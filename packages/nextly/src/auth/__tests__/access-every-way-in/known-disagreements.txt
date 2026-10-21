@@ -12,56 +12,56 @@
 # removing a deviation fails each cell it explained until the cell is taken
 # off.
 
-service visitor read collection none at direct
+service visitor read collection none at direct  # visitor-public-default
 service visitor read collection none at website  # visitor-public-default
 service visitor read collection none at service  # visitor-public-default
-service visitor read collection true at direct
+service visitor read collection true at direct  # visitor-public-default
 service visitor read collection true at website  # visitor-public-default
 service visitor read collection true at service  # visitor-public-default
 service user-without read collection true at rest
-service user-without read collection true at direct
+service user-without read collection true at direct  # rule-alone-for-people
 service user-without read collection true at website  # rule-alone-for-people
 service user-without read collection true at route
 service user-without read collection true at can
 service user-without read collection true at service  # rule-alone-for-people
 service user-without read collection true at entity
 service user-without create collection true at rest
-service user-without create collection true at direct
+service user-without create collection true at direct  # rule-alone-for-people
 service user-without create collection true at route
 service user-without create collection true at can
 service user-without create collection true at service  # rule-alone-for-people
 service user-partial create collection true at rest
-service user-partial create collection true at direct
+service user-partial create collection true at direct  # rule-alone-for-people
 service user-partial create collection true at route
 service user-partial create collection true at can
 service user-partial create collection true at service  # rule-alone-for-people
 service user-without update collection true at rest
-service user-without update collection true at direct
+service user-without update collection true at direct  # rule-alone-for-people
 service user-without update collection true at route
 service user-without update collection true at can
 service user-without update collection true at service  # rule-alone-for-people
 service user-without delete collection true at rest
-service user-without delete collection true at direct
+service user-without delete collection true at direct  # rule-alone-for-people
 service user-without delete collection true at route
 service user-without delete collection true at can
 service user-without delete collection true at service  # rule-alone-for-people
 service user-partial delete collection true at rest
-service user-partial delete collection true at direct
+service user-partial delete collection true at direct  # rule-alone-for-people
 service user-partial delete collection true at route
 service user-partial delete collection true at can
 service user-partial delete collection true at service  # rule-alone-for-people
 service user-without publish collection true at rest
-service user-without publish collection true at direct
+service user-without publish collection true at direct  # rule-alone-for-people
 service user-without publish collection true at route
 service user-without publish collection true at can
 service user-without publish collection true at service  # rule-alone-for-people
 service user-without unpublish collection true at rest
-service user-without unpublish collection true at direct
+service user-without unpublish collection true at direct  # rule-alone-for-people
 service user-without unpublish collection true at route
 service user-without unpublish collection true at can
 service user-without unpublish collection true at service  # rule-alone-for-people
 service user-partial unpublish collection true at rest
-service user-partial unpublish collection true at direct
+service user-partial unpublish collection true at direct  # rule-alone-for-people
 service user-partial unpublish collection true at route
 service user-partial unpublish collection true at can
 service user-partial unpublish collection true at service  # rule-alone-for-people
@@ -73,53 +73,53 @@ service key-role-based read collection false at schema
 service key-super-admin read collection false at schema
 service user-partial read collection false at schema
 service key-partial read collection false at schema
-service visitor read collection returns-true at direct
+service visitor read collection returns-true at direct  # visitor-public-default
 service visitor read collection returns-true at website  # visitor-public-default
 service visitor read collection returns-true at service  # visitor-public-default
 service user-without read collection returns-true at rest
-service user-without read collection returns-true at direct
+service user-without read collection returns-true at direct  # rule-alone-for-people
 service user-without read collection returns-true at website  # rule-alone-for-people
 service user-without read collection returns-true at route
 service user-without read collection returns-true at can
 service user-without read collection returns-true at service  # rule-alone-for-people
 service user-without read collection returns-true at entity
 service user-without create collection returns-true at rest
-service user-without create collection returns-true at direct
+service user-without create collection returns-true at direct  # rule-alone-for-people
 service user-without create collection returns-true at route
 service user-without create collection returns-true at can
 service user-without create collection returns-true at service  # rule-alone-for-people
 service user-partial create collection returns-true at rest
-service user-partial create collection returns-true at direct
+service user-partial create collection returns-true at direct  # rule-alone-for-people
 service user-partial create collection returns-true at route
 service user-partial create collection returns-true at can
 service user-partial create collection returns-true at service  # rule-alone-for-people
 service user-without update collection returns-true at rest
-service user-without update collection returns-true at direct
+service user-without update collection returns-true at direct  # rule-alone-for-people
 service user-without update collection returns-true at route
 service user-without update collection returns-true at can
 service user-without update collection returns-true at service  # rule-alone-for-people
 service user-without delete collection returns-true at rest
-service user-without delete collection returns-true at direct
+service user-without delete collection returns-true at direct  # rule-alone-for-people
 service user-without delete collection returns-true at route
 service user-without delete collection returns-true at can
 service user-without delete collection returns-true at service  # rule-alone-for-people
 service user-partial delete collection returns-true at rest
-service user-partial delete collection returns-true at direct
+service user-partial delete collection returns-true at direct  # rule-alone-for-people
 service user-partial delete collection returns-true at route
 service user-partial delete collection returns-true at can
 service user-partial delete collection returns-true at service  # rule-alone-for-people
 service user-without publish collection returns-true at rest
-service user-without publish collection returns-true at direct
+service user-without publish collection returns-true at direct  # rule-alone-for-people
 service user-without publish collection returns-true at route
 service user-without publish collection returns-true at can
 service user-without publish collection returns-true at service  # rule-alone-for-people
 service user-without unpublish collection returns-true at rest
-service user-without unpublish collection returns-true at direct
+service user-without unpublish collection returns-true at direct  # rule-alone-for-people
 service user-without unpublish collection returns-true at route
 service user-without unpublish collection returns-true at can
 service user-without unpublish collection returns-true at service  # rule-alone-for-people
 service user-partial unpublish collection returns-true at rest
-service user-partial unpublish collection returns-true at direct
+service user-partial unpublish collection returns-true at direct  # rule-alone-for-people
 service user-partial unpublish collection returns-true at route
 service user-partial unpublish collection returns-true at can
 service user-partial unpublish collection returns-true at service  # rule-alone-for-people
@@ -131,7 +131,7 @@ service key-role-based read collection returns-false at schema
 service key-super-admin read collection returns-false at schema
 service user-partial read collection returns-false at schema
 service key-partial read collection returns-false at schema
-service visitor read collection returns-null at direct
+service visitor read collection returns-null at direct  # visitor-public-default
 service visitor read collection returns-null at website  # visitor-public-default
 service visitor read collection returns-null at service  # visitor-public-default
 service user-with read collection returns-null at can
@@ -170,7 +170,7 @@ service user-with unpublish collection returns-null at can
 service user-without unpublish collection returns-null at can
 service custom-role unpublish collection returns-null at can
 service user-partial unpublish collection returns-null at can
-service visitor read collection returns-undefined at direct
+service visitor read collection returns-undefined at direct  # visitor-public-default
 service visitor read collection returns-undefined at website  # visitor-public-default
 service visitor read collection returns-undefined at service  # visitor-public-default
 service user-with read collection returns-undefined at can
@@ -217,53 +217,53 @@ service key-role-based read collection throws at schema
 service key-super-admin read collection throws at schema
 service user-partial read collection throws at schema
 service key-partial read collection throws at schema
-service visitor read collection async-true at direct
+service visitor read collection async-true at direct  # visitor-public-default
 service visitor read collection async-true at website  # visitor-public-default
 service visitor read collection async-true at service  # visitor-public-default
 service user-without read collection async-true at rest
-service user-without read collection async-true at direct
+service user-without read collection async-true at direct  # rule-alone-for-people
 service user-without read collection async-true at website  # rule-alone-for-people
 service user-without read collection async-true at route
 service user-without read collection async-true at can
 service user-without read collection async-true at service  # rule-alone-for-people
 service user-without read collection async-true at entity
 service user-without create collection async-true at rest
-service user-without create collection async-true at direct
+service user-without create collection async-true at direct  # rule-alone-for-people
 service user-without create collection async-true at route
 service user-without create collection async-true at can
 service user-without create collection async-true at service  # rule-alone-for-people
 service user-partial create collection async-true at rest
-service user-partial create collection async-true at direct
+service user-partial create collection async-true at direct  # rule-alone-for-people
 service user-partial create collection async-true at route
 service user-partial create collection async-true at can
 service user-partial create collection async-true at service  # rule-alone-for-people
 service user-without update collection async-true at rest
-service user-without update collection async-true at direct
+service user-without update collection async-true at direct  # rule-alone-for-people
 service user-without update collection async-true at route
 service user-without update collection async-true at can
 service user-without update collection async-true at service  # rule-alone-for-people
 service user-without delete collection async-true at rest
-service user-without delete collection async-true at direct
+service user-without delete collection async-true at direct  # rule-alone-for-people
 service user-without delete collection async-true at route
 service user-without delete collection async-true at can
 service user-without delete collection async-true at service  # rule-alone-for-people
 service user-partial delete collection async-true at rest
-service user-partial delete collection async-true at direct
+service user-partial delete collection async-true at direct  # rule-alone-for-people
 service user-partial delete collection async-true at route
 service user-partial delete collection async-true at can
 service user-partial delete collection async-true at service  # rule-alone-for-people
 service user-without publish collection async-true at rest
-service user-without publish collection async-true at direct
+service user-without publish collection async-true at direct  # rule-alone-for-people
 service user-without publish collection async-true at route
 service user-without publish collection async-true at can
 service user-without publish collection async-true at service  # rule-alone-for-people
 service user-without unpublish collection async-true at rest
-service user-without unpublish collection async-true at direct
+service user-without unpublish collection async-true at direct  # rule-alone-for-people
 service user-without unpublish collection async-true at route
 service user-without unpublish collection async-true at can
 service user-without unpublish collection async-true at service  # rule-alone-for-people
 service user-partial unpublish collection async-true at rest
-service user-partial unpublish collection async-true at direct
+service user-partial unpublish collection async-true at direct  # rule-alone-for-people
 service user-partial unpublish collection async-true at route
 service user-partial unpublish collection async-true at can
 service user-partial unpublish collection async-true at service  # rule-alone-for-people
@@ -275,7 +275,7 @@ service key-role-based read collection async-false at schema
 service key-super-admin read collection async-false at schema
 service user-partial read collection async-false at schema
 service key-partial read collection async-false at schema
-service visitor read collection other-operation at direct
+service visitor read collection other-operation at direct  # visitor-public-default
 service visitor read collection other-operation at website  # visitor-public-default
 service visitor read collection other-operation at service  # visitor-public-default
 service custom-role read collection role-name at schema
@@ -291,28 +291,28 @@ service key-role-based read collection principal-kind at schema
 service key-super-admin read collection principal-kind at schema
 service user-partial read collection principal-kind at schema
 service key-partial read collection principal-kind at schema
-service visitor read single none at direct
-service visitor read single true at direct
+service visitor read single none at direct  # visitor-public-default
+service visitor read single true at direct  # visitor-public-default
 service user-without read single true at rest
-service user-without read single true at direct
+service user-without read single true at direct  # rule-alone-for-people
 service user-without read single true at route
 service user-without read single true at can
 service user-without read single true at entity
 service user-without update single true at rest
-service user-without update single true at direct
+service user-without update single true at direct  # rule-alone-for-people
 service user-without update single true at route
 service user-without update single true at can
-service visitor read single returns-true at direct
+service visitor read single returns-true at direct  # visitor-public-default
 service user-without read single returns-true at rest
-service user-without read single returns-true at direct
+service user-without read single returns-true at direct  # rule-alone-for-people
 service user-without read single returns-true at route
 service user-without read single returns-true at can
 service user-without read single returns-true at entity
 service user-without update single returns-true at rest
-service user-without update single returns-true at direct
+service user-without update single returns-true at direct  # rule-alone-for-people
 service user-without update single returns-true at route
 service user-without update single returns-true at can
-service visitor read single returns-null at direct
+service visitor read single returns-null at direct  # visitor-public-default
 service user-with read single returns-null at can
 service user-with read single returns-null at entity
 service user-without read single returns-null at can
@@ -325,7 +325,7 @@ service user-with update single returns-null at can
 service user-without update single returns-null at can
 service custom-role update single returns-null at can
 service user-partial update single returns-null at can
-service visitor read single returns-undefined at direct
+service visitor read single returns-undefined at direct  # visitor-public-default
 service user-with read single returns-undefined at can
 service user-with read single returns-undefined at entity
 service user-without read single returns-undefined at can
@@ -338,17 +338,17 @@ service user-with update single returns-undefined at can
 service user-without update single returns-undefined at can
 service custom-role update single returns-undefined at can
 service user-partial update single returns-undefined at can
-service visitor read single async-true at direct
+service visitor read single async-true at direct  # visitor-public-default
 service user-without read single async-true at rest
-service user-without read single async-true at direct
+service user-without read single async-true at direct  # rule-alone-for-people
 service user-without read single async-true at route
 service user-without read single async-true at can
 service user-without read single async-true at entity
 service user-without update single async-true at rest
-service user-without update single async-true at direct
+service user-without update single async-true at direct  # rule-alone-for-people
 service user-without update single async-true at route
 service user-without update single async-true at can
-service visitor read single other-operation at direct
+service visitor read single other-operation at direct  # visitor-public-default
 service visitor read related none at population
 service visitor read related true at population
 service user-without read related true at population
@@ -362,48 +362,48 @@ service visitor read related other-operation at population
 service visitor read media none at population
 service principal read media none at population
 service principal-other read media none at population
-no-service visitor read collection none at direct
+no-service visitor read collection none at direct  # visitor-public-default
 no-service user-with read collection none at can
 no-service user-with read collection none at entity
-no-service visitor read collection returns-true at direct
+no-service visitor read collection returns-true at direct  # visitor-public-default
 no-service user-with read collection returns-true at can
 no-service user-with read collection returns-true at entity
-no-service visitor read collection returns-false at direct
+no-service visitor read collection returns-false at direct  # visitor-public-default
 no-service user-with read collection returns-false at rest
-no-service user-with read collection returns-false at direct
+no-service user-with read collection returns-false at direct  # no-service
 no-service key-role-based read collection returns-false at rest
-no-service key-role-based read collection returns-false at direct
+no-service key-role-based read collection returns-false at direct  # no-service
 no-service key-role-based read collection returns-false at can
 no-service key-role-based read collection returns-false at entity
-no-service visitor read collection returns-null at direct
+no-service visitor read collection returns-null at direct  # visitor-public-default
 no-service user-with read collection returns-null at rest
-no-service user-with read collection returns-null at direct
+no-service user-with read collection returns-null at direct  # no-service
 no-service key-role-based read collection returns-null at rest
-no-service key-role-based read collection returns-null at direct
+no-service key-role-based read collection returns-null at direct  # no-service
 no-service key-role-based read collection returns-null at can
 no-service key-role-based read collection returns-null at entity
-no-service visitor read single none at direct
+no-service visitor read single none at direct  # visitor-public-default
 no-service user-with read single none at can
 no-service user-with read single none at entity
-no-service user-without read single none at direct
-no-service visitor read single returns-true at direct
+no-service user-without read single none at direct  # no-service
+no-service visitor read single returns-true at direct  # visitor-public-default
 no-service user-with read single returns-true at can
 no-service user-with read single returns-true at entity
-no-service user-without read single returns-true at direct
-no-service visitor read single returns-false at direct
+no-service user-without read single returns-true at direct  # no-service
+no-service visitor read single returns-false at direct  # visitor-public-default
 no-service user-with read single returns-false at rest
-no-service user-with read single returns-false at direct
-no-service user-without read single returns-false at direct
+no-service user-with read single returns-false at direct  # no-service
+no-service user-without read single returns-false at direct  # no-service
 no-service key-role-based read single returns-false at rest
-no-service key-role-based read single returns-false at direct
+no-service key-role-based read single returns-false at direct  # no-service
 no-service key-role-based read single returns-false at can
 no-service key-role-based read single returns-false at entity
-no-service visitor read single returns-null at direct
+no-service visitor read single returns-null at direct  # visitor-public-default
 no-service user-with read single returns-null at rest
-no-service user-with read single returns-null at direct
-no-service user-without read single returns-null at direct
+no-service user-with read single returns-null at direct  # no-service
+no-service user-without read single returns-null at direct  # no-service
 no-service key-role-based read single returns-null at rest
-no-service key-role-based read single returns-null at direct
+no-service key-role-based read single returns-null at direct  # no-service
 no-service key-role-based read single returns-null at can
 no-service key-role-based read single returns-null at entity
 no-service visitor read related none at population
@@ -446,74 +446,74 @@ service key-role-based unpublish collection other-operation at route
 service key-role-based unpublish collection other-operation at can
 service key-super-admin unpublish collection other-operation at route
 service key-super-admin unpublish collection other-operation at can
-service visitor list collection none at direct
+service visitor list collection none at direct  # visitor-public-default
 service visitor list collection none at service  # visitor-public-default
-service visitor count collection none at direct
+service visitor count collection none at direct  # visitor-public-default
 service visitor count collection none at service  # visitor-public-default
-service visitor list collection true at direct
+service visitor list collection true at direct  # visitor-public-default
 service visitor list collection true at service  # visitor-public-default
 service user-without list collection true at rest
-service user-without list collection true at direct
+service user-without list collection true at direct  # rule-alone-for-people
 service user-without list collection true at service  # rule-alone-for-people
-service visitor count collection true at direct
+service visitor count collection true at direct  # visitor-public-default
 service visitor count collection true at service  # visitor-public-default
 service user-without count collection true at rest
-service user-without count collection true at direct
+service user-without count collection true at direct  # rule-alone-for-people
 service user-without count collection true at service  # rule-alone-for-people
-service visitor list collection returns-true at direct
+service visitor list collection returns-true at direct  # visitor-public-default
 service visitor list collection returns-true at service  # visitor-public-default
 service user-without list collection returns-true at rest
-service user-without list collection returns-true at direct
+service user-without list collection returns-true at direct  # rule-alone-for-people
 service user-without list collection returns-true at service  # rule-alone-for-people
-service visitor count collection returns-true at direct
+service visitor count collection returns-true at direct  # visitor-public-default
 service visitor count collection returns-true at service  # visitor-public-default
 service user-without count collection returns-true at rest
-service user-without count collection returns-true at direct
+service user-without count collection returns-true at direct  # rule-alone-for-people
 service user-without count collection returns-true at service  # rule-alone-for-people
-service visitor list collection returns-null at direct
+service visitor list collection returns-null at direct  # visitor-public-default
 service visitor list collection returns-null at service  # visitor-public-default
-service visitor count collection returns-null at direct
+service visitor count collection returns-null at direct  # visitor-public-default
 service visitor count collection returns-null at service  # visitor-public-default
-service visitor list collection returns-undefined at direct
+service visitor list collection returns-undefined at direct  # visitor-public-default
 service visitor list collection returns-undefined at service  # visitor-public-default
-service visitor count collection returns-undefined at direct
+service visitor count collection returns-undefined at direct  # visitor-public-default
 service visitor count collection returns-undefined at service  # visitor-public-default
-service visitor list collection async-true at direct
+service visitor list collection async-true at direct  # visitor-public-default
 service visitor list collection async-true at service  # visitor-public-default
 service user-without list collection async-true at rest
-service user-without list collection async-true at direct
+service user-without list collection async-true at direct  # rule-alone-for-people
 service user-without list collection async-true at service  # rule-alone-for-people
-service visitor count collection async-true at direct
+service visitor count collection async-true at direct  # visitor-public-default
 service visitor count collection async-true at service  # visitor-public-default
 service user-without count collection async-true at rest
-service user-without count collection async-true at direct
+service user-without count collection async-true at direct  # rule-alone-for-people
 service user-without count collection async-true at service  # rule-alone-for-people
-service visitor list collection other-operation at direct
+service visitor list collection other-operation at direct  # visitor-public-default
 service visitor list collection other-operation at service  # visitor-public-default
-service visitor count collection other-operation at direct
+service visitor count collection other-operation at direct  # visitor-public-default
 service visitor count collection other-operation at service  # visitor-public-default
 service user-without publish single-pub true at rest
-service user-without publish single-pub true at direct
+service user-without publish single-pub true at direct  # rule-alone-for-people
 service user-without publish single-pub true at route
 service user-without publish single-pub true at can
 service user-without unpublish single-pub true at rest
-service user-without unpublish single-pub true at direct
+service user-without unpublish single-pub true at direct  # rule-alone-for-people
 service user-without unpublish single-pub true at route
 service user-without unpublish single-pub true at can
 service user-partial unpublish single-pub true at rest
-service user-partial unpublish single-pub true at direct
+service user-partial unpublish single-pub true at direct  # rule-alone-for-people
 service user-partial unpublish single-pub true at route
 service user-partial unpublish single-pub true at can
 service user-without publish single-pub returns-true at rest
-service user-without publish single-pub returns-true at direct
+service user-without publish single-pub returns-true at direct  # rule-alone-for-people
 service user-without publish single-pub returns-true at route
 service user-without publish single-pub returns-true at can
 service user-without unpublish single-pub returns-true at rest
-service user-without unpublish single-pub returns-true at direct
+service user-without unpublish single-pub returns-true at direct  # rule-alone-for-people
 service user-without unpublish single-pub returns-true at route
 service user-without unpublish single-pub returns-true at can
 service user-partial unpublish single-pub returns-true at rest
-service user-partial unpublish single-pub returns-true at direct
+service user-partial unpublish single-pub returns-true at direct  # rule-alone-for-people
 service user-partial unpublish single-pub returns-true at route
 service user-partial unpublish single-pub returns-true at can
 service user-with publish single-pub returns-null at can
@@ -533,15 +533,15 @@ service user-without unpublish single-pub returns-undefined at can
 service custom-role unpublish single-pub returns-undefined at can
 service user-partial unpublish single-pub returns-undefined at can
 service user-without publish single-pub async-true at rest
-service user-without publish single-pub async-true at direct
+service user-without publish single-pub async-true at direct  # rule-alone-for-people
 service user-without publish single-pub async-true at route
 service user-without publish single-pub async-true at can
 service user-without unpublish single-pub async-true at rest
-service user-without unpublish single-pub async-true at direct
+service user-without unpublish single-pub async-true at direct  # rule-alone-for-people
 service user-without unpublish single-pub async-true at route
 service user-without unpublish single-pub async-true at can
 service user-partial unpublish single-pub async-true at rest
-service user-partial unpublish single-pub async-true at direct
+service user-partial unpublish single-pub async-true at direct  # rule-alone-for-people
 service user-partial unpublish single-pub async-true at route
 service user-partial unpublish single-pub async-true at can
 service user-with publish single-pub other-operation at route
@@ -571,14 +571,14 @@ service key-super-admin unpublish single-pub other-operation at can
 service custom-role read collection user-is-key-maker at schema
 service key-super-admin read collection user-is-key-maker at schema
 service user-partial read collection user-is-key-maker at schema
-service visitor read collection publish-false at direct
+service visitor read collection publish-false at direct  # visitor-public-default
 service visitor read collection publish-false at website  # visitor-public-default
 service visitor read collection publish-false at service  # visitor-public-default
-service visitor list collection publish-false at direct
+service visitor list collection publish-false at direct  # visitor-public-default
 service visitor list collection publish-false at service  # visitor-public-default
-service visitor count collection publish-false at direct
+service visitor count collection publish-false at direct  # visitor-public-default
 service visitor count collection publish-false at service  # visitor-public-default
-service visitor read single publish-false at direct
+service visitor read single publish-false at direct  # visitor-public-default
 service visitor read related publish-false at population
 
 # Readers handed a caller: a scope without its permission rows, a Direct API

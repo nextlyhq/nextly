@@ -13,8 +13,14 @@
  * no context at all.
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 
+import {
+  callerMay,
+  fakeActorForUser,
+  fakeUserHoldsPermission,
+  resetCallerAccess,
+} from "../../../auth/access/__tests__/fake-caller";
 import { container } from "../../../di/container";
 import { TRUSTS_EVERY_COLLECTION } from "../../../services/collections/trust-grant";
 import { SingleQueryService } from "../services/single-query-service";
@@ -29,11 +35,37 @@ import {
   textField,
 } from "./single-test-helpers";
 
+// The signed-in caller the gate looks up, set per test (`callerMay`).
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
+  const fake = await import("../../../auth/access/__tests__/fake-caller");
+  return {
+    ...(await importOriginal<object>()),
+    actorForUser: fake.fakeActorForUser,
+    userHoldsPermission: fake.fakeUserHoldsPermission,
+    userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
+  };
+});
+
+beforeEach(() => {
+  resetCallerAccess();
+  fakeActorForUser.mockClear();
+  fakeUserHoldsPermission.mockClear();
+});
+
 type Ctor = ConstructorParameters<typeof SingleQueryService>;
 
 const editor = { id: "user-1", roles: ["editor"] };
 
-function createService(rbacAllows: boolean) {
+/**
+ * The read path with the caller holding every action, or none. `readRule` is
+ * the Single's declared read rule, if it declares one.
+ */
+function createService(
+  rbacAllows: boolean,
+  readRule?: (ctx: { user: unknown; operation: string }) => unknown
+) {
+  if (rbacAllows) resetCallerAccess();
+  else callerMay();
   const registry = createMockSingleRegistry();
   registry.registerSingle("site-settings", {
     ...siteSettingsMeta(),
@@ -41,6 +73,7 @@ function createService(rbacAllows: boolean) {
   });
 
   const rbac = createMockRBACService(rbacAllows);
+  if (readRule) rbac.getRegisteredAccess.mockReturnValue({ read: readRule });
 
   const service = new SingleQueryService(
     createMockAdapter({
@@ -77,16 +110,15 @@ describe("SingleQueryService.get — the read gate", () => {
   });
 
   it("asks the gate about the read operation, for this caller", async () => {
-    const { service, rbac } = createService(true);
+    const { service } = createService(true);
 
     await service.get("site-settings", { user: editor });
 
-    expect(rbac.checkAccess).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: "user-1",
-        operation: "read",
-        resource: "site-settings",
-      })
+    expect(fakeUserHoldsPermission).toHaveBeenCalledWith(
+      "user-1",
+      "read",
+      "site-settings",
+      { executor: undefined }
     );
   });
 
@@ -102,45 +134,48 @@ describe("SingleQueryService.get — the read gate", () => {
     });
 
     expect(result.success).toBe(true);
-    expect(rbac.checkAccess).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
+    expect(fakeActorForUser).not.toHaveBeenCalled();
   });
 
   it("skips the permission check for a caller with no identity", async () => {
     // There are no permissions to look up for an anonymous caller, so with no
     // code-defined rule governing the read it falls through to the
     // permission-less default rather than being refused.
-    const { service, rbac } = createService(false);
+    const readRule = vi.fn(() => undefined);
+    const { service } = createService(false, readRule);
 
     const result = await service.get("site-settings", {});
 
     expect(result.success).toBe(true);
-    expect(rbac.checkAccess).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
+    expect(fakeActorForUser).not.toHaveBeenCalled();
     // The half of the gate that needs no user WAS asked.
-    expect(rbac.checkAnonymousCodeAccess).toHaveBeenCalledWith({
-      operation: "read",
-      resource: "site-settings",
-    });
+    expect(readRule).toHaveBeenCalledWith(
+      expect.objectContaining({ user: null, operation: "read" })
+    );
   });
 
   it("applies the Single's own code-defined rule to a caller with no identity", async () => {
     // `read: false` or `read: ({ user }) => !!user` on a Single describes an
     // anonymous reader most clearly of all. The same rule on a collection
     // refuses them; a Single that admitted them answered one rule two ways.
-    const { service, rbac } = createService(true);
-    rbac.checkAnonymousCodeAccess.mockResolvedValue(false);
+    const { service } = createService(true, () => false);
 
     const result = await service.get("site-settings", {});
 
     expect(result.success).toBe(false);
     expect(result.statusCode).toBe(403);
-    expect(rbac.checkAccess).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
+    expect(fakeActorForUser).not.toHaveBeenCalled();
   });
 
   it("refuses an anonymous publish even when the rule would admit", async () => {
     // Publishing has no identity to stamp, so the rule's admission does not
     // lift the refusal: asked, then overruled.
-    const { service, rbac } = createService(true);
-    rbac.checkAnonymousCodeAccess.mockResolvedValue(true);
+    const publishRule = vi.fn(() => true);
+    const { rbac } = createService(true);
+    rbac.getRegisteredAccess.mockReturnValue({ publish: publishRule });
 
     const { checkSingleAccess } = await import(
       "../services/single-query-service"
@@ -153,7 +188,8 @@ describe("SingleQueryService.get — the read gate", () => {
     });
 
     expect(denied?.statusCode).toBe(403);
-    expect(rbac.checkAnonymousCodeAccess).not.toHaveBeenCalled();
+    // Refused before the rule is asked.
+    expect(publishRule).not.toHaveBeenCalled();
   });
 });
 

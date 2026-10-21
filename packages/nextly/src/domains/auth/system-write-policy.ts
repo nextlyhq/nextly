@@ -53,6 +53,11 @@ export const SYSTEM_WRITE_POLICY = {
     create: ownOrManage("create", "permissions"),
     delete: ownOrManage("delete", "permissions"),
   },
+  users: {
+    create: { action: "create", resource: "users" },
+    update: { action: "update", resource: "users" },
+    delete: { action: "delete", resource: "users" },
+  },
   fieldGroups: {
     create: ownOrManage("create", "settings"),
     update: ownOrManage("update", "settings"),

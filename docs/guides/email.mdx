@@ -329,9 +329,11 @@ characters that names the email, such as an order's confirmation.
   every recipient, `from`, `replyTo`, the rendered subject and bodies, the
   attachments and the person. A template edited between two sends with one key
   is a different message.
-- Keys belong to their caller. The site's own code (the Direct API and the REST
-  routes) shares one set; each plugin has its own; Nextly's own sends have
-  theirs. The same key from two of them names two different emails.
+- Keys belong to their caller. The site's own code (the Direct API) has one
+  set; each plugin has its own; Nextly's own sends have theirs. On the REST
+  routes, each API key and each signed-in person has its own, so a REST caller
+  can never use up a key the site's code sends with. The same key from two of
+  them names two different emails.
 - A provider that takes a key (Resend) is also handed one derived from yours, so
   the provider itself sends the message once for 24 hours.
 

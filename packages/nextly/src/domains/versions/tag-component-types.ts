@@ -397,9 +397,11 @@ function stripNestedTags(
  */
 export async function containedComponentResolver(
   fields: FieldConfig[],
-  getComponentFields: (slug: string) => Promise<FieldConfig[] | null>
+  getComponentFields: (slug: string) => Promise<FieldConfig[] | null>,
+  /** `fields` are a component's own, so a component placed directly in them counts. */
+  ownFieldsAreContainer = false
 ): Promise<ComponentFieldResolver | undefined> {
-  if (!hasComponentInContainer(fields)) return undefined;
+  if (!hasComponentInContainer(fields, ownFieldsAreContainer)) return undefined;
   const schemas = await resolveComponentFieldMap(fields, getComponentFields);
   return componentSlug => schemas.get(componentSlug);
 }

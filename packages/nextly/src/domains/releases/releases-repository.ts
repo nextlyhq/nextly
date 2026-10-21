@@ -16,6 +16,7 @@
 import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
 import type { CacheRevalidator } from "../../revalidation/types";
+import { releasesTables } from "../../schemas/releases";
 import {
   RELEASE_CANCELLABLE_FROM,
   RELEASE_DELETABLE_FROM,
@@ -26,7 +27,9 @@ import {
   type ReleaseState,
 } from "../../schemas/releases/types";
 import type { VersionScopeKind } from "../../schemas/versions/types";
+import type { RowLockServer } from "../../shared/lib/row-lock";
 import { uuidV7 } from "../../utils/uuid-v7";
+import { rowLockServer } from "../audit/audit-log-writer";
 import {
   NoticesService,
   type NoticesDb,
@@ -51,11 +54,13 @@ import {
   documentEventPayload,
   hasStartedAt,
   keptAsRecord,
+  readOneUnderLock,
   recordReleaseEvent,
   runHistoryOf,
   SYSTEM_RELEASE_EVENT_ACTOR,
   type ReleaseEventActor,
   type ReleaseEventInput,
+  type LockingReadTx,
   type ReleaseEventTx,
   type ReleaseRunHistory,
 } from "./release-events";
@@ -503,11 +508,80 @@ export async function forgetMemberApplied(
  * Idempotent: a write that runs its transaction again writes the same values.
  */
 export async function recordMemberApplied(
-  tx: ReleaseEventTx,
-  member: { id: string; revision: number; ref: DocumentRef }
+  tx: ReleaseEventTx & LockingReadTx & Pick<ReleasesTxApi, "lockRow">,
+  member: { id: string; revision: number; ref: DocumentRef },
+  server: RowLockServer
 ): Promise<void> {
+  await holdRunningRelease(tx, member, server);
   await markMemberApplied(tx, member);
   await recordRunStart(tx, member);
+}
+
+/**
+ * Hold the release a member belongs to for the rest of the content write, or
+ * refuse the write unless that release is still the run the write was
+ * planned for: still there, still `scheduled`, at the revision the run
+ * planned against, and still holding the member. A release deleted,
+ * cancelled, rescheduled, renamed, or with its documents or their actions
+ * changed since has moved on, every such move raises its revision, and the
+ * document must not take an action the release no longer asks for.
+ *
+ * The release row is locked first, as every release write takes it, and the
+ * release and the member are then read again under lock. A move of the
+ * release is a write on the same row, so it either committed before this
+ * lock and is seen, or waits for this write, which then records the run's
+ * start. The reads are locked ones because a plain read on MySQL would answer
+ * from the snapshot taken before the move committed. The member's own release
+ * is read first, plainly: a member never moves between releases.
+ */
+async function holdRunningRelease(
+  tx: ReleaseEventTx & LockingReadTx & Pick<ReleasesTxApi, "lockRow">,
+  member: { id: string; revision: number },
+  server: RowLockServer
+): Promise<void> {
+  const [row] = await tx.select<{ releaseId: string }>(MEMBERS, {
+    columns: ["releaseId"],
+    where: { and: [{ column: "id", op: "=", value: member.id }] },
+  });
+  if (
+    row !== undefined &&
+    (await isRunAsPlanned(tx, row.releaseId, member, server))
+  ) {
+    return;
+  }
+  throw NextlyError.conflict({
+    logContext: {
+      reason: "release-moved-during-write",
+      memberId: member.id,
+      revision: member.revision,
+    },
+  });
+}
+
+/** Whether release `releaseId`, read under its lock, is the run as planned. */
+async function isRunAsPlanned(
+  tx: ReleaseEventTx & LockingReadTx & Pick<ReleasesTxApi, "lockRow">,
+  releaseId: string,
+  member: { id: string; revision: number },
+  server: RowLockServer
+): Promise<boolean> {
+  await tx.lockRow(RELEASES, releaseId);
+  const { nextlyReleases: releases, nextlyReleaseMembers: members } =
+    releasesTables(server.dialect);
+  const release = await readOneUnderLock(tx, server, releases, releaseId, {
+    state: releases.state,
+    revision: releases.revision,
+  });
+  if (
+    release?.state !== "scheduled" ||
+    Number(release.revision) !== member.revision
+  ) {
+    return false;
+  }
+  const held = await readOneUnderLock(tx, server, members, member.id, {
+    id: members.id,
+  });
+  return held !== undefined;
 }
 
 /**
@@ -600,8 +674,7 @@ function scheduleEvent(
  * a rename names the title it had and the one it now has.
  */
 async function recordDetailsEvents(
-  tx: ReleasesTxApi,
-  releaseId: string,
+  record: (event: ReleaseEventInput) => Promise<void>,
   write: {
     current: Pick<ReleaseRow, "title">;
     next: Pick<ReleaseRow, "title">;
@@ -610,17 +683,14 @@ async function recordDetailsEvents(
   by: ReleaseEventActor
 ): Promise<void> {
   if (write.changed.includes("title")) {
-    await recordReleaseEvent(tx, releaseId, {
+    await record({
       kind: "renamed",
       actor: by,
       payload: { from: write.current.title, to: write.next.title },
     });
   }
   if (write.changed.includes("description")) {
-    await recordReleaseEvent(tx, releaseId, {
-      kind: "descriptionChanged",
-      actor: by,
-    });
+    await record({ kind: "descriptionChanged", actor: by });
   }
 }
 
@@ -851,10 +921,17 @@ export class ReleasesRepository {
    *   knows how to reach the cache, and a per-call parameter is a thing 31 call
    *   sites can each forget. A runtime with no cache passes nothing.
    */
+  /**
+   * The server's row-lock facts, read from this repository's database, for
+   * the locked reads an event naming a person takes.
+   */
+  private readonly lockServer: RowLockServer;
+
   constructor(
     private readonly db: ReleasesDbApi,
     private readonly revalidator?: CacheRevalidator
   ) {
+    this.lockServer = rowLockServer(db, db.dialect);
     this.notices = new NoticesService({
       db,
       // The runtime's own log, so a notices table not migrated yet is said
@@ -868,6 +945,15 @@ export class ReleasesRepository {
           }),
       },
     });
+  }
+
+  /** Record a release event on `tx` with this database's row-lock facts. */
+  private recordEvent(
+    tx: ReleasesTxApi,
+    releaseId: string,
+    event: ReleaseEventInput
+  ): Promise<void> {
+    return recordReleaseEvent(tx, releaseId, event, this.lockServer);
   }
 
   /**
@@ -931,7 +1017,7 @@ export class ReleasesRepository {
     // `undefined` on MySQL.
     await this.db.transaction(async tx => {
       await tx.insert(RELEASES, { ...row }, { returning: [] });
-      await recordReleaseEvent(tx, row.id, { kind: "created", actor: by });
+      await this.recordEvent(tx, row.id, { kind: "created", actor: by });
     });
     return row;
   }
@@ -992,7 +1078,7 @@ export class ReleasesRepository {
       ) {
         return false;
       }
-      await recordReleaseEvent(tx, id, {
+      await this.recordEvent(tx, id, {
         ...scheduleEvent(before, at, timezone, intent),
         actor: by,
       });
@@ -1051,6 +1137,41 @@ export class ReleasesRepository {
       }
     );
     return affected > 0;
+  }
+
+  /**
+   * Record that `by` asked for Publish now on a release already due, which
+   * Publish now does not move: its history still says who asked. In a short
+   * transaction of its own, under the release's lock, and only while the
+   * release is still the one the caller judged due, at `expectedRevision`;
+   * `false` when it is gone or has moved since (rescheduled, cancelled), so
+   * the caller refuses rather than answering a release it did not run.
+   */
+  async recordPublishNow(
+    id: string,
+    by: ReleaseEventActor,
+    expectedRevision: number
+  ): Promise<boolean> {
+    return this.db.transaction(async tx => {
+      await tx.lockRow(RELEASES, id);
+      const [release] = await tx.select<Pick<ReleaseRow, "state" | "revision">>(
+        RELEASES,
+        {
+          columns: ["state", "revision"],
+          where: { and: [{ column: "id", op: "=", value: id }] },
+        }
+      );
+      if (release === undefined || release.revision !== expectedRevision) {
+        return false;
+      }
+      await this.recordEvent(tx, id, {
+        kind: "publishNow",
+        actor: by,
+        fromState: release.state,
+        toState: release.state,
+      });
+      return true;
+    });
   }
 
   /**
@@ -1129,7 +1250,7 @@ export class ReleasesRepository {
       async (tx, entry, revision) => {
         await this.recordStopped(tx, entry, revision);
         // The stop is the system's, whichever event found the problem.
-        await recordReleaseEvent(tx, entry.id, {
+        await this.recordEvent(tx, entry.id, {
           kind: "stopped",
           actor: SYSTEM_RELEASE_EVENT_ACTOR,
           payload: { scheduledAt: isoOf(entry.scheduledAt) },
@@ -1291,7 +1412,7 @@ export class ReleasesRepository {
       );
       // `release-cancelled`, by `by`, in the cancel's transaction.
       if (advanced !== null) {
-        await recordReleaseEvent(tx, id, {
+        await this.recordEvent(tx, id, {
           kind: "cancelled",
           actor: by,
           toState: "cancelled",
@@ -1368,7 +1489,11 @@ export class ReleasesRepository {
       // Under the lock taken above nothing can have moved the release, so
       // this answers a release that is gone the way the read above does.
       if (moved === null) return null;
-      await recordDetailsEvents(tx, id, { current, next, changed }, by);
+      await recordDetailsEvents(
+        event => this.recordEvent(tx, id, event),
+        { current, next, changed },
+        by
+      );
       return { row: { ...next, revision: current.revision + 1 }, changed };
     });
   }
@@ -1428,7 +1553,7 @@ export class ReleasesRepository {
       ) {
         return null;
       }
-      await recordReleaseEvent(tx, id, {
+      await this.recordEvent(tx, id, {
         kind: "deleted",
         actor: by,
         fromState: release.state,
@@ -1836,7 +1961,7 @@ export class ReleasesRepository {
       // component settles with its events or not at all. The run is the
       // system's.
       (tx, entry) =>
-        recordReleaseEvent(tx, entry.id, {
+        this.recordEvent(tx, entry.id, {
           kind: "published",
           actor: SYSTEM_RELEASE_EVENT_ACTOR,
           fromState: "scheduled",
@@ -2217,7 +2342,7 @@ export class ReleasesRepository {
         // Client-side id and no RETURNING, for the reason `createRelease`
         // gives.
         await tx.insert(MEMBERS, { ...member }, { returning: [] });
-        await recordReleaseEvent(tx, input.releaseId, {
+        await this.recordEvent(tx, input.releaseId, {
           kind: "documentAdded",
           actor: by,
           payload: documentEventPayload(member),
@@ -2290,7 +2415,7 @@ export class ReleasesRepository {
         // A member already gone removes nothing, and records nothing.
         if (row !== undefined) {
           await tx.delete(MEMBERS, where);
-          await recordReleaseEvent(tx, member.releaseId, {
+          await this.recordEvent(tx, member.releaseId, {
             kind: "documentRemoved",
             actor: by,
             payload: documentEventPayload(row),
@@ -2361,7 +2486,7 @@ export class ReleasesRepository {
           throw releaseMovedConflict(member.releaseId, "change-member-action");
         }
         await tx.updateCount(MEMBERS, { action }, where);
-        await recordReleaseEvent(tx, member.releaseId, {
+        await this.recordEvent(tx, member.releaseId, {
           kind: "documentActionChanged",
           actor: by,
           payload: {
