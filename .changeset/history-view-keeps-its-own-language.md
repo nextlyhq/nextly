@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-History shows each language its own versions. When one save publishes several languages, the other languages' views show that publish as an event rather than as a version you can open, and each language is pinned as published by its own version, the one that went live. Previewing, comparing or restoring from a language's view no longer reaches another language's content.
+History shows each language its own versions. When one save publishes several languages, the other languages' views show that publish as an event rather than as a version you can open, and pin it as what is currently published there, with no version to open, unless that language has published again since. Previewing, comparing or restoring from a language's view no longer offers another language's versions.
