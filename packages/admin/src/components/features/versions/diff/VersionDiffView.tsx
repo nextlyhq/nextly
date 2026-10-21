@@ -37,6 +37,7 @@ import {
   isFieldChange,
   isSystemField,
   versionChangesOf,
+  type NoChanges,
 } from "../version-changes";
 import { changeAnchorId } from "../VersionChangesForm";
 
@@ -89,23 +90,6 @@ function arrangeFields(fields: readonly FieldDiff[]) {
     ),
     system,
   };
-}
-
-/**
- * What a comparison with no authored change says: that only system fields
- * changed, that nothing the reader can see changed (fields were withheld, or
- * the server found a difference not shown), or, only when the server found
- * none, that the two are identical.
- */
-type NoChanges = "system" | "unseen" | "identical";
-
-function noChangesNote(
-  data: { hasChanges: boolean; incomplete?: boolean },
-  system: readonly FieldDiff[]
-): NoChanges {
-  if (system.some(isFieldChange)) return "system";
-  if (data.incomplete || data.hasChanges) return "unseen";
-  return "identical";
 }
 
 const NO_CHANGES_TEXT: Record<NoChanges, string> = {
@@ -182,9 +166,7 @@ export function VersionDiffView({ scope, from, to }: VersionDiffViewProps) {
   const order = arranged.changed.map(node => node.name);
   // Said only when no authored field changed.
   const note =
-    diff.data && arranged.changed.length === 0
-      ? noChangesNote(diff.data, arranged.system)
-      : null;
+    changes && arranged.changed.length === 0 ? changes.whenNone : null;
   const { layout, splittable } = layoutFor(
     preference,
     changes?.byField.values() ?? []

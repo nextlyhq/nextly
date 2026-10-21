@@ -327,7 +327,13 @@ function phonePositionText(
     case "first":
       return "First version";
     case "ready":
-      return changed > 0 ? `${position + 1} of ${changed}` : "No changes";
+      if (changed > 0) return `${position + 1} of ${changed}`;
+      // Never "No changes" where the server found a difference.
+      return state.whenNone === "system"
+        ? "System fields only"
+        : state.whenNone === "unseen"
+          ? "None you can read"
+          : "No changes";
   }
 }
 
@@ -556,8 +562,10 @@ function ViewedVersionFrame({
   return (
     // The reader's remembered layout, for every change drawn below.
     <ChangesLayoutProvider value={changesLayout}>
-      {/* Room under the last field for the phone's bottom bar. */}
-      <div className="@4xl/content:p-8 pt-6 pb-20 sm:pb-0">
+      {/* Room under the last field for the phone's bottom bar. The container
+          the changes query, as on the comparison page: side by side, each
+          change's two sides take columns only where this box has room. */}
+      <div className="@container/diff @4xl/content:p-8 pt-6 pb-20 sm:pb-0">
         <VersionComparisonBar
           layoutToggle={
             order.length > 0 ? (

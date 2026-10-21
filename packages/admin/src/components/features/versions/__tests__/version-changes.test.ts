@@ -88,6 +88,34 @@ describe("versionChangesOf", () => {
     expect([...changes.byField.keys()]).toEqual(["title"]);
     expect(changes.total).toBe(1);
   });
+
+  it("says what changed when no authored field did", () => {
+    const system: FieldDiff = {
+      kind: "unknown",
+      name: "firstPublishedAt",
+      status: "changed",
+      reason: "system",
+    };
+    // Only a framework column: a change, though not one counted.
+    expect(
+      versionChangesOf(diffOf([text("title", "unchanged"), system])).whenNone
+    ).toBe("system");
+    // Fields withheld: nothing the reader can see changed.
+    expect(
+      versionChangesOf(diffOf([text("title", "unchanged")], true)).whenNone
+    ).toBe("unseen");
+    // A difference the server found and nothing shows.
+    expect(versionChangesOf({ ...diffOf([]), hasChanges: true }).whenNone).toBe(
+      "unseen"
+    );
+    // Identical only when the server found none.
+    expect(
+      versionChangesOf({
+        ...diffOf([text("title", "unchanged")]),
+        hasChanges: false,
+      }).whenNone
+    ).toBe("identical");
+  });
 });
 
 describe("changeOrder", () => {

@@ -21,7 +21,14 @@ import { cn } from "@admin/lib/utils";
 
 import { FieldDiffNode } from "./diff/FieldDiffNode";
 import { UnchangedFieldsToggle } from "./UnchangedFieldsToggle";
-import type { VersionChanges } from "./version-changes";
+import type { NoChanges, VersionChanges } from "./version-changes";
+
+/** What the editor says when no authored field changed. */
+const NO_CHANGES_IN_EDITOR: Record<NoChanges, string> = {
+  system: "Only system fields changed.",
+  unseen: "No changes in the fields you can read.",
+  identical: "No changes from the version before it.",
+};
 
 /** The DOM id of a changed field's card, so a move can bring it into view. */
 export function changeAnchorId(name: string): string {
@@ -153,9 +160,7 @@ export function VersionChangesForm({
       )}
       {order.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          {changes.incomplete
-            ? "No changes in the fields you can read."
-            : "No changes from the version before it."}
+          {NO_CHANGES_IN_EDITOR[changes.whenNone]}
         </p>
       ) : null}
       <UnchangedFieldsToggle

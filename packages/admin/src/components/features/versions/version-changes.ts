@@ -21,7 +21,17 @@ export interface VersionChanges {
   total: number;
   /** Fields this reader may not read were left out, so a count is a floor. */
   incomplete: boolean;
+  /** What to say when no authored field changed; see {@link NoChanges}. */
+  whenNone: NoChanges;
 }
+
+/**
+ * What a comparison with no authored change says: that only system fields
+ * changed, that nothing the reader can see changed (fields were withheld, or
+ * the server found a difference not shown), or, only when the server found
+ * none, that the two are the same.
+ */
+export type NoChanges = "system" | "unseen" | "identical";
 
 /**
  * Whether a field's comparison is a change worth marking. A field the reader
@@ -55,6 +65,13 @@ export function versionChangesOf(diff: VersionDiff): VersionChanges {
     // "the fields you can read".
     total: authored.filter(node => node.kind !== "hidden").length,
     incomplete: diff.incomplete === true,
+    whenNone: diff.fields.some(
+      node => isSystemField(node) && isFieldChange(node)
+    )
+      ? "system"
+      : diff.incomplete === true || diff.hasChanges
+        ? "unseen"
+        : "identical",
   };
 }
 
@@ -97,7 +114,13 @@ export type ChangesState =
   | { kind: "reading" }
   | { kind: "failed"; retry: () => void }
   | { kind: "first" }
-  | { kind: "ready"; changed: number; total: number; incomplete: boolean };
+  | {
+      kind: "ready";
+      changed: number;
+      total: number;
+      incomplete: boolean;
+      whenNone: NoChanges;
+    };
 
 /**
  * A comparison, but only the one for this pair. A query keeps the previous
@@ -129,5 +152,6 @@ export function changesStateOf(input: {
     changed: input.changes.byField.size,
     total: input.changes.total,
     incomplete: input.changes.incomplete,
+    whenNone: input.changes.whenNone,
   };
 }
