@@ -93,6 +93,14 @@ export interface ReleaseCallerArgs {
    * must bring its own rather than inherit the instance's.
    */
   userRoles?: string[];
+  /**
+   * The API key's own id, when the TRANSPORT authenticated the call as one.
+   *
+   * Travels with `authenticatedScope`: a release's history records a key's
+   * change as the key, never as its owner, and the scope carries the key's
+   * grants but not who it is.
+   */
+  apiKeyId?: string;
 }
 
 export interface ReleasesNamespace {
@@ -415,6 +423,9 @@ function actorOf(ctx: NextlyContext, args: ReleaseCallerArgs) {
     // against none.
     userRoles:
       args.userRoles ?? (overridesIdentity ? undefined : access.user?.roles),
+    // Only with the scope supplied by this call: it names the key that scope
+    // belongs to, and an inherited scope arrives without one.
+    apiKeyId: args.authenticatedScope === undefined ? undefined : args.apiKeyId,
   };
 }
 
@@ -442,12 +453,14 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
         overrideAccess,
         authenticatedScope,
         userRoles,
+        apiKeyId,
         ...query
       } = args;
       void userId;
       void overrideAccess;
       void authenticatedScope;
       void userRoles;
+      void apiKeyId;
       const found = await service().find(query, actorOf(ctx, args));
       return {
         items: found.rows,
@@ -467,12 +480,14 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
         overrideAccess,
         authenticatedScope,
         userRoles,
+        apiKeyId,
         ...query
       } = args;
       void userId;
       void overrideAccess;
       void authenticatedScope;
       void userRoles;
+      void apiKeyId;
       return service().count(query, actorOf(ctx, args));
     },
 
@@ -511,12 +526,14 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
         overrideAccess,
         authenticatedScope,
         userRoles,
+        apiKeyId,
         ...member
       } = args;
       void userId;
       void overrideAccess;
       void authenticatedScope;
       void userRoles;
+      void apiKeyId;
       return service().addMember(releaseId, member, actorOf(ctx, args));
     },
 

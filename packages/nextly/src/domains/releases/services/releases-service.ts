@@ -101,6 +101,11 @@ import {
   type ReleaseCalendar,
 } from "../release-calendar";
 import { isDueAt } from "../release-due";
+import {
+  keptAsRecord,
+  releaseEventActorOf,
+  type ReleaseRunHistory,
+} from "../release-events";
 import { releaseMemberKey } from "../release-member-key";
 import type { ReleaseRecheckTarget } from "../release-recheck";
 import {
@@ -188,6 +193,12 @@ export interface ReleaseActor {
    * against the real user rather than against an empty list.
    */
   userRoles?: string[];
+  /**
+   * The API key's own id, when the caller authenticated as one: what a
+   * release's history names the key by. The key's owner stays `userId`, which
+   * authorizes it; a change is recorded as the key, never as its owner.
+   */
+  apiKeyId?: string;
 }
 
 /**
@@ -430,7 +441,8 @@ function runCapabilities(
 function editCapabilities(
   release: ReleaseRow,
   held: number,
-  may: HeldAuthorities
+  may: HeldAuthorities,
+  history: ReleaseRunHistory | undefined
 ): Pick<
   ReleaseCapabilities,
   "addMember" | "removeMember" | "update" | "delete"
@@ -448,7 +460,7 @@ function editCapabilities(
     removeMember: mayChange("remove"),
     // Any state, as `update` writes it: the title is a label.
     update: may.mayUpdate,
-    delete: may.mayDelete && whyNotDeletable(release) === null,
+    delete: may.mayDelete && whyNotDeletable(release, history) === null,
   };
 }
 
@@ -526,25 +538,23 @@ function assertDetailsChange(change: ReleaseDetailsChange): void {
 /**
  * Why this release may not be deleted, or `null` when it may.
  *
- * Only a release that never ran: a draft, or a release cancelled before it
- * was ever scheduled. A cancelled release that WAS scheduled is kept, because
- * nothing stored says whether it began to run: one that stopped part-way and
- * was then cancelled has put content live, and reads like any other cancelled
- * release. `scheduledAt` is the evidence that survives a cancel, so a release
- * that ever had one is kept as the record. A release goes from draft only to
- * scheduled or cancelled, so a draft never carries one.
+ * Only a release that never ran: a draft, or a cancelled release that never
+ * put content live. Whether a scheduled-then-cancelled one did is its
+ * history's to say (`keptAsRecord`): it is kept when it started publishing or
+ * was published, and when its history was not recorded, since nothing then
+ * says whether it ran. Both are `was-scheduled`. A release goes from draft
+ * only to scheduled or cancelled, so a draft never carries an instant.
  *
  * The one answer for the write and for the `delete` capability; the
- * repository's fence states the same rule in its transaction.
+ * repository's fence asks `keptAsRecord` in its transaction.
  */
 function whyNotDeletable(
-  release: Pick<ReleaseRow, "state" | "scheduledAt">
+  release: Pick<ReleaseRow, "state" | "scheduledAt">,
+  history: ReleaseRunHistory | undefined
 ): ReleaseNotDeletablePublicData["reason"] | null {
   if (release.state === "published") return "published";
   if (!RELEASE_DELETABLE_FROM.includes(release.state)) return "committed";
-  if (release.scheduledAt !== null && release.scheduledAt !== undefined) {
-    return "was-scheduled";
-  }
+  if (keptAsRecord(release, history)) return "was-scheduled";
   return null;
 }
 
@@ -558,8 +568,16 @@ const NOT_DELETABLE_MESSAGES: Record<
   committed:
     "This release is scheduled or stopped, so it can't be deleted. Cancelling it calls it off, and it's then kept as a record.",
   "was-scheduled":
-    "This release was scheduled, so it's kept as a record. Cancelled releases that were never scheduled can be deleted.",
+    "This release began publishing before it was cancelled, so it's kept as the record of what went live.",
 };
+
+/**
+ * The `was-scheduled` sentence for a release whose history was not recorded:
+ * it was scheduled before releases recorded their history, so nothing says
+ * whether it began publishing.
+ */
+const UNRECORDED_RUN_MESSAGE =
+  "This release was scheduled before its history was recorded, so whether it began publishing is unknown and it's kept as a record.";
 
 /**
  * The refusal for deleting a release that may not be deleted: a CONFLICT
@@ -567,10 +585,14 @@ const NOT_DELETABLE_MESSAGES: Record<
  */
 function notDeletableRefusal(
   release: ReleaseRow,
-  reason: ReleaseNotDeletablePublicData["reason"]
+  reason: ReleaseNotDeletablePublicData["reason"],
+  history: ReleaseRunHistory | undefined
 ): NextlyError {
+  const unrecorded = reason === "was-scheduled" && history?.recorded !== true;
   return NextlyError.conflict({
-    message: NOT_DELETABLE_MESSAGES[reason],
+    message: unrecorded
+      ? UNRECORDED_RUN_MESSAGE
+      : NOT_DELETABLE_MESSAGES[reason],
     data: { reason },
     logContext: {
       reason: "release-not-deletable",
@@ -1518,10 +1540,10 @@ export class ReleasesService {
     // `createdBy` comes from the ACTOR, never from the input. Materialisation
     // performs each member as its recorded author, so an author a caller could
     // name would be an identity they could borrow at a future instant.
-    return this.deps.repository.createRelease({
-      ...input,
-      createdBy: actor.userId,
-    });
+    return this.deps.repository.createRelease(
+      { ...input, createdBy: actor.userId },
+      releaseEventActorOf(actor)
+    );
   }
 
   async findByID(id: string, actor: ReleaseActor): Promise<ReleaseRow | null> {
@@ -1569,6 +1591,7 @@ export class ReleasesService {
     const mayUpdate = await this.holds(actor, "update");
     const mayDelete = await this.holds(actor, "delete");
     const held = await this.heldBy(releases, mayCreate, mayPublish);
+    const histories = await this.runHistoriesFor(releases, mayDelete);
 
     const may = { mayPublish, mayCreate, mayUpdate, mayDelete };
     return new Map(
@@ -1578,11 +1601,35 @@ export class ReleasesService {
           release.id,
           {
             ...runCapabilities(release, count, may),
-            ...editCapabilities(release, count, may),
+            ...editCapabilities(release, count, may, histories.get(release.id)),
           },
         ];
       })
     );
+  }
+
+  /**
+   * The run history of each release among these whose `delete` answer turns
+   * on it, in one read, and none when there are none: only a caller who may
+   * delete, and only a release in a deletable state that was scheduled, since
+   * any other is answered without its history.
+   */
+  private async runHistoriesFor(
+    releases: readonly ReleaseRow[],
+    mayDelete: boolean
+  ): Promise<Map<string, ReleaseRunHistory>> {
+    if (!mayDelete) return new Map();
+    const ids = releases
+      .filter(
+        release =>
+          RELEASE_DELETABLE_FROM.includes(release.state) &&
+          release.scheduledAt !== null &&
+          release.scheduledAt !== undefined
+      )
+      .map(release => release.id);
+    return ids.length === 0
+      ? new Map()
+      : this.deps.repository.runHistoriesOf(ids);
   }
 
   /**
@@ -2566,7 +2613,8 @@ export class ReleasesService {
         // The member limit, judged under the release lock and after every
         // other refusal: a final release says it is final, not how much it
         // holds, and adds racing for the last place are judged one by one.
-        held => memberLimitRefusal(releaseId, held)
+        held => memberLimitRefusal(releaseId, held),
+        releaseEventActorOf(actor)
       );
     } catch (error) {
       // The `memberKey` unique index is what stops one document being scheduled
@@ -2651,7 +2699,11 @@ export class ReleasesService {
     // The delete and a bump of the release's revision are one transaction
     // that lands only while the release is in `allowedStates`; otherwise it is
     // refused as a CONFLICT and the member stays.
-    await this.deps.repository.removeMember(member, allowedStates);
+    await this.deps.repository.removeMember(
+      member,
+      allowedStates,
+      releaseEventActorOf(actor)
+    );
   }
 
   /**
@@ -2717,7 +2769,8 @@ export class ReleasesService {
     return this.deps.repository.changeMemberAction(
       member,
       action,
-      allowedStates
+      allowedStates,
+      releaseEventActorOf(actor)
     );
   }
 
@@ -2967,7 +3020,9 @@ export class ReleasesService {
     // locks across a query that touches another table entirely, to buy a
     // guarantee this single fenced UPDATE already provides. The blocking pass
     // needs a transaction because it writes to SEVERAL rows that must move
-    // together; this writes to one.
+    // together; this writes to one. The repository runs that one UPDATE in a
+    // short transaction of its own, with the release's schedule event, and
+    // nothing else.
     const from = wasBlocked
       ? RELEASE_SCHEDULABLE_FROM_BLOCKED
       : RELEASE_SCHEDULABLE_FROM_UNBLOCKED;
@@ -2986,7 +3041,8 @@ export class ReleasesService {
         at,
         timezone,
         from,
-        current.revision
+        current.revision,
+        releaseEventActorOf(actor)
       ))
     ) {
       throw NextlyError.conflict({
@@ -3095,7 +3151,7 @@ export class ReleasesService {
     // release that would stop part-way, or a single-document release with no
     // document, sends nothing out and is not marked published.
     await this.assertReadyToRun(actor, id, current);
-    await this.moveToNowUnlessDue(current);
+    await this.moveToNowUnlessDue(current, actor);
     await this.runDrainForPublishNow(id);
     const [after] = await this.deps.repository.findReleases({ ids: [id] });
     return after ?? current;
@@ -3142,7 +3198,10 @@ export class ReleasesService {
    * Due by the same rule the drain selects releases with (`isDueAt`), so a
    * release left unmoved here is one the drain will pick up.
    */
-  private async moveToNowUnlessDue(current: ReleaseRow): Promise<void> {
+  private async moveToNowUnlessDue(
+    current: ReleaseRow,
+    actor: ReleaseActor
+  ): Promise<void> {
     const now = new Date();
     const alreadyDue =
       current.state === "scheduled" &&
@@ -3159,7 +3218,10 @@ export class ReleasesService {
       // The zone the author chose stays part of the record.
       current.timezone ?? "UTC",
       [current.state],
-      current.revision
+      current.revision,
+      // Recorded as the caller's Publish now; the drain records the publish.
+      releaseEventActorOf(actor),
+      "publish-now"
     );
     if (!moved) {
       throw NextlyError.conflict({
@@ -3197,7 +3259,12 @@ export class ReleasesService {
     // outright: `publish-content-releases` is "schedule or cancel". Someone who
     // could cancel but not schedule could still silently stop a launch.
     await this.authorize(actor, "publish");
-    if (!(await this.deps.repository.cancelRelease(id))) {
+    if (
+      !(await this.deps.repository.cancelRelease(
+        id,
+        releaseEventActorOf(actor)
+      ))
+    ) {
       throw NextlyError.conflict({
         logContext: { reason: "release-not-cancellable", releaseId: id },
       });
@@ -3225,12 +3292,16 @@ export class ReleasesService {
     // Whether anything changes is decided in the repository's transaction,
     // under the release's lock, and the row it answers is the one that
     // transaction wrote: see `updateReleaseDetails`.
-    const written = await this.deps.repository.updateReleaseDetails(id, {
-      ...(change.title === undefined ? {} : { title: change.title }),
-      ...(change.description === undefined
-        ? {}
-        : { description: change.description }),
-    });
+    const written = await this.deps.repository.updateReleaseDetails(
+      id,
+      {
+        ...(change.title === undefined ? {} : { title: change.title }),
+        ...(change.description === undefined
+          ? {}
+          : { description: change.description }),
+      },
+      releaseEventActorOf(actor)
+    );
     if (written === null) {
       throw NextlyError.notFound({
         logContext: { reason: "release-not-found", releaseId: id },
@@ -3266,14 +3337,22 @@ export class ReleasesService {
   async delete(id: string, actor: ReleaseActor): Promise<ReleaseRow> {
     await this.authorize(actor, "delete");
     const current = await this.requireRelease(id);
-    const refused = whyNotDeletable(current);
-    if (refused !== null) throw notDeletableRefusal(current, refused);
+    const history = (
+      await this.deps.repository.runHistoriesOf([current.id])
+    ).get(current.id);
+    const refused = whyNotDeletable(current, history);
+    if (refused !== null) {
+      throw notDeletableRefusal(current, refused, history);
+    }
     // FENCED on the same rule, so a release scheduled since the read above is
     // not deleted, and neither are its documents. A retry judges it as it now
     // is, and is told why.
     // The row the delete found under its lock, recorded and answered: one
     // renamed since the read above is the release that was deleted.
-    const deleted = await this.deps.repository.deleteRelease(id);
+    const deleted = await this.deps.repository.deleteRelease(
+      id,
+      releaseEventActorOf(actor)
+    );
     if (deleted === null) {
       throw NextlyError.conflict({
         logContext: { reason: "release-moved-before-delete", releaseId: id },
