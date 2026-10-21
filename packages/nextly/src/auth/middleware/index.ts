@@ -370,6 +370,10 @@ export async function authorizeCaller(
     resource,
     getRBACService()
   );
+  // A caller whose access could not be read is not a caller without the
+  // permission: the read's error goes to the route's error handling, as it
+  // always has, rather than being answered as a refusal.
+  if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
   if (!verdict.allowed) {
     return createErrorResponse(
       403,

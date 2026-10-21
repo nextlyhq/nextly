@@ -101,9 +101,12 @@ vi.mock("../../services/lib/permissions", async importOriginal => {
           p => p.resource !== "" && holds(userId, p.action, p.resource)
         )
     ),
-    listRoleSlugsForUser: vi.fn(async (userId: string) => [
-      ...stored(userId).roles,
-    ]),
+    // The role read refuses for one caller, as it does when the database
+    // cannot be read.
+    listRoleSlugsForUser: vi.fn(async (userId: string) => {
+      if (userId === "unreadable") throw new Error("roles unreadable");
+      return [...stored(userId).roles];
+    }),
     listRoleSlugsForUserStrict: vi.fn(async (userId: string) => [
       ...stored(userId).roles,
     ]),
@@ -294,5 +297,19 @@ describe("the REST route gates' answers", () => {
     await expect(`${text}\n`).toMatchFileSnapshot(
       join(__dirname, "route-gate-answers.txt")
     );
+  });
+});
+
+describe("a session whose access cannot be read", () => {
+  it("fails the gate with the read's error, rather than answering 403", async () => {
+    // A rule handed the caller's roles, so they must be read to ask it.
+    registered.rbac = serviceFor("service", RULES["role-name"]);
+    // POPULATION CONTROL: a caller whose roles are read reaches the rule.
+    expect(said(await authorizeCaller(session("editor"), "read", POSTS))).toBe(
+      "A"
+    );
+    await expect(
+      authorizeCaller(session("unreadable"), "read", POSTS)
+    ).rejects.toThrow("roles unreadable");
   });
 });
