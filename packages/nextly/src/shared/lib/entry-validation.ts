@@ -42,7 +42,11 @@ import type {
 } from "../../plugins/contributions";
 
 import { detachedField } from "./detached-field";
-import { attachFieldValidators } from "./field-level-registry";
+import { applyFieldDefaults } from "./field-defaults";
+import {
+  attachFieldValidators,
+  getFieldFunctions,
+} from "./field-level-registry";
 
 export type ValidationIssue = ValidationPublicData["errors"][number];
 
@@ -892,7 +896,17 @@ async function validateContainedComponents(
     ? value.map((row, i) => [row, `${path}[${i}]`])
     : [[value, path]];
   for (const [instance, at] of instances) {
-    if (instance === null || typeof instance !== "object") continue;
+    if (instance === null || instance === undefined) continue;
+    // The component write refuses a value that is not an object, and none
+    // reaches this one, so the shape is refused here or it is stored as sent.
+    if (typeof instance !== "object" || Array.isArray(instance)) {
+      issues.push({
+        path: at,
+        code: "INVALID_TYPE",
+        message: "Component data must be an object.",
+      });
+      continue;
+    }
     const slug =
       single ??
       (many?.includes(readFieldGroupType(instance) ?? "")
@@ -900,9 +914,15 @@ async function validateContainedComponents(
         : undefined);
     const own = slug ? resolve(slug) : undefined;
     if (!slug || !own) continue;
+    // Judged with its declared defaults filled, as the component write fills a
+    // new instance's before judging it, so a required child the caller left to
+    // its default is not refused. Filled on a copy: validation reports, and
+    // the value written is the caller's.
+    const filled = { ...(instance as Record<string, unknown>) };
+    applyFieldDefaults(filled, own, getFieldFunctions("fieldGroup", slug));
     await validateFields(
       attachFieldValidators("fieldGroup", slug, own),
-      instance as Record<string, unknown>,
+      filled,
       write,
       at,
       // A component's value is written whole, so its required fields apply.
