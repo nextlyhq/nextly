@@ -32,6 +32,11 @@ import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFr
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
 import { LiveDocumentRecoveryOffer } from "@admin/components/features/entries/EntryForm/AutosaveRecoveryBanner";
 import type { ContributedAction } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
+import {
+  DocumentActionsHost,
+  DocumentSaveShortcuts,
+  SaveActionFormProvider,
+} from "@admin/components/features/entries/EntryForm/DocumentActionsContext";
 import { DocumentLockBanner } from "@admin/components/features/entries/EntryForm/DocumentLockBanner";
 import {
   DocumentViewBody,
@@ -42,16 +47,25 @@ import {
   EntryFormContextProvider,
   hasPendingWorkingDraft,
 } from "@admin/components/features/entries/EntryForm/EntryFormContext";
-import { EntryFormProvider } from "@admin/components/features/entries/EntryForm/EntryFormProvider";
 import { EntryFormSidebar } from "@admin/components/features/entries/EntryForm/EntryFormSidebar";
 import { EntryMetaStrip } from "@admin/components/features/entries/EntryForm/EntryMetaStrip";
 import { EntrySystemHeader } from "@admin/components/features/entries/EntryForm/EntrySystemHeader";
 import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
+import { submitDocument } from "@admin/components/features/entries/EntryForm/submit-document";
+import {
+  submitBusy,
+  submitHeld,
+  type SubmitOutcome,
+} from "@admin/components/features/entries/EntryForm/submit-outcome";
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import {
   UnsavedWorkProvider,
   useFormUnsavedWork,
 } from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
+import {
+  storingHandlers,
+  type DocumentActionBindingsInput,
+} from "@admin/components/features/entries/EntryForm/useDocumentActionBindings";
 import { useDocumentLockSurface } from "@admin/components/features/entries/EntryForm/useDocumentLockSurface";
 import { useDocumentPanelCollapsed } from "@admin/components/features/entries/EntryForm/useDocumentPanelCollapsed";
 import {
@@ -86,12 +100,14 @@ import {
   autosaveScopeFor,
   useDocumentAutosave,
 } from "@admin/hooks/useDocumentAutosave";
-import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
-import { withoutPlaceholders } from "@admin/lib/form/stored-references";
+import {
+  holdsPlaceholders,
+  withoutPlaceholders,
+} from "@admin/lib/form/stored-references";
 import { cn } from "@admin/lib/utils";
 import type { SingleAdminOptions } from "@admin/types/entities";
 
@@ -170,7 +186,9 @@ export interface SingleFormProps {
   /** Current document data */
   document: SingleDocumentData;
   /** Callback when form is successfully submitted */
-  onSubmit: (data: Record<string, unknown>) => Promise<void>;
+  onSubmit: (
+    data: Record<string, unknown>
+  ) => Promise<SingleDocumentData | void>;
   /** Whether the form is currently submitting */
   isSubmitting?: boolean;
   /** Callback when the user clicks Discard changes in the system header
@@ -235,6 +253,27 @@ export interface SingleFormProps {
 // ============================================================================
 // Editor sub-surfaces
 // ============================================================================
+
+/**
+ * The form's values for a stored document: its fields, with the Single's
+ * identity (title and slug) pinned to its config, so the read-only display and
+ * the submitted payload always reflect the definition rather than any stale
+ * stored value. One derivation for the first render and for every save after.
+ */
+function singleFormDefaults(
+  schema: SingleSchema,
+  document: SingleDocumentData
+): Record<string, unknown> {
+  const values = getDefaultValues(schema.fields, document);
+  values.title = schema.label;
+  values.slug = schema.slug;
+  return values;
+}
+
+/** Which stored version of which document, in which language, is on screen. */
+function singleResetKey(document: SingleDocumentData, locale: unknown): string {
+  return `${document.id}:${String(document.updatedAt)}:${String(locale)}`;
+}
 
 /**
  * The inline language panel, shown where the rail is not.
@@ -444,12 +483,10 @@ export function SingleForm({
   // Generate default values from document data, then pin the single's identity
   // (title/slug) to its config so the read-only display and the submitted
   // payload always reflect the definition rather than any stale stored value.
-  const defaultValues = useMemo(() => {
-    const values = getDefaultValues(schema.fields, document);
-    values.title = schema.label;
-    values.slug = schema.slug;
-    return values;
-  }, [schema.fields, schema.label, schema.slug, document]);
+  const defaultValues = useMemo(
+    () => singleFormDefaults(schema, document),
+    [schema, document]
+  );
 
   // Initialize form
   //
@@ -482,13 +519,33 @@ export function SingleForm({
   // unmount/remount) still resets the form to that locale's values; otherwise the
   // previous language's inputs would linger. A first-time switch refetches and
   // remounts via the page's loading gate, which resets naturally.
+  //
+  // The stored document this author's own save produced arrives here too, and
+  // resetting to it blindly would wipe whatever they typed while the save was
+  // in flight; the save has already made it the form's starting point, so that
+  // echo keeps unsaved edits. Recognised while the save is in flight, and
+  // afterwards by the key of the document it stored. Any other new version —
+  // a restore, a colleague's change, another language — resets the form to
+  // it, as Restore promises when it warns unsaved work is discarded.
   const lastResetKeyRef = useRef<string | null>(null);
+  // Which document, in which language, the form was last reset to: a new
+  // version of that is the case an own-save echo can be.
+  const lastResetPlaceRef = useRef<string | null>(null);
+  const ownSave = useRef<{ inFlight: boolean; storedKey?: string }>({
+    inFlight: false,
+  });
   useEffect(() => {
     if (!document) return;
-    const resetKey = `${document.id}:${String(document.updatedAt)}:${locale}`;
+    const resetKey = singleResetKey(document, locale);
     if (lastResetKeyRef.current === resetKey) return;
+    const place = JSON.stringify([document.id, locale ?? null]);
+    const sameDocument = lastResetPlaceRef.current === place;
     lastResetKeyRef.current = resetKey;
-    form.reset(defaultValuesRef.current);
+    lastResetPlaceRef.current = place;
+    const echoOfOwnSave =
+      sameDocument &&
+      (ownSave.current.inFlight || resetKey === ownSave.current.storedKey);
+    form.reset(defaultValuesRef.current, { keepDirtyValues: echoOfOwnSave });
   }, [document, locale, form]);
 
   // submitCount gates the top-level "Please fix" toast so the user
@@ -581,8 +638,13 @@ export function SingleForm({
   });
   const busy = isSubmitting || discardMutation.isPending;
 
+  // Resolves to what the submission came to, never rejects, as the entry
+  // editor's does: the toasts report to the author, the outcome to the caller.
   const handleSubmit = useCallback(
-    async (e?: React.BaseSyntheticEvent, intent?: EntryFormIntent) => {
+    async (
+      e?: React.BaseSyntheticEvent,
+      intent?: EntryFormIntent
+    ): Promise<SubmitOutcome> => {
       e?.preventDefault();
 
       // 🔴 The one gate every write passes through. Save, Publish, Unpublish, the
@@ -594,36 +656,66 @@ export function SingleForm({
       // handler acts on the live document, which is not what is on screen. And
       // so is a submit already in flight — parallel writes would let completion
       // order decide which contents survive.
-      if (writesHeld || busy || submissionLatch.current) return;
+      if (writesHeld) return submitHeld;
+      if (busy || submissionLatch.current) return submitBusy;
       submissionLatch.current = true;
 
       try {
-        await form.handleSubmit(async rawData => {
+        return await submitDocument({
+          form,
+          event: e,
           // Why: shared intent→payload helper mirrors the EntryForm
           // contract (see useEntryForm.mapIntentToPayload). Unpublish
           // strips other dirty fields so a confirm-modal misclick can't
           // ship unrelated changes to the public site.
-          const data = mapIntentToPayload(rawData, intent, blankPasswordFields);
-
-          try {
+          toPayload: values =>
+            mapIntentToPayload(values, intent, blankPasswordFields),
+          write: async data => {
             // A link the editor cannot see is held in the form as a
-            // placeholder and written as the reference it stands for. The
-            // form keeps the placeholder, so it is reset to `data`.
-            await onSubmit(withoutPlaceholders(schema.fields, data));
+            // placeholder and written as the reference it stands for.
+            ownSave.current.inFlight = true;
+            const stored = await onSubmit(
+              withoutPlaceholders(schema.fields, data)
+            ).finally(() => {
+              ownSave.current.inFlight = false;
+            });
             // After the write lands and before the reset: this is the only
             // point that knows a save succeeded, and a revision that misses
             // one leaves the pane showing the previous draft.
             setSavedCount(n => n + 1);
-            form.reset(data);
-          } catch (error) {
-            console.error("Form submission error:", error);
-          }
-        })(e);
+            if (stored) {
+              ownSave.current.storedKey = singleResetKey(stored, locale);
+            }
+            return {
+              // A Single is one document, so what was saved is the one on
+              // screen; `onSubmit` reports no row of its own.
+              item: { id: document.id },
+              // A host that reports no stored document leaves the form at
+              // what was sent, the best starting point there is. So does a
+              // save that sent a placeholder: the stored document leaves out
+              // the link it stands for, and taking it in would drop the link
+              // from the form, for the next save to remove.
+              stored:
+                stored && !holdsPlaceholders(schema.fields, data)
+                  ? singleFormDefaults(schema, stored)
+                  : null,
+            };
+          },
+        });
       } finally {
         submissionLatch.current = false;
       }
     },
-    [form, onSubmit, blankPasswordFields, busy, writesHeld, schema.fields]
+    [
+      form,
+      onSubmit,
+      blankPasswordFields,
+      busy,
+      writesHeld,
+      document.id,
+      schema,
+      locale,
+    ]
   );
 
   const handleCancel = useCallback(() => {
@@ -638,23 +730,12 @@ export function SingleForm({
    * Work a FIELD holds that the form's values do not contain — the page builder
    * commits its document on exit, so the form is not dirty while it is open.
    *
-   * Declared HERE rather than beside the autosave below, because the shortcut
-   * registration that reads it comes first: a save shortcut guarded on the
-   * form's own flag declines for the whole time the editor is open.
+   * Declared HERE rather than beside the autosave below: the document's
+   * actions and the save shortcut read it, and a save guarded on the form's
+   * own flag declines for the whole time the editor is open.
    */
   const unsavedWork = useFormUnsavedWork(isDirty);
   const hasUnsavedWork = unsavedWork.hasUnsavedWork;
-
-  useEntryFormShortcuts({
-    onSave: () => {
-      void handleSubmit();
-    },
-    // The view owns Escape; the save chords stay. As in the entry editor.
-    onCancel: documentView ? undefined : handleCancel,
-    isDirty: hasUnsavedWork,
-    isSubmitting,
-    enabled: true,
-  });
 
   // ---------------------------------------------------------------------------
   // Render
@@ -833,7 +914,60 @@ export function SingleForm({
   const recovery = useAutosaveRecovery({
     scope: autosaveScope,
     form,
+    savedCount,
   });
+
+  /*
+   * Throwing away this language's pending change, through the same gate as a
+   * save: it reaches the row directly and never passes `handleSubmit`. The
+   * latch is held for its duration so a save started in the same turn cannot
+   * run against it.
+   */
+  const discardWorkingDraft = async () => {
+    if (writesHeld || busy || submissionLatch.current) {
+      return;
+    }
+    submissionLatch.current = true;
+    try {
+      await discardMutation.mutateAsync();
+    } finally {
+      submissionLatch.current = false;
+    }
+  };
+
+  /*
+   * What deciding this document's actions reads. The storing handlers hand
+   * back their outcome so an action run from outside the header can say what
+   * it came to.
+   */
+  const documentActionsInput: DocumentActionBindingsInput = {
+    mode: "edit",
+    hasStatus,
+    /* The draft/published split. Without this the actions take their
+       `draftsEnabled: false` branch, whose Save names the status — and a write
+       that names one is never held, so the engine's pending-change support
+       stayed dark for every Single. The label is the visible tell: "Save
+       changes" rather than "Save". */
+    draftsEnabled: schema.draftsEnabled === true,
+    // The whole busy state: the disabled reasons and the discard question
+    // reflect a discard in flight as well as a save.
+    isSubmitting: busy,
+    // Includes work a field holds, so Save is offered for it — and Mod+S,
+    // which runs Save — while the page builder holds the change.
+    isDirty: hasUnsavedWork,
+    entry: entryLike,
+    collectionSlug: schema.slug,
+    /* The active language, whose row's status the save actions act on — a
+       localized single's default row and its translations can be in
+       different publish states. */
+    locale,
+    documentLocked: lock.readOnly,
+    contributedActions: documentActions,
+    ...storingHandlers(handleSubmit),
+    onDiscardWorkingDraft: discardWorkingDraft,
+    onCancel: handleCancel,
+    ...(onViewApi === undefined ? {} : { onViewApi }),
+  };
 
   return (
     // A single is only ever edited standalone, so unlike the entry editor there
@@ -901,225 +1035,190 @@ export function SingleForm({
                 >
                   {/* A document view replaces the form body and nothing around
                       it, as in the entry editor. */}
-                  {documentView ? (
-                    <DocumentViewBody
-                      view={documentView}
-                      target={{ singleSlug: schema.slug }}
-                      form={form}
-                      lock={lock}
-                      recovery={recovery}
-                      viewingVersion={viewingVersion}
-                      fields={schema.fields}
+                  <DocumentActionsHost input={documentActionsInput}>
+                    {/* Mod+S runs the Save action, so a Single saves by the
+                      same rule the entry editor does. The view owns Escape;
+                      the save chords stay. */}
+                    <DocumentSaveShortcuts
+                      onCancel={documentView ? undefined : handleCancel}
+                      hasUnsavedWork={hasUnsavedWork}
+                      isSubmitting={isSubmitting}
                     />
-                  ) : (
-                    <div className={cn("space-y-0", className)}>
-                      <EntryFormProvider form={form} onSubmit={handleSubmit}>
-                        <CopyFromLanguageScope>
-                          <FormErrorSummary
-                            errors={errors}
-                            submitCount={submitCount}
-                            className="mx-6 mt-3"
-                          />
+                    {documentView ? (
+                      <DocumentViewBody
+                        view={documentView}
+                        target={{ singleSlug: schema.slug }}
+                        form={form}
+                        lock={lock}
+                        recovery={recovery}
+                        viewingVersion={viewingVersion}
+                        fields={schema.fields}
+                      />
+                    ) : (
+                      <div className={cn("space-y-0", className)}>
+                        {/* Its native submit — Enter in a field, or a
+                            submit-typed Save — runs the Save action, so it
+                            stores what Mod+S does and waits for what Save
+                            waits for. */}
+                        <SaveActionFormProvider form={form}>
+                          <CopyFromLanguageScope>
+                            <FormErrorSummary
+                              errors={errors}
+                              submitCount={submitCount}
+                              className="mx-6 mt-3"
+                            />
 
-                          <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-my-8">
-                            {/* Main column */}
-                            <div className="flex-1 min-w-0 flex flex-col">
-                              {/* No horizontal compensation here, and none needed. The
+                            <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-my-8">
+                              {/* Main column */}
+                              <div className="flex-1 min-w-0 flex flex-col">
+                                {/* No horizontal compensation here, and none needed. The
                 parent's `-my-8` cancels the page's VERTICAL inset only; the
                 horizontal inset is spent as grid columns on a measured page and
                 is not a padding any margin can pull back from. A horizontal one here
                 would not cancel anything — it would push the header and meta
                 strip past the content column, which is what it did when the
                 parent still cancelled both axes. */}
-                              <EntrySystemHeader
-                                autosaveEnabled={autosaveScope !== null}
-                                autosaveStatus={autosave.status}
-                                autosaveLastSavedAt={autosave.lastSavedAt}
-                                mode="edit"
-                                titleField={titleField}
-                                historyFields={schema.fields}
-                                historyEnabled={historyEnabledFrom(schema)}
-                                historyRetention={historyRetentionFrom(schema)}
-                                hasStatus={hasStatus}
-                                // The whole busy state: the header's spinner,
-                                // disabled reasons and discard dialog all
-                                // reflect a discard in flight as well as a save.
-                                isSubmitting={busy}
-                                isDirty={isDirty}
-                                hasUnsavedWork={hasUnsavedWork}
-                                entry={entryLike}
-                                collectionSlug={schema.slug}
-                                /* The active language, which the header reads to decide
-                             which row's status its save buttons act on — a
-                             localized single's default row and its translations
-                             can be in different publish states. Switching
-                             language is the language panel's job, so no handler
-                             is forwarded here. */
-                                locale={locale}
-                                localized={schema.localized === true}
-                                /* A Single has a draft lifecycle, so it has drafts worth
+                                <EntrySystemHeader
+                                  autosaveEnabled={autosaveScope !== null}
+                                  // A recovery point newer than the stored document, still on offer:
+                                  // its edits are not stored, whatever the form says.
+                                  pendingRecoveryAt={
+                                    recovery.offer?.savedAt ?? null
+                                  }
+                                  autosaveLastSavedAt={autosave.lastSavedAt}
+                                  mode="edit"
+                                  titleField={titleField}
+                                  historyFields={schema.fields}
+                                  historyEnabled={historyEnabledFrom(schema)}
+                                  historyRetention={historyRetentionFrom(
+                                    schema
+                                  )}
+                                  historyLifecycle={hasStatus}
+                                  // The whole busy state: the header's spinner,
+                                  // disabled reasons and discard dialog all
+                                  // reflect a discard in flight as well as a save.
+                                  isSubmitting={busy}
+                                  hasUnsavedWork={hasUnsavedWork}
+                                  entry={entryLike}
+                                  collectionSlug={schema.slug}
+                                  localized={schema.localized === true}
+                                  /* A Single has a draft lifecycle, so it has drafts worth
                    sharing. The control is offered whenever the Single carries
                    that lifecycle; whether a link can actually be minted is the
                    server's call, and it refuses with a message naming what is
                    missing rather than handing out one that 404s. */
-                                isLinkAvailable={previewLink.isAvailable}
-                                {...(previewLink.shareDocument === undefined
-                                  ? {}
-                                  : {
-                                      shareDocument: previewLink.shareDocument,
-                                    })}
-                                /* The pane is offered on exactly the terms the
+                                  isLinkAvailable={previewLink.isAvailable}
+                                  {...(previewLink.shareDocument === undefined
+                                    ? {}
+                                    : {
+                                        shareDocument:
+                                          previewLink.shareDocument,
+                                      })}
+                                  /* The pane is offered on exactly the terms the
                            shareable link is: a Single with a draft lifecycle
                            and a resolvable language. Withheld in translation
                            mode, where the pane itself is withheld — a button
                            that toggles a flag nothing reads is worse than no
                            button. */
-                                {...previewPane.toggle}
-                                contributedActions={documentActions}
-                                toolbarSlot={versionAwareToolbarSlots(
-                                  viewedVersionHost,
-                                  lock.actionsDisabled,
-                                  "single",
-                                  controllerNames[0]
-                                )}
-                                onSaveDraft={() => {
-                                  void handleSubmit(undefined, "save-draft");
-                                }}
-                                onPublish={() => {
-                                  void handleSubmit(undefined, "publish");
-                                }}
-                                onSaveChanges={() => {
-                                  void handleSubmit(undefined, "save-changes");
-                                }}
-                                /* The draft/published split. Without this the header
-                   takes its `draftsEnabled: false` branch, whose Save names the
-                   status — and a write that names one is never held, so the
-                   engine's pending-change support stayed dark for every Single.
-                   The label is the visible tell: "Save changes" rather than
-                   "Save". */
-                                draftsEnabled={schema.draftsEnabled === true}
-                                onSaveWorkingDraft={() => {
-                                  void handleSubmit(
-                                    undefined,
-                                    "save-working-draft"
-                                  );
-                                }}
-                                onUnpublish={() => {
-                                  void handleSubmit(undefined, "unpublish");
-                                }}
-                                onDiscardWorkingDraft={async () => {
-                                  // Through the same gate: this reaches the row
-                                  // directly and never passed `handleSubmit`. The
-                                  // latch is held for its duration so a save
-                                  // started in the same turn cannot run against
-                                  // it.
-                                  if (
-                                    writesHeld ||
-                                    busy ||
-                                    submissionLatch.current
-                                  ) {
-                                    return;
-                                  }
-                                  submissionLatch.current = true;
-                                  try {
-                                    await discardMutation.mutateAsync();
-                                  } finally {
-                                    submissionLatch.current = false;
-                                  }
-                                }}
-                                onCancel={handleCancel}
-                                onViewApi={onViewApi}
-                                /* Why: Singles share the Show JSON dialog with collections,
+                                  {...previewPane.toggle}
+                                  toolbarSlot={versionAwareToolbarSlots(
+                                    viewedVersionHost,
+                                    lock.actionsDisabled,
+                                    "single",
+                                    controllerNames[0]
+                                  )}
+                                  /* Why: Singles share the Show JSON dialog with collections,
                  but at the /api/singles/{slug} URL pattern. Passing
                  `scope="single"` routes the dialog through singleApi
                  instead of entryApi. */
-                                scope="single"
-                                lockIdentity
-                                documentLocked={lock.readOnly}
-                                isRailCollapsed={railCollapsed}
-                                onToggleRail={toggleRail}
-                              />
-                              <EntryMetaStrip
-                                slugField={slugField}
-                                hasStatus={hasStatus}
-                                status={documentStatus}
-                                // The pill shows wherever the panel is off
-                                // screen, a phone included, so it reports a
-                                // pending working draft as the panel does.
-                                hasWorkingDraft={hasPendingWorkingDraft(
-                                  document
-                                )}
-                                isRailCollapsed={railCollapsed}
-                                lockSlug
-                              />
+                                  scope="single"
+                                  lockIdentity
+                                  documentLocked={lock.readOnly}
+                                  isRailCollapsed={railCollapsed}
+                                  onToggleRail={toggleRail}
+                                />
+                                <EntryMetaStrip
+                                  slugField={slugField}
+                                  hasStatus={hasStatus}
+                                  status={documentStatus}
+                                  // The pill shows wherever the panel is off
+                                  // screen, a phone included, so it reports a
+                                  // pending working draft as the panel does.
+                                  hasWorkingDraft={hasPendingWorkingDraft(
+                                    document
+                                  )}
+                                  isRailCollapsed={railCollapsed}
+                                  lockSlug
+                                />
 
-                              {/* Inside the main column, below the header, matching the entry
+                                {/* Inside the main column, below the header, matching the entry
                   editor. Placed above the flex row it sat UNDER the sticky
                   header, which intercepted pointer events: the offer was
                   visible and its buttons were not clickable. */}
-                              <DocumentLockBanner
-                                notice={lock.notice}
-                                onTakeOver={lock.takeOver}
-                                onRequestAccess={lock.requestAccess}
-                                className="mx-6 mt-3"
-                              />
-                              <LiveDocumentRecoveryOffer
-                                recovery={recovery}
-                                viewingVersion={viewingVersion}
-                                className="mx-6 mt-3"
-                              />
+                                <DocumentLockBanner
+                                  notice={lock.notice}
+                                  onTakeOver={lock.takeOver}
+                                  onRequestAccess={lock.requestAccess}
+                                  className="mx-6 mt-3"
+                                />
+                                <LiveDocumentRecoveryOffer
+                                  recovery={recovery}
+                                  viewingVersion={viewingVersion}
+                                  className="mx-6 mt-3"
+                                />
 
-                              {/* The language panel, inline: the exact complement
+                                {/* The language panel, inline: the exact complement
                               of the rail, shown where the rail is not. */}
-                              <SingleFormLanguagePanel
+                                <SingleFormLanguagePanel
+                                  actionsDisabled={writesHeld}
+                                  enabled={localizationEnabled}
+                                  hasStatus={hasStatus}
+                                  railCollapsed={railCollapsed}
+                                  {...(singleTranslations === undefined
+                                    ? {}
+                                    : { translations: singleTranslations })}
+                                  {...(locale === undefined ? {} : { locale })}
+                                  {...(onLocaleChange === undefined
+                                    ? {}
+                                    : { onLocaleChange })}
+                                />
+
+                                {/* Reading a past version replaces the document rather
+                              than opening beside it — see the fields panel. */}
+                                <SingleFormFieldsPanel
+                                  historicalFields={historicalFields}
+                                  historicalValues={historicalValues}
+                                  isSubmitting={isSubmitting}
+                                  mainFields={mainFields}
+                                  readOnly={lock.readOnly}
+                                  // A submit in flight withholds restore too: a
+                                  // restore racing the ordinary save would let
+                                  // completion order decide which contents
+                                  // survive.
+                                  versionActionsHeld={
+                                    lock.actionsDisabled || busy
+                                  }
+                                />
+                              </div>
+
+                              {/* Rail (collapsible). */}
+                              <SingleFormRail
                                 actionsDisabled={writesHeld}
-                                enabled={localizationEnabled}
+                                entry={entryLike}
                                 hasStatus={hasStatus}
+                                isDirty={isDirty}
                                 railCollapsed={railCollapsed}
-                                {...(singleTranslations === undefined
-                                  ? {}
-                                  : { translations: singleTranslations })}
                                 {...(locale === undefined ? {} : { locale })}
                                 {...(onLocaleChange === undefined
                                   ? {}
                                   : { onLocaleChange })}
                               />
-
-                              {/* Reading a past version replaces the document rather
-                              than opening beside it — see the fields panel. */}
-                              <SingleFormFieldsPanel
-                                historicalFields={historicalFields}
-                                historicalValues={historicalValues}
-                                isSubmitting={isSubmitting}
-                                mainFields={mainFields}
-                                readOnly={lock.readOnly}
-                                // A submit in flight withholds restore too: a
-                                // restore racing the ordinary save would let
-                                // completion order decide which contents
-                                // survive.
-                                versionActionsHeld={
-                                  lock.actionsDisabled || busy
-                                }
-                              />
                             </div>
-
-                            {/* Rail (collapsible). */}
-                            <SingleFormRail
-                              actionsDisabled={writesHeld}
-                              entry={entryLike}
-                              hasStatus={hasStatus}
-                              isDirty={isDirty}
-                              railCollapsed={railCollapsed}
-                              {...(locale === undefined ? {} : { locale })}
-                              {...(onLocaleChange === undefined
-                                ? {}
-                                : { onLocaleChange })}
-                            />
-                          </div>
-                        </CopyFromLanguageScope>
-                      </EntryFormProvider>
-                    </div>
-                  )}
+                          </CopyFromLanguageScope>
+                        </SaveActionFormProvider>
+                      </div>
+                    )}
+                  </DocumentActionsHost>
                 </TranslationPanes>
               </PreviewPanes>
             </DocumentHistoryContext.Provider>

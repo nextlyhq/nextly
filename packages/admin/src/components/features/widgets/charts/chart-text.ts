@@ -27,16 +27,19 @@ export function chartName(
 
 /**
  * The current point, as the live region reads it: the series where there are
- * several, then when (or which group) and how many.
+ * several, then when (or which group) and how many, then where it sits ("2 of
+ * 3"). The position makes every move heard: two bars, or two intervals, can
+ * read alike, and a live region whose text does not change says nothing.
  */
 export function currentPointText(point: {
   series?: string;
   when: string;
   value: string;
+  position: { index: number; of: number };
 }): string {
   const where =
     point.series === undefined ? point.when : `${point.series}, ${point.when}`;
-  return `${where}: ${point.value}.`;
+  return `${where}: ${point.value}. ${point.position.index + 1} of ${point.position.of}.`;
 }
 
 interface Point {
