@@ -131,6 +131,24 @@ export function absentPluginFor(slug: string): string | null {
   return match ? match.plugin : null;
 }
 
+/**
+ * Which version a send of a template uses: the stored one, the site's code
+ * version, or none at all. The one decision, read by the send and by every
+ * report of what a send does. The stored one sends when it is active and the
+ * code does not come first; otherwise the code version does, if there is one.
+ */
+export function sendSource(input: {
+  stored: { isActive: boolean } | null;
+  /** Whether the code version comes first (see `resolveForSend`). */
+  preferCode: boolean;
+  hasCode: boolean;
+}): "stored" | "code" | "none" {
+  if (input.stored?.isActive && !(input.hasCode && input.preferCode)) {
+    return "stored";
+  }
+  return input.hasCode ? "code" : "none";
+}
+
 /** Whether a version is the owner's, current or earlier, rather than the site's. */
 export function isOwnersVersion(
   entry: OwnedTemplate,

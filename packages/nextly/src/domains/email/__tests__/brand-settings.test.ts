@@ -28,6 +28,7 @@ import {
   BUILT_IN_TEMPLATES,
   DEFAULT_LAYOUT_BEFORE_BRAND,
   defaultLayoutTemplate,
+  EARLIER_BUILT_IN_VERSIONS,
 } from "../services/templates";
 
 const body = (htmlContent: string): TemplateFields => ({
@@ -56,7 +57,7 @@ const SITE_LAYOUT = {
   ].join(""),
 };
 
-describe("core's default layout before and after brand settings", () => {
+describe("core's built-ins before and after brand settings", () => {
   const data = {
     appName: `Shop <b>&</b> 'Co' "Ltd"`,
     year: "2026",
@@ -65,8 +66,8 @@ describe("core's default layout before and after brand settings", () => {
   };
 
   it.each(BUILT_IN_TEMPLATES.map(t => [t.slug, t] as const))(
-    "renders %s exactly as the layout before brand settings did",
-    (_slug, template) => {
+    "renders %s exactly as core shipped it before brand settings",
+    (slug, template) => {
       const fields: TemplateFields = {
         subject: template.subject,
         htmlContent: template.htmlContent,
@@ -75,8 +76,14 @@ describe("core's default layout before and after brand settings", () => {
         useLayout: template.useLayout ?? true,
         kind: template.kind ?? "template",
       };
+      // What core shipped before: the template's earlier version, in the
+      // layout's. Every built-in has one, and it differs from today's text,
+      // so the equality below compares two renders of different sources.
+      const earlier = EARLIER_BUILT_IN_VERSIONS[slug]?.[0];
+      expect(earlier?.htmlContent).toBeDefined();
+      expect(earlier?.htmlContent).not.toBe(template.htmlContent);
       const before = renderTemplate(
-        fields,
+        { ...fields, ...earlier },
         fields.useLayout ? DEFAULT_LAYOUT_BEFORE_BRAND : null,
         data,
         { appName: "Nextly" }
@@ -115,6 +122,50 @@ describe("core's default layout before and after brand settings", () => {
     // A layout either engine could read differently would be kept on the
     // old one by the switch to Liquid, which writes `{%` and filters as text.
     expect(oldEngineReasons(defaultLayoutTemplate)).toEqual([]);
+  });
+});
+
+describe("core's built-in emails with a changed accent", () => {
+  const accent = brand({ accentColor: "#ff0066" });
+  const bodies = BUILT_IN_TEMPLATES.filter(t => t.kind !== "layout");
+
+  it.each(bodies.map(t => [t.slug, t] as const))(
+    "writes the button of %s in the accent, for Outlook and every other client",
+    (_slug, template) => {
+      const { html } = renderTemplate(
+        body(template.htmlContent),
+        defaultLayoutTemplate,
+        { verifyLink: "https://x.test/v", resetLink: "https://x.test/r" },
+        { appName: "Acme", brand: accent }
+      );
+      expect(html).toContain(`fillcolor="#ff0066"`);
+      expect(html).toContain(`background-color: #ff0066; color: #ffffff;`);
+      // Only the button: the heading keeps its own colour.
+      expect(html).toContain(`font-weight: 600; color: #18181b;`);
+      expect(html).not.toContain(`fillcolor="#18181b"`);
+    }
+  );
+
+  it("does so without a layout too", () => {
+    const reset = bodies.find(t => t.slug === "password-reset");
+    if (!reset) throw new Error("no password-reset");
+    const { html } = renderTemplate(
+      { ...body(reset.htmlContent), useLayout: false },
+      null,
+      {},
+      { appName: "Acme", brand: accent }
+    );
+    expect(html).toContain(`fillcolor="#ff0066"`);
+  });
+
+  it("lets a send that supplies its own `brand` keep it in the body", () => {
+    const { html } = renderTemplate(
+      body("<p>{{ brand }}</p>"),
+      null,
+      { brand: "Contoso" },
+      { appName: "Acme", brand: accent }
+    );
+    expect(html).toBe("<p>Contoso</p>");
   });
 });
 
@@ -192,6 +243,80 @@ describe("core's default layout with changed settings", () => {
     // The body says what its data says; the layout keeps the site's colour.
     expect(html).toContain("<p>Contoso</p>");
     expect(html).toContain(`style="background-color: #102030;"`);
+  });
+});
+
+describe("core's default layout in dark mode", () => {
+  /** The layout's style block, where the dark-mode rules are. */
+  const style = (settings: BrandSettings) => {
+    const { html } = renderTemplate(
+      body("x"),
+      defaultLayoutTemplate,
+      {},
+      {
+        appName: "Acme",
+        brand: settings,
+      }
+    );
+    return html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+  };
+
+  it("swaps the starting colours for dark ones", () => {
+    const css = style(brand({}));
+    expect(css).toContain(
+      ".email-bg { background-color: #1a1a2e !important; }"
+    );
+    expect(css).toContain(
+      ".email-card { background-color: #27272a !important; }"
+    );
+  });
+
+  it("keeps a background the site chose", () => {
+    const css = style(brand({ backgroundColor: "#102030" }));
+    expect(css).not.toContain(".email-bg {");
+    expect(css).toContain(
+      ".email-card { background-color: #27272a !important; }"
+    );
+  });
+
+  it("keeps a content colour the site chose, and its text with it", () => {
+    const css = style(brand({ contentColor: "#fff8e7" }));
+    expect(css).not.toContain(".email-card");
+    expect(css).toContain(
+      ".email-bg { background-color: #1a1a2e !important; }"
+    );
+    // The muted footer text is not the card's, and keeps its dark rule.
+    expect(css).toContain(".email-muted { color: #a1a1aa !important; }");
+  });
+});
+
+describe("a layout kept on the engine before Liquid", () => {
+  it("writes the brand markup as markup, not as escaped text", () => {
+    const { html, text } = renderTemplate(
+      {
+        ...body("<p>Body</p>"),
+        plainTextContent: "Body {{brand.html.footer}}",
+        legacy: true,
+      },
+      {
+        htmlContent:
+          "<div>{{content}}<p>{{brand.html.footer}}</p>{{brand.html.links}}</div>",
+        legacy: true,
+      },
+      {},
+      {
+        appName: "Acme",
+        brand: brand({
+          footerText: "Acme <Ltd>",
+          footerLinks: [{ label: "Help", url: "https://acme.test/h" }],
+        }),
+      }
+    );
+    expect(html).toContain('<p>Acme &lt;Ltd&gt;</p><p class="email-muted"');
+    expect(html).toContain(`<a href="https://acme.test/h"`);
+    expect(html).not.toContain("&lt;p");
+    // In plain text the markup is read as its text.
+    expect(text).toBe("Body Acme <Ltd>");
   });
 });
 

@@ -29,7 +29,12 @@ import {
   type BrandSettings,
 } from "../brand-settings";
 
-import { markHtml, renderLiquid, type LiquidContext } from "./liquid-engine";
+import {
+  markHtml,
+  renderLiquid,
+  TrustedHtml,
+  type LiquidContext,
+} from "./liquid-engine";
 import { htmlToText, interpolateTemplate } from "./template-engine";
 
 /** The slot a layout declares for the message body. */
@@ -98,11 +103,24 @@ export interface RenderTemplateOptions {
   /** Value for `{{appName}}` when the caller's data supplies none. */
   appName: string;
   /**
-   * The site's brand settings, read by a layout as `brand`. Absent means the
-   * starting values, which render core's default layout as it was before
-   * brand settings.
+   * The site's brand settings, read as `brand` by a layout and by a body
+   * whose send supplies no `brand` of its own. Absent means the starting
+   * values, which render core's built-ins as they were before brand settings.
    */
   brand?: BrandSettings;
+}
+
+/**
+ * Marked HTML as the old engine writes it, the way Liquid does: as it is in
+ * HTML, and as its text in plain text. Without this the old engine would
+ * escape a brand setting's markup into visible tags.
+ */
+function trustedAsHtml(value: unknown): string | undefined {
+  return TrustedHtml.is(value) ? value.html : undefined;
+}
+
+function trustedAsText(value: unknown): string | undefined {
+  return TrustedHtml.is(value) ? htmlToText(value.html) : undefined;
 }
 
 /**
@@ -119,6 +137,7 @@ function fill(
   if (legacy) {
     return interpolateTemplate(source, data, {
       escapeHtml: context === "html",
+      trusted: context === "html" ? trustedAsHtml : trustedAsText,
     });
   }
   return renderLiquid(source, data, context);
@@ -135,18 +154,25 @@ export function renderTemplate(
   options: RenderTemplateOptions
 ): RenderedTemplate {
   const legacy = template.legacy;
+  const layoutData = withLayoutChrome(data, options);
+  // The body reads the brand settings as `brand` too, so a template can write
+  // its buttons in the accent, as core's built-ins do. A send's own `brand`
+  // wins here, as every explicit value does in a body: a template written for
+  // a `brand` its sends supply keeps reading it.
+  const bodyData =
+    data.brand === undefined ? { ...data, brand: layoutData.brand } : data;
   // Mail clients render a subject as plain text, so escaping it would show the
   // reader `&amp;` where the value contains `&`.
-  const subject = fill(template.subject, data, "line", legacy);
+  const subject = fill(template.subject, bodyData, "line", legacy);
 
   // A layout row IS the wrapper, so the chrome variables its own markup
   // references resolve here exactly as they do when a body is spliced into it.
-  // Withheld from an ordinary body: a template that says `{{appName}}` in its
-  // own copy has always rendered whatever the caller supplied, and nothing
-  // when the caller supplied nothing.
+  // Withheld from an ordinary body (all but `brand`): a template that says
+  // `{{appName}}` in its own copy has always rendered whatever the caller
+  // supplied, and nothing when the caller supplied nothing.
   let html = fill(
     template.htmlContent,
-    template.kind === "layout" ? withLayoutChrome(data, options) : data,
+    template.kind === "layout" ? layoutData : bodyData,
     "html",
     legacy
   );
@@ -156,18 +182,18 @@ export function renderTemplate(
   // that line as the message's opening words; the layout's chrome would follow
   // it into the text part for the same reason.
   const text = template.plainTextContent?.trim()
-    ? fill(template.plainTextContent, data, "text", legacy)
+    ? fill(template.plainTextContent, bodyData, "text", legacy)
     : htmlToText(html);
 
   if (template.preheader?.trim()) {
-    const preheader = fill(template.preheader, data, "html", legacy);
+    const preheader = fill(template.preheader, bodyData, "html", legacy);
     html = `${PREHEADER_OPEN}${preheader}</div>${html}`;
   }
 
   // A layout row IS a wrapper, so wrapping it in another would nest two
   // documents. It renders as itself.
   if (template.kind !== "layout" && template.useLayout && layout) {
-    html = spliceIntoLayout(layout, html, withLayoutChrome(data, options));
+    html = spliceIntoLayout(layout, html, layoutData);
   }
 
   return { subject, html, text };
@@ -187,7 +213,7 @@ export function renderTemplate(
  * reads from the settings: core's default layout is written in it, so a send
  * whose data happens to carry a `brand` of its own (a product's brand name,
  * say) must not take the layout's colours and footer with it. The body still
- * reads the caller's value.
+ * reads the caller's value, and the settings only when the caller gave none.
  */
 function withLayoutChrome(
   data: Record<string, unknown>,
@@ -222,11 +248,17 @@ function spliceIntoLayout(
   const wrapper = layout.htmlContent;
   const at = wrapper.indexOf(CONTENT_MARKER);
   if (layout.legacy) {
-    if (at === -1) return interpolateTemplate(wrapper, variables) + body;
+    const options = { trusted: trustedAsHtml };
+    if (at === -1)
+      return interpolateTemplate(wrapper, variables, options) + body;
     return (
-      interpolateTemplate(wrapper.slice(0, at), variables) +
+      interpolateTemplate(wrapper.slice(0, at), variables, options) +
       body +
-      interpolateTemplate(wrapper.slice(at + CONTENT_MARKER.length), variables)
+      interpolateTemplate(
+        wrapper.slice(at + CONTENT_MARKER.length),
+        variables,
+        options
+      )
     );
   }
   if (at === -1) return renderLiquid(wrapper, variables, "html") + body;

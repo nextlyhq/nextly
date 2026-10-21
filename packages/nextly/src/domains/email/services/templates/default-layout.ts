@@ -118,9 +118,7 @@ export const defaultLayoutTemplate: OwnerTemplate = {
     table { border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
     img { border: 0; line-height: 100%; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic; }
     @media (prefers-color-scheme: dark) {
-      .email-bg { background-color: #1a1a2e !important; }
-      .email-card { background-color: #27272a !important; }
-      .email-card h1, .email-card h2, .email-card p { color: #fafafa !important; }
+      {{brand.html.darkMode}}
       .email-muted { color: #a1a1aa !important; }
     }
   </style>

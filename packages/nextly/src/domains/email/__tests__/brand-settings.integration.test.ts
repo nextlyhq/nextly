@@ -11,6 +11,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { EMAIL_BRAND_TABLE } from "../../../schemas/email-brand";
+import type { EmailTemplateVersion } from "../../../schemas/email-templates/types";
 import { STARTING_BRAND } from "../brand-settings";
 import type { EmailTemplateService } from "../services/email-template-service";
 import {
@@ -19,6 +20,9 @@ import {
   DEFAULT_LAYOUT_SLUG,
   defaultLayoutTemplate,
 } from "../services/templates";
+import { EMAIL_VERIFICATION_BEFORE_BRAND } from "../services/templates/email-verification";
+import { PASSWORD_RESET_BEFORE_BRAND } from "../services/templates/password-reset";
+import { WELCOME_BEFORE_BRAND } from "../services/templates/welcome";
 
 import {
   forgetOwnership,
@@ -44,6 +48,17 @@ const EDITED_LAYOUT = `<html><body style="background: #000000;"><table><tr><td>{
 /** A layout of the site's own that reads the settings. */
 const SITE_LAYOUT = `<div style="background: {{ brand.backgroundColor }};">{{content}}<p>{{ brand.footerText }}</p></div>`;
 
+/**
+ * Each built-in body as core shipped it before brand settings, read from its
+ * own file rather than from the registry's list of earlier versions, which is
+ * what the upgrade below puts to the test.
+ */
+const BEFORE_BRAND: Record<string, EmailTemplateVersion> = {
+  welcome: WELCOME_BEFORE_BRAND,
+  "password-reset": PASSWORD_RESET_BEFORE_BRAND,
+  "email-verification": EMAIL_VERIFICATION_BEFORE_BRAND,
+};
+
 const BODIES = BUILT_IN_TEMPLATES.filter(t => t.kind !== "layout").map(
   t => t.slug
 );
@@ -58,10 +73,11 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
     async function seedBeforeBrand(layoutHtml: string): Promise<void> {
       const seeding = store.newService();
       for (const template of BUILT_IN_TEMPLATES) {
+        // Each built-in as core shipped it then, the layout as given.
         await seeding.createTemplate(
           template.slug === DEFAULT_LAYOUT_SLUG
             ? { ...template, htmlContent: layoutHtml }
-            : template
+            : { ...template, ...BEFORE_BRAND[template.slug] }
         );
       }
       await forgetOwnership(store);
@@ -124,6 +140,13 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         overridden: false,
         htmlContent: defaultLayoutTemplate.htmlContent,
       });
+      // Every built-in body follows core too, its button now in the accent.
+      for (const builtIn of BUILT_IN_TEMPLATES) {
+        expect(await template(service, builtIn.slug)).toMatchObject({
+          overridden: false,
+          htmlContent: builtIn.htmlContent,
+        });
+      }
       const reach = await service.brandReach();
       expect(reach.map(r => [r.slug, r.reached]).sort()).toEqual(
         BODIES.map(slug => [slug, true]).sort()
@@ -164,6 +187,9 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         `href="https://acme.test/privacy" style="color: #ff0066;`
       );
       expect(sent.html).not.toContain("All rights reserved.");
+      // The button is in the accent, for Outlook and every other client.
+      expect(sent.html).toContain(`fillcolor="#ff0066"`);
+      expect(sent.html).toContain(`background-color: #ff0066; color: #ffffff;`);
 
       // The draft preview composes the same way.
       const draft = await next.previewDraft(
@@ -274,6 +300,34 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         reason: "setInCode",
       });
       expect(reach.get("password-reset")).toMatchObject({ reached: true });
+    });
+
+    it("follows the send's choice when a template is switched off", async () => {
+      const service = await boot({
+        welcome: () => ({ subject: "Welcome (code)", html: "<p>code</p>" }),
+      });
+      // An active override sends the stored row, in the layout.
+      const welcome = await template(service, "welcome");
+      await service.overrideTemplate(welcome.id);
+      const reachOf = async (slug: string) =>
+        (await service.brandReach()).find(r => r.slug === slug);
+      expect(await reachOf("welcome")).toMatchObject({ reached: true });
+
+      // Switched off, the send falls back to the code version.
+      await service.updateTemplate(welcome.id, { isActive: false });
+      expect(await reachOf("welcome")).toMatchObject({
+        reached: false,
+        reason: "setInCode",
+      });
+
+      // Switched off with no code version, nothing sends.
+      const reset = await template(service, "password-reset");
+      await service.updateTemplate(reset.id, { isActive: false });
+      expect(await reachOf("password-reset")).toMatchObject({
+        reached: false,
+        reason: "inactive",
+        layout: null,
+      });
     });
 
     it("sends as before when the database has no brand table yet", async () => {

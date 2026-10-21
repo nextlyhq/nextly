@@ -71,6 +71,7 @@ import {
   detailsOf,
   isOwnersVersion,
   isProtectedOwner,
+  sendSource,
   ownerOf,
   ownershipFromConfig,
   sameStoredValue,
@@ -330,11 +331,30 @@ type StoredTemplateRow = Omit<
 // Email Template Service
 // ============================================================
 
-/** A template's own layout, when what it names is one; otherwise null, for the default. */
-function ownLayout(
-  candidate: EmailTemplateRecord | null
-): EmailTemplateRecord | null {
-  return candidate?.kind === "layout" ? candidate : null;
+/**
+ * The layout a template is wrapped in: the one it names, when that is a
+ * layout, otherwise the default one. How a record is found is the caller's;
+ * the choice is made here only, for a send and for every report of one.
+ */
+async function chooseLayout(
+  template: Pick<EmailTemplateRecord, "layoutId">,
+  find: (
+    id: string
+  ) => Promise<EmailTemplateRecord | null> | EmailTemplateRecord | null,
+  defaultLayout: () =>
+    | Promise<EmailTemplateRecord | null>
+    | EmailTemplateRecord
+    | null
+): Promise<EmailTemplateRecord | null> {
+  const own = template.layoutId ? await find(template.layoutId) : null;
+  return own?.kind === "layout" ? own : defaultLayout();
+}
+
+/** Whether the site's code version comes before a stored row: unless the row is an override, or not yet given its owner. */
+function prefersCode(
+  row: Pick<StoredTemplateRow, "ownerKind" | "overridden">
+): boolean {
+  return row.ownerKind !== null && row.overridden !== true;
 }
 
 /** Union of all dialect-specific email_templates table definitions. */
@@ -984,22 +1004,9 @@ export class EmailTemplateService extends BaseService {
       data,
       {
         appName: options?.appName ?? this.appName,
-        brand: await this.brandFor(template, layout),
+        brand: await this.brandStore.read(),
       }
     );
-  }
-
-  /**
-   * The brand settings for a render that has a layout to read them: one
-   * wrapping the template, or the template when it is a layout. Nothing is
-   * read for a render without one.
-   */
-  private async brandFor(
-    template: Pick<TemplateFields, "kind">,
-    layout: EmailTemplateRecord | null
-  ): Promise<BrandSettings | undefined> {
-    if (!layout && template.kind !== "layout") return undefined;
-    return this.brandStore.read();
   }
 
   /**
@@ -1145,7 +1152,7 @@ export class EmailTemplateService extends BaseService {
     if (!row) return { template: null, preferCode: true };
     return {
       template: this.toRecord(row),
-      preferCode: row.ownerKind !== null && row.overridden !== true,
+      preferCode: prefersCode(row),
     };
   }
 
@@ -1868,7 +1875,7 @@ export class EmailTemplateService extends BaseService {
         legacy: await this.keptOnOldEngine(layout),
       },
       sampleData,
-      { appName: this.appName, brand: await this.brandFor(draft, layout) }
+      { appName: this.appName, brand: await this.brandStore.read() }
     );
   }
 
@@ -2282,15 +2289,18 @@ export class EmailTemplateService extends BaseService {
   async getLayoutFor(
     template: Pick<EmailTemplateRecord, "layoutId">
   ): Promise<EmailTemplateRecord | null> {
-    let own: EmailTemplateRecord | null = null;
-    if (template.layoutId) {
-      try {
-        own = await this.getTemplate(template.layoutId);
-      } catch (error) {
-        if (!NextlyError.isCode(error, "NOT_FOUND")) throw error;
-      }
-    }
-    return ownLayout(own) ?? this.getDefaultLayout();
+    return chooseLayout(
+      template,
+      async id => {
+        try {
+          return await this.getTemplate(id);
+        } catch (error) {
+          if (!NextlyError.isCode(error, "NOT_FOUND")) throw error;
+          return null;
+        }
+      },
+      () => this.getDefaultLayout()
+    );
   }
 
   // ============================================================
@@ -2346,46 +2356,62 @@ export class EmailTemplateService extends BaseService {
           record.slug === DEFAULT_LAYOUT_SLUG && record.kind === "layout"
       ) ?? null;
 
-    return rows.flatMap((row, i): BrandReach[] => {
+    const reach: BrandReach[] = [];
+    for (const [i, row] of rows.entries()) {
       const template = records[i];
-      if (template.kind === "layout") return [];
+      if (template.kind === "layout") continue;
       const base = {
         templateId: template.id,
         slug: template.slug,
         name: template.name,
       };
-      // The site's code version sends whenever the stored one is not an
-      // override (as `resolveForSend` decides), and it has no stored layout.
-      if (
-        this.registry.setInCode.has(template.slug) &&
-        row.ownerKind !== null &&
-        row.overridden !== true
-      ) {
-        return [{ ...base, reached: false, reason: "setInCode", layout: null }];
+      // Whichever version a send of it uses, as the send decides.
+      const source = sendSource({
+        stored: template,
+        preferCode: prefersCode(row),
+        hasCode: this.registry.setInCode.has(template.slug),
+      });
+      if (source !== "stored") {
+        // The code version has no stored layout, and an inactive template
+        // with no code version is not sent at all.
+        reach.push({
+          ...base,
+          reached: false,
+          reason: source === "code" ? "setInCode" : "inactive",
+          layout: null,
+        });
+        continue;
       }
       const layout = template.useLayout
-        ? (ownLayout(
-            template.layoutId ? (byId.get(template.layoutId) ?? null) : null
-          ) ?? defaultLayout)
+        ? await chooseLayout(
+            template,
+            id => byId.get(id) ?? null,
+            () => defaultLayout
+          )
         : null;
       if (!layout) {
-        return [{ ...base, reached: false, reason: "noLayout", layout: null }];
+        reach.push({
+          ...base,
+          reached: false,
+          reason: "noLayout",
+          layout: null,
+        });
+        continue;
       }
       const reached = readsVariable(layout.htmlContent, "brand");
-      return [
-        {
-          ...base,
-          reached,
-          reason: reached ? null : "layoutWithoutBrand",
-          layout: {
-            id: layout.id,
-            slug: layout.slug,
-            name: layout.name,
-            overridden: layout.overridden,
-          },
+      reach.push({
+        ...base,
+        reached,
+        reason: reached ? null : "layoutWithoutBrand",
+        layout: {
+          id: layout.id,
+          slug: layout.slug,
+          name: layout.name,
+          overridden: layout.overridden,
         },
-      ];
-    });
+      });
+    }
+    return reach;
   }
 
   // ============================================================

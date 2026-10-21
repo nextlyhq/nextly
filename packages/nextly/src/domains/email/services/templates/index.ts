@@ -18,9 +18,15 @@ import {
   DEFAULT_LAYOUT_SLUG,
   defaultLayoutTemplate,
 } from "./default-layout";
-import { emailVerificationTemplate } from "./email-verification";
-import { passwordResetTemplate } from "./password-reset";
-import { welcomeTemplate } from "./welcome";
+import {
+  EMAIL_VERIFICATION_BEFORE_BRAND,
+  emailVerificationTemplate,
+} from "./email-verification";
+import {
+  PASSWORD_RESET_BEFORE_BRAND,
+  passwordResetTemplate,
+} from "./password-reset";
+import { WELCOME_BEFORE_BRAND, welcomeTemplate } from "./welcome";
 
 export {
   DEFAULT_LAYOUT_BEFORE_BRAND,
@@ -54,4 +60,7 @@ export const EARLIER_BUILT_IN_VERSIONS: Readonly<
   Record<string, ReadonlyArray<EmailTemplateVersion>>
 > = {
   [DEFAULT_LAYOUT_SLUG]: [DEFAULT_LAYOUT_BEFORE_BRAND],
+  [welcomeTemplate.slug]: [WELCOME_BEFORE_BRAND],
+  [passwordResetTemplate.slug]: [PASSWORD_RESET_BEFORE_BRAND],
+  [emailVerificationTemplate.slug]: [EMAIL_VERIFICATION_BEFORE_BRAND],
 };

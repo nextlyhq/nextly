@@ -188,18 +188,18 @@ const FIELD_SCHEMAS = {
  * it to its starting value. A key it does not name is refused.
  */
 export const brandSettingsUpdateSchema = z
-  .object({
-    logoUrl: FIELD_SCHEMAS.logoUrl.nullable(),
-    logoWidth: FIELD_SCHEMAS.logoWidth.nullable(),
-    accentColor: FIELD_SCHEMAS.accentColor.nullable(),
-    backgroundColor: FIELD_SCHEMAS.backgroundColor.nullable(),
-    contentColor: FIELD_SCHEMAS.contentColor.nullable(),
-    fontFamily: FIELD_SCHEMAS.fontFamily.nullable(),
-    footerText: FIELD_SCHEMAS.footerText.nullable(),
-    footerLinks: FIELD_SCHEMAS.footerLinks.nullable(),
-  })
+  .object(nullableEach(FIELD_SCHEMAS))
   .partial()
   .strict();
+
+/** Each rule, also accepting null. Derived, so a setting added above is writable. */
+function nullableEach<T extends Record<string, z.ZodTypeAny>>(
+  shape: T
+): { [K in keyof T]: z.ZodNullable<T[K]> } {
+  return Object.fromEntries(
+    Object.entries(shape).map(([key, schema]) => [key, schema.nullable()])
+  ) as { [K in keyof T]: z.ZodNullable<T[K]> };
+}
 
 export type BrandSettingsUpdate = z.infer<typeof brandSettingsUpdateSchema>;
 
@@ -247,6 +247,8 @@ export interface BrandMarkup {
   footer: TrustedHtml;
   /** A line of footer links, or nothing. */
   links: TrustedHtml;
+  /** The dark-mode rules for the colours still at their starting values. */
+  darkMode: TrustedHtml;
 }
 
 /** What a layout reads as `brand`. */
@@ -293,8 +295,31 @@ export function brandVariables(
           : escapeHtml(settings.footerText).replace(/\r?\n/g, "<br>")
       ),
       links: markHtml(linksMarkup(settings, stack)),
+      darkMode: markHtml(darkModeRules(settings)),
     },
   };
+}
+
+/**
+ * The default layout's dark-mode rules. They swap the starting colours for
+ * dark ones, so each holds only while its colour is still the starting one: a
+ * colour the site chose is the site's in dark mode too, since the settings
+ * have no dark palette, and the card's light text goes with the card's
+ * colour so it is never set on a background it was not chosen for.
+ */
+function darkModeRules(settings: BrandSettings): string {
+  const rules: string[] = [];
+  if (settings.backgroundColor === STARTING_BRAND.backgroundColor) {
+    rules.push(".email-bg { background-color: #1a1a2e !important; }");
+  }
+  if (settings.contentColor === STARTING_BRAND.contentColor) {
+    rules.push(
+      ".email-card { background-color: #27272a !important; }",
+      ".email-card h1, .email-card h2, .email-card p { color: #fafafa !important; }"
+    );
+  }
+  // Indented as the rules sit in the layout's style block.
+  return rules.join("\n      ");
 }
 
 function logoMarkup(settings: BrandSettings, chrome: LayoutChrome): string {
@@ -326,11 +351,16 @@ function linksMarkup(settings: BrandSettings, stack: string): string {
 /**
  * Why the brand settings do not reach an email:
  * - `setInCode`: the site's code version sends, which has no stored layout;
+ * - `inactive`: it is switched off and has no code version, so nothing sends;
  * - `noLayout`: it sends without a layout, or no layout exists;
  * - `layoutWithoutBrand`: its layout does not read `brand` (an overridden
  *   default layout from before brand settings, or one of the site's own).
  */
-export type BrandReachReason = "setInCode" | "noLayout" | "layoutWithoutBrand";
+export type BrandReachReason =
+  | "setInCode"
+  | "inactive"
+  | "noLayout"
+  | "layoutWithoutBrand";
 
 /** One email, and whether the brand settings shape it. */
 export interface BrandReach {

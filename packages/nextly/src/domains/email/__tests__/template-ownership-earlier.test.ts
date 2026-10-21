@@ -50,6 +50,17 @@ describe("an owner's earlier versions", () => {
     }
   });
 
+  it.each(Object.keys(EARLIER_BUILT_IN_VERSIONS))(
+    "count each version core shipped of %s before brand settings as core's",
+    slug => {
+      const entry = registry.owned.get(slug);
+      if (!entry) throw new Error(`no ${slug}`);
+      for (const version of EARLIER_BUILT_IN_VERSIONS[slug]) {
+        expect(isOwnersVersion(entry, version)).toBe(true);
+      }
+    }
+  );
+
   it("belong only to the template they were shipped as", () => {
     const welcome = registry.owned.get("welcome");
     if (!welcome) throw new Error("no welcome");
