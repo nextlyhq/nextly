@@ -130,7 +130,7 @@ describe("FieldValueDisplay", () => {
     expect(screen.getByRole("presentation", { hidden: true })).toBeTruthy();
   });
 
-  it("describes an image by its alt text, read aloud and shown beside its name", () => {
+  it("describes an image by its alt text once, shown beside its name", () => {
     render(
       <FieldValueDisplay
         field={field("upload")}
@@ -146,11 +146,14 @@ describe("FieldValueDisplay", () => {
 
     expect(screen.getByText("barn.jpg")).toBeInTheDocument();
     expect(
-      screen.getByRole("img", { name: "A red barn at dusk" })
-    ).toBeTruthy();
-    expect(
       screen.getByText("Alt text: A red barn at dusk")
     ).toBeInTheDocument();
+    // The visible line reads the description; the thumbnail, decorative,
+    // does not read it a second time.
+    expect(
+      screen.queryByRole("img", { name: "A red barn at dusk" })
+    ).toBeNull();
+    expect(screen.getByRole("presentation", { hidden: true })).toBeTruthy();
   });
 
   it("renders rich text as readable text, not as editor JSON", () => {

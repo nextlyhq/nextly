@@ -16,8 +16,11 @@ vi.mock("@admin/hooks/useDashboardUser", () => ({
   useDashboardUser: () => userMock(),
 }));
 
+import type { FieldDiff } from "@admin/services/versionApi";
+
 import {
   ChangesLayoutToggle,
+  honoursSideBySide,
   useChangesLayoutPreference,
 } from "../changes-layout";
 
@@ -55,5 +58,78 @@ describe("the changes layout preference", () => {
     userMock.mockReturnValue({ user: { id: "u2" } });
     render(<Chooser />);
     expect(toggle()).toHaveAttribute("aria-pressed", "false");
+  });
+});
+
+describe("whether a comparison has a side-by-side view", () => {
+  const text = (status: FieldDiff["status"]): FieldDiff => ({
+    kind: "text",
+    name: "title",
+    label: "Title",
+    type: "text",
+    status,
+    segments: [{ op: 0, text: "x" }],
+  });
+  const tags: FieldDiff = {
+    kind: "set",
+    name: "tags",
+    label: "Tags",
+    type: "relationship",
+    status: "changed",
+    added: [{ id: "c" }],
+    removed: [{ id: "a" }],
+  };
+  const body: FieldDiff = {
+    kind: "richText",
+    name: "body",
+    label: "Body",
+    type: "richText",
+    status: "changed",
+    blocks: [],
+  };
+
+  it("has one for a changed text or value, also inside a group or a list", () => {
+    expect(honoursSideBySide(text("changed"))).toBe(true);
+    expect(
+      honoursSideBySide({
+        kind: "group",
+        name: "seo",
+        label: "SEO",
+        type: "group",
+        status: "changed",
+        fields: [tags, text("changed")],
+      })
+    ).toBe(true);
+    expect(
+      honoursSideBySide({
+        kind: "list",
+        name: "rows",
+        label: "Rows",
+        type: "repeater",
+        status: "changed",
+        items: [{ id: "r1", status: "changed", fields: [text("changed")] }],
+      })
+    ).toBe(true);
+  });
+
+  it("has none for rich text, a relationship, or an unchanged field", () => {
+    expect(honoursSideBySide(body)).toBe(false);
+    expect(honoursSideBySide(tags)).toBe(false);
+    expect(honoursSideBySide(text("unchanged"))).toBe(false);
+  });
+
+  it("offers no toggle that would do nothing, and says why", () => {
+    render(
+      <ChangesLayoutToggle
+        layout="split"
+        onChange={vi.fn()}
+        splittable={false}
+      />
+    );
+    expect(toggle()).toBeDisabled();
+    expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    expect(toggle()).toHaveAccessibleDescription(
+      "This comparison has no side-by-side view"
+    );
   });
 });

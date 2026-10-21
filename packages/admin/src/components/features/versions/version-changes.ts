@@ -32,17 +32,28 @@ export function isFieldChange(node: FieldDiff): boolean {
   return node.kind !== "hidden" && node.status !== "unchanged";
 }
 
-/** The changes in a comparison, keyed for the form that marks them. */
+/** A framework column kept on every document, rather than an author's field. */
+export function isSystemField(node: FieldDiff): boolean {
+  return node.kind === "unknown" && node.reason === "system";
+}
+
+/**
+ * The changes in a comparison, keyed for the form that marks them. Framework
+ * columns are left out of the changes and the count: they are shown only on
+ * request, so counting them, or walking to one, would point at nothing on
+ * screen.
+ */
 export function versionChangesOf(diff: VersionDiff): VersionChanges {
+  const authored = diff.fields.filter(node => !isSystemField(node));
   const byField = new Map<string, FieldDiff>();
-  for (const node of diff.fields) {
+  for (const node of authored) {
     if (isFieldChange(node)) byField.set(node.name, node);
   }
   return {
     byField,
     // Only the fields this reader may read: a withheld field is not one of
     // "the fields you can read".
-    total: diff.fields.filter(node => node.kind !== "hidden").length,
+    total: authored.filter(node => node.kind !== "hidden").length,
     incomplete: diff.incomplete === true,
   };
 }

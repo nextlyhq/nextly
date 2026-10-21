@@ -348,12 +348,9 @@ function UploadValue({ entry }: { entry: unknown }) {
   return (
     <span className="inline-flex items-center gap-2 border border-border p-1 pr-2">
       {src ? (
-        <img
-          src={src}
-          alt={alt ?? ""}
-          className="h-8 w-8 object-cover"
-          loading="lazy"
-        />
+        // Decorative: the name beside it, and the alt text shown under the
+        // name, describe it, so a screen reader hears the description once.
+        <img src={src} alt="" className="h-8 w-8 object-cover" loading="lazy" />
       ) : (
         <span className="h-8 w-8 bg-muted" aria-hidden="true" />
       )}

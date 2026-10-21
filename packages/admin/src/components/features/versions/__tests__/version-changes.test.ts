@@ -69,6 +69,25 @@ describe("versionChangesOf", () => {
     expect(changes.total).toBe(1);
     expect(changes.incomplete).toBe(true);
   });
+
+  it("leaves a framework column out of the changes and the count", () => {
+    // Shown only on request, so counting or walking to it would land on a
+    // card that is not there.
+    const changes = versionChangesOf(
+      diffOf([
+        text("title", "changed"),
+        {
+          kind: "unknown",
+          name: "firstPublishedAt",
+          status: "changed",
+          reason: "system",
+        },
+      ])
+    );
+
+    expect([...changes.byField.keys()]).toEqual(["title"]);
+    expect(changes.total).toBe(1);
+  });
 });
 
 describe("changeOrder", () => {

@@ -424,4 +424,36 @@ describe("VersionDiffView", () => {
 
     expect(screen.getByText("hero.png")).toBeInTheDocument();
   });
+
+  it("offers no side-by-side view of a comparison that has none", () => {
+    // A relationship's change is its added and removed targets, drawn one way
+    // only: a toggle here would change nothing on screen.
+    useVersionDiffMock.mockReturnValue({
+      data: {
+        from: 1,
+        to: 2,
+        locale: null,
+        hasChanges: true,
+        fields: [
+          {
+            kind: "set",
+            name: "tags",
+            label: "Tags",
+            type: "relationship",
+            status: "changed",
+            added: [{ id: "c", label: "C" }],
+            removed: [{ id: "a", label: "A" }],
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
+
+    expect(screen.getByRole("button", { name: "Side by side" })).toBeDisabled();
+  });
 });

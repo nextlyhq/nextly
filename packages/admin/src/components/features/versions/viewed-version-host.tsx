@@ -45,6 +45,7 @@ import { cn } from "@admin/lib/utils";
 import {
   ChangesLayoutProvider,
   ChangesLayoutToggle,
+  layoutFor,
   useChangesLayoutPreference,
 } from "./diff/changes-layout";
 import {
@@ -547,7 +548,11 @@ function ViewedVersionFrame({
     [changes, layout]
   );
   const { position, current, move } = useChangeNavigation(order);
-  const [changesLayout, setChangesLayout] = useChangesLayoutPreference();
+  const [preference, setChangesLayout] = useChangesLayoutPreference();
+  const { layout: changesLayout, splittable } = layoutFor(
+    preference,
+    changes?.byField.values() ?? []
+  );
   return (
     // The reader's remembered layout, for every change drawn below.
     <ChangesLayoutProvider value={changesLayout}>
@@ -559,6 +564,7 @@ function ViewedVersionFrame({
               <ChangesLayoutToggle
                 layout={changesLayout}
                 onChange={setChangesLayout}
+                splittable={splittable}
               />
             ) : null
           }

@@ -35,6 +35,7 @@ import { useChangeNavigation } from "../useChangeNavigation";
 import {
   changesCountText,
   isFieldChange,
+  isSystemField,
   versionChangesOf,
 } from "../version-changes";
 import { changeAnchorId } from "../VersionChangesForm";
@@ -42,6 +43,7 @@ import { changeAnchorId } from "../VersionChangesForm";
 import {
   ChangesLayoutProvider,
   ChangesLayoutToggle,
+  layoutFor,
   useChangesLayoutPreference,
 } from "./changes-layout";
 import { childKey, FieldDiffNode, SystemFieldsProvider } from "./FieldDiffNode";
@@ -68,11 +70,6 @@ function DiffSkeleton() {
       ))}
     </div>
   );
-}
-
-/** A framework column kept on every document, rather than an author's field. */
-function isSystemField(node: FieldDiff): boolean {
-  return node.kind === "unknown" && node.reason === "system";
 }
 
 /**
@@ -114,7 +111,7 @@ function ChangeAnchor({
 }
 
 export function VersionDiffView({ scope, from, to }: VersionDiffViewProps) {
-  const [layout, setLayout] = useChangesLayoutPreference();
+  const [preference, setLayout] = useChangesLayoutPreference();
   const [showUnchanged, setShowUnchanged] = useState(false);
   const [showSystem, setShowSystem] = useState(false);
   // Every field, so the count and the fold are of the whole document: the
@@ -123,6 +120,10 @@ export function VersionDiffView({ scope, from, to }: VersionDiffViewProps) {
   const arranged = arrangeFields(diff.data?.fields ?? []);
   const changes = diff.data ? versionChangesOf(diff.data) : null;
   const order = arranged.changed.map(node => node.name);
+  const { layout, splittable } = layoutFor(
+    preference,
+    changes?.byField.values() ?? []
+  );
   const nav = useChangeNavigation(order);
 
   return (
@@ -145,8 +146,8 @@ export function VersionDiffView({ scope, from, to }: VersionDiffViewProps) {
               // the pair named before it.
               <span className="font-medium text-foreground">
                 {changesCountText({
-                  changed: arranged.changed.length,
-                  total: changes.total - arranged.system.length,
+                  changed: changes.byField.size,
+                  total: changes.total,
                   incomplete: changes.incomplete,
                 })}
               </span>
@@ -160,7 +161,11 @@ export function VersionDiffView({ scope, from, to }: VersionDiffViewProps) {
                 onMove={nav.move}
               />
             ) : null}
-            <ChangesLayoutToggle layout={layout} onChange={setLayout} />
+            <ChangesLayoutToggle
+              layout={layout}
+              onChange={setLayout}
+              splittable={splittable}
+            />
           </div>
         </div>
 
