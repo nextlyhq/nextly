@@ -251,7 +251,18 @@ describe.each(getConfiguredTestDialects())(
       expect(onUpdate.ok).toBe(false);
       expect(onUpdate.issues).toContainEqual({ path: "badge", ...NOT_STORED });
 
-      // A required one is refused the same way: required or not, it is not stored.
+      // A required one is not asked for: the admin never draws it and nothing could store it, so
+      // an outer component without it is created.
+      expect(
+        await outcomeOf(() =>
+          t.nextly.create({
+            collection: "pages" as never,
+            data: { name: "Q", plaque: {} } as never,
+          })
+        )
+      ).toEqual({ ok: true, issues: [] });
+
+      // A value for a required one is refused the same way: required or not, it is not stored.
       const required = await outcomeOf(() =>
         t.nextly.create({
           collection: "pages" as never,
