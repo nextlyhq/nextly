@@ -157,7 +157,10 @@ export interface UseWidgetQueriesResult {
    * the tier it sent here, so a card that now draws more than was fetched can ask again alone.
    */
   fetchedTierFor: (placementId: string) => SizeTier | undefined;
-  /** What each placement's answer was asked with (see `appliedKey`), read from the answer. */
+  /**
+   * What each placement's answer was asked with (see `appliedKey`), read from the answer, or
+   * from a request that settled by failing; `undefined` while the first request is in flight.
+   */
   fetchedAppliedFor: (placementId: string) => string | undefined;
 }
 
@@ -227,6 +230,25 @@ const MALFORMED_SLOT_ERROR =
  * reads it.
  */
 const BATCH_FAILED_ERROR = "Dashboard data could not be loaded.";
+
+/**
+ * What a request that FAILED was asked with, by the error it failed with: a failed request has
+ * no answer to carry it, and without it a card whose settings change after its first request
+ * failed could not tell that it now asks something else, so it stayed on the old failure.
+ * Weakly held, so an error the cache lets go of takes its entry with it.
+ */
+const askedWithByError = new WeakMap<object, Record<string, string>>();
+
+/** Files what the failed `partition` was asked with against the error it threw, then rethrows. */
+function failedAsking(
+  partition: readonly WidgetQueryRequest[],
+  error: unknown
+): never {
+  if (typeof error === "object" && error !== null) {
+    askedWithByError.set(error, appliedSent(partition));
+  }
+  throw error;
+}
 
 /**
  * Narrows the response body before anything is keyed from it.
@@ -713,16 +735,20 @@ export function useWidgetQueries(
       // Built from this render's partition, and TanStack runs the latest observer's function,
       // so a refetch sends each card's CURRENT tier.
       queryFn: async () => {
-        const body = await protectedApi.post<unknown>("/dashboard/query", {
-          queries: partition.map(
-            entry => entry.sized?.query ?? entry.applied ?? entry.query
-          ),
-        });
-        return {
-          slots: readResults(body),
-          tiers: tiersSent(partition),
-          applied: appliedSent(partition),
-        };
+        try {
+          const body = await protectedApi.post<unknown>("/dashboard/query", {
+            queries: partition.map(
+              entry => entry.sized?.query ?? entry.applied ?? entry.query
+            ),
+          });
+          return {
+            slots: readResults(body),
+            tiers: tiersSent(partition),
+            applied: appliedSent(partition),
+          };
+        } catch (error) {
+          return failedAsking(partition, error);
+        }
       },
       staleTime: 0,
       gcTime: 5 * 60 * 1000,
@@ -780,6 +806,13 @@ export function useWidgetQueries(
           error: BATCH_FAILED_ERROR,
         });
       });
+      // A settled failure was asked with something too, which a change of settings is judged
+      // against; a first request still in flight has neither, and its answer will say.
+      const asked =
+        typeof answer.error === "object" && answer.error !== null
+          ? askedWithByError.get(answer.error)
+          : undefined;
+      if (asked) Object.assign(fetchedApplied, asked);
     }
   });
 

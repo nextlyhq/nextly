@@ -159,11 +159,15 @@ function grown(
     return state;
   }
   const previous = settled?.attempt ?? 0;
+  // A different question is being asked, so an earlier refusal no longer stands: left in place,
+  // it would keep that question from being asked again should the reader come back to it.
+  const stalled = new Map(state.stalled);
+  stalled.delete(placementId);
   return {
     inFlight: new Map(state.inFlight).set(placementId, previous + 1),
     settled: state.settled,
     quiet: new Map(state.quiet).set(placementId, asking),
-    stalled: state.stalled,
+    stalled,
   };
 }
 
