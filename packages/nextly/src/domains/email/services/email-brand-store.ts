@@ -28,11 +28,22 @@ import {
   type BrandSettings,
   type BrandSettingsUpdate,
 } from "../brand-settings";
+import { transactionOpenInFlow } from "../transaction-flow";
 
 type EmailBrandTable = ReturnType<typeof emailBrandTables>["nextlyEmailBrand"];
 
 export class EmailBrandStore extends BaseService {
   private readonly table: EmailBrandTable;
+  /**
+   * The settings as this instance last read or wrote them. A render made
+   * inside a caller's open transaction reads them here, because the email
+   * service is never handed that transaction and a read of the table would run
+   * on another connection, outside it. Read at the end of each boot and kept
+   * current by this instance's own reads and writes; outside a transaction
+   * every read goes to the table, so a change another instance made is seen
+   * there.
+   */
+  private snapshot: BrandSettings | null = null;
 
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
@@ -41,6 +52,19 @@ export class EmailBrandStore extends BaseService {
 
   /** The settings as a render reads them, each resolved to its starting value where unset. */
   async read(): Promise<BrandSettings> {
+    if (this.snapshot && transactionOpenInFlow(this.adapter)) {
+      return this.snapshot;
+    }
+    this.snapshot = await this.readTable();
+    return this.snapshot;
+  }
+
+  /** Read the settings into the snapshot (at the end of a boot). */
+  async load(): Promise<void> {
+    this.snapshot = await this.readTable();
+  }
+
+  private async readTable(): Promise<BrandSettings> {
     let rows: unknown[];
     try {
       rows = await this.db
@@ -86,6 +110,9 @@ export class EmailBrandStore extends BaseService {
       if (error instanceof NextlyError) throw error;
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
-    return this.read();
+    // Read back from the table whatever the flow, so what is returned, and
+    // what this instance renders with from now on, is what was written.
+    this.snapshot = await this.readTable();
+    return this.snapshot;
   }
 }

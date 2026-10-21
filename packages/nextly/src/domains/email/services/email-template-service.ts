@@ -84,6 +84,7 @@ import {
   type RegistryInput,
   type TemplateOwnerRegistry,
 } from "../template-ownership";
+import { transactionOpenInFlow } from "../transaction-flow";
 import type { EmailConfig } from "../types";
 
 import { EmailBrandStore } from "./email-brand-store";
@@ -712,11 +713,7 @@ export class EmailTemplateService extends BaseService {
     adopted: boolean | null;
     keys: Set<string>;
   } | null {
-    const adapter = this.adapter as {
-      transactionOpenInFlow?: () => boolean;
-    };
-    if (typeof adapter.transactionOpenInFlow !== "function") return null;
-    return adapter.transactionOpenInFlow() ? this.engineState : null;
+    return transactionOpenInFlow(this.adapter) ? this.engineState : null;
   }
 
   /** Whether an engine-state key is recorded (see engineState). */
@@ -1915,6 +1912,7 @@ export class EmailTemplateService extends BaseService {
   async ensureBuiltInTemplates(): Promise<void> {
     await this.reconcileStoredTemplates();
     await this.loadEngineState();
+    await this.brandStore.load();
   }
 
   /** The reconciliation `ensureBuiltInTemplates` runs. */
