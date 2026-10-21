@@ -28,8 +28,15 @@ import {
   seedPermissions,
 } from "../../direct-api/__tests__/checked-access-fixtures";
 import { Nextly } from "../../direct-api/nextly";
+import {
+  currentCallerScope,
+  runWithCallerScope,
+} from "../../auth/caller-scope";
+import { currentPrincipal, runAsPrincipal } from "../../auth/principal-scope";
+import { getEventBus } from "../../events/event-bus";
 import { registerHook } from "../../hooks";
 import { definePlugin } from "../../plugins";
+import { makePrincipal } from "../principals/principal";
 import { pdfDocument } from "../../services/upload-validation/__tests__/format-fixtures";
 import type { AuthUserId } from "../../types/auth";
 import type { ServiceOpts } from "../service-opts";
@@ -110,6 +117,10 @@ describe.each(getConfiguredTestDialects())(
     let ownerId: string;
     let holderId: string;
     let lackerId: string;
+    /** People holding one media write each, so each mapping is told apart. */
+    let creatorId: string;
+    let updaterId: string;
+    let deleterId: string;
 
     const probe = definePlugin({
       name: "@acme/media-probe",
@@ -161,6 +172,21 @@ describe.each(getConfiguredTestDialects())(
       return (await trusted.media.folders.list()).map(f => f.name);
     }
 
+    /** Who the outbox recorded as making this kind of write to this file. */
+    async function recordedBy(
+      type: string,
+      mediaId: string
+    ): Promise<[string | null, string | null] | undefined> {
+      const rows = await t.adapter.select<{
+        type: string;
+        resourceId: string | null;
+        actorType: string | null;
+        actorId: string | null;
+      }>("nextly_events");
+      const row = rows.find(r => r.type === type && r.resourceId === mediaId);
+      return row ? [row.actorType, row.actorId] : undefined;
+    }
+
     beforeAll(async () => {
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
@@ -185,6 +211,15 @@ describe.each(getConfiguredTestDialects())(
       ]);
       lackerId = await account(t, "lacker@example.com", [
         await role(t, "plugin-media-readers", ["read-media"]),
+      ]);
+      creatorId = await account(t, "creator@example.com", [
+        await role(t, "plugin-media-creators", ["read-media", "create-media"]),
+      ]);
+      updaterId = await account(t, "updater@example.com", [
+        await role(t, "plugin-media-updaters", ["read-media", "update-media"]),
+      ]);
+      deleterId = await account(t, "deleter@example.com", [
+        await role(t, "plugin-media-deleters", ["read-media", "delete-media"]),
       ]);
     });
 
@@ -289,7 +324,10 @@ describe.each(getConfiguredTestDialects())(
           asUser(holderId),
           { type: "user", id: holderId }
         );
-        expect(await exists(uploaded.id)).toBe(true);
+        expect(await recordedBy("media.uploaded", uploaded.id)).toEqual([
+          "user",
+          holderId,
+        ]);
       });
 
       it("takes a checked write whose actor names only the caller's kind", async () => {
@@ -299,7 +337,10 @@ describe.each(getConfiguredTestDialects())(
           asUser(holderId),
           { type: "user" }
         );
-        expect(await exists(uploaded.id)).toBe(true);
+        expect(await recordedBy("media.uploaded", uploaded.id)).toEqual([
+          "user",
+          holderId,
+        ]);
       });
 
       it("lets a person with the permission write", async () => {
@@ -313,7 +354,128 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("each write asks for its own permission", () => {
+      const refused = { code: "FORBIDDEN", statusCode: 403 };
+
+      it("lets only create-media upload or make a folder", async () => {
+        const uploaded = await media.upload(
+          input("by-creator.pdf"),
+          asUser(creatorId)
+        );
+        expect(await exists(uploaded.id)).toBe(true);
+        await media.createFolder({ name: "by-creator" }, asUser(creatorId));
+        for (const other of [updaterId, deleterId]) {
+          await expect(
+            media.upload(input("not-yours.pdf"), asUser(other))
+          ).rejects.toMatchObject(refused);
+          await expect(
+            media.createFolder({ name: "not-yours" }, asUser(other))
+          ).rejects.toMatchObject(refused);
+        }
+      });
+
+      it("lets only update-media change, move or rename", async () => {
+        const id = await storedFile("to-change.pdf");
+        const folderId = await storedFolder("to-rename");
+        for (const other of [creatorId, deleterId]) {
+          await expect(
+            media.update(id, { altText: "no" }, asUser(other))
+          ).rejects.toMatchObject(refused);
+          await expect(
+            media.moveToFolder(id, folderId, asUser(other))
+          ).rejects.toMatchObject(refused);
+          await expect(
+            media.updateFolder(folderId, { name: "no" }, asUser(other))
+          ).rejects.toMatchObject(refused);
+        }
+        await media.update(
+          id,
+          { altText: "by the updater" },
+          asUser(updaterId)
+        );
+        await media.moveToFolder(id, folderId, asUser(updaterId));
+        await media.updateFolder(
+          folderId,
+          { name: "renamed" },
+          asUser(updaterId)
+        );
+        expect(await folderNames()).toContain("renamed");
+      });
+
+      it("lets only delete-media delete a file, many files or a folder", async () => {
+        const one = await storedFile("to-delete.pdf");
+        const many = await storedFile("to-delete-many.pdf");
+        const folderId = await storedFolder("to-delete");
+        for (const other of [creatorId, updaterId]) {
+          await expect(media.delete(one, asUser(other))).rejects.toMatchObject(
+            refused
+          );
+          await expect(
+            media.bulkDelete([many], asUser(other))
+          ).rejects.toMatchObject(refused);
+          await expect(
+            media.deleteFolder(folderId, false, asUser(other))
+          ).rejects.toMatchObject(refused);
+        }
+        await media.delete(one, asUser(deleterId));
+        await media.bulkDelete([many], asUser(deleterId));
+        await media.deleteFolder(folderId, false, asUser(deleterId));
+        expect(await exists(one)).toBe(false);
+        expect(await exists(many)).toBe(false);
+        expect(await folderNames()).not.toContain("to-delete");
+      });
+    });
+
     describe("the plugin acting as itself", () => {
+      it("runs what it sets going as the plugin, not as a plugin person whose frame it is in", async () => {
+        // A write is its own call: one the plugin makes from inside an
+        // operation run as one of its people is still the plugin's, so an
+        // event handler it starts runs with no person.
+        let seen: unknown = "unset";
+        const handler = () => {
+          seen = currentPrincipal();
+        };
+        getEventBus().on("media.uploaded", handler);
+        try {
+          await runAsPrincipal(
+            makePrincipal("accounts:account", "acc_frame", { verified: true }),
+            () => media.upload(input("in-a-frame.pdf"))
+          );
+        } finally {
+          getEventBus().off("media.uploaded", handler);
+        }
+        expect(seen).toBeNull();
+      });
+
+      it("runs what a keyed write sets going under the key it was checked as", async () => {
+        // Inside a request made with a broad key, a write naming a narrower
+        // one runs what it starts under the narrower key.
+        const broad = {
+          actorType: "apiKey" as const,
+          permissions: ["read-media", "create-media", "delete-media"],
+        };
+        const narrow = {
+          actorType: "apiKey" as const,
+          permissions: ["read-media", "create-media"],
+        };
+        let seen: readonly string[] | undefined;
+        const handler = () => {
+          seen = currentCallerScope()?.permissions;
+        };
+        getEventBus().on("media.uploaded", handler);
+        try {
+          await runWithCallerScope(broad, () =>
+            media.upload(input("narrowed.pdf"), {
+              ...asUser(holderId),
+              authenticatedScope: narrow,
+            })
+          );
+        } finally {
+          getEventBus().off("media.uploaded", handler);
+        }
+        expect(seen).toEqual(narrow.permissions);
+      });
+
       it("stays trusted with no options at all", async () => {
         const uploaded = await media.upload(input("system.pdf"));
         expect(await exists(uploaded.id)).toBe(true);

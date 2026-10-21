@@ -53,6 +53,10 @@ describe.each(getConfiguredTestDialects())(
     let holderId: string;
     let lackerId: string;
     let ownerId: string;
+    /** People holding one media write each, so each mapping is told apart. */
+    let creatorId: string;
+    let updaterId: string;
+    let deleterId: string;
 
     /** An instance that asks to be checked, as this person. */
     function checkedAs(userId: string): Nextly {
@@ -95,6 +99,15 @@ describe.each(getConfiguredTestDialects())(
       ]);
       lackerId = await account(t, "lacker@example.com", [
         await role(t, "media-readers", ["read-media"]),
+      ]);
+      creatorId = await account(t, "creator@example.com", [
+        await role(t, "media-creators", ["read-media", "create-media"]),
+      ]);
+      updaterId = await account(t, "updater@example.com", [
+        await role(t, "media-updaters", ["read-media", "update-media"]),
+      ]);
+      deleterId = await account(t, "deleter@example.com", [
+        await role(t, "media-deleters", ["read-media", "delete-media"]),
       ]);
     });
 
@@ -290,6 +303,59 @@ describe.each(getConfiguredTestDialects())(
           "user",
           holderId,
         ]);
+      });
+    });
+
+    describe("each write asks for its own permission", () => {
+      const refused = { code: "FORBIDDEN", statusCode: 403 };
+
+      it("lets only create-media upload or make a folder", async () => {
+        const uploaded = await checkedAs(creatorId).media.upload({
+          file: file("by-creator.pdf"),
+        });
+        expect(await exists(uploaded.id)).toBe(true);
+        await checkedAs(creatorId).media.folders.create({ name: "by-creator" });
+        for (const other of [updaterId, deleterId]) {
+          await expect(
+            checkedAs(other).media.upload({ file: file("not-yours.pdf") })
+          ).rejects.toMatchObject(refused);
+          await expect(
+            checkedAs(other).media.folders.create({ name: "not-yours" })
+          ).rejects.toMatchObject(refused);
+        }
+      });
+
+      it("lets only update-media change a file", async () => {
+        const id = await stored("to-change.pdf");
+        for (const other of [creatorId, deleterId]) {
+          await expect(
+            checkedAs(other).media.update({ id, data: { altText: "no" } })
+          ).rejects.toMatchObject(refused);
+        }
+        await checkedAs(updaterId).media.update({
+          id,
+          data: { altText: "by the updater" },
+        });
+        expect((await trusted.media.findByID({ id }))?.altText).toBe(
+          "by the updater"
+        );
+      });
+
+      it("lets only delete-media delete, one or many", async () => {
+        const one = await stored("to-delete.pdf");
+        const many = await stored("to-delete-many.pdf");
+        for (const other of [creatorId, updaterId]) {
+          await expect(
+            checkedAs(other).media.delete({ id: one })
+          ).rejects.toMatchObject(refused);
+          await expect(
+            checkedAs(other).media.bulkDelete({ ids: [many] })
+          ).rejects.toMatchObject(refused);
+        }
+        await checkedAs(deleterId).media.delete({ id: one });
+        await checkedAs(deleterId).media.bulkDelete({ ids: [many] });
+        expect(await exists(one)).toBe(false);
+        expect(await exists(many)).toBe(false);
       });
     });
 
