@@ -401,7 +401,9 @@ export function unpublishedLinksSource(deps: {
 
       return going.flatMap(member =>
         findingsFor(member, links.get(member.id) ?? [], link => {
-          if (!judged.has(link.collection)) return "live";
+          // Nothing can be said of a target that is no collection, such as
+          // the media library: it is not a link this check judges at all.
+          if (!judged.has(link.collection)) return null;
           const key = targetKey(link.collection, link.entryId);
           const isPublished = published.get(key);
           if (isPublished === undefined) return "deleted";
@@ -428,61 +430,47 @@ function uniqueTargets(
 }
 
 /**
- * This member's findings: one per target that will not be live, naming every
- * field that links to it, in the order the targets are first met; then one
- * per field holding links to deleted documents, with how many, naming no
- * target, since a deleted document has nothing left to name it by.
+ * This member's findings: one per target it links to, naming the target and
+ * every field that links to it, in the order the targets are first met.
+ *
+ * A finding is made for a target that IS live too (`cause: "live"`), and for
+ * a deleted one with its identity. Neither reaches a reader as such: a live
+ * link is dropped and deleted ones are counted per field without a target
+ * ({@link narrowLinkFindings}, {@link withoutFieldKeys}). They are made so a
+ * reader who may not read a target is told the same about every link to it,
+ * whatever its state: one count.
  *
  * Each names its fields twice: `fields`, the paths a reader reads, and
  * `fieldKeys` with `fieldNames`, each field's own key and path side by side,
  * for judging what a reader may see. The keys are taken off before any
- * reader is shown a finding ({@link narrowLinkFindings}).
+ * reader is shown a finding.
  */
 function findingsFor(
   member: ReleaseMemberRow,
   links: readonly DocumentLink[],
-  stateOf: (link: DocumentLink) => "live" | UnpublishedLinkCause
+  stateOf: (link: DocumentLink) => LinkState | null
 ): ReleaseCheckFinding<UnpublishedLinkCode>[] {
-  const findings: ReleaseCheckFinding<UnpublishedLinkCode>[] = [];
-  const deleted = new Map<string, { field: DocumentLink; count: number }>();
-  for (const { link, fields } of byTarget(links)) {
+  return byTarget(links).flatMap(({ link, fields }) => {
     const state = stateOf(link);
-    if (state === "live") continue;
-    if (state === "deleted") {
-      for (const field of fields) {
-        const held = deleted.get(field.fieldKey);
-        deleted.set(field.fieldKey, {
-          field,
-          count: (held?.count ?? 0) + 1,
-        });
-      }
-      continue;
-    }
-    findings.push({
-      memberId: member.id,
-      code: "UNPUBLISHED_LINK",
-      detail: {
-        scopeKind: "collection",
-        scopeSlug: link.collection,
-        entryId: link.entryId,
-        ...fieldsDetail(fields),
-        cause: state,
+    if (state === null) return [];
+    return [
+      {
+        memberId: member.id,
+        code: "UNPUBLISHED_LINK" as const,
+        detail: {
+          scopeKind: "collection",
+          scopeSlug: link.collection,
+          entryId: link.entryId,
+          ...fieldsDetail(fields),
+          cause: state,
+        },
       },
-    });
-  }
-  for (const { field, count } of deleted.values()) {
-    findings.push({
-      memberId: member.id,
-      code: "UNPUBLISHED_LINK",
-      detail: {
-        ...fieldsDetail([field]),
-        cause: "deleted",
-        count: String(count),
-      },
-    });
-  }
-  return findings;
+    ];
+  });
 }
+
+/** What a linked document is at the moment: live, or why it is not. */
+type LinkState = "live" | UnpublishedLinkCause;
 
 /** The fields a finding names, as paths and as keys beside their paths. */
 function fieldsDetail(fields: readonly DocumentLink[]): {
@@ -569,22 +557,22 @@ function weightOf(finding: ReadinessFinding): number {
 }
 
 /**
- * `findings` as a reader may be told them:
- * - a link from a document the reader may not read, or to one they may not
- *   read, is counted in one `UNPUBLISHED_LINKS_HIDDEN` per member in its
- *   place, naming nothing;
- * - a link in a field the reader may not view is replaced by an
- *   `UNPUBLISHED_LINK_IN_HIDDEN_FIELD` naming neither the field nor the target,
- *   so it still counts;
- * - a link to a deleted document names no target, so only its field is
- *   judged;
- * - the fields a kept finding names are those the reader may view, judged by
- *   each field's own key, never by its path;
- * - every count is of links: a finding standing for several deleted links
- *   counts as that many.
+ * `findings` as a reader may be told them, each link judged in this order:
+ * 1. from a document the reader may not read: counted, or dropped when it is
+ *    live (that document's own problems are the members' to count);
+ * 2. to a document the reader may not read: counted, whatever it is (live, a
+ *    draft, coming down or deleted), so nothing about that document can be
+ *    told from the answer, not even whether it exists;
+ * 3. live: dropped, as there is nothing to note;
+ * 4. in a field the reader may not view: an `UNPUBLISHED_LINK_IN_HIDDEN_FIELD`
+ *    naming neither the field nor the target, so it still counts;
+ * 5. otherwise shown, naming only the fields the reader may view, each judged
+ *    by its own key, never by its path; links to deleted documents are then
+ *    shown per field, with how many, naming no target.
  *
- * Every other finding passes through untouched, in its order, and no finding
- * leaves with the field keys it was judged by.
+ * Counted links are summed in one `UNPUBLISHED_LINKS_HIDDEN` per member, in
+ * its links' place. Every other finding passes through untouched, in its
+ * order, and no finding leaves with the keys or targets it was judged by.
  *
  * @experimental
  */
@@ -617,50 +605,116 @@ export function narrowLinkFindings(
     const judged = isLinkFinding(finding)
       ? judgedForReader(finding, verdicts)
       : finding;
-    if (judged === null) {
+    if (judged === "counted") {
       held.finding ??= finding;
       held.count += weightOf(finding);
-      continue;
+    } else if (judged !== "dropped") {
+      shown.push(judged);
     }
-    shown.push(judged);
   }
   flush();
-  return shown;
+  return byField(shown);
 }
 
 /**
- * `findings` with the field keys taken off, as a reader who may see every
- * field is shown them.
+ * `findings` as a reader who may read everything is shown them: live links
+ * dropped, deleted ones per field, and no keys.
  *
  * @experimental
  */
 export function withoutFieldKeys(
   findings: readonly ReadinessFinding[]
 ): ReadinessFinding[] {
-  return findings.map(finding =>
-    isLinkFinding(finding) ? shownAs(finding, null) : finding
+  return byField(
+    findings.flatMap(finding => {
+      if (!isLinkFinding(finding)) return [finding];
+      if (finding.detail?.cause === "live") return [];
+      return [shownAs(finding, null)];
+    })
   );
 }
 
 /**
- * One link finding as the reader may see it, or `null` when it is only to be
- * counted.
+ * One link finding as the reader may see it: the finding to show, or
+ * whether it is only counted or dropped.
  */
 function judgedForReader(
   finding: ReadinessFinding,
   verdicts: LinkReaderVerdicts
-): ReadinessFinding | null {
-  if (!verdicts.sourceReadable(finding)) return null;
-  const visible = verdicts.visibleFields(finding);
-  const shown = shownAs(finding, visible);
+): ReadinessFinding | "counted" | "dropped" {
+  const live = finding.detail?.cause === "live";
+  if (!verdicts.sourceReadable(finding)) return live ? "dropped" : "counted";
+  // Before anything is said of what the target is: a document the reader may
+  // not read is one count, live or not, there or not.
+  const target = linkTargetOf(finding);
+  if (target === null || !verdicts.targetReadable(target)) return "counted";
+  if (live) return "dropped";
+  const shown = shownAs(finding, verdicts.visibleFields(finding));
   if (shown.detail?.fields?.length === 0) {
     return bare(finding, "UNPUBLISHED_LINK_IN_HIDDEN_FIELD", {
       count: String(weightOf(finding)),
     });
   }
-  const target = linkTargetOf(finding);
-  if (target !== null && !verdicts.targetReadable(target)) return null;
   return shown;
+}
+
+/**
+ * Findings that stand for several links, each gathered into one with how
+ * many, in the place of the first: links to deleted documents per member and
+ * field set, naming no target (a deleted document has nothing left to name
+ * it by); and links in fields the reader may not view, per member.
+ */
+function byField(findings: readonly ReadinessFinding[]): ReadinessFinding[] {
+  const out: ReadinessFinding[] = [];
+  const gathered = new Map<string, ReadinessFinding>();
+  for (const finding of findings) {
+    const key = gatherKey(finding);
+    if (key === null) {
+      out.push(finding);
+      continue;
+    }
+    const held = gathered.get(key);
+    if (held !== undefined) {
+      held.detail = {
+        ...held.detail,
+        count: String(weightOf(held) + weightOf(finding)),
+      };
+      continue;
+    }
+    const first = gatheredFrom(finding);
+    gathered.set(key, first);
+    out.push(first);
+  }
+  return out;
+}
+
+/** What a finding is gathered by, or `null` for one that stands alone. */
+function gatherKey(finding: ReadinessFinding): string | null {
+  if (finding.source !== UNPUBLISHED_LINKS_SOURCE_KEY) return null;
+  if (finding.code === "UNPUBLISHED_LINK_IN_HIDDEN_FIELD") {
+    return JSON.stringify([finding.memberId, "hidden field"]);
+  }
+  if (finding.code !== "UNPUBLISHED_LINK") return null;
+  if (finding.detail?.cause !== "deleted") return null;
+  return JSON.stringify([finding.memberId, fieldsNamed(finding)]);
+}
+
+/** The first finding of a gathering, as it is shown. */
+function gatheredFrom(finding: ReadinessFinding): ReadinessFinding {
+  if (finding.code === "UNPUBLISHED_LINK_IN_HIDDEN_FIELD") {
+    return bare(finding, finding.code, { count: String(weightOf(finding)) });
+  }
+  return bare(finding, "UNPUBLISHED_LINK", {
+    fields: fieldsNamed(finding),
+    cause: "deleted",
+    count: String(weightOf(finding)),
+  });
+}
+
+/** The field paths a link finding names. */
+function fieldsNamed(finding: ReadinessFinding): string[] {
+  const fields = finding.detail?.fields;
+  return Array.isArray(fields) ? [...fields] : [];
 }
 
 /**

@@ -16,6 +16,7 @@ import {
   narrowLinkFindings,
   unpublishedLinksReport,
   unpublishedLinksSource,
+  withoutFieldKeys,
   type DocumentLink,
   type LinkReaderVerdicts,
   type ReleaseLinkReads,
@@ -161,7 +162,7 @@ function link(
 describe("core.unpublished-links", () => {
   const scheduled = release({ state: "scheduled", scheduledAt: MOMENT });
 
-  it("reports a draft link and one coming down earlier, and leaves live ones alone", async () => {
+  it("states every link: a draft, one coming down earlier, and a live one", async () => {
     const content = linkReads(
       {
         "entry-post": [
@@ -223,6 +224,21 @@ describe("core.unpublished-links", () => {
           cause: "comes-down",
         },
       },
+      // Live, so a reader who may not read it is told what they are told of
+      // the others; the narrowing drops it for everyone else.
+      {
+        memberId: "post",
+        code: "UNPUBLISHED_LINK",
+        detail: {
+          scopeKind: "collection",
+          scopeSlug: "posts",
+          entryId: "live",
+          fields: ["related"],
+          fieldKeys: ["related"],
+          fieldNames: ["related"],
+          cause: "live",
+        },
+      },
     ]);
   });
 
@@ -246,7 +262,7 @@ describe("core.unpublished-links", () => {
           liveAuthors: async ids => new Set(ids.filter(id => id === "author")),
         }),
       });
-    expect(await check(BEFORE)).toEqual([]);
+    expect((await check(BEFORE)).map(f => f.detail?.cause)).toEqual(["live"]);
     // Published only after the moment: reported.
     expect((await check(AFTER)).map(f => f.code)).toEqual(["UNPUBLISHED_LINK"]);
     // Published before it, by an author who can no longer act: reported.
@@ -273,7 +289,9 @@ describe("core.unpublished-links", () => {
         now: NOW,
         reads: reads(),
       });
-    expect(await run([ownAuthor])).toEqual([]);
+    expect((await run([ownAuthor])).map(f => f.detail?.cause)).toEqual([
+      "live",
+    ]);
     expect((await run([])).map(f => f.code)).toEqual(["UNPUBLISHED_LINK"]);
   });
 
@@ -314,7 +332,7 @@ describe("core.unpublished-links", () => {
     expect((await run(false)).map(f => f.code)).toEqual(["UNPUBLISHED_LINK"]);
   });
 
-  it("reports links to deleted documents by field, naming no target, and never the media library", async () => {
+  it("states links to deleted documents, and never one to the media library", async () => {
     const content = linkReads(
       {
         "entry-post": [
@@ -337,31 +355,29 @@ describe("core.unpublished-links", () => {
       now: NOW,
       reads: reads(),
     });
-    expect(found).toEqual([
-      {
-        memberId: "post",
-        code: "UNPUBLISHED_LINK",
-        detail: {
-          fields: ["author"],
-          fieldKeys: ["author"],
-          fieldNames: ["author"],
-          cause: "deleted",
-          count: "2",
-        },
-      },
-      {
-        memberId: "post",
-        code: "UNPUBLISHED_LINK",
-        detail: {
-          fields: ["editor"],
-          fieldKeys: ["editor"],
-          fieldNames: ["editor"],
-          cause: "deleted",
-          count: "1",
-        },
-      },
+    // Each with its target, for judging who may be told; the narrowing
+    // names deleted ones by field only.
+    expect(found.map(f => [f.detail?.entryId, f.detail?.cause])).toEqual([
+      ["gone-1", "deleted"],
+      ["gone-2", "deleted"],
+      ["gone-3", "deleted"],
+      ["plain", "live"],
     ]);
-    expect(JSON.stringify(found)).not.toContain("gone");
+    expect(
+      withoutFieldKeys(
+        found.map(f => ({
+          ...f,
+          source: "core.unpublished-links",
+          action: "publish" as const,
+          scopeKind: "collection" as const,
+          scopeSlug: "posts",
+          entryId: "entry-post",
+        }))
+      ).map(f => f.detail)
+    ).toEqual([
+      { fields: ["author"], cause: "deleted", count: "2" },
+      { fields: ["editor"], cause: "deleted", count: "1" },
+    ]);
   });
 
   it("asks for statuses in runs the smallest parameter limit admits", async () => {
@@ -425,17 +441,22 @@ function shown(
 function deletedIn(
   memberId: string,
   field: string,
-  count = 1
+  entryId = "gone"
 ): ReadinessFinding {
   return {
-    ...shown(memberId, "x"),
+    ...shown(memberId, entryId, [field]),
     detail: {
-      fields: [field],
-      fieldKeys: [field],
-      fieldNames: [field],
+      ...shown(memberId, entryId, [field]).detail,
       cause: "deleted",
-      count: String(count),
     },
+  };
+}
+
+/** A live-link finding from member `memberId`. */
+function liveIn(memberId: string, entryId: string): ReadinessFinding {
+  return {
+    ...shown(memberId, entryId),
+    detail: { ...shown(memberId, entryId).detail, cause: "live" },
   };
 }
 
@@ -513,32 +534,65 @@ describe("narrowLinkFindings", () => {
       verdicts({ visibleFields: () => new Set(["author"]) })
     );
     expect(narrowed.map(f => [f.code, f.detail])).toEqual([
-      ["UNPUBLISHED_LINK_IN_HIDDEN_FIELD", { count: "1" }],
+      // Both links in the hidden field, gathered into one count.
+      ["UNPUBLISHED_LINK_IN_HIDDEN_FIELD", { count: "2" }],
       // Shown through the field the reader may view, and only that one.
       [
         "UNPUBLISHED_LINK",
         { ...plain(shown("a", "open")), fields: ["author"] },
       ],
-      ["UNPUBLISHED_LINK_IN_HIDDEN_FIELD", { count: "1" }],
     ]);
-    expect(narrowed).toHaveLength(all.length);
     expect(JSON.stringify(narrowed)).not.toContain("guarded");
     expect(JSON.stringify(narrowed)).not.toContain("secret-target");
   });
 
-  it("judges a deleted link by its field alone, never by a target it no longer has", () => {
+  it("tells a reader who may not read a target the same of it, whatever it is", () => {
+    // A live document, a draft and a deleted one, none of them readable.
     const narrowed = narrowLinkFindings(
-      [deletedIn("a", "author")],
+      [liveIn("a", "t1"), shown("a", "t2"), deletedIn("a", "author", "t3")],
       verdicts({ targetReadable: () => false })
     );
+    expect(narrowed.map(f => [f.code, f.detail])).toEqual([
+      ["UNPUBLISHED_LINKS_HIDDEN", { count: "3" }],
+    ]);
+    for (const [one] of [
+      [liveIn("a", "t1")],
+      [shown("a", "t2")],
+      [deletedIn("a", "author", "t3")],
+    ]) {
+      expect(
+        narrowLinkFindings([one], verdicts({ targetReadable: () => false }))
+      ).toEqual([
+        expect.objectContaining({
+          code: "UNPUBLISHED_LINKS_HIDDEN",
+          detail: { count: "1" },
+        }),
+      ]);
+    }
+  });
+
+  it("names a deleted link to a readable target by its field alone, and drops a live one", () => {
+    const narrowed = narrowLinkFindings(
+      [
+        deletedIn("a", "author", "g1"),
+        liveIn("a", "t1"),
+        deletedIn("a", "author", "g2"),
+      ],
+      verdicts()
+    );
     expect(narrowed.map(f => f.detail)).toEqual([
-      plain(deletedIn("a", "author")),
+      { fields: ["author"], cause: "deleted", count: "2" },
     ]);
   });
 
   it("passes everything through for a reader who may read everything, without the keys", () => {
     const all = [shown("a", "one"), other];
     expect(narrowLinkFindings(all, verdicts())).toEqual([
+      { ...shown("a", "one"), detail: plain(shown("a", "one")) },
+      other,
+    ]);
+    // A trusted reader's view is the same, live links dropped.
+    expect(withoutFieldKeys([...all, liveIn("a", "two")])).toEqual([
       { ...shown("a", "one"), detail: plain(shown("a", "one")) },
       other,
     ]);
@@ -561,16 +615,18 @@ describe("narrowLinkFindings", () => {
     expect(JSON.stringify(narrowed)).not.toContain("aside-only");
   });
 
-  it("counts a finding standing for several deleted links as that many", () => {
+  it("counts five deleted links as five, hidden or in a hidden field", () => {
+    const five = ["g1", "g2", "g3", "g4", "g5"].map(id =>
+      deletedIn("a", "author", id)
+    );
     expect(
-      narrowLinkFindings(
-        [deletedIn("a", "author", 5)],
-        verdicts({ sourceReadable: () => false })
-      ).map(f => [f.code, f.detail])
+      narrowLinkFindings(five, verdicts({ sourceReadable: () => false })).map(
+        f => [f.code, f.detail]
+      )
     ).toEqual([["UNPUBLISHED_LINKS_HIDDEN", { count: "5" }]]);
     expect(
       narrowLinkFindings(
-        [deletedIn("a", "author", 5)],
+        five,
         verdicts({ visibleFields: () => new Set() })
       ).map(f => [f.code, f.detail])
     ).toEqual([["UNPUBLISHED_LINK_IN_HIDDEN_FIELD", { count: "5" }]]);
