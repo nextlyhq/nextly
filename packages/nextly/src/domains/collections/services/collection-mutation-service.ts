@@ -165,7 +165,7 @@ import {
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { stopReleasesHolding } from "../../releases/early-stop";
-import { perLanguageFieldNames } from "../../singles/services/single-publish-all";
+import { perLanguageFieldNames } from "../../singles/services/live-shared-single";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { mergeComponentPatches } from "../../versions/draft-components";

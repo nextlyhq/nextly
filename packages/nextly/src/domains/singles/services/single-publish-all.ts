@@ -21,7 +21,6 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { actorForWrite } from "../../../auth/request-actor";
-import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -40,7 +39,6 @@ import {
 import type { Logger } from "../../../shared/types";
 import { recordTransitionEvents } from "../../content-events/write-event";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
-import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { readCompanionLocaleStatusAll } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
@@ -57,7 +55,6 @@ import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
 import {
   outOfDateSharedFields,
   releaseAllSharedBases,
-  sharedFieldNames,
   sharedValuesConflict,
   snapshotRecord,
 } from "../../versions/shared-publish-base";
@@ -89,6 +86,7 @@ import {
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
+import { liveSharedSingle, perLanguageFieldNames } from "./live-shared-single";
 import {
   assertDraftsMayBePromoted,
   liveStoredDocument,
@@ -981,16 +979,26 @@ export class SinglePublishAllService extends BaseService {
     options: PublishAllSingleLocalesOptions,
     promoteGrants?: () => Promise<CallerGrants>
   ): Promise<void> {
-    const { companion, singleMeta, existingDoc, fieldConfigs, slug } = plan;
-    if (!companion || !this.queryService || pending.length === 0) return;
-    const live = this.queryService.deserializeJsonFields(
-      convertTimestampsToCamelCase({ ...lockedRow }) as SingleDocument,
-      singleMeta.fields
-    ) as Record<string, unknown>;
-    const shared = sharedFieldNames(
-      fieldConfigs,
-      new Set(companion.localizedFields.map(f => f.name)),
-      live
+    const { companion, singleMeta, existingDoc, slug } = plan;
+    const reader = this.queryService;
+    if (!companion || !reader || pending.length === 0) return;
+    // The row this transaction locked, with its shared components.
+    const { live, shared } = await liveSharedSingle(
+      tx,
+      {
+        fieldGroupDataService: this.fieldGroupDataService,
+        deserialize: row =>
+          reader.deserializeJsonFields(
+            row as SingleDocument,
+            singleMeta.fields
+          ),
+      },
+      {
+        singleMeta,
+        entryId: existingDoc.id,
+        locale: null,
+        translated: new Set(companion.localizedFields.map(f => f.name)),
+      }
     );
     const ref = this.workingDraftRef(plan);
     const stale = new Set<string>();
@@ -1537,29 +1545,4 @@ function languagesGoingLiveAsStored(
   if (translations.length > 0 || pending.length > 0) return translations;
   if (!plan.hasMainStatus || prior.mainStatus === "published") return [];
   return [{ locale: null, snapshot: {} }];
-}
-
-/**
- * The fields judged per language when every language is published: the
- * translated fields, and each field whose component is translated. A dynamic
- * zone counts when any type it permits is translated. References are read
- * through `fieldGroupSlugList`, so a definition stored under the migrated
- * `fieldGroup` / `fieldGroups` keys counts as the field-group saver sees it.
- */
-export async function perLanguageFieldNames(
-  fieldConfigs: readonly FieldConfig[],
-  localizedFieldNames: ReadonlySet<string>,
-  isComponentLocalized: (slug: string) => Promise<boolean>
-): Promise<Set<string>> {
-  const names = new Set(localizedFieldNames);
-  for (const field of fieldConfigs) {
-    if (!isFieldGroupField(field)) continue;
-    for (const slug of fieldGroupSlugList(field)) {
-      if (await isComponentLocalized(slug)) {
-        names.add(field.name);
-        break;
-      }
-    }
-  }
-  return names;
 }

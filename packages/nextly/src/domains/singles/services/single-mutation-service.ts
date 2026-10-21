@@ -135,7 +135,6 @@ import {
   outOfDateSharedFields,
   recordSharedBase,
   releaseSharedBase,
-  sharedFieldNames,
   sharedValuesConflict,
   snapshotRecord,
   takeLiveSharedValuesInto,
@@ -170,6 +169,7 @@ import {
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
+import { liveSharedSingle } from "./live-shared-single";
 import {
   assertDraftsMayBePromoted,
   liveStoredDocument,
@@ -275,22 +275,33 @@ export class SingleMutationService extends BaseService {
   private readonly versionCapture = new VersionCaptureService();
 
   /**
-   * The Single's main row as it stands in this transaction, in the read shape
-   * a version snapshot and a pending change hold: the shared values a publish
-   * would overwrite. Read under the row lock the write already holds.
+   * The Single as it stands live in this transaction, and the fields every
+   * language shares in it; see `liveSharedSingle`. Read under the row lock
+   * the write already holds.
    */
-  private async liveSharedDocument(
+  private liveSharedDocument(
     tx: TransactionContext,
     singleMeta: DynamicSingleRecord,
-    entryId: string
-  ): Promise<Record<string, unknown>> {
-    const row = await tx.selectOne<Record<string, unknown>>(
-      singleMeta.tableName,
-      { where: this.whereEq("id", entryId) }
-    );
-    return this.queryService.deserializeJsonFields(
-      convertTimestampsToCamelCase({ ...(row ?? {}) }) as SingleDocument,
-      singleMeta.fields
+    entryId: string,
+    companion: CompanionSchema,
+    locale: string | null
+  ): Promise<{ live: Record<string, unknown>; shared: string[] }> {
+    return liveSharedSingle(
+      tx,
+      {
+        fieldGroupDataService: this.fieldGroupDataService,
+        deserialize: row =>
+          this.queryService.deserializeJsonFields(
+            row as SingleDocument,
+            singleMeta.fields
+          ),
+      },
+      {
+        singleMeta,
+        entryId,
+        locale,
+        translated: new Set(companion.localizedFields.map(f => f.name)),
+      }
     );
   }
 
@@ -374,15 +385,17 @@ export class SingleMutationService extends BaseService {
     );
     if (!found) return null;
     const { ref, locale, pending } = found;
-    const live = await this.liveSharedDocument(tx, singleMeta, ref.entryId);
+    const { live, shared } = await this.liveSharedDocument(
+      tx,
+      singleMeta,
+      ref.entryId,
+      companion,
+      locale
+    );
     const took = await takeLiveSharedValuesInto(tx, this.versionCapture, {
       ref,
       locale,
-      shared: sharedFieldNames(
-        singleMeta.fields,
-        new Set(companion.localizedFields.map(f => f.name)),
-        live
-      ),
+      shared,
       live,
       pending: snapshotRecord(pending.snapshot),
       createdBy: params.user?.id ?? null,
@@ -2031,10 +2044,12 @@ export class SingleMutationService extends BaseService {
                 // someone else published since the change began would be put
                 // back by this write, so the publish is refused, naming it.
                 if (companion) {
-                  const live = await this.liveSharedDocument(
+                  const { live, shared } = await this.liveSharedDocument(
                     tx,
                     singleMeta,
-                    existingDoc.id
+                    existingDoc.id,
+                    companion,
+                    singleDraftLocale ?? null
                   );
                   const stale = await outOfDateSharedFields(tx, {
                     ref: {
@@ -2043,11 +2058,7 @@ export class SingleMutationService extends BaseService {
                       entryId: existingDoc.id,
                     },
                     locale: singleDraftLocale ?? null,
-                    shared: sharedFieldNames(
-                      fieldConfigs,
-                      new Set(companion.localizedFields.map(f => f.name)),
-                      live
-                    ),
+                    shared,
                     live,
                     pending: snapshotRecord(pendingDraft.snapshot),
                   });
@@ -2948,15 +2959,20 @@ export class SingleMutationService extends BaseService {
               // later save keeps it, so saving again never makes an old shared
               // value current.
               if (!existingDraft && companion) {
+                // A held save has written nothing live, so the live document
+                // read here is the one the change began from.
+                const { live, shared } = await this.liveSharedDocument(
+                  tx,
+                  singleMeta,
+                  existingDoc.id,
+                  companion,
+                  singleDraftLocale ?? null
+                );
                 await recordSharedBase(tx, {
                   ref: draftRef,
                   locale: singleDraftLocale ?? null,
-                  shared: sharedFieldNames(
-                    fieldConfigs,
-                    new Set(companion.localizedFields.map(f => f.name)),
-                    base
-                  ),
-                  live: base,
+                  shared,
+                  live,
                 });
               }
             }
