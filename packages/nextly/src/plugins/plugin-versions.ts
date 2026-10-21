@@ -134,11 +134,28 @@ function storedCopy(snapshot: unknown): unknown {
   return JSON.parse(serializeVersionSnapshot(snapshot)) as unknown;
 }
 
+/**
+ * What the plugin handed its hooks, for every read a checked write makes of
+ * the document, so a read hook that narrows by the request or the context
+ * answers as it would for the caller's own read.
+ */
+function hookInputsOf(resolved: ResolvedOpts): {
+  request?: Request;
+  context?: Record<string, unknown>;
+} {
+  return {
+    ...(resolved.request === undefined ? {} : { request: resolved.request }),
+    ...(resolved.context === undefined ? {} : { context: resolved.context }),
+  };
+}
+
 /** The person a checked history write is made as. */
 interface HistoryWriter {
   user: UserContext;
   authenticatedScope?: AuthenticatedScope;
   actor: RequestActor;
+  /** What the plugin handed its hooks, for the write's later reads. */
+  hookInputs: { request?: Request; context?: Record<string, unknown> };
 }
 
 /**
@@ -172,10 +189,7 @@ async function assertHandlerGates(
     ref.entryId,
     user,
     authenticatedScope,
-    {
-      ...(resolved.request === undefined ? {} : { request: resolved.request }),
-      ...(resolved.context === undefined ? {} : { context: resolved.context }),
-    }
+    hookInputsOf(resolved)
   );
   await assertDocumentUpdatable(
     ref.scopeKind,
@@ -254,6 +268,7 @@ async function checkedWriter(
     user,
     authenticatedScope,
     actor: directApiActor({}, config) ?? { type: "user", id: user.id },
+    hookInputs: hookInputsOf(resolved),
   };
 }
 
@@ -319,6 +334,7 @@ async function discardAsWriter(
     locale,
     authenticatedScope: writer.authenticatedScope,
     actor: writer.actor,
+    ...writer.hookInputs,
   });
   return removed;
 }
@@ -346,7 +362,8 @@ export function pluginVersionWrites(
             user: writer.user,
             authenticatedScope: writer.authenticatedScope,
           },
-          versionNo
+          versionNo,
+          writer.hookInputs
         );
         // The namer is the writer, by the name the writer is known by: never
         // a name the plugin passes, which could be anyone's. A key whose own

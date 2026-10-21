@@ -23,7 +23,8 @@ const { discardSpy, getEntrySpy, unlockedDeleteSpy } = vi.hoisted(() => ({
 vi.mock("../../../di", () => ({
   getService: vi.fn((name: string) => {
     if (name === "collectionsHandler") {
-      return { discardWorkingDraft: discardSpy, getEntry: getEntrySpy };
+      // The counted form: the discard answers how many drafts it removed.
+      return { discardWorkingDraftCounted: discardSpy, getEntry: getEntrySpy };
     }
     // The lock-less path the discard must no longer take; wired so the test can
     // assert it is never called.

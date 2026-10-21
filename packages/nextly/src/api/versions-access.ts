@@ -314,7 +314,9 @@ export async function assertVersionLanguageReadable(
     user: UserContext;
     authenticatedScope?: AuthenticatedScope;
   },
-  versionNo: number
+  versionNo: number,
+  // What the caller's own read carries, for the language's read hooks.
+  hookInputs: DocumentReadHookInputs = {}
 ): Promise<string | null | undefined> {
   const part = await getService("versionsService").partOfVersion(
     {
@@ -331,7 +333,7 @@ export async function assertVersionLanguageReadable(
     document.entryId,
     document.user,
     document.authenticatedScope,
-    {},
+    hookInputs,
     [part]
   );
   return part;

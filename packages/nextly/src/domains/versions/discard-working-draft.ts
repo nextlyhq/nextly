@@ -73,6 +73,9 @@ export interface DiscardWorkingDraftArgs {
   authenticatedScope?: AuthenticatedScope;
   /** Who discarded it, for the document's history. */
   actor?: RequestActor;
+  /** The request and context the caller's own read carries, for read hooks. */
+  request?: Request;
+  context?: Record<string, unknown>;
 }
 
 /**
@@ -111,6 +114,12 @@ export async function discardWorkingDraft(
   // as though it might be trusted, and this is the document a caller receives.
   // The live-document read gate beside this one states it for the same reason.
   const locale = args.locale ? { locale: args.locale } : {};
+  // The live-document read runs the read hooks, so they see what the caller's
+  // own read would.
+  const hookInputs = {
+    ...(args.request === undefined ? {} : { request: args.request }),
+    ...(args.context === undefined ? {} : { context: args.context }),
+  };
   const result =
     args.scopeKind === "single"
       ? await getService("singleEntryService").get(args.slug, {
@@ -120,6 +129,7 @@ export async function discardWorkingDraft(
           authenticatedScope: args.authenticatedScope,
           status: "all",
           ...locale,
+          ...hookInputs,
         })
       : await getService("collectionsHandler").getEntry({
           collectionName: args.slug,
@@ -130,6 +140,7 @@ export async function discardWorkingDraft(
           authenticatedScope: args.authenticatedScope,
           status: "all",
           ...locale,
+          ...hookInputs,
         });
 
   // A failed read (a concurrent delete, or an after-read hook or database error)
@@ -157,7 +168,7 @@ export async function discardWorkingDraft(
           actor: args.actor,
           user: args.user,
         })
-      : await getService("collectionsHandler").discardWorkingDraft({
+      : await getService("collectionsHandler").discardWorkingDraftCounted({
           collectionName: args.slug,
           entryId: args.entryId,
           locale: args.locale ?? null,
