@@ -990,14 +990,23 @@ async function registerServicesOnce(
   // Where core's own limits count. An app's store of the older contract keeps
   // serving them, as it did before the limit store existed; without one they
   // count in the selected store, so on the database store every instance
-  // counts one budget.
-  container.registerSingleton<RateLimitStore>("coreRateLimitStore", () =>
-    coreRateLimitStoreFor(
-      transformedConfig.rateLimit?.store,
-      () => container.get<LimitStore>("limitStore"),
-      env.NEXTLY_SECRET
-    )
-  );
+  // counts one budget. Registered only where that store is shared: on this
+  // process's memory, each limit keeps the count of its own it always had
+  // (sign-in's in its limiter, the REST API's in its route handler's), so a
+  // memory site counts exactly as before.
+  const configuredStore = transformedConfig.rateLimit?.store;
+  const limitsShared =
+    configuredStore !== undefined ||
+    (transformedConfig.rateLimit?.limitStore ?? "memory") !== "memory";
+  if (limitsShared) {
+    container.registerSingleton<RateLimitStore>("coreRateLimitStore", () =>
+      coreRateLimitStoreFor(
+        configuredStore,
+        () => container.get<LimitStore>("limitStore"),
+        env.NEXTLY_SECRET
+      )
+    );
+  }
   // Beside the config rather than in it: what the boot granted, decided once
   // when the plugin list was resolved. The auth router builds its plugin
   // contexts from this entry, as `initializePlugins` does from the same value.
