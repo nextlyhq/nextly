@@ -85,7 +85,12 @@ export interface ArrangedGridProps {
           ) => void;
           isWriting: boolean;
           unavailable?: string;
-          announce: (title: string, setting: string, value: string) => void;
+          announce: (
+            title: string,
+            setting: string,
+            value: string,
+            shown: boolean
+          ) => void;
         }
       | undefined;
   };
@@ -197,8 +202,8 @@ function cellSettingsWrite(
       ...(settingsWrite.unavailable === undefined
         ? {}
         : { unavailable: settingsWrite.unavailable }),
-      announce: (setting, value) =>
-        settingsWrite.announce(row.widget.title, setting, value),
+      announce: (setting, value, shown) =>
+        settingsWrite.announce(row.widget.title, setting, value, shown),
     },
   };
 }

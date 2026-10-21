@@ -7,7 +7,9 @@
  * Announced once the card SHOWS it, not when the write lands: a change that alters the card's
  * query is asked again for this card alone, and saying "set to" while the old answer is still on
  * screen would describe a card the reader cannot see yet. A change the query does not read
- * (a custom card reading its settings itself) is announced as soon as it lands.
+ * (a custom card reading its settings itself) is announced as soon as it lands. A change whose
+ * re-ask was refused is still announced, as saved but not shown: the save did land, and a reader
+ * who hears nothing cannot tell whether it did.
  *
  * @module components/features/widgets/edit/useCardQuickSetting
  */
@@ -37,8 +39,11 @@ export interface CellSettingsWrite {
   isWriting: boolean;
   /** Why the card's settings cannot be saved now, when they cannot. */
   unavailable?: string;
-  /** Say that one of the card's settings changed, once the card shows it. */
-  announce: (setting: string, value: string) => void;
+  /**
+   * Say that one of the card's settings changed, once its request has ended: `shown` when the
+   * card shows the change, false when its new answer was refused and it kept the one it had.
+   */
+  announce: (setting: string, value: string, shown: boolean) => void;
 }
 
 interface PendingAnnouncement {
@@ -101,10 +106,13 @@ export function useCardQuickSetting(args: {
     }
     if (isFetching) return;
     // A refused quiet re-ask keeps the answer the card had, and its time with it: the card does
-    // not show the change, so it is not said. Only an answer that arrived after the change is.
-    if (!pending.asksAgain || shownAt !== pending.shownAt) {
-      settingsWrite.announce(pending.setting, pending.value);
-    }
+    // not show the change, so it is said as saved but not shown. Only an answer that arrived
+    // after the change shows it.
+    settingsWrite.announce(
+      pending.setting,
+      pending.value,
+      !pending.asksAgain || shownAt !== pending.shownAt
+    );
     setPending(null);
   }, [pending, isFetching, shownAt, settingsWrite]);
 
