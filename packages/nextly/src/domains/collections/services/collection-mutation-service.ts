@@ -11855,8 +11855,15 @@ export class CollectionMutationService extends BaseService {
         });
       }
 
+      // A held edit answers with the pending document, not the live row, so
+      // that is the document redacted: it carries the edited values, field
+      // groups included, which the live row does not.
+      const response = (workingDraftDocument ?? updated) as Record<
+        string,
+        unknown
+      >;
       await this.redactResponseFields(
-        updated as Record<string, unknown>,
+        response,
         fields,
         {
           user: params.user,
@@ -11874,8 +11881,7 @@ export class CollectionMutationService extends BaseService {
         success: true,
         statusCode: 200,
         message: "Entry updated successfully",
-        // A held edit answers with the pending document, not the live row.
-        data: workingDraftDocument ?? updated,
+        data: response,
         eventRecorded,
         revalidationIntent,
       };

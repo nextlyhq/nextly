@@ -50,8 +50,13 @@ export async function liveFieldGroupReadPass(
   const fieldGroupFields = source
     ? await resolveComponentFieldMap([...fields], onceEach(source))
     : new Map<string, FieldConfig[]>();
+  // A live document: a single field group's value is judged by the field group
+  // the field declares, whatever type a hook may have given it.
   return (row, caller) =>
-    applyComponentReadAccess(row, fields, fieldGroupFields, caller);
+    applyComponentReadAccess(row, fields, fieldGroupFields, {
+      ...caller,
+      declaredComponentDecides: true,
+    });
 }
 
 /**

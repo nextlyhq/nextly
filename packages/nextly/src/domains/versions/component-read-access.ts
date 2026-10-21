@@ -42,6 +42,13 @@ export interface ComponentReadCaller {
    * no use for one.
    */
   redactions?: ReadAccessRedactions;
+  /**
+   * Set for a live document: a field declared with one component judges its
+   * value by that component, whatever type the value claims, since a hook may
+   * retag it. Unset for a version, whose snapshot keeps the component it was
+   * captured under, which is the one its values were written against.
+   */
+  declaredComponentDecides?: boolean;
 }
 
 /** Component field schemas, keyed by component slug. */
@@ -71,18 +78,24 @@ function nameOf(field: FieldConfig): string | undefined {
  * component it is judged by: a block's own type (under either stored key), or
  * the field's single component.
  *
- * A field declared with one component holds only that one, so its instances
- * are judged by it whatever type they claim: a value a hook retagged as a
- * component with no rules is still judged by the rules it was declared under.
- * A type is read only where the field offers several, a dynamic zone.
+ * In a live document (`declaredComponentDecides`), a field declared with one
+ * component holds only that one, so its instances are judged by it whatever
+ * type they claim: a value a hook retagged as a component with no rules is
+ * still judged by the rules it was declared under. A version keeps the type
+ * it was captured under, so there the type decides.
  */
 function componentInstances(
   field: FieldConfig,
-  value: unknown
+  value: unknown,
+  declaredComponentDecides: boolean
 ): { slug: string; instance: Record<string, unknown> }[] {
   const { single, many } = extractFieldGroupReferences(field);
   return rowsOf(value).flatMap(instance => {
-    if (single !== undefined && many === undefined) {
+    if (
+      declaredComponentDecides &&
+      single !== undefined &&
+      many === undefined
+    ) {
       return [{ slug: single, instance }];
     }
     const own = readFieldGroupType(instance);
@@ -132,7 +145,11 @@ async function judgeField(
     return;
   }
   if (isFieldGroupField(field)) {
-    for (const { slug, instance } of componentInstances(field, entry[name])) {
+    for (const { slug, instance } of componentInstances(
+      field,
+      entry[name],
+      caller.declaredComponentDecides === true
+    )) {
       await judgeInstance(instance, slug, componentFields, caller);
     }
     return;
