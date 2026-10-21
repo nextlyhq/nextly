@@ -323,7 +323,11 @@ function UploadValue({ entry }: { entry: unknown }) {
     thumbnailUrl?: string | null;
     url?: string | null;
     mimeType?: string | null;
+    alt?: string | null;
   };
+  // The image's description, as the library keeps it: read aloud with the
+  // thumbnail and shown beside the name, so a change of alt text is visible.
+  const alt = typeof file.alt === "string" && file.alt !== "" ? file.alt : null;
 
   // `filename` holds the internal storage path; the name the user chose lives
   // in `originalFilename`, which is what every other admin surface shows.
@@ -344,11 +348,23 @@ function UploadValue({ entry }: { entry: unknown }) {
   return (
     <span className="inline-flex items-center gap-2 border border-border p-1 pr-2">
       {src ? (
-        <img src={src} alt="" className="h-8 w-8 object-cover" loading="lazy" />
+        <img
+          src={src}
+          alt={alt ?? ""}
+          className="h-8 w-8 object-cover"
+          loading="lazy"
+        />
       ) : (
         <span className="h-8 w-8 bg-muted" aria-hidden="true" />
       )}
-      <span className="text-sm text-foreground break-all">{name}</span>
+      <span className="flex min-w-0 flex-col">
+        <span className="text-sm text-foreground break-all">{name}</span>
+        {alt ? (
+          <span className="text-xs text-muted-foreground break-words">
+            Alt text: {alt}
+          </span>
+        ) : null}
+      </span>
     </span>
   );
 }

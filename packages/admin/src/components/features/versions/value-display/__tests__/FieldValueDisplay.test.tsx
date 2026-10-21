@@ -130,6 +130,29 @@ describe("FieldValueDisplay", () => {
     expect(screen.getByRole("presentation", { hidden: true })).toBeTruthy();
   });
 
+  it("describes an image by its alt text, read aloud and shown beside its name", () => {
+    render(
+      <FieldValueDisplay
+        field={field("upload")}
+        value={{
+          id: "m1",
+          originalFilename: "barn.jpg",
+          thumbnailUrl: "/t.jpg",
+          mimeType: "image/jpeg",
+          alt: "A red barn at dusk",
+        }}
+      />
+    );
+
+    expect(screen.getByText("barn.jpg")).toBeInTheDocument();
+    expect(
+      screen.getByRole("img", { name: "A red barn at dusk" })
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Alt text: A red barn at dusk")
+    ).toBeInTheDocument();
+  });
+
   it("renders rich text as readable text, not as editor JSON", () => {
     const doc = {
       root: {
