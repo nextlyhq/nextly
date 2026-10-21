@@ -853,10 +853,17 @@ async function validatePluginFieldType(
  * back to itself ends.
  */
 export function hasComponentInContainer(
-  fields: readonly ValidatableField[]
+  fields: readonly ValidatableField[],
+  /**
+   * Whether `fields` are themselves a container's: a component's own fields are, for a component
+   * placed directly in them, since its value too is reached by no write of its own.
+   */
+  inContainer = false
 ): boolean {
   const seen = new Set<readonly ValidatableField[]>();
-  const work: Array<[readonly ValidatableField[], boolean]> = [[fields, false]];
+  const work: Array<[readonly ValidatableField[], boolean]> = [
+    [fields, inContainer],
+  ];
   for (let next = work.pop(); next; next = work.pop()) {
     const [list, inContainer] = next;
     if (seen.has(list)) continue;

@@ -26,6 +26,7 @@ import {
   BuilderNotFoundScreen,
   BuilderPageLayout,
   BuilderSchemaChangeDialogs,
+  DirectFieldGroupsNotice,
   type ActiveOverlay,
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
@@ -318,32 +319,35 @@ export default function FieldGroupBuilderEditPage({
            contrast suite and Tailwind's scanner read this file as text, so
            quoting the utility would re-introduce it — failing the suite from a
            comment, and emitting the class into the build. */
-        needsRepair ? (
-          <Alert variant="destructive" className="mb-4">
-            <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <div className="min-w-0">
-              <AlertTitle>
-                Saving is blocked until this definition is repaired
-              </AlertTitle>
-              <AlertDescription className="mt-1">
-                This field group&apos;s tables changed and the record describing
-                them did not, so schema edits are refused. Repairing rewrites
-                the record to describe the tables — it moves no data and creates
-                no columns.
-              </AlertDescription>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="mt-3"
-                onClick={() => setReconcileOpen(true)}
-              >
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Review the repair
-              </Button>
-            </div>
-          </Alert>
-        ) : null
+        <>
+          {needsRepair ? (
+            <Alert variant="destructive" className="mb-4">
+              <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <div className="min-w-0">
+                <AlertTitle>
+                  Saving is blocked until this definition is repaired
+                </AlertTitle>
+                <AlertDescription className="mt-1">
+                  This field group&apos;s tables changed and the record
+                  describing them did not, so schema edits are refused.
+                  Repairing rewrites the record to describe the tables — it
+                  moves no data and creates no columns.
+                </AlertDescription>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-3"
+                  onClick={() => setReconcileOpen(true)}
+                >
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Review the repair
+                </Button>
+              </div>
+            </Alert>
+          ) : null}
+          <DirectFieldGroupsNotice fields={builder.fields} />
+        </>
       }
       isSaving={isSaving || confirmation.isApplying}
       savingLabel="Saving field group changes…"

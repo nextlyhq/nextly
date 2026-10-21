@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -43,6 +44,7 @@ import {
   companionNotReadyMessage,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { containedComponentResolver } from "../../versions/tag-component-types";
 import {
   isFieldGroupFieldType,
   withResolvedFieldGroupReferences,
@@ -51,6 +53,7 @@ import {
   currentFieldGroupTypeKey,
   readFieldGroupType,
 } from "../storage/field-group-type-key";
+import { unstoredNestedComponentIssues } from "../unstored-nested-components";
 
 import {
   COMPONENT_META_KEYS,
@@ -108,6 +111,17 @@ export interface DeleteComponentDataParams {
   parentTable: string;
   fields: FieldConfig[];
 }
+
+/**
+ * The connection an in-transaction component write runs on, for the reads made deep inside it.
+ *
+ * Preparing an instance reads the schemas of the components nested in it, and inside a transaction
+ * that read must use the transaction's own connection: a pooled read while the transaction holds
+ * the only connection waits on itself. The transaction's entry point binds it once here, so the
+ * save paths beneath it, which mirror their pooled twins, need not each carry it. Empty for a
+ * pooled write, which reads pooled.
+ */
+const writeExecutor = new AsyncLocalStorage<unknown>();
 
 function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
   return isFieldGroupFieldType(field.type);
@@ -560,66 +574,70 @@ export class FieldGroupMutationService extends BaseService {
   ): Promise<void> {
     const { parentId, parentTable, fields, data, locale, req } = params;
 
-    await this.eachFieldGroupWrite(fields, data, {
-      clear: async f => {
-        // Clearing a field holds nothing to validate.
-        if (validateOnly) return;
-        await this.deleteFieldComponentDataInTx(
-          tx,
-          parentId,
-          parentTable,
-          f.name,
-          f
-        );
-      },
-      save: async (f, fieldData) => {
-        if (f.components && f.components.length > 0) {
-          await this.saveMultiComponentsInTx(
+    // Every read made beneath this write goes through the transaction's own connection; see
+    // `writeExecutor`.
+    await writeExecutor.run(tx.getDrizzle(), () =>
+      this.eachFieldGroupWrite(fields, data, {
+        clear: async f => {
+          // Clearing a field holds nothing to validate.
+          if (validateOnly) return;
+          await this.deleteFieldComponentDataInTx(
             tx,
-            {
-              parentId,
-              parentTable,
-              fieldName: f.name,
-              field: f,
-              data: fieldData,
-              locale,
-              req,
-            },
-            validateOnly
+            parentId,
+            parentTable,
+            f.name,
+            f
           );
-        } else if (f.component) {
-          if (f.repeatable) {
-            await this.saveRepeatableComponentsInTx(
+        },
+        save: async (f, fieldData) => {
+          if (f.components && f.components.length > 0) {
+            await this.saveMultiComponentsInTx(
               tx,
               {
                 parentId,
                 parentTable,
                 fieldName: f.name,
-                componentSlug: f.component,
+                field: f,
                 data: fieldData,
                 locale,
                 req,
               },
               validateOnly
             );
-          } else {
-            await this.saveSingleComponentInTx(
-              tx,
-              {
-                parentId,
-                parentTable,
-                fieldName: f.name,
-                componentSlug: f.component,
-                data: fieldData as ComponentInstanceData,
-                locale,
-                req,
-              },
-              validateOnly
-            );
+          } else if (f.component) {
+            if (f.repeatable) {
+              await this.saveRepeatableComponentsInTx(
+                tx,
+                {
+                  parentId,
+                  parentTable,
+                  fieldName: f.name,
+                  componentSlug: f.component,
+                  data: fieldData,
+                  locale,
+                  req,
+                },
+                validateOnly
+              );
+            } else {
+              await this.saveSingleComponentInTx(
+                tx,
+                {
+                  parentId,
+                  parentTable,
+                  fieldName: f.name,
+                  componentSlug: f.component,
+                  data: fieldData as ComponentInstanceData,
+                  locale,
+                  req,
+                },
+                validateOnly
+              );
+            }
           }
-        }
-      },
-    });
+        },
+      })
+    );
   }
   /**
    * Validates component values the way {@link saveComponentDataInTransaction}
@@ -1741,16 +1759,32 @@ export class FieldGroupMutationService extends BaseService {
     // reference left populated here is stored there as a snapshot of the row.
     normalizeRelationshipFields(instance, componentFields);
 
+    // The components nested in this one: their schemas judge one held in a group or repeater here,
+    // whose value no component write of its own reaches, and tell a seeded value from a real one.
+    const nested = await containedComponentResolver(
+      componentFields,
+      async nestedSlug =>
+        (
+          await this.registryService.getComponentBySlug(
+            nestedSlug,
+            writeExecutor.getStore()
+          )
+        )?.fields ?? null,
+      true
+    );
     // The stored definition carries no functions, so a component field's own
     // `validate` is attached from the field-level registry, as the parent's
     // fields are; without it that validator never ran on any write.
-    const issues = await validateEntryData(
-      instance,
-      slug
-        ? attachFieldValidators("fieldGroup", slug, componentFields)
-        : componentFields,
-      { mode, req }
-    );
+    const issues = [
+      ...unstoredNestedComponentIssues(instance, componentFields, nested),
+      ...(await validateEntryData(
+        instance,
+        slug
+          ? attachFieldValidators("fieldGroup", slug, componentFields)
+          : componentFields,
+        { mode, req, componentFields: nested }
+      )),
+    ];
     if (issues.length > 0) {
       throw NextlyError.validation({ errors: issues });
     }
