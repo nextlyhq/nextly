@@ -67,6 +67,17 @@ describe("canReadSystemResource — signed-in users", () => {
     );
   });
 
+  it("refuses a user without the service, and looks nothing up to say so", async () => {
+    // Without the access-control service a signed-in user is refused whatever
+    // they hold, so resolving their roles and grants would only cost reads.
+    hasSpy.mockReturnValue(false);
+
+    await expect(canReadSystemResource("media", "u1", undefined)).resolves.toBe(
+      false
+    );
+    expect(actorForUserSpy).not.toHaveBeenCalled();
+  });
+
   it("admits a user whose grants hold the read", async () => {
     // The control: the lookup answers, and the grant decides.
     actorForUserSpy.mockResolvedValue(

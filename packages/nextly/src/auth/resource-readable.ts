@@ -86,6 +86,17 @@ export async function canReadSystemResource(
     return readsSystemResource(actor, read);
   }
   if (userId === undefined) return readsSystemResource(actorForVisitor(), read);
+  if (!read.serviceRegistered) {
+    // Without the service a signed-in user is refused whatever they hold, as
+    // before, so nothing is looked up to say so. The decision it is compared
+    // with is the one the service's presence would give.
+    return deviate("no-service", false, async () =>
+      readsSystemResource(await actorForUser(userId), {
+        ...read,
+        serviceRegistered: true,
+      })
+    );
+  }
   let actor: Actor;
   try {
     actor = await actorForUser(userId);
