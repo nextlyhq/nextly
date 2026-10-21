@@ -54,7 +54,7 @@ import {
 import type { EmailSendOutcome } from "./services/send-failures";
 import type { ResolvedAttachment } from "./types";
 
-/** The scope of the site's own code: the Direct API and the REST routes. */
+/** The scope of the site's own server code: the Direct API. */
 export const SITE_KEY_SCOPE = "site";
 
 /** The scope of core's own sends, and of a caller that names no scope. */
@@ -66,6 +66,25 @@ export const CORE_KEY_SCOPE = "core";
  */
 export function pluginKeyScope(pluginName: string | undefined): string {
   return pluginName ? `plugin:${pluginName}` : SITE_KEY_SCOPE;
+}
+
+/** Who sent a request over REST: a signed-in person, or an API key. */
+export interface RestKeyCaller {
+  authMethod: "session" | "api-key";
+  userId: string;
+  apiKeyId?: string;
+}
+
+/**
+ * A REST caller's scope: its own API key, or the signed-in person. A key sent
+ * over REST is the caller's alone, so it can never claim a key the site's own
+ * code sends with, nor learn from the answer which keys anyone else has used.
+ * The `rest:` prefix keeps it apart from the site, core and plugin scopes.
+ */
+export function restKeyScope(caller: RestKeyCaller): string {
+  return caller.authMethod === "api-key" && caller.apiKeyId
+    ? `rest:api-key:${caller.apiKeyId}`
+    : `rest:user:${caller.userId}`;
 }
 
 /**
