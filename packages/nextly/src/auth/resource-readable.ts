@@ -12,7 +12,9 @@
  */
 
 import { container } from "../di/container";
+import { consoleLogger } from "../shared/types";
 
+import { holdsPermission, type Actor } from "./access/actor";
 import { deviate } from "./access/deviations";
 import {
   actorForKey,
@@ -61,25 +63,40 @@ export async function canReadSystemResource(
   };
   if (authenticatedScope?.actorType === "apiKey") {
     const user = { id: userId ?? "" };
-    if (scopeRowsAgree(authenticatedScope)) {
-      return readsSystemResource(actorForScope(authenticatedScope, user), read);
-    }
-    // Judged on the stored slugs, as before: a scope without the rows its
-    // slugs came from holds no grant the decision can read.
-    const today =
-      apiKeyScopeAllows(authenticatedScope, "read", resource) === true;
-    return deviate("key-slug-string-match", today, () =>
-      readsSystemResource(
-        actorForKey({
+    const rows = scopeRowsAgree(authenticatedScope);
+    const actor = rows
+      ? actorForScope(authenticatedScope, user)
+      : actorForKey({
           keyId: "",
           userId: user.id,
           grants: authenticatedScope.grants ?? [],
           roles: authenticatedScope.roles ?? [],
-        }),
-        read
-      )
-    );
+        });
+    // A key holds the read by its stored slug, `read-<resource>`. The
+    // decision reads a grant's action and resource, which agree with the slug
+    // unless the scope carries no rows or the grant was stored under a slug of
+    // its own; then the stored slug answers, as before.
+    const today =
+      apiKeyScopeAllows(authenticatedScope, "read", resource) === true;
+    if (!rows || today !== holdsPermission(actor, "read", resource)) {
+      return deviate("key-slug-string-match", today, () =>
+        readsSystemResource(actor, read)
+      );
+    }
+    return readsSystemResource(actor, read);
   }
   if (userId === undefined) return readsSystemResource(actorForVisitor(), read);
-  return readsSystemResource(await actorForUser(userId), read);
+  let actor: Actor;
+  try {
+    actor = await actorForUser(userId);
+  } catch (error) {
+    // A lookup that fails refuses the read, as the permission check this
+    // replaced did, so a relationship withholds the row and the read goes on.
+    consoleLogger.error(
+      `[rbac] Could not resolve user ${userId} to read ${resource}`,
+      { error }
+    );
+    return false;
+  }
+  return readsSystemResource(actor, read);
 }
