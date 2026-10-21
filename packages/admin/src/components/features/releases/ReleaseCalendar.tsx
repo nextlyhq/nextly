@@ -275,7 +275,8 @@ export function ReleaseCalendar() {
       <p id={noteId} className="text-xs text-muted-foreground">
         Days and times are in {zoneDisplayName(zone)}
         {zone === reader ? " (your time zone)" : ""}. A published release is on
-        the day it went out.
+        the day it went out. Drafts have no date yet, so they are not on the
+        calendar: they are in the list&rsquo;s Drafts tab.
       </p>
 
       <ReleaseCalendarDaySheet

@@ -179,6 +179,17 @@ describe("the calendar screen", () => {
     );
   });
 
+  it("says where drafts are, since a draft has no day to be drawn on", () => {
+    render(<ReleaseCalendar />);
+    // The grid is described by the note, so a screen reader hears it too.
+    const grid = screen.getByRole("grid");
+    const note = document.getElementById(
+      grid.getAttribute("aria-describedby") ?? ""
+    );
+    expect(note?.textContent).toMatch(/Drafts have no date yet/);
+    expect(note?.textContent).toMatch(/Drafts tab/);
+  });
+
   it("says the month could not be loaded rather than drawing it empty", () => {
     calendarMock.mockReturnValue({
       data: undefined,

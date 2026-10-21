@@ -1,6 +1,7 @@
 /**
  * The Releases list in a real browser: its four tabs, their counts and pages,
- * and its times in the reader's own zone.
+ * its times in the reader's own zone, and every tab under axe with the
+ * suite's brand colour applied.
  *
  * The releases are written through the API, each named with a stamp this run
  * owns, and the list is searched for that stamp, so the counts and rows are
@@ -10,6 +11,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { expectNoAxeViolations } from "./support/axe";
 import {
   leaveReleasesAsTheRunnerWould,
   type RunnerOutcome,
@@ -201,4 +203,90 @@ test.describe("the Releases list, read from New York", () => {
     await expect(home).not.toContainText("your time");
     await expect(home).not.toContainText("as scheduled");
   });
+});
+
+/**
+ * The admin's default primary, which the brand colour must have replaced for
+ * the scan below to say anything about a branded admin.
+ */
+const DEFAULT_PRIMARY = "oklch(0 0 0)";
+
+/**
+ * The state badges, which are what this check holds to AA.
+ *
+ * Scoped to them rather than the whole page because, under the brand colour,
+ * a whole-page scan of this list also fails on parts drawn by shared
+ * components, not by the releases screens: the selected tab's brand-coloured
+ * text, the table row that is both a link and a holder of its menu, the
+ * rows-per-page select's missing name, and the search box's clear button's
+ * size. Each is a design-system defect to fix where it lives; scanning the
+ * whole page here would keep this check red for reasons the releases code
+ * cannot change, and so stop it saying anything about the badges.
+ */
+const STATE_BADGES = '[role="tabpanel"] [data-slot^="badge."]';
+
+test.describe("the Releases list, under a brand colour", () => {
+  for (const theme of ["light", "dark"] as const) {
+    test(`draws every state's badge at AA contrast, at desk and phone widths (${theme})`, async ({
+      page,
+    }) => {
+      test.setTimeout(120_000);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      const stamp = `${Date.now()}`;
+      const postId = await post(page, `list-axe-${stamp}`);
+      const name = (what: string) => `Contrast ${what} ${stamp}`;
+
+      // One release in each state the list draws a badge for.
+      await schedule(
+        page,
+        await release(page, name("upcoming"), postId),
+        new Date(Date.now() + 3 * DAY),
+        "UTC"
+      );
+      await release(page, name("draft"), postId);
+      await publishNow(page, await release(page, name("published"), postId));
+      await cancel(page, await release(page, name("cancelled"), postId));
+      const attention: Array<{ id: string; outcome: RunnerOutcome }> = [];
+      for (const outcome of ["overdue", "stopped"] as const) {
+        const id = await release(page, name(outcome), postId);
+        await schedule(page, id, new Date(Date.now() + 40 * DAY), "UTC");
+        attention.push({ id, outcome });
+      }
+      // Last, since Publish now runs a pass of the runner.
+      await leaveReleasesAsTheRunnerWould(page, attention);
+
+      await gotoAdmin(page, "/releases", theme);
+      // The suite's server runs with the playground's brand colours on.
+      // Checked rather than assumed: on the default palette the primary is
+      // the foreground colour, and every badge would pass whatever it is
+      // drawn with.
+      const primary = await page
+        .locator(".nextly-admin")
+        .first()
+        .evaluate(root =>
+          getComputedStyle(root).getPropertyValue("--nx-primary").trim()
+        );
+      expect(primary).not.toBe("");
+      expect(primary).not.toBe(DEFAULT_PRIMARY);
+      await searchFor(page, stamp);
+
+      for (const label of [
+        "Upcoming (1)",
+        "Needs attention (2)",
+        "Drafts (1)",
+        "Done (2)",
+      ]) {
+        const tab = page.getByRole("tab", { name: label });
+        await tab.click();
+        await expect(tab).toHaveAttribute("aria-selected", "true");
+        // The table at a desk's width and a card per row at a phone's, which
+        // draw each badge on a different surface.
+        for (const width of [1440, 390]) {
+          await page.setViewportSize({ width, height: 900 });
+          await expectNoAxeViolations(page, { include: STATE_BADGES });
+        }
+        await page.setViewportSize({ width: 1440, height: 900 });
+      }
+    });
+  }
 });
