@@ -50,6 +50,7 @@ import {
   mailboxOf,
   refusedMailboxes,
   messageIdWithoutRecipients,
+  type EmailDeliveryInput,
   type EmailDeliveryRecipientKind,
 } from "../delivery-record";
 import { EmailErrorCode } from "../errors";
@@ -211,6 +212,11 @@ interface DispatchContext {
   keyed?: KeyedSend;
   /** Runs, or queues, the `email.afterSend` actions for this message. */
   afterSend: (value: EmailAfterSendValue) => Promise<void>;
+  /**
+   * Writes, or keeps for the claim's commit, this message's delivery
+   * records. Never throws.
+   */
+  record: (rows: EmailDeliveryInput[]) => Promise<void>;
 }
 
 /** A keyed send's claim, while it sends. */
@@ -828,6 +834,9 @@ export class EmailService extends BaseService {
             return Promise.resolve();
           };
 
+    // A keyed send's records are kept, to commit with its claim's outcome;
+    // any other send's are written as each message is answered, as before.
+    const records: EmailDeliveryInput[] | undefined = claimed ? [] : undefined;
     const calls = await this.dispatchAll(messages, {
       adapter,
       providerType,
@@ -838,6 +847,7 @@ export class EmailService extends BaseService {
       resolvedAttachments,
       keyed: claimed?.keyed,
       afterSend,
+      record: rows => this.recordOrKeep(rows, records),
     });
     // One message is today's send, and its result is returned as it is; a
     // split send's messages are combined into one result.
@@ -854,9 +864,15 @@ export class EmailService extends BaseService {
         envelope,
         previouslyAccepted,
         calls,
+        records,
       });
     } else if (claimed) {
-      await this.deliveries?.settleSend(claimed.keyed.claim, outcome, accepted);
+      await this.deliveries?.settleSend(
+        claimed.keyed.claim,
+        outcome,
+        accepted,
+        records
+      );
     }
 
     for (const value of deferred) {
@@ -906,6 +922,7 @@ export class EmailService extends BaseService {
     envelope: SendEnvelope;
     previouslyAccepted: ReadonlySet<string>;
     calls: readonly CallOutcome[];
+    records?: EmailDeliveryInput[];
   }): Promise<void> {
     const renewal = setInterval(() => {
       void late.keyed?.renew();
@@ -925,7 +942,12 @@ export class EmailService extends BaseService {
           late.previouslyAccepted,
           calls
         );
-        await this.deliveries?.settleSend(late.keyed.claim, outcome, accepted);
+        await this.deliveries?.settleSend(
+          late.keyed.claim,
+          outcome,
+          accepted,
+          late.records
+        );
       }
     } catch (error) {
       warnQuietly(this.logger, "A late email send could not be finished", {
@@ -1202,7 +1224,7 @@ export class EmailService extends BaseService {
     // `success: false`, and tell the caller a delivered message failed.
     state.dispatched = outcome;
 
-    await this.deliveries?.recordAll(
+    await context.record(
       recipients.map(recipient =>
         acceptedRow(recipient, {
           refused,
@@ -1332,7 +1354,7 @@ export class EmailService extends BaseService {
     // Contained, like the log line below: a recorder or a logger that throws
     // here would otherwise turn this message's failure into an exception, and
     // on a split send stop every later message from being sent.
-    await this.containedRecord(
+    await context.record(
       recipients.map(recipient => ({
         ...rowBase(recipient, context),
         status: "failed" as const,
@@ -1384,10 +1406,18 @@ export class EmailService extends BaseService {
     return { success: false, failure };
   }
 
-  /** Record delivery rows, never letting the recorder's own failure escape. */
-  private async containedRecord(
-    rows: Parameters<EmailDeliveryService["recordAll"]>[0]
+  /**
+   * Record delivery rows, or keep them in `kept` for a keyed send's commit,
+   * never letting the recorder's own failure escape.
+   */
+  private async recordOrKeep(
+    rows: EmailDeliveryInput[],
+    kept: EmailDeliveryInput[] | undefined
   ): Promise<void> {
+    if (kept) {
+      kept.push(...rows);
+      return;
+    }
     try {
       await this.deliveries?.recordAll(rows);
     } catch {

@@ -64,9 +64,12 @@ import { pruneSendClaims } from "../prune";
 import type { ResolvedEmailRetentionConfig } from "../retention-config";
 import {
   claimSendKey,
+  ownTransaction,
   renewSendClaim,
   sendClaimsTableFor,
+  settleClaimIn,
   settleSendClaim,
+  type SettleOptions,
   type ClaimDecision,
   type HeldClaim,
   type SendKey,
@@ -289,24 +292,119 @@ export class EmailDeliveryService extends BaseService {
   async settleSend(
     claim: HeldClaim,
     outcome: EmailSendOutcome,
-    acceptedRecipients: readonly string[] = []
+    acceptedRecipients: readonly string[] = [],
+    records?: EmailDeliveryInput[]
   ): Promise<void> {
+    const keep = !this.keepsNothing();
     try {
-      await settleSendClaim(this.adapter, claim, outcome, {
-        keep: !this.keepsNothing(),
-        acceptedRecipients,
-      });
+      if (records === undefined) {
+        await settleSendClaim(this.adapter, claim, outcome, {
+          keep,
+          acceptedRecipients,
+        });
+      } else {
+        await this.recordAndSettle(claim, outcome, {
+          keep,
+          acceptedRecipients,
+          records,
+        });
+      }
     } catch (error) {
+      // Neither written: the claim stays held until its lease lapses, and a
+      // later send with the key takes it over and completes both.
       warnQuietly(this.logger, "Email send claim could not be recorded", {
         error,
       });
     }
+    if (records !== undefined) await this.offerRetention();
     try {
       await pruneSendClaims(this.adapter, this.sentClaimLifetime(), new Date());
     } catch (error) {
       warnQuietly(this.logger, "Email send claims could not be swept", {
         error,
       });
+    }
+  }
+
+  /**
+   * A keyed send's delivery records and its claim's outcome, in one
+   * transaction: a process that stops between the provider's answer and the
+   * commit leaves neither, so the retry that takes the claim over writes both.
+   * Recovers from a provider deleted mid-send as `insertChunk` does, by
+   * writing the records again without its reference.
+   */
+  private async recordAndSettle(
+    claim: HeldClaim,
+    outcome: EmailSendOutcome,
+    options: {
+      keep: boolean;
+      acceptedRecipients: readonly string[];
+      records: EmailDeliveryInput[];
+    }
+  ): Promise<void> {
+    const commit = (withProvider: boolean) =>
+      ownTransaction(this.adapter)(async db => {
+        if (options.keep) {
+          await this.insertWithin(
+            db as unknown as PersonRowsDb,
+            options.records,
+            withProvider
+          );
+        }
+        await this.settleWithin(db, claim, outcome, {
+          keep: options.keep,
+          acceptedRecipients: options.acceptedRecipients,
+        });
+      });
+    try {
+      await commit(true);
+    } catch (error) {
+      if (toDbError(this.dialect, error).kind !== "fk-violation") throw error;
+      await commit(false);
+      this.reportProviderReferenceDropped(options.records);
+    }
+  }
+
+  /** The claim's part of a keyed send's commit, in the transaction given. */
+  settleWithin(
+    db: unknown,
+    claim: HeldClaim,
+    outcome: EmailSendOutcome,
+    options: SettleOptions
+  ): Promise<void> {
+    return settleClaimIn(db, this.dialect, claim, outcome, options);
+  }
+
+  /**
+   * Insert a send's records in the transaction given, in bounded chunks as
+   * `recordAll` does, clearing the key digest of a send to a person already
+   * reported deleted from every chunk.
+   */
+  private async insertWithin(
+    db: PersonRowsDb,
+    inputs: EmailDeliveryInput[],
+    withProvider: boolean
+  ): Promise<void> {
+    if (inputs.length === 0) return;
+    const now = new Date();
+    const ids = inputs.map(() => randomUUID());
+    const erasedKeys = new Set<string>();
+    for (let start = 0; start < inputs.length; start += INSERT_CHUNK_SIZE) {
+      const end = start + INSERT_CHUNK_SIZE;
+      await this.insertRows(
+        inputs.slice(start, end),
+        ids.slice(start, end),
+        now,
+        withProvider,
+        erasedKeys,
+        db
+      );
+    }
+    if (erasedKeys.size > 0) {
+      await db
+        .update(this.deliveries)
+        .set({ keyDigest: null })
+        .where(inArray(this.deliveries.keyDigest, [...erasedKeys]));
     }
   }
 
@@ -400,9 +498,16 @@ export class EmailDeliveryService extends BaseService {
       await this.clearErasedKeys(erasedKeys);
     }
 
-    // Offered after the rows exist, never before: a pass that ran first would
-    // do its work and then be handed the very rows it was meant to bound.
-    //
+    await this.offerRetention();
+  }
+
+  /**
+   * Offer a retention pass, after a send's rows are written.
+   *
+   * Offered after the rows exist, never before: a pass that ran first would
+   * do its work and then be handed the very rows it was meant to bound.
+   */
+  private async offerRetention(): Promise<void> {
     // Contained here as well as inside the runner, and the duplication is
     // deliberate. `retention` is INJECTED, so what arrives is whatever the
     // composition root or a test handed over, and this method cannot verify
@@ -567,12 +672,18 @@ export class EmailDeliveryService extends BaseService {
     ids: string[],
     now: Date,
     withProvider: boolean,
-    erasedKeys: Set<string>
+    erasedKeys: Set<string>,
+    within?: PersonRowsDb
   ): Promise<void> {
     const rows = this.rowsFor(inputs, ids, now, withProvider);
     const people = inputs.map(input => input.person ?? null);
     if (people.every(person => person === null)) {
-      await this.db.insert(this.deliveries).values(rows);
+      await (within ?? this.db).insert(this.deliveries).values(rows);
+      return;
+    }
+    // Inside a keyed send's commit, which already holds a transaction.
+    if (within) {
+      await this.insertNamingPeople(within, rows, people, erasedKeys);
       return;
     }
     // A row naming a person is decided under the deleted-people lock, in the

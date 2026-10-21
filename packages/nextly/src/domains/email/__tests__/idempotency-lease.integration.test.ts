@@ -25,6 +25,7 @@ vi.mock("../send-timing", () => ({
   CLAIM_TAKEOVER_MS: 400,
 }));
 
+import { container } from "../../../di/container";
 import {
   definePlugin,
   type PluginContext,
@@ -36,6 +37,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { defineEmailProvider } from "../provider-definition";
+import type { EmailDeliveryService } from "../services/email-delivery-service";
 import type { EmailProviderAdapter } from "../types";
 
 type SentOptions = Parameters<EmailProviderAdapter["send"]>[0];
@@ -149,6 +151,38 @@ describe.each(getConfiguredTestDialects())(
         repeat: true,
       });
       expect(calls).toHaveLength(1);
+    }, 120_000);
+
+    it("commits a definite outcome with its delivery records, or neither, and a retry completes both", async () => {
+      const t = await boot(dialect);
+      const deliveries = container.get<EmailDeliveryService>(
+        "emailDeliveryService"
+      );
+      const settle = deliveries.settleWithin.bind(deliveries);
+      // The process stops after the provider answered, before the commit.
+      deliveries.settleWithin = async () => {
+        deliveries.settleWithin = settle;
+        throw new Error("stopped before the commit");
+      };
+
+      const first = await t.nextly.email.send(keyed);
+      expect(first).toMatchObject({ success: true });
+      expect(await t.adapter.select("email_deliveries")).toEqual([]);
+      expect(await t.adapter.select("email_send_claims")).toEqual([
+        expect.objectContaining({ state: "claimed" }),
+      ]);
+
+      // Its lease lapses; the retry takes the claim over and completes both.
+      await wait(500);
+      const retried = await t.nextly.email.send(keyed);
+
+      expect(retried).toMatchObject({ success: true });
+      expect(calls).toHaveLength(2);
+      expect(calls[1].idempotencyKey).toBe(calls[0].idempotencyKey);
+      expect(await t.adapter.select("email_deliveries")).toHaveLength(1);
+      expect(await t.adapter.select("email_send_claims")).toEqual([
+        expect.objectContaining({ state: "sent" }),
+      ]);
     }, 120_000);
 
     it("lets a later send take over a call that never answers, after the lease limit, with the same provider key", async () => {

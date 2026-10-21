@@ -317,7 +317,7 @@ export type ClaimDecision =
 const CLAIM_ATTEMPTS = 3;
 
 /** A runner for work in a transaction of its own, never one the flow has open. */
-function ownTransaction(adapter: DrizzleAdapter) {
+export function ownTransaction(adapter: DrizzleAdapter) {
   const relations = getStaticRelations(adapter.getCapabilities().dialect);
   return <T>(work: (db: ClaimDb) => Promise<T>): Promise<T> =>
     runAdapterTransaction<T, TransactionContext>(
@@ -526,33 +526,53 @@ export async function settleSendClaim(
   adapter: DrizzleAdapter,
   claim: HeldClaim,
   outcome: EmailSendOutcome,
-  options: {
-    keep: boolean;
-    acceptedRecipients?: readonly string[];
-    now?: number;
-  }
+  options: SettleOptions
 ): Promise<void> {
-  const table = sendClaimsTableFor(adapter.getCapabilities().dialect);
+  const dialect = adapter.getCapabilities().dialect;
+  await ownTransaction(adapter)(db =>
+    settleClaimIn(db, dialect, claim, outcome, options)
+  );
+}
+
+/** How a claim is settled. */
+export interface SettleOptions {
+  keep: boolean;
+  acceptedRecipients?: readonly string[];
+  now?: number;
+}
+
+/**
+ * {@link settleSendClaim} inside a transaction the caller holds, so the
+ * claim's outcome commits with whatever else that transaction writes: the
+ * send's delivery records.
+ */
+export async function settleClaimIn(
+  db: unknown,
+  dialect: string,
+  claim: HeldClaim,
+  outcome: EmailSendOutcome,
+  options: SettleOptions
+): Promise<void> {
+  const claims = db as ClaimDb;
+  const table = sendClaimsTableFor(dialect);
   const now = options.now ?? Date.now();
   const held = and(eq(table.id, claim.id), eq(table.holder, claim.holder));
-  await ownTransaction(adapter)(async db => {
-    if (!options.keep) {
-      await db.delete(table).where(held);
-      return;
-    }
-    const accepted = options.acceptedRecipients ?? [];
-    await db
-      .update(table)
-      .set(
-        outcome.success
-          ? { state: "sent", result: JSON.stringify(outcome), settledAt: now }
-          : {
-              state: accepted.length > 0 ? "partial" : "failed",
-              result: accepted.length > 0 ? JSON.stringify({ accepted }) : null,
-              leaseExpiresAt: now,
-              settledAt: now,
-            }
-      )
-      .where(held);
-  });
+  if (!options.keep) {
+    await claims.delete(table).where(held);
+    return;
+  }
+  const accepted = options.acceptedRecipients ?? [];
+  await claims
+    .update(table)
+    .set(
+      outcome.success
+        ? { state: "sent", result: JSON.stringify(outcome), settledAt: now }
+        : {
+            state: accepted.length > 0 ? "partial" : "failed",
+            result: accepted.length > 0 ? JSON.stringify({ accepted }) : null,
+            leaseExpiresAt: now,
+            settledAt: now,
+          }
+    )
+    .where(held);
 }
