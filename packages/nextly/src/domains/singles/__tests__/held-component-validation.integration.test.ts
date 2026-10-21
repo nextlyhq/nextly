@@ -18,6 +18,7 @@ import {
   defineFieldGroup,
   defineSingle,
   fieldGroup,
+  group,
   text,
 } from "../../../config";
 import {
@@ -227,6 +228,95 @@ describe.each(getConfiguredTestDialects())(
       expect(await liveHero(current)).toMatchObject({
         heading: "Valid",
         code: "new",
+      });
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a collection component held inside a group (integration, %s)",
+  dialect => {
+    // A component in a group is stored in the group's value, so no component
+    // write reaches it: the entry's own validation judges it.
+    async function bootPages() {
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [
+          heroGroup(),
+          // Required children a caller may leave to their defaults: one a
+          // constant, one a function only the registry holds.
+          defineFieldGroup({
+            slug: "card",
+            fields: [
+              text({ name: "label", required: true, defaultValue: "More" }),
+              text({
+                name: "tone",
+                required: true,
+                defaultValue: () => "plain",
+              }),
+            ],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "pages",
+            fields: [
+              text({ name: "title" }),
+              group({
+                name: "layout",
+                fields: [
+                  fieldGroup({ name: "hero", component: "hero" }),
+                  fieldGroup({ name: "card", component: "card" }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      });
+      const t = current;
+      return (layout: Record<string, unknown>) =>
+        outcomeOf(() =>
+          t.nextly.create({
+            collection: "pages" as never,
+            data: { title: "T", layout } as never,
+          })
+        );
+    }
+
+    it("is judged by its own validators on an ordinary write", async () => {
+      const createWith = await bootPages();
+      const create = (code: string) =>
+        createWith({ hero: { heading: "H", code } });
+
+      expect((await create("ok")).ok).toBe(true);
+      const refused = await create("forbidden");
+      expect(refused.ok).toBe(false);
+      expect(refused.issues).toContainEqual({
+        path: "layout.hero.code",
+        message: "code cannot be forbidden.",
+      });
+    });
+
+    it("fills a component's declared defaults before judging it", async () => {
+      const createWith = await bootPages();
+
+      // Absent children take their defaults, as a top-level component's do.
+      expect(await createWith({ card: {} })).toMatchObject({ ok: true });
+      // A child the caller empties is still required, so the component was
+      // judged rather than passed over.
+      const emptied = await createWith({ card: { label: "" } });
+      expect(emptied.ok).toBe(false);
+      expect(emptied.issues.map(i => i.path)).toContain("layout.card.label");
+    });
+
+    it("refuses a component value that is not an object", async () => {
+      const createWith = await bootPages();
+
+      const refused = await createWith({ hero: "Just a heading" });
+      expect(refused.ok).toBe(false);
+      expect(refused.issues).toContainEqual({
+        path: "layout.hero",
+        message: "Component data must be an object.",
       });
     });
   }

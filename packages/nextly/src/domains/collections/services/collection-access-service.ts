@@ -19,6 +19,7 @@ import {
 import { effectiveCallerScope } from "../../../auth/caller-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import type { Principal } from "../../../plugins/principals/types";
 import type { AccessOperation } from "../../../services/access";
 import { isSuperAdminContext } from "../../../services/access";
@@ -225,12 +226,14 @@ export class CollectionAccessService extends BaseService {
           userId: user.id,
           error: errorMessage,
         });
-        // Fail-secure: deny on unexpected RBAC errors
+        // Fail-secure: deny on unexpected RBAC errors. A typed refusal keeps
+        // its own code and status (a busy database is DATABASE_BUSY, 503).
         return {
           success: false,
           statusCode: 500,
           message: "Failed to verify RBAC permissions",
           data: null as unknown as T,
+          ...errorEnvelopeFields(error),
         };
       }
     } else if (!routeAuthorized && this.rbacAccessControlService && !user) {

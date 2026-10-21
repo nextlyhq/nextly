@@ -910,13 +910,17 @@ export class CollectionBulkService extends BaseService {
       authenticatedScope: params.authenticatedScope,
     });
     if (accessDenied) {
-      throw NextlyError.forbidden({
-        logContext: {
-          op: "bulkUpdateByQuery",
-          collectionName: params.collectionName,
-          legacyMessage: accessDenied.message,
-        },
-      });
+      const logContext = {
+        op: "bulkUpdateByQuery",
+        collectionName: params.collectionName,
+        legacyMessage: accessDenied.message,
+      };
+      // A refusal the gate carried as a typed error (a busy database is
+      // DATABASE_BUSY, 503) keeps its code; a plain denial is FORBIDDEN.
+      if (accessDenied.code !== undefined) {
+        throw errorFromServiceEnvelope(accessDenied, logContext);
+      }
+      throw NextlyError.forbidden({ logContext });
     }
     await assertCallerFilterReadable(params);
 
@@ -1092,13 +1096,17 @@ export class CollectionBulkService extends BaseService {
       authenticatedScope: params.authenticatedScope,
     });
     if (accessDenied) {
-      throw NextlyError.forbidden({
-        logContext: {
-          op: "bulkDeleteByQuery",
-          collectionName: params.collectionName,
-          legacyMessage: accessDenied.message,
-        },
-      });
+      const logContext = {
+        op: "bulkDeleteByQuery",
+        collectionName: params.collectionName,
+        legacyMessage: accessDenied.message,
+      };
+      // A refusal the gate carried as a typed error (a busy database is
+      // DATABASE_BUSY, 503) keeps its code; a plain denial is FORBIDDEN.
+      if (accessDenied.code !== undefined) {
+        throw errorFromServiceEnvelope(accessDenied, logContext);
+      }
+      throw NextlyError.forbidden({ logContext });
     }
     await assertCallerFilterReadable(params);
 

@@ -213,6 +213,18 @@ export class SingleEntryService extends BaseService {
   }
 
   /**
+   * The Single's document as a release would put it live, never creating its
+   * row. See the mutation service.
+   *
+   * @experimental
+   */
+  async releaseGoingLiveDocument(
+    params: Parameters<SingleMutationService["releaseGoingLiveDocument"]>[0]
+  ): ReturnType<SingleMutationService["releaseGoingLiveDocument"]> {
+    return this.mutationService.releaseGoingLiveDocument(params);
+  }
+
+  /**
    * The languages whose unreleased work a release's document-wide write of
    * this Single would be refused over. See the mutation service.
    *

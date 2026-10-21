@@ -81,7 +81,10 @@ import { useTranslationSource } from "@admin/components/features/entries/Transla
 import { useEntryLocaleContext } from "@admin/components/features/entries/useEntryLocaleContext";
 import { autosaveIntervalFrom } from "@admin/components/features/versions/autosave-interval";
 import { DocumentHistoryContext } from "@admin/components/features/versions/document-history-context";
-import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
+import {
+  historyEnabledFrom,
+  historyRetentionFrom,
+} from "@admin/components/features/versions/history-enabled";
 import {
   mayRecordRecovery,
   useViewedVersion,
@@ -1087,6 +1090,10 @@ export function SingleForm({
                                   titleField={titleField}
                                   historyFields={schema.fields}
                                   historyEnabled={historyEnabledFrom(schema)}
+                                  historyRetention={historyRetentionFrom(
+                                    schema
+                                  )}
+                                  historyLifecycle={hasStatus}
                                   // The whole busy state: the header's spinner,
                                   // disabled reasons and discard dialog all
                                   // reflect a discard in flight as well as a save.

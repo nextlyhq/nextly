@@ -121,6 +121,10 @@ import {
   mergeComponentPatches,
 } from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
+import {
+  draftDocumentFacts,
+  resolveDraftOverlay,
+} from "../../versions/draft-overlay";
 import { storeDraftSave } from "../../versions/draft-save";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
 import { hasLifecycle } from "../../versions/recorded-status";
@@ -128,6 +132,7 @@ import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   resolveComponentFieldMap,
   tagComponentTypes,
+  containedComponentResolver,
   stripSingleComponentTags,
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
@@ -136,7 +141,10 @@ import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
-import { recordMutationEvent } from "../../webhooks/record-mutation-event";
+import {
+  recordMutationEvent,
+  recordSingleSaveActivity,
+} from "../../webhooks/record-mutation-event";
 import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
 import type { WebhookResource } from "../../webhooks/types";
 import type {
@@ -372,6 +380,82 @@ export class SingleMutationService extends BaseService {
           }
         );
       }
+    });
+  }
+
+  /**
+   * The Single's document as a release would put it live: its working draft
+   * where the write would fold one in, otherwise its stored row with its
+   * components, read as storage holds it, with no read hooks and no reader's
+   * access. Answered with the row's id; `null` for a Single with no
+   * draft/published lifecycle or with no stored row.
+   *
+   * Never creates the row, unlike the Single's ordinary read: a Single with no
+   * stored document has nothing to put live, and asking must not write one.
+   * The pending change is found by the rule every read of "the draft" uses
+   * (`resolveDraftOverlay`), as the system and in no request language, as the
+   * document-wide write carries none.
+   *
+   * @experimental
+   */
+  async releaseGoingLiveDocument(params: {
+    slug: string;
+  }): Promise<{ entryId: string; document: Record<string, unknown> } | null> {
+    const meta = await resolveSingleForRequest(
+      this.adapter,
+      this.singleRegistryService,
+      params.slug,
+      this.logger
+    );
+    if (meta?.status !== true) return null;
+    const fieldConfigs = meta.fields ?? [];
+    const overlay = resolveDraftOverlay({
+      ...draftDocumentFacts(meta),
+      entityKind: "single",
+      fields: fieldConfigs,
+      componentSchemas: await resolveComponentSchemas(fieldConfigs),
+      includeWorkingDraft: true,
+      // As the system: this is what goes live, not what someone may see.
+      callerMayEdit: true,
+      requestLocale: null,
+      defaultLocale: this.localization?.defaultLocale ?? null,
+    });
+    // In a transaction of its own, which writes nothing: the stored-document
+    // read takes one.
+    return this.adapter.transaction(async tx => {
+      const row = await tx.selectOne<SingleDocument>(meta.tableName, {});
+      if (!row) return null;
+      const pending = overlay.overlay
+        ? await new VersionsRepository(tx).findWorkingDraft(
+            { scopeKind: "single", scopeSlug: params.slug, entryId: row.id },
+            overlay.draftLocale
+          )
+        : undefined;
+      const snapshot = pending?.snapshot;
+      if (typeof snapshot === "object" && snapshot !== null) {
+        return {
+          entryId: row.id,
+          document: snapshot as Record<string, unknown>,
+        };
+      }
+      const stored = await liveStoredDocument({
+        tx,
+        row,
+        locale: null,
+        companion: null,
+        companionExists: false,
+        fieldGroupDataService: this.fieldGroupDataService,
+        parentTable: meta.tableName,
+        fieldConfigs,
+        slug: params.slug,
+      });
+      return {
+        entryId: row.id,
+        document: this.queryService.deserializeJsonFields(
+          { ...stored, id: row.id, updatedAt: row.updatedAt },
+          meta.fields
+        ),
+      };
     });
   }
 
@@ -918,6 +1002,15 @@ export class SingleMutationService extends BaseService {
           {
             mode: "update",
             req: options.user ? { user: options.user } : {},
+            // A component inside a group or repeater is judged here, since
+            // no component write reaches it. On the pool, as this is.
+            componentFields: await containedComponentResolver(
+              fieldConfigs,
+              async componentSlug =>
+                (await this.fieldGroupDataService?.getComponentFields(
+                  componentSlug
+                )) ?? null
+            ),
             localizedFieldNames,
             enforceLocalizedRequired,
             // Before the transaction opens, so on the pool.
@@ -2485,7 +2578,24 @@ export class SingleMutationService extends BaseService {
               // Mapped through the declared fields rather than camel-cased
               // wholesale, for the reason the version capture below gives: a
               // field genuinely named `site_title` must keep its own spelling.
-              let pending: Record<string, unknown> = { ...base };
+              // A component nested in a group or repeater rides in that
+              // container's value, so the component tagging below never reaches
+              // it. It is recorded with its type as a captured version records
+              // it, so a restore after its field is pointed at another
+              // component can tell which schema the value belonged to. The live
+              // document a first held save builds on is recorded whole, the
+              // untouched containers included; a type a draft already recorded
+              // is kept, or a save after a retarget would rewrite it to the new
+              // component's. Both sides compare from the same base, so an
+              // unchanged save records no version.
+              const recordNested = (document: Record<string, unknown>) =>
+                tagNestedComponentTypes(
+                  document,
+                  fieldConfigs,
+                  componentResolver
+                ) as Record<string, unknown>;
+              const replaces = existingDraft ? base : recordNested(base);
+              let pending: Record<string, unknown> = { ...replaces };
               // The fields this save supplies, as opposed to those carried over
               // from the draft or the live document it builds on.
               const suppliedFieldNames = new Set<string>();
@@ -2578,26 +2688,12 @@ export class SingleMutationService extends BaseService {
                   )
                 );
               }
-              // A component nested in a group or repeater rides in that
-              // container's value, so the tagging above never reached it. It
-              // is recorded with its type as a captured version records it, so
-              // a restore after its field is pointed at another component can
-              // tell which schema the value belonged to. Only values this save
-              // supplies, and the live document a first held save builds on:
-              // a type the draft already recorded is kept, or a save after a
-              // retarget would rewrite it to the new component's.
-              const recordNested = (document: Record<string, unknown>) =>
-                tagNestedComponentTypes(
-                  document,
-                  fieldConfigs,
-                  componentResolver
-                ) as Record<string, unknown>;
+              // This save's own container values, recorded the same way.
               for (const name of suppliedFieldNames) {
                 if (Object.prototype.hasOwnProperty.call(pending, name)) {
                   pending[name] = recordNested({ [name]: pending[name] })[name];
                 }
               }
-              const replaces = existingDraft ? base : recordNested(base);
               // The draft, and the save as a version of its own. A save that
               // changes nothing against what it replaces records no version.
               const { versionNo: draftVersionNo } = await storeDraftSave(
@@ -3100,6 +3196,20 @@ export class SingleMutationService extends BaseService {
               id: existingDoc.id,
               ...(eventLocale != null ? { locale: eventLocale } : {}),
             };
+            // The save's row in the activity trail, ahead of the outbox gate
+            // below: the trail records who changed what on every install,
+            // whether or not webhooks or audit are on, so it cannot wait on a
+            // gate that is closed on an install with neither. One row per save,
+            // however many events the save appends below. A held draft edit is
+            // filed under the draft's language, as its history is; any other
+            // save under the language it stored, or none.
+            await recordSingleSaveActivity(tx, {
+              slug,
+              entryId: existingDoc.id,
+              label: singleMeta.label,
+              locale: holdEdit ? (singleDraftLocale ?? null) : eventLocale,
+              actor,
+            });
             // Record only when the same opt-out decision that gated the payload
             // assembly still holds. `recordMutationEvent` re-derives the policy
             // internally, but a dev HMR reload can flip `webhooks` mid-write: if

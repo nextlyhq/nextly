@@ -125,11 +125,19 @@ async function workingDraft(handle: TestNextly): Promise<Row | undefined> {
   );
 }
 
-/** Refuses an internal key in the component value it is part of. */
-const siblingsPublicOnly = (_value: unknown, args: { data?: unknown }) =>
-  !Object.keys((args?.data as Record<string, unknown>) ?? {}).some(key =>
-    key.startsWith("_")
-  ) || "the component value carried an internal key";
+/**
+ * The component's child validator: refuses an internal key in the component
+ * value it is part of, and refuses `code: "forbidden"`, so that a run in which
+ * it is never called cannot pass for one in which it saw the public shape.
+ */
+const siblingsPublicOnly = (value: unknown, args: { data?: unknown }) => {
+  if (value === "forbidden") return "code cannot be forbidden";
+  return (
+    !Object.keys((args?.data as Record<string, unknown>) ?? {}).some(key =>
+      key.startsWith("_")
+    ) || "the component value carried an internal key"
+  );
+};
 
 async function boot(dialect: TestDialect, placement: Placement) {
   current = await createTestNextly({
@@ -254,6 +262,42 @@ describe.each(getConfiguredTestDialects())(
           await expectNoStoredTag(current!);
         }
       );
+
+      it("records the type of a component a first held save leaves alone", async () => {
+        if (placement.virtual) return;
+        const singles = await boot(dialect, placement);
+
+        await hold(singles, { title: "Other" });
+
+        const draft = parsed((await workingDraft(current!))?.snapshot);
+        expect(valueAt(draft, placement.path)).toMatchObject({
+          heading: "Live",
+          _componentType: "hero",
+        });
+      });
+
+      it("runs the component's validators, refusing a value they refuse", async () => {
+        if (placement.virtual) return;
+        const singles = await boot(dialect, placement);
+        const invalid = held(placement, "Held", "forbidden");
+
+        for (const data of [invalid, { ...invalid, status: "published" }]) {
+          const result = (await singles
+            .update("home", data, { overrideAccess: true })
+            .catch((error: unknown) => error)) as {
+            success?: boolean;
+            errors?: Array<{ field?: string; message: string }>;
+            publicData?: { errors?: Array<{ path: string; message: string }> };
+          };
+          const messages = [
+            ...(result.errors ?? []).map(e => e.message),
+            ...(result.publicData?.errors ?? []).map(e => e.message),
+          ].join(" ");
+          expect(result.success, JSON.stringify(result)).not.toBe(true);
+          expect(messages).toContain("code cannot be forbidden");
+        }
+        expect(await workingDraft(current!)).toBeUndefined();
+      });
 
       it("keeps a type the draft recorded through a later save", async () => {
         if (placement.virtual) return;

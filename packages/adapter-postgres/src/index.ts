@@ -564,6 +564,8 @@ export class PostgresAdapter extends DrizzleAdapter {
 
     for (let attempt = 1; attempt <= maxQueryAttempts; attempt++) {
       try {
+        // Outside the calling flow's transaction, if it has one (`notePoolAccess`).
+        this.notePoolAccess(sql);
         const result = await pool.query(sql, params as unknown[]);
 
         // Log query if logger configured
@@ -643,7 +645,7 @@ export class PostgresAdapter extends DrizzleAdapter {
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const client = await pool.connect();
+      const client = await this.connectFlowTransaction(() => pool.connect());
       const startTime = Date.now();
       // Set when the ROLLBACK failed. The client may then still be inside the
       // transaction, so it is destroyed rather than pooled: the next request
@@ -908,9 +910,12 @@ export class PostgresAdapter extends DrizzleAdapter {
   private poolDrizzle(pool: Pool, relations?: AnyRelations) {
     const onClient = (client: Pool | PoolClient) =>
       relations ? drizzle({ client, relations }) : drizzle({ client });
+    // The handle's own queries go to the pool, so it is handed a view of the
+    // pool that reports them (`observedPool`).
+    const reported = this.observedPool(pool, ["query"]);
     return this.trackFlowTransactions(
-      this.pinDrizzleTransactions(onClient(pool), async () => {
-        const client = await pool.connect();
+      this.pinDrizzleTransactions(onClient(reported), async () => {
+        const client = await this.connectFlowTransaction(() => pool.connect());
         return {
           drizzle: onClient(client),
           rollback: () => client.query("ROLLBACK"),

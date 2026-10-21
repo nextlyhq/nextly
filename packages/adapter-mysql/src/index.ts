@@ -516,6 +516,8 @@ export class MySqlAdapter extends DrizzleAdapter {
     const startTime = Date.now();
 
     try {
+      // Outside the calling flow's transaction, if it has one (`notePoolAccess`).
+      this.notePoolAccess(sql);
       const [rows] = await pool.query<RowDataPacket[]>(
         sql,
         params as unknown[]
@@ -570,7 +572,9 @@ export class MySqlAdapter extends DrizzleAdapter {
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const connection = await pool.getConnection();
+      const connection = await this.connectFlowTransaction(() =>
+        pool.getConnection()
+      );
       const startTime = Date.now();
       // Set when the ROLLBACK failed (`returnTransactionConnection`).
       let rollbackFailed = false;
@@ -762,10 +766,17 @@ export class MySqlAdapter extends DrizzleAdapter {
     // (setting 'supportBigNumbers')"). The pre-v1 `mode` option is gone.
     const onClient = (client: CallbackPool | CallbackConnection) =>
       relations ? drizzle({ client, relations }) : drizzle({ client });
-    const callbackPool = (pool as unknown as { pool: CallbackPool }).pool;
+    // The handle's own queries go to the pool, so it is handed a view of the
+    // pool that reports them (`observedPool`).
+    const callbackPool = this.observedPool(
+      (pool as unknown as { pool: CallbackPool }).pool,
+      ["query", "execute", "getConnection"]
+    );
     return this.trackFlowTransactions(
       this.pinDrizzleTransactions(onClient(callbackPool), async () => {
-        const connection = await pool.getConnection();
+        const connection = await this.connectFlowTransaction(() =>
+          pool.getConnection()
+        );
         return {
           drizzle: onClient(
             (connection as unknown as { connection: CallbackConnection })
