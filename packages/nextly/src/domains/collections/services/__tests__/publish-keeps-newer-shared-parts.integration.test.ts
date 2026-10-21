@@ -187,7 +187,7 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
         locale: "en",
       });
-      expect(taken.data).toEqual({ taken: ["hero", "tags"] });
+      expect(taken.data).toEqual({ taken: ["hero", "tags"], outOfDate: [] });
       const published = await save(entries, id, "en", { status: "published" });
 
       expect(published.success).toBe(true);

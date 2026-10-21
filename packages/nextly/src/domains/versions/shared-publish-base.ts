@@ -54,11 +54,24 @@ function slotOf(locale: string | null): string {
 }
 
 /**
- * A container a row may hold as JSON text and a snapshot as its parsed value:
- * the parsed value either way, so the two compare equal.
+ * A stored value in one comparable form: a date as its ISO string, as a
+ * snapshot stores it, object keys in one order, and a component row's own
+ * timestamps, which a publish rewrites, left out, as a save's no-op check
+ * leaves them out.
  */
-function parsedContainer(value: unknown): unknown {
-  if (typeof value !== "string" || !/^\s*[[{]/.test(value)) return value;
+function comparable(value: unknown): string {
+  return canonicalJson(value ?? null);
+}
+
+/**
+ * One side of a pair, parsed where the other side holds the same container
+ * parsed: a JSON field one reader returns as text and another as its value.
+ * Two texts stay texts, so a text field whose words happen to look like JSON
+ * is compared character by character.
+ */
+function alignedWith(value: unknown, other: unknown): unknown {
+  if (typeof value !== "string" || other === null) return value;
+  if (typeof other !== "object") return value;
   try {
     return JSON.parse(value) as unknown;
   } catch {
@@ -66,15 +79,8 @@ function parsedContainer(value: unknown): unknown {
   }
 }
 
-/**
- * A stored value in one comparable form. A version's snapshot went through
- * JSON on its way into storage, so the live value is put through the same: a
- * date becomes its ISO string, a container held as text is parsed, and a
- * component row's own timestamps, which a publish rewrites, are left out, as
- * a save's no-op check leaves them out.
- */
-function comparable(value: unknown): string {
-  return canonicalJson(parsedContainer(value) ?? null);
+function sameValue(a: unknown, b: unknown): boolean {
+  return comparable(alignedWith(a, b)) === comparable(alignedWith(b, a));
 }
 
 /**
@@ -103,7 +109,7 @@ export function differingFields(
   a: Record<string, unknown>,
   b: Record<string, unknown>
 ): string[] {
-  return shared.filter(name => comparable(a[name]) !== comparable(b[name]));
+  return shared.filter(name => !sameValue(a[name], b[name]));
 }
 
 /** A stored snapshot as a record, whether the driver parsed its JSON or not. */
@@ -163,39 +169,62 @@ export async function recordSharedBase(
   }
 }
 
-/**
- * The refusal of a pending change holding out-of-date shared values: a
- * conflict naming each field the caller may read. One it may not read is
- * counted instead, so a refusal never reveals that a protected field exists.
- *
- * @param live The live document the fields were judged against, which the
- *   field read rules are shown.
- * @param grants The caller's grants, resolved before any transaction this
- *   runs in, since resolving them takes a pooled connection.
- */
-export async function sharedValuesConflict(args: {
+/** Who asks, for the field read rules that decide which names they see. */
+export interface FieldNameReader {
   kind: "collection" | "single";
   slug: string;
-  entryId: string;
-  fields: readonly string[];
-  live: Record<string, unknown>;
   user?: Record<string, unknown>;
   overrideAccess?: boolean;
   authenticatedScope?: AuthenticatedScope;
+  /** Resolved before any transaction this runs in: they take a pooled connection. */
   grants?: () => Promise<CallerGrants>;
-}): Promise<NextlyError> {
-  const readable = { ...args.live };
+}
+
+/**
+ * Of these field names, the ones the caller may read, and how many others: a
+ * field the caller may not read is counted, never named, so an answer never
+ * reveals that a protected field exists.
+ *
+ * @param document The document the read rules are shown.
+ */
+export async function readableFieldNames(
+  reader: FieldNameReader,
+  names: readonly string[],
+  document: Record<string, unknown>
+): Promise<{ named: string[]; hidden: number }> {
+  const readable = { ...document };
   await applyFieldReadAccess({
-    kind: args.kind,
-    slug: args.slug,
+    kind: reader.kind,
+    slug: reader.slug,
     entry: readable,
-    user: args.user,
-    authenticatedScope: args.authenticatedScope,
-    overrideAccess: args.overrideAccess,
-    grants: args.grants,
+    user: reader.user,
+    authenticatedScope: reader.authenticatedScope,
+    overrideAccess: reader.overrideAccess,
+    grants: reader.grants,
   });
-  const named = args.fields.filter(name => name in readable);
-  const hidden = args.fields.length - named.length;
+  const named = names.filter(name => name in readable);
+  return { named, hidden: names.length - named.length };
+}
+
+/**
+ * The refusal of a pending change holding out-of-date shared values: a
+ * conflict naming each field the caller may read, and counting the others.
+ *
+ * @param live The live document the fields were judged against, which the
+ *   field read rules are shown.
+ */
+export async function sharedValuesConflict(
+  args: FieldNameReader & {
+    entryId: string;
+    fields: readonly string[];
+    live: Record<string, unknown>;
+  }
+): Promise<NextlyError> {
+  const { named, hidden } = await readableFieldNames(
+    args,
+    args.fields,
+    args.live
+  );
   return NextlyError.conflict({
     reason: "state",
     message:
@@ -233,8 +262,9 @@ export async function releaseSharedBase(
 
 /**
  * The shared fields a pending change may not publish: those whose live value
- * has moved off the change's base. A change with no base compares its own
- * values with live instead.
+ * has moved off the change's base, where the change does not already hold the
+ * live value. A change with no base compares its own values with live
+ * instead.
  *
  * @param live The live document, shaped as a version snapshot is.
  * @param pending The pending change's snapshot.
@@ -249,20 +279,31 @@ export async function outOfDateSharedFields(
     pending: Record<string, unknown>;
   }
 ): Promise<string[]> {
-  const { ref, locale, shared, live, pending } = args;
+  const { ref, locale, live, pending } = args;
+  // Only the fields the change holds: a snapshot without a field writes
+  // nothing to it.
+  const held = args.shared.filter(name => name in pending);
+  // Where the change already holds the live value, publishing it puts back
+  // nothing, whatever the base says: a field whose live value was taken stays
+  // current though the base stays put for another left behind.
+  const changed = differingFields(held, pending, live);
+  const base = await baseSnapshotOf(tx, ref, locale);
+  if (!base) return changed;
+  const moved = new Set(differingFields(held, base, live));
+  return changed.filter(name => moved.has(name));
+}
+
+/** The snapshot a pending change's base pins, or null when it has none. */
+async function baseSnapshotOf(
+  tx: TransactionContext,
+  ref: VersionRef,
+  locale: string | null
+): Promise<Record<string, unknown> | null> {
   const slot = slotOf(locale);
   const pin = (await versionPins.list(tx, ref)).find(
     p => p.holder === "shared-publish-base" && p.slot === slot
   );
-  if (!pin) {
-    // Only the fields the change holds: a snapshot without a field writes
-    // nothing to it.
-    return differingFields(
-      shared.filter(name => name in pending),
-      pending,
-      live
-    );
-  }
+  if (!pin) return null;
   const base = await tx.select<{ snapshot: unknown }>(VERSIONS_TABLE, {
     columns: ["snapshot"],
     where: {
@@ -276,18 +317,46 @@ export async function outOfDateSharedFields(
     },
     limit: 1,
   });
-  return differingFields(shared, snapshotRecord(base[0]?.snapshot), live);
+  return snapshotRecord(base[0]?.snapshot);
+}
+
+/**
+ * The shared fields a pending change itself edited: those whose value in it
+ * differs from its base. A change with no base edited none it may publish,
+ * since one that differs from live is refused.
+ */
+export async function editedSharedFields(
+  tx: TransactionContext,
+  args: {
+    ref: VersionRef;
+    locale: string | null;
+    shared: readonly string[];
+    pending: Record<string, unknown>;
+  }
+): Promise<string[]> {
+  const base = await baseSnapshotOf(tx, args.ref, args.locale);
+  if (!base) return [];
+  return differingFields(
+    args.shared.filter(name => name in args.pending),
+    args.pending,
+    base
+  );
 }
 
 /**
  * Bring a pending change up to date: write the live value of each out-of-date
- * shared field into it, saved as any other save of the change is, so history
- * shows it and a restore can undo it, and move its base to the version those
- * live values are in. Returns the fields taken, the change's other values
- * staying its own, and the version the save recorded (none when nothing was
- * out of date).
+ * shared field the caller may write into it, saved as any other save of the
+ * change is, so history shows it and a restore can undo it. The change's base
+ * moves to the version those live values are in only when every out-of-date
+ * field was taken: moving it past one left behind would make that field's old
+ * value look current, and the next publish would put it back.
+ *
+ * Returns the fields taken, those left out of date, and the version the save
+ * recorded (none when nothing changed).
  *
  * @param live The live document, shaped as a version snapshot is.
+ * @param mayTake The out-of-date fields the caller may write; all of them
+ *   when omitted, for a trusted caller.
  */
 export async function takeLiveSharedValuesInto(
   tx: TransactionContext,
@@ -300,8 +369,9 @@ export async function takeLiveSharedValuesInto(
     pending: Record<string, unknown>;
     createdBy: string | null;
     maxPerDoc?: number | false;
+    mayTake?: (stale: string[]) => Promise<string[]>;
   }
-): Promise<{ taken: string[]; versionNo: number | null }> {
+): Promise<{ taken: string[]; remaining: string[]; versionNo: number | null }> {
   const { ref, locale, shared, live, pending, createdBy } = args;
   const stale = await outOfDateSharedFields(tx, {
     ref,
@@ -310,17 +380,52 @@ export async function takeLiveSharedValuesInto(
     live,
     pending,
   });
+  const allowed = args.mayTake ? new Set(await args.mayTake(stale)) : null;
+  const taken = allowed ? stale.filter(name => allowed.has(name)) : stale;
+  const remaining = stale.filter(name => !taken.includes(name));
+  // Recorded before the save, so the save's retention pass already keeps it.
+  if (remaining.length === 0) {
+    await recordSharedBase(tx, { ref, locale, shared, live });
+  }
   const { versionNo } = await storeDraftSave(tx, capture, {
     ref,
     locale,
     snapshot: {
       ...pending,
-      ...Object.fromEntries(stale.map(name => [name, live[name]])),
+      ...Object.fromEntries(taken.map(name => [name, live[name]])),
     },
     replaces: pending,
     createdBy,
     maxPerDoc: args.maxPerDoc,
   });
-  await recordSharedBase(tx, { ref, locale, shared, live });
-  return { taken: stale, versionNo };
+  return { taken, remaining, versionNo };
+}
+
+/**
+ * What taking the live values did, as the caller may see it: the fields
+ * taken, and those still out of date because the caller may not write them,
+ * each named where the caller may read it and counted otherwise.
+ *
+ * @experimental
+ */
+export interface TakenLiveValues {
+  taken: string[];
+  hiddenTaken?: number;
+  outOfDate: string[];
+  hiddenOutOfDate?: number;
+}
+
+/** {@link TakenLiveValues} for this caller. */
+export async function takenLiveValues(
+  reader: FieldNameReader,
+  took: { taken: string[]; remaining: string[]; live: Record<string, unknown> }
+): Promise<TakenLiveValues> {
+  const taken = await readableFieldNames(reader, took.taken, took.live);
+  const left = await readableFieldNames(reader, took.remaining, took.live);
+  return {
+    taken: taken.named,
+    ...(taken.hidden > 0 ? { hiddenTaken: taken.hidden } : {}),
+    outOfDate: left.named,
+    ...(left.hidden > 0 ? { hiddenOutOfDate: left.hidden } : {}),
+  };
 }
