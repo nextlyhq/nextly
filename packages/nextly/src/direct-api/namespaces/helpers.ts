@@ -291,6 +291,20 @@ export function checkedCaller(
 export type { RouteGrant };
 
 /**
+ * The key scope a call is checked with: the instance's and the call's, read
+ * as `checkedCaller` reads them, so a call naming a user without a key has
+ * none. A write runs what it sets going under this, so a handler it starts
+ * cannot use grants the call gave up.
+ */
+export function checkedScope(
+  defaultConfig: DirectAPIConfig,
+  args: DirectAPIConfig
+): AuthenticatedScope | undefined {
+  return accessOptions(mergeConfig(defaultConfig, suppliedByCall(args)))
+    .authenticatedScope;
+}
+
+/**
  * Whether `caller` holds `grant`, asked of the decision the REST route asks,
  * so one caller gets one answer through either door: `authorizeCaller` (the
  * `requirePermission` decision) for one permission, `authorizeCallerForAny`

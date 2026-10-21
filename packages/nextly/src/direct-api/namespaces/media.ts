@@ -14,6 +14,7 @@
  * @packageDocumentation
  */
 
+import { runWithCallerScope } from "../../auth/caller-scope";
 import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
@@ -36,6 +37,7 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
+  checkedScope,
   checkWrite,
   createRequestContext,
   directApiActor,
@@ -88,6 +90,14 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
   // as the key's owner the context names.
   const writeActor = (args: Parameters<typeof createRequestContext>[0]) =>
     directApiActor(ctx.defaultConfig, args);
+  // The check and the work run under the key scope the call is checked with,
+  // so what the write sets going (an event handler's own service calls) is
+  // held to that key, not to a broader one the request around it carries.
+  const asChecked = <T>(
+    args: Parameters<typeof createRequestContext>[0],
+    work: () => Promise<T>
+  ): Promise<T> =>
+    runWithCallerScope(checkedScope(ctx.defaultConfig, args), work);
 
   const folders: MediaFoldersNamespace = {
     async list(args: ListFoldersArgs = {}): Promise<MediaFolder[]> {
@@ -101,51 +111,55 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
     },
 
     async create(args: CreateFolderArgs): Promise<MediaFolder> {
-      await checkWrite(
-        ctx.defaultConfig,
-        args,
-        SYSTEM_WRITE_POLICY.media.createFolder
-      );
-      if (!args.name) {
-        throw new NextlyError({
-          code: "INVALID_INPUT",
-          publicMessage: "'name' is required for media.folders.create()",
-          statusCode: 400,
-        });
-      }
+      return asChecked(args, async () => {
+        await checkWrite(
+          ctx.defaultConfig,
+          args,
+          SYSTEM_WRITE_POLICY.media.createFolder
+        );
+        if (!args.name) {
+          throw new NextlyError({
+            code: "INVALID_INPUT",
+            publicMessage: "'name' is required for media.folders.create()",
+            statusCode: 400,
+          });
+        }
 
-      return await ctx.mediaService.createFolder(
-        {
-          name: args.name,
-          description: args.description,
-          color: args.color,
-          icon: args.icon,
-          parentId: args.parent ?? null,
-        },
-        writeContext(args)
-      );
+        return await ctx.mediaService.createFolder(
+          {
+            name: args.name,
+            description: args.description,
+            color: args.color,
+            icon: args.icon,
+            parentId: args.parent ?? null,
+          },
+          writeContext(args)
+        );
+      });
     },
   };
 
   return {
     async upload(args: UploadMediaArgs): Promise<MediaFile> {
-      await checkWrite(
-        ctx.defaultConfig,
-        args,
-        SYSTEM_WRITE_POLICY.media.upload
-      );
-      return await ctx.mediaService.upload(
-        {
-          buffer: args.file.data,
-          filename: args.file.name,
-          mimeType: args.file.mimetype,
-          size: args.file.size,
-          altText: args.altText,
-          folderId: args.folder ?? null,
-        },
-        writeContext(args),
-        writeActor(args)
-      );
+      return asChecked(args, async () => {
+        await checkWrite(
+          ctx.defaultConfig,
+          args,
+          SYSTEM_WRITE_POLICY.media.upload
+        );
+        return await ctx.mediaService.upload(
+          {
+            buffer: args.file.data,
+            filename: args.file.name,
+            mimeType: args.file.mimetype,
+            size: args.file.size,
+            altText: args.altText,
+            folderId: args.folder ?? null,
+          },
+          writeContext(args),
+          writeActor(args)
+        );
+      });
     },
 
     async find(args: FindMediaArgs = {}): Promise<ListResult<MediaFile>> {
@@ -185,88 +199,94 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
     },
 
     async update(args: UpdateMediaArgs): Promise<MutationResult<MediaFile>> {
-      await checkWrite(
-        ctx.defaultConfig,
-        args,
-        SYSTEM_WRITE_POLICY.media.update
-      );
-      if (!args.id) {
-        throw new NextlyError({
-          code: "INVALID_INPUT",
-          publicMessage: "'id' is required for media.update()",
-          statusCode: 400,
-        });
-      }
+      return asChecked(args, async () => {
+        await checkWrite(
+          ctx.defaultConfig,
+          args,
+          SYSTEM_WRITE_POLICY.media.update
+        );
+        if (!args.id) {
+          throw new NextlyError({
+            code: "INVALID_INPUT",
+            publicMessage: "'id' is required for media.update()",
+            statusCode: 400,
+          });
+        }
 
-      const item = await ctx.mediaService.update(
-        args.id,
-        {
-          filename: args.data.filename,
-          altText: args.data.altText,
-          caption: args.data.caption,
-          tags: args.data.tags,
-          folderId: args.data.folderId,
-        },
-        writeContext(args),
-        writeActor(args)
-      );
-      return {
-        message: "Media updated.",
-        item,
-      };
+        const item = await ctx.mediaService.update(
+          args.id,
+          {
+            filename: args.data.filename,
+            altText: args.data.altText,
+            caption: args.data.caption,
+            tags: args.data.tags,
+            folderId: args.data.folderId,
+          },
+          writeContext(args),
+          writeActor(args)
+        );
+        return {
+          message: "Media updated.",
+          item,
+        };
+      });
     },
 
     async delete(
       args: DeleteMediaArgs
     ): Promise<MutationResult<{ id: string }>> {
-      await checkWrite(
-        ctx.defaultConfig,
-        args,
-        SYSTEM_WRITE_POLICY.media.delete
-      );
-      if (!args.id) {
-        throw new NextlyError({
-          code: "INVALID_INPUT",
-          publicMessage: "'id' is required for media.delete()",
-          statusCode: 400,
-        });
-      }
+      return asChecked(args, async () => {
+        await checkWrite(
+          ctx.defaultConfig,
+          args,
+          SYSTEM_WRITE_POLICY.media.delete
+        );
+        if (!args.id) {
+          throw new NextlyError({
+            code: "INVALID_INPUT",
+            publicMessage: "'id' is required for media.delete()",
+            statusCode: 400,
+          });
+        }
 
-      await ctx.mediaService.delete(
-        args.id,
-        writeContext(args),
-        writeActor(args)
-      );
-      return {
-        message: "Media deleted.",
-        item: { id: args.id },
-      };
+        await ctx.mediaService.delete(
+          args.id,
+          writeContext(args),
+          writeActor(args)
+        );
+        return {
+          message: "Media deleted.",
+          item: { id: args.id },
+        };
+      });
     },
 
     async bulkDelete(args: BulkDeleteMediaArgs): Promise<BulkOperationResult> {
-      await checkWrite(
-        ctx.defaultConfig,
-        args,
-        SYSTEM_WRITE_POLICY.media.bulkDelete
-      );
-      if (!args.ids || args.ids.length === 0) {
-        return {
-          successes: [],
-          failures: [],
-          total: 0,
-          successCount: 0,
-          failedCount: 0,
-        };
-      }
+      return asChecked(args, async () => {
+        await checkWrite(
+          ctx.defaultConfig,
+          args,
+          SYSTEM_WRITE_POLICY.media.bulkDelete
+        );
+        if (!args.ids || args.ids.length === 0) {
+          return {
+            successes: [],
+            failures: [],
+            total: 0,
+            successCount: 0,
+            failedCount: 0,
+          };
+        }
 
-      // Phase 4.5: mediaService.bulkDelete now returns the canonical
-      // BulkOperationResult shape (successes + failures) directly. No
-      // translation needed at the direct-api boundary anymore.
-      return ctx.mediaService.bulkDelete(
-        args.ids,
-        writeContext(args),
-        writeActor(args)
-      );
+        // Phase 4.5: mediaService.bulkDelete now returns the canonical
+        // BulkOperationResult shape (successes + failures) directly. No
+        // translation needed at the direct-api boundary anymore.
+        return ctx.mediaService.bulkDelete(
+          args.ids,
+          writeContext(args),
+          writeActor(args)
+        );
+      });
     },
 
     folders,
