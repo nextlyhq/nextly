@@ -185,6 +185,19 @@ describe("MessagesList", () => {
     expect(within(table()).queryByText("Welcome")).toBeNull();
   });
 
+  it("shows a notice's emails even when an earlier search hid them", () => {
+    render(<MessagesList />);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search emails" }), {
+      target: { value: "welcome" },
+    });
+    expect(within(table()).queryByText("Reset a password")).toBeNull();
+    const notice = screen
+      .getByText("1 email has an update from its owner")
+      .closest('[role="alert"]') as HTMLElement;
+    fireEvent.click(within(notice).getByRole("button", { name: "Show it" }));
+    expect(within(table()).getByText("Reset a password")).toBeTruthy();
+  });
+
   it("names the emails kept as the previous engine sent them", () => {
     render(<MessagesList />);
     expect(screen.getByText("1 email is kept as it was")).toBeTruthy();

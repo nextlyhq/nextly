@@ -40,6 +40,8 @@ import {
 } from "../useTemplateActions";
 
 import {
+  KEPT_HELP,
+  KEPT_LABEL,
   STATE_FILTER_LABELS,
   STATE_HELP,
   STATE_LABELS,
@@ -57,10 +59,15 @@ import {
 
 const STATE_FILTERS = Object.keys(STATE_FILTER_LABELS) as StateFilter[];
 
-/** The state badge, with Off beside it when the email won't be sent. */
+/**
+ * The state badge, with Off beside it when the email won't be sent and Kept
+ * as before when it still sends as the previous engine did. A site's own
+ * email that is on says nothing more than the badges beside it already do.
+ */
 function StateBadges({ record }: { record: EmailTemplateRecord }) {
   const state = stateOf(record);
   const off = !record.isActive;
+  const kept = Boolean(record.keptOnOldEngine);
   return (
     <span className="flex flex-wrap items-center gap-1.5">
       {off && (
@@ -68,10 +75,15 @@ function StateBadges({ record }: { record: EmailTemplateRecord }) {
           Off
         </Badge>
       )}
-      {!(off && state === "own") && (
+      {kept && (
+        <Badge variant="warning" title={KEPT_HELP}>
+          {KEPT_LABEL}
+        </Badge>
+      )}
+      {!(state === "own" && (off || kept)) && (
         <Badge
           variant={
-            state === "update" || state === "kept"
+            state === "update"
               ? "warning"
               : state === "own"
                 ? "success"
@@ -326,7 +338,7 @@ export function MessagesList() {
     messages.some(record => record.lastSentAt !== undefined);
 
   const updates = messages.filter(record => stateOf(record) === "update");
-  const kept = messages.filter(record => stateOf(record) === "kept");
+  const kept = messages.filter(record => record.keptOnOldEngine);
 
   if (isError) {
     return (
@@ -355,7 +367,11 @@ export function MessagesList() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setQuery(q => ({ ...q, state: "update" }))}
+              // Clears the search and owner too: the notice promises these
+              // emails, and a filter set earlier could hide them.
+              onClick={() =>
+                setQuery({ search: "", owner: "all", state: "update" })
+              }
             >
               Show {updates.length === 1 ? "it" : "them"}
             </Button>
@@ -379,7 +395,9 @@ export function MessagesList() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setQuery(q => ({ ...q, state: "kept" }))}
+              onClick={() =>
+                setQuery({ search: "", owner: "all", state: "kept" })
+              }
             >
               Show {kept.length === 1 ? "it" : "them"}
             </Button>

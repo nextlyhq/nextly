@@ -55,6 +55,8 @@ export default function CreateEmailProviderPage() {
           toast.success("Provider created", {
             description: `${payload.name} has been created successfully.`,
           });
+          // Back to the Email hub's Sending tab, which lists providers now
+          // that email has left Settings.
           navigateTo(ROUTES.EMAIL_SENDING);
         },
         onError: (error: Error) => {

@@ -16,7 +16,7 @@
  * use for a DOM.
  */
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -273,8 +273,13 @@ describe("the notification's email template", () => {
     vi.unstubAllGlobals();
   });
 
-  /** The admin's answers: one template, and the caller's grants. */
-  function serve(permissions: string[]) {
+  /**
+   * The admin's answers: one template, and the caller's grants. Returns
+   * whether the grants have been answered, so a test can wait for that answer
+   * rather than assert against the state before it.
+   */
+  function serve(permissions: string[]): () => boolean {
+    let answered = false;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
@@ -294,11 +299,13 @@ describe("the notification's email template", () => {
           );
         }
         if (String(url).endsWith("/me/permissions")) {
+          answered = true;
           return new Response(JSON.stringify({ permissions }));
         }
         return new Response("{}", { status: 404 });
       })
     );
+    return () => answered;
   }
 
   async function openEditor() {
@@ -325,13 +332,16 @@ describe("the notification's email template", () => {
   });
 
   it("offers no link to someone who may only read templates", async () => {
-    serve(["read-email-templates"]);
+    const answered = serve(["read-email-templates"]);
     notifications = [aNotification({ templateSlug: "form-submitted" })];
     await openEditor();
 
     // The template is chosen and listed; only the link is withheld, since
-    // the editor it leads to would refuse them.
+    // the editor it leads to would refuse them. Asserted once the grants are
+    // answered and applied, not against the state before they arrive.
     await screen.findByText("Form submitted");
+    await waitFor(() => expect(answered()).toBe(true));
+    await act(async () => {});
     expect(screen.queryByRole("link", { name: /in email/i })).toBeNull();
   });
 

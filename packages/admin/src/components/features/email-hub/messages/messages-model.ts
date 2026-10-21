@@ -51,25 +51,31 @@ export function compareGroups(a: OwnerGroup, b: OwnerGroup): number {
  * - `default`: an owner's email as its owner wrote it.
  * - `customised`: the site's version of an owner's email.
  * - `update`: the owner changed it since the site customised it.
- * - `kept`: holds text the previous engine sent as written, so it sends as it
- *   always did until someone changes those lines.
  * - `own`: one of the site's own emails.
  *
- * Off is separate: an email that is off says so beside whichever of these it
- * is, because being off is true of it whatever else is.
+ * Off and kept-as-before are separate: each is true of an email whatever else
+ * is, so each is said beside its state. An email kept on the previous engine
+ * can also have an owner's update waiting, and both must stay visible.
  */
-export type EmailState = "default" | "customised" | "update" | "kept" | "own";
+export type EmailState = "default" | "customised" | "update" | "own";
 
 export function stateOf(record: EmailTemplateRecord): EmailState {
-  if (record.keptOnOldEngine) return "kept";
   if (record.owner.kind === "site") return "own";
   if (record.ownerChanged) return "update";
   if (record.overridden) return "customised";
   return "default";
 }
 
-/** The state filter's choices; `off` matches any email that is off. */
-export type StateFilter = "all" | "off" | Exclude<EmailState, "own">;
+/**
+ * The state filter's choices. `off` matches any email that is off and `kept`
+ * any email kept as the previous engine sent it, whatever its state.
+ */
+export type StateFilter = "all" | "off" | "kept" | Exclude<EmailState, "own">;
+
+/** Holds text the previous engine sent as written. */
+export const KEPT_LABEL = "Kept as before";
+export const KEPT_HELP =
+  "Holds text the previous engine sent as written. It keeps sending exactly as before until someone changes those lines.";
 
 export const STATE_FILTER_LABELS: Record<StateFilter, string> = {
   all: "Any state",
@@ -84,7 +90,6 @@ export const STATE_LABELS: Record<EmailState, string> = {
   default: "Default",
   customised: "Customised",
   update: "Update available",
-  kept: "Kept as before",
   own: "On",
 };
 
@@ -92,7 +97,6 @@ export const STATE_HELP: Record<EmailState, string> = {
   default: "The owner's version, kept up to date by the owner.",
   customised: "Your site's version. The owner's updates wait for your review.",
   update: "The owner changed this email since you customised it.",
-  kept: "Holds text the previous engine sent as written. It keeps sending exactly as before until someone changes those lines.",
   own: "One of this site's own emails.",
 };
 
@@ -113,6 +117,8 @@ export function matchesQuery(
   }
   if (query.state === "off") {
     if (record.isActive) return false;
+  } else if (query.state === "kept") {
+    if (!record.keptOnOldEngine) return false;
   } else if (query.state !== "all" && stateOf(record) !== query.state) {
     return false;
   }

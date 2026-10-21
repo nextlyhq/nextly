@@ -253,9 +253,10 @@ export default function EditEmailProviderPage() {
 }
 
 /**
- * This page renders the settings chrome in several branches — loading,
- * error and the resolved document — and its identity is the same in all of
- * them. Stated once here so the branches cannot drift apart.
+ * This page renders the Email hub's subpage chrome (Dashboard › Email ›
+ * Sending › this page) in several branches — loading, error and the resolved
+ * document — and its identity is the same in all of them. Stated once here so
+ * the branches cannot drift apart.
  */
 const EMAIL_PROVIDER_PAGE = {
   title: "Edit Email Provider",

@@ -49,14 +49,23 @@ describe("stateOf", () => {
     expect(
       stateOf(email({ ...core, overridden: true, ownerChanged: true }))
     ).toBe("update");
-    expect(stateOf(email({ ...core, keptOnOldEngine: true }))).toBe("kept");
   });
 
-  it("calls the site's own email its own, whatever else it carries", () => {
+  it("keeps an owner's update visible on an email kept as before", () => {
+    // Kept-as-before is said beside the state, never instead of it.
+    const both = email({
+      owner: { kind: "core" },
+      overridden: true,
+      ownerChanged: true,
+      keptOnOldEngine: true,
+    });
+    expect(stateOf(both)).toBe("update");
+    expect(matchesQuery(both, { ...ANY, state: "update" })).toBe(true);
+    expect(matchesQuery(both, { ...ANY, state: "kept" })).toBe(true);
+  });
+
+  it("calls the site's own email its own", () => {
     expect(stateOf(email({ owner: { kind: "site" } }))).toBe("own");
-    expect(
-      stateOf(email({ owner: { kind: "site" }, keptOnOldEngine: true }))
-    ).toBe("kept");
   });
 });
 
