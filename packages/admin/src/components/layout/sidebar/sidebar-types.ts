@@ -7,9 +7,7 @@ import {
   Puzzle,
   ShieldAlert,
   FileText,
-  Mail,
 } from "@admin/components/icons";
-import { EMAIL_HUB_PERMISSIONS } from "@admin/constants/email-hub";
 import type { ActiveNavSection } from "@admin/constants/nav-sections";
 import { SIDEBAR_NAVIGATION } from "@admin/constants/navigation";
 import { ROUTES } from "@admin/constants/routes";
@@ -80,6 +78,20 @@ const releasesRail: MainMenuItem[] = releasesNav
     ]
   : [];
 
+/** The rail entry for the Email hub, derived the same way. */
+const emailNav = canonical(ROUTES.EMAIL);
+const emailRail: MainMenuItem[] = emailNav
+  ? [
+      {
+        id: "email",
+        label: emailNav.title,
+        icon: emailNav.icon,
+        href: emailNav.href ?? ROUTES.EMAIL,
+        requiredPermission: emailNav.requiredPermission,
+      },
+    ]
+  : [];
+
 export const MAIN_MENU_ITEMS: MainMenuItem[] = [
   {
     id: "dashboard",
@@ -109,13 +121,7 @@ export const MAIN_MENU_ITEMS: MainMenuItem[] = [
   // Email is its own area rather than two pages under Settings: what a site
   // sends, how it looks and how it goes out are one subject, and a reader
   // checking a password reset should not have to know it is "configuration".
-  {
-    id: "email",
-    label: "Email",
-    icon: Mail,
-    href: ROUTES.EMAIL,
-    requiredPermission: [...EMAIL_HUB_PERMISSIONS],
-  },
+  ...emailRail,
   { id: "plugins", label: "Plugins", icon: Puzzle, href: "#" },
   // User management (Users, User Fields, Roles) lives under Settings now —
   // there is no dedicated top-level icon for it.

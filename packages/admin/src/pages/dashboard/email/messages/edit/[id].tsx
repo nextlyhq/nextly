@@ -66,7 +66,10 @@ export default function EditEmailTemplatePage() {
               description: `${values.name} has been saved.`,
             });
             navigateTo(
-              template?.kind === "layout" ? ROUTES.EMAIL_DESIGN : ROUTES.EMAIL
+              // Layouts and partials are listed under Design.
+              template && template.kind !== "template"
+                ? ROUTES.EMAIL_DESIGN
+                : ROUTES.EMAIL
             );
           },
           onError: (error: Error) => {

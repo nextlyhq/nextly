@@ -712,6 +712,38 @@ export class EmailTemplateService extends BaseService {
     }
   }
 
+  /**
+   * Which of these templates are kept on the old engine, answered for all of
+   * them at once.
+   *
+   * The same decision as `keptOnOldEngine`, for a list: the switch and the
+   * marks it left are read once rather than once per template, so a list of
+   * any length costs two reads.
+   */
+  async keptOnOldEngineIds(
+    templates: ReadonlyArray<
+      Pick<EmailTemplateRecord, "id"> & LiquidFieldValues
+    >
+  ): Promise<Set<string>> {
+    const kept = new Set<string>();
+    if (templates.length === 0) return kept;
+    const adopted = await this.liquidAdopted();
+    // No meta table means nothing was recorded, so every template is judged
+    // by what it holds.
+    const recorded = adopted === null ? {} : await this.meta.getAll();
+    const marked = (key: string) => Object.hasOwn(recorded, key);
+    for (const template of templates) {
+      if (adopted) {
+        if (marked(keptKey(template.id))) kept.add(template.id);
+      } else if (adopted === false && marked(authoredKey(template.id))) {
+        continue;
+      } else if (oldEngineReasons(template).length > 0) {
+        kept.add(template.id);
+      }
+    }
+    return kept;
+  }
+
   /** Whether a template is kept on the old engine, and what in it is why. */
   async oldEngineStatus(id: string): Promise<OldEngineStatus> {
     const template = await this.getTemplate(id);

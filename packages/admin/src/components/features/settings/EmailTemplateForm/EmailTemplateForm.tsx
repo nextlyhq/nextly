@@ -74,9 +74,10 @@ export function EmailTemplateForm({
   // The row being edited keeps its kind; layouts are wrappers, not bodies.
   const currentKind = template?.kind ?? "template";
   const isLayoutRow = currentKind === "layout";
-  // Layouts are listed under Design and emails under Messages; leaving the
-  // editor returns to the tab it was opened from.
-  const listHref = isLayoutRow ? ROUTES.EMAIL_DESIGN : ROUTES.EMAIL;
+  // Emails are listed under Messages, and layouts and partials under Design;
+  // leaving the editor returns to the tab that lists it.
+  const listedUnderDesign = currentKind !== "template";
+  const listHref = listedUnderDesign ? ROUTES.EMAIL_DESIGN : ROUTES.EMAIL;
 
   const form = useForm<TemplateFormValues>({
     resolver: zodResolver(
@@ -192,7 +193,7 @@ export function EmailTemplateForm({
            */
           suppress={["subSidebar", "pageFrame"]}
           onExit={() => navigateTo(listHref)}
-          exitLabel={isLayoutRow ? "Back to Design" : "Back to Messages"}
+          exitLabel={listedUnderDesign ? "Back to Design" : "Back to Messages"}
           splitLabel="Editor and preview"
           /*
            * Side by side on a phone gives two columns too narrow to author in

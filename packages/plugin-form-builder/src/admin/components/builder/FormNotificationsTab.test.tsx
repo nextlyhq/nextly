@@ -273,28 +273,35 @@ describe("the notification's email template", () => {
     vi.unstubAllGlobals();
   });
 
-  it("links to the chosen template in the Email hub, in a new tab", async () => {
+  /** The admin's answers: one template, and the caller's grants. */
+  function serve(permissions: string[]) {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (url: string) =>
-        String(url).endsWith("/email-templates")
-          ? new Response(
-              JSON.stringify({
-                templates: [
-                  {
-                    id: "tpl-1",
-                    name: "Form submitted",
-                    slug: "form-submitted",
-                    isActive: true,
-                    kind: "template",
-                  },
-                ],
-              })
-            )
-          : new Response("{}", { status: 404 })
-      )
+      vi.fn(async (url: string) => {
+        if (String(url).endsWith("/email-templates")) {
+          return new Response(
+            JSON.stringify({
+              templates: [
+                {
+                  id: "tpl-1",
+                  name: "Form submitted",
+                  slug: "form-submitted",
+                  isActive: true,
+                  kind: "template",
+                },
+              ],
+            })
+          );
+        }
+        if (String(url).endsWith("/me/permissions")) {
+          return new Response(JSON.stringify({ permissions }));
+        }
+        return new Response("{}", { status: 404 });
+      })
     );
-    notifications = [aNotification({ templateSlug: "form-submitted" })];
+  }
+
+  async function openEditor() {
     const user = userEvent.setup();
     render(<FormNotificationsTab defaults={null} />);
     await user.click(
@@ -302,6 +309,12 @@ describe("the notification's email template", () => {
         name: /edit notification admin notification/i,
       })
     );
+  }
+
+  it("links to the chosen template in the Email hub, in a new tab", async () => {
+    serve(["read-email-templates", "manage-email-templates"]);
+    notifications = [aNotification({ templateSlug: "form-submitted" })];
+    await openEditor();
 
     const link = await screen.findByRole("link", {
       name: /open form submitted in email/i,
@@ -311,15 +324,21 @@ describe("the notification's email template", () => {
     expect(link).toHaveAttribute("target", "_blank");
   });
 
+  it("offers no link to someone who may only read templates", async () => {
+    serve(["read-email-templates"]);
+    notifications = [aNotification({ templateSlug: "form-submitted" })];
+    await openEditor();
+
+    // The template is chosen and listed; only the link is withheld, since
+    // the editor it leads to would refuse them.
+    await screen.findByText("Form submitted");
+    expect(screen.queryByRole("link", { name: /in email/i })).toBeNull();
+  });
+
   it("offers no link until a template is chosen", async () => {
+    serve(["manage-email-templates"]);
     notifications = [aNotification()];
-    const user = userEvent.setup();
-    render(<FormNotificationsTab defaults={null} />);
-    await user.click(
-      screen.getByRole("button", {
-        name: /edit notification admin notification/i,
-      })
-    );
+    await openEditor();
     expect(screen.queryByRole("link", { name: /in email/i })).toBeNull();
   });
 });

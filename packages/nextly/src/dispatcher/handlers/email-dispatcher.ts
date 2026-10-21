@@ -174,17 +174,15 @@ const EMAIL_TEMPLATE_METHODS: Record<
   listTemplates: {
     // Plain array, no pagination; same rationale as listProviders. Each row
     // says whether it is kept on the previous engine, so the admin's list can
-    // name those emails without asking once per row.
+    // name those emails without asking once per row; the service answers for
+    // the whole list in one pass.
     execute: async svc => {
       const records = await svc.templateService.listTemplates();
-      const templates = await Promise.all(
-        records.map(async record => ({
-          ...record,
-          keptOnOldEngine: (
-            await svc.templateService.oldEngineStatus(record.id)
-          ).kept,
-        }))
-      );
+      const kept = await svc.templateService.keptOnOldEngineIds(records);
+      const templates = records.map(record => ({
+        ...record,
+        keptOnOldEngine: kept.has(record.id),
+      }));
       return respondData({ templates });
     },
   },

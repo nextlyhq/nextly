@@ -125,6 +125,32 @@ async function fetchProviders(): Promise<ProviderOption[]> {
   }
 }
 
+/**
+ * Whether the signed-in person may open an email in the Email hub's editor.
+ * The editor's route needs the grant that saves a template, so a link shown
+ * without it would open a page that refuses them.
+ */
+async function fetchCanEditTemplates(): Promise<boolean> {
+  try {
+    const res = await fetch("/admin/api/me/permissions", {
+      credentials: "include",
+    });
+    if (!res.ok) return false;
+    const json = (await res.json()) as {
+      permissions?: string[];
+      isSuperAdmin?: boolean;
+    };
+    const held = json.permissions ?? [];
+    return (
+      Boolean(json.isSuperAdmin) ||
+      held.includes("update-email-templates") ||
+      held.includes("manage-email-templates")
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function fetchTemplates(): Promise<TemplateOption[]> {
   try {
     const res = await fetch("/admin/api/email-templates", {
@@ -915,6 +941,8 @@ interface NotificationIdentityFieldsProps {
   providers: ProviderOption[];
   defaults: NotificationDefaults | null;
   templates: TemplateOption[];
+  /** May open a template in the Email hub's editor. */
+  canEditTemplates: boolean;
   update: <K extends keyof FormNotification>(
     key: K,
     value: FormNotification[K]
@@ -936,6 +964,7 @@ function NotificationIdentityFields({
   providers,
   defaults,
   templates,
+  canEditTemplates,
   update,
   addressErrors,
   validateAddress,
@@ -943,9 +972,10 @@ function NotificationIdentityFields({
   // Derived here, from props this component already holds. Passing them in
   // would be the same answer worked out in the caller.
   const defaultProvider = providers.find(p => p.isDefault);
-  const selectedTemplate = form.templateSlug
-    ? templates.find(t => t.slug === form.templateSlug)
-    : undefined;
+  const selectedTemplate =
+    canEditTemplates && form.templateSlug
+      ? templates.find(t => t.slug === form.templateSlug)
+      : undefined;
   const defaultProviderLabel = defaultProvider
     ? `System default (${defaultProvider.name})`
     : "System default";
@@ -1098,6 +1128,7 @@ interface NotificationEditorProps {
   editorId: string;
   providers: ProviderOption[];
   templates: TemplateOption[];
+  canEditTemplates: boolean;
   fields: readonly FieldOption[];
   defaults: NotificationDefaults | null;
   /**
@@ -1118,6 +1149,7 @@ function NotificationEditor({
   editorId,
   providers,
   templates,
+  canEditTemplates,
   fields,
   defaults,
   onChange,
@@ -1178,6 +1210,7 @@ function NotificationEditor({
           providers={providers}
           defaults={defaults}
           templates={templates}
+          canEditTemplates={canEditTemplates}
           update={update}
           addressErrors={addressErrors}
           validateAddress={validateAddress}
@@ -1241,6 +1274,7 @@ export function FormNotificationsTab({ defaults }: FormNotificationsTabProps) {
 
   const [providers, setProviders] = useState<ProviderOption[]>([]);
   const [templates, setTemplates] = useState<TemplateOption[]>([]);
+  const [canEditTemplates, setCanEditTemplates] = useState(false);
   // Which row is open. One at a time: several open at once turns the list
   // into a wall of fields and loses the overview the summaries exist to give.
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -1248,6 +1282,7 @@ export function FormNotificationsTab({ defaults }: FormNotificationsTabProps) {
   useEffect(() => {
     void fetchProviders().then(setProviders);
     void fetchTemplates().then(setTemplates);
+    void fetchCanEditTemplates().then(setCanEditTemplates);
   }, []);
 
   const fieldList = useMemo<FieldOption[]>(
@@ -1343,6 +1378,7 @@ export function FormNotificationsTab({ defaults }: FormNotificationsTabProps) {
                 editorId={`notification-editor-${notification.id}`}
                 providers={providers}
                 templates={templates}
+                canEditTemplates={canEditTemplates}
                 fields={fieldList}
                 defaults={defaults}
                 onChange={next => updateNotification(notification.id, next)}
