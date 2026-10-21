@@ -15,7 +15,6 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { layOutStacked, recordDragRegion } from "@admin/__tests__/helpers/drag";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
 import type { AdminBranding } from "@admin/types/branding";
@@ -27,7 +26,9 @@ import type {
 import { MAX_PLACEMENTS } from "nextly/config";
 
 import { WidgetGrid } from "../../WidgetGrid";
+import { DRAG_INSTRUCTIONS } from "../drag/drag-messages";
 import {
+  resizeDashboard,
   stubDashboardWidth,
   unstubDashboardWidth,
 } from "../../__tests__/dashboard-width";
@@ -55,6 +56,12 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
     delete: vi.fn(),
   },
 }));
+// The batch answered as the `protectedApi.post` mock above describes it; see `batch-over-post`.
+vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
+  (
+    await import("@admin/hooks/queries/__tests__/batch-over-post")
+  ).streamOverPost()
+);
 
 const api = vi.mocked(protectedApi);
 
@@ -495,102 +502,154 @@ describe("choosing a width", () => {
   });
 });
 
-describe("moving a card from the keyboard", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  /** Enters customise mode and gives the cells the geometry a list has. */
-  async function beginKeyboardEditing() {
+describe("dragging a card from the keyboard", () => {
+  /** Enters customise mode and focuses one card's handle. */
+  async function handleOf(title: string) {
     renderGrid();
     await beginEditing();
-    layOutStacked(
-      ["core/a", "core/b", "core/c"].map(id =>
-        screen.getByTestId(`widget-cell-${id}`)
-      ),
-      { height: 200, width: 400 }
-    );
+    const handle = screen.getByRole("button", { name: `Move ${title}` });
+    handle.focus();
+    return handle;
   }
 
-  it("says which card was picked up, and where it sits, by title", async () => {
-    // 🔴 dnd-kit's default reads the placement id aloud, which names nothing a
-    // reader can see.
-    await beginKeyboardEditing();
-    const heard = recordDragRegion();
-    const handle = screen.getByRole("button", {
-      name: "Drag to reorder Widget core/b",
-    });
-    handle.focus();
-    fireEvent.keyDown(handle, { code: "Space", key: " " });
+  function press(handle: HTMLElement, key: string) {
+    fireEvent.keyDown(handle, { key });
+  }
+
+  it("names the card on its handle, and reads the keys from the handle's description", async () => {
+    const handle = await handleOf("Widget core/b");
+    expect(handle).toHaveAccessibleDescription(DRAG_INSTRUCTIONS);
+  });
+
+  it("picks a card up with Space, saying which, where it sits and how to move it", async () => {
+    const handle = await handleOf("Widget core/b");
+    press(handle, " ");
+
+    expect(live()).toHaveTextContent(
+      "Picked up Widget core/b, position 2 of 3. Use the arrow keys to move it, Space to drop it, Escape to cancel."
+    );
+    expect(screen.getByTestId("widget-cell-core/b")).toHaveAttribute(
+      "data-held"
+    );
+    // Picked up, not moved: nothing would change yet, so no line is drawn.
+    expect(screen.queryByTestId("widget-drop-line")).toBeNull();
+  });
+
+  it("steps one place per arrow, saying each, with every card still where it was", async () => {
+    const handle = await handleOf("Widget core/b");
+    press(handle, " ");
+    press(handle, "ArrowDown");
+
+    expect(live()).toHaveTextContent("Position 3 of 3.");
+    expect(screen.getByTestId("widget-drop-line")).toBeInTheDocument();
+    expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
+
+    // Stops at the end rather than wrapping round to the start.
+    press(handle, "ArrowRight");
+    expect(live()).toHaveTextContent("Position 3 of 3.");
+  });
+
+  it("moves it on Space, says both positions, rings it and keeps focus on its handle", async () => {
+    const handle = await handleOf("Widget core/b");
+    press(handle, " ");
+    press(handle, "ArrowUp");
+    press(handle, " ");
 
     await waitFor(() =>
-      expect(heard).toContain("Picked up Widget core/b, position 2 of 3.")
+      expect(drawnOrder()).toEqual(["core/b", "core/a", "core/c"])
     );
-    expect(heard.join(" ")).not.toContain("draggable item");
-    // The grid's OWN region is for landings. A pick-up is not one.
-    expect(live().textContent).not.toMatch(/Widget core\/b/);
+    expect(live()).toHaveTextContent("Widget core/b moved from 2 to 1 of 3.");
+    expect(screen.getByTestId("widget-cell-core/b")).toHaveAttribute(
+      "data-highlighted"
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Move Widget core/b" })
+      ).toHaveFocus()
+    );
+    expect(screen.queryByTestId("widget-drop-line")).toBeNull();
+    expect(screen.getByTestId("dashboard-edit-save")).toBeEnabled();
   });
 
-  it("does not read a drop twice: dnd-kit is silent on landing, the grid speaks", async () => {
-    await beginKeyboardEditing();
-    const heard = recordDragRegion();
-    const handle = screen.getByRole("button", {
-      name: "Drag to reorder Widget core/b",
+  it("animates nothing for a reader who asks for reduced motion: the ring fades only under motion-safe, the line never", async () => {
+    // jsdom applies no media query, so what is asserted is the gate itself: every animation
+    // class is one `prefers-reduced-motion: reduce` switches off.
+    const moving = /animate|fade|transition|duration/;
+    const handle = await handleOf("Widget core/b");
+    press(handle, " ");
+    press(handle, "ArrowDown");
+    const line = screen.getByTestId("widget-drop-line");
+    expect([...line.classList].filter(c => moving.test(c))).toEqual([]);
+    press(handle, " ");
+
+    const ringed = await screen.findByTestId("widget-cell-core/b");
+    await waitFor(() => expect(ringed).toHaveAttribute("data-highlighted"));
+    const animated = [...ringed.classList].filter(c => moving.test(c));
+    expect(animated.length).toBeGreaterThan(0);
+    expect(animated.filter(c => !c.startsWith("motion-safe:"))).toEqual([]);
+  });
+
+  it("puts it down where it was when nothing changed, and says so", async () => {
+    const handle = await handleOf("Widget core/b");
+    press(handle, " ");
+    press(handle, "Enter");
+
+    expect(live()).toHaveTextContent("Widget core/b dropped where it was.");
+    expect(screen.getByTestId("widget-cell-core/b")).not.toHaveAttribute(
+      "data-held"
+    );
+    expect(screen.getByTestId("dashboard-edit-save")).toBeDisabled();
+  });
+
+  for (const key of ["Escape", "Tab"]) {
+    it(`cancels on ${key}: nothing moves, and it says so`, async () => {
+      const handle = await handleOf("Widget core/b");
+      press(handle, " ");
+      press(handle, "ArrowDown");
+      press(handle, key);
+
+      expect(live()).toHaveTextContent("Move cancelled. Nothing moved.");
+      expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
+      expect(screen.queryByTestId("widget-drop-line")).toBeNull();
+      expect(screen.getByTestId("dashboard-edit-save")).toBeDisabled();
     });
-    handle.focus();
-    fireEvent.keyDown(handle, { code: "Space", key: " " });
-    await waitFor(() => expect(handle).toHaveAttribute("aria-pressed", "true"));
+  }
 
-    fireEvent.keyDown(handle, { code: "Space", key: " " });
-    await waitFor(() => expect(handle).not.toHaveAttribute("aria-pressed"));
-    expect(heard.join(" ")).not.toMatch(/moved to|was dropped/);
-    expect(live().textContent).not.toMatch(/moved/);
-  });
-});
+  it("cancels when focus leaves the handle mid-drag", async () => {
+    const handle = await handleOf("Widget core/b");
+    press(handle, " ");
+    press(handle, "ArrowDown");
+    act(() => handle.blur());
 
-describe("dragging cards of different widths", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
+    expect(live()).toHaveTextContent("Move cancelled. Nothing moved.");
+    expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
   });
 
-  it("moves only the held card while dragging, and reorders on drop", async () => {
-    // A quarter beside a full card. dnd-kit's live preview would slide the
-    // full card into the quarter's rectangle, scaled to fit, drawing a row the
-    // grid never lays out; so the card not held stays put until the drop.
-    mockBranding = branding(["core/a", "core/b"]);
+  it("lands a card where the menu would, stepping over a removed one", async () => {
+    // core/x is removed: one gesture must give one order, whichever way it was made.
+    mockBranding = branding(["core/a", "core/b", "core/x", "core/c"]);
     layoutResponse = layout([
-      { id: "p1", widgetId: "core/a", width: "quarter" },
-      { id: "p2", widgetId: "core/b", width: "full" },
+      { id: "p1", widgetId: "core/a" },
+      { id: "p2", widgetId: "core/b" },
+      { id: "px", widgetId: "core/x", removed: true },
+      { id: "p3", widgetId: "core/c" },
     ]);
-    renderGrid();
-    await beginEditing();
-    layOutStacked(
-      ["core/a", "core/b"].map(id => screen.getByTestId(`widget-cell-${id}`)),
-      { height: 200, width: 400 }
-    );
-
-    const handle = screen.getByRole("button", {
-      name: "Drag to reorder Widget core/a",
-    });
-    handle.focus();
-    fireEvent.keyDown(handle, { code: "Space", key: " " });
-    await waitFor(() => expect(handle).toHaveAttribute("aria-pressed", "true"));
-    fireEvent.keyDown(handle, { code: "ArrowDown", key: "ArrowDown" });
-
+    const handle = await handleOf("Widget core/a");
+    press(handle, " ");
+    press(handle, "ArrowDown");
+    press(handle, " ");
     await waitFor(() =>
-      expect(screen.getByTestId("widget-cell-core/a").style.transform).not.toBe(
-        ""
-      )
+      expect(drawnOrder()).toEqual(["core/b", "core/a", "core/c"])
     );
-    // The held card follows unscaled; the other card has no transform at all.
-    expect(
-      screen.getByTestId("widget-cell-core/a").style.transform
-    ).not.toMatch(/scale/);
-    expect(screen.getByTestId("widget-cell-core/b").style.transform).toBe("");
 
-    fireEvent.keyDown(handle, { code: "Space", key: " " });
-    await waitFor(() => expect(drawnOrder()).toEqual(["core/b", "core/a"]));
-    expect(live()).toHaveTextContent("Widget core/a moved from 1 to 2 of 2.");
+    await userEvent.setup().click(screen.getByTestId("dashboard-edit-save"));
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    expect(putBody().placements.map(p => p.id)).toEqual([
+      "p2",
+      "p1",
+      "px",
+      "p3",
+    ]);
   });
 });
 
@@ -654,6 +713,22 @@ describe("removing a card", () => {
     expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
     expect(screen.queryByTestId("removal-notice")).toBeNull();
     expect(screen.getByTestId("dashboard-edit-save")).toBeDisabled();
+  });
+
+  it("rings the card Undo puts back, as putting it back from the add panel does", async () => {
+    // 🔴 Undo restored the card through its own path, which had no reach to the ring, so the
+    // card came back unmarked while the same card put back from the panel was ringed.
+    renderGrid();
+    const user = await beginEditing();
+    await choose(user, "Widget core/b", "Remove");
+    await user.click(screen.getByTestId("removal-notice-undo"));
+
+    expect(screen.getByTestId("widget-cell-core/b")).toHaveAttribute(
+      "data-highlighted"
+    );
+    expect(screen.getByTestId("widget-cell-core/a")).not.toHaveAttribute(
+      "data-highlighted"
+    );
   });
 
   it("keeps the notice until it is closed, or replaced by the next one", async () => {
@@ -1143,6 +1218,42 @@ describe("resetting to the default dashboard", () => {
     );
   });
 
+  it("rings no card once the reset is staged, even one the default reuses", async () => {
+    // 🔴 The ring outlived the reset: a layout saved from the defaults reuses their placement
+    // ids, so the card ringed for the last move came back ringed, as if Reset had placed it.
+    layoutResponse = layout(
+      [
+        { id: "core/a", widgetId: "core/a" },
+        { id: "core/b", widgetId: "core/b" },
+      ],
+      {
+        defaultPlacements: [
+          { id: "core/a", widgetId: "core/a", width: "half", removed: false },
+          { id: "core/b", widgetId: "core/b", width: "half", removed: false },
+          { id: "core/c", widgetId: "core/c", width: "full", removed: false },
+        ],
+      }
+    );
+    renderGrid();
+    const user = await beginEditing();
+    await choose(user, "Widget core/b", "Move to start");
+    expect(screen.getByTestId("widget-cell-core/b")).toHaveAttribute(
+      "data-highlighted"
+    );
+
+    await user.click(screen.getByTestId("dashboard-edit-reset"));
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Reset dashboard",
+      })
+    );
+
+    expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
+    expect(screen.getByTestId("widget-cell-core/b")).not.toHaveAttribute(
+      "data-highlighted"
+    );
+  });
+
   it("asks first, and keeping the layout changes nothing", async () => {
     renderGrid();
     const user = await beginEditing();
@@ -1404,36 +1515,112 @@ describe("when the schema changes underneath an open dashboard", () => {
   });
 });
 
-describe("below the md breakpoint", () => {
-  // jsdom lays nothing out; what is asserted is the CAUSE -- the responsive
-  // classes -- on the exact elements the fold applies to.
+describe("at one column", () => {
+  // jsdom lays nothing out; the dashboard's width is stubbed, as the grid measures it.
 
-  it("does not offer customising: the entry control is hidden until md", async () => {
+  it("offers customising at every width", async () => {
+    stubDashboardWidth(390);
     renderGrid();
     const offer = await screen.findByTestId("dashboard-edit-offer");
-    expect(offer).toHaveClass("hidden", "md:flex");
+    expect(offer).not.toHaveClass("hidden");
     expect(offer).toContainElement(screen.getByTestId("dashboard-edit-begin"));
   });
 
-  it("keeps the way OUT at every width once customising is under way", async () => {
+  it("draws no handle, and leaves every move to the card menu", async () => {
+    stubDashboardWidth(390);
     renderGrid();
-    await beginEditing();
-    const bar = screen.getByTestId("dashboard-edit-cancel").parentElement;
-    expect(bar).not.toBeNull();
-    expect(bar).not.toHaveClass("hidden");
-    expect(screen.queryByTestId("dashboard-edit-offer")).toBeNull();
+    const user = await beginEditing();
+    expect(screen.queryAllByTestId("widget-drag-handle")).toEqual([]);
+
+    await choose(user, "Widget core/c", "Move to start");
+    expect(drawnOrder()).toEqual(["core/c", "core/a", "core/b"]);
   });
 
-  it("tells a narrow-screen reader the way back is a larger screen", async () => {
+  it("lists the widths in the card menu itself, with no submenu to open off the screen", async () => {
+    // 🔴 On a phone the menu sits mid-screen, and a submenu beside it has room on neither side,
+    // so it was drawn partly off the screen. In place, the widths share the menu's own box.
+    layoutResponse = layout([{ id: "p1", widgetId: "core/a", width: "half" }], {
+      widgets: {
+        "core/a": facts({ allowedWidths: ["third", "half", "full"] }),
+      },
+    });
+    stubDashboardWidth(390);
+    renderGrid();
+    const user = await beginEditing();
+
+    const menu = await openMenu(user, "Widget core/a");
+    expect(screen.queryByTestId("card-width-menu")).toBeNull();
+    expect(
+      within(menu)
+        .getAllByRole("menuitemradio")
+        .map(item => item.textContent)
+    ).toEqual(["Third width⅓", "Half width½", "Full width"]);
+    expect(
+      within(menu).getByRole("menuitemradio", { name: "Half width" })
+    ).toHaveAttribute("aria-checked", "true");
+
+    within(menu).getByRole("menuitemradio", { name: "Third width" }).focus();
+    await user.keyboard("{Enter}");
+    expect(live()).toHaveTextContent("Widget core/a set to Third width.");
+    expect(screen.getByTestId("card-width-label")).toHaveTextContent("⅓");
+  });
+
+  it("cancels a drag when the dashboard narrows to one column, and says why", async () => {
+    renderGrid();
+    await beginEditing();
+    const handle = screen.getByRole("button", { name: "Move Widget core/b" });
+    handle.focus();
+    fireEvent.keyDown(handle, { key: " " });
+    fireEvent.keyDown(handle, { key: "ArrowDown" });
+
+    resizeDashboard(390);
+
+    await waitFor(() =>
+      expect(live()).toHaveTextContent(
+        "The dashboard is one column now, so the move was cancelled. Nothing moved. Use the card's menu to move it."
+      )
+    );
+    // 🔴 The handle that had focus is gone at one column; focus goes to the card's menu, where
+    // the move goes on, rather than falling to the page.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(menuButton("Widget core/b"))
+    );
+    expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
+    expect(screen.queryAllByTestId("widget-drag-handle")).toEqual([]);
+  });
+
+  it("cancels a drag when the dashboard changes width but keeps its columns, and says why", async () => {
+    // 🔴 Only narrowing to one column ended a drag. A change between two wider bands reflows
+    // the cards while the drag kept the places it measured at pick-up, so the line, and the
+    // drop, pointed somewhere other than where the cards had gone.
+    renderGrid();
+    await beginEditing();
+    const handle = screen.getByRole("button", { name: "Move Widget core/b" });
+    handle.focus();
+    fireEvent.keyDown(handle, { key: " " });
+    fireEvent.keyDown(handle, { key: "ArrowDown" });
+
+    resizeDashboard(900);
+
+    await waitFor(() =>
+      expect(live()).toHaveTextContent(
+        "The dashboard changed width, so the move was cancelled. Nothing moved."
+      )
+    );
+    expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
+    expect(screen.queryByTestId("widget-drop-line")).toBeNull();
+    // Still more than one column: the handles stay, and the card can be picked up again.
+    expect(
+      screen.getByRole("button", { name: "Move Widget core/b" })
+    ).toBeInTheDocument();
+  });
+
+  it("tells a reader with an empty dashboard to customise it, at any width", async () => {
     layoutResponse = layout([{ id: "p1", widgetId: "core/a", removed: true }]);
     renderGrid();
-    const empty = await screen.findByTestId("widget-grid-empty");
-    const wide = screen.getByText(/Customize it to bring one back/);
-    const narrow = screen.getByText(/Customize it on a larger screen/);
-    expect(empty).toContainElement(wide);
-    expect(empty).toContainElement(narrow);
-    expect(wide).toHaveClass("hidden", "md:inline");
-    expect(narrow).toHaveClass("md:hidden");
+    expect(await screen.findByTestId("widget-grid-empty")).toHaveTextContent(
+      "Your dashboard has no cards on it. Customize it to bring one back, or reset to the default dashboard."
+    );
   });
 });
 

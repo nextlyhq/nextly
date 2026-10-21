@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 
-import { EntrySystemHeader } from "../EntrySystemHeader";
+import { HeaderUnderTest as EntrySystemHeader } from "./header-under-test";
 
 function Harness({ lockIdentity }: { lockIdentity?: boolean }) {
   const methods = useForm({ defaultValues: { title: "Homepage" } });

@@ -15,8 +15,11 @@ import { fetcher } from "../lib/api/fetcher";
 import type {
   AddReleaseMemberPayload,
   CreateReleasePayload,
+  HiddenReleaseMembers,
   Release,
   ReleaseBlocker,
+  ReleaseCalendarParams,
+  ReleaseCalendarRead,
   ReleaseListParams,
   ReleaseMember,
   ReleaseReadinessEntry,
@@ -45,13 +48,15 @@ export interface ReleaseListResponse {
 
 export interface MemberListResponse {
   items: ReleaseMember[];
-  meta: { total: number; hasNext: boolean };
+  /** `hidden`: the documents the reader may not read, counted by collection. */
+  meta: { total: number; hasNext: boolean; hidden?: HiddenReleaseMembers[] };
 }
 
 /** The blockers standing between one release and its instant. */
 export interface BlockerListResponse {
   items: ReleaseBlocker[];
-  meta: { total: number; hasNext: boolean };
+  /** `hidden`: blocked documents the reader may not read, by collection. */
+  meta: { total: number; hasNext: boolean; hidden?: HiddenReleaseMembers[] };
 }
 
 /** The canonical mutation envelope. */
@@ -102,6 +107,12 @@ function query(params: ReleaseListParams): string {
     search.set("containingScopeSlug", params.containing.scopeSlug);
     search.set("containingEntryId", params.containing.entryId);
   }
+  // Both or neither, for the same reason: the route refuses half a day, since
+  // a date with no zone names no instants.
+  if (params.day) {
+    search.set("day", params.day.date);
+    search.set("timezone", params.day.timezone);
+  }
   const q = search.toString();
   return q ? `?${q}` : "";
 }
@@ -110,6 +121,29 @@ export const fetchReleases = (
   params: ReleaseListParams = {}
 ): Promise<ReleaseListResponse> =>
   fetcher<ReleaseListResponse>(`/releases${query(params)}`, {}, true);
+
+/**
+ * The calendar of a window of days in a zone: every day, with its complete
+ * count by state and its first releases.
+ *
+ * The server places each release on its day, so the browser never buckets
+ * releases itself and never reads a capped page of them: a busy month is
+ * counted in full, and a release published late is on the day it went out.
+ */
+export const fetchReleaseCalendar = (
+  params: ReleaseCalendarParams
+): Promise<ReleaseCalendarRead> => {
+  const search = new URLSearchParams({
+    from: params.from,
+    to: params.to,
+    timezone: params.timezone,
+  });
+  return fetcher<ReleaseCalendarRead>(
+    `/releases/calendar?${search.toString()}`,
+    {},
+    true
+  );
+};
 
 export const fetchRelease = (id: string): Promise<Release> =>
   fetcher<Release>(`/releases/${id}`, {}, true);

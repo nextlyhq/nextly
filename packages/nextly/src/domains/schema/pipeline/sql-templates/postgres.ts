@@ -21,6 +21,7 @@ import {
   unsupportedOperation,
 } from "./foreign-key-action";
 import { quoteIdent } from "./identifier-quoting";
+import { postgresAlterTypeUsing } from "./postgres-alter-type-using";
 
 const q = (n: string) => quoteIdent(n, "postgresql");
 
@@ -140,7 +141,7 @@ function generateChangeColumnType(op: ChangeColumnTypeOp): string {
   }
   return (
     `ALTER TABLE ${q(op.tableName)} ALTER COLUMN ${q(op.columnName)} ` +
-    `TYPE ${op.toType} USING ${q(op.columnName)}::${op.toType}`
+    `TYPE ${op.toType} ${postgresAlterTypeUsing(q(op.columnName), op.fromType, op.toType)}`
   );
 }
 

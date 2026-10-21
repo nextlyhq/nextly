@@ -40,6 +40,7 @@ import { LinkCard, LinkQuote } from "./src/field-groups/related-link-groups";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
+import { slowWidgetFixturePlugin } from "./src/plugins/slow-widget-fixture/plugin";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
 import { Announcement } from "./src/singles/announcement";
 import { Homepage } from "./src/singles/homepage";
@@ -182,6 +183,11 @@ export default defineConfig({
     formBuilder({ redirectRelationships: { pages: "/{slug}" } }).plugin,
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [styleFixturePlugin]
+      : []),
+    // A card whose data answers as late as a spec asks, for the slow-card
+    // spec; off in a contributor's dev server, where it would be a test double.
+    ...(process.env.NEXTLY_E2E_SLOW_WIDGET === "1"
+      ? [slowWidgetFixturePlugin]
       : []),
     // Refuses the admin by design (a widget whose component the committed map
     // lacks), so only the component-map e2e spec's own server turns it on.

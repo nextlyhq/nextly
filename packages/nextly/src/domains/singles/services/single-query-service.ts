@@ -21,10 +21,8 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { inArray, type AnyColumn } from "drizzle-orm";
 
-import {
-  apiKeyWriteAllowed,
-  type AuthenticatedScope,
-} from "../../../auth/authenticated-scope";
+import { singleGateVerdict } from "../../../auth/access/gate-adapters";
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { SYSTEM_ACTOR } from "../../../auth/request-actor";
 import type { FieldConfig } from "../../../collections/fields/types";
@@ -32,6 +30,7 @@ import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
 import type { Nextly as NextlyDirectAPI } from "../../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   buildContext,
@@ -52,7 +51,6 @@ import {
 } from "../../../lib/status-filter";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
-import { isSuperAdminContext } from "../../../services/access";
 import {
   effectiveRelationshipDepth,
   type CollectionRelationshipService,
@@ -249,7 +247,8 @@ export function buildSingleHookContext<T>(
 /**
  * Check access for a Single operation.
  *
- * Evaluation order:
+ * Asked of the one access decision (`auth/access`), through the adapter that
+ * keeps this gate's answers and their order as they were:
  * 1. `overrideAccess` bypass → null (allow)
  * 2. Super-admin (by authorized role) bypass → null (allow)
  * 3. `routeAuthorized` with a verified user → null: the route middleware
@@ -257,10 +256,10 @@ export function buildSingleHookContext<T>(
  * 4. Anonymous publish/unpublish → 403, whatever any rule says.
  * 5. No user → the Single's own code-defined rule decides, handed a real
  *    anonymous context; a rule that names nothing lets the request through
- *    to the public default. The DB-permission half needs a user and does not
- *    run. Mirrors the collection gate, so one rule gives one answer.
- * 6. No RBAC service → null (skip)
- * 7. RBAC check (super-admin → code-defined → DB permissions)
+ *    to the public default.
+ * 6. No access-control service → null (skip)
+ * 7. The decision for the user or key (super-admin → code-defined →
+ *    permissions)
  * 8. Fail-secure on unexpected errors
  *
  * @returns `null` if access is allowed, `SingleResult` if denied
@@ -299,141 +298,44 @@ export async function checkSingleAccess(params: {
     return null;
   }
 
-  // A call made as a plugin-defined person: the Single's code-defined rule is
-  // the whole decision, through the same check the collection gate asks.
-  // Every path below is a staff, API-key or anonymous path, and none of them
-  // may apply to a person.
-  const principal = currentPrincipal();
-  if (principal !== null) {
-    const allowed =
-      rbacAccessControlService !== undefined &&
-      (await rbacAccessControlService.checkPrincipalCodeAccess({
-        operation,
-        resource: slug,
-        principal,
-      }));
-    return allowed
-      ? null
-      : {
-          success: false,
-          statusCode: 403,
-          message: `Access denied: insufficient permissions for ${operation} on single "${slug}"`,
-        };
-  }
-
-  // Super-admins bypass the RBAC gate on every transport — EXCEPT via a
-  // scoped API key. The bypass belongs to the session path: a key is
-  // authoritative on its OWN stamped scope, never on the owner's roles, so a
-  // read/update-only key issued by an admin is not equivalent to their full
-  // account (mirrors canReadEntity). Otherwise a super-admin-owned, update-only
-  // key could publish.
-  if (authenticatedScope?.actorType !== "apiKey" && isSuperAdminContext(user)) {
-    return null;
-  }
-
-  // The route middleware already ran this exact RBAC gate; skip the redundant
-  // re-check — but only when a verified user is present, so a caller that sets
-  // routeAuthorized without authenticating cannot silently allow an anonymous
-  // write. Field-level write access still applies downstream (overrideAccess is
-  // false).
-  if (routeAuthorized && user) {
-    return null;
-  }
-
-  // Secure-by-default publish gate: publishing/unpublishing changes a document's
-  // privileged published state, so an anonymous caller may never do it. Without
-  // this the operation falls through to the permission-less public default below
-  // (`!user` → allow), letting an unauthenticated caller publish a
-  // publicly-writable Single.
-  if (!user && (operation === "publish" || operation === "unpublish")) {
-    return {
-      success: false,
-      statusCode: 403,
-      message: `Access denied: ${operation} on single "${slug}" requires an authenticated user`,
-    };
-  }
-
-  if (!user) {
-    // A caller with NO session, judged against the Single's own code-defined
-    // rule. Everything below resolves roles and permissions from a user id, so
-    // without one the DB-permission half has nothing to check — but the rule
-    // reads nothing off the caller, and `read: false` or
-    // `read: ({ user }) => !!user` on a Single describes this caller most
-    // clearly of all. Left unasked here, the same rule refused an anonymous
-    // reader on a collection and admitted one on a Single.
-    //
-    // `undefined` means no code-defined rule governs the operation, and the
-    // request falls through to the public default. A boolean is the verdict.
-    const allowed = await rbacAccessControlService?.checkAnonymousCodeAccess({
-      operation,
-      resource: slug,
-    });
-    if (allowed === false) {
-      return {
-        success: false,
-        statusCode: 403,
-        message: `Access denied: insufficient permissions for ${operation} on single "${slug}"`,
-      };
-    }
-    return null;
-  }
-
-  // A scoped API key is authorized on its OWN stamped grants, not the key
-  // owner's: the route only checked `update` against the key's scope, so this
-  // publish/unpublish re-check must consult the key's own permission list AND
-  // the code-defined access rule against that scope. `apiKeyWriteAllowed`
-  // returns null for a non-API-key caller, falling through to the owner/session
-  // RBAC path below.
-  const scopeDecision = await apiKeyWriteAllowed(
-    authenticatedScope,
-    operation,
+  // Asked of the one access decision, through the adapter that keeps this
+  // gate's answers as they were (`auth/access/gate-adapters`).
+  const verdict = await singleGateVerdict({
     slug,
+    action: operation,
     user,
-    rbacAccessControlService
-  );
-  if (scopeDecision !== null) {
-    return scopeDecision
-      ? null
-      : {
-          success: false,
-          statusCode: 403,
-          message: `Access denied: insufficient permissions for ${operation} on single "${slug}"`,
-        };
-  }
+    routeAuthorized,
+    scope: authenticatedScope,
+    principal: currentPrincipal(),
+    rules: rbacAccessControlService,
+  });
+  if (verdict.allowed) return null;
 
-  if (!rbacAccessControlService) {
-    return null;
-  }
-
-  try {
-    const allowed = await rbacAccessControlService.checkAccess({
-      userId: user.id,
-      operation,
-      resource: slug,
-    });
-    if (!allowed) {
-      return {
-        success: false,
-        statusCode: 403,
-        message: `Access denied: insufficient permissions for ${operation} on single "${slug}"`,
-      };
-    }
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
+  if (verdict.refusal === "failed") {
+    const error = verdict.error;
     logger.error("RBAC access check failed for Single", {
       slug,
       operation,
-      userId: user.id,
-      error: message,
+      userId: user?.id,
+      error: error instanceof Error ? error.message : String(error),
     });
+    // A typed refusal keeps its own code and status (a busy database is
+    // DATABASE_BUSY, 503).
     return {
       success: false,
       statusCode: 500,
       message: "Failed to verify RBAC permissions",
+      ...errorEnvelopeFields(error),
     };
   }
-
-  return null;
+  return {
+    success: false,
+    statusCode: 403,
+    message:
+      verdict.refusal === "unauthenticated"
+        ? `Access denied: ${operation} on single "${slug}" requires an authenticated user`
+        : `Access denied: insufficient permissions for ${operation} on single "${slug}"`,
+  };
 }
 
 // ============================================================

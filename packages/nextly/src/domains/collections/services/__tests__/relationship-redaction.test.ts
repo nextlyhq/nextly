@@ -32,6 +32,10 @@ vi.mock("../../../../services/lib/permissions", async importOriginal => ({
     typeof import("../../../../services/lib/permissions")
   >()),
   hasPermission: vi.fn().mockResolvedValue(true),
+  // A field rule is handed the caller's roles and grants; with no database
+  // behind this suite the real lookups refuse, so they answer here.
+  listRoleSlugsForUser: vi.fn().mockResolvedValue([]),
+  listEffectiveGrants: vi.fn().mockResolvedValue([]),
 }));
 
 // getSystemEntityTable() resolves the users table via env.DB_DIALECT (not the

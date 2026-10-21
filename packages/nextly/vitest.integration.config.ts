@@ -19,6 +19,8 @@ export default defineConfig({
     globals: true,
     environment: "node",
     setupFiles: ["./src/__tests__/setup.ts"],
+    // Prints the run's transaction escapes, grouped by call site, at its end.
+    globalSetup: ["./src/__tests__/transaction-escapes-inventory.ts"],
     include: ["src/**/*.integration.test.ts"],
     exclude: ["node_modules", "dist", ".turbo", "**/*.d.ts"],
     // Why longer timeouts: integration tests do real DB I/O, schema setup,

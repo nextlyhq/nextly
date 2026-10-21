@@ -498,8 +498,11 @@ export interface WidgetProps<W extends AnyWidget> {
   retry: () => void;
 }
 
-/** The component path a widget declares, for one drawn by its own component. */
-type ComponentPathOf<W> = W extends {
+/**
+ * The component path a widget declares, for one drawn by its own component. Exported for the
+ * site's generated component map, which keeps only the widgets whose path is a literal.
+ */
+export type ComponentPathOf<W> = W extends {
   readonly display: { component: infer Path extends string };
 }
   ? Path

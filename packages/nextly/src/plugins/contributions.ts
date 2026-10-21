@@ -15,6 +15,7 @@ import type { SchemaHook } from "../domains/schema/extension/draft";
 import type { TableDefinition } from "../domains/schema/extension/dsl";
 import type { PluginMigration } from "../domains/schema/migrate/plugin/plugin-migration";
 import type { DashboardContribution } from "../domains/widgets/declaration/dashboard";
+import type { AnyWidget } from "../domains/widgets/declaration/define-widget";
 import type { FieldGroupConfig } from "../field-groups/config/types";
 import type { SingleConfig } from "../singles/config/types";
 
@@ -157,6 +158,20 @@ export interface PluginEmailTemplate {
    * password").
    */
   description?: string;
+  /**
+   * @experimental Mark a template that carries a secret: a sign-in, reset or
+   * verification link or code. Such a template takes no `cc` or `bcc`, and
+   * any stored on it are not sent, so nobody who can edit templates can copy
+   * themselves on it. Leave it unset only on a template whose every copy is
+   * harmless to share; it cannot be changed from the admin.
+   */
+  carriesSecret?: boolean;
+  /**
+   * @experimental The Reply-To the template starts with, which may use the
+   * send's variables (for example `{{customerEmail}}`). After the first boot
+   * it is the site's setting, as the provider and From are.
+   */
+  replyTo?: string;
 }
 
 /**
@@ -567,8 +582,12 @@ export type PermissionSlug = GeneratedTypes extends { permissions: infer P }
  * @public Each key is *consumed* by a phase: collections/singles/components/
  * extend → P2 (merge pipeline); permissions → P3; events → P1; routes → P4;
  * admin → P5 (menu/pages/settings/views; widgets reserved for M8).
+ *
+ * `W` is the plugin's dashboard widgets, which `definePlugin` infers so their ids, component
+ * paths and props survive to the site's config. It defaults to any widget, today's type, for a
+ * plugin written without `definePlugin` or in plain JavaScript.
  */
-export interface PluginContributions {
+export interface PluginContributions<W extends AnyWidget = AnyWidget> {
   /**
    * @experimental Tables and indexes of the plugin's own.
    *
@@ -757,7 +776,7 @@ export interface PluginContributions {
    * default dashboard; core and the site config decide. Beside today's
    * `admin.widgets` and `widgetSources`, which keep working.
    */
-  dashboard?: DashboardContribution;
+  dashboard?: DashboardContribution<W>;
   /**
    * @experimental Auth extensibility: auth-flow hooks, challenge
    * definitions, and auth-page UI. Strategies are app-opt-in (defineConfig

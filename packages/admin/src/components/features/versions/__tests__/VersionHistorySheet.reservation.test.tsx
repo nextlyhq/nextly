@@ -42,6 +42,13 @@ vi.mock("@admin/hooks/queries/useVersions", () => ({
   useVersion: () => ({ data: undefined, isLoading: false, error: null }),
   useRestoreVersion: () => ({ mutate: vi.fn(), isPending: false }),
   useSetVersionLabel: () => ({ mutate: vi.fn(), isPending: false }),
+  useDocumentEvents: () => ({
+    data: { pages: [{ items: [], meta: { total: 0 } }] },
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    fetchNextPage: vi.fn(),
+  }),
+  useVersionDiff: () => ({ data: undefined, isLoading: false, isError: false }),
 }));
 
 /**

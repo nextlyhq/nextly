@@ -286,6 +286,18 @@ export type {
   UpdateEmailTemplateArgs,
   DeleteEmailTemplateArgs,
   PreviewEmailTemplateArgs,
+  // @experimental Template ownership: what `override`, `reset`, `compare`,
+  // `applyUpdate` and `undoUpdate` take and return.
+  OverrideEmailTemplateArgs,
+  ResetEmailTemplateArgs,
+  CompareEmailTemplateArgs,
+  ApplyEmailTemplateUpdateArgs,
+  UndoEmailTemplateUpdateArgs,
+  EmailTemplateComparison,
+  EmailTemplateVersion,
+  OwnerChange,
+  OwnerChangeChoice,
+  OwnerUpdateUndo,
   // User Field types
   FindUserFieldsArgs,
   FindUserFieldByIDArgs,
@@ -640,6 +652,12 @@ export {
   type WidgetRenderSize,
   type WidgetWidth,
 } from "./domains/widgets/declaration/public";
+// @experimental The check a site's generated admin component map applies, and what it reads:
+// the widgets a config declares, kept as types from `definePlugin` through `defineConfig`.
+export type {
+  DeclaredComponentMap,
+  WidgetsOf,
+} from "./plugins/declared-widgets";
 
 // The widget domain's public surface: the registry every core and
 // plugin-contributed widget shares, the source registry a query names, and
@@ -701,7 +719,9 @@ export {
   callerReadOptions,
   type WidgetSourceResolver,
   type PluginSourceResolver,
+  type PluginManySourceResolver,
   type ResolverOptions,
+  type WidgetScope,
   type PluginWidgetSource,
   type ReadCaller,
 } from "./domains/widgets";

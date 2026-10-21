@@ -25,6 +25,7 @@ import {
   rememberForRequest,
 } from "../../auth/access/request-memo";
 import type { GrantedPermission } from "../../auth/authenticated-scope";
+import { isDatabaseBusy } from "../../database/errors";
 import { getDialectTables } from "../../database/index";
 import { container } from "../../di/container";
 import { PermissionCacheService } from "../../domains/auth/services/permission-cache-service";
@@ -894,8 +895,11 @@ export async function listEffectivePermissions(
  * `<resource>:<action>` spelling too, and a slug cannot be rebuilt from its
  * parts: `manage-api-keys` grants `update` on `api-keys`.
  *
- * Empty for a missing user id, and empty if the lookup fails (fail-closed):
- * a rule that asks for a permission then denies rather than opens.
+ * Empty for a missing user id. A lookup that fails refuses rather than
+ * answering empty: an empty list only denies a rule that asks for a
+ * permission, and allows one that asks for the absence of one.
+ *
+ * @throws NextlyError when the permissions cannot be read.
  */
 export async function listEffectiveGrants(
   userId: string,
@@ -923,15 +927,33 @@ export async function listEffectiveGrants(
         loadEffectiveGrants(userId)
       )),
     ];
-  } catch (error) {
-    getAuthLogger()?.log?.("error", {
-      category: "auth",
-      op: "permissions",
-      userId,
-      error: String(error),
-    });
-    return []; // fail-closed
+  } catch (cause) {
+    throw unreadable(cause, { reason: "permissions-unreadable", userId });
   }
+}
+
+/**
+ * The refusal for a role or permission set that could not be read: "database
+ * busy" when the read waited out its connection bound, and an internal error
+ * otherwise. Thrown rather than answered with an empty set, which a rule
+ * reads as a caller holding nothing.
+ */
+function unreadable(
+  cause: unknown,
+  logContext: Record<string, unknown>
+): NextlyError {
+  // Logged here, where the failure is known: a field rule that receives the
+  // refusal is denied by its own guard, which records nothing of why.
+  getAuthLogger()?.log?.("error", {
+    category: "auth",
+    op: "permissions",
+    ...logContext,
+    error: String(cause),
+  });
+  const error = cause instanceof Error ? cause : undefined;
+  return isDatabaseBusy(cause)
+    ? NextlyError.databaseBusy({ cause: error, logContext })
+    : NextlyError.internal({ cause: error, logContext });
 }
 
 /** The lookup behind {@link listEffectiveGrants}; throws on a failed read. */
@@ -1606,41 +1628,6 @@ export async function hasSuperAdminExcluding(
 }
 
 /**
- * Check if any of the given role IDs belongs to the super-admin role.
- *
- * Used for role-assignment protection: prevents non-super-admins from
- * assigning the super_admin role to any user via create/update user or
- * individual role-assignment endpoints.
- *
- * @param roleIds - Array of role IDs to check
- * @returns `true` if any role ID has the slug `super-admin`
- */
-export async function containsSuperAdminRole(
-  roleIds: string[]
-): Promise<boolean> {
-  if (!roleIds || roleIds.length === 0) return false;
-
-  try {
-    const t = getTablesLazy();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { roles } = t as any;
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rows = await (getDb() as any)
-      .select({ id: roles.id })
-      .from(roles)
-      .where(and(inArray(roles.id, roleIds), eq(roles.slug, "super-admin")))
-      .limit(1);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (rows as any[]).length > 0;
-  } catch {
-    // fail-open: don't break normal flow if we can't check
-    return false;
-  }
-}
-
-/**
  * Get role slugs for a user by resolving role IDs to slugs.
  *
  * Used by the RBAC AccessControlService to build context for code-defined
@@ -1648,23 +1635,18 @@ export async function containsSuperAdminRole(
  *
  * @param userId - The user ID
  * @returns Array of role slugs (e.g., ['super-admin', 'editor'])
+ * @throws NextlyError when the roles cannot be read: DATABASE_BUSY when the
+ *   read waited out its connection bound, an internal error otherwise.
  */
 export async function listRoleSlugsForUser(
   userId: string,
   // Optional transaction-bound executor; see `hasPermission`.
   executor?: unknown
 ): Promise<string[]> {
-  try {
-    return await listRoleSlugsForUserStrict(userId, executor);
-  } catch (error) {
-    getAuthLogger()?.log?.("error", {
-      category: "auth",
-      op: "permissions",
-      userId,
-      error: String(error),
-    });
-    return [];
-  }
+  // A role set that cannot be read refuses rather than answering empty: an
+  // empty set only denies a rule that asks for a role, and allows one that
+  // asks for the absence of one.
+  return listRoleSlugsForUserOrRefuse(userId, executor);
 }
 
 /**
@@ -1690,10 +1672,7 @@ export async function listRoleSlugsForUserOrRefuse(
   try {
     return await listRoleSlugsForUserStrict(userId, executor);
   } catch (cause) {
-    throw NextlyError.internal({
-      ...(cause instanceof Error ? { cause } : {}),
-      logContext: { reason: "roles-unreadable", userId },
-    });
+    throw unreadable(cause, { reason: "roles-unreadable", userId });
   }
 }
 

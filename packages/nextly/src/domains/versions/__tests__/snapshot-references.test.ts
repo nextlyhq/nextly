@@ -38,7 +38,10 @@ vi.mock("../../../di/container", () => ({
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { UserContext } from "../../singles/types";
-import { hydrateSnapshotReferences } from "../snapshot-references";
+import {
+  hydrateSnapshotReferences,
+  walkReferenceFields,
+} from "../snapshot-references";
 
 const user = { id: "u1", roles: ["editor"] } as unknown as UserContext;
 
@@ -111,6 +114,8 @@ describe("hydrateSnapshotReferences", () => {
       url: "/u",
       thumbnailUrl: "/t",
       mimeType: "image/png",
+      // The media fixture carries no alt text.
+      alt: null,
     });
   });
 
@@ -299,5 +304,50 @@ describe("hydrateSnapshotReferences", () => {
     );
 
     expect(snapshot.owner).toEqual({ id: "o1", label: "T-o1" });
+  });
+});
+
+describe("walkReferenceFields", () => {
+  // A component holding a protected relationship beside an open one. The two
+  // preview cases above pin that hydration leaves the protected one bare; these
+  // pin the walk's option directly, so the preview's default cannot drift.
+  const component = fields({
+    name: "blocks",
+    type: "component",
+    componentSchemas: {
+      quote: {
+        fields: [
+          { name: "cite", type: "relationship", relationTo: "authors" },
+          {
+            name: "secret",
+            type: "relationship",
+            relationTo: "authors",
+            access: { read: () => false },
+          },
+        ],
+      },
+    },
+  });
+  const visited = (options?: { includeReadRuleFields?: boolean }): string[] => {
+    const names: string[] = [];
+    walkReferenceFields(
+      { blocks: [{ _componentType: "quote", cite: "a1", secret: "a2" }] },
+      component,
+      (_field, _holder, name) => names.push(name),
+      false,
+      options
+    );
+    return names;
+  };
+
+  it("skips a protected field inside a component by default, as the preview needs", () => {
+    expect(visited()).toEqual(["cite"]);
+  });
+
+  it("visits it when the caller judges read rules itself", () => {
+    expect(visited({ includeReadRuleFields: true })).toEqual([
+      "cite",
+      "secret",
+    ]);
   });
 });

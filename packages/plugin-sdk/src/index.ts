@@ -734,8 +734,11 @@ export type {
  * Type a contributed resolver as `PluginSourceResolver`, not
  * `WidgetSourceResolver`: the latter is core's own shape and rejects the
  * `PluginContext` parameter a plugin needs to read any data. `ResolverOptions`
- * is what the host passes beside the question -- a cancellation signal today --
- * and is published so a standalone resolver can annotate that parameter.
+ * is what the host passes beside the question -- a cancellation signal, and the
+ * batch's shared work as a `WidgetScope` -- and is published so a standalone
+ * resolver can annotate that parameter. `PluginManySourceResolver` types the
+ * optional `resolveMany`, which answers several of a source's queries in one
+ * call; it and `WidgetScope` are `@experimental`.
  *
  * `callerReadOptions(caller)` turns the caller a resolver is handed into the
  * `ServiceOpts` a managed read takes. Use it rather than assembling them: the
@@ -779,7 +782,9 @@ export {
   callerReadOptions,
   type WidgetSourceResolver,
   type PluginSourceResolver,
+  type PluginManySourceResolver,
   type ResolverOptions,
+  type WidgetScope,
   type PluginWidgetSource,
   type ReadCaller,
 } from "nextly";
@@ -799,3 +804,29 @@ export { sanitizeAdminPath, DEFAULT_ADMIN_PATH } from "nextly";
  * @experimental
  */
 export { collectDeclarations } from "nextly";
+
+/**
+ * @experimental `markHtml` — mark HTML a plugin's own code built so an email
+ *   template writes it unescaped.
+ *
+ * A template escapes every value it writes; the mark is what turns that off.
+ * Only code marks HTML, and only markup that code built itself: never a value
+ * from a request, a form, a stored row or another plugin, since marking it
+ * lets whatever it holds into the email as markup.
+ *
+ * Re-exported here so a plugin reaches it through the package it builds
+ * against. The same function as the `nextly` root's, so a mark made here is
+ * one the template engine recognises.
+ */
+export { markHtml } from "nextly";
+/**
+ * @experimental `TrustedHtml` is what `markHtml` returns. Tagged on its own
+ *   declaration: a release tag applies to the declaration it precedes.
+ */
+export { TrustedHtml } from "nextly";
+/**
+ * @experimental `EmailTemplateData` is the data a template is rendered with:
+ *   lists and objects as well as strings, and a `TrustedHtml` wherever code
+ *   marked a value.
+ */
+export type { EmailTemplateData } from "nextly";

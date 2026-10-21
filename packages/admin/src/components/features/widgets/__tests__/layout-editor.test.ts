@@ -18,7 +18,7 @@ import {
   moveAvailability,
   moveEarlier,
   moveLater,
-  movePlacementTo,
+  movePlacementToPosition,
   moveToEnd,
   moveToStart,
   newPlacementId,
@@ -187,25 +187,70 @@ describe("where a card is drawn", () => {
   });
 });
 
-describe("a drag", () => {
-  it("puts the dragged card where the target was", () => {
-    expect(ids(movePlacementTo(placements("a", "b", "c"), "a", "c"))).toEqual([
+describe("a drag released over a drop line", () => {
+  it("puts the card at its final position, counted among the others", () => {
+    const list = placements("a", "b", "c", "d");
+    expect(ids(movePlacementToPosition(list, "a", 2))).toEqual([
       "b",
       "c",
       "a",
+      "d",
     ]);
-    expect(ids(movePlacementTo(placements("a", "b", "c"), "c", "a"))).toEqual([
-      "c",
+    expect(ids(movePlacementToPosition(list, "d", 0))).toEqual([
+      "d",
       "a",
       "b",
+      "c",
+    ]);
+    // The last position: after every other card.
+    expect(ids(movePlacementToPosition(list, "a", 3))).toEqual([
+      "b",
+      "c",
+      "d",
+      "a",
     ]);
   });
 
-  it("leaves the order alone for a drop on nothing or on itself", () => {
-    const list = placements("a", "b");
-    expect(ids(movePlacementTo(list, "a", "nope"))).toEqual(["a", "b"]);
-    expect(ids(movePlacementTo(list, "nope", "a"))).toEqual(["a", "b"]);
-    expect(ids(movePlacementTo(list, "a", "a"))).toEqual(["a", "b"]);
+  it("lands beside the card it passes, a removed card staying on the far side, as the menu does", () => {
+    // 🔴 Anchored before the card now at `final` either way, "a" moved later would land after
+    // the removed "x", where Move later puts it before: one gesture, two orders to save.
+    expect(ids(movePlacementToPosition(withRemoved(), "a", 1))).toEqual(
+      ids(moveLater(withRemoved(), "a"))
+    );
+    expect(ids(movePlacementToPosition(withRemoved(), "a", 1))).toEqual([
+      "b",
+      "a",
+      "x",
+      "c",
+      "d",
+    ]);
+    expect(ids(movePlacementToPosition(withRemoved(), "d", 2))).toEqual([
+      "a",
+      "b",
+      "x",
+      "d",
+      "c",
+    ]);
+  });
+
+  it("leaves the order alone for a drop where it was, or for an unknown card", () => {
+    const list = placements("a", "b", "c");
+    expect(ids(movePlacementToPosition(list, "b", 1))).toEqual(["a", "b", "c"]);
+    expect(ids(movePlacementToPosition(list, "nope", 0))).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("clamps a position past either end", () => {
+    const list = placements("a", "b", "c");
+    expect(ids(movePlacementToPosition(list, "b", 9))).toEqual(["a", "c", "b"]);
+    expect(ids(movePlacementToPosition(list, "b", -3))).toEqual([
+      "b",
+      "a",
+      "c",
+    ]);
   });
 });
 

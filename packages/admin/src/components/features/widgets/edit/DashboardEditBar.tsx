@@ -63,23 +63,30 @@ export interface DashboardEditBarProps {
   children?: ReactNode;
 }
 
-/** The bar's title, and the marker that says the draft differs from the saved one. */
-function BarTitle({ hasUnsavedChanges }: { hasUnsavedChanges: boolean }) {
+/** The bar's title: short where the bar is one phone's width, so Cancel and Save fit beside it. */
+function BarTitle() {
   return (
     // A paragraph, not a heading: the page keeps ONE level-one heading, the
     // welcome's, and this names a mode rather than a section of the outline.
-    <p className="flex flex-wrap items-center gap-x-2 text-sm font-semibold text-foreground">
-      Customizing your dashboard
-      {hasUnsavedChanges ? (
-        <span
-          className="inline-flex items-center gap-1.5 text-xs font-normal text-muted-foreground"
-          data-testid="dashboard-edit-unsaved"
-        >
-          <span aria-hidden className="size-1.5 rounded-full bg-warning" />
-          Unsaved changes
-        </span>
-      ) : null}
+    <p className="order-2 min-w-0 flex-1 text-center text-sm font-semibold text-foreground @min-[640px]/dashboard:text-left">
+      <span className="@min-[640px]/dashboard:hidden">Customizing</span>
+      <span className="hidden @min-[640px]/dashboard:inline">
+        Customizing your dashboard
+      </span>
     </p>
+  );
+}
+
+/** The marker that says the draft differs from the saved one. */
+function UnsavedMarker() {
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
+      data-testid="dashboard-edit-unsaved"
+    >
+      <span aria-hidden className="size-1.5 rounded-full bg-warning" />
+      Unsaved changes
+    </span>
   );
 }
 
@@ -94,10 +101,40 @@ function BarHint({ isResetStaged }: { isResetStaged: boolean }) {
       className="text-xs text-muted-foreground"
       data-testid="dashboard-edit-status"
     >
-      {isResetStaged
-        ? "Showing the default dashboard. Save to keep it, or Cancel to go back to yours."
-        : "Drag a card by its handle, or use its menu. Only you see this layout."}
+      {isResetStaged ? (
+        "Showing the default dashboard. Save to keep it, or Cancel to go back to yours."
+      ) : (
+        <>
+          {/* The handles are drawn only where dragging is on: at one column, the menu alone. */}
+          <span className="@min-[640px]/dashboard:hidden">
+            Use a card&apos;s menu to move, resize or remove it.
+          </span>
+          <span className="hidden @min-[640px]/dashboard:inline">
+            Drag a card by its handle, or use its menu.
+          </span>{" "}
+          Only you see this layout.
+        </>
+      )}
     </p>
+  );
+}
+
+/**
+ * The line under the title: whether the draft differs from the saved one, and the hint. A row of
+ * its own across the bar where the bar is one phone's width.
+ */
+function BarStatus({
+  hasUnsavedChanges,
+  isResetStaged,
+}: {
+  hasUnsavedChanges: boolean;
+  isResetStaged: boolean;
+}) {
+  return (
+    <div className="order-4 flex basis-full flex-wrap items-center justify-center gap-x-2 @min-[640px]/dashboard:justify-start">
+      {hasUnsavedChanges ? <UnsavedMarker /> : null}
+      <BarHint isResetStaged={isResetStaged} />
+    </div>
   );
 }
 
@@ -121,14 +158,8 @@ export function DashboardEditBar({
   if (!isEditing) {
     return (
       <>
-        {/* `hidden md:flex`: a breakpoint in CSS rather than a width read in
-            JavaScript, so the offer cannot disagree with what the page draws.
-            `display: none` also takes the control out of the accessibility
-            tree, so it is not offered to a screen reader either. */}
-        <div
-          className="hidden justify-end md:flex"
-          data-testid="dashboard-edit-offer"
-        >
+        {/* Offered at every width: on one column the card menu does everything a drag does. */}
+        <div className="flex justify-end" data-testid="dashboard-edit-offer">
           <Button
             ref={customizeRef}
             type="button"
@@ -174,13 +205,24 @@ export function DashboardEditBar({
       className="sticky top-0 z-20 space-y-3 rounded-lg border border-border bg-card px-5 py-3 shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
       data-testid="dashboard-edit-bar"
     >
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <div className="mr-auto min-w-0">
-          <BarTitle hasUnsavedChanges={hasUnsavedChanges} />
-          <BarHint isResetStaged={isResetStaged} />
+      {/* One column: Cancel leading, a short title, Save trailing; the unsaved marker and the
+          hint on a row of their own beneath, the full width, rather than squeezed between the two
+          buttons; then Add widget and Reset, as an edit mode's bar is laid out on a phone. Wider:
+          the title over the marker and hint, then every action on one row. Switched at the
+          dashboard's own one-column width (the `@container/dashboard` 640 px band), the width
+          that turns dragging off, so the bar and the hint change with it. Below it the title's
+          block is `contents`, so the title and the status line each take their own place in the
+          row. The DOM keeps the wide order, which the keyboard follows. */}
+      <div className="flex flex-wrap items-center gap-2 @min-[640px]/dashboard:gap-x-4">
+        <div className="contents @min-[640px]/dashboard:order-1 @min-[640px]/dashboard:mr-auto @min-[640px]/dashboard:block @min-[640px]/dashboard:min-w-0">
+          <BarTitle />
+          <BarStatus
+            hasUnsavedChanges={hasUnsavedChanges}
+            isResetStaged={isResetStaged}
+          />
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="order-5 flex basis-full flex-wrap items-center gap-2 @min-[640px]/dashboard:order-2 @min-[640px]/dashboard:basis-auto">
           {/* Opens the add panel, which only stages cards in the draft, so it
               waits for no write. */}
           <Button
@@ -218,33 +260,35 @@ export function DashboardEditBar({
               Reset
             </Button>
           ) : null}
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onCancel}
-            disabled={isWriting}
-            data-testid="dashboard-edit-cancel"
-          >
-            <Icons.X aria-hidden className="mr-2 size-4" />
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            onClick={onSave}
-            // Disabled with nothing to save, so pressing it cannot spend a
-            // write — and a write is not free here: it is guarded, so a
-            // pointless one can still come back a conflict and send the
-            // reader to reload for nothing.
-            disabled={isWriting || !hasUnsavedChanges}
-            data-testid="dashboard-edit-save"
-          >
-            <Icons.Check aria-hidden className="mr-2 size-4" />
-            {isSaving ? "Saving…" : "Save"}
-          </Button>
         </div>
+
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onCancel}
+          disabled={isWriting}
+          className="order-1 @min-[640px]/dashboard:order-3"
+          data-testid="dashboard-edit-cancel"
+        >
+          <Icons.X aria-hidden className="mr-2 size-4" />
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          onClick={onSave}
+          // Disabled with nothing to save, so pressing it cannot spend a
+          // write — and a write is not free here: it is guarded, so a
+          // pointless one can still come back a conflict and send the
+          // reader to reload for nothing.
+          disabled={isWriting || !hasUnsavedChanges}
+          className="order-3 @min-[640px]/dashboard:order-4"
+          data-testid="dashboard-edit-save"
+        >
+          <Icons.Check aria-hidden className="mr-2 size-4" />
+          {isSaving ? "Saving…" : "Save"}
+        </Button>
       </div>
       {children}
     </div>

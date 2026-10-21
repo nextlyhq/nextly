@@ -12,7 +12,9 @@
  *                            all in one transaction
  *                            — unless its last attempt failed and may have
  *                            stopped part-way: it ran outside a transaction,
- *                            or on MySQL (`assertNotPartiallyApplied`).
+ *                            or on MySQL (`assertNotPartiallyApplied`), and
+ *                            the snapshot does not prove its whole effect
+ *                            (`schemaOnly`).
  *   - neither              → DRIFT: throw NEXTLY_MIGRATION_DRIFT.
  *
  * Two snapshots are equivalent when the diff engine finds no difference.
@@ -99,6 +101,16 @@ export interface ReconcileFileArgs {
      * in one.
      */
     transaction?: boolean;
+    /**
+     * True for a unit whose whole effect the snapshot shows: a plugin module
+     * whose statements change only the schema and are exactly what its two
+     * sides render to (the runner's `provenBySnapshot`). A database standing
+     * at its target then proves it ran, so it is recorded applied even when
+     * its last attempt did not finish (`assertNotPartiallyApplied` guards
+     * against a statement the snapshot cannot see, and it has none). Absent —
+     * an app file, which has no such proof — such an attempt is refused.
+     */
+    schemaOnly?: boolean;
   };
   before: NextlySchemaSnapshot;
   target: NextlySchemaSnapshot;
@@ -404,35 +416,95 @@ export async function assertNotPartiallyApplied(
   });
 }
 
+/** How one kind of operation reads as a drift item. */
+type DriftItemOf = {
+  [K in Operation["type"]]: (op: Extract<Operation, { type: K }>) => DriftItem;
+};
+
+/**
+ * One entry per operation kind, keyed by the union itself, so a kind added to
+ * `Operation` fails to compile here until it says what it names, rather than
+ * reaching the operator as an unnamed difference.
+ */
+const DRIFT_ITEMS: DriftItemOf = {
+  add_table: op => ({
+    kind: "+",
+    detail: `table '${op.table.name}' present in DB`,
+  }),
+  drop_table: op => ({
+    kind: "-",
+    detail: `table '${op.tableName}' absent from DB`,
+  }),
+  rename_table: op => ({
+    kind: "?",
+    detail: `table '${op.fromName}' stands as '${op.toName}' in DB`,
+  }),
+  add_column: op => ({
+    kind: "+",
+    detail: `${op.tableName}.${op.column.name} present in DB`,
+  }),
+  drop_column: op => ({
+    kind: "-",
+    detail: `${op.tableName}.${op.columnName} absent from DB`,
+  }),
+  rename_column: op => ({
+    kind: "?",
+    detail: `${op.tableName}.${op.fromColumn} stands as ${op.tableName}.${op.toColumn} in DB`,
+  }),
+  change_column_type: op => ({
+    kind: "?",
+    detail: `${op.tableName}.${op.columnName} is ${op.toType} in DB, not ${op.fromType}`,
+  }),
+  change_column_nullable: op => ({
+    kind: "?",
+    detail: `${op.tableName}.${op.columnName} is ${op.toNullable ? "nullable" : "NOT NULL"} in DB`,
+  }),
+  change_column_default: op => ({
+    kind: "?",
+    detail: `${op.tableName}.${op.columnName} defaults to ${op.toDefault ?? "nothing"} in DB, not ${op.fromDefault ?? "nothing"}`,
+  }),
+  add_index: op => ({
+    kind: "+",
+    detail: `index '${op.index.name}' on '${op.tableName}' present in DB`,
+  }),
+  drop_index: op => ({
+    kind: "-",
+    detail: `index '${op.index.name}' on '${op.tableName}' absent from DB`,
+  }),
+  add_check: op => ({
+    kind: "+",
+    detail: `check '${op.check.name}' on '${op.tableName}' present in DB`,
+  }),
+  drop_check: op => ({
+    kind: "-",
+    detail: `check '${op.check.name}' on '${op.tableName}' absent from DB`,
+  }),
+  add_foreign_key: op => ({
+    kind: "+",
+    detail: `foreign key '${op.foreignKey.name}' on '${op.tableName}' present in DB`,
+  }),
+  drop_foreign_key: op => ({
+    kind: "-",
+    detail: `foreign key '${op.foreignKey.name}' on '${op.tableName}' absent from DB`,
+  }),
+  change_foreign_key_action: op => ({
+    kind: "?",
+    detail: `foreign key '${op.constraintName}' on '${op.tableName}' is ON DELETE ${op.toOnDelete} ON UPDATE ${op.toOnUpdate} in DB, not ON DELETE ${op.fromOnDelete} ON UPDATE ${op.fromOnUpdate}`,
+  }),
+};
+
+/**
+ * One difference between where a file starts and the live database, naming
+ * the element it is about. Every operation kind is named (`DRIFT_ITEMS`), so
+ * a refusal tells the operator which column, index, check or foreign key to
+ * look at rather than only the kind of change.
+ */
 function toDriftItem(op: Operation): DriftItem {
-  switch (op.type) {
-    case "add_table":
-      return { kind: "+", detail: `table '${op.table.name}' present in DB` };
-    case "add_column":
-      return {
-        kind: "+",
-        detail: `${op.tableName}.${op.column.name} present in DB`,
-      };
-    case "drop_table":
-      return { kind: "-", detail: `table '${op.tableName}' absent from DB` };
-    case "drop_column":
-      return {
-        kind: "-",
-        detail: `${op.tableName}.${op.columnName} absent from DB`,
-      };
-    case "add_index":
-      return {
-        kind: "+",
-        detail: `index '${op.index.name}' on '${op.tableName}' present in DB`,
-      };
-    case "drop_index":
-      return {
-        kind: "-",
-        detail: `index '${op.index.name}' on '${op.tableName}' absent from DB`,
-      };
-    default:
-      return { kind: "?", detail: `${op.type} differs` };
-  }
+  // The table's key and its operation's type are the same member of the
+  // union; TypeScript can't correlate the two through an index, so the
+  // formatter is widened to the union it is only ever called with.
+  const describe = DRIFT_ITEMS[op.type] as (op: Operation) => DriftItem;
+  return describe(op);
 }
 
 /**
@@ -532,9 +604,13 @@ export async function reconcileFile(
     return { state: "in_sync" };
   }
 
-  // ALREADY_APPLIED — live already matches the target → record without running.
+  // ALREADY_APPLIED — live already matches the target → record without running,
+  // unless a failed attempt may have left a statement the snapshot cannot see
+  // undone. A unit that changes only the schema has none.
   if (equiv(live, target)) {
-    await assertNotPartiallyApplied(file, args.dialect, repo);
+    if (file.schemaOnly !== true) {
+      await assertNotPartiallyApplied(file, args.dialect, repo);
+    }
     await adoptFile(args);
     return { state: "already_applied" };
   }

@@ -18,6 +18,8 @@
  * @module components/features/releases/ReleaseListCells
  */
 
+import type { ReactNode } from "react";
+
 import {
   AlertCircle,
   AlertTriangle,
@@ -44,6 +46,7 @@ import type {
   ReleaseReadinessEntry,
 } from "@admin/types/releases";
 
+import { describeHidden } from "./release-hidden";
 import {
   releaseOwnerView,
   describeDocuments,
@@ -56,6 +59,7 @@ import {
 } from "./release-list";
 import { releaseTimeSentence, releaseTimeText } from "./release-time";
 
+/** Each status's icon, drawn beside its word wherever a release's state is shown. */
 const STATUS_ICON: Record<ReleaseRowStatus, typeof Clock> = {
   scheduled: Clock,
   overdue: AlertTriangle,
@@ -76,6 +80,63 @@ export function ReleaseStatusBadge({ status }: { status: ReleaseRowStatus }) {
       <Icon className="size-3.5" aria-hidden />
       {label}
     </Badge>
+  );
+}
+
+/**
+ * Each status's tone, for a mark that is not a badge: the icon's colour, and
+ * a bar a calendar chip draws down its edge. The word carries the state; the
+ * colour only repeats it.
+ */
+export const RELEASE_STATUS_TONE: Record<
+  ReleaseRowStatus,
+  { bar: string; icon: string }
+> = {
+  scheduled: { bar: "bg-primary", icon: "text-primary" },
+  overdue: {
+    bar: "bg-warning-500",
+    icon: "text-warning-600 dark:text-warning-400",
+  },
+  stopped: { bar: "bg-destructive", icon: "text-destructive" },
+  published: {
+    bar: "bg-success-500",
+    icon: "text-success-600 dark:text-success-400",
+  },
+  draft: { bar: "bg-border", icon: "text-muted-foreground" },
+  cancelled: { bar: "bg-muted-foreground/40", icon: "text-muted-foreground" },
+};
+
+/**
+ * Where a release stands, as an icon in its tone and a word in the body's
+ * muted text, for a place too small or too dense for a badge: a calendar
+ * chip, a day's list. The word is drawn in a text colour rather than the
+ * state's, so it reads at full contrast under any brand colour.
+ */
+export function ReleaseStatusMark({
+  status,
+  className,
+  children,
+}: {
+  status: ReleaseRowStatus;
+  className?: string;
+  /** Drawn between the icon and the word, such as the time. */
+  children?: ReactNode;
+}) {
+  const Icon = STATUS_ICON[status];
+  return (
+    <span
+      className={cn(
+        "flex min-w-0 items-center gap-1 text-muted-foreground",
+        className
+      )}
+    >
+      <Icon
+        className={cn("size-3 shrink-0", RELEASE_STATUS_TONE[status].icon)}
+        aria-hidden
+      />
+      {children}{" "}
+      <span className="truncate">{RELEASE_ROW_STATUS[status].label}</span>
+    </span>
   );
 }
 
@@ -245,6 +306,7 @@ function ReadinessLine({
   }
   const summary = summariseReadiness(total, entry);
   const label = describeReadiness(summary);
+  const hidden = describeHidden(entry.hidden);
   return (
     <span className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs @md/table:flex-nowrap @md/table:justify-start @md/table:whitespace-nowrap">
       <Progress
@@ -261,6 +323,9 @@ function ReadinessLine({
           {describeNeedFix(summary.needFix)}
         </span>
       ) : null}
+      {/* Quiet, beside the count it is part of: the reader is told how many
+          documents they cannot open and where, never which. */}
+      {hidden ? <span className="text-muted-foreground">{hidden}</span> : null}
     </span>
   );
 }

@@ -40,6 +40,8 @@ const mockPool = {
     _allConnections: { length: 5 },
     _freeConnections: { length: 3 },
     _connectionQueue: { length: 1 },
+    // The callback pool Drizzle's mysql2 driver binds to, whose `config` it writes to.
+    config: {},
     getConnection: vi.fn(),
     once: vi.fn(),
     removeListener: vi.fn(),
@@ -197,6 +199,25 @@ describe("@nextly/adapter-mysql", () => {
   // ============================================================
   // Pool Configuration
   // ============================================================
+
+  describe("getDrizzle()", () => {
+    it("hands its handles on the pool one $client, with relations or without", async () => {
+      // Each handle is given a view of the pool that reports its queries; made once per pool, so
+      // a caller holding both handles still sees one client, as it did when each held the pool.
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      const notes = mysqlTable("notes", { id: int("id").primaryKey() });
+      type Handle = { $client: unknown };
+
+      const bare = adapter.getDrizzle<Handle>();
+      const relational = adapter.getDrizzle<Handle>(defineRelations({ notes }));
+
+      expect(relational).not.toBe(bare);
+      expect(relational.$client).toBe(bare.$client);
+    });
+  });
 
   describe("Pool Configuration", () => {
     it("should configure pool with URL", async () => {
@@ -633,6 +654,44 @@ describe("@nextly/adapter-mysql", () => {
         expect(restore).toBeGreaterThan(ended);
         expect(mockConnection.release).toHaveBeenCalledTimes(1);
       }
+    });
+
+    it("puts back the lock wait timeout when strict-mode setup fails after it was set", async () => {
+      // Each session change is recorded as it lands: a failure part way through the setup must
+      // still restore what had already been changed, or the connection is pooled carrying it.
+      const answer = mockConnection.query.getMockImplementation();
+      mockConnection.query.mockImplementation((statement: string) =>
+        statement.startsWith("SELECT @@SESSION.innodb_lock_wait_timeout")
+          ? Promise.resolve([[{ timeout: 50 }], []])
+          : statement.startsWith("SELECT @@SESSION.sql_mode")
+            ? Promise.reject(new Error("lost the read"))
+            : answer?.(statement)
+      );
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      mockConnection.query.mockClear();
+      mockConnection.release.mockClear();
+      mockConnection.destroy.mockClear();
+
+      // The setup must reach the strict-mode read and fail on it: a transaction that ignored the
+      // option would commit, and restoring the timeout alone would prove nothing about this path.
+      await expect(
+        adapter.transaction(async () => "done", {
+          timeoutMs: 5000,
+          strictSqlMode: true,
+        })
+      ).rejects.toThrow(/lost the read/);
+
+      const statements = mockConnection.query.mock.calls.map(
+        call => call[0] as string
+      );
+      expect(statements).toContain("SELECT @@SESSION.sql_mode AS mode");
+      expect(statements).not.toContain("COMMIT");
+      expect(statements).toContain("SET SESSION innodb_lock_wait_timeout = 50");
+      expect(mockConnection.release).toHaveBeenCalledTimes(1);
+      mockConnection.query.mockImplementation(answer);
     });
 
     it("destroys a connection whose ROLLBACK failed instead of pooling it", async () => {

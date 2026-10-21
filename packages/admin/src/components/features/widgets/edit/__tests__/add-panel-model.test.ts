@@ -196,6 +196,42 @@ describe("searching the add panel", () => {
     expect(searchAddPanel(rows, query).map(row => row.key)).toEqual(expected);
   });
 
+  describe("a removed one-card plugin widget, listed only under Removed", () => {
+    const removedRows = addPanelRows({
+      placements: [placement("p4", "forms/latest", true)],
+      offered: ["forms/latest"],
+      widgets: WIDGETS,
+      byId,
+    });
+
+    // 🔴 Its Removed row is the only way back, so a search by what the widget's own row would
+    // have been found by must still find it. The plausible slip searches the put-back line alone.
+    it.each([
+      ["its description", "newest submissions"],
+      ["its category", "forms"],
+      ["its group's heading", "plugins"],
+      ["its plugin", "@acme"],
+    ])("is found by %s", (_how, query) => {
+      expect(searchAddPanel(removedRows, query).map(row => row.key)).toEqual([
+        "removed:p4",
+      ]);
+    });
+
+    it("still says how it comes back, and stays out of any sub-group", () => {
+      const [row] = removedRows;
+      expect(row).toMatchObject({
+        section: "removed",
+        description: REMOVED_ROW_DESCRIPTION,
+      });
+      expect(row.subgroup).toBeUndefined();
+      expect(addPanelGroups(removedRows)[0].subgroups).toEqual([]);
+    });
+
+    it("is not found by text the widget does not carry", () => {
+      expect(searchAddPanel(removedRows, "invoices")).toEqual([]);
+    });
+  });
+
   it("keeps every row for an empty or blank query", () => {
     expect(searchAddPanel(rows, "   ")).toHaveLength(rows.length);
   });

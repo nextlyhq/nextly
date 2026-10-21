@@ -46,6 +46,9 @@ import { emailDeliveriesSqlite } from "../../../schemas/email-deliveries/sqlite"
 import { emailProvidersMysql } from "../../../schemas/email-providers/mysql";
 import { emailProvidersPg } from "../../../schemas/email-providers/postgres";
 import { emailProvidersSqlite } from "../../../schemas/email-providers/sqlite";
+import { emailSendClaimsMysql } from "../../../schemas/email-send-claims/mysql";
+import { emailSendClaimsPg } from "../../../schemas/email-send-claims/postgres";
+import { emailSendClaimsSqlite } from "../../../schemas/email-send-claims/sqlite";
 import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
 import { deliveriesTableFor } from "../deliveries-table";
 import { ERASED_RECIPIENT_HASH, recipientDigest } from "../delivery-record";
@@ -72,7 +75,11 @@ const ERASED = "erase-me@example.com";
 const KEPT = "someone-else@example.com";
 
 /** The fixed-name system tables these suites build, which every suite in a run shares. */
-const SHARED_TABLES = ["email_deliveries", "email_providers"];
+const SHARED_TABLES = [
+  "email_deliveries",
+  "email_providers",
+  "email_send_claims",
+];
 
 const DIALECTS: Array<{
   dialect: SupportedDialect;
@@ -84,19 +91,23 @@ const DIALECTS: Array<{
     dialect: "postgresql",
     url: process.env.TEST_POSTGRES_URL ?? null,
     make: url => createPostgresAdapter({ url }) as unknown as TestAdapter,
-    tables: { emailProvidersPg, emailDeliveriesPg },
+    tables: { emailProvidersPg, emailDeliveriesPg, emailSendClaimsPg },
   },
   {
     dialect: "mysql",
     url: process.env.TEST_MYSQL_URL ?? null,
     make: url => createMySqlAdapter({ url }) as unknown as TestAdapter,
-    tables: { emailProvidersMysql, emailDeliveriesMysql },
+    tables: { emailProvidersMysql, emailDeliveriesMysql, emailSendClaimsMysql },
   },
   {
     dialect: "sqlite",
     url: "memory",
     make: () => createSqliteAdapter({ memory: true }) as unknown as TestAdapter,
-    tables: { emailProvidersSqlite, emailDeliveriesSqlite },
+    tables: {
+      emailProvidersSqlite,
+      emailDeliveriesSqlite,
+      emailSendClaimsSqlite,
+    },
   },
 ];
 
@@ -208,6 +219,79 @@ for (const entry of DIALECTS) {
       // would erase this one too, and the assertions above would not notice.
       expect(after).toContain(recipientDigest(KEPT));
       expect(after).toHaveLength(2);
+    });
+
+    it("clears a keyed send's key digest from every record of it, the copies included", async () => {
+      // One keyed send to ERASED with KEPT copied, and another send of KEPT's
+      // own under a different key.
+      const keyed = async (address: string, kind: string, keyDigest: string) =>
+        adapter.executeQuery(
+          `INSERT INTO ${q("email_deliveries")} (${q("id")}, ${q("provider_type")}, ` +
+            `${q("recipient_hash")}, ${q("recipient_kind")}, ${q("status")}, ` +
+            `${q("attempt_count")}, ${q("retention_class")}, ${q("key_digest")}, ` +
+            `${q("created_at")}) VALUES (${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(p).join(", ")})`,
+          [
+            randomUUID(),
+            "smtp",
+            recipientDigest(address),
+            kind,
+            "sent",
+            1,
+            "email",
+            keyDigest,
+            new Date(),
+          ]
+        );
+      await keyed(ERASED, "to", "a".repeat(64));
+      await keyed(KEPT, "cc", "a".repeat(64));
+      await keyed(KEPT, "to", "b".repeat(64));
+      // The two sends' claims.
+      for (const digest of ["a".repeat(64), "b".repeat(64)]) {
+        await adapter.executeQuery(
+          `INSERT INTO ${q("email_send_claims")} (${q("id")}, ${q("scope")}, ` +
+            `${q("key_digest")}, ${q("message_digest")}, ${q("state")}, ` +
+            `${q("holder")}, ${q("claimed_at")}, ${q("lease_expires_at")}) ` +
+            `VALUES (${[1, 2, 3, 4, 5, 6, 7, 8].map(p).join(", ")})`,
+          [
+            randomUUID(),
+            "site",
+            digest,
+            "c".repeat(64),
+            "sent",
+            randomUUID(),
+            1,
+            1,
+          ]
+        );
+      }
+
+      await eraseRecipientDeliveries(
+        adapter.getDrizzle() as Parameters<typeof eraseRecipientDeliveries>[0],
+        deliveriesTableFor(entry.dialect),
+        ERASED
+      );
+
+      const rows = await adapter.executeQuery<{ key_digest: string | null }>(
+        `SELECT ${q("key_digest")} FROM ${q("email_deliveries")} ` +
+          `WHERE ${q("key_digest")} IS NOT NULL`
+      );
+      // The send's digest is gone from both its records; the other send's stays.
+      expect(rows.map(row => row.key_digest)).toEqual(["b".repeat(64)]);
+      // And from the send's claim, with its message digest.
+      const claims = await adapter.executeQuery<{
+        key_digest: string | null;
+        message_digest: string | null;
+      }>(
+        `SELECT ${q("key_digest")}, ${q("message_digest")} FROM ${q("email_send_claims")}`
+      );
+      expect(
+        claims.map(row => [row.key_digest, row.message_digest]).sort()
+      ).toEqual(
+        [
+          ["b".repeat(64), "c".repeat(64)],
+          [null, null],
+        ].sort()
+      );
     });
 
     it("writes only values no collation difference can confuse", async () => {

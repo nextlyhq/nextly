@@ -19,10 +19,12 @@ import { z } from "zod";
 
 import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
+import { authorizationGroups } from "../auth/entity-read-access";
 import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
 import { container } from "../di/container";
 import type { FieldGroupDataService } from "../domains/field-groups/services/field-group-data-service";
+import { configuredLocales } from "../domains/i18n/configured-locales";
 import {
   resolveSingleDocumentId,
   singleDocumentEditable,
@@ -51,6 +53,7 @@ import {
   markLastViewed,
 } from "../domains/versions/version-views";
 import type { VersionRef } from "../domains/versions/versions-repository";
+import type { VersionListOptions } from "../domains/versions/versions-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type {
@@ -151,7 +154,10 @@ export async function assertVersionDocumentReadable(
   // super-admin-owned key does not skip the document's own read gate before
   // its snapshots are exposed.
   authenticatedScope?: AuthenticatedScope,
-  hookInputs: DocumentReadHookInputs = {}
+  hookInputs: DocumentReadHookInputs = {},
+  // The languages the read names or returns, each asked about in its own
+  // right; null is a part with no language, which the read above covers.
+  locales: readonly (string | null)[] = []
 ): Promise<void> {
   const readable = await canReadLiveDocument(
     scopeKind,
@@ -174,6 +180,179 @@ export async function assertVersionDocumentReadable(
       },
     });
   }
+  await assertHistoryLocalesReadable(
+    scopeKind,
+    slug,
+    entryId,
+    user,
+    authenticatedScope,
+    hookInputs,
+    locales
+  );
+}
+
+/**
+ * What a history listing reads, by language: the one it names, once its caller
+ * may read the document in it, or else every language they may read it in.
+ * Spread into the listing's options, so every listing narrows alike.
+ *
+ * @throws NextlyError.notFound when the named language is not readable.
+ */
+export async function historyListLanguages(
+  scopeKind: VersionScopeKind,
+  slug: string,
+  entryId: string,
+  user: UserContext,
+  authenticatedScope: AuthenticatedScope | undefined,
+  locale: string | undefined
+): Promise<Pick<VersionListOptions, "locale" | "locales">> {
+  if (locale !== undefined && locale !== "") {
+    await assertHistoryLocalesReadable(
+      scopeKind,
+      slug,
+      entryId,
+      user,
+      authenticatedScope,
+      {},
+      [locale]
+    );
+    return { locale };
+  }
+  const readable = await readableHistoryLocales(
+    scopeKind,
+    slug,
+    entryId,
+    user,
+    authenticatedScope
+  );
+  return { locales: [...readable] };
+}
+
+/**
+ * Refuse a read of a document's history in a language its caller may not read
+ * the document in. The language half of {@link assertVersionDocumentReadable},
+ * for a read that learns the language only once it has loaded a version: the
+ * document half has run by then and is not asked twice.
+ *
+ * @throws NextlyError.notFound when any named language is not readable.
+ */
+export async function assertHistoryLocalesReadable(
+  scopeKind: VersionScopeKind,
+  slug: string,
+  entryId: string,
+  user: UserContext,
+  authenticatedScope: AuthenticatedScope | undefined,
+  hookInputs: DocumentReadHookInputs,
+  // Null is a part with no language: the whole document, already read.
+  locales: readonly (string | null)[]
+): Promise<void> {
+  const named = [
+    ...new Set(locales.filter((l): l is string => l !== null && l !== "")),
+  ];
+  if (named.length === 0) return;
+  const allowed = await readableHistoryLocales(
+    scopeKind,
+    slug,
+    entryId,
+    user,
+    authenticatedScope,
+    hookInputs,
+    named
+  );
+  if (named.some(locale => !allowed.has(locale))) {
+    // Not found, as the document half answers, so a refused language does
+    // not confirm that the document has history in it.
+    throw NextlyError.notFound({
+      logContext: {
+        reason: "version-language-not-readable",
+        scopeKind,
+        scopeSlug: slug,
+        entryId,
+        userId: user.id,
+      },
+    });
+  }
+}
+
+/**
+ * The languages a document's history can be asked about: the configured ones
+ * for a localized collection or Single, and for one that is not, the default
+ * language alone. An unlocalized document reads the same in every language, so
+ * no other language can be asked about it, and history it holds from when it
+ * was localized stays withheld. The default language stays, because a save of
+ * an unlocalized document can be recorded under it.
+ */
+export async function historyLanguagesOf(
+  scopeKind: VersionScopeKind,
+  slug: string
+): Promise<ReadonlySet<string>> {
+  const configured = configuredLocales() ?? new Set<string>();
+  const entity = await registryEntityOf(scopeKind, slug);
+  if ((entity as { localized?: boolean } | null)?.localized === true) {
+    return configured;
+  }
+  const defaultLocale =
+    getService("config").localization?.defaultLocale ?? null;
+  return new Set(
+    defaultLocale !== null && configured.has(defaultLocale)
+      ? [defaultLocale]
+      : []
+  );
+}
+
+/**
+ * The languages of a document the caller may read its history in.
+ *
+ * Asked of the document's read in each language, because a read rule or hook
+ * may answer differently per language: it is handed that language's values.
+ * A language no longer configured is never readable here. A read in it would
+ * resolve to the default language and answer for that instead, which is not
+ * an answer about the entries written in it. That includes every language
+ * once an install configures none: history recorded in a language before
+ * localization was removed stays, and nothing can be asked about it.
+ *
+ * Asked in bounded groups: each question is a full document read, and an
+ * install may configure any number of languages.
+ *
+ * `among` narrows the question to the languages a read names, so a read of
+ * one language asks once rather than once per configured language.
+ *
+ * The caller has already passed {@link assertVersionDocumentReadable}; this
+ * answers which of the document's languages, not whether the document.
+ */
+export async function readableHistoryLocales(
+  scopeKind: VersionScopeKind,
+  slug: string,
+  entryId: string,
+  user: UserContext,
+  authenticatedScope: AuthenticatedScope | undefined,
+  hookInputs: DocumentReadHookInputs = {},
+  among?: readonly string[]
+): Promise<ReadonlySet<string>> {
+  const languages = await historyLanguagesOf(scopeKind, slug);
+  const asked = (among ?? [...languages]).filter(locale =>
+    languages.has(locale)
+  );
+  const readable = new Set<string>();
+  for (const group of authorizationGroups(asked)) {
+    const verdicts = await Promise.all(
+      group.map(locale =>
+        canReadLiveDocument(
+          scopeKind,
+          slug,
+          entryId,
+          user,
+          authenticatedScope,
+          hookInputs,
+          locale
+        )
+      )
+    );
+    group.forEach((locale, index) => {
+      if (verdicts[index]) readable.add(locale);
+    });
+  }
+  return readable;
 }
 
 /**
@@ -277,7 +456,9 @@ async function canReadLiveDocument(
   entryId: string,
   user: UserContext,
   authenticatedScope: AuthenticatedScope | undefined,
-  hookInputs: DocumentReadHookInputs
+  hookInputs: DocumentReadHookInputs,
+  // The language to read the document in; absent reads the default one.
+  locale?: string
 ): Promise<boolean> {
   if (scopeKind === "single") {
     return canReadLiveSingle(
@@ -285,7 +466,8 @@ async function canReadLiveDocument(
       entryId,
       user,
       authenticatedScope,
-      hookInputs
+      hookInputs,
+      locale
     );
   }
 
@@ -309,23 +491,16 @@ async function canReadLiveDocument(
     // The request and context the caller's own read would carry, for hooks
     // that narrow reads by them.
     ...hookInputs,
+    // The read rules and hooks are handed this language's values.
+    ...(locale === undefined ? {} : { locale }),
   });
   if (!interpretReadResult(result.success, result.statusCode)) return false;
   // The read must be of the document asked about. A `beforeOperation` hook may
   // rewrite the id a read resolves, and a read that passed on another document
-  // would authorize this one's history by that document's rules.
-  return readIdOf(result.data) === entryId;
-}
-
-/** The id of the entry a read returned, as text, or undefined without one. */
-function readIdOf(data: unknown): string | undefined {
-  if (typeof data !== "object" || data === null || !("id" in data)) {
-    return undefined;
-  }
-  const { id } = data;
-  return typeof id === "string" || typeof id === "number"
-    ? String(id)
-    : undefined;
+  // would authorize this one's history by that document's rules. The id is the
+  // read's own report of the row it loaded, not `data.id`: an `afterRead` hook
+  // may project the output without it.
+  return result.resolvedEntryId === entryId;
 }
 
 /**
@@ -344,7 +519,8 @@ async function canReadLiveSingle(
   entryId: string,
   user: UserContext,
   authenticatedScope: AuthenticatedScope | undefined,
-  hookInputs: DocumentReadHookInputs
+  hookInputs: DocumentReadHookInputs,
+  locale: string | undefined
 ): Promise<boolean> {
   const registry = getService("singleRegistryService");
   const record = await registry.getSingleBySlug(slug);
@@ -364,6 +540,7 @@ async function canReadLiveSingle(
     routeAuthorized: true,
     ...(authenticatedScope === undefined ? {} : { actor: authenticatedScope }),
     ...hookInputs,
+    ...(locale === undefined ? {} : { locale }),
   });
 }
 
@@ -850,6 +1027,20 @@ export async function compareDocumentVersions(args: {
   query: ComparisonQuery;
 }): Promise<VersionDiff> {
   const { query } = args;
+  // The language whose history finds the pair is asked about before anything
+  // of it is read, or a refusal said: the target's own when one is named,
+  // since the baseline is found in its part, and otherwise the `locale` the
+  // server pairs in. An explicit pair names no language here; its two rows are
+  // asked about below.
+  await assertHistoryLocalesReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    args.authenticatedScope,
+    {},
+    [await pairingPart(args, query)]
+  );
   let pair: { from: number; to: number };
   let baseline: VersionDiff["baseline"];
   if (query.from !== undefined && query.to !== undefined) {
@@ -899,6 +1090,50 @@ export async function compareDocumentVersions(args: {
     authenticatedScope: args.authenticatedScope,
   });
   return baseline ? { ...diff, baseline } : diff;
+}
+
+/**
+ * The part a comparison's pair is found in, before it is resolved: the
+ * target's, when the comparison names one and not a pair, else the `locale`
+ * it names. Null when it names neither, or names a pair.
+ */
+async function pairingPart(
+  document: { scopeKind: VersionScopeKind; slug: string; entryId: string },
+  query: ComparisonQuery
+): Promise<string | null> {
+  if (query.from !== undefined) return null;
+  if (query.to === undefined) return query.locale ?? null;
+  const part = await getService("versionsService").partOfVersion(
+    {
+      scopeKind: document.scopeKind,
+      scopeSlug: document.slug,
+      entryId: document.entryId,
+    },
+    query.to
+  );
+  return part ?? null;
+}
+
+/**
+ * Whether two versions' language tags name one part of the document. A
+ * document without languages has a single part, and its versions may be
+ * tagged with the default language (a component read in it) or with none:
+ * both name that part. A localized document's parts are its languages.
+ */
+async function onePart(
+  scopeKind: VersionScopeKind,
+  slug: string,
+  a: string | null,
+  b: string | null
+): Promise<boolean> {
+  if (a === b) return true;
+  const entity = await registryEntityOf(scopeKind, slug);
+  if ((entity as { localized?: boolean } | null)?.localized === true) {
+    return false;
+  }
+  const defaultLocale =
+    getService("config").localization?.defaultLocale ?? null;
+  return [a, b].every(tag => tag === null || tag === defaultLocale);
 }
 
 /** The collection's or Single's registry record, or null when it is gone. */
@@ -961,8 +1196,21 @@ export async function diffDocumentVersions(args: {
     versions.get(ref, args.from),
     versions.get(ref, args.to),
   ]);
+  // Each version is of the language it records, asked about before either is
+  // compared, or a mismatch reported.
+  await assertHistoryLocalesReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    args.authenticatedScope,
+    {},
+    [fromRow.locale, toRow.locale]
+  );
 
-  if (fromRow.locale !== toRow.locale) {
+  if (
+    !(await onePart(args.scopeKind, args.slug, fromRow.locale, toRow.locale))
+  ) {
     throw NextlyError.validation({
       errors: [
         {
@@ -980,6 +1228,9 @@ export async function diffDocumentVersions(args: {
       },
     });
   }
+
+  // The pair's language: either's tag, since they name one part.
+  const pairLocale = fromRow.locale ?? toRow.locale;
 
   // Redact each snapshot for the caller BEFORE diffing, so the diff can never
   // surface a field the caller may not read. What either side withheld is
@@ -1027,13 +1278,13 @@ export async function diffDocumentVersions(args: {
     body.fields,
     args.user,
     args.authenticatedScope,
-    fromRow.locale
+    pairLocale
   );
 
   return {
     from: args.from,
     to: args.to,
-    locale: fromRow.locale,
+    locale: pairLocale,
     hasChanges: body.hasChanges,
     incomplete: body.incomplete,
     fields: body.fields,

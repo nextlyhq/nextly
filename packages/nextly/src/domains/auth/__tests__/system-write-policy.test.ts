@@ -127,6 +127,9 @@ describe("the REST route gate asks what the system write policy says", () => {
       "DELETE",
       SYSTEM_WRITE_POLICY.permissions.delete,
     ],
+    ["users", "createLocalUser", "POST", SYSTEM_WRITE_POLICY.users.create],
+    ["users", "updateUser", "PATCH", SYSTEM_WRITE_POLICY.users.update],
+    ["users", "deleteUser", "DELETE", SYSTEM_WRITE_POLICY.users.delete],
     [
       "field-groups",
       "createComponent",

@@ -21,7 +21,11 @@
  * @module domains/widgets/executable-source
  */
 
-import { sourceResolver, type SourceResolver } from "./resolved-sources";
+import {
+  sourceAnswerers,
+  type ManySourceResolver,
+  type SourceResolver,
+} from "./resolved-sources";
 import {
   failUnavailableSourceOrOp,
   getSource,
@@ -42,10 +46,22 @@ import {
  * branch makes the disagreement unrepresentable rather than merely unlikely.
  */
 export type ExecutableSource =
-  | { kind: "system"; source: WidgetSource; resolve: SourceResolver }
-  | { kind: "plugin"; source: WidgetSource; resolve: SourceResolver }
+  | ResolverAnswered<"system">
+  | ResolverAnswered<"plugin">
   | { kind: "collection"; source: WidgetSource }
   | { kind: "single"; source: WidgetSource };
+
+/**
+ * A source answered by its registered resolver, with its many-query resolver
+ * when its author wrote one: carried out of the same decision, for the reason
+ * the one-query resolver is.
+ */
+interface ResolverAnswered<K extends "system" | "plugin"> {
+  kind: K;
+  source: WidgetSource;
+  resolve: SourceResolver;
+  resolveMany?: ManySourceResolver;
+}
 
 /**
  * Which executable kinds are answered by a read of the entity the id names.
@@ -110,13 +126,16 @@ export function resolveExecutableSource(sourceId: string): ExecutableSource {
   // would confirm the source exists. One branch for both kinds, because the
   // question ("what answers this id") and the store are one.
   if (source.kind === "system" || source.kind === "plugin") {
-    const resolve = sourceResolver(source.id);
-    if (!resolve) {
+    const answerers = sourceAnswerers(source.id);
+    if (!answerers) {
       failUnavailableSourceOrOp(
         `${source.kind} source "${sourceId}" has no registered resolver`
       );
     }
-    return { kind: source.kind, source, resolve };
+    const { resolve, resolveMany } = answerers;
+    return resolveMany === undefined
+      ? { kind: source.kind, source, resolve }
+      : { kind: source.kind, source, resolve, resolveMany };
   }
   // A single is executable the way a collection is: its one document is read
   // through the Direct API with the caller, and the executor decides what

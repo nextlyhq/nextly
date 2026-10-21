@@ -15,7 +15,16 @@
  * - handleError / ServiceError translation
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+import {
+  callerLookupFails,
+  callerMay,
+  callerMayNot,
+  fakeActorForUser,
+  fakeUserHoldsPermission,
+  resetCallerAccess,
+} from "../../../auth/access/__tests__/fake-caller";
 
 import { NextlyError } from "../../../errors";
 import { SingleEntryService } from "../services/single-entry-service";
@@ -36,6 +45,27 @@ import {
 // ============================================================
 // Test Fixture
 // ============================================================
+
+// The signed-in caller the gate looks up, set per test (`callerMay`).
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
+  const fake = await import("../../../auth/access/__tests__/fake-caller");
+  return {
+    ...(await importOriginal<object>()),
+    actorForUser: fake.fakeActorForUser,
+    userHoldsPermission: fake.fakeUserHoldsPermission,
+    userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
+  };
+});
+
+beforeEach(() => {
+  resetCallerAccess();
+  fakeActorForUser.mockClear();
+  fakeUserHoldsPermission.mockClear();
+});
+
+/** The actions the permission check was asked about, in order. */
+const actionsAsked = () =>
+  fakeUserHoldsPermission.mock.calls.map(([, action]) => action);
 
 type EntryTestCtx = {
   service: SingleEntryService;
@@ -311,7 +341,8 @@ describe("SingleEntryService", () => {
       });
 
       expect(result.success).toBe(true);
-      expect(ctx.rbac.checkAccess).not.toHaveBeenCalled();
+      expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
+      expect(fakeActorForUser).not.toHaveBeenCalled();
     });
 
     it("skips RBAC check when no user is provided", async () => {
@@ -324,13 +355,14 @@ describe("SingleEntryService", () => {
 
       await ctx.service.get("site-settings");
 
-      expect(ctx.rbac.checkAccess).not.toHaveBeenCalled();
+      expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
+      expect(fakeActorForUser).not.toHaveBeenCalled();
     });
 
     it("denies with 403 when RBAC reports access denied", async () => {
       ctx = createCtx({ withRbac: true });
       ctx.registry.registerSingle("site-settings", siteSettingsMeta());
-      ctx.rbac.checkAccess.mockResolvedValue(false);
+      callerMay();
 
       const result = await ctx.service.get("site-settings", {
         user: { id: "u1" },
@@ -344,7 +376,7 @@ describe("SingleEntryService", () => {
     it("fails secure (500) when RBAC check throws", async () => {
       ctx = createCtx({ withRbac: true });
       ctx.registry.registerSingle("site-settings", siteSettingsMeta());
-      ctx.rbac.checkAccess.mockRejectedValue(new Error("boom"));
+      callerLookupFails(new Error("boom"));
 
       const result = await ctx.service.get("site-settings", {
         user: { id: "u1" },
@@ -364,12 +396,11 @@ describe("SingleEntryService", () => {
 
       await ctx.service.get("site-settings", { user: { id: "u1" } });
 
-      expect(ctx.rbac.checkAccess).toHaveBeenCalledWith(
-        expect.objectContaining({
-          operation: "read",
-          resource: "site-settings",
-          userId: "u1",
-        })
+      expect(fakeUserHoldsPermission).toHaveBeenCalledWith(
+        "u1",
+        "read",
+        "site-settings",
+        { executor: undefined }
       );
     });
   });
@@ -823,7 +854,7 @@ describe("SingleEntryService", () => {
     it("denies with 403 when RBAC reports access denied", async () => {
       ctx = createCtx({ withRbac: true });
       ctx.registry.registerSingle("site-settings", siteSettingsMeta());
-      ctx.rbac.checkAccess.mockResolvedValue(false);
+      callerMay();
 
       const result = await ctx.service.update(
         "site-settings",
@@ -856,12 +887,11 @@ describe("SingleEntryService", () => {
         { user: { id: "u1" } }
       );
 
-      expect(ctx.rbac.checkAccess).toHaveBeenCalledWith(
-        expect.objectContaining({
-          operation: "update",
-          resource: "site-settings",
-          userId: "u1",
-        })
+      expect(fakeUserHoldsPermission).toHaveBeenCalledWith(
+        "u1",
+        "update",
+        "site-settings",
+        { executor: undefined }
       );
     });
   });
@@ -916,9 +946,7 @@ describe("SingleEntryService", () => {
         "site-settings",
         siteSettingsMeta({ status: true })
       );
-      ctx.rbac.checkAccess.mockImplementation((args: { operation: string }) =>
-        Promise.resolve(args.operation !== deny)
-      );
+      callerMayNot(deny);
       ctx.adapter.update.mockResolvedValue([
         { id: "doc-1", siteName: "S", updated_at: "2026-02-01T00:00:00.000Z" },
       ]);
@@ -1001,9 +1029,7 @@ describe("SingleEntryService", () => {
           fields: [textField("siteName"), textField("status")],
         })
       );
-      ctx.rbac.checkAccess.mockImplementation((args: { operation: string }) =>
-        Promise.resolve(args.operation !== "publish")
-      );
+      callerMayNot("publish");
       ctx.adapter.selectOne.mockResolvedValue({
         id: "doc-1",
         siteName: "S",
@@ -1023,10 +1049,8 @@ describe("SingleEntryService", () => {
       // The write reaches and passes the gate (no lifecycle to enforce), rather
       // than 404-ing on an unregistered single.
       expect(result.success).toBe(true);
-      const publishConsulted = ctx.rbac.checkAccess.mock.calls.some(
-        ([args]: [{ operation: string }]) => args.operation === "publish"
-      );
-      expect(publishConsulted).toBe(false);
+      expect(actionsAsked()).toContain("update");
+      expect(actionsAsked()).not.toContain("publish");
     });
 
     it("bypasses the transition gate under overrideAccess", async () => {
@@ -1166,7 +1190,7 @@ describe("SingleEntryService", () => {
       const ctx = createCtx({ withRbac: true });
       ctx.registry.registerSingle("site-settings", siteSettingsMeta());
       // The key's own grant does not cover this write. Only the scope can refuse
-      // it: the owner's roles say super-admin, and `rbac.checkAccess` allows.
+      // it: the owner's roles say super-admin, and the owner holds every action.
       const result = await ctx.service.update(
         "site-settings",
         { siteName: "x" },

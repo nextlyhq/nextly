@@ -17,6 +17,12 @@ import { MAX_QUERIES_PER_REQUEST, type WidgetQuery } from "nextly/config";
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
 }));
+// The batch answered as the `protectedApi.post` mock above describes it; see `batch-over-post`.
+vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
+  (
+    await import("@admin/hooks/queries/__tests__/batch-over-post")
+  ).streamOverPost()
+);
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({
@@ -895,6 +901,61 @@ describe("useWidgetQueries, grouped results", () => {
     });
   });
 
+  it("carries a grouped answer's floor through to the slot, and only a boolean one", async () => {
+    // The decoder rebuilds each result from the fields it knows. A floor it did
+    // not carry would be dropped, and every bucket's short count would reach
+    // the chart as a whole one. Answered by source rather than by position, so
+    // the batch's own ordering cannot decide which slot gets which answer.
+    vi.mocked(protectedApi.post).mockImplementation(async (_path, body) => ({
+      results: (body as { queries: Array<{ source: string }> }).queries.map(
+        query => ({
+          ok: true,
+          result: {
+            op: "groupBy",
+            buckets: [{ value: "published", count: 4 }],
+            atLeast: query.source === "collection:posts" ? true : "true",
+          },
+        })
+      ),
+    }));
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          {
+            placementId: "p1",
+            cellKey: "bounded",
+            query: groupQuery("collection:posts"),
+          },
+          {
+            placementId: "p2",
+            cellKey: "garbled",
+            query: groupQuery("collection:pages"),
+          },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() => {
+      expect(result.current.cellSlots.p1?.bounded).toBeDefined();
+      expect(result.current.cellSlots.p2?.garbled).toBeDefined();
+    });
+
+    expect(result.current.cellSlots.p1?.bounded).toEqual({
+      ok: true,
+      result: {
+        op: "groupBy",
+        buckets: [{ value: "published", count: 4 }],
+        atLeast: true,
+      },
+    });
+    // A string is not a claim the contract makes, so it is not carried.
+    expect(result.current.cellSlots.p2?.garbled).toEqual({
+      ok: true,
+      result: { op: "groupBy", buckets: [{ value: "published", count: 4 }] },
+    });
+  });
+
   it("refuses a bucket whose count is not a finite number", async () => {
     // `1e400` is valid JSON and parses to `Infinity`, which would draw as a bar
     // dwarfing every real bucket rather than as a card admitting it cannot
@@ -1120,9 +1181,11 @@ describe("useWidgetQueries, a malformed timeline point", () => {
 
 describe("the tier an answer was fetched at", () => {
   it("travels with the cached answer, to a card that returns while it is still in flight", async () => {
-    // A card asked at small leaves before its answer lands, and comes back wider: the new
-    // render takes over the request already in flight. The answer it receives is the small one,
-    // so it must know that, or it never asks for the rows it is missing.
+    // A card asked at small is drawn again wider before its answer lands -- a remount while the
+    // first render still holds the request -- and the first then leaves: the new render takes
+    // over the request already in flight. The answer it receives is the small one, so it must
+    // know that, or it never asks for the rows it is missing. (Once every render has left, the
+    // request is cancelled through its signal, and a card that comes back asks anew.)
     const client = new QueryClient({
       defaultOptions: { queries: { retryDelay: 0, gcTime: 60_000 } },
     });
@@ -1150,11 +1213,11 @@ describe("the tier an answer was fetched at", () => {
       wrapper: shared,
     });
     await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1));
-    left.unmount();
-
     const back = renderHook(() => useWidgetQueries(asked("medium")), {
       wrapper: shared,
     });
+    left.unmount();
+
     answer({ results: [{ ok: true, result: { op: "list", items: [] } }] });
     await waitFor(() => expect(back.result.current.slots.p1).toBeDefined());
     expect(back.result.current.fetchedTierFor("p1")).toBe("small");

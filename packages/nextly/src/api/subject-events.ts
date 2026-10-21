@@ -42,9 +42,14 @@ import {
 import { resolveSingleDocumentId } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
 import { NextlyError } from "../errors/nextly-error";
+import { SHARED_PART } from "../schemas/content-events";
 
 import type { PaginationMeta } from "./response-shapes";
-import { assertVersionDocumentReadable } from "./versions-access";
+import {
+  assertVersionDocumentReadable,
+  historyLanguagesOf,
+  readableHistoryLocales,
+} from "./versions-access";
 
 /** Who is reading. */
 export interface SubjectEventsCaller {
@@ -189,19 +194,81 @@ export async function readSubjectEvents(
     caller,
     repository
   );
+  const { items, nextBefore } =
+    subject.kind === "release"
+      ? await visibleReleasePage(
+          subject,
+          { ...query, limit },
+          releaseActorOf(caller),
+          repository,
+          page
+        )
+      : { items: page.items, nextBefore: page.nextBefore };
   return {
-    items: page.items,
+    items,
     // A cursor walk: page and total describe the window returned, and the
     // next page passes the last item's id as `before`.
     meta: {
-      total: page.items.length,
+      total: items.length,
       page: 1,
       limit,
       totalPages: 1,
-      hasNext: page.nextBefore !== null,
+      hasNext: nextBefore !== null,
       hasPrev: query.before !== undefined,
+      ...(nextBefore === null ? {} : { nextBefore }),
     },
   };
+}
+
+/**
+ * How many further reads one page of a release's history may make past its
+ * first, looking for events its reader may see. Bounded, so a history mostly
+ * hidden from its reader costs a request a fixed number of reads; the page's
+ * `nextBefore` then says where the scan stopped.
+ */
+const MAX_FURTHER_HISTORY_READS = 10;
+
+/**
+ * A page of a release's history as the caller may be shown it: only the
+ * documents they may read, as the release's own document list does
+ * (`historyVisibleTo`).
+ *
+ * Filled from further reads, each starting where the last ended, until it
+ * holds `limit` events, the history runs out, or it has made
+ * {@link MAX_FURTHER_HISTORY_READS} further reads. The cursor it answers
+ * always moves on: the last event returned when the page was cut to
+ * `limit`, and otherwise the last row scanned, so a walk can pass any run of
+ * events the caller may not see, a bounded number of reads at a time.
+ */
+async function visibleReleasePage(
+  subject: ContentEventSubject,
+  query: ContentEventQuery,
+  actor: ReturnType<typeof releaseActorOf>,
+  repository: ContentEventsRepository,
+  first: Awaited<ReturnType<ContentEventsRepository["listForSubject"]>>
+): Promise<{ items: ContentEventRecord[]; nextBefore: string | null }> {
+  const releases = getService("releasesService");
+  const items = await releases.historyVisibleTo(first.items, actor);
+  let next = first.nextBefore;
+  for (
+    let reads = 0;
+    items.length < query.limit &&
+    next !== null &&
+    reads < MAX_FURTHER_HISTORY_READS;
+    reads += 1
+  ) {
+    const more = await repository.listForSubject(subject, {
+      ...query,
+      before: next,
+    });
+    items.push(...(await releases.historyVisibleTo(more.items, actor)));
+    next = more.nextBefore;
+  }
+  if (items.length > query.limit) {
+    const page = items.slice(0, query.limit);
+    return { items: page, nextBefore: page[page.length - 1]?.id ?? null };
+  }
+  return { items, nextBefore: next };
 }
 
 /** How many times a read is authorized again when a life ends under it. */
@@ -224,10 +291,16 @@ async function readAuthorizedLife(
   repository: ContentEventsRepository
 ): Promise<Awaited<ReturnType<ContentEventsRepository["listForSubject"]>>> {
   for (let attempt = 1; attempt <= LIFE_ATTEMPTS; attempt += 1) {
-    const { life, ended } = await authorizeSubject(subject, caller, repository);
+    const { life, ended, visibleParts } = await authorizeSubject(
+      subject,
+      query,
+      caller,
+      repository
+    );
     const page = await repository.listForSubject(subject, {
       ...query,
       ...(life === undefined ? {} : { life }),
+      ...(visibleParts === undefined ? {} : { visibleParts }),
     });
     // Only the current life can change under a read: an ended one is named by
     // its end, and a release has one life.
@@ -239,13 +312,19 @@ async function readAuthorizedLife(
 
 /**
  * Refuse a caller who may not read this subject's events, and say which life
- * of it to read, with the subject's latest end as it stood before deciding.
+ * of it to read, with the subject's latest end as it stood before deciding,
+ * and which of its parts the caller may be shown.
  */
 async function authorizeSubject(
   subject: ContentEventSubject,
+  query: ContentEventQuery,
   caller: SubjectEventsCaller,
   repository: ContentEventsRepository
-): Promise<{ life: ContentEventQuery["life"]; ended: string | null }> {
+): Promise<{
+  life: ContentEventQuery["life"];
+  ended: string | null;
+  visibleParts?: readonly string[];
+}> {
   if (subject.kind === "release") {
     await authorizeRelease(subject.id, caller);
     // A release id is never reused, so it has one life.
@@ -253,44 +332,85 @@ async function authorizeSubject(
   }
   const ended = await repository.latestEnd(subject);
   if (ended !== null && !(await documentExists(subject))) {
-    if (!caller.overrideAccess) {
-      const reader = readerOf(caller);
-      if (!(await mayReadDeletedDocument(subject, reader))) {
-        throw refused(subject, "deleted-document-not-readable");
-      }
-    }
-    return { life: { endedBy: ended }, ended };
+    const life = { endedBy: ended };
+    if (caller.overrideAccess) return { life, ended };
+    const visibleParts = await authorizeDeletedDocument(subject, query, caller);
+    return { life, ended, visibleParts };
   }
-  if (!caller.overrideAccess) await authorizeLiveDocument(subject, caller);
-  return { life: "current", ended };
+  if (caller.overrideAccess) return { life: "current", ended };
+  const visibleParts = await authorizeLiveDocument(subject, query, caller);
+  return { life: "current", ended, visibleParts };
+}
+
+/**
+ * A deleted document's gate, and the parts its events may show.
+ *
+ * A row that is gone cannot be read in any language, so the languages shown
+ * are those its history can be asked about (`historyLanguagesOf`), which
+ * `mayReadDeletedDocument` decides alike. A
+ * language no longer configured is withheld here as it is from a live
+ * document's history, and a read naming one is refused.
+ */
+async function authorizeDeletedDocument(
+  subject: Exclude<ContentEventSubject, { kind: "release" }>,
+  query: ContentEventQuery,
+  caller: SubjectEventsCaller
+): Promise<readonly string[]> {
+  if (!(await mayReadDeletedDocument(subject, readerOf(caller)))) {
+    throw refused(subject, "deleted-document-not-readable");
+  }
+  const visibleParts = [
+    ...(await historyLanguagesOf(subject.kind, subject.slug)),
+    SHARED_PART,
+  ];
+  if ((query.parts ?? []).some(part => !visibleParts.includes(part))) {
+    throw refused(subject, "deleted-document-language-not-readable");
+  }
+  return visibleParts;
 }
 
 /**
  * The live document's gate, as its version history has it. The coarse read
  * permission runs here too, because not every entry point has a route that ran
  * it first: the Direct API, a plugin, and the read by subject.
+ *
+ * Returns the parts the caller may be shown: the shared part and each
+ * language they may read the document in.
  */
 async function authorizeLiveDocument(
   subject: Exclude<ContentEventSubject, { kind: "release" }>,
+  query: ContentEventQuery,
   caller: SubjectEventsCaller
-): Promise<void> {
+): Promise<readonly string[]> {
   const { user } = caller;
   if (user === undefined) throw refused(subject, "anonymous");
   if (!(await canReadEntity(subject.slug, readerOf(caller)))) {
     throw refused(subject, "document-type-not-readable");
   }
+  // The hooks see what they would on the caller's own read of the document.
+  const hookInputs = {
+    ...(caller.request === undefined ? {} : { request: caller.request }),
+    ...(caller.context === undefined ? {} : { context: caller.context }),
+  };
+  // Each language the read names is asked about, and any refused refuses it.
   await assertVersionDocumentReadable(
     subject.kind,
     subject.slug,
     subject.id,
     user,
     caller.authenticatedScope,
-    // The hooks see what they would on the caller's own read of the document.
-    {
-      ...(caller.request === undefined ? {} : { request: caller.request }),
-      ...(caller.context === undefined ? {} : { context: caller.context }),
-    }
+    hookInputs,
+    (query.parts ?? []).filter(part => part !== SHARED_PART)
   );
+  const readable = await readableHistoryLocales(
+    subject.kind,
+    subject.slug,
+    subject.id,
+    user,
+    caller.authenticatedScope,
+    hookInputs
+  );
+  return [...readable, SHARED_PART];
 }
 
 /**
@@ -303,20 +423,25 @@ async function authorizeRelease(
   caller: SubjectEventsCaller
 ): Promise<void> {
   try {
-    await getService("releasesService").findByID(id, {
-      userId: caller.user?.id ?? null,
-      overrideAccess: caller.overrideAccess === true,
-      ...(caller.authenticatedScope === undefined
-        ? {}
-        : { authenticatedScope: caller.authenticatedScope }),
-      ...(caller.user?.roles ? { userRoles: [...caller.user.roles] } : {}),
-    });
+    await getService("releasesService").findByID(id, releaseActorOf(caller));
   } catch (error) {
     if (error instanceof NextlyError && error.code === "FORBIDDEN") {
       throw refused({ kind: "release", id }, "releases-not-readable");
     }
     throw error;
   }
+}
+
+/** The caller as Releases judges it: its read check and its document reads. */
+function releaseActorOf(caller: SubjectEventsCaller) {
+  return {
+    userId: caller.user?.id ?? null,
+    overrideAccess: caller.overrideAccess === true,
+    ...(caller.authenticatedScope === undefined
+      ? {}
+      : { authenticatedScope: caller.authenticatedScope }),
+    ...(caller.user?.roles ? { userRoles: [...caller.user.roles] } : {}),
+  };
 }
 
 /** Whether the document still exists, read without the caller's access. */

@@ -26,7 +26,12 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
-import { useQueries } from "@tanstack/react-query";
+import {
+  useQueries,
+  useQueryClient,
+  type QueryClient,
+  type QueryKey,
+} from "@tanstack/react-query";
 import {
   isTimeseriesInterval,
   MAX_QUERIES_PER_REQUEST,
@@ -35,13 +40,13 @@ import {
 } from "nextly/config";
 import { useMemo } from "react";
 
-import { protectedApi } from "@admin/lib/api/protectedApi";
 import type {
-  WidgetQueryBatchResponse,
   WidgetResult,
   WidgetResultField,
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
+
+import { fetchWidgetBatch } from "./widget-query-stream";
 
 /** One card's request: the id to key the answer back to, and what to ask. */
 export interface WidgetQueryRequest {
@@ -87,6 +92,26 @@ export interface WidgetQueryRequest {
    * now draws more than was fetched asks again alone (see `fetchedTierFor`).
    */
   sized?: { query: WidgetQuery; tier: SizeTier };
+  /**
+   * The query as the card's SETTINGS ask it, when they change it: what is sent (sized for the
+   * tier when `sized` is given, from this), while `query` -- the widget's declared question --
+   * is what the cache is keyed by.
+   *
+   * 🔴 Kept out of the key for the reason `sized` is. Every card of a dashboard travels in one
+   * partition, so a setting in the key made one card's change a new question for the whole
+   * dashboard: every card went back to its skeleton and the grid announced them all. Sent at
+   * fetch time instead, a change of settings refetches nothing; the card whose shown answer was
+   * asked with other settings asks again alone (see `fetchedAppliedFor`).
+   */
+  applied?: WidgetQuery;
+}
+
+/**
+ * The query a request asks with, before sizing, as one comparable string: what an answer is
+ * filed as having been asked with, and what a card compares against when its settings change.
+ */
+export function appliedKey(request: WidgetQueryRequest): string {
+  return JSON.stringify(request.applied ?? request.query);
 }
 
 /** One card's cell answers, keyed by cell key. */
@@ -109,13 +134,16 @@ export interface UseWidgetQueriesResult {
    */
   isFetching: boolean;
   /**
-   * The placements whose OWN request is still in flight.
+   * The placements whose OWN answer is still on its way.
    *
    * `isFetching` above answers "is anything still loading", which is what the
    * grid's own busy affordance needs. A CARD needs its own answer: on a
    * dashboard split across partitions the two differ, and a card reading the
-   * batch-wide flag stays dimmed while an unrelated partition loads. A card
-   * that asked nothing is never in a partition, so it is never in this set.
+   * batch-wide flag stays dimmed while an unrelated partition loads. Within one
+   * partition too, since each slot streams in as the server settles it: a card
+   * whose slot this request has delivered is not waiting, though a slower card
+   * in the same request still is. A card that asked nothing is never in a
+   * partition, so it is never in this set.
    */
   fetchingPlacementIds: ReadonlySet<string>;
   error: Error | null;
@@ -137,6 +165,11 @@ export interface UseWidgetQueriesResult {
    * the tier it sent here, so a card that now draws more than was fetched can ask again alone.
    */
   fetchedTierFor: (placementId: string) => SizeTier | undefined;
+  /**
+   * What each placement's answer was asked with (see `appliedKey`), read from the answer, or
+   * from a request that settled by failing; `undefined` while the first request is in flight.
+   */
+  fetchedAppliedFor: (placementId: string) => string | undefined;
 }
 
 /**
@@ -205,6 +238,25 @@ const MALFORMED_SLOT_ERROR =
  * reads it.
  */
 const BATCH_FAILED_ERROR = "Dashboard data could not be loaded.";
+
+/**
+ * What a request that FAILED was asked with, by the error it failed with: a failed request has
+ * no answer to carry it, and without it a card whose settings change after its first request
+ * failed could not tell that it now asks something else, so it stayed on the old failure.
+ * Weakly held, so an error the cache lets go of takes its entry with it.
+ */
+const askedWithByError = new WeakMap<object, Record<string, string>>();
+
+/** Files what the failed `partition` was asked with against the error it threw, then rethrows. */
+function failedAsking(
+  partition: readonly WidgetQueryRequest[],
+  error: unknown
+): never {
+  if (typeof error === "object" && error !== null) {
+    askedWithByError.set(error, appliedSent(partition));
+  }
+  throw error;
+}
 
 /**
  * Narrows the response body before anything is keyed from it.
@@ -469,12 +521,15 @@ function asBuckets(
  *
  * `truncated` is carried through rather than dropped, for the reason `atLeast`
  * is on a count: it says the bucket set is PARTIAL, and a chart that loses it
- * presents the categories it happens to hold as the whole picture.
+ * presents the categories it happens to hold as the whole picture. `atLeast` is
+ * carried for its own reason: it says the counts inside the buckets are floors,
+ * and a chart that loses it draws short counts as whole ones.
  */
 function asGrouped(
   buckets: unknown,
   truncated: unknown,
-  field: unknown
+  field: unknown,
+  atLeast: unknown
 ): WidgetResult | undefined {
   const read = asBuckets(buckets);
   if (!read) return undefined;
@@ -486,6 +541,7 @@ function asGrouped(
     buckets: read,
     ...(truncated === true ? { truncated: true } : {}),
     ...(described !== undefined && { field: described }),
+    ...(atLeast === true ? { atLeast: true } : {}),
   };
 }
 
@@ -588,7 +644,12 @@ function asResult(value: unknown): WidgetResult | undefined {
   }
 
   if (result.op === "groupBy") {
-    return asGrouped(result.buckets, result.truncated, result.field);
+    return asGrouped(
+      result.buckets,
+      result.truncated,
+      result.field,
+      result.atLeast
+    );
   }
 
   if (result.op === "timeseries") {
@@ -635,14 +696,99 @@ function refusal(error: unknown, code?: unknown): WidgetSlot {
   };
 }
 
-function readResults(body: unknown): unknown[] {
-  const results = (body as WidgetQueryBatchResponse | null)?.results;
-  if (!Array.isArray(results)) {
-    throw new Error(
-      "Dashboard query response was not shaped as { results: [] }."
+/** One partition's answer as the cache holds it, filled in slot by slot while it streams. */
+interface PartitionAnswer {
+  /** Each request's slot by position, unread; `undefined` for one not yet arrived. */
+  slots: unknown[];
+  /**
+   * Which slots arrived in the CURRENT request, while it streams. A refetch keeps the slots
+   * already held on screen while it runs, so a held slot is not proof that its card has its new
+   * answer; this is. Read only while `complete` is false: a complete answer is a whole earlier
+   * request's, and every card in it is waiting again once the next request starts.
+   */
+  settled: boolean[];
+  /** Whether the answer has ended. Until it has, a slot not yet arrived is on its way, not lost. */
+  complete: boolean;
+  tiers: Record<string, SizeTier>;
+  applied: Record<string, string>;
+}
+
+/**
+ * Asks one partition, filing each slot into the cache as it arrives, so its card draws without
+ * waiting for any card a slower source answers.
+ *
+ * Merged by position over the answer already held: a refetch keeps the old numbers on screen
+ * until each card's new one arrives. Every write before the end keeps the held answer's time, so
+ * the dashboard's freshness line moves once the answer is whole, never on its first slot.
+ */
+async function askPartition(
+  partition: readonly WidgetQueryRequest[],
+  queryClient: QueryClient,
+  queryKey: QueryKey,
+  signal: AbortSignal
+): Promise<PartitionAnswer> {
+  const tiers = tiersSent(partition);
+  const applied = appliedSent(partition);
+  const held = queryClient.getQueryData<PartitionAnswer>(queryKey);
+  const heldAt = queryClient.getQueryState(queryKey)?.dataUpdatedAt ?? 0;
+  const slots: unknown[] = partition.map(
+    (_, position) => held?.slots[position]
+  );
+  const settled: boolean[] = partition.map(() => false);
+  // What each shown slot was asked with, while some are still the held answer's: an arrived slot
+  // was asked with this request's tier and settings, one not yet arrived with the held answer's.
+  // Recorded as the request's for all, a card left showing its old answer by a broken stream
+  // would read as already asked with its new settings, and never ask again.
+  const askedSoFar = <T>(
+    before: Record<string, T> | undefined,
+    now: Record<string, T>
+  ): Record<string, T> => {
+    const record = emptyRecord<T>();
+    if (before) Object.assign(record, before);
+    partition.forEach((entry, position) => {
+      const asked = Object.hasOwn(now, entry.placementId)
+        ? now[entry.placementId]
+        : undefined;
+      if (settled[position] && asked !== undefined) {
+        record[entry.placementId] = asked;
+      }
+    });
+    return record;
+  };
+  const write = () =>
+    queryClient.setQueryData<PartitionAnswer>(
+      queryKey,
+      {
+        slots: [...slots],
+        settled: [...settled],
+        complete: false,
+        tiers: askedSoFar(held?.tiers, tiers),
+        applied: askedSoFar(held?.applied, applied),
+      },
+      { updatedAt: heldAt }
     );
-  }
-  return results;
+
+  const answered = await fetchWidgetBatch(
+    partition.map(entry => entry.sized?.query ?? entry.applied ?? entry.query),
+    {
+      signal,
+      onSlots: arrived => {
+        for (const { index, slot } of arrived) {
+          slots[index] = slot;
+          settled[index] = true;
+        }
+        write();
+      },
+    }
+  );
+  // Whole: a slot the answer never carried is missing now, whatever was held for it before.
+  return {
+    slots: partition.map((_, position) => answered[position]),
+    settled: partition.map(() => true),
+    complete: true,
+    tiers,
+    applied,
+  };
 }
 
 /**
@@ -679,6 +825,7 @@ export function useWidgetQueries(
   queries: WidgetQueryRequest[]
 ): UseWidgetQueriesResult {
   const partitions = useMemo(() => partitionRequests(queries), [queries]);
+  const queryClient = useQueryClient();
 
   const results = useQueries({
     queries: partitions.map(partition => ({
@@ -689,12 +836,20 @@ export function useWidgetQueries(
       // see `WidgetQueryRequest.sized`.
       queryKey: ["dashboard", "widget-queries", partition.map(unsized)],
       // Built from this render's partition, and TanStack runs the latest observer's function,
-      // so a refetch sends each card's CURRENT tier.
-      queryFn: async () => {
-        const body = await protectedApi.post<unknown>("/dashboard/query", {
-          queries: partition.map(entry => entry.sized?.query ?? entry.query),
-        });
-        return { slots: readResults(body), tiers: tiersSent(partition) };
+      // so a refetch sends each card's CURRENT tier. The signal is TanStack's own, so a
+      // dashboard the reader leaves stops reading, and the server gives up the batch.
+      queryFn: async ({
+        queryKey,
+        signal,
+      }: {
+        queryKey: QueryKey;
+        signal: AbortSignal;
+      }): Promise<PartitionAnswer> => {
+        try {
+          return await askPartition(partition, queryClient, queryKey, signal);
+        } catch (error) {
+          return failedAsking(partition, error);
+        }
       },
       staleTime: 0,
       gcTime: 5 * 60 * 1000,
@@ -714,25 +869,38 @@ export function useWidgetQueries(
   // request that wrote it may belong to a render that has since left, and the answer a returning
   // card receives is that request's, at that request's tier.
   const fetchedTiers: Record<string, SizeTier> = emptyRecord();
+  // What each answer was asked with, read from the cached answer for the same reason.
+  const fetchedApplied: Record<string, string> = emptyRecord();
   partitions.forEach((partition, index) => {
     const answer = results[index];
     if (!answer) return;
 
     if (answer.data) {
+      const data = answer.data;
+      // Still streaming: a slot not yet here is on its way, so its card stays busy rather than
+      // being told it is missing. Once the request has ended, by finishing or by failing, it is
+      // not on its way any more.
+      const streaming = !data.complete && answer.isFetching;
       partition.forEach((entry, position) => {
+        const slot = data.slots[position];
+        if (slot === undefined && streaming) return;
         // A short response is the server disagreeing with us about how many
         // questions were asked, and a member that is not a slot is it
         // disagreeing about the shape. Saying so per widget is what stops the
         // trailing cards spinning silently forever -- and what keeps one bad
         // entry from throwing out of the renderer and taking the page with it.
+        // A slot a failed stream never delivered says the request failed.
         fileAnswer(
           slots,
           cellSlots,
           entry,
-          asSlot(answer.data.slots[position])
+          slot === undefined && answer.isError
+            ? { ok: false, error: BATCH_FAILED_ERROR }
+            : asSlot(slot)
         );
       });
       Object.assign(fetchedTiers, answer.data.tiers);
+      Object.assign(fetchedApplied, answer.data.applied);
       return;
     }
 
@@ -749,6 +917,13 @@ export function useWidgetQueries(
           error: BATCH_FAILED_ERROR,
         });
       });
+      // A settled failure was asked with something too, which a change of settings is judged
+      // against; a first request still in flight has neither, and its answer will say.
+      const asked =
+        typeof answer.error === "object" && answer.error !== null
+          ? askedWithByError.get(answer.error)
+          : undefined;
+      if (asked) Object.assign(fetchedApplied, asked);
     }
   });
 
@@ -765,8 +940,17 @@ export function useWidgetQueries(
    */
   const fetchingPlacementIds = new Set<string>();
   partitions.forEach((partition, index) => {
-    if (results[index]?.isFetching !== true) return;
-    partition.forEach(entry => fetchingPlacementIds.add(entry.placementId));
+    const answer = results[index];
+    if (answer?.isFetching !== true) return;
+    // Per CARD within the partition, too: a card whose slot this request already delivered has
+    // its answer, even while a slower card in the same request is still on its way. Only once
+    // this request has written: until then the cached answer is the previous request's whole one,
+    // and every card in it is being asked again.
+    const streaming = answer.data !== undefined && !answer.data.complete;
+    partition.forEach((entry, position) => {
+      if (streaming && answer.data?.settled[position] === true) return;
+      fetchingPlacementIds.add(entry.placementId);
+    });
   });
 
   const settledAt = results.map(answer => answer.dataUpdatedAt);
@@ -778,6 +962,12 @@ export function useWidgetQueries(
     return (placementId: string): SizeTier | undefined =>
       Object.hasOwn(tiers, placementId) ? tiers[placementId] : undefined;
   }, [tiersKey]);
+  const appliedKeyOfAll = JSON.stringify(fetchedApplied);
+  const fetchedAppliedFor = useMemo(() => {
+    const applied = JSON.parse(appliedKeyOfAll) as Record<string, string>;
+    return (placementId: string): string | undefined =>
+      Object.hasOwn(applied, placementId) ? applied[placementId] : undefined;
+  }, [appliedKeyOfAll]);
 
   return {
     slots,
@@ -790,12 +980,9 @@ export function useWidgetQueries(
      * partitions count as in flight would have to be made in both places, and
      * the grid-wide affordance and the per-card one would drift apart silently.
      *
-     * Equivalent by construction, not by coincidence: `partitionRequests`
-     * advances while `start < queries.length`, so every partition it emits
-     * holds at least one request, and an empty input produces no partitions at
-     * all. A fetching partition therefore always contributes at least one
-     * placement, and the set is non-empty exactly when some partition is
-     * fetching.
+     * So the grid is busy exactly while some CARD is still waiting for its
+     * answer. A request whose every slot has arrived, and which is only closing
+     * its stream, keeps nobody waiting and makes nothing busy.
      */
     isFetching: fetchingPlacementIds.size > 0,
     fetchingPlacementIds,
@@ -812,7 +999,24 @@ export function useWidgetQueries(
         ? new Date(Math.min(...settledAt))
         : null,
     fetchedTierFor,
+    fetchedAppliedFor,
   };
+}
+
+/**
+ * What each request in `partition` was asked with, by placement: cached with the answer, as
+ * its tier is. A `stats` card's cells are left out; settings do not change them.
+ */
+function appliedSent(
+  partition: readonly WidgetQueryRequest[]
+): Record<string, string> {
+  const applied: Record<string, string> = emptyRecord();
+  for (const entry of partition) {
+    if (entry.cellKey === undefined) {
+      applied[entry.placementId] = appliedKey(entry);
+    }
+  }
+  return applied;
 }
 
 /**
@@ -830,13 +1034,14 @@ function tiersSent(
 }
 
 /**
- * A request as the cache keys it: everything but the sizing it is sent with. Named field by
- * field, so a field added to the request is a decision about the key rather than an accident;
- * TanStack's hash drops the `undefined` ones, so an unsized request keys exactly as before.
+ * A request as the cache keys it: everything but the sizing and the settings it is sent with.
+ * Named field by field, so a field added to the request is a decision about the key rather than
+ * an accident; TanStack's hash drops the `undefined` ones, so an unsized request keys exactly as
+ * before.
  */
 function unsized(
   request: WidgetQueryRequest
-): Omit<WidgetQueryRequest, "sized"> {
+): Omit<WidgetQueryRequest, "sized" | "applied"> {
   return {
     placementId: request.placementId,
     cellKey: request.cellKey,

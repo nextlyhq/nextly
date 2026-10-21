@@ -87,6 +87,16 @@ beforeEach(() => {
   count.mockResolvedValue({ total: ROWS_THE_CALLER_MAY_READ });
 });
 
+/**
+ * The recent-changes figure is counted by the activity-log service's own walk, which this
+ * service hands the kept-off content to. Answered with a distinct 7, so a figure of 0 can only
+ * mean the question was never asked.
+ */
+const countRecentActivity = vi.fn();
+beforeEach(() => {
+  countRecentActivity.mockResolvedValue({ count: 7, atLeast: false });
+});
+
 describe("a collection or Single kept off the dashboard is never counted", () => {
   it("leaves a hidden collection and a hidden Single out, even for a caller who may read everything", async () => {
     // `allResources()` is a super-admin's scope, so nothing about access removes them: only the
@@ -117,6 +127,7 @@ describe("a collection or Single kept off the dashboard is never counted", () =>
             ]),
         };
       }
+      if (name === "activityLogService") return { countRecentActivity };
       throw new Error(`unexpected container.get("${name}")`);
     });
 
@@ -131,12 +142,15 @@ describe("a collection or Single kept off the dashboard is never counted", () =>
     expect(count).not.toHaveBeenCalledWith(
       expect.objectContaining({ collection: "nx_pb_class_usage" })
     );
-    // Nor is its activity counted in the recent-changes figure: the activity query leaves out
-    // the collection the registry read above left out. Not the Single: the trail records none.
-    const activity = activityQuery(adapter);
-    expect(String(activity?.[0])).toContain("NOT IN");
-    expect(activity?.[1]).toContain("nx_pb_class_usage");
-    expect(activity?.[1]).not.toContain("hidden-single");
+    // Nor is its activity counted in the recent-changes figure: the figure is handed what the
+    // registry reads above left out, each by its kind -- the hidden collection, and the hidden
+    // Single -- and the walk leaves out their rows (`activity-scope.test.ts`).
+    expect(countRecentActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        keptOffCollections: new Set(["nx_pb_class_usage"]),
+        singles: { keptOff: new Set(["hidden-single"]), complete: true },
+      })
+    );
   });
 
   it("keeps a visible collection's activity when a hidden Single shares its slug", async () => {
@@ -151,6 +165,7 @@ describe("a collection or Single kept off the dashboard is never counted", () =>
             .mockResolvedValue([{ slug: "posts", admin: { hidden: true } }]),
         };
       }
+      if (name === "activityLogService") return { countRecentActivity };
       throw new Error(`unexpected container.get("${name}")`);
     });
 
@@ -161,9 +176,14 @@ describe("a collection or Single kept off the dashboard is never counted", () =>
     });
 
     expect(stats.singles).toBe(0);
-    const activity = activityQuery(adapter);
-    expect(String(activity?.[0])).not.toContain("NOT IN");
-    expect(activity?.[1]).not.toContain("posts");
+    // The hidden Single's slug is handed over as a Single's only: the visible collection of the
+    // same slug is not kept off, so its rows, and rows stating no kind, are still counted.
+    expect(countRecentActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        keptOffCollections: new Set(),
+        singles: { keptOff: new Set(["posts"]), complete: true },
+      })
+    );
   });
 });
 
@@ -182,6 +202,7 @@ describe("the recent-changes figure fails closed", () => {
       if (name === "singleRegistryService") {
         return { getAllSingles: vi.fn().mockResolvedValue([]) };
       }
+      if (name === "activityLogService") return { countRecentActivity };
       throw new Error(`unexpected container.get("${name}")`);
     });
 
@@ -192,16 +213,9 @@ describe("the recent-changes figure fails closed", () => {
     });
 
     expect(stats.content.recentChanges24h).toBe(0);
-    expect(activityQuery(adapter)).toBeUndefined();
+    expect(countRecentActivity).not.toHaveBeenCalled();
   });
 });
-
-/** The recent-changes count's query and its bound values, as the adapter received them. */
-function activityQuery(adapter: ReturnType<typeof makeAdapter>) {
-  return vi
-    .mocked(adapter.executeQuery)
-    .mock.calls.find(([sql]) => String(sql).includes("activity_log"));
-}
 
 describe("per-collection totals honour the caller's row-level access", () => {
   it("reports the access-controlled count, not the physical row count", async () => {

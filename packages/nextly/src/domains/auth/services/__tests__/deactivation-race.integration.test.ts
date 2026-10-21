@@ -36,7 +36,11 @@ vi.mock("../../../../auth/password", async importOriginal => {
   };
 });
 
-import { hashPassword, verifyPassword } from "../../../../auth/password";
+import {
+  DEFAULT_DIGESTER_REACH_BYTES,
+  hashPassword,
+  verifyPassword,
+} from "../../../../auth/password";
 
 import { getDialectTables } from "../../../../database/index";
 import {
@@ -134,14 +138,19 @@ async function sessionCount(db: TestDb): Promise<number> {
  *
  * The harness configures no hasher, so the service is assembled here around
  * the real account service; the query and mutation services are not reached
- * by a password change.
+ * by a password change. The hasher declares core's own reach, the contract
+ * every digester a service is handed must state.
  */
 function usersService(t: TestNextly): UserService {
   return new UserService(
     {} as never,
     {} as never,
     new UserAccountService(t.adapter, consoleLogger),
-    { hash: hashPassword, verify: verifyPassword }
+    {
+      hash: hashPassword,
+      verify: verifyPassword,
+      reach: DEFAULT_DIGESTER_REACH_BYTES,
+    }
   );
 }
 

@@ -69,6 +69,14 @@ export interface CollectionServiceResult<T = unknown> {
    * conflating `success` (a no-op reports success) with a committed write.
    */
   committed?: boolean;
+  /**
+   * The stored id of the document a read by id returned, taken from the row
+   * as loaded, before any `afterRead` hook ran. `data` is presentation output a
+   * hook may reshape or project, so a caller asking which document a read
+   * resolved to — a `beforeOperation` hook may rewrite the id — reads it here
+   * rather than from `data.id`.
+   */
+  resolvedEntryId?: string;
 }
 
 /**

@@ -64,16 +64,16 @@ describe("FieldValueDisplay", () => {
     expect(screen.getByText("••••••••")).toBeInTheDocument();
   });
 
-  it("shows a checkbox as a word, including a deliberate no", () => {
+  it("shows a checkbox as On or Off, including a deliberate off", () => {
     const { unmount } = render(
       <FieldValueDisplay field={field("checkbox")} value={1} />
     );
-    expect(screen.getByText("Yes")).toBeInTheDocument();
+    expect(screen.getByText("On")).toBeInTheDocument();
     unmount();
 
-    // false must read as "No", not as "Not set" — the distinction is the point.
+    // false must read as "Off", not as "Not set" — the distinction is the point.
     render(<FieldValueDisplay field={field("checkbox")} value={false} />);
-    expect(screen.getByText("No")).toBeInTheDocument();
+    expect(screen.getByText("Off")).toBeInTheDocument();
   });
 
   it("resolves a select value to its option label", () => {
@@ -127,6 +127,32 @@ describe("FieldValueDisplay", () => {
 
     expect(screen.getByText("hero.jpg")).toBeInTheDocument();
     // Decorative: the filename beside it is the accessible name.
+    expect(screen.getByRole("presentation", { hidden: true })).toBeTruthy();
+  });
+
+  it("describes an image by its alt text once, shown beside its name", () => {
+    render(
+      <FieldValueDisplay
+        field={field("upload")}
+        value={{
+          id: "m1",
+          originalFilename: "barn.jpg",
+          thumbnailUrl: "/t.jpg",
+          mimeType: "image/jpeg",
+          alt: "A red barn at dusk",
+        }}
+      />
+    );
+
+    expect(screen.getByText("barn.jpg")).toBeInTheDocument();
+    expect(
+      screen.getByText("Alt text: A red barn at dusk")
+    ).toBeInTheDocument();
+    // The visible line reads the description; the thumbnail, decorative,
+    // does not read it a second time.
+    expect(
+      screen.queryByRole("img", { name: "A red barn at dusk" })
+    ).toBeNull();
     expect(screen.getByRole("presentation", { hidden: true })).toBeTruthy();
   });
 

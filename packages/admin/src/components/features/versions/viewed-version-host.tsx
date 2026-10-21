@@ -43,12 +43,19 @@ import {
 import { cn } from "@admin/lib/utils";
 
 import {
+  ChangesLayoutProvider,
+  ChangesLayoutToggle,
+  layoutFor,
+  useChangesLayoutPreference,
+} from "./diff/changes-layout";
+import {
   useDocumentHistory,
   type DocumentHistoryValue,
   type RestoreAffordance,
   type ViewedVersion,
 } from "./document-history-context";
 import { snapshotToFormValues } from "./snapshot-to-form-values";
+import { useChangeNavigation } from "./useChangeNavigation";
 import {
   useVersionActions,
   versionOnScreen,
@@ -62,7 +69,7 @@ import {
   type ChangesState,
   type VersionChanges,
 } from "./version-changes";
-import { changeAnchorId, VersionChangesForm } from "./VersionChangesForm";
+import { VersionChangesForm } from "./VersionChangesForm";
 import { VersionComparisonBar } from "./VersionComparisonBar";
 
 /**
@@ -320,7 +327,13 @@ function phonePositionText(
     case "first":
       return "First version";
     case "ready":
-      return changed > 0 ? `${position + 1} of ${changed}` : "No changes";
+      if (changed > 0) return `${position + 1} of ${changed}`;
+      // Never "No changes" where the server found a difference.
+      return state.whenNone === "system"
+        ? "System fields only"
+        : state.whenNone === "unseen"
+          ? "None you can read"
+          : "No changes";
   }
 }
 
@@ -421,25 +434,6 @@ function useViewedChanges(viewing: ViewedVersion) {
     changes,
   });
   return { changes, state };
-}
-
-/**
- * Where the reader is among a version's changes, and the move to the
- * previous or next one. A move brings the change into view and focuses it,
- * so a keyboard or screen reader user lands on it as well as seeing it.
- */
-function useChangeNavigation(order: readonly string[]) {
-  const [position, setPosition] = useState(0);
-  const at = Math.min(position, Math.max(order.length - 1, 0));
-  const move = (delta: -1 | 1) => {
-    if (order.length === 0) return;
-    const next = (at + delta + order.length) % order.length;
-    setPosition(next);
-    const target = document.getElementById(changeAnchorId(order[next]));
-    target?.scrollIntoView({ block: "center", behavior: "smooth" });
-    target?.focus({ preventScroll: true });
-  };
-  return { position: at, current: order[at] ?? null, move };
 }
 
 /** The top-level names a form lays out, in its order. */
@@ -560,38 +554,57 @@ function ViewedVersionFrame({
     [changes, layout]
   );
   const { position, current, move } = useChangeNavigation(order);
+  const [preference, setChangesLayout] = useChangesLayoutPreference();
+  const { layout: changesLayout, splittable } = layoutFor(
+    preference,
+    changes?.byField.values() ?? []
+  );
   return (
-    // Room under the last field for the phone's bottom bar.
-    <div className="@4xl/content:p-8 pt-6 pb-20 sm:pb-0">
-      <VersionComparisonBar
-        versionNo={viewing.versionNo}
-        about={viewing.about}
-        comparedWith={viewing.comparedWith}
-        changes={state}
-        position={position}
-        onMove={move}
-        onBackToHistory={restore?.backToHistory}
-        onOpenComparison={restore?.compare}
-        onCompareCurrent={restore?.compareCurrent}
-      />
-      <VersionContent
-        viewing={viewing}
-        fields={fields}
-        values={values}
-        changes={changes}
-        order={order}
-        current={current}
-      />
-      {actions ? (
-        <VersionPhoneBar
-          actions={actions}
-          state={state}
-          changed={order.length}
+    // The reader's remembered layout, for every change drawn below.
+    <ChangesLayoutProvider value={changesLayout}>
+      {/* Room under the last field for the phone's bottom bar. The container
+          the changes query, as on the comparison page: side by side, each
+          change's two sides take columns only where this box has room. */}
+      <div className="@container/diff @4xl/content:p-8 pt-6 pb-20 sm:pb-0">
+        <VersionComparisonBar
+          layoutToggle={
+            order.length > 0 ? (
+              <ChangesLayoutToggle
+                layout={changesLayout}
+                onChange={setChangesLayout}
+                splittable={splittable}
+              />
+            ) : null
+          }
+          versionNo={viewing.versionNo}
+          about={viewing.about}
+          comparedWith={viewing.comparedWith}
+          changes={state}
           position={position}
           onMove={move}
+          onBackToHistory={restore?.backToHistory}
+          onOpenComparison={restore?.compare}
+          onCompareCurrent={restore?.compareCurrent}
         />
-      ) : null}
-    </div>
+        <VersionContent
+          viewing={viewing}
+          fields={fields}
+          values={values}
+          changes={changes}
+          order={order}
+          current={current}
+        />
+        {actions ? (
+          <VersionPhoneBar
+            actions={actions}
+            state={state}
+            changed={order.length}
+            position={position}
+            onMove={move}
+          />
+        ) : null}
+      </div>
+    </ChangesLayoutProvider>
   );
 }
 

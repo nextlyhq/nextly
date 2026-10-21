@@ -46,6 +46,13 @@ export interface BatchCard {
    * drawn somewhere with no dashboard width, whose query is asked as declared.
    */
   tier?: SizeTier;
+  /**
+   * The widget's query as DECLARED, when the card's settings change it: `widget` is then the
+   * widget as its settings ask it. The batch keys the card by this and sends `widget.query`, so
+   * one card's change of settings is not a new question for the whole dashboard. Absent when
+   * nothing applies, and the card is keyed by what it asks.
+   */
+  declaredQuery?: DashboardWidget["query"];
 }
 
 export interface WidgetBatch {
@@ -121,14 +128,17 @@ function questionsFor(card: BatchCard): WidgetQueryRequest[] {
   // Sized only for a card the host draws, whose body slices to its tier. A custom card's own
   // component draws the raw answer with no tier, so it is asked exactly as declared.
   const tier = widget.archetype === "custom" ? undefined : card.tier;
+  // Keyed by the declared question and sent as the settings ask it; see `declaredQuery`.
+  const declared = card.declaredQuery ?? widget.query;
   return [
-    tier
-      ? {
-          placementId,
-          query: widget.query,
-          sized: { query: queryForTier(widget.query, tier), tier },
-        }
-      : { placementId, query: widget.query },
+    {
+      placementId,
+      query: declared,
+      ...(declared === widget.query ? {} : { applied: widget.query }),
+      ...(tier
+        ? { sized: { query: queryForTier(widget.query, tier), tier } }
+        : {}),
+    },
   ];
 }
 

@@ -100,6 +100,42 @@ describe("a save", () => {
   });
 });
 
+describe("a card's settings written outside customise mode", () => {
+  it("holds every other layout write while in flight, and keeps its failure off the editor's chrome", async () => {
+    let fail: (error: Error) => void = () => {};
+    api.put.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          fail = reject;
+        })
+    );
+    const { result } = renderHook(() => useDashboardLayout(), { wrapper });
+    await waitFor(() => expect(result.current.layout).toBeDefined());
+
+    act(() => {
+      result.current.cardSettings.mutate({
+        placements: [],
+        version: 4,
+        scope: "s",
+        arranged: false,
+      });
+    });
+    // In flight: every layout control waits, as for a dismissal, because a
+    // second write would carry the same version guard.
+    await waitFor(() => expect(result.current.isWriting).toBe(true));
+
+    await act(async () => {
+      fail(Object.assign(new Error("Conflict"), { status: 409 }));
+    });
+    await waitFor(() => expect(result.current.cardSettings.isError).toBe(true));
+    // Reported by the card, not by the editor's chrome, which a reader who is
+    // not customising is not looking at.
+    expect(result.current.isConflict).toBe(false);
+    expect(result.current.writeError).toBeNull();
+    expect(result.current.isWriting).toBe(false);
+  });
+});
+
 describe("an unreadable stored arrangement", () => {
   it("is reported as such, and still counts as a row that can be reset", async () => {
     api.get.mockResolvedValue(read({ source: "unreadable", version: 9 }));

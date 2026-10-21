@@ -55,6 +55,7 @@ import { captureInTx } from "../../versions/capture-in-tx";
 import { draftComponentValues } from "../../versions/draft-components";
 import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
 import {
+  type ComponentFieldResolver,
   resolveComponentFieldMap,
   tagComponentTypes,
   tagNestedComponentTypes,
@@ -63,7 +64,10 @@ import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
-import { recordMutationEvent } from "../../webhooks/record-mutation-event";
+import {
+  recordMutationEvent,
+  recordSingleSaveActivity,
+} from "../../webhooks/record-mutation-event";
 import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
 import type { WebhookResource } from "../../webhooks/types";
 import type {
@@ -525,6 +529,13 @@ export class SinglePublishAllService extends BaseService {
       versionNo: publishVersionNo,
     });
 
+    // A publish that moved nothing — no main lifecycle and no stored
+    // translation — has no content write for the caller to flush or prune, and
+    // nothing for the activity trail to record.
+    const committed = hasMainStatus || priorCompanionStatuses.size > 0;
+
+    await this.recordPublishActivity(tx, plan, committed);
+
     const eventRecorded = plan.recordingEnabled
       ? await this.recordPublishEvents(tx, {
           plan,
@@ -538,11 +549,30 @@ export class SinglePublishAllService extends BaseService {
 
     return {
       documentVanished: false,
-      // A publish that moved nothing — no main lifecycle and no stored
-      // translation — has no content write for the caller to flush or prune.
-      committed: hasMainStatus || priorCompanionStatuses.size > 0,
+      committed,
       eventRecorded,
     };
+  }
+
+  /**
+   * The publish's row in the activity trail: one for the whole publish, every
+   * language at once, so no language is named. Written outside the outbox
+   * gate, as a single save's row is: the trail holds on every install,
+   * webhooks or not. A publish that moved nothing records nothing.
+   */
+  private async recordPublishActivity(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    committed: boolean
+  ): Promise<void> {
+    if (!committed) return;
+    await recordSingleSaveActivity(tx, {
+      slug: plan.slug,
+      entryId: plan.existingDoc.id,
+      label: plan.singleMeta.label,
+      locale: null,
+      actor: plan.actor,
+    });
   }
 
   /**
@@ -672,12 +702,15 @@ export class SinglePublishAllService extends BaseService {
     const localizedFieldNames = new Set(
       (companion?.localizedFields ?? []).map(f => f.name)
     );
+    // The gate takes the type tags off nested components as well.
+    const componentFields = await this.componentFieldsOn(tx, fieldConfigs);
     await assertDraftsMayBePromoted(pending, {
       ...promoteCallerFor({
         tx,
         slug,
         defaultLocale: this.localization?.defaultLocale ?? null,
         fields: fieldConfigs,
+        componentFields,
         options,
         grants: promoteGrants,
       }),
@@ -726,6 +759,27 @@ export class SinglePublishAllService extends BaseService {
    * belongs on that language's companion row, and folding it into the main row
    * would write it to a table with no column for it.
    */
+  /**
+   * A component's fields by its slug, for the walks that tag and untag the
+   * components a snapshot records. Resolved once per call so each walk stays
+   * synchronous, and on the transaction's own connection: a registry lookup on
+   * the pool would take a second connection while this transaction holds one.
+   */
+  private async componentFieldsOn(
+    tx: TransactionContext,
+    fieldConfigs: FieldConfig[]
+  ): Promise<ComponentFieldResolver> {
+    const schemas = this.fieldGroupDataService
+      ? await resolveComponentFieldMap(fieldConfigs, componentSlug =>
+          this.fieldGroupDataService!.getComponentFields(
+            componentSlug,
+            tx.getDrizzle()
+          )
+        )
+      : new Map<string, FieldConfig[]>();
+    return componentSlug => schemas.get(componentSlug);
+  }
+
   private async promotePendingChanges(
     tx: TransactionContext,
     plan: PublishPlan,
@@ -736,6 +790,8 @@ export class SinglePublishAllService extends BaseService {
   ): Promise<void> {
     if (pending.length === 0) return;
     const { singleMeta, existingDoc, companion } = plan;
+    // So the type tags the drafts record come off at every depth.
+    const componentFields = await this.componentFieldsOn(tx, plan.fieldConfigs);
 
     for (const draft of pending) {
       // The pending change carries no lifecycle of its own; the statuses this
@@ -748,7 +804,9 @@ export class SinglePublishAllService extends BaseService {
         draft.snapshot,
         plan.singleMeta.tableName,
         plan.singleMeta.fields,
-        companion
+        companion,
+        undefined,
+        componentFields
       );
       delete main.status;
 
@@ -982,20 +1040,8 @@ export class SinglePublishAllService extends BaseService {
     // columns — camel-casing every key would rewrite those fields.
     const parentRow = convertTimestampsToCamelCase({ ...publishedRow });
 
-    // Component schemas the snapshot's tagging needs, resolved once so the walk
-    // itself stays synchronous, and read on the transaction's own connection —
-    // a registry lookup on the pool would take a second connection while this
-    // transaction still holds one.
-    const componentSchemas = this.fieldGroupDataService
-      ? await resolveComponentFieldMap(fieldConfigs, componentSlug =>
-          this.fieldGroupDataService!.getComponentFields(
-            componentSlug,
-            tx.getDrizzle()
-          )
-        )
-      : new Map<string, FieldConfig[]>();
-    const resolveComponent = (componentSlug: string) =>
-      componentSchemas.get(componentSlug);
+    // The component schemas the snapshot's tagging needs.
+    const resolveComponent = await this.componentFieldsOn(tx, fieldConfigs);
 
     const components = await readComponentSubtrees({
       fieldGroupDataService: this.fieldGroupDataService,
