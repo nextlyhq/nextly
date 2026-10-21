@@ -781,6 +781,20 @@ describe("@nextly/adapter-mysql", () => {
       mockConnection.query.mockImplementation(answer);
     });
 
+    it("is refused inside an open transaction, taking no connection", async () => {
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      await expect(
+        adapter.transaction(async () => {
+          mockPool.getConnection.mockClear();
+          await adapter.withSession(async () => undefined);
+        })
+      ).rejects.toMatchObject({ code: "NEXTLY_SESSION_INSIDE_TRANSACTION" });
+      expect(mockPool.getConnection).not.toHaveBeenCalled();
+    });
+
     it("commits each statement when the server starts sessions with autocommit off, and puts it back", async () => {
       // With autocommit off a statement waits for a COMMIT nobody sends, and the connection would
       // return to the pool with an open transaction for later work to commit or roll back.

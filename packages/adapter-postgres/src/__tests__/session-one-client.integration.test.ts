@@ -83,4 +83,40 @@ describe("PostgreSQL withSession", async () => {
     });
     expect(rows).toEqual([{ v: "kept" }]);
   });
+
+  it("hands the client back to the pool with nothing the session set left on it", async () => {
+    const one = createPostgresAdapter({ url: TEST_DB_URL, pool: { max: 1 } });
+    await one.connect();
+    try {
+      const [before] = await one.executeQuery<{ name: string }>(
+        "SELECT current_setting('application_name') AS name"
+      );
+      const work = async () =>
+        one.withSession(async session => {
+          await session.execute(
+            "CREATE TEMP TABLE int_pg_session_leftover (v text)"
+          );
+          await session.execute("SET application_name = 'leftover'");
+        });
+      await work();
+      // The pool's only client again: the temporary table and the setting are gone.
+      const [after] = await one.executeQuery<{ name: string }>(
+        "SELECT current_setting('application_name') AS name"
+      );
+      expect(after.name).toBe(before.name);
+      await work();
+    } finally {
+      await one.disconnect();
+    }
+  });
+
+  it("is refused inside an open transaction, running nothing", async () => {
+    await expect(
+      adapter.transaction(async () => {
+        await adapter.withSession(async session => {
+          await session.execute("SELECT 1");
+        });
+      })
+    ).rejects.toMatchObject({ code: "NEXTLY_SESSION_INSIDE_TRANSACTION" });
+  });
 });

@@ -551,14 +551,16 @@ export class PostgresAdapter extends DrizzleAdapter {
    * Runs `work` on one pooled client outside a transaction, each statement
    * committing as it runs, so connection-scoped state a statement sets — a
    * temporary table, a session setting, an advisory lock — is still there
-   * for the next. The client goes back to the pool once `work` has finished
-   * or thrown. No `SessionOptions` field changes anything on PostgreSQL:
+   * for the next. The client goes back to the pool reset, once `work` has
+   * finished or thrown (`releaseSessionClient`). No `SessionOptions` field changes anything on PostgreSQL:
    * strict mode is MySQL's, and PostgreSQL refuses an overlong value already.
    */
   override async withSession<T>(
     work: (session: StatementSession) => Promise<T>,
     _options?: SessionOptions
   ): Promise<T> {
+    // A precondition: before any connection is taken.
+    this.refuseSessionInTransaction();
     const pool = this.ensurePool();
     // A checkout, taken from the pool like `executeQuery`'s queries are.
     this.notePoolAccess();
@@ -591,7 +593,23 @@ export class PostgresAdapter extends DrizzleAdapter {
         },
       });
     } finally {
+      await this.releaseSessionClient(client);
+    }
+  }
+
+  /**
+   * Returns a session's client to the pool with nothing the session set left
+   * on it. `DISCARD ALL` drops its temporary tables, resets every session
+   * setting, releases its advisory locks and closes its prepared statements;
+   * a client it cannot be run on, such as one left inside a transaction the
+   * work opened, is closed instead, so no later caller inherits its state.
+   */
+  private async releaseSessionClient(client: PoolClient): Promise<void> {
+    try {
+      await client.query("DISCARD ALL");
       client.release();
+    } catch (error) {
+      client.release(error instanceof Error ? error : true);
     }
   }
 

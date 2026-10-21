@@ -472,6 +472,26 @@ export abstract class DrizzleAdapter {
   ): Promise<T>;
 
   /**
+   * Refuses a `withSession` call made while the calling flow is inside an
+   * open transaction, before any connection is taken. On SQLite's one
+   * connection its statements would join that transaction and be undone
+   * with it; on PostgreSQL and MySQL they would commit on a connection of
+   * their own. Refused on every dialect, so code that passes on one does not
+   * behave differently on another.
+   *
+   * @throws {DatabaseError} code `NEXTLY_SESSION_INSIDE_TRANSACTION`
+   */
+  protected refuseSessionInTransaction(): void {
+    if (!this.transactionOpenInFlow()) return;
+    throw createDatabaseError({
+      kind: "query",
+      code: "NEXTLY_SESSION_INSIDE_TRANSACTION",
+      message:
+        "withSession was called inside an open transaction. Its statements run outside any transaction: call it before opening the transaction, or after it has finished.",
+    });
+  }
+
+  /**
    * Runs `work` with statements that commit one by one, outside any
    * transaction, on one connection held for the whole of `work`.
    *
@@ -486,14 +506,19 @@ export abstract class DrizzleAdapter {
    * before the connection returns to the pool, whether `work` finished or
    * threw.
    *
+   * Refused inside an open transaction (`refuseSessionInTransaction`).
+   *
    * @param work - Runs the statements through the session it is handed
    * @param options - Session options
    * @returns Result of `work`
+   * @throws {DatabaseError} code `NEXTLY_SESSION_INSIDE_TRANSACTION` when the
+   *   calling flow is inside an open transaction
    */
   async withSession<T>(
     work: (session: StatementSession) => Promise<T>,
     _options?: SessionOptions
   ): Promise<T> {
+    this.refuseSessionInTransaction();
     return work({
       execute: <R = unknown>(statement: string, params?: SqlParam[]) =>
         this.executeQuery<R>(statement, params),

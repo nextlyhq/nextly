@@ -601,6 +601,8 @@ export class MySqlAdapter extends DrizzleAdapter {
     work: (session: StatementSession) => Promise<T>,
     options?: SessionOptions
   ): Promise<T> {
+    // A precondition: before any connection is taken.
+    this.refuseSessionInTransaction();
     const pool = this.ensurePool();
     // A checkout, taken from the pool like `executeQuery`'s queries are.
     this.notePoolAccess();
