@@ -499,6 +499,97 @@ describe("reconcileFile (Phase 2 three-state)", () => {
     ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
   });
 
+  describe("DRIFT names every element it finds different", () => {
+    // `before` holds one table with a text `id`; each case changes one
+    // element of it in the live database, so the database matches neither
+    // side and the refusal must say which element differs.
+    const withId = (
+      over: Partial<NextlySchemaSnapshot["tables"][number]>
+    ): NextlySchemaSnapshot => ({
+      tables: [{ ...tbl("a"), ...over }],
+    });
+    // `before` tracks checks and foreign keys (an empty list), as an
+    // introspected table does: a side that leaves them out has the diff skip
+    // that dimension, and nothing would differ.
+    const before = withId({ checks: [], foreignKeys: [] });
+    const refusal = async (live: NextlySchemaSnapshot): Promise<unknown> =>
+      reconcileFile({
+        file,
+        before,
+        target: { tables: [...before.tables, tbl("b")] },
+        live,
+        repo: fakeRepo(),
+        executeSql: executor(),
+      }).catch((error: unknown) => error);
+    const details = (error: unknown): string[] =>
+      (
+        (error as { logContext?: { driftItems?: Array<{ detail: string }> } })
+          .logContext?.driftItems ?? []
+      ).map(item => item.detail);
+
+    it.each([
+      [
+        "a column's type",
+        withId({
+          columns: [{ name: "id", type: "integer", nullable: false }],
+          checks: [],
+          foreignKeys: [],
+        }),
+        "a.id",
+      ],
+      [
+        "a column's nullability",
+        withId({
+          columns: [{ name: "id", type: "text", nullable: true }],
+          checks: [],
+          foreignKeys: [],
+        }),
+        "a.id",
+      ],
+      [
+        "a column's default",
+        withId({
+          columns: [
+            { name: "id", type: "text", nullable: false, default: "'x'" },
+          ],
+          checks: [],
+          foreignKeys: [],
+        }),
+        "a.id",
+      ],
+      [
+        "a check",
+        withId({
+          checks: [{ name: "a_id_check", sql: "id <> ''" }],
+          foreignKeys: [],
+        }),
+        "a_id_check",
+      ],
+      [
+        "a foreign key",
+        withId({
+          checks: [],
+          foreignKeys: [
+            {
+              name: "fk_a_id",
+              columns: ["id"],
+              referencesTable: "c",
+              referencesColumns: ["id"],
+              onDelete: "cascade",
+              onUpdate: "no action",
+            },
+          ],
+        }),
+        "fk_a_id",
+      ],
+    ])("names %s", async (_what, live, name) => {
+      const error = await refusal(live);
+      expect(error).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      expect(details(error).join("\n")).toContain(name);
+      expect(details(error).join("\n")).not.toMatch(/^\S+ differs$/m);
+    });
+  });
+
   it("does not offer the baseline recovery when the file already failed once", async () => {
     // Schema alone cannot tell a retried failed migration from a database
     // nobody has adopted: MySQL commits each DDL statement as it runs, so a

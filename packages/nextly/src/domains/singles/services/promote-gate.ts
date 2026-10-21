@@ -492,6 +492,11 @@ async function schemaIssues(
       req: ctx.user ? { user: ctx.user } : {},
       localizedFieldNames: ctx.localizedFieldNames,
       enforceLocalizedRequired: ctx.enforceLocalizedRequired,
+      // A component inside a group or repeater is judged here: the component
+      // write the promotion runs never reaches it.
+      ...(ctx.componentFields === undefined
+        ? {}
+        : { componentFields: ctx.componentFields }),
       ...(ctx.write === undefined ? {} : { write: ctx.write }),
     }
   );

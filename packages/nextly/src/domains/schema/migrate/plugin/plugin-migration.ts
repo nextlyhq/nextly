@@ -364,7 +364,7 @@ export function assertModuleIntact(
 
   throw new NextlyError({
     code: "MIGRATION_CHECKSUM_MISMATCH",
-    publicMessage: `A plugin migration has been changed since it was generated. Regenerate it, or restore the original. A module written or edited by hand is sealed with \`migrationChecksum\` from \`@nextlyhq/plugin-sdk/schema\` — \`checksum: migrationChecksum(content)\` over the module without its checksum — which is the form \`nextly migrate:create --plugin <entry> --blank\` and \`--no-transaction\` write.`,
+    publicMessage: `Plugin "${pluginName}" migration ${migration.name}: a plugin migration has been changed since it was generated. Regenerate it, or restore the original. A module written or edited by hand is sealed with \`migrationChecksum\` from \`@nextlyhq/plugin-sdk/schema\` — \`checksum: migrationChecksum(content)\` over the module without its checksum — which is the form \`nextly migrate:create --plugin <entry> --blank\` and \`--no-transaction\` write.`,
     logContext: {
       plugin: pluginName,
       migration: migration.name,
@@ -393,8 +393,7 @@ export function assertAppliedUnchanged(
 
   throw new NextlyError({
     code: "MIGRATION_CHECKSUM_MISMATCH",
-    publicMessage:
-      "A plugin migration that has already been applied no longer matches what was applied. The database does not match the file that claims to describe it.",
+    publicMessage: `Plugin "${pluginName}" migration ${migration.name}: a plugin migration that has already been applied no longer matches what was applied. The database does not match the file that claims to describe it. Restore the migration as it was when it ran.`,
     logContext: {
       plugin: pluginName,
       migration: migration.name,
@@ -407,9 +406,11 @@ export function assertAppliedUnchanged(
 /**
  * The modules a plugin ships, in the order they must run.
  *
- * Sorted by name rather than trusting the array's order: the generated
- * `index.ts` is rewritten by a tool, and a hand-edit that reorders it would
- * otherwise silently change which migration runs first.
+ * Sorted by name, the one order every reader of a plugin's modules uses. A
+ * list declared in any other order is refused before anything runs
+ * (`assertModulesInNameOrder`), so this is also the order the plugin
+ * declares; the sort keeps a reader that has not been through that check
+ * from depending on the array's order.
  */
 export function orderedMigrations(
   migrations: readonly PluginMigration[]
@@ -475,6 +476,38 @@ export function assertUniqueModuleNames(
         plugin: pluginName,
         migration: migration.name,
         clashesWith: earlier,
+      },
+    });
+  }
+}
+
+/**
+ * Refuse a plugin whose modules are listed in an order other than their
+ * names' (`compareModuleNames`).
+ *
+ * The modules run in name order, and every reader of them — the runner, its
+ * preview, `migrate:status`, `migrate:down`, the uninstall runner and the
+ * generator — uses that order. A list declared otherwise would run in an
+ * order its author never wrote, so it is refused, naming the first module
+ * out of place, rather than re-sorted in silence. The generator writes its
+ * list in name order, so only a list edited by hand is refused. Asked where
+ * the manifest is read and before any module runs.
+ */
+export function assertModulesInNameOrder(
+  pluginName: string,
+  migrations: readonly Pick<PluginMigration, "name">[]
+): void {
+  for (let at = 1; at < migrations.length; at += 1) {
+    const before = migrations[at - 1].name;
+    const here = migrations[at].name;
+    if (compareModuleNames(before, here) <= 0) continue;
+    throw new NextlyError({
+      code: "PLUGIN_MIGRATIONS_OUT_OF_ORDER",
+      publicMessage: `Plugin "${pluginName}" lists its migration "${here}" after "${before}", but its migrations run in the order of their names, so "${here}" runs first. List the plugin's migrations in the order of their names (the order \`nextly migrate:create --plugin\` writes them in). Nothing was applied.`,
+      logContext: {
+        plugin: pluginName,
+        migration: here,
+        listedAfter: before,
       },
     });
   }

@@ -20,6 +20,7 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { NextlyError } from "../../errors";
 import type { AddressableField } from "../../shared/addressable-fields";
 import { addressableFields } from "../../shared/addressable-fields";
+import { hasComponentInContainer } from "../../shared/lib/entry-validation";
 import { storageTypeToken } from "../../shared/lib/plugin-storage";
 import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
 import {
@@ -386,6 +387,21 @@ function stripNestedTags(
   if (typeof value !== "object" || value === null) return value;
 
   return stripFieldsIn(value as Record<string, unknown>, fields, resolve, seen);
+}
+
+/**
+ * The fields of the components `fields` holds inside groups or repeaters, by
+ * slug, for validating those components' values where no component write
+ * reaches them; undefined when `fields` holds none, so a write without one
+ * resolves nothing.
+ */
+export async function containedComponentResolver(
+  fields: FieldConfig[],
+  getComponentFields: (slug: string) => Promise<FieldConfig[] | null>
+): Promise<ComponentFieldResolver | undefined> {
+  if (!hasComponentInContainer(fields)) return undefined;
+  const schemas = await resolveComponentFieldMap(fields, getComponentFields);
+  return componentSlug => schemas.get(componentSlug);
 }
 
 /**

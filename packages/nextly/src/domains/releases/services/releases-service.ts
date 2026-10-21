@@ -93,6 +93,17 @@ import {
   type ReadinessFinding,
   type ReleaseReadiness,
 } from "../readiness/evaluate-readiness";
+import {
+  linkTargetOf,
+  narrowLinkFindings,
+  UNPUBLISHED_LINKS_SOURCE_KEY,
+  unpublishedLinksReport,
+  unpublishedLinksSource,
+  withoutFieldKeys,
+  type ReleaseLinkReads,
+  type ScannedLinks,
+  type UnpublishedLinksReport,
+} from "../readiness/unpublished-links";
 import type { ReleaseActivityEntry } from "../release-activity";
 import {
   RELEASE_CALENDAR_RELEASES_PER_DAY,
@@ -101,6 +112,11 @@ import {
   type ReleaseCalendar,
 } from "../release-calendar";
 import { isDueAt } from "../release-due";
+import {
+  keptAsRecord,
+  releaseEventActorOf,
+  type ReleaseRunHistory,
+} from "../release-events";
 import { releaseMemberKey } from "../release-member-key";
 import type { ReleaseRecheckTarget } from "../release-recheck";
 import {
@@ -188,6 +204,12 @@ export interface ReleaseActor {
    * against the real user rather than against an empty list.
    */
   userRoles?: string[];
+  /**
+   * The API key's own id, when the caller authenticated as one: what a
+   * release's history names the key by. The key's owner stays `userId`, which
+   * authorizes it; a change is recorded as the key, never as its owner.
+   */
+  apiKeyId?: string;
 }
 
 /**
@@ -304,6 +326,50 @@ export interface ReleasesServiceDeps {
    * wants.
    */
   recordActivity?: (entry: ReleaseActivityEntry) => Promise<void>;
+  /**
+   * What the link check reads of content: what each document links to as it
+   * would go live, with the document it was read from, and which linked
+   * documents are live. Held by this service, so every call it serves reads
+   * through the one registration it was built with. Optional: without it no
+   * link is checked.
+   *
+   * @experimental
+   */
+  linkReads?: ReleaseLinkReads;
+  /**
+   * For each of these scanned documents, by `id`, the keys of the link fields
+   * the actor may view, judged on the scanned document itself
+   * ({@link ScannedLinks.snapshot}) with the field read rules applied for the
+   * actor as a read applies them. A link in any other field is reported
+   * without its field or target. Optional: without it, an untrusted reader is
+   * shown no linked field at all.
+   *
+   * @experimental
+   */
+  visibleLinkFields?: (
+    scans: ReadonlyArray<{ id: string; scanned: ScannedLinks }>,
+    actor: ReleaseActor
+  ) => Promise<ReadonlyMap<string, ReadonlySet<string>>>;
+}
+
+/**
+ * A member as an add answers it: the stored member, and the documents it
+ * links to that will not be live at its release's moment, so a client can
+ * offer to add them too.
+ *
+ * @experimental
+ */
+export type AddedReleaseMember = ReleaseMemberRow & {
+  /** @experimental */
+  unpublishedLinks: UnpublishedLinksReport;
+};
+
+/**
+ * The report for a member with nothing to report: a new one each time, since
+ * it is handed to the caller, who may change it.
+ */
+function noUnpublishedLinks(): UnpublishedLinksReport {
+  return { links: [], hiddenCount: 0, inHiddenFields: 0, deletedLinks: [] };
 }
 
 /**
@@ -430,7 +496,8 @@ function runCapabilities(
 function editCapabilities(
   release: ReleaseRow,
   held: number,
-  may: HeldAuthorities
+  may: HeldAuthorities,
+  history: ReleaseRunHistory | undefined
 ): Pick<
   ReleaseCapabilities,
   "addMember" | "removeMember" | "update" | "delete"
@@ -448,7 +515,7 @@ function editCapabilities(
     removeMember: mayChange("remove"),
     // Any state, as `update` writes it: the title is a label.
     update: may.mayUpdate,
-    delete: may.mayDelete && whyNotDeletable(release) === null,
+    delete: may.mayDelete && whyNotDeletable(release, history) === null,
   };
 }
 
@@ -526,25 +593,23 @@ function assertDetailsChange(change: ReleaseDetailsChange): void {
 /**
  * Why this release may not be deleted, or `null` when it may.
  *
- * Only a release that never ran: a draft, or a release cancelled before it
- * was ever scheduled. A cancelled release that WAS scheduled is kept, because
- * nothing stored says whether it began to run: one that stopped part-way and
- * was then cancelled has put content live, and reads like any other cancelled
- * release. `scheduledAt` is the evidence that survives a cancel, so a release
- * that ever had one is kept as the record. A release goes from draft only to
- * scheduled or cancelled, so a draft never carries one.
+ * Only a release that never ran: a draft, or a cancelled release that never
+ * put content live. Whether a scheduled-then-cancelled one did is its
+ * history's to say (`keptAsRecord`): it is kept when it started publishing or
+ * was published, and when its history was not recorded, since nothing then
+ * says whether it ran. Both are `was-scheduled`. A release goes from draft
+ * only to scheduled or cancelled, so a draft never carries an instant.
  *
  * The one answer for the write and for the `delete` capability; the
- * repository's fence states the same rule in its transaction.
+ * repository's fence asks `keptAsRecord` in its transaction.
  */
 function whyNotDeletable(
-  release: Pick<ReleaseRow, "state" | "scheduledAt">
+  release: Pick<ReleaseRow, "state" | "scheduledAt">,
+  history: ReleaseRunHistory | undefined
 ): ReleaseNotDeletablePublicData["reason"] | null {
   if (release.state === "published") return "published";
   if (!RELEASE_DELETABLE_FROM.includes(release.state)) return "committed";
-  if (release.scheduledAt !== null && release.scheduledAt !== undefined) {
-    return "was-scheduled";
-  }
+  if (keptAsRecord(release, history)) return "was-scheduled";
   return null;
 }
 
@@ -558,8 +623,16 @@ const NOT_DELETABLE_MESSAGES: Record<
   committed:
     "This release is scheduled or stopped, so it can't be deleted. Cancelling it calls it off, and it's then kept as a record.",
   "was-scheduled":
-    "This release was scheduled, so it's kept as a record. Cancelled releases that were never scheduled can be deleted.",
+    "This release began publishing before it was cancelled, so it's kept as the record of what went live.",
 };
+
+/**
+ * The `was-scheduled` sentence for a release whose history was not recorded:
+ * it was scheduled before releases recorded their history, so nothing says
+ * whether it began publishing.
+ */
+const UNRECORDED_RUN_MESSAGE =
+  "This release was scheduled before its history was recorded, so whether it began publishing is unknown and it's kept as a record.";
 
 /**
  * The refusal for deleting a release that may not be deleted: a CONFLICT
@@ -567,10 +640,14 @@ const NOT_DELETABLE_MESSAGES: Record<
  */
 function notDeletableRefusal(
   release: ReleaseRow,
-  reason: ReleaseNotDeletablePublicData["reason"]
+  reason: ReleaseNotDeletablePublicData["reason"],
+  history: ReleaseRunHistory | undefined
 ): NextlyError {
+  const unrecorded = reason === "was-scheduled" && history?.recorded !== true;
   return NextlyError.conflict({
-    message: NOT_DELETABLE_MESSAGES[reason],
+    message: unrecorded
+      ? UNRECORDED_RUN_MESSAGE
+      : NOT_DELETABLE_MESSAGES[reason],
     data: { reason },
     logContext: {
       reason: "release-not-deletable",
@@ -1424,6 +1501,64 @@ export interface AddMemberInput extends Omit<DocumentRef, "scopeKind"> {
   action: ReleaseMemberAction;
 }
 
+/**
+ * Every document these link findings name, once each, its document key as its
+ * id: the documents the links are TO, and when `withSources` the ones they are
+ * FROM.
+ */
+function documentsAskedAbout(
+  links: readonly ReadinessFinding[],
+  withSources: boolean
+): ReleaseDocument[] {
+  const asked = new Map<string, ReleaseDocument>();
+  const ask = (ref: DocumentRef): void => {
+    const id = documentRefKey(ref);
+    asked.set(id, { ...ref, id });
+  };
+  for (const finding of links) {
+    if (withSources) ask(sourceOf(finding));
+    const target = linkTargetOf(finding);
+    if (target !== null) ask(targetRef(target));
+  }
+  return [...asked.values()];
+}
+
+/** The scanned documents of these findings' members, once each. */
+function scansOf(
+  links: readonly ReadinessFinding[],
+  scans: ReadonlyMap<string, ScannedLinks>
+): Array<{ id: string; scanned: ScannedLinks }> {
+  return [...new Set(links.map(finding => finding.memberId))].flatMap(
+    memberId => {
+      const scanned = scans.get(memberId);
+      return scanned === undefined ? [] : [{ id: memberId, scanned }];
+    }
+  );
+}
+
+/** The document a link finding is FROM: the member's. */
+function sourceOf(finding: ReadinessFinding): DocumentRef {
+  return {
+    scopeKind: finding.scopeKind,
+    scopeSlug: finding.scopeSlug,
+    entryId: finding.entryId,
+    locale: null,
+  };
+}
+
+/** The document a link finding is TO. */
+function targetRef(target: {
+  collection: string;
+  entryId: string;
+}): DocumentRef {
+  return {
+    scopeKind: "collection",
+    scopeSlug: target.collection,
+    entryId: target.entryId,
+    locale: null,
+  };
+}
+
 export class ReleasesService {
   constructor(private readonly deps: ReleasesServiceDeps) {}
 
@@ -1518,10 +1653,10 @@ export class ReleasesService {
     // `createdBy` comes from the ACTOR, never from the input. Materialisation
     // performs each member as its recorded author, so an author a caller could
     // name would be an identity they could borrow at a future instant.
-    return this.deps.repository.createRelease({
-      ...input,
-      createdBy: actor.userId,
-    });
+    return this.deps.repository.createRelease(
+      { ...input, createdBy: actor.userId },
+      releaseEventActorOf(actor)
+    );
   }
 
   async findByID(id: string, actor: ReleaseActor): Promise<ReleaseRow | null> {
@@ -1569,6 +1704,7 @@ export class ReleasesService {
     const mayUpdate = await this.holds(actor, "update");
     const mayDelete = await this.holds(actor, "delete");
     const held = await this.heldBy(releases, mayCreate, mayPublish);
+    const histories = await this.runHistoriesFor(releases, mayDelete);
 
     const may = { mayPublish, mayCreate, mayUpdate, mayDelete };
     return new Map(
@@ -1578,11 +1714,35 @@ export class ReleasesService {
           release.id,
           {
             ...runCapabilities(release, count, may),
-            ...editCapabilities(release, count, may),
+            ...editCapabilities(release, count, may, histories.get(release.id)),
           },
         ];
       })
     );
+  }
+
+  /**
+   * The run history of each release among these whose `delete` answer turns
+   * on it, in one read, and none when there are none: only a caller who may
+   * delete, and only a release in a deletable state that was scheduled, since
+   * any other is answered without its history.
+   */
+  private async runHistoriesFor(
+    releases: readonly ReleaseRow[],
+    mayDelete: boolean
+  ): Promise<Map<string, ReleaseRunHistory>> {
+    if (!mayDelete) return new Map();
+    const ids = releases
+      .filter(
+        release =>
+          RELEASE_DELETABLE_FROM.includes(release.state) &&
+          release.scheduledAt !== null &&
+          release.scheduledAt !== undefined
+      )
+      .map(release => release.id);
+    return ids.length === 0
+      ? new Map()
+      : this.deps.repository.runHistoriesOf(ids);
   }
 
   /**
@@ -2017,16 +2177,29 @@ export class ReleasesService {
     await this.authorize(actor, "read");
     const release = await this.requireRelease(releaseId);
     const members = await this.deps.repository.listMembers(release.id);
+    const scan = this.linkScan();
     const found = await this.checkMembers(
       release,
       members,
-      registeredReleaseCheckSources()
+      this.sourcesWith(scan)
+    );
+    // Which members the reader may read, judged once and used twice: for the
+    // links they are FROM, then for the members themselves.
+    const view = await this.membersVisibleTo(actor, members);
+    // Link findings first, targets and fields, then the members themselves.
+    // A link the reader may not be told about is counted, not named.
+    [found.soft] = await this.narrowLinksFor(
+      [found.soft],
+      actor,
+      scan.scans,
+      view.sees
     );
     const readiness = await this.readinessFor(
       actor,
       release.id,
       members,
-      found
+      found,
+      view
     );
     return { ...readiness, hidden: await this.labelled(readiness.hidden) };
   }
@@ -2111,7 +2284,16 @@ export class ReleasesService {
       actor,
       [...membersByRelease.values()].flat()
     );
-    const entries: ReleaseReadinessEntry[] = [];
+    // One scan for the page, so every release's links are judged on the
+    // documents its own check read.
+    const scan = this.linkScan();
+    const entries: Array<ReleaseReadinessEntry | null> = [];
+    const checked: Array<{
+      at: number;
+      id: string;
+      members: ReleaseMemberRow[];
+      found: Awaited<ReturnType<ReleasesService["checkMembers"]>>;
+    }> = [];
     for (const id of ids) {
       const release = byId.get(id);
       if (release === undefined) continue;
@@ -2127,14 +2309,56 @@ export class ReleasesService {
       const found = await this.checkMembers(
         release,
         members,
-        registeredReleaseCheckSources()
+        this.sourcesWith(scan)
       );
-      entries.push({
-        ...(await this.readinessFor(actor, id, members, found, view)),
-        checked: true,
-      });
+      checked.push({ at: entries.length, id, members, found });
+      entries.push(null);
     }
-    return this.labelledEntries(entries);
+    await this.fillCheckedEntries(entries, checked, actor, scan.scans, view);
+    return this.labelledEntries(
+      entries.filter((entry): entry is ReleaseReadinessEntry => entry !== null)
+    );
+  }
+
+  /**
+   * Each checked release's entry, in its place in `entries`, as `actor` may
+   * be told it: link findings first, in one pass for the whole page so a
+   * document linked from several releases gets one verdict; then the members.
+   */
+  private async fillCheckedEntries(
+    entries: Array<ReleaseReadinessEntry | null>,
+    checked: ReadonlyArray<{
+      at: number;
+      id: string;
+      members: ReleaseMemberRow[];
+      found: Awaited<ReturnType<ReleasesService["checkMembers"]>>;
+    }>,
+    actor: ReleaseActor,
+    scans: ReadonlyMap<string, ScannedLinks>,
+    view: {
+      hidden: readonly ReleaseMemberRow[];
+      sees: (memberId: string) => boolean;
+    }
+  ): Promise<void> {
+    const narrowed = await this.narrowLinksFor(
+      checked.map(entry => entry.found.soft),
+      actor,
+      scans,
+      view.sees
+    );
+    for (const [index, entry] of checked.entries()) {
+      entry.found.soft = narrowed[index];
+      entries[entry.at] = {
+        ...(await this.readinessFor(
+          actor,
+          entry.id,
+          entry.members,
+          entry.found,
+          view
+        )),
+        checked: true,
+      };
+    }
   }
 
   /**
@@ -2154,6 +2378,118 @@ export class ReleasesService {
         ? { ...entry, hidden: withLabelsFrom(entry.hidden, labels) }
         : entry
     );
+  }
+
+  /**
+   * The link check for one call, and the documents it scans, by member id.
+   *
+   * Built from this service's own reads, never from the registry: a
+   * registration made while the call is under way cannot change what the
+   * call reads its links through.
+   */
+  private linkScan(): {
+    source: ReleaseCheckSource | null;
+    scans: Map<string, ScannedLinks>;
+  } {
+    const scans = new Map<string, ScannedLinks>();
+    const reads = this.deps.linkReads;
+    if (reads === undefined) return { source: null, scans };
+    const repository = this.deps.repository;
+    return {
+      source: unpublishedLinksSource({
+        reads,
+        membersOf: releaseId => repository.listMembers(releaseId),
+        onScanned: (member, scanned) => scans.set(member.id, scanned),
+      }),
+      scans,
+    };
+  }
+
+  /**
+   * Every check a readiness read runs: the registered ones, and this call's
+   * link check in place of any registered under its key.
+   */
+  private sourcesWith(scan: {
+    source: ReleaseCheckSource | null;
+  }): ReleaseCheckSource[] {
+    const registered = registeredReleaseCheckSources().filter(
+      source => source.key !== UNPUBLISHED_LINKS_SOURCE_KEY
+    );
+    return scan.source === null ? registered : [...registered, scan.source];
+  }
+
+  /**
+   * Each of these lists of soft findings as `actor` may be told them
+   * ({@link narrowLinkFindings}): a link from or to a document the actor may
+   * not read is counted, and one in a field they may not view is named by
+   * neither field nor target. Readability is one question, `readableMembers`:
+   * for the documents links are FROM, the members' verdict `sees` already
+   * holds when given, so a member reads alike as a member and as a source;
+   * for the documents they are TO, asked once for all the lists. Field
+   * visibility is judged on the documents `scans` read the links from, so
+   * both come from one reading. A trusted actor is shown everything.
+   */
+  private async narrowLinksFor(
+    lists: readonly ReadinessFinding[][],
+    actor: ReleaseActor,
+    scans: ReadonlyMap<string, ScannedLinks>,
+    sees?: (memberId: string) => boolean
+  ): Promise<ReadinessFinding[][]> {
+    if (actor.overrideAccess === true) return lists.map(withoutFieldKeys);
+    const links = lists
+      .flat()
+      .filter(
+        finding =>
+          finding.source === UNPUBLISHED_LINKS_SOURCE_KEY &&
+          finding.code === "UNPUBLISHED_LINK"
+      );
+    if (links.length === 0) return lists.map(withoutFieldKeys);
+    const asked = documentsAskedAbout(links, sees === undefined);
+    const readable =
+      actor.userId === null || asked.length === 0
+        ? new Set<string>()
+        : await this.deps.readableMembers(asked, actor);
+    const sourceReadable = (finding: ReadinessFinding): boolean =>
+      sees === undefined
+        ? readable.has(documentRefKey(sourceOf(finding)))
+        : sees(finding.memberId);
+    // Which fields the reader may view, judged only for members whose
+    // document the reader may read at all, on the document each was read as.
+    const judged = scansOf(links.filter(sourceReadable), scans);
+    const fields =
+      this.deps.visibleLinkFields === undefined || judged.length === 0
+        ? new Map<string, ReadonlySet<string>>()
+        : await this.deps.visibleLinkFields(judged, actor);
+    const none = new Set<string>();
+    return lists.map(findings =>
+      narrowLinkFindings(findings, {
+        sourceReadable,
+        // Failing closed: a member nothing was learned about shows no field.
+        visibleFields: finding => fields.get(finding.memberId) ?? none,
+        targetReadable: target =>
+          readable.has(documentRefKey(targetRef(target))),
+      })
+    );
+  }
+
+  /**
+   * The documents `member` links to that will not be live at `release`'s
+   * moment, as `actor` may be told them: the link check's findings for that
+   * one member, narrowed as a readiness read narrows them. Nothing for a
+   * document coming down, or for a service built without link reads.
+   */
+  private async unpublishedLinksOf(
+    release: ReleaseRow,
+    member: ReleaseMemberRow,
+    actor: ReleaseActor
+  ): Promise<UnpublishedLinksReport> {
+    const scan = this.linkScan();
+    if (scan.source === null || member.action !== "publish") {
+      return noUnpublishedLinks();
+    }
+    const { soft } = await this.checkMembers(release, [member], [scan.source]);
+    const [narrowed] = await this.narrowLinksFor([soft], actor, scan.scans);
+    return unpublishedLinksReport(narrowed);
   }
 
   /**
@@ -2466,12 +2802,19 @@ export class ReleasesService {
    * Two authorities, for the reason in the module docblock: `create` to assemble
    * the release, and the document's own `publish`/`unpublish` so that scheduling
    * cannot become a way to perform a write the caller could not perform now.
+   *
+   * Answers the stored member with `unpublishedLinks`: for a document going
+   * live, what it links to that will not be live at the release's moment,
+   * naming only documents the caller may read and counting the rest. Empty
+   * for a document coming down.
+   *
+   * @experimental The `unpublishedLinks` field.
    */
   async addMember(
     releaseId: string,
     input: AddMemberInput,
     actor: ReleaseActor
-  ): Promise<ReleaseMemberRow> {
+  ): Promise<AddedReleaseMember> {
     await this.authorize(actor, "create");
     await this.authorizeDocumentAction(actor, input.scopeSlug, input.action);
     requireRunnableMember(input, actor);
@@ -2526,12 +2869,7 @@ export class ReleasesService {
       actor
     );
     await this.requireLiveAuthor(actor.userId);
-    // A document joining a release already committed to an instant is checked
-    // first, as scheduling checked the rest: otherwise one with a hard problem
-    // joins and stops the release at its instant. Refused, the release stays
-    // scheduled as it was. A release judged still assembling is not checked
-    // here, and the fence below keeps this add off one scheduled since.
-    await this.assertCommittedChangeReady(actor, release, {
+    const unwritten: ReleaseMemberRow = {
       id: UNWRITTEN_MEMBER_ID,
       releaseId,
       scopeKind: input.scopeKind,
@@ -2543,7 +2881,21 @@ export class ReleasesService {
       singleSlot: null,
       createdBy: actor.userId,
       createdAt: new Date(),
-    });
+    };
+    // A document joining a release already committed to an instant is checked
+    // first, as scheduling checked the rest: otherwise one with a hard problem
+    // joins and stops the release at its instant. Refused, the release stays
+    // scheduled as it was. A release judged still assembling is not checked
+    // here, and the fence below keeps this add off one scheduled since.
+    await this.assertCommittedChangeReady(actor, release, unwritten);
+    // What the document links to that will not be live at the moment, so the
+    // answer can offer those too. Worked out before the write, so a read that
+    // fails refuses the add with nothing written rather than failing an add
+    // that has already landed.
+    const unpublishedLinks =
+      release === undefined
+        ? noUnpublishedLinks()
+        : await this.unpublishedLinksOf(release, unwritten, actor);
 
     try {
       // FENCED on the judgement: the member and a bump of the release's
@@ -2552,7 +2904,7 @@ export class ReleasesService {
       // write makes it refuse rather than add to a committed launch without
       // the publish gate, and a schedule judged before it misses on the
       // revision instead. Refused as a CONFLICT, with nothing written.
-      return await this.deps.repository.addMember(
+      const added = await this.deps.repository.addMember(
         {
           ...input,
           entryId,
@@ -2566,8 +2918,10 @@ export class ReleasesService {
         // The member limit, judged under the release lock and after every
         // other refusal: a final release says it is final, not how much it
         // holds, and adds racing for the last place are judged one by one.
-        held => memberLimitRefusal(releaseId, held)
+        held => memberLimitRefusal(releaseId, held),
+        releaseEventActorOf(actor)
       );
+      return { ...added, unpublishedLinks };
     } catch (error) {
       // The `memberKey` unique index is what stops one document being scheduled
       // twice in one release; its refusal rolls the revision bump back with
@@ -2651,7 +3005,11 @@ export class ReleasesService {
     // The delete and a bump of the release's revision are one transaction
     // that lands only while the release is in `allowedStates`; otherwise it is
     // refused as a CONFLICT and the member stays.
-    await this.deps.repository.removeMember(member, allowedStates);
+    await this.deps.repository.removeMember(
+      member,
+      allowedStates,
+      releaseEventActorOf(actor)
+    );
   }
 
   /**
@@ -2717,7 +3075,8 @@ export class ReleasesService {
     return this.deps.repository.changeMemberAction(
       member,
       action,
-      allowedStates
+      allowedStates,
+      releaseEventActorOf(actor)
     );
   }
 
@@ -2967,7 +3326,9 @@ export class ReleasesService {
     // locks across a query that touches another table entirely, to buy a
     // guarantee this single fenced UPDATE already provides. The blocking pass
     // needs a transaction because it writes to SEVERAL rows that must move
-    // together; this writes to one.
+    // together; this writes to one. The repository runs that one UPDATE in a
+    // short transaction of its own, with the release's schedule event, and
+    // nothing else.
     const from = wasBlocked
       ? RELEASE_SCHEDULABLE_FROM_BLOCKED
       : RELEASE_SCHEDULABLE_FROM_UNBLOCKED;
@@ -2986,7 +3347,8 @@ export class ReleasesService {
         at,
         timezone,
         from,
-        current.revision
+        current.revision,
+        releaseEventActorOf(actor)
       ))
     ) {
       throw NextlyError.conflict({
@@ -3095,7 +3457,7 @@ export class ReleasesService {
     // release that would stop part-way, or a single-document release with no
     // document, sends nothing out and is not marked published.
     await this.assertReadyToRun(actor, id, current);
-    await this.moveToNowUnlessDue(current);
+    await this.moveToNowUnlessDue(current, actor);
     await this.runDrainForPublishNow(id);
     const [after] = await this.deps.repository.findReleases({ ids: [id] });
     return after ?? current;
@@ -3142,7 +3504,10 @@ export class ReleasesService {
    * Due by the same rule the drain selects releases with (`isDueAt`), so a
    * release left unmoved here is one the drain will pick up.
    */
-  private async moveToNowUnlessDue(current: ReleaseRow): Promise<void> {
+  private async moveToNowUnlessDue(
+    current: ReleaseRow,
+    actor: ReleaseActor
+  ): Promise<void> {
     const now = new Date();
     const alreadyDue =
       current.state === "scheduled" &&
@@ -3159,7 +3524,10 @@ export class ReleasesService {
       // The zone the author chose stays part of the record.
       current.timezone ?? "UTC",
       [current.state],
-      current.revision
+      current.revision,
+      // Recorded as the caller's Publish now; the drain records the publish.
+      releaseEventActorOf(actor),
+      "publish-now"
     );
     if (!moved) {
       throw NextlyError.conflict({
@@ -3197,7 +3565,12 @@ export class ReleasesService {
     // outright: `publish-content-releases` is "schedule or cancel". Someone who
     // could cancel but not schedule could still silently stop a launch.
     await this.authorize(actor, "publish");
-    if (!(await this.deps.repository.cancelRelease(id))) {
+    if (
+      !(await this.deps.repository.cancelRelease(
+        id,
+        releaseEventActorOf(actor)
+      ))
+    ) {
       throw NextlyError.conflict({
         logContext: { reason: "release-not-cancellable", releaseId: id },
       });
@@ -3225,12 +3598,16 @@ export class ReleasesService {
     // Whether anything changes is decided in the repository's transaction,
     // under the release's lock, and the row it answers is the one that
     // transaction wrote: see `updateReleaseDetails`.
-    const written = await this.deps.repository.updateReleaseDetails(id, {
-      ...(change.title === undefined ? {} : { title: change.title }),
-      ...(change.description === undefined
-        ? {}
-        : { description: change.description }),
-    });
+    const written = await this.deps.repository.updateReleaseDetails(
+      id,
+      {
+        ...(change.title === undefined ? {} : { title: change.title }),
+        ...(change.description === undefined
+          ? {}
+          : { description: change.description }),
+      },
+      releaseEventActorOf(actor)
+    );
     if (written === null) {
       throw NextlyError.notFound({
         logContext: { reason: "release-not-found", releaseId: id },
@@ -3266,14 +3643,22 @@ export class ReleasesService {
   async delete(id: string, actor: ReleaseActor): Promise<ReleaseRow> {
     await this.authorize(actor, "delete");
     const current = await this.requireRelease(id);
-    const refused = whyNotDeletable(current);
-    if (refused !== null) throw notDeletableRefusal(current, refused);
+    const history = (
+      await this.deps.repository.runHistoriesOf([current.id])
+    ).get(current.id);
+    const refused = whyNotDeletable(current, history);
+    if (refused !== null) {
+      throw notDeletableRefusal(current, refused, history);
+    }
     // FENCED on the same rule, so a release scheduled since the read above is
     // not deleted, and neither are its documents. A retry judges it as it now
     // is, and is told why.
     // The row the delete found under its lock, recorded and answered: one
     // renamed since the read above is the release that was deleted.
-    const deleted = await this.deps.repository.deleteRelease(id);
+    const deleted = await this.deps.repository.deleteRelease(
+      id,
+      releaseEventActorOf(actor)
+    );
     if (deleted === null) {
       throw NextlyError.conflict({
         logContext: { reason: "release-moved-before-delete", releaseId: id },

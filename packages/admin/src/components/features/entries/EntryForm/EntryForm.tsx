@@ -19,7 +19,10 @@ import { useCallback, useMemo, useState } from "react";
 
 import { autosaveIntervalFrom } from "@admin/components/features/versions/autosave-interval";
 import { DocumentHistoryContext } from "@admin/components/features/versions/document-history-context";
-import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
+import {
+  historyEnabledFrom,
+  historyRetentionFrom,
+} from "@admin/components/features/versions/history-enabled";
 import {
   mayRecordRecovery,
   useViewedVersion,
@@ -1011,6 +1014,10 @@ export function EntryForm({
                                   historyEnabled={historyEnabledFrom(
                                     collection
                                   )}
+                                  historyRetention={historyRetentionFrom(
+                                    collection
+                                  )}
+                                  historyLifecycle={hasStatus}
                                   localized={collection.localized === true}
                                   isPreviewAvailable={canPreview}
                                   {...(entryPreview.declaredLabel === undefined

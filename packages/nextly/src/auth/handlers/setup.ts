@@ -126,10 +126,12 @@ export async function handleSetupStatus(
     const requestId = readOrGenerateRequestId(request);
     const nextlyErr = NextlyError.is(err)
       ? err
-      : NextlyError.serviceUnavailable({
-          logMessage: "setup-status: user-count lookup failed",
-          cause: err as Error,
-        });
+      : NextlyError.busyOr(err, () =>
+          NextlyError.serviceUnavailable({
+            logMessage: "setup-status: user-count lookup failed",
+            cause: err as Error,
+          })
+        );
     getNextlyLogger().error({
       kind: "setup-status-failed",
       ...nextlyErr.toLogJSON(requestId),
@@ -393,10 +395,12 @@ export async function handleSetup(
     const requestId = readOrGenerateRequestId(request);
     const nextlyErr = NextlyError.is(err)
       ? err
-      : NextlyError.serviceUnavailable({
-          logMessage: "setup: administrator pre-check failed",
-          cause: err as Error,
-        });
+      : NextlyError.busyOr(err, () =>
+          NextlyError.serviceUnavailable({
+            logMessage: "setup: administrator pre-check failed",
+            cause: err as Error,
+          })
+        );
     getNextlyLogger().error({
       kind: "setup-precheck-failed",
       ...nextlyErr.toLogJSON(requestId),

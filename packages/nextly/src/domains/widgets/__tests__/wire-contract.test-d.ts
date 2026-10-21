@@ -47,4 +47,14 @@ if (slot.ok) {
   expectTypeOf(slot.error).toEqualTypeOf<string>();
 }
 
+// A grouped result may say its counts are floors, as a count may, and only with
+// a boolean: the admin carries `atLeast === true` and nothing else, so any other
+// value would type-check here and vanish on the wire.
+expectTypeOf<
+  Extract<WidgetResult, { op: "groupBy" }>["atLeast"]
+>().toEqualTypeOf<boolean | undefined>();
+expectTypeOf<
+  Assignable<{ op: "groupBy"; buckets: []; atLeast: "yes" }, WidgetResult>
+>().toEqualTypeOf<false>();
+
 void listResult;

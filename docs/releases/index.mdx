@@ -37,7 +37,7 @@ can put new pages live and retire old ones in the same moment.
 | Publish now | A draft or scheduled release is run at once instead of waiting for its time |
 | Cancel      | An unapplied release can be cancelled                                       |
 | Rename      | The title and description can be changed in any state                       |
-| Delete      | A draft, or a release cancelled before it was scheduled, can be deleted     |
+| Delete      | A draft, or a cancelled release that never began publishing, can be deleted |
 
 A document is checked when it is added, the same way over REST and from the Direct API. It
 must exist, and the person adding it must be allowed to read it. Its collection or Single
@@ -144,21 +144,28 @@ release uses: it can't be empty, and it can be at most 255 characters. A `descri
 clears it. A body that names any other field is refused, since a state is changed by its own
 route. A rename that changes nothing writes nothing.
 
-Only a release that never ran can be deleted: a draft, or one cancelled while it was still a
-draft. Each refusal answers `409 Conflict`, with the reason in the error's `data.reason`:
+Only a release that never ran can be deleted: a draft, or a cancelled release whose
+[history](#a-releases-history) shows it never began publishing. Each refusal answers
+`409 Conflict`, with the reason in the error's `data.reason`:
 
-| `reason`        | The release                         | What to do                           |
-| --------------- | ----------------------------------- | ------------------------------------ |
-| `committed`     | Is scheduled or stopped             | Cancel it to call it off; it is kept |
-| `published`     | Has been published                  | Nothing: it is kept for good         |
-| `was-scheduled` | Was cancelled after being scheduled | Nothing: it is kept as a record      |
+| `reason`        | The release                                       | What to do                           |
+| --------------- | ------------------------------------------------- | ------------------------------------ |
+| `committed`     | Is scheduled or stopped                           | Cancel it to call it off; it is kept |
+| `published`     | Has been published                                | Nothing: it is kept for good         |
+| `was-scheduled` | Was cancelled after it may have begun publishing  | Nothing: it is kept as a record      |
 
-A cancelled release that was ever scheduled is kept because nothing stored says whether it began
-to run. One that stopped part-way, after some of its documents went live, and was then cancelled
-looks like any other cancelled release. Deleting a release that does not exist answers `404`.
+A cancelled release that was scheduled can be deleted when its history shows no run: no
+`release-started` and no `release-published` event. One scheduled and cancelled before its
+moment goes. One that started publishing is kept, whether it then stopped part-way or was
+cancelled in the middle of its run, because some of its documents may have gone live.
+
+A release created before releases recorded their history has no `release-created` event, so its
+history cannot say whether it ran. It keeps the earlier rule: once it has been scheduled, it is
+kept. Deleting a release that does not exist answers `404`.
 
 Both are recorded in the activity log, under `content-releases`, with who made the change.
-A change made through an API key is not recorded there yet.
+A change made through an API key is not recorded there yet; the release's own
+[history](#a-releases-history) records it, as the key.
 
 ### Who holds the two permissions after an upgrade
 
@@ -176,6 +183,38 @@ This happens once, when the permissions are created. If you take one away from a
 created, a restart doesn't give it back. The built-in roles are different: every boot brings
 each one back in line with its preset, so a permission its preset includes returns on the next
 restart. To keep a role without it, give people a role of your own instead.
+
+## A release's history
+
+Each release operation records an event in the record of content events, with the release as its
+subject, in the same transaction as the change: a change never stands without its event. The
+release page reads its history from this record; the activity log stays the site-wide audit feed.
+
+| Event                             | Recorded when                                                  |
+| --------------------------------- | -------------------------------------------------------------- |
+| `release-created`                 | The release is created                                         |
+| `release-document-added`          | A document is added, with its collection or Single and action  |
+| `release-document-removed`        | A document is taken out                                        |
+| `release-document-action-changed` | A document is switched between going live and coming down      |
+| `release-scheduled`               | A release is given a time (`at`, `timezone`)                   |
+| `release-rescheduled`             | A scheduled or stopped release is given another time (`from`)  |
+| `release-publish-now`             | Publish now moves the release to this moment                   |
+| `release-started`                 | The run writes its first document                              |
+| `release-published`               | The run finishes and the release is published                  |
+| `release-stopped`                 | The release stops on a problem, at its moment or before it     |
+| `release-cancelled`               | The release is cancelled                                       |
+| `release-renamed`                 | The title changes (`from`, `to`)                               |
+| `release-description-changed`     | The description changes                                        |
+| `release-deleted`                 | The release is deleted; its history is kept for the activity log's window, then removed |
+
+Each event names who acted: the person, an API key by its own id and name (never the person who
+owns the key), or the system for the run and its stops. A Direct API call that forwards an API
+key's `authenticatedScope` passes the key's `apiKeyId` with it; one that does not is refused
+before anything is written, since the change has to name the key.
+
+Read a release's history with `GET /api/content-events?subject=release&id=<id>`, or
+`nextly.contentEvents.list({ subject: { kind: "release", id } })`, by anyone who may read
+releases. It stays readable after the release is deleted, for the same window.
 
 ## Listing releases
 
@@ -493,9 +532,12 @@ A document **coming down** is judged only on its status and on a pending change 
 
 **Soft problems** are notes and stop nothing:
 
-| Code               | The document…                                                                                                                                                                                |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `IN_OTHER_RELEASE` | is also in another scheduled release, named by `detail.releaseId`. `detail.winningReleaseId` is the one whose action stands once both have run, or `null` while this release has no time set |
+| Code                               | The document…                                                                                                                                                                                |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `IN_OTHER_RELEASE`                 | is also in another scheduled release, named by `detail.releaseId`. `detail.winningReleaseId` is the one whose action stands once both have run, or `null` while this release has no time set |
+| `UNPUBLISHED_LINK`                 | is going live and links to a document that will not be live at the release's moment (see [Linked documents](#linked-documents-that-will-not-be-live))                                        |
+| `UNPUBLISHED_LINKS_HIDDEN`         | is going live and links to documents that will not be live, which you may not read: `detail.count` says how many, and nothing else about them is given                                       |
+| `UNPUBLISHED_LINK_IN_HIDDEN_FIELD` | is going live and links to a document that will not be live through a field you may not view: neither the field nor the document is named, and `detail.count` says how many links            |
 
 Ask for them with:
 
@@ -636,11 +678,114 @@ scheduled release the new action is checked as that person, and a switch that wo
 problem, such as an author who may publish the document but not unpublish it, is refused with the
 same `409` and the release is left as it was.
 
+### Linked documents that will not be live
+
+> **Needs the release after 0.0.2-alpha.68.** Experimental, like the rest of readiness.
+
+A document going live may link to other documents through its relationship and upload
+fields: an author, a category, related posts, an attachment. When one of those will not be live
+at the release's moment, or no longer exists, the document goes live linking to something a
+visitor cannot open. Readiness notes each such link as a soft problem, `UNPUBLISHED_LINK`,
+which never stops scheduling, Publish now or the run.
+
+"Live at the moment" accounts for every other scheduled release, as the run will:
+
+- a linked draft that another release publishes at or before the moment is not reported;
+- a linked document that is live now but that another release takes down before the moment is
+  reported, with `detail.cause` set to `"comes-down"`;
+- a linked draft that nothing publishes by then is reported with `detail.cause` set to `"draft"`;
+- a release whose author can no longer act (deleted or deactivated) changes nothing, as at its
+  run, so a draft only that release would publish is still reported as `"draft"`;
+- a linked document in the same release, going live with it, is not reported.
+
+The moment is the release's scheduled time while it is still ahead. For a draft, a stopped
+release or one past its time, it is now: the links are judged as if the release ran now.
+
+`detail` names the linked document (`scopeKind`, `scopeSlug`, `entryId`) and every field of
+the document going live that links to it (`fields`, such as `["author"]`, `["meta.editor"]`
+or `["blocks.cite"]`).
+
+A link to a document that **no longer exists** is reported with `detail.cause` set to
+`"deleted"`. A deleted document has nothing left to name it by, so the problem names only the
+field (`detail.fields`) and how many such links it holds (`detail.count`).
+
+What counts as a link:
+
+- **Relationship and upload fields**, one level deep: the document's own fields, including those
+  inside groups, repeaters, field groups and blocks, but not the links of the documents it links
+  to. A document's links are read from what will go live, as stored: its pending change where it
+  has one, otherwise what is saved. A read hook that hides a value from readers does not hide it
+  here.
+- A document in a collection without Draft/Published is live as soon as it exists, so a link to
+  one is reported only once it is deleted.
+- **Files in the media library are never reported.** They have no draft state. An upload field
+  that points at a collection of your own with Draft/Published is checked like a relationship.
+- **Links inside rich text are not checked yet.**
+
+A document **coming down** gets no such note: what it links to stops mattering once it is not
+live itself.
+
+**You are only told what you may read.**
+
+- A document of the release you may not read is counted among the release's hidden documents,
+  as any problem of it is, and none of its links is reported.
+- A link to a document you may not read is never named, by id or otherwise. Each document's such
+  links are counted together in one `UNPUBLISHED_LINKS_HIDDEN` problem, whose `detail.count`
+  says how many there are.
+- A link in a field you may not view, by that field's read rule (a field group's own fields
+  included), is reported as `UNPUBLISHED_LINK_IN_HIDDEN_FIELD`, "a field you can't view links
+  to an unpublished document", naming neither the field nor the document. Its `detail.count`
+  says how many links it stands for, so the release reads the same size to everyone. Each field
+  is judged on its own: two fields that share a name, such as `author` in two kinds of block,
+  never answer for each other.
+- What you may see of a document's links is judged on the document they were read from, at the
+  same reading.
+- A trusted Direct API call (`overrideAccess`, the default) may read everything, so it is told
+  about every link.
+
+#### Offering the links when a document is added
+
+Adding a document to a release answers with the same links, so a client can offer to add them
+in the same step. The member comes back as before, with `unpublishedLinks` beside its fields
+(experimental): over REST in the response's `item`, and from the Direct API on the returned
+member.
+
+```json
+{
+  "message": "Added to release.",
+  "item": {
+    "id": "…",
+    "scopeSlug": "posts",
+    "entryId": "…",
+    "action": "publish",
+    "unpublishedLinks": {
+      "links": [
+        {
+          "scopeKind": "collection",
+          "scopeSlug": "authors",
+          "entryId": "…",
+          "fields": ["author"],
+          "cause": "draft"
+        }
+      ],
+      "hiddenCount": 0,
+      "inHiddenFields": 0,
+      "deletedLinks": [{ "field": "category", "count": 1 }]
+    }
+  }
+}
+```
+
+`links` holds the documents you may read. `hiddenCount` counts links to or from documents you
+may not read, `inHiddenFields` those in fields you may not view, and `deletedLinks` names each
+field linking to deleted documents. All are empty for a document added to come down. Adding the
+linked documents is an ordinary add of each, going live.
+
 ### What is not checked yet
 
 The checks run core's rules only. Other features will be able to add their own, such as
 approvals, later: a hard check of their own must also say when what it judges changes, so a
-scheduled release is stopped then. Unpublished linked documents are not yet reported.
+scheduled release is stopped then. Links inside rich text are not checked yet.
 
 ## One release covers every language
 

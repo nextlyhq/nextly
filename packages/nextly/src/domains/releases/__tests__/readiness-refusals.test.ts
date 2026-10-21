@@ -314,7 +314,9 @@ describe("switching a document's action", () => {
     expect(repo.changeMemberAction).toHaveBeenCalledWith(
       expect.objectContaining({ id: "m1" }),
       "unpublish",
-      [...RELEASE_ASSEMBLABLE_FROM, ...RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM]
+      [...RELEASE_ASSEMBLABLE_FROM, ...RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM],
+      // Who switched it, for the release's history.
+      expect.objectContaining({ kind: "person" })
     );
   });
 
@@ -389,7 +391,8 @@ describe("switching a document's action", () => {
     expect(repo.changeMemberAction).toHaveBeenCalledWith(
       expect.objectContaining({ id: "m1" }),
       "publish",
-      expect.any(Array)
+      expect.any(Array),
+      expect.objectContaining({ kind: "person" })
     );
   });
 });
