@@ -30,3 +30,5 @@
 ---
 
 The Releases calendar's day counts, today's date and the day list's Today label are now drawn in colours that stay readable under any brand colour.
+
+A release's readiness report now counts a link to a deleted document under every field it is linked from, so each field's total is right.
