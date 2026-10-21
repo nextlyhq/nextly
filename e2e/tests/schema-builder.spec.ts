@@ -13,8 +13,9 @@
  * contributor opening the playground actually sees, and nothing else exercises
  * it end to end.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 interface BuilderKind {

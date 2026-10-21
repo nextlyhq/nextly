@@ -8,9 +8,10 @@
  * super-admin, whose read-only key reads every collection: a summary built
  * from the viewer's own permissions in the browser would draw something else.
  */
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 const API = "/admin/api";

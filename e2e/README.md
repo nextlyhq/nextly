@@ -53,12 +53,21 @@ two `next dev` processes on one app fight over `.next`, and the second one dies.
 ```
 e2e/
   playwright.config.ts    the server, the database, the port
-  global-setup.ts         signs in once, hands the session to every test
+  global-setup.ts         signs in once, before the first test
   scripts/                empties the database before the server opens it
   tests/
     support/admin.ts      navigation, theming, contrast maths
+    support/session.ts    the stored session, and signing in again once it ages
+    support/test.ts       the `test` every spec imports: renews the session first
     *.spec.ts
 ```
+
+Write a spec with `test` from `tests/support/test`, not from
+`@playwright/test`. The session's access token lives 15 minutes and nothing in a
+test renews it, so the suite's `test` signs in again before a test once the
+stored session is ten minutes old; a spec on Playwright's `test` is signed out
+once a run passes 15 minutes. `session-stays-signed-in.spec.ts` fails a spec
+that imports the other one.
 
 It lives at the repo root rather than under `packages/` or `apps/` because it
 tests neither a package nor an app: it tests the composed product — playground,

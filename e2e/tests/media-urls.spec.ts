@@ -8,8 +8,9 @@
  * onto the public origin would point at a port nothing serves here, and the
  * image would not load.
  */
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { dropFiles, pngBuffer } from "./support/media-files";
 

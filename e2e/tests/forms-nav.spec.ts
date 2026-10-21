@@ -4,8 +4,9 @@
  * collections — and it appears exactly once (no Plugins-section duplicate,
  * no Collections-group duplicate).
  */
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 test("Forms lives in the main rail exactly once, with its collections inside", async ({
