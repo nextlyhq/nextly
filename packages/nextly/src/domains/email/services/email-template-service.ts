@@ -101,14 +101,15 @@ import {
  * deleted when the template is confirmed as Liquid. A key per template keeps
  * every change a single-row write, with nothing to merge.
  */
-const LIQUID_ADOPTED_KEY = "email.templates.liquid.adoptedAt";
-const keptKey = (id: string) => `email.templates.liquid.kept.${id}`;
+const ENGINE_KEY_PREFIX = "email.templates.liquid.";
+const LIQUID_ADOPTED_KEY = `${ENGINE_KEY_PREFIX}adoptedAt`;
+const keptKey = (id: string) => `${ENGINE_KEY_PREFIX}kept.${id}`;
 /**
  * A template saved as Liquid while the first boot on Liquid had not yet
  * recorded the switch. The switch leaves it as Liquid rather than judging its
  * loops and filters as text the previous engine wrote.
  */
-const authoredKey = (id: string) => `email.templates.liquid.authored.${id}`;
+const authoredKey = (id: string) => `${ENGINE_KEY_PREFIX}authored.${id}`;
 
 /** Why a template is kept on the old engine, field by field. */
 export interface OldEngineStatus {
@@ -345,6 +346,18 @@ export class EmailTemplateService extends BaseService {
   private registry: TemplateOwnerRegistry;
   /** Where the switch to Liquid, and the templates kept off it, are recorded. */
   private readonly meta: MetaService;
+  /**
+   * The engine state as this instance last read it whole: whether the switch
+   * is recorded, and the keys of the templates kept off it or saved as Liquid
+   * before it. A render made inside a caller's open transaction reads it
+   * here, because the email service is never handed that transaction and a
+   * read of the meta table would run on another connection, outside it. Read
+   * at the end of each boot and kept current by this instance's own writes;
+   * outside a transaction every read goes to the table, so a change another
+   * instance made is seen there.
+   */
+  private engineState: { adopted: boolean | null; keys: Set<string> } | null =
+    null;
 
   constructor(adapter: DrizzleAdapter, logger: Logger, appName?: string) {
     // Masked here whatever logger an app supplied: what this service logs,
@@ -580,10 +593,7 @@ export class EmailTemplateService extends BaseService {
     ) {
       return;
     }
-    await this.meta.insertIfAbsent(
-      keptKey(template.id),
-      flaggedDigests(template)
-    );
+    await this.markEngine(keptKey(template.id), flaggedDigests(template));
   }
 
   /** Whether every field Liquid renders parses. */
@@ -634,11 +644,59 @@ export class EmailTemplateService extends BaseService {
   // Liquid, and templates kept on the old engine
   // ============================================================
 
+  /** The engine state to answer from, inside an open transaction only. */
+  private engineSnapshot(): {
+    adopted: boolean | null;
+    keys: Set<string>;
+  } | null {
+    return this.adapter.transactionOpenInFlow() ? this.engineState : null;
+  }
+
+  /** Whether an engine-state key is recorded (see engineState). */
+  private async engineKeyPresent(key: string): Promise<boolean> {
+    const snapshot = this.engineSnapshot();
+    if (snapshot) return snapshot.keys.has(key);
+    return (await this.meta.getEntry(key)).present;
+  }
+
+  /** Record an engine-state key, unless it is recorded already. */
+  private async markEngine(key: string, value: unknown): Promise<void> {
+    await this.meta.insertIfAbsent(key, value);
+    this.engineState?.keys.add(key);
+    if (key === LIQUID_ADOPTED_KEY && this.engineState) {
+      this.engineState.adopted = true;
+    }
+  }
+
+  /** Remove an engine-state key. */
+  private async unmarkEngine(key: string): Promise<void> {
+    await this.meta.delete(key);
+    this.engineState?.keys.delete(key);
+  }
+
+  /** Read the whole engine state into engineState (at the end of a boot). */
+  private async loadEngineState(): Promise<void> {
+    let all: Record<string, unknown>;
+    try {
+      all = await this.meta.getAll();
+    } catch (error) {
+      if (!isMissingTable(error, this.dialect)) throw error;
+      this.engineState = { adopted: null, keys: new Set() };
+      return;
+    }
+    const keys = new Set(
+      Object.keys(all).filter(key => key.startsWith(ENGINE_KEY_PREFIX))
+    );
+    this.engineState = { adopted: keys.has(LIQUID_ADOPTED_KEY), keys };
+  }
+
   /**
    * Whether the switch to Liquid is recorded, or null where nothing can be
    * recorded (a database without the meta table).
    */
   private async liquidAdopted(): Promise<boolean | null> {
+    const snapshot = this.engineSnapshot();
+    if (snapshot) return snapshot.adopted;
     try {
       return (await this.meta.getEntry(LIQUID_ADOPTED_KEY)).present;
     } catch (error) {
@@ -663,7 +721,7 @@ export class EmailTemplateService extends BaseService {
   ): Promise<boolean> {
     const adopted = await this.liquidAdopted();
     if (adopted) {
-      return (await this.meta.getEntry(keptKey(template.id))).present;
+      return this.engineKeyPresent(keptKey(template.id));
     }
     if (adopted === false && (await this.authoredAsLiquid(template.id))) {
       return false;
@@ -672,7 +730,7 @@ export class EmailTemplateService extends BaseService {
   }
 
   private async authoredAsLiquid(id: string): Promise<boolean> {
-    return (await this.meta.getEntry(authoredKey(id))).present;
+    return this.engineKeyPresent(authoredKey(id));
   }
 
   /**
@@ -682,7 +740,7 @@ export class EmailTemplateService extends BaseService {
    */
   private async markAuthoredBeforeSwitch(id: string): Promise<void> {
     if ((await this.liquidAdopted()) === false) {
-      await this.meta.insertIfAbsent(authoredKey(id), "1");
+      await this.markEngine(authoredKey(id), "1");
     }
   }
 
@@ -706,14 +764,11 @@ export class EmailTemplateService extends BaseService {
         oldEngineReasons(row).length > 0 &&
         !(await this.authoredAsLiquid(row.id))
       ) {
-        await this.meta.insertIfAbsent(keptKey(row.id), flaggedDigests(row));
+        await this.markEngine(keptKey(row.id), flaggedDigests(row));
         kept.push(row.id);
       }
     }
-    await this.meta.insertIfAbsent(
-      LIQUID_ADOPTED_KEY,
-      new Date().toISOString()
-    );
+    await this.markEngine(LIQUID_ADOPTED_KEY, new Date().toISOString());
     if (kept.length > 0) {
       this.logger.info(
         `Kept ${kept.length} stored email template(s) on the previous engine; they render as before until confirmed as Liquid.`,
@@ -809,7 +864,7 @@ export class EmailTemplateService extends BaseService {
     template: EmailTemplateRecord,
     flagged: string
   ): Promise<void> {
-    await this.meta.delete(keptKey(template.id));
+    await this.unmarkEngine(keptKey(template.id));
     const after = await this.getTemplate(template.id);
     if (
       flaggedDigests(after) === flaggedDigests(template) &&
@@ -817,7 +872,7 @@ export class EmailTemplateService extends BaseService {
     ) {
       return;
     }
-    await this.meta.insertIfAbsent(keptKey(template.id), flagged);
+    await this.markEngine(keptKey(template.id), flagged);
     throw new NextlyError({
       code: "CONFLICT",
       publicMessage:
@@ -1176,8 +1231,8 @@ export class EmailTemplateService extends BaseService {
       .delete(this.emailTemplates)
       .where(eq(this.emailTemplates.id, id));
     // A deleted template has nothing left to keep on the old engine.
-    await this.meta.delete(keptKey(id)).catch(() => undefined);
-    await this.meta.delete(authoredKey(id)).catch(() => undefined);
+    await this.unmarkEngine(keptKey(id)).catch(() => undefined);
+    await this.unmarkEngine(authoredKey(id)).catch(() => undefined);
 
     // The name is read from the row fetched above: after the delete there is
     // nothing left to label the entry with, and an unlabelled row is the one
@@ -1558,7 +1613,7 @@ export class EmailTemplateService extends BaseService {
   ): Promise<boolean> {
     const engine = await this.keepIfWrittenForOldEngine(row.id, entry);
     const undoKeep = () =>
-      engine.created ? this.meta.delete(keptKey(row.id)) : Promise.resolve();
+      engine.created ? this.unmarkEngine(keptKey(row.id)) : Promise.resolve();
     try {
       await this.db
         .update(this.emailTemplates)
@@ -1602,7 +1657,7 @@ export class EmailTemplateService extends BaseService {
     const key = keptKey(row.id);
     const mark = await this.meta.getEntry<string>(key);
     if (this.keepsOwnersVersion(entry)) {
-      if (!mark.present) await this.meta.insertIfAbsent(key, ownersMark(entry));
+      if (!mark.present) await this.markEngine(key, ownersMark(entry));
       return;
     }
     if (!mark.present) return;
@@ -1622,14 +1677,14 @@ export class EmailTemplateService extends BaseService {
     entry: OwnedTemplate,
     recorded: string
   ): Promise<void> {
-    await this.meta.delete(keptKey(row.id));
+    await this.unmarkEngine(keptKey(row.id));
     const after = await this.getRowBySlug(row.slug);
     if (
       after &&
       (after.overridden === true ||
         !sameVersion(versionOf(after), entry.version))
     ) {
-      await this.meta.insertIfAbsent(keptKey(row.id), recorded);
+      await this.markEngine(keptKey(row.id), recorded);
     }
   }
 
@@ -1737,6 +1792,12 @@ export class EmailTemplateService extends BaseService {
    * judged against owners nobody has listed.
    */
   async ensureBuiltInTemplates(): Promise<void> {
+    await this.reconcileStoredTemplates();
+    await this.loadEngineState();
+  }
+
+  /** The reconciliation `ensureBuiltInTemplates` runs. */
+  private async reconcileStoredTemplates(): Promise<void> {
     if (!this.registry.complete) this.configureOwnershipFromConfig();
     await this.migrateLegacyLayout();
 
@@ -1861,7 +1922,7 @@ export class EmailTemplateService extends BaseService {
     } catch (error) {
       // No row has this id, so no engine choice may name it either: boots
       // that keep failing would otherwise pile them up.
-      if (created) await this.meta.delete(keptKey(id));
+      if (created) await this.unmarkEngine(keptKey(id));
       // Two first starts seed at once (several instances, or a dev server
       // beside a build): the one that loses hits the unique slug, and the row
       // it wanted is there. Any other failure is warned of, and seeding goes on.
@@ -2067,7 +2128,7 @@ export class EmailTemplateService extends BaseService {
     if (!this.keepsOwnersVersion(entry)) return { kept: false, created: false };
     const key = keptKey(id);
     const present = (await this.meta.getEntry(key)).present;
-    if (!present) await this.meta.insertIfAbsent(key, ownersMark(entry));
+    if (!present) await this.markEngine(key, ownersMark(entry));
     return { kept: true, created: !present };
   }
 
