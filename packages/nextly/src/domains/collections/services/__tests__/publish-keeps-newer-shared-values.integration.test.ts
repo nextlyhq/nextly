@@ -56,6 +56,13 @@ async function boot(
           text({ name: "note", localized: false }),
         ],
       }),
+      // No languages: every field is the document's own.
+      defineCollection({
+        slug: "plain",
+        status: true,
+        versions: { drafts: true },
+        fields: [text({ name: "title" }), number({ name: "total" })],
+      }),
     ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
   });
@@ -488,6 +495,40 @@ describe.each(getConfiguredTestDialects())(
         statusCode: 404,
         code: "NOT_FOUND",
       });
+    });
+
+    it("refuses taking live values for a document without languages, and keeps its pending change", async () => {
+      // Nothing there is shared with another language, so there is nothing
+      // to take; a take would only overwrite the editor's own pending edits.
+      const entries = await boot(dialect);
+      const created = await entries.createEntry(
+        { collectionName: "plain", overrideAccess: true },
+        { title: "live", total: 1, status: "published" }
+      );
+      const id = (created.data as { id: string }).id;
+      expect(
+        (
+          await entries.updateEntry(
+            { collectionName: "plain", entryId: id, overrideAccess: true },
+            { title: "pending", total: 2 }
+          )
+        ).success
+      ).toBe(true);
+
+      const refused = await entries.takeLiveSharedValues({
+        collectionName: "plain",
+        entryId: id,
+        overrideAccess: true,
+      });
+
+      expect(refused.statusCode).toBe(409);
+      const draft = await entries.getEntry({
+        collectionName: "plain",
+        entryId: id,
+        overrideAccess: true,
+        includeWorkingDraft: true,
+      });
+      expect(draft.data).toMatchObject({ title: "pending", total: 2 });
     });
   }
 );

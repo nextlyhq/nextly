@@ -3334,6 +3334,20 @@ export class CollectionMutationService extends BaseService {
       const collection = await this.collectionService.getCollection(
         params.collectionName
       );
+      // Without languages every field is the document's own: nothing comes
+      // from another language to take, and a take would only overwrite the
+      // editor's pending edits.
+      if ((collection as { localized?: boolean }).localized !== true) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "This collection has no languages, so there are no shared values from another language to take.",
+          logContext: {
+            reason: "take-live-unlocalized",
+            collection: params.collectionName,
+          },
+        });
+      }
       // Resolved before the transaction: they take a pooled connection.
       const grants = await resolvedCallerGrants(
         params.user,

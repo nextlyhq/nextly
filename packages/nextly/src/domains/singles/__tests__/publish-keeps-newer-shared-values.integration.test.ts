@@ -346,6 +346,29 @@ describe.each(getConfiguredTestDialects())(
         ],
         { articleCount: 20, rating: 1 },
       ],
+      [
+        "an earlier shared edit loses to a later one though its language saved last",
+        [
+          ["en", { articleCount: 11 }],
+          ["es", { articleCount: 12 }],
+          // English saves again, its words only: its count is still the
+          // older edit.
+          ["en", { siteName: "EN edited" }],
+          ["fr", { siteName: "FR edited" }],
+        ],
+        { articleCount: 12, rating: 1 },
+      ],
+      [
+        "a later shared edit wins though the earlier language saved last",
+        [
+          ["es", { rating: 6 }],
+          ["en", { rating: 7 }],
+          // Spanish saves again, its words only.
+          ["es", { siteName: "ES edited" }],
+          ["fr", { siteName: "FR edited" }],
+        ],
+        { articleCount: 10, rating: 7 },
+      ],
     ];
 
     it.each(publishAllCases)(
