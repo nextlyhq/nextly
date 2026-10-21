@@ -182,6 +182,29 @@ describe("ViewedVersionBody — a past version with its changes marked", () => {
     expect(screen.getByText("Change 2 of 2")).toBeInTheDocument();
   });
 
+  it("says only system fields changed, never no changes, when that is all the server found", async () => {
+    diffMock.mockResolvedValue({
+      ...diff,
+      fields: [
+        node("excerpt", "unchanged"),
+        {
+          kind: "unknown",
+          name: "firstPublishedAt",
+          status: "changed",
+          reason: "system",
+        },
+      ],
+    });
+    renderVersion();
+
+    expect(
+      await screen.findByText("Only system fields changed.")
+    ).toBeInTheDocument();
+    const bar = screen.getByRole("toolbar", { name: "Version actions" });
+    expect(bar).toHaveTextContent("System fields only");
+    expect(screen.queryByText(/No changes/)).toBeNull();
+  });
+
   it("says it is still reading, never that nothing changed, until the comparison answers", async () => {
     // A comparison that has not answered yet.
     diffMock.mockReturnValue(new Promise(() => {}));

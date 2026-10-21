@@ -264,7 +264,14 @@ describe("dispatchRbac — mutations (respondMutation)", () => {
 describe("dispatchRbac — actions (respondAction)", () => {
   it("assignRoleToUser returns { message, userId, roleId } body", async () => {
     const container = {
-      userRoles: { assignRoleToUser: vi.fn().mockResolvedValue({}) },
+      // The service's own answer for an assignment it made.
+      userRoles: {
+        assignRoleToUser: vi.fn().mockResolvedValue({
+          success: true,
+          statusCode: 201,
+          message: "Role assigned successfully",
+        }),
+      },
       roles: {},
       permissions: {},
     } as unknown as ServiceContainer;

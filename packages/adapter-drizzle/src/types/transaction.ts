@@ -58,6 +58,16 @@ export interface TransactionOptions {
 
   /** Delay between retry attempts in milliseconds (default: 100) */
   retryDelayMs?: number;
+
+  /**
+   * MySQL only: run the transaction in strict mode, so a statement that would
+   * cut a string to its column's length or clamp a number to its range fails
+   * rather than applying with a warning. The session's own mode is restored
+   * before the connection returns to the pool. PostgreSQL and SQLite ignore
+   * it: PostgreSQL refuses such values already, and SQLite enforces no
+   * declared length.
+   */
+  strictSqlMode?: boolean;
 }
 
 /**

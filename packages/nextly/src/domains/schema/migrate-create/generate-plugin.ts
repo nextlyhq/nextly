@@ -187,6 +187,48 @@ function renderDialect(
 }
 
 /**
+ * Whether a module's UP on `dialect` is exactly what its own two sides render
+ * to (`renderDialect`, the generator's own rendering): its statements then
+ * make the schema change the sides record and nothing else, so a database
+ * standing at its result proves the module ran.
+ *
+ * A statement the snapshot cannot see — row-level security, a table option,
+ * a trigger, a data change — makes the two differ, and so does a module
+ * written by hand, or one rendered by an older generator: each reads as not
+ * proven, which is the safe answer. A rendering that fails reads the same.
+ */
+export function upRendersItsSides(
+  migration: Pick<
+    PluginMigration,
+    "dialects" | "before" | "snapshot" | "contributed" | "contributedBefore"
+  >,
+  dialect: SupportedDialect
+): boolean {
+  const before = [
+    ...(migration.before[dialect]?.tables ?? []),
+    ...(migration.contributedBefore?.[dialect]?.tables ?? []),
+  ];
+  const target = [
+    ...(migration.snapshot[dialect]?.tables ?? []),
+    ...(migration.contributed?.[dialect]?.tables ?? []),
+  ];
+  let rendered: ReturnType<typeof renderDialect>;
+  try {
+    rendered = renderDialect(before, target, dialect);
+  } catch {
+    // Not proven: the module is judged as one whose statements may do more.
+    return false;
+  }
+  if (rendered.handWritten) return false;
+  const up = migration.dialects[dialect]?.up ?? [];
+  const expected = rendered.statements.up;
+  return (
+    up.length === expected.length &&
+    up.every((statement, at) => statement === expected[at])
+  );
+}
+
+/**
  * The columns a list of operations adds that the rows already in their table
  * would have no value for: NOT NULL with no default
  * (`leavesExistingRowsEmpty`, the rule a contributed column is held to when

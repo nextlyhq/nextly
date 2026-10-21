@@ -329,39 +329,107 @@ describe("the pinned rows", () => {
     expect(result.published).toEqual([]);
   });
 
-  it("shows a publish of several parts as one row naming them", () => {
-    const result = story(
-      [
-        version(1, 1, { locale: "en" }),
-        version(2, 2, { locale: "es" }),
-        version(3, 3, { locale: "es", status: "published" }),
-      ],
-      [event("published", 3, { versionNo: 3, parts: ["en", "es"] })]
-    );
-    expect(result.published).toMatchObject([
-      { parts: ["es", "en"], version: { versionNo: 3 } },
-    ]);
-  });
-
-  it("keeps a publish of several parts in each of their language views", () => {
-    // A Spanish version whose publish shipped English too: in the English
-    // view it is English's publish, so English is pinned as published by it
-    // and its earlier save is not left pinned as a draft.
-    const result = story(
+  // A Spanish save that published every language: one event names both, and
+  // its version holds the Spanish snapshot alone. English went live as it was
+  // last saved, but no English version is recorded as what went live.
+  const sweep = () =>
+    [
       [
         version(1, 1, { locale: "en" }),
         version(2, 2, { locale: "es" }),
         version(3, 3, { locale: "es", status: "published" }),
       ],
       [event("published", 3, { versionNo: 3, parts: ["en", "es"] })],
+    ] as const;
+
+  it("shows a publish of several parts as one row naming them", () => {
+    const [versions, events] = sweep();
+    const result = story([...versions], [...events]);
+    expect(allRows(result)).toEqual(["v3[v2,v1]"]);
+    expect(result.days[0]?.entries[0]).toMatchObject({ parts: ["en", "es"] });
+  });
+
+  it("pins a part another part's publish shipped to that publish, with no version to open", () => {
+    // Version 3 holds no English: pinning English to it would preview,
+    // compare or restore Spanish content under English's name. Nor is
+    // English's own last save known to be live: retention keeps no record
+    // of which save a publish shipped, so it may be gone.
+    const [versions, events] = sweep();
+    const result = story([...versions], [...events]);
+    expect(result.published).toMatchObject([
+      { parts: ["es"], version: { versionNo: 3 } },
+      {
+        parts: ["en"],
+        version: null,
+        publishedBy: events[0],
+        at: events[0]!.occurredAt,
+      },
+    ]);
+    expect(result.drafts).toEqual([]);
+  });
+
+  it("tells another language's publish in a language view by its event alone", () => {
+    const [versions, events] = sweep();
+    const result = story([...versions], [...events], {
+      view: { kind: "language", locale: "en" },
+    });
+    // No row or pin of the English view is the Spanish version.
+    expect(allRows(result)).toEqual(["e:published", "v1"]);
+    expect(result.published).toMatchObject([
+      { parts: ["en"], version: null, publishedBy: events[0] },
+    ]);
+    // English's save went live with the publish, so it is no longer a draft.
+    expect(result.drafts).toEqual([]);
+  });
+
+  it("pins a save made after another language's publish as the draft", () => {
+    const [versions, events] = sweep();
+    const result = story(
+      [...versions, version(4, 4, { locale: "en" })],
+      [...events],
+      { view: { kind: "language", locale: "en" } }
+    );
+    expect(result.drafts).toMatchObject([
+      { part: "en", version: { versionNo: 4 }, published: true },
+    ]);
+    expect(result.published).toMatchObject([{ version: null }]);
+  });
+
+  it("orders a save in the publish's own second by its version number", () => {
+    // History stores whole seconds: an English save in the same second as the
+    // publish is still after it, so it is the draft, not what went live.
+    const [versions, events] = sweep();
+    const result = story(
+      [...versions, version(4, 3, { locale: "en" })],
+      [...events],
+      { view: { kind: "language", locale: "en" } }
+    );
+    expect(result.drafts).toMatchObject([
+      { part: "en", version: { versionNo: 4 }, published: true },
+    ]);
+  });
+
+  it("pins the shared fields and each language of a publish of every language", () => {
+    // Publishing every language records one version of the shared fields,
+    // holding no language's translated values.
+    const publishAll = event("published", 3, {
+      versionNo: 3,
+      parts: ["en", "es"],
+    });
+    const result = story(
+      [
+        version(1, 1, { locale: "en" }),
+        version(2, 2, { locale: "es" }),
+        version(3, 3, { locale: null, status: "published" }),
+      ],
+      [publishAll],
       { view: { kind: "language", locale: "en" } }
     );
     expect(result.published).toMatchObject([
-      { parts: ["en"], version: { versionNo: 3 } },
+      { parts: [SHARED_PART], version: { versionNo: 3 } },
+      { parts: ["en"], version: null, publishedBy: publishAll },
     ]);
     expect(result.drafts).toEqual([]);
-    // The English save folds under the publish that shipped it.
-    expect(rows(result.days.flatMap(day => day.entries))).toEqual(["v3[v1]"]);
   });
 
   it("pins a Spanish draft beside a shared-fields draft", () => {

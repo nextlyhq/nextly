@@ -49,6 +49,7 @@ import {
   recordTemplateActivity,
   type EmailTemplateActivityInput,
 } from "../template-activity";
+import { checkTemplateEnvelope, type SavedCopies } from "../template-envelope";
 import {
   applyOwnerChoices,
   ownerChanges,
@@ -58,6 +59,7 @@ import {
 import {
   absentPluginFor,
   buildTemplateOwnerRegistry,
+  carriesSecret,
   detailsOf,
   isProtectedOwner,
   ownerOf,
@@ -72,7 +74,7 @@ import {
   type RegistryInput,
   type TemplateOwnerRegistry,
 } from "../template-ownership";
-import type { EmailAttachmentInput, EmailConfig } from "../types";
+import type { EmailConfig } from "../types";
 
 import { LIQUID_FIELDS, oldEngineReasons } from "./liquid-compat";
 import { parseLiquid, writesOutput } from "./liquid-engine";
@@ -137,6 +139,8 @@ const NEW_TEMPLATE_DEFAULTS = {
   layoutId: null,
   fromOverride: null,
   replyTo: null,
+  cc: null,
+  bcc: null,
   variables: null,
   useLayout: true,
   isActive: true,
@@ -164,6 +168,8 @@ const UPDATABLE_FIELDS = [
   "layoutId",
   "fromOverride",
   "replyTo",
+  "cc",
+  "bcc",
   "variables",
   "useLayout",
   "isActive",
@@ -171,6 +177,23 @@ const UPDATABLE_FIELDS = [
   "attachments",
   "description",
 ] as const satisfies ReadonlyArray<keyof UpdateEmailTemplateInput>;
+
+/**
+ * The columns an update writes: each field it gives, with the copies as
+ * checked (trimmed, each address once) in place of the ones it gave.
+ */
+function updateColumns(
+  data: UpdateEmailTemplateInput,
+  copies: SavedCopies
+): Record<string, unknown> {
+  const columns: Record<string, unknown> = { updatedAt: new Date() };
+  for (const field of UPDATABLE_FIELDS) {
+    if (data[field] !== undefined) columns[field] = data[field];
+  }
+  if (copies.cc !== undefined) columns.cc = copies.cc;
+  if (copies.bcc !== undefined) columns.bcc = copies.bcc;
+  return columns;
+}
 
 /** The owner's current version and details, kept as an override's base. */
 function keptBase(entry: OwnedTemplate): KeptBase {
@@ -192,22 +215,9 @@ export type CreateEmailTemplateInput = EmailTemplateInsert;
  * All fields are optional — only provided fields are updated.
  * Note: `slug` cannot be changed after creation.
  */
-export interface UpdateEmailTemplateInput {
-  name?: string;
-  subject?: string;
-  htmlContent?: string;
-  plainTextContent?: string | null;
-  preheader?: string | null;
-  layoutId?: string | null;
-  fromOverride?: string | null;
-  replyTo?: string | null;
-  variables?: EmailTemplateVariable[] | null;
-  useLayout?: boolean;
-  isActive?: boolean;
-  providerId?: string | null;
-  attachments?: EmailAttachmentInput[] | null;
-  description?: string | null;
-}
+export type UpdateEmailTemplateInput = Partial<
+  Omit<EmailTemplateInsert, "slug" | "kind">
+>;
 
 /** What the running site contributes to ownership: its plugins and its code. */
 export interface TemplateOwnershipInput {
@@ -293,8 +303,10 @@ export interface OwnerUpdateUndo {
 /** A stored row: the record's columns, with ownership as stored. */
 type StoredTemplateRow = Omit<
   EmailTemplateRecord,
-  "owner" | "overridden" | "ownerChanged" | "setInCode"
+  "owner" | "overridden" | "ownerChanged" | "setInCode" | "carriesSecret"
 > & {
+  /** The owner's mark as last stored; see `carriesSecret` for what counts. */
+  carriesSecret: boolean | null;
   ownerKind: string | null;
   ownerName: string | null;
   overridden: boolean | null;
@@ -405,6 +417,7 @@ export class EmailTemplateService extends BaseService {
       overridden: storedOverridden,
       baseDigest,
       baseVersion: _baseVersion,
+      carriesSecret: storedMark,
       ...columns
     } = row;
     const owner = ownerOf(row.slug, { ownerKind, ownerName }, this.registry);
@@ -414,7 +427,10 @@ export class EmailTemplateService extends BaseService {
       ...columns,
       kind: columns.kind ?? "template",
       description: columns.description ?? null,
+      cc: columns.cc ?? null,
+      bcc: columns.bcc ?? null,
       owner,
+      carriesSecret: carriesSecret(row.slug, storedMark, this.registry),
       overridden,
       ownerChanged: overridden && !!entry && baseDigest !== entry.digest,
       setInCode: this.registry.setInCode.has(row.slug),
@@ -837,6 +853,11 @@ export class EmailTemplateService extends BaseService {
     this.assertLayoutMarker(kind, data.htmlContent);
     this.assertLiquid(data);
     this.assertMarkerOutput(kind, data.htmlContent);
+    // A slug an owner declares carries that owner's mark, even before the
+    // owner's row exists.
+    const copies = checkTemplateEnvelope(data, {
+      carriesSecret: carriesSecret(data.slug, null, this.registry),
+    });
     const id = randomUUID();
     const now = new Date();
     await this.markAuthoredBeforeSwitch(id);
@@ -853,6 +874,8 @@ export class EmailTemplateService extends BaseService {
       layoutId: orDefault(data, "layoutId"),
       fromOverride: orDefault(data, "fromOverride"),
       replyTo: orDefault(data, "replyTo"),
+      cc: copies.cc ?? NEW_TEMPLATE_DEFAULTS.cc,
+      bcc: copies.bcc ?? NEW_TEMPLATE_DEFAULTS.bcc,
       variables: orDefault(data, "variables"),
       useLayout: orDefault(data, "useLayout"),
       isActive: orDefault(data, "isActive"),
@@ -1005,15 +1028,14 @@ export class EmailTemplateService extends BaseService {
       existing.kind,
       data.htmlContent ?? existing.htmlContent
     );
+    // Before anything is recorded about the save: a refused envelope leaves
+    // no trace.
+    const updateData = updateColumns(
+      data,
+      checkTemplateEnvelope(data, { carriesSecret: record.carriesSecret })
+    );
     const afterSave = await this.checkLiquidOnSave(record, data);
 
-    const updateData: Record<string, unknown> = {
-      updatedAt: new Date(),
-    };
-
-    for (const field of UPDATABLE_FIELDS) {
-      if (data[field] !== undefined) updateData[field] = data[field];
-    }
     const overriding = this.overridesOwner(existing, record, updateData);
     if (overriding) {
       // The owner's version as the base. A plugin that isn't running has no
@@ -1669,6 +1691,7 @@ export class EmailTemplateService extends BaseService {
         await this.insertOwned(entry);
       } else if (this.registry.complete) {
         await this.reconcileOwnedRow(row, entry);
+        await this.followOwnerMark(row, entry);
       }
     }
 
@@ -1755,6 +1778,7 @@ export class EmailTemplateService extends BaseService {
         isActive: t.isActive ?? true,
         providerId: t.providerId ?? null,
         attachments: t.attachments ?? null,
+        carriesSecret: entry.carriesSecret,
         ...storedOwner(entry.owner),
         overridden: false,
         baseVersion: null,
@@ -1777,7 +1801,10 @@ export class EmailTemplateService extends BaseService {
         // That process may run another version of its owner: the row it
         // wrote is reconciled against this one's, as any stored row is.
         const row = await this.getRowBySlug(t.slug);
-        if (row) await this.reconcileOwnedRow(row, entry);
+        if (row) {
+          await this.reconcileOwnedRow(row, entry);
+          await this.followOwnerMark(row, entry);
+        }
         return;
       }
       this.logger.warn(`Failed to create email template "${t.slug}"`, {
@@ -1893,6 +1920,23 @@ export class EmailTemplateService extends BaseService {
         },
       })
       .where(this.unchanged(row));
+  }
+
+  /**
+   * Store the owner's secret mark, overridden or not: it is the owner's to
+   * declare, never the site's, and the stored copy is what a plugin that
+   * stops running leaves its template with. Written on its own, leaving
+   * `updatedAt` alone, so no save in between is refused for it.
+   */
+  private async followOwnerMark(
+    row: StoredTemplateRow,
+    entry: OwnedTemplate
+  ): Promise<void> {
+    if ((row.carriesSecret === true) === entry.carriesSecret) return;
+    await this.db
+      .update(this.emailTemplates)
+      .set({ carriesSecret: entry.carriesSecret })
+      .where(eq(this.emailTemplates.id, row.id));
   }
 
   /** A template following its owner: rewritten whenever the owner's version, kind or details move. */

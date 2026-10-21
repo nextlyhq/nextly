@@ -33,9 +33,28 @@ import {
   createMockCollection,
   createSampleEntry,
   createSampleEntries,
+  callerMay,
+  fakeActorForUser,
+  fakeUserHoldsPermission,
+  fakeUserIsSuperAdmin,
+  resetCallerAccess,
 } from "./collection-test-helpers";
 
 // ── Module mocks ──────────────────────────────────────────────────────────
+
+// The caller the collection gate decides for: a signed-in user's actions are
+// set per test (`callerMay`), and every test starts from one holding all.
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  ...(await (async () => {
+    const fake = await import("./collection-test-helpers");
+    return {
+      actorForUser: fake.fakeActorForUser,
+      userHoldsPermission: fake.fakeUserHoldsPermission,
+      userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
+    };
+  })()),
+}));
 
 vi.mock("../../../di/container", () => ({
   container: {
@@ -145,6 +164,10 @@ describe("CollectionEntryService — Query Contracts", () => {
   >;
 
   beforeEach(() => {
+    resetCallerAccess();
+    fakeActorForUser.mockClear();
+    fakeUserHoldsPermission.mockClear();
+    fakeUserIsSuperAdmin.mockClear();
     vi.clearAllMocks();
 
     schema = createMockSchema();
@@ -658,11 +681,11 @@ describe("CollectionEntryService — Query Contracts", () => {
         user: { id: "user-1", role: "viewer" },
       });
 
-      expect(mockRbac.checkAccess).toHaveBeenCalled();
+      expect(fakeUserHoldsPermission).toHaveBeenCalled();
     });
 
     it("should return 403 when access is denied", async () => {
-      mockRbac.checkAccess.mockResolvedValueOnce(false);
+      callerMay();
 
       const result = await service.countEntries({
         collectionName: "posts",
@@ -685,7 +708,8 @@ describe("CollectionEntryService — Query Contracts", () => {
       expect(result.success).toBe(true);
       // checkCollectionAccess returns null under overrideAccess, so the gate is
       // skipped entirely.
-      expect(mockRbac.checkAccess).not.toHaveBeenCalled();
+      expect(fakeActorForUser).not.toHaveBeenCalled();
+      expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
     });
 
     it("should return 500 when collection not found (no 404 distinction)", async () => {
@@ -776,7 +800,7 @@ describe("CollectionEntryService — Query Contracts", () => {
     });
 
     it("should return 403 when collection access is denied", async () => {
-      mockRbac.checkAccess.mockResolvedValueOnce(false);
+      callerMay();
 
       const result = await service.getEntry({
         collectionName: "posts",

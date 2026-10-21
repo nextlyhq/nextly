@@ -476,6 +476,94 @@ describe("a refill that runs out of ROUNDS", () => {
   });
 });
 
+describe("counting the feed's rows for the last day", () => {
+  /** `count` install-level rows: no document to authorize, so every one is kept. */
+  const settingsRows = (count: number, from = 0) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: `s${from + i}`,
+      collection: "email-providers",
+      subjectKind: "settings",
+      entryTitle: "SMTP",
+      createdAt: new Date(2026, 0, 1, 0, 0, from + i),
+    }));
+  const caller = { user: { id: "u1", roles: ["editor"] } };
+  const since = new Date(2026, 0, 1);
+
+  it("is a FLOOR when the walk stops at its bound with rows unread", async () => {
+    // Every round a full page, so the walk stops at its rounds and not at the table's end: the
+    // figure is then at least what it found, never a total it did not establish.
+    const { service, adapter } = makeService();
+    (adapter.select as ReturnType<typeof vi.fn>).mockResolvedValue(
+      settingsRows(100)
+    );
+    const counted = await service.countRecentActivity({
+      since,
+      scope: someResources(["email-providers"]),
+      caller,
+    });
+    expect(counted).toEqual({ count: 1000, atLeast: true });
+  });
+
+  it("is WHOLE when the rows of the day run out", async () => {
+    // The control: without it, `atLeast: true` unconditionally would satisfy the case above.
+    const { service, adapter } = makeService();
+    (adapter.select as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(settingsRows(100))
+      .mockResolvedValueOnce(settingsRows(30, 100));
+    const counted = await service.countRecentActivity({
+      since,
+      scope: someResources(["email-providers"]),
+      caller,
+    });
+    expect(counted).toEqual({ count: 130, atLeast: false });
+  });
+
+  it("asks for the day's rows inside the scope, without the kept-off collections", async () => {
+    const { service, adapter } = makeService();
+    await service.countRecentActivity({
+      since,
+      scope: someResources(["posts"]),
+      caller,
+      keptOffCollections: new Set(["patterns"]),
+    });
+    const where = JSON.stringify(
+      (adapter.select as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.where
+    );
+    expect(where).toContain(
+      '"column":"collection","op":"IN","value":["posts"]'
+    );
+    expect(where).toContain(
+      `"column":"createdAt","op":">","value":"${since.toISOString()}"`
+    );
+    expect(where).toContain(
+      '"column":"collection","op":"NOT IN","value":["patterns"]'
+    );
+  });
+
+  it("counts nothing, and reads nothing, for a scope that admits nothing", async () => {
+    const { service, adapter } = makeService();
+    const counted = await service.countRecentActivity({
+      since,
+      scope: someResources([]),
+      caller,
+    });
+    expect(counted).toEqual({ count: 0, atLeast: false });
+    expect(adapter.select).not.toHaveBeenCalled();
+  });
+
+  it("counts nothing without a caller, as the feed shows nothing", async () => {
+    const { service, adapter } = makeService();
+    (adapter.select as ReturnType<typeof vi.fn>).mockResolvedValue(
+      settingsRows(5)
+    );
+    const counted = await service.countRecentActivity({
+      since,
+      scope: someResources(["email-providers"]),
+    });
+    expect(counted.count).toBe(0);
+  });
+});
+
 describe("existence probes for refused rows", () => {
   it("issues them CONCURRENTLY, within a bound", async () => {
     // 🔴 Each probe is a full collection read, and a page can hold refused rows

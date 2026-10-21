@@ -29,6 +29,12 @@ export type RegisteredOwner =
   | { kind: "core" }
   | { kind: "plugin"; name: string };
 
+/**
+ * A template as its owner declares it: the row it ships, and whether it
+ * carries a secret, which only an owner can say and no edit can change.
+ */
+export type OwnerTemplate = EmailTemplateInsert & { carriesSecret?: boolean };
+
 /** One owned template's current default. */
 export interface OwnedTemplate {
   slug: string;
@@ -39,6 +45,8 @@ export interface OwnedTemplate {
   version: EmailTemplateVersion;
   /** `versionDigest(version)`, computed once. */
   digest: string;
+  /** Whether the owner marks it as carrying a secret. */
+  carriesSecret: boolean;
 }
 
 export interface TemplateOwnerRegistry {
@@ -189,10 +197,8 @@ export function sameVersion(
   return versionDigest(a) === versionDigest(b);
 }
 
-function owned(
-  owner: RegisteredOwner,
-  defaults: EmailTemplateInsert
-): OwnedTemplate {
+function owned(owner: RegisteredOwner, declared: OwnerTemplate): OwnedTemplate {
+  const { carriesSecret, ...defaults } = declared;
   const version = versionOf(defaults);
   return {
     slug: defaults.slug,
@@ -200,11 +206,14 @@ function owned(
     defaults,
     version,
     digest: versionDigest(version),
+    // Strictly true: a plugin is plain JavaScript at runtime, and only an
+    // explicit mark should count as one.
+    carriesSecret: carriesSecret === true,
   };
 }
 
 /** A plugin's contribution, in the shape core inserts. */
-function pluginDefaults(template: PluginEmailTemplate): EmailTemplateInsert {
+function pluginDefaults(template: PluginEmailTemplate): OwnerTemplate {
   return {
     name: template.name,
     slug: template.slug,
@@ -215,7 +224,25 @@ function pluginDefaults(template: PluginEmailTemplate): EmailTemplateInsert {
     variables: (template.variables ?? null) as EmailTemplateVariable[] | null,
     useLayout: template.useLayout ?? true,
     description: template.description ?? null,
+    replyTo: template.replyTo ?? null,
+    carriesSecret: template.carriesSecret,
   };
+}
+
+/**
+ * Whether a template carries a secret: its running owner's mark, or the mark
+ * stored from its owner's last declaration, so the template of a plugin that
+ * is not running keeps it. Either one suffices, which is the safe way to be
+ * wrong while the two disagree (a boot that has not reconciled yet).
+ */
+export function carriesSecret(
+  slug: string,
+  storedMark: boolean | null | undefined,
+  registry: TemplateOwnerRegistry
+): boolean {
+  return (
+    registry.owned.get(slug)?.carriesSecret === true || storedMark === true
+  );
 }
 
 /**
@@ -277,7 +304,7 @@ export function ownershipFromConfig(
 
 export interface RegistryInput {
   /** Core's built-in templates and layouts. */
-  builtIns: ReadonlyArray<EmailTemplateInsert>;
+  builtIns: ReadonlyArray<OwnerTemplate>;
   /** Each running plugin, with the templates it contributes. */
   plugins: ReadonlyArray<{
     name: string;
