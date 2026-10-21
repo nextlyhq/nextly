@@ -12,6 +12,8 @@
  */
 
 import { container } from "../di/container";
+import { SUPER_ADMIN_SLUG } from "../services/access/super-admin";
+import { listRoleSlugsForUser } from "../services/lib/permissions";
 import { consoleLogger } from "../shared/types";
 
 import { holdsPermission, type Actor } from "./access/actor";
@@ -103,11 +105,23 @@ export async function canReadSystemResource(
   } catch (error) {
     // A lookup that fails refuses the read, as the permission check this
     // replaced did, so a relationship withholds the row and the read goes on.
+    // That check asked whether the user is a super-admin before reading any
+    // grant, so a super-admin, who needs none, is still let through when only
+    // the grants could not be read.
     consoleLogger.error(
       `[rbac] Could not resolve user ${userId} to read ${resource}`,
       { error }
     );
-    return false;
+    return holdsSuperAdminRole(userId);
   }
   return readsSystemResource(actor, read);
+}
+
+/** Whether the user holds the super-admin role; `false` when it cannot be read. */
+async function holdsSuperAdminRole(userId: string): Promise<boolean> {
+  try {
+    return (await listRoleSlugsForUser(userId)).includes(SUPER_ADMIN_SLUG);
+  } catch {
+    return false;
+  }
 }

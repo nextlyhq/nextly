@@ -12,14 +12,31 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { hasSpy, actorForUserSpy } = vi.hoisted(() => ({
+const { hasSpy, actorForUserSpy, roleSlugsSpy, decideSpy } = vi.hoisted(() => ({
   hasSpy: vi.fn(),
   actorForUserSpy: vi.fn(),
+  roleSlugsSpy: vi.fn(),
+  decideSpy: vi.fn(),
 }));
 
 vi.mock("../../di/container", () => ({
   container: { has: hasSpy, get: () => ({}) },
 }));
+
+// The roles lookup the reader falls back on when the whole actor cannot be
+// resolved, since a super-admin passes without any grant.
+vi.mock("../../services/lib/permissions", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../services/lib/permissions")>()),
+  listRoleSlugsForUser: roleSlugsSpy,
+}));
+
+// The one decision, observed rather than replaced: every call is recorded and
+// answered by the real decision.
+vi.mock("../access/decide", async importOriginal => {
+  const real = await importOriginal<typeof import("../access/decide")>();
+  decideSpy.mockImplementation(real.decide);
+  return { ...real, decide: decideSpy };
+});
 
 vi.mock("../access/resolve-actor", async importOriginal => ({
   ...(await importOriginal<typeof import("../access/resolve-actor")>()),
@@ -58,11 +75,52 @@ describe("canReadSystemResource — API keys", () => {
   });
 });
 
+describe("canReadSystemResource — the decision", () => {
+  it("asks the one decision about the system resource for a key's read", async () => {
+    // A read no deviation keeps today's answer for, so its answer is the
+    // decision's own: the decision must have been asked, about this target.
+    const scope = apiKeyScope([
+      { slug: "read-users", action: "read", resource: "users" },
+    ]);
+
+    await expect(
+      canReadSystemResource("users", "owner-1", scope)
+    ).resolves.toBe(true);
+    expect(decideSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "key" }),
+      "read",
+      { kind: "system", slug: "users" }
+    );
+  });
+});
+
 describe("canReadSystemResource — signed-in users", () => {
   it("refuses, rather than fails, when the user's lookup fails", async () => {
     actorForUserSpy.mockRejectedValue(new Error("database busy"));
+    roleSlugsSpy.mockRejectedValue(new Error("database busy"));
 
     await expect(canReadSystemResource("media", "u1", undefined)).resolves.toBe(
+      false
+    );
+  });
+
+  it("admits a super-admin whose grants cannot be read, as no grant is needed", async () => {
+    // The super-admin pass is asked before any grant, as the permission
+    // check this replaced asked it first.
+    actorForUserSpy.mockRejectedValue(new Error("grants unreadable"));
+    roleSlugsSpy.mockResolvedValue(["super-admin"]);
+
+    await expect(canReadSystemResource("users", "u1", undefined)).resolves.toBe(
+      true
+    );
+  });
+
+  it("refuses a user who is no super-admin when their grants cannot be read", async () => {
+    // The control: the fallback admits on the super-admin role alone.
+    actorForUserSpy.mockRejectedValue(new Error("grants unreadable"));
+    roleSlugsSpy.mockResolvedValue(["editor"]);
+
+    await expect(canReadSystemResource("users", "u1", undefined)).resolves.toBe(
       false
     );
   });
