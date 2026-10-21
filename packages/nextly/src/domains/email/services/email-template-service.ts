@@ -809,6 +809,7 @@ export class EmailTemplateService extends BaseService {
     const template = await this.getTemplate(id);
     const flagged = await this.flaggedWhenKept(template);
     if (flagged === null) return template;
+    this.assertNotDeclaredLegacy(template);
     // Every flagged field must have changed: an edit elsewhere leaves the
     // flagged text as it was, and reading it as Liquid would change the email.
     const unchanged = unchangedFlaggedFields(flagged, template);
@@ -833,6 +834,24 @@ export class EmailTemplateService extends BaseService {
       actor,
     });
     return template;
+  }
+
+  /**
+   * A template following an owner that declares it was written for the
+   * previous engine renders there: the owner says so, and the next boot
+   * would put it back. Overriding it makes it the site's, to confirm.
+   *
+   * @throws NextlyError BUSINESS_RULE_VIOLATION for such a template
+   */
+  private assertNotDeclaredLegacy(template: EmailTemplateRecord): void {
+    if (template.overridden) return;
+    if (this.registry.owned.get(template.slug)?.engine !== "legacy") return;
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage:
+        "This template's owner says it was written for the previous engine. Override it to read it as Liquid.",
+      logContext: { id: template.id, reason: "liquid-confirm-declared-legacy" },
+    });
   }
 
   /**

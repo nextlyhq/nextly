@@ -657,6 +657,19 @@ for (const dialect of getConfiguredTestDialects()) {
         ).toBeNull();
       });
 
+      it("refuses to read as Liquid a template that follows a plugin declaring legacy", async () => {
+        const t = await boot(dialect);
+        await templates(t).ensureBuiltInTemplates();
+        // Text both engines read alike: nothing is flagged, so only the
+        // declaration keeps it on the previous engine.
+        await shipping(t, PLAIN, "legacy");
+        const id = (await promo(t)).id;
+        await expect(templates(t).confirmLiquid(id)).rejects.toMatchObject({
+          code: "BUSINESS_RULE_VIOLATION",
+        });
+        expect((await templates(t).oldEngineStatus(id)).kept).toBe(true);
+      });
+
       it("releases a template to Liquid when its plugin drops a legacy declaration", async () => {
         const t = await boot(dialect);
         await templates(t).ensureBuiltInTemplates();
