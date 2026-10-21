@@ -77,6 +77,7 @@ vi.mock("../../services/lib/permissions", async importOriginal => ({
   isSuperAdmin: vi.fn(),
   hasPermission: vi.fn(),
   listEffectivePermissions: vi.fn(),
+  listEffectiveGrants: vi.fn(),
   listRoleSlugsForUser: vi.fn(),
   resolveRoleSlugs: vi.fn(),
 }));
@@ -89,6 +90,7 @@ import { EMAIL_TEMPLATE_ACTIVITY_COLLECTION } from "../../domains/email/template
 import {
   hasPermission,
   isSuperAdmin,
+  listEffectiveGrants,
   listEffectivePermissions,
   listRoleSlugsForUser,
   resolveRoleSlugs,
@@ -170,6 +172,9 @@ beforeEach(() => {
     "site-settings:read",
   ]);
   asMock(listRoleSlugsForUser).mockResolvedValue(["editor"]);
+  // A rule is handed the grants beside the roles, and a lookup with no
+  // database behind it refuses rather than answering none.
+  asMock(listEffectiveGrants).mockResolvedValue([]);
   asMock(resolveRoleSlugs).mockResolvedValue(["editor"]);
 });
 
