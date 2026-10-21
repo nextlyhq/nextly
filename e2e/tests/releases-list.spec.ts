@@ -14,62 +14,16 @@ import {
   leaveReleasesAsTheRunnerWould,
   type RunnerOutcome,
 } from "./support/release-states";
+import {
+  cancel,
+  post,
+  publishNow,
+  release,
+  schedule,
+} from "./support/releases-api";
 
-const API = "/admin/api";
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
-
-async function ok<T>(
-  response: Awaited<ReturnType<Page["request"]["post"]>>
-): Promise<T> {
-  expect(response.ok(), await response.text()).toBe(true);
-  return (await response.json()) as T;
-}
-
-/** A post to put in releases: a release with no documents is not scheduled. */
-async function post(page: Page, stamp: string): Promise<string> {
-  const { item } = await ok<{ item: { id: string } }>(
-    await page.request.post(`${API}/collections/posts/entries`, {
-      data: { title: `Release e2e ${stamp}`, slug: `release-e2e-${stamp}` },
-    })
-  );
-  return item.id;
-}
-
-/** A release holding one post, created as a draft. */
-async function release(
-  page: Page,
-  title: string,
-  postId: string
-): Promise<string> {
-  const { item } = await ok<{ item: { id: string } }>(
-    await page.request.post(`${API}/releases`, { data: { title } })
-  );
-  await ok(
-    await page.request.post(`${API}/releases/${item.id}/members`, {
-      data: {
-        scopeKind: "collection",
-        scopeSlug: "posts",
-        entryId: postId,
-        action: "publish",
-      },
-    })
-  );
-  return item.id;
-}
-
-async function schedule(
-  page: Page,
-  id: string,
-  at: Date,
-  timezone: string
-): Promise<void> {
-  await ok(
-    await page.request.post(`${API}/releases/${id}/schedule`, {
-      data: { at: at.toISOString(), timezone },
-    })
-  );
-}
 
 /** Rows per page: the list starts at 25. */
 const PAGE_SIZE = 25;
@@ -156,19 +110,9 @@ test.describe("the Releases list", () => {
     const draft = name("Draft");
     await release(page, draft, postId);
     const published = name("Published");
-    await ok(
-      await page.request.post(
-        `${API}/releases/${await release(page, published, postId)}/publish`,
-        { data: {} }
-      )
-    );
+    await publishNow(page, await release(page, published, postId));
     const cancelled = name("Cancelled");
-    await ok(
-      await page.request.post(
-        `${API}/releases/${await release(page, cancelled, postId)}/cancel`,
-        { data: {} }
-      )
-    );
+    await cancel(page, await release(page, cancelled, postId));
 
     await leaveReleasesAsTheRunnerWould(page, needAttention);
 
