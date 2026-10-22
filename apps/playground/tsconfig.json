@@ -3,7 +3,6 @@
   "compilerOptions": {
     "target": "ES2017",
     "incremental": true,
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
       // admin's internal path alias — needed for tsc when it walks admin's
