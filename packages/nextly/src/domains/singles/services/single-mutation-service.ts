@@ -27,6 +27,7 @@ import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import { resolveRequestFacts } from "../../../hooks/request-facts";
@@ -112,8 +113,10 @@ import {
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
+  languagesChangedConflict,
   languagesGoingLiveFrom,
   languagesToAsk,
+  unaskedLanguages,
 } from "../../i18n/languages-going-live";
 import { EVERY_LOCALE } from "../../i18n/locale-selector";
 import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
@@ -782,6 +785,30 @@ export class SingleMutationService extends BaseService {
         row.id
       ),
     };
+  }
+
+  /**
+   * The languages a write to every language that publishes puts live, each to
+   * be asked about: those the stored `statuses` and the main row's
+   * `mainStatus` name, and every configured language where the Single
+   * reaches a localized field group.
+   */
+  private languagesToPublish(
+    statuses: ReadonlyMap<string, string | null>,
+    mainStatus: unknown,
+    reachesLocalizedFieldGroup: boolean
+  ): string[] {
+    const configured =
+      this.localization?.locales.map(locale => locale.code) ?? [];
+    return languagesToAsk(
+      languagesGoingLiveFrom({
+        statuses,
+        configured,
+        defaultLocale: this.localization?.defaultLocale,
+        mainPublished: mainStatus === "published",
+      }),
+      { configured, reachesLocalizedFieldGroup }
+    );
   }
 
   /**
@@ -1686,6 +1713,65 @@ export class SingleMutationService extends BaseService {
         locale: options.locale,
       });
 
+      // A write to every language that publishes asks the publish permission
+      // and rule once for each language it puts live, each time told that
+      // language and all of them, as publishing every language does: a rule
+      // that answers by language answers for each, and any refusal refuses the
+      // write. Asked here, before the transaction and off its connection: a
+      // rule is the app's own code and may read the database. The lock
+      // re-reads what goes live (below), and asks nothing.
+      const sweepStatusesReadable =
+        sweepAllLocales &&
+        companion !== null &&
+        companion !== undefined &&
+        companionPhysicallyExists &&
+        companion.hasStatus;
+      const askedLanguages =
+        sweepAllLocales &&
+        !options.overrideAccess &&
+        (currentData as { status?: unknown }).status === "published"
+          ? this.languagesToPublish(
+              sweepStatusesReadable && companion
+                ? await readCompanionLocaleStatusAll(
+                    this.adapter.getDrizzle<
+                      Parameters<typeof readCompanionLocaleStatusAll>[0]
+                    >(),
+                    companion.table,
+                    existingDoc.id,
+                    cachedCompanionReadiness(
+                      this.adapter,
+                      companion.companionTableName
+                    )
+                  )
+                : new Map<string, string | null>(),
+              existingDoc.status,
+              reachesLocalizedGroup
+            )
+          : undefined;
+      if (askedLanguages !== undefined) {
+        const denied = await askEachLanguage(askedLanguages, () =>
+          checkSingleAccess({
+            slug,
+            operation: "publish",
+            user: options.user,
+            overrideAccess: options.overrideAccess,
+            trusted: options.trusted,
+            routeAuthorized: false,
+            rbacAccessControlService: this.rbacAccessControlService,
+            authenticatedScope: options.authenticatedScope,
+            logger: this.logger,
+          })
+        );
+        if (denied) {
+          // The languages refused are for the server log only.
+          this.logger.warn("Publish refused in some languages", {
+            single: slug,
+            refusedLanguages: denied.refused,
+          });
+          return denied.refusal;
+        }
+      }
+
       try {
         // Retry the whole update+capture transaction on a version_no allocation
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
@@ -1973,53 +2059,33 @@ export class SingleMutationService extends BaseService {
                 status => status === "published"
               );
             }
-            // A write to every language that publishes asks the publish
-            // permission and rule once for each language it puts live, each
-            // time told that language and all of them, as publishing every
-            // language does: a rule that answers by language answers for each.
-            // Judged under the lock, on the statuses it reads, before the write
-            // lands; any refusal refuses the write. With no language going
-            // live, it is asked once.
+            // What goes live, re-read under the lock on the statuses it reads,
+            // before the write lands. The rule was asked before the
+            // transaction; a language it was not asked about refuses the write
+            // as a conflict. No rule runs here. A write the earlier check did
+            // not see publishing was asked about nothing, so any language it
+            // puts live is one.
             if (
               sweepAllLocales &&
               !options.overrideAccess &&
               mainStatusWritten === "published"
             ) {
-              const configured =
-                this.localization?.locales.map(locale => locale.code) ?? [];
-              const goingLive = languagesToAsk(
-                languagesGoingLiveFrom({
-                  statuses: priorStatuses,
-                  configured,
-                  defaultLocale: this.localization?.defaultLocale,
-                  mainPublished: preRowMainStatus === "published",
-                }),
-                {
-                  configured,
-                  reachesLocalizedFieldGroup: reachesLocalizedGroup,
-                }
+              const unasked = unaskedLanguages(
+                askedLanguages ?? [],
+                this.languagesToPublish(
+                  priorStatuses,
+                  preRowMainStatus,
+                  reachesLocalizedGroup
+                )
               );
-              const denied = await askEachLanguage(goingLive, () =>
-                checkSingleAccess({
-                  slug,
-                  operation: "publish",
-                  user: options.user,
-                  overrideAccess: options.overrideAccess,
-                  trusted: options.trusted,
-                  routeAuthorized: false,
-                  rbacAccessControlService: this.rbacAccessControlService,
-                  authenticatedScope: options.authenticatedScope,
-                  logger: this.logger,
-                  executor: tx.getDrizzle(),
-                })
-              );
-              if (denied) {
-                // The languages refused are for the server log only.
-                this.logger.warn("Publish refused in some languages", {
-                  single: slug,
-                  refusedLanguages: denied.refused,
-                });
-                transitionDeniedResult = denied.refusal;
+              if (unasked.length > 0) {
+                const conflict = languagesChangedConflict(unasked);
+                transitionDeniedResult = {
+                  success: false,
+                  statusCode: 500,
+                  message: conflict.message,
+                  ...errorEnvelopeFields(conflict),
+                };
                 throw new SingleStatusTransitionDeniedError();
               }
             }

@@ -8,6 +8,8 @@
  * @module domains/i18n/languages-going-live
  */
 
+import { NextlyError } from "../../errors/nextly-error";
+
 /**
  * The languages a publish of every language puts live: each stored
  * translation not yet published, among the languages the site still
@@ -65,4 +67,35 @@ export function languagesToAsk(
   return args.reachesLocalizedFieldGroup
     ? [...new Set([...goingLive, ...args.configured])]
     : [...goingLive];
+}
+
+/**
+ * The languages going live as the publish's lock reads them that the publish
+ * rule was not asked about before it. The rule is asked before the
+ * transaction, off its connection, since a rule is the app's own code and may
+ * read the database; the lock only re-reads what goes live. A language there
+ * that was not asked about refuses the publish as a conflict, and a smaller
+ * set proceeds, each of its languages having been asked.
+ */
+export function unaskedLanguages(
+  asked: readonly string[],
+  goingLive: readonly string[]
+): string[] {
+  const askedAbout = new Set(asked);
+  return goingLive.filter(locale => !askedAbout.has(locale));
+}
+
+/**
+ * The refusal of a publish whose languages going live changed between the
+ * rule's answer and the lock: the document changed while it was published, so
+ * nothing is written and the caller tries again. The languages go to the
+ * server log only.
+ */
+export function languagesChangedConflict(
+  unasked: readonly string[]
+): NextlyError {
+  return NextlyError.conflict({
+    reason: "state",
+    logContext: { languagesNotAsked: [...unasked] },
+  });
 }

@@ -9,7 +9,7 @@
  * going live is allowed. Asked as a signed-in user who is not a super-admin,
  * so the rule decides.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   defineCollection,
@@ -41,6 +41,8 @@ const HELD_PAGES = "heldpages";
 const BANNER = "banner";
 const NO_ENGLISH = "noenglishbanner";
 const UNPUBLISHABLE = "unpublishablebanner";
+const GROWING_ARTICLES = "growingarticles";
+const GROWING_BANNER = "growingbanner";
 const USER = { id: "user-1", isActive: true };
 
 /** Every question the publish rule was asked, in order. */
@@ -49,14 +51,46 @@ let asked: { locale?: string; locales: string[] }[] = [];
 /** Refuses English, the default language. */
 const englishRefused = ({ locale }: AccessRuleContext) => locale !== "en";
 
+/** Each rule ask and each transaction opened, in the order they happened. */
+let order: string[] = [];
+
 /** Refuses French, and records what it was asked. */
 const frenchRefused = ({ locale, locales }: AccessRuleContext) => {
   asked.push({ locale, locales: [...locales] });
+  order.push("ask");
   return locale !== "fr";
 };
 
+/**
+ * Run once, when the publish rule is first asked, then cleared: a case uses it
+ * to change what goes live between the rule's answer and the publish's write,
+ * as a concurrent writer could.
+ */
+let onFirstAsk: (() => Promise<void>) | undefined;
+
+/** Allows, after running `onFirstAsk`. */
+const changesWhatGoesLive = async () => {
+  const run = onFirstAsk;
+  onFirstAsk = undefined;
+  await run?.();
+  return true;
+};
+
+/** Records each transaction the publish opens, beside the rule's asks. */
+function recordTransactions(t: TestNextly): void {
+  const open = t.adapter.transaction.bind(t.adapter);
+  vi.spyOn(t.adapter, "transaction").mockImplementation(((
+    ...args: Parameters<typeof open>
+  ) => {
+    order.push("transaction");
+    return open(...args);
+  }) as typeof open);
+}
+
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   asked = [];
+  order = [];
+  onFirstAsk = undefined;
   current = await createTestNextly({
     dialect,
     localization: { locales: ["en", "fr", "de"], defaultLocale: "en" },
@@ -68,6 +102,18 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
     ],
     collections: [
+      defineCollection({
+        slug: GROWING_ARTICLES,
+        localized: true,
+        status: true,
+        access: {
+          create: () => true,
+          read: () => true,
+          update: () => true,
+          publish: changesWhatGoesLive,
+        },
+        fields: [text({ name: "heading" })],
+      }),
       defineCollection({
         slug: NO_ENGLISH_ARTICLES,
         localized: true,
@@ -132,6 +178,17 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           read: () => true,
           update: () => true,
           publish: frenchRefused,
+        },
+        fields: [text({ name: "headline" })],
+      }),
+      defineSingle({
+        slug: GROWING_BANNER,
+        localized: true,
+        status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: changesWhatGoesLive,
         },
         fields: [text({ name: "headline" })],
       }),
@@ -496,6 +553,158 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(refused.success).toBe(false);
       expect(refused.statusCode).toBe(403);
+    });
+
+    it("asks the publish rule about each language before the publish's transaction opens", async () => {
+      // A rule is the app's own code and may read the database; asked on a
+      // connection the publish transaction holds, its read would wait for one
+      // that transaction keeps.
+      const t = await boot(dialect);
+      const id = await draftArticle(t, ["en", "de"]);
+      for (const locale of ["en", "de"]) {
+        await singlesOf(t).update(
+          BANNER,
+          { headline: locale },
+          { overrideAccess: true, locale }
+        );
+      }
+      recordTransactions(t);
+      const publishes: Array<() => Promise<{ success: boolean }>> = [
+        () =>
+          handlerOf(t).publishAllLocales({
+            collectionName: ARTICLES,
+            entryId: id,
+            overrideAccess: false,
+            user: USER,
+          }),
+        () =>
+          handlerOf(t).updateEntry(
+            {
+              collectionName: ARTICLES,
+              entryId: id,
+              overrideAccess: false,
+              user: USER,
+              locale: "*",
+            },
+            { status: "published" }
+          ),
+        () =>
+          singlesOf(t).publishAllLocales(BANNER, {
+            overrideAccess: false,
+            user: USER,
+          }),
+        () =>
+          singlesOf(t).update(
+            BANNER,
+            { status: "published" },
+            { overrideAccess: false, user: USER, locale: "*" }
+          ),
+      ];
+      for (const publish of publishes) {
+        order = [];
+        expect((await publish()).success).toBe(true);
+        expect(order).toContain("ask");
+        expect(order).toContain("transaction");
+        expect(order.lastIndexOf("ask")).toBeLessThan(
+          order.indexOf("transaction")
+        );
+      }
+    });
+
+    it("refuses with a conflict, publishing nothing, a language that goes live after the rule was asked", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: GROWING_ARTICLES,
+        data: { heading: "en", status: "draft" },
+      });
+      const { id } = created.item;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      // As the rule answers, a French draft lands: under the lock, French is
+      // going live and was never asked about.
+      const draftFrench = async () => {
+        await t.nextly.update({
+          collection: GROWING_ARTICLES,
+          id,
+          locale: "fr",
+          data: { heading: "fr" },
+        });
+      };
+
+      onFirstAsk = draftFrench;
+      const publishAll = await handlerOf(t).publishAllLocales({
+        collectionName: GROWING_ARTICLES,
+        entryId: id,
+        overrideAccess: false,
+        user: USER,
+      });
+      expect(publishAll.success).toBe(false);
+      expect(publishAll.statusCode).toBe(409);
+      expect(
+        (
+          await handlerOf(t).getEntry({
+            collectionName: GROWING_ARTICLES,
+            entryId: id,
+            overrideAccess: true,
+          })
+        ).data
+      ).toMatchObject({ status: "draft" });
+
+      // The write to every language that publishes, the same way. French is a
+      // draft already, so a German draft is what lands this time.
+      onFirstAsk = async () => {
+        await t.nextly.update({
+          collection: GROWING_ARTICLES,
+          id,
+          locale: "de",
+          data: { heading: "de" },
+        });
+      };
+      const everyLanguage = await handlerOf(t).updateEntry(
+        {
+          collectionName: GROWING_ARTICLES,
+          entryId: id,
+          overrideAccess: false,
+          user: USER,
+          locale: "*",
+        },
+        { status: "published" }
+      );
+      expect(everyLanguage.success).toBe(false);
+      expect(everyLanguage.statusCode).toBe(409);
+    });
+
+    it("refuses a Single's publish of every language with a conflict when a language goes live after the rule was asked", async () => {
+      const t = await boot(dialect);
+      await singlesOf(t).update(
+        GROWING_BANNER,
+        { headline: "en" },
+        { overrideAccess: true, locale: "en" }
+      );
+      const draftIn = (locale: string) => async () => {
+        await singlesOf(t).update(
+          GROWING_BANNER,
+          { headline: locale },
+          { overrideAccess: true, locale }
+        );
+      };
+
+      onFirstAsk = draftIn("fr");
+      const publishAll = await singlesOf(t).publishAllLocales(GROWING_BANNER, {
+        overrideAccess: false,
+        user: USER,
+      });
+      expect(publishAll.success).toBe(false);
+      expect(publishAll.statusCode).toBe(409);
+
+      onFirstAsk = draftIn("de");
+      const everyLanguage = await singlesOf(t).update(
+        GROWING_BANNER,
+        { status: "published" },
+        { overrideAccess: false, user: USER, locale: "*" }
+      );
+      expect(everyLanguage.success).toBe(false);
+      expect(everyLanguage.statusCode).toBe(409);
     });
   }
 );
