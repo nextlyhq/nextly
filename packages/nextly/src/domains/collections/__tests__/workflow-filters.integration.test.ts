@@ -21,6 +21,8 @@ process.env.NEXTLY_SECRET =
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../../config";
+import { readClientWhere } from "../../../dispatcher/helpers/validation";
+import type { AccessRuleContext } from "../../../shared/types/access";
 import { resetHookRegistry } from "../../../hooks/hook-registry";
 import {
   createTestNextly,
@@ -79,7 +81,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   return current;
 }
 
-type Collection = "posts" | "secrets";
+type Collection = "posts" | "secrets" | "notes" | "opennotes";
 
 /** A published entry, through the ordinary write path; its id. */
 async function entry(
@@ -209,6 +211,18 @@ async function listed(
     total: (list.json.meta as { total: number }).total,
     counted: count.json.total as number,
   };
+}
+
+/**
+ * A filter as a client sends it, read through the same check the REST routes
+ * and the bulk-by-query body apply. The workflow keys take `true`, which the
+ * published `WhereFilter` type does not admit, so a typed caller reaches them
+ * the way a client's JSON does.
+ */
+function clientWhere(where: Record<string, unknown>) {
+  const read = readClientWhere(where);
+  if (read === undefined) throw new Error("no filter");
+  return read;
 }
 
 /** A REST read's refusal: its status and the problems it names. */
@@ -446,6 +460,68 @@ describe.each(getConfiguredTestDialects())(
       expect(bounded.errors).toEqual(asInRelease.errors);
     });
 
+    it("refuses a bulk write selecting by _inRelease to a caller who may not read releases, before any row is written", async () => {
+      const { t, posts } = await seed();
+      const handler = t.getService("collectionsHandler") as CollectionsHandler;
+      // A super admin's key scoped to write posts but not to read releases:
+      // judged on the scope, so the bypass cannot carry it past the check.
+      const owner = { id: "admin", roles: ["super-admin"] };
+      const writer = {
+        actorType: "apiKey" as const,
+        permissions: ["read-posts", "update-posts", "delete-posts"],
+      };
+      const unknownField = {
+        statusCode: 400,
+        publicData: {
+          errors: [expect.objectContaining({ code: "FILTER_UNKNOWN_FIELD" })],
+        },
+      };
+      // The bulk enumeration runs trusted, so without this precondition the
+      // refused caller would write exactly the members, and learn from the
+      // affected count which entries a release holds.
+      await expect(
+        handler.bulkUpdateByQuery({
+          collectionName: "posts",
+          where: clientWhere({ _inRelease: true }),
+          data: { title: "Selected by release" },
+          user: owner,
+          authenticatedScope: writer,
+        })
+      ).rejects.toMatchObject(unknownField);
+      await expect(
+        handler.bulkDeleteByQuery({
+          collectionName: "posts",
+          where: clientWhere({ _inRelease: true }),
+          user: owner,
+          authenticatedScope: writer,
+        })
+      ).rejects.toMatchObject(unknownField);
+      // Nothing was written or removed: every entry keeps its title.
+      const after = await handler.listEntries({
+        collectionName: "posts",
+        overrideAccess: true,
+        status: "all",
+        limit: 100,
+      });
+      const titles = (after.data?.docs ?? []) as { title: string }[];
+      expect(titles).toHaveLength(Object.keys(posts).length);
+      expect(titles.map(row => row.title)).not.toContain("Selected by release");
+
+      // The control: the same write from a key that may read releases reaches
+      // exactly the entries the list filter keeps.
+      const updated = await handler.bulkUpdateByQuery({
+        collectionName: "posts",
+        where: clientWhere({ _inRelease: true }),
+        data: { title: "Selected by release" },
+        user: owner,
+        authenticatedScope: {
+          ...writer,
+          permissions: [...writer.permissions, "read-content-releases"],
+        },
+      });
+      expect(updated.successCount).toBe(2);
+    });
+
     it("refuses either key inside and/or", async () => {
       const { keys } = await seed();
       const nested = await refusedWith(
@@ -464,6 +540,144 @@ describe.each(getConfiguredTestDialects())(
           path: "where.and.0._pendingChange",
         }),
       ]);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "the workflow list filters, per language (%s)",
+  dialect => {
+    /** Open in every language but French. */
+    const frenchClosed = ({ locales }: AccessRuleContext) =>
+      !locales.includes("fr");
+
+    /**
+     * A localized site with one collection whose read rule refuses French and
+     * one open in every language, each holding an entry with a French working
+     * draft, an entry with an English one, and an entry a release due tomorrow
+     * publishes in French alone.
+     */
+    async function seed() {
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "fr", "de"], defaultLocale: "en" },
+        collections: [
+          ["notes", frenchClosed],
+          ["opennotes", () => true],
+        ].map(([slug, read]) =>
+          defineCollection({
+            slug: slug as string,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            access: { read: read as (ctx: AccessRuleContext) => boolean },
+            fields: [text({ name: "title", localized: true })],
+          })
+        ),
+      });
+      const t = current;
+      const tomorrow = await release(
+        t,
+        "scheduled",
+        new Date(Date.now() + DAY)
+      );
+      const seeded = async (collection: "notes" | "opennotes") => {
+        const ids = {
+          frenchDraft: await entry(t, collection, "French draft"),
+          englishDraft: await entry(t, collection, "English draft"),
+          frenchMember: await entry(t, collection, "French member"),
+        };
+        await versionRow(t, collection, ids.frenchDraft, { locale: "fr" });
+        await versionRow(t, collection, ids.englishDraft, { locale: "en" });
+        await member(
+          t,
+          tomorrow,
+          collection,
+          ids.frenchMember,
+          "publish",
+          "fr"
+        );
+        return ids;
+      };
+      return {
+        handler: t.getService("collectionsHandler") as CollectionsHandler,
+        notes: await seeded("notes"),
+        open: await seeded("opennotes"),
+      };
+    }
+
+    /** A super admin's key, judged on its scope: it may read both collections and releases. */
+    const reader = {
+      user: { id: "admin", roles: ["super-admin"] },
+      authenticatedScope: {
+        actorType: "apiKey" as const,
+        permissions: ["read-notes", "read-opennotes", "read-content-releases"],
+      },
+    };
+
+    /** The ids a read keeps under `where`, after checking its count agrees. */
+    async function kept(
+      handler: CollectionsHandler,
+      collection: "notes" | "opennotes",
+      where: Record<string, unknown>,
+      language: { locale: string; fallbackLocale?: string }
+    ): Promise<Set<string>> {
+      const read = {
+        collectionName: collection,
+        where: clientWhere(where),
+        status: "all" as const,
+        ...language,
+        ...reader,
+      };
+      const list = await handler.listEntries({ ...read, limit: 100 });
+      expect(list.success, list.message).toBe(true);
+      const count = await handler.countEntries(read);
+      const items = (list.data?.docs ?? []) as { id: string }[];
+      expect(count.data?.totalDocs).toBe(items.length);
+      return new Set(items.map(item => item.id));
+    }
+
+    it("keeps an entry for a draft or release member only in a language the read was judged for", async () => {
+      const { handler, notes, open } = await seed();
+      // English, where the rule is open: the English draft keeps its entry,
+      // and the French draft and the French member, withheld from this read,
+      // keep nothing.
+      expect(
+        await kept(handler, "notes", { _pendingChange: true }, { locale: "en" })
+      ).toEqual(new Set([notes.englishDraft]));
+      expect(
+        await kept(handler, "notes", { _inRelease: true }, { locale: "en" })
+      ).toEqual(new Set());
+
+      // German falling back to English is judged in both, so the fallback
+      // language's draft keeps its entry.
+      expect(
+        await kept(
+          handler,
+          "notes",
+          { _pendingChange: true },
+          { locale: "de", fallbackLocale: "en" }
+        )
+      ).toEqual(new Set([notes.englishDraft]));
+
+      // The control: a read of every language, which the open collection's
+      // rule admits, keeps the French draft and the French member.
+      expect(
+        await kept(
+          handler,
+          "opennotes",
+          { _pendingChange: true },
+          { locale: "all" }
+        )
+      ).toEqual(new Set([open.frenchDraft, open.englishDraft]));
+      expect(
+        await kept(
+          handler,
+          "opennotes",
+          { _inRelease: true },
+          { locale: "all" }
+        )
+      ).toEqual(new Set([open.frenchMember]));
     });
   }
 );

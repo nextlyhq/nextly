@@ -6,6 +6,10 @@
  * every collection the caller may read rather than the ones on one page, and
  * `hasNext` says whether another page follows. A list paged first and filtered
  * after would return short pages, and a total that stops at one page.
+ *
+ * What a plugin's nav filter hides is gone from the pages and the total too,
+ * and the caller's access is read once for the whole list, so listing every
+ * collection reads no more about the caller than listing one.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -13,7 +17,8 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { getTableName, isTable } from "drizzle-orm";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { buildClaims } from "../../auth/jwt/claims";
 import { signAccessToken } from "../../auth/jwt/sign";
@@ -21,16 +26,38 @@ import { resetSessionStandingForTests } from "../../auth/session/session-standin
 import { defineCollection, text } from "../../config";
 import type { ApiKeyService } from "../../domains/auth/services/api-key-service";
 import {
+  FilterSeams,
+  getFilterRegistry,
+  resetFilterRegistry,
+} from "../../filters";
+import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "../../plugins/test-nextly";
+import { invalidateAllPermissionCaches } from "../../services/lib/permissions";
 import { GET as listCollectionsSchema } from "../collections-schema";
 
 /** Five collections; the reader may read three, spread among the others. */
 const ALL = ["alpha", "bravo", "charlie", "delta", "echo"];
 const READABLE = ["bravo", "delta", "echo"];
+
+/**
+ * The tables every question about a caller's access is answered from. The
+ * role-epoch row is not counted: it is read on a clock, not per question.
+ */
+const ACCESS_TABLES = new Set([
+  "roles",
+  "permissions",
+  "role_permissions",
+  "user_roles",
+  "role_inherits",
+  "user_permission_cache",
+  "api_keys",
+]);
+
+type Select = (...args: unknown[]) => { from: (...args: unknown[]) => unknown };
 
 interface Listed {
   items: { slug: string }[];
@@ -81,6 +108,34 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(res.status).toBe(200);
       return (await res.json()) as Listed;
+    }
+
+    /**
+     * The access tables `work` reads through the instance's Drizzle client,
+     * one entry per statement, with every permission cache emptied first.
+     */
+    async function accessRead(work: () => Promise<unknown>) {
+      await invalidateAllPermissionCaches();
+      const tables: string[] = [];
+      const db = t.adapter.getDrizzle() as { select: Select };
+      const select = db.select.bind(db);
+      const spy = vi.spyOn(db, "select").mockImplementation((...args) => {
+        const builder = select(...args);
+        const from = builder.from.bind(builder);
+        builder.from = (table: unknown, ...rest: unknown[]) => {
+          if (isTable(table) && ACCESS_TABLES.has(getTableName(table))) {
+            tables.push(getTableName(table));
+          }
+          return from(table, ...rest);
+        };
+        return builder;
+      });
+      try {
+        await work();
+      } finally {
+        spy.mockRestore();
+      }
+      return tables;
     }
 
     /** Every collection the caller is shown, page by page, in order. */
@@ -165,6 +220,7 @@ describe.each(getConfiguredTestDialects())(
     }, 120_000);
 
     afterAll(async () => {
+      resetFilterRegistry();
       resetSessionStandingForTests();
       await t?.destroy();
     });
@@ -224,6 +280,60 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(pages[0]!.meta.total).toBe(whole.items.length);
       expect(pages.at(-1)!.meta.hasNext).toBe(false);
+    });
+
+    it("leaves what a plugin's nav filter hides out of the pages and the total", async () => {
+      getFilterRegistry().addFilter(
+        FilterSeams.AdminNav,
+        (items: Array<{ slug: string }>) =>
+          items.filter(item => item.slug !== "delta")
+      );
+      try {
+        const pages = await walk(await session(readerId, [readerRoleId]), 1);
+        expect(pages.flatMap(p => p.items.map(i => i.slug)).sort()).toEqual([
+          "bravo",
+          "echo",
+        ]);
+        expect(pages.map(p => p.items.length)).toEqual([1, 1]);
+        expect(pages[0]!.meta).toMatchObject({
+          total: 2,
+          totalPages: 2,
+          hasNext: true,
+        });
+      } finally {
+        resetFilterRegistry();
+      }
+    });
+
+    it("reads the reader's access as often for every collection as for one", async () => {
+      const headers = await session(readerId, [readerRoleId]);
+      const ask = (search: string) =>
+        listCollectionsSchema(
+          new Request(
+            `http://localhost/api/collections/schema?limit=500${search}`,
+            { headers }
+          )
+        ).then(async res => {
+          expect(res.status).toBe(200);
+          return (await res.json()) as Listed;
+        });
+
+      let one: Listed | undefined;
+      let every: Listed | undefined;
+      const forOne = await accessRead(async () => {
+        one = await ask("&search=bravo");
+      });
+      const forEvery = await accessRead(async () => {
+        every = await ask("");
+      });
+
+      // POPULATION CONTROL: one list matched one collection and the other
+      // all of them, each filtered by the reader's access, and the reader's
+      // access was read for both.
+      expect(one!.items.map(i => i.slug)).toEqual(["bravo"]);
+      expect(every!.items.map(i => i.slug).sort()).toEqual(READABLE);
+      expect(forOne.length).toBeGreaterThan(0);
+      expect(forEvery.length).toBe(forOne.length);
     });
   }
 );

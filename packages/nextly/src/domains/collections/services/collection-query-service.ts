@@ -32,6 +32,7 @@ import { transformRichTextFields } from "@nextly/lib/field-transform";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { currentRuleLanguage } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
@@ -1235,16 +1236,7 @@ export class CollectionQueryService extends BaseService {
     // runs: a hook may write an audit entry or spend a rate-limit budget, and
     // a refusal after it would come after those effects. The condition is
     // judged again where it is built, for one a trusted hook adds.
-    if (
-      isPlainObject(params.where) &&
-      Object.prototype.hasOwnProperty.call(params.where, IN_RELEASE_KEY)
-    ) {
-      await this.refuseReleaseFilterUnlessReadable({
-        overrideAccess: params.overrideAccess,
-        accessUser: params.overrideAccess ? undefined : params.user,
-        authenticatedScope: params.authenticatedScope,
-      });
-    }
+    await this.assertReleaseFilterReadable(params);
     // The settled filter a list forwards to its own count already passed this
     // check as the caller's, and what a read hook added to it is trusted
     // server code, which may scope by the column its own plugin contributed.
@@ -2182,6 +2174,17 @@ export class CollectionQueryService extends BaseService {
       });
     }
     const dialect = this.groupDialect();
+    // The languages this read's access rules were judged for: the language it
+    // reads and its fallback chain, or every language where it reads them all.
+    // A draft or release member in any other language is withheld from this
+    // read, so it must not keep a row either. A trusted read judged nobody, and
+    // a site with no languages has only unlocalized rows, so both consider
+    // every language.
+    const ruleLocales = currentRuleLanguage().locales;
+    const locales =
+      params.overrideAccess === true || ruleLocales.length === 0
+        ? null
+        : ruleLocales;
     const conditions: SQL[] = [];
     if (filter.pendingChange) {
       conditions.push(
@@ -2189,6 +2192,7 @@ export class CollectionQueryService extends BaseService {
           dialect,
           collectionName: params.collectionName,
           entryId: idColumn,
+          locales,
         })
       );
     }
@@ -2200,10 +2204,40 @@ export class CollectionQueryService extends BaseService {
           entryId: idColumn,
           now: params.now,
           scheduledBefore: filter.inRelease.scheduledBefore,
+          locales,
         })
       );
     }
     return conditions;
+  }
+
+  /**
+   * Refuse a caller's filter carrying `_inRelease`, in exactly the words an
+   * unknown condition gets, unless the caller may read releases.
+   *
+   * A precondition, judged on what the CALLER sent, before any read or write
+   * that filter selects for: a list and a count judge it before their read
+   * hooks, and a bulk write by query judges it before its trusted enumeration.
+   * One method for every door, so a filter refused on a list is refused on a
+   * bulk write by the same decision.
+   */
+  async assertReleaseFilterReadable(params: {
+    where?: unknown;
+    overrideAccess?: boolean;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<void> {
+    if (
+      !isPlainObject(params.where) ||
+      !Object.prototype.hasOwnProperty.call(params.where, IN_RELEASE_KEY)
+    ) {
+      return;
+    }
+    await this.refuseReleaseFilterUnlessReadable({
+      overrideAccess: params.overrideAccess,
+      accessUser: params.overrideAccess ? undefined : params.user,
+      authenticatedScope: params.authenticatedScope,
+    });
   }
 
   /**

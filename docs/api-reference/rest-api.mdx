@@ -266,8 +266,6 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `DELETE` | `/admin/api/field-groups/{slug}` | Delete field group. | `manage-settings` |
 | `POST` | `/admin/api/field-groups/schema/{slug}/preview` | Dry-run field group schema diff. | `manage-settings` |
 | `POST` | `/admin/api/field-groups/schema/{slug}/apply` | Apply field group schema changes. | `manage-settings` |
-| `POST` | `/admin/api/email/send` | Send a raw email. | Authenticated |
-| `POST` | `/admin/api/email/send-with-template` | Send a templated email. | Authenticated |
 | `GET` | `/admin/api/email-providers` | List providers. | `read-email-providers` |
 | `POST` | `/admin/api/email-providers` | Create provider. | `create-email-providers` |
 | `GET` | `/admin/api/email-providers/{id}` | Get provider. | `read-email-providers` |
@@ -283,6 +281,7 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `PATCH` | `/admin/api/email-templates/{id}` | Update template. | `update-email-templates` |
 | `DELETE` | `/admin/api/email-templates/{id}` | Delete template. | `delete-email-templates` |
 | `POST` | `/admin/api/email-templates/{id}/preview` | Render template with sample data. | `read-email-templates` |
+| `PATCH` | `/admin/api/email-templates/{id}/send-test` | Send the saved template to the signed-in user's own address. | `update-email-templates` |
 | `GET` | `/admin/api/user-fields` | List user field definitions. | `read-settings` |
 | `POST` | `/admin/api/user-fields` | Create user field. | `create-settings` |
 | `PATCH` | `/admin/api/user-fields/reorder` | Reorder user fields. | `update-settings` |
@@ -558,27 +557,9 @@ curl -X PATCH http://localhost:3000/admin/api/singles/site-settings \
 
 ### Email send
 
-Both endpoints accept an authenticated request (cookie or API key). The body matches the Direct API arguments documented in [Direct API → Email](/docs/api-reference/direct-api#email).
+There is no REST route for sending email: a route that let any signed-in caller or API key pick the recipient would let anyone with access send as the site. Send from server code with `nextly.email.send()` or `nextly.email.sendWithTemplate()` (see [Direct API → Email](/docs/api-reference/direct-api#email)), or add a route of your own that checks who may send, and to whom, before it calls them.
 
-```bash
-curl -X POST http://localhost:3000/admin/api/email/send \
-  -H "Authorization: Bearer nx_live_..." \
-  -H "Content-Type: application/json" \
-  -d '{
-    "to": "user@example.com",
-    "subject": "Hello",
-    "html": "<p>Welcome to Nextly</p>"
-  }'
-
-curl -X POST http://localhost:3000/admin/api/email/send-with-template \
-  -H "Authorization: Bearer nx_live_..." \
-  -H "Content-Type: application/json" \
-  -d '{
-    "to": "user@example.com",
-    "template": "welcome-email",
-    "variables": { "name": "Alice" }
-  }'
-```
+The admin's test send, `PATCH /admin/api/email-templates/{id}/send-test`, sends the saved template only to the signed-in user's own address. It takes `variables` in the body and ignores any recipient, and it refuses API keys.
 
 ### Media
 
@@ -671,16 +652,17 @@ Two reserved conditions keep a collection's entries by where they stand in publi
 
 | Condition | Keeps | Query string example |
 |---|---|---|
-| `_pendingChange: true` | Entries whose draft holds changes not yet published, in any language. | `where[_pendingChange]=true` |
+| `_pendingChange: true` | Entries whose draft holds changes not yet published. | `where[_pendingChange]=true` |
 | `_inRelease: { scheduledBefore }` | Entries a scheduled release will **publish** after now and no later than `scheduledBefore`, an instant with its zone. | `where[_inRelease][scheduledBefore]=2026-10-28T09:00:00Z` |
 | `_inRelease: true` | The same, with no upper bound. | `where[_inRelease]=true` |
 
 - An entry is kept once, however many of its languages or releases hold it.
+- Only the languages the read is judged for count: the `locale` it reads and its fallbacks, or every language with `locale=all`. A draft or a release member in another language does not keep the entry.
 - A release's member that it will **unpublish** is not counted.
 - A release whose time has passed is left out, even while it waits to run.
 - Each condition is accepted only at the top level of a filter, beside other conditions there: `{ "_pendingChange": true, "status": { "equals": "draft" } }`. Inside `and` or `or` it is refused with `FILTER_MISPLACED_KEY`.
 - Any other value is refused with `FILTER_INVALID_OPERAND`: `false`, an empty object, an extra key, or a time without a zone.
-- `_inRelease` needs the right to read content releases as well as the collection. A caller without it is refused exactly as if the condition did not exist (`FILTER_UNKNOWN_FIELD`), so the filter says nothing about what releases hold.
+- `_inRelease` needs the right to read content releases as well as the collection. A caller without it is refused exactly as if the condition did not exist (`FILTER_UNKNOWN_FIELD`), so the filter says nothing about what releases hold. A bulk update or delete selected by `_inRelease` is refused the same way, before any entry is written.
 
 ### sort
 

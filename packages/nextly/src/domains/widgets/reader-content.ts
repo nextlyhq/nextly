@@ -27,7 +27,7 @@
  * @module domains/widgets/reader-content
  */
 
-import { callerMayPerform } from "../../auth/authenticated-scope";
+import { callerMayPerform } from "../../auth/access/route-gate-adapters";
 import {
   AUTHORIZATION_CONCURRENCY,
   authorizationGroups,
