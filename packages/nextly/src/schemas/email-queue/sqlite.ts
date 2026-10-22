@@ -18,10 +18,15 @@ export const emailQueueSqlite = sqliteTable(
     state: text("state").notNull(),
     jobId: text("job_id").notNull(),
     message: text("message"),
+    principalKind: text("principal_kind"),
+    principalId: text("principal_id"),
     failure: text("failure"),
     createdAt: integer("created_at").notNull(),
     updatedAt: integer("updated_at").notNull(),
     settledAt: integer("settled_at"),
   },
-  t => [index("email_queue_state_idx").on(t.state, t.settledAt)]
+  t => [
+    index("email_queue_state_idx").on(t.state, t.settledAt),
+    index("email_queue_principal_idx").on(t.principalKind, t.principalId),
+  ]
 );

@@ -88,6 +88,7 @@ export { emailProvidersPg as emailProviders } from "../email-providers/postgres"
 export { emailDeliveriesPg as emailDeliveries } from "../email-deliveries/postgres";
 export { emailSendClaimsPg as emailSendClaims } from "../email-send-claims/postgres";
 export { emailQueuePg as emailQueue } from "../email-queue/postgres";
+export { emailQueueRecipientsPg as emailQueueRecipients } from "../email-queue-recipients/postgres";
 export { emailTemplatesPg as emailTemplates } from "../email-templates/postgres";
 
 export { nextlySchemaEventsPg as nextlySchemaEvents } from "../schema-events/postgres";

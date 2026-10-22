@@ -33,6 +33,13 @@ export const emailQueuePg = pgTable(
     jobId: varchar("job_id", { length: 36 }).notNull(),
     /** The message, sealed: addresses, content and every send option. */
     message: text("message"),
+    /**
+     * The person `to` is, by kind and id, as the delivery records name them,
+     * so their deletion cancels the email. Their digest in place of the id
+     * once they are deleted.
+     */
+    principalKind: varchar("principal_kind", { length: 191 }),
+    principalId: varchar("principal_id", { length: 191 }),
     /** The last failed attempt's failure, as JSON, with no address. */
     failure: text("failure"),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
@@ -40,5 +47,8 @@ export const emailQueuePg = pgTable(
     /** When it was sent, failed for good, or was cancelled. */
     settledAt: bigint("settled_at", { mode: "number" }),
   },
-  t => [index("email_queue_state_idx").on(t.state, t.settledAt)]
+  t => [
+    index("email_queue_state_idx").on(t.state, t.settledAt),
+    index("email_queue_principal_idx").on(t.principalKind, t.principalId),
+  ]
 );
