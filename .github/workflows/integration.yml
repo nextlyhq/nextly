@@ -35,8 +35,8 @@ on:
 permissions:
   contents: read
 
-# The wall-clock budget for ONE job's share of a dialect's suite: the whole
-# suite on the sqlite leg, one shard of it on the postgres and mysql legs.
+# The wall-clock budget for ONE job's share of a dialect's suite: one shard
+# of it, on every leg.
 # Enforced per step rather than per job — see scripts/run-with-budget.sh for
 # why the distinction decides whether a slow leg reports at all.
 #
@@ -129,7 +129,8 @@ jobs:
             Integration (postgres) shard (2)
             Integration (mysql) shard (1)
             Integration (mysql) shard (2)
-            Integration (sqlite)
+            Integration (sqlite) shard (1)
+            Integration (sqlite) shard (2)
           token: ${{ github.token }}
       - name: Decide
         id: decide
@@ -460,8 +461,12 @@ jobs:
   # sqlite runs in-process against a throwaway file, so this job declares no
   # `services:` at all and has no external network dependency: a
   # container-registry outage cannot fail a leg that needs no database.
-  integration-sqlite:
-    name: Integration (sqlite)
+  integration-sqlite-shards:
+    # Not a required check: `Integration (sqlite)` below is, and it passes
+    # only when every shard did. GitHub appends the matrix value to a name
+    # with no expression in it, so the shards report as `... shard (1)` and
+    # `... shard (2)`, and a skipped run as one `... shard`.
+    name: Integration (sqlite) shard
     needs: changes
     # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
     # its timeout) does not skip this leg: with no `always()`-style override,
@@ -471,11 +476,17 @@ jobs:
     # suite; only a cancelled workflow stays cancelled.
     if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
     runs-on: ubuntu-latest
-    # A BACKSTOP, for the same reason as the database legs above: the bound that
-    # should ever fire is INTEGRATION_SUITE_BUDGET on the step, which reports as
-    # a failure. This one passed at 22m18s, so it has the most room of the
-    # three, and it moves with its siblings so there is one rule to reason about
-    # rather than a per-leg ceiling nobody re-derives.
+    strategy:
+      # The same split as the postgres leg, for the same reasons: run whole,
+      # this leg's suite ran past INTEGRATION_SUITE_BUDGET on main and on pull
+      # requests alike, so a run ended red with files still to go.
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    # The same backstop as the database legs, for the same reasons: the bound
+    # that should ever fire is INTEGRATION_SUITE_BUDGET on the step, which
+    # reports as a failure. It moves with its siblings so there is one rule to
+    # reason about rather than a per-leg ceiling nobody re-derives.
     timeout-minutes: 75
 
     steps:
@@ -503,12 +514,16 @@ jobs:
       # each case boots a real instance, and doing that while every other
       # package's suite runs in parallel is what took one past a 30s budget on
       # CI while it finishes in about 1.5s alone.
+      #
+      # Every package of the lane takes the same shard, so each one splits its
+      # own files between the jobs; a package with fewer files than shards
+      # passes the shard that gets none (merge-queue-workflows.test.mjs).
       - name: Run integration tests (sqlite)
         run: |
           pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-seo --filter=@nextlyhq/plugin-form-builder
           scripts/run-with-budget.sh "$INTEGRATION_SUITE_BUDGET" \
-            "the SQLite integration suite" \
-            pnpm lane:test:integration:sqlite
+            "shard ${{ matrix.shard }} of ${{ strategy.job-total }} of the SQLite integration suite" \
+            pnpm lane:test:integration:sqlite -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
         env:
           TURBO_CACHE_DIR: .turbo
 
@@ -517,8 +532,39 @@ jobs:
       # step that runs however the job ended, and splitting restore from save is the
       # supported way to make that conditional (`save-always` was deprecated for it).
       - name: Save Turbo cache
-        if: success()
+        # One shard saves: both build the same packages under the same key,
+        # and a cache key can be written once.
+        if: success() && matrix.shard == 1
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # The required check `Integration (sqlite)`, read by the ruleset and by
+  # scripts/verify-merge.mjs: it passes only when every shard above passed.
+  #
+  # It runs on the same conditions as the shards, so a run that skips them
+  # skips this too and reports `skipped` under this literal name, as the
+  # unsharded leg did. When they did run, `needs.<id>.result` is `success`
+  # only if every shard succeeded; anything else fails it, including a shard
+  # cancelled by its own backstop, which on its own would read as no verdict.
+  integration-sqlite:
+    name: Integration (sqlite)
+    needs: [changes, integration-sqlite-shards]
+    # `always()`, not `!cancelled()`: a shard stopped by its own backstop is
+    # cancelled, and this check, skipped then, would read to the merge gate as
+    # a pass. It runs on the shards' conditions otherwise, and fails unless
+    # every shard succeeded; a run cancelled on purpose reads as failed here
+    # rather than cancelled, on a head nothing merges.
+    if: ${{ always() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every shard passed
+        env:
+          SHARDS: ${{ needs.integration-sqlite-shards.result }}
+        run: |
+          if [ "$SHARDS" != "success" ]; then
+            echo "::error::the sqlite integration shards ended '$SHARDS', not 'success'"
+            exit 1
+          fi
