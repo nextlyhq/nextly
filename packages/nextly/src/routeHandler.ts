@@ -68,6 +68,7 @@ import {
 } from "./api/image-sizes";
 import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
+import { changeLanguages, getLanguages } from "./api/languages";
 import { getNoticeCount, getNotices, markNoticesRead } from "./api/notices";
 import {
   listPreviewLinks,
@@ -417,6 +418,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "notices",
   "jobs",
   "generalSettings",
+  "languages",
   "previewLinks",
   "previewUrl",
   "imageSizes",
@@ -472,6 +474,24 @@ async function handleWebhookRequest(
         JSON.stringify({ error: "Unknown webhook operation" }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
+  }
+}
+
+/** Delegate a languages request to its handler, which manages its own auth and body. */
+async function handleLanguagesRequest(
+  req: Request,
+  httpMethod: string
+): Promise<Response> {
+  switch (httpMethod) {
+    case "GET":
+      return getLanguages(req);
+    case "POST":
+      return changeLanguages(req);
+    default:
+      return new Response(JSON.stringify({ error: "Method not allowed" }), {
+        status: 405,
+        headers: { "Content-Type": "application/json" },
+      });
   }
 }
 
@@ -1493,6 +1513,11 @@ async function serveServiceRequest(
   // and the shared body read below would leave the stream empty.
   if (service === "previewUrl") {
     return resolveEntryPreviewUrl(req);
+  }
+
+  // ==================== LANGUAGES DIRECT DISPATCH ====================
+  if (service === "languages") {
+    return handleLanguagesRequest(req, httpMethod);
   }
 
   // ==================== GENERAL SETTINGS DIRECT DISPATCH ====================

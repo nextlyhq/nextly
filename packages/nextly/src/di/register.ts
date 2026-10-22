@@ -74,6 +74,7 @@ import {
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import { LanguageRegistry } from "../domains/i18n/language-registry";
+import { LanguageSettingsService } from "../domains/i18n/services/language-settings-service";
 import { storedLanguageReader } from "../domains/i18n/stored-language-reader";
 import type { AnyJobDefinition } from "../domains/jobs/job-registry";
 import { coreRateLimitStoreFor } from "../domains/limits/core-limit-store";
@@ -555,6 +556,8 @@ export interface ServiceMap {
   versionsService: VersionsService;
   /** The site's content languages, configured or stored in Settings. */
   languageRegistry: LanguageRegistry;
+  /** Settings' view of the languages, and the one path that changes them. */
+  languageSettingsService: LanguageSettingsService;
   // Registered by registerCollectionServices but previously untyped here, so
   // consumers had to reach past getService() to use it.
   collectionsHandler: CollectionsHandler;
@@ -1039,6 +1042,10 @@ async function registerServicesOnce(
   container.registerSingleton<LanguageRegistry>(
     "languageRegistry",
     () => ctx.languages
+  );
+  container.registerSingleton<LanguageSettingsService>(
+    "languageSettingsService",
+    () => new LanguageSettingsService(adapter, ctx.languages)
   );
 
   registerDomainServices(ctx);
