@@ -2114,19 +2114,28 @@ export class UserMutationService extends BaseService {
             }
             // A deactivation or a role replacement may not leave the install
             // without an active super-admin. First, before any row lock, for
-            // the lock order `refuseRemovingLastSuperAdmin` describes.
-            if (changes.isActive === false || requestedRoleIds) {
+            // the lock order `refuseRemovingLastSuperAdmin` describes. Each is
+            // judged when one request makes both: a role replacement that
+            // takes super-admin from someone is a super-admin's to make, even
+            // beside a deactivation.
+            if (requestedRoleIds) {
               await refuseRemovingLastSuperAdmin(
                 tx as LastSuperAdminTx,
                 this.tables,
                 this.dialect,
-                changes.isActive === false
-                  ? { kind: "deactivate", userId: currentUser.id }
-                  : {
-                      kind: "replaceRoles",
-                      userId: currentUser.id,
-                      roleIds: requestedRoleIds ?? [],
-                    }
+                {
+                  kind: "replaceRoles",
+                  userId: currentUser.id,
+                  roleIds: requestedRoleIds,
+                }
+              );
+            }
+            if (changes.isActive === false) {
+              await refuseRemovingLastSuperAdmin(
+                tx as LastSuperAdminTx,
+                this.tables,
+                this.dialect,
+                { kind: "deactivate", userId: currentUser.id }
               );
             }
             if (guardsAdministrator) {

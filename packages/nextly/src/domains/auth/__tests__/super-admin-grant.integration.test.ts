@@ -48,14 +48,6 @@ const afterGrantCheck = vi.hoisted(() => ({
 vi.mock("../services/super-admin-grant", () => {
   const real = (): GrantModule => afterGrantCheck.real!;
   return {
-    runAsRoleChangeCaller: ((...args) =>
-      real().runAsRoleChangeCaller(
-        ...args
-      )) as GrantModule["runAsRoleChangeCaller"],
-    roleChangeCallerFor: ((...args) =>
-      real().roleChangeCallerFor(
-        ...args
-      )) as GrantModule["roleChangeCallerFor"],
     rolesConferSuperAdmin: ((...args) =>
       real().rolesConferSuperAdmin(
         ...args
