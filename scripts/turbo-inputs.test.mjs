@@ -69,6 +69,16 @@ function dryRun() {
   return parseTurboPlan(raw, "turbo run check-types --dry=json");
 }
 
+/**
+ * Whether a check-types command writes no build-info file: it runs `tsc` at
+ * least once, and every run says `--incremental false`. One `tsc` without it
+ * writes the file, so the command still races its own build.
+ */
+function writesNoBuildInfo(command) {
+  const runs = command.match(/\btsc\b[^&|;]*/g) ?? [];
+  return runs.length > 0 && runs.every(run => /--incremental false\b/.test(run));
+}
+
 function resolvedTasks() {
   // The `check-types` tasks ONLY, rather than everything the run contains.
   //
@@ -384,15 +394,30 @@ describe("a package's hash covers the program it actually compiles", () => {
     // they are unordered siblings free to write and restore it at once.
     // Asserted as the un-prefixed `build`: `^build` is a different edge and
     // satisfies neither this nor the case above.
+    //
+    // A task whose every `tsc` runs with `--incremental false` writes no
+    // build-info file, so it has nothing to race its build over and need not
+    // wait for it. That is how the playground type-checks without its
+    // production build (`next build`); the exempt set is pinned so the
+    // exemption cannot spread unnoticed.
     const withCommand = resolvedTasks().filter(
       task => !String(task.command).includes("NONEXISTENT")
     );
-    for (const task of withCommand) {
+    const exempt = withCommand.filter(task => writesNoBuildInfo(String(task.command)));
+    expect(exempt.map(task => task.package)).toEqual(["playground"]);
+    for (const task of withCommand.filter(candidate => !exempt.includes(candidate))) {
       expect(
         task.resolvedTaskDefinition.dependsOn,
         `${task.package} may typecheck while its own build writes the same .tsbuildinfo`
       ).toContain("build");
     }
+  });
+
+  it("counts a type-check as writing no build-info only when every tsc in it says so", () => {
+    expect(writesNoBuildInfo("next typegen && tsc --noEmit --incremental false")).toBe(true);
+    expect(writesNoBuildInfo("tsc --noEmit")).toBe(false);
+    expect(writesNoBuildInfo("tsc --noEmit --incremental false && tsc --noEmit -p tsconfig.tests.json")).toBe(false);
+    expect(writesNoBuildInfo("next typegen")).toBe(false);
   });
 });
 
