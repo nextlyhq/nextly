@@ -1211,23 +1211,26 @@ export class SingleMutationService extends BaseService {
       // via the field-level registry; serialized field defs drop them).
       // Runs BEFORE component extraction so component fields cannot bypass
       // write access, hooks, or validation.
-      await applyFieldWriteAccess({
-        kind: "single",
-        slug,
-        data: currentData,
-        operation: "update",
-        user: options.user,
-        overrideAccess: options.overrideAccess,
-        id: existingDoc.id,
-      });
-      // The field groups this Single stores inline, by their own rules, and
-      // what a denied field inside a container held kept as the row holds it.
+      // With the field groups this Single stores inline, by their own rules,
+      // and every denied value inside a container kept as the row holds it: a
+      // group is written whole, so a denied child of one would otherwise clear.
+      const documentId = existingDoc.id;
       await keepDeniedAtStoredOnUpdate({
         data: currentData,
         stored: existingDeserialized,
         fields: fieldConfigs,
         source: this.fieldGroupDataService,
         access: fieldGroupWriteAccessOf(options),
+        ownRules: document =>
+          applyFieldWriteAccess({
+            kind: "single",
+            slug,
+            data: document,
+            operation: "update",
+            user: options.user,
+            overrideAccess: options.overrideAccess,
+            id: documentId,
+          }),
       });
       await runFieldHooks({
         kind: "single",

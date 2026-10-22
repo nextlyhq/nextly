@@ -23,6 +23,14 @@ import { readFieldGroupType } from "./storage/field-group-type-key";
 /** Field-group field schemas, keyed by field-group slug. */
 export type ComponentFieldMap = ReadonlyMap<string, readonly FieldConfig[]>;
 
+/**
+ * What the walk asks of a schema source: one field group's fields by slug. A
+ * map answers it, and so does a resolver a caller already holds.
+ */
+export interface FieldGroupFieldsBySlug {
+  get(slug: string): readonly FieldConfig[] | undefined;
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -121,7 +129,7 @@ export interface FieldGroupInstanceVisit {
 export async function forEachFieldGroupInstance(
   entry: Record<string, unknown>,
   fields: readonly FieldConfig[],
-  componentFields: ComponentFieldMap,
+  componentFields: FieldGroupFieldsBySlug,
   visit: (reached: FieldGroupInstanceVisit) => Promise<void>,
   options: {
     declaredComponentDecides: boolean;

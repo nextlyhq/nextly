@@ -19,7 +19,10 @@ import {
 } from "../../shared/lib/field-level-registry";
 import { resolveComponentFieldMap } from "../versions/tag-component-types";
 
-import { forEachFieldGroupInstance } from "./field-group-instances";
+import {
+  forEachFieldGroupInstance,
+  type FieldGroupFieldsBySlug,
+} from "./field-group-instances";
 import {
   lookupOncePerFieldGroup,
   type FieldGroupFieldsSource,
@@ -27,8 +30,9 @@ import {
 import type { FieldGroupWriteAccess } from "./services/field-group-mutation-service";
 
 /**
- * An update's field rules beyond the entity's own fields, applied in place,
- * with every value they deny inside a container kept as the row holds it.
+ * An update's field rules, applied in place, with every value they deny
+ * inside a container kept as the row holds it: the entity's own (`ownRules`)
+ * and those of the field groups it stores inline.
  *
  * A group or repeater is written whole, so a denied child removed from the
  * update would otherwise be cleared from the row: `keepDeniedAtStored` puts
@@ -42,20 +46,28 @@ export async function keepDeniedAtStoredOnUpdate(params: {
   source: FieldGroupFieldsSource | undefined;
   access: FieldGroupWriteAccess;
   executor?: unknown;
+  /**
+   * The entity's own field rules on the document it is given, in place: run
+   * first, so a group of the entity's that a rule removes whole is not walked
+   * for the field groups inside it.
+   */
+  ownRules: (document: Record<string, unknown>) => Promise<void>;
 }): Promise<void> {
   if (params.access.overrideAccess) return;
   const kept = await keepDeniedAtStored({
     update: params.data,
     stored: params.stored,
-    applyRules: document =>
-      applyInlineFieldGroupWriteAccess({
+    applyRules: async document => {
+      await params.ownRules(document);
+      await applyInlineFieldGroupWriteAccess({
         data: document,
         fields: params.fields,
         source: params.source,
         operation: "update",
         access: params.access,
         executor: params.executor,
-      }),
+      });
+    },
   });
   // In place: the caller holds this object, and so may what it was handed to.
   for (const key of Object.keys(params.data)) delete params.data[key];
@@ -92,25 +104,51 @@ export async function applyInlineFieldGroupWriteAccess(params: {
         })
       )
     : new Map<string, FieldConfig[]>();
-  const grants =
-    access.grants ??
-    callerAccessGrants(access.user, access.authenticatedScope, params.executor);
+  await judgeFieldGroupInstances({
+    data: params.data,
+    fields: params.fields,
+    fieldGroupFields,
+    operation,
+    access: {
+      ...access,
+      grants:
+        access.grants ??
+        callerAccessGrants(
+          access.user,
+          access.authenticatedScope,
+          params.executor
+        ),
+    },
+    // One stored in its own table is judged by the save that writes it there.
+    inlineOnly: true,
+  });
+}
+
+/** The one judgment both passes make, over the instances the walk reaches. */
+async function judgeFieldGroupInstances(params: {
+  data: Record<string, unknown>;
+  fields: readonly FieldConfig[];
+  fieldGroupFields: FieldGroupFieldsBySlug;
+  operation: "create" | "update";
+  access: FieldGroupWriteAccess;
+  inlineOnly: boolean;
+}): Promise<void> {
+  const { access } = params;
   await forEachFieldGroupInstance(
     params.data,
     params.fields,
-    fieldGroupFields,
+    params.fieldGroupFields,
     async ({ instance, slug, inline }) => {
-      // Stored in its own table, and judged by the save that writes it there.
-      if (!inline) return;
+      if (params.inlineOnly && !inline) return;
       await applyFieldWriteAccess({
         kind: "fieldGroup",
         slug,
         data: instance,
-        operation,
+        operation: params.operation,
         user: access.user,
         authenticatedScope: access.authenticatedScope,
         overrideAccess: false,
-        grants,
+        grants: access.grants,
       });
     },
     // A write's value is live, so a single field group's instance is judged by

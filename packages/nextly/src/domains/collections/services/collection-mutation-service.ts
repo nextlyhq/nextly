@@ -2079,13 +2079,15 @@ export class CollectionMutationService extends BaseService {
       authenticatedScope?: AuthenticatedScope;
     };
     executor?: unknown;
+    /** The write's own resolver, so the entry's pass and this one share it. */
+    grants: () => Promise<CallerGrants>;
   }): Promise<void> {
     await applyInlineFieldGroupWriteAccess({
       data: args.data,
       fields: args.fields as unknown as FieldConfig[],
       source: this.fieldGroupDataService,
       operation: "create",
-      access: fieldGroupWriteAccessOf(args.params),
+      access: { ...fieldGroupWriteAccessOf(args.params), grants: args.grants },
       executor: args.executor,
     });
   }
@@ -2097,6 +2099,9 @@ export class CollectionMutationService extends BaseService {
    */
   private async keepDeniedFieldsAtStored(args: {
     data: Record<string, unknown>;
+    /** The entry, so owner- and record-aware rules can evaluate. */
+    entryId: string;
+    collectionName: string;
     stored: Record<string, unknown>;
     fields: FieldDefinition[];
     params: {
@@ -2106,13 +2111,35 @@ export class CollectionMutationService extends BaseService {
     };
     executor?: unknown;
   }): Promise<void> {
+    // One resolver for the entry's rules and the field groups', read on the
+    // write's own connection: inside a transaction, the pool's would wait on
+    // the connection the transaction holds and miss its writes.
+    const grants = callerAccessGrants(
+      args.params.user,
+      args.params.authenticatedScope,
+      args.executor
+    );
     await keepDeniedAtStoredOnUpdate({
       data: args.data,
       stored: args.stored,
       fields: args.fields as unknown as FieldConfig[],
       source: this.fieldGroupDataService,
-      access: fieldGroupWriteAccessOf(args.params),
+      access: { ...fieldGroupWriteAccessOf(args.params), grants },
       executor: args.executor,
+      // The entry's own rules, in the same judgment: a group is written whole,
+      // so a denied child of one keeps its stored value rather than clearing.
+      ownRules: document =>
+        applyFieldWriteAccess({
+          kind: "collection",
+          slug: args.collectionName,
+          data: document,
+          operation: "update",
+          user: args.params.user,
+          authenticatedScope: args.params.authenticatedScope,
+          overrideAccess: args.params.overrideAccess,
+          id: args.entryId,
+          grants,
+        }),
     });
   }
 
@@ -4893,6 +4920,7 @@ export class CollectionMutationService extends BaseService {
         data: finalData,
         fields,
         params,
+        grants: writeGrants,
       });
 
       // Field-level beforeValidate hooks transform values ahead of the
@@ -8111,20 +8139,12 @@ export class CollectionMutationService extends BaseService {
       // Field-level access: fields the caller may not update are stripped
       // silently (Payload parity); overrideAccess bypasses. The document id
       // is passed so owner/record-aware access rules can evaluate.
-      await applyFieldWriteAccess({
-        kind: "collection",
-        slug: params.collectionName,
-        data: finalData,
-        operation: "update",
-        user: params.user,
-        authenticatedScope: params.authenticatedScope,
-        overrideAccess: params.overrideAccess,
-        id: params.entryId,
-      });
-      // The field groups this entry stores inline, by their own rules, and
-      // what a denied field inside a container held kept as the row holds it.
+      // With the field groups this entry stores inline, by their own rules,
+      // and every denied value inside a container kept as the row holds it.
       await this.keepDeniedFieldsAtStored({
         data: finalData,
+        entryId: params.entryId,
+        collectionName: params.collectionName,
         stored: this.readShapeEventDocument(
           existingEntry as Record<string, unknown>,
           fields,
@@ -10996,7 +11016,13 @@ export class CollectionMutationService extends BaseService {
 
       // Field-level write access: fields the caller may not create are
       // stripped (Payload parity); a system write (no user) or an
-      // explicit override bypasses.
+      // explicit override bypasses. One resolver for this pass and the
+      // field groups', read on the caller-owned transaction.
+      const writeGrants = callerAccessGrants(
+        params.user,
+        params.authenticatedScope,
+        tx.getDrizzle()
+      );
       await applyFieldWriteAccess({
         kind: "collection",
         slug: params.collectionName,
@@ -11005,6 +11031,7 @@ export class CollectionMutationService extends BaseService {
         user: params.user,
         authenticatedScope: params.authenticatedScope,
         overrideAccess: params.overrideAccess,
+        grants: writeGrants,
       });
       // The field groups this entry stores inline, inside its groups and
       // repeaters, by their own rules: no field-group save reaches them.
@@ -11014,6 +11041,7 @@ export class CollectionMutationService extends BaseService {
         params,
         // Still inside the caller-owned transaction.
         executor: tx.getDrizzle(),
+        grants: writeGrants,
       });
 
       // Field-level beforeValidate hooks transform values ahead of the
@@ -11572,20 +11600,12 @@ export class CollectionMutationService extends BaseService {
       // Field-level write access: fields the caller may not update are
       // stripped (Payload parity); a system write (no user) or an
       // explicit override bypasses.
-      await applyFieldWriteAccess({
-        kind: "collection",
-        slug: params.collectionName,
-        data: finalData,
-        operation: "update",
-        user: params.user,
-        authenticatedScope: params.authenticatedScope,
-        overrideAccess: params.overrideAccess,
-        id: entryId,
-      });
-      // The field groups this entry stores inline, by their own rules, and
-      // what a denied field inside a container held kept as the row holds it.
+      // With the field groups this entry stores inline, by their own rules,
+      // and every denied value inside a container kept as the row holds it.
       await this.keepDeniedFieldsAtStored({
         data: finalData,
+        entryId: entryId,
+        collectionName: params.collectionName,
         stored: this.readShapeEventDocument(existingEntry, fields, tableName),
         fields,
         params,
