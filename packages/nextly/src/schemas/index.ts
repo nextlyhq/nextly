@@ -46,6 +46,7 @@ import {
 import { dynamicSinglesMysql } from "./dynamic-singles/mysql";
 import { dynamicSinglesPg } from "./dynamic-singles/postgres";
 import { dynamicSinglesSqlite } from "./dynamic-singles/sqlite";
+import { emailBrandTables } from "./email-brand";
 import { emailDeliveriesMysql } from "./email-deliveries/mysql";
 import { emailDeliveriesPg } from "./email-deliveries/postgres";
 import { emailDeliveriesSqlite } from "./email-deliveries/sqlite";
@@ -285,6 +286,9 @@ export function getCoreSchema(
     // `nextly_notices` — each person's own notices. In the snapshot for the
     // reason every table above is: it is the set `nextly migrate` creates.
     ...Object.values(noticesTables(dialect)),
+    // `nextly_email_brand` — the site's email brand settings, one row. In the
+    // snapshot for the reason every table above is.
+    ...Object.values(emailBrandTables(dialect)),
   ];
 
   const fieldGroupRegistry = fieldGroupRegistryFor(dialect, options);
@@ -406,6 +410,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_webhooks",
   "nextly_webhook_deliveries",
   "nextly_notices",
+  "nextly_email_brand",
 ] as const;
 
 /**

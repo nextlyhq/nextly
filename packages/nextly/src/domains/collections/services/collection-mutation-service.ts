@@ -3201,12 +3201,13 @@ export class CollectionMutationService extends BaseService {
     /** Who discarded it, for the document's history. */
     actor?: RequestActor;
     user?: UserContext;
-  }): Promise<void> {
+  }): Promise<number> {
     const collection = await this.collectionService.getCollection(
       params.collectionName
     );
     const tableName = collectionTableName(collection, params.collectionName);
-    await this.adapter.transaction(async tx => {
+    // The drafts it removed, counted by the delete made under the lock.
+    return this.adapter.transaction(async tx => {
       // Serialize with concurrent draft-save upserts, which lock this same parent
       // row before writing the sidecar.
       await tx.lockRow(tableName, params.entryId);
@@ -3238,6 +3239,7 @@ export class CollectionMutationService extends BaseService {
           }
         );
       }
+      return removed;
     });
   }
 
