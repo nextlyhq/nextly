@@ -1408,6 +1408,23 @@ type TargetTableColumns = {
   status?: unknown;
 };
 
+/**
+ * Strip a related row to its identity (`id` and `label`), in place: the answer
+ * for a row whose schema cannot be resolved, which leaves no field to judge.
+ */
+function stripToIdentity(row: Record<string, unknown>): void {
+  for (const key of Object.keys(row)) {
+    if (key !== "id" && key !== "label") delete row[key];
+  }
+  // Defense in depth: the label is normally a display field (never a
+  // password — a password can't be configured as a label), but a row
+  // migrated from before that guard could carry a bcrypt hash here, so
+  // drop a hash-shaped label rather than surface it.
+  if (typeof row.label === "string" && row.label.startsWith("$2")) {
+    delete row.label;
+  }
+}
+
 export class CollectionRelationshipService extends BaseService {
   /**
    * Decides whether a caller may read a TARGET collection at all.
@@ -3095,18 +3112,7 @@ export class CollectionRelationshipService extends BaseService {
     }
     const targetFields = target?.fields ?? null;
     if (targetFields === null) {
-      for (const row of rows) {
-        for (const key of Object.keys(row)) {
-          if (key !== "id" && key !== "label") delete row[key];
-        }
-        // Defense in depth: the label is normally a display field (never a
-        // password — a password can't be configured as a label), but a row
-        // migrated from before that guard could carry a bcrypt hash here, so
-        // drop a hash-shaped label rather than surface it.
-        if (typeof row.label === "string" && row.label.startsWith("$2")) {
-          delete row.label;
-        }
-      }
+      for (const row of rows) stripToIdentity(row);
       // Nothing but id/label survives, so there is no field left to judge.
       return;
     }
@@ -3992,9 +3998,15 @@ export class CollectionRelationshipService extends BaseService {
     targetCollection: string
   ): Promise<LiveFieldGroupReadPass | undefined> {
     const target = await this.getRedactionTarget(targetCollection);
-    // A row whose schema cannot be resolved is stripped to its identity when
-    // it is loaded, so it holds no field-group field left to judge.
-    if (target === null) return undefined;
+    // The schema resolved when the row was loaded, but this read of it failed:
+    // what the row's field groups hold cannot be judged, so the row is
+    // withheld to its identity, as a row whose schema never resolved is.
+    if (target === null) {
+      return row => {
+        stripToIdentity(row);
+        return Promise.resolve();
+      };
+    }
     const source = container.has("fieldGroupDataService")
       ? container.get<FieldGroupDataService>("fieldGroupDataService")
       : undefined;
