@@ -8587,10 +8587,15 @@ export class CollectionMutationService extends BaseService {
       const collectionHasStatus =
         (collection as { status?: boolean }).status === true;
       // The guard carries the pre-resolved PERMISSION denial, judged off this
-      // transaction's connection so the under-lock step needs no DB read.
+      // transaction's connection so the under-lock step needs no DB read. A
+      // write to every language that publishes carries the question instead,
+      // asked under the lock once for each language going live.
       let transitionGuard: {
         op: "publish" | "unpublish";
         permissionDenied: CollectionServiceResult | null;
+        askEachLanguage?: (
+          executor: unknown
+        ) => Promise<CollectionServiceResult | null>;
       } | null = null;
       if (
         collectionHasStatus &&
@@ -8599,7 +8604,7 @@ export class CollectionMutationService extends BaseService {
       ) {
         const transitionOp =
           transitionNextStatus === "published" ? "publish" : "unpublish";
-        const transitionDenied = () =>
+        const transitionDenied = (executor?: unknown) =>
           this.accessService.checkCollectionAccess({
             collectionName: params.collectionName,
             operation: transitionOp,
@@ -8612,26 +8617,29 @@ export class CollectionMutationService extends BaseService {
             // not the key owner's — the route only checked `update` against the
             // key's scope.
             authenticatedScope: params.authenticatedScope,
+            ...(executor === undefined ? {} : { executor }),
           });
-        // A write to every language that publishes asks the publish rule once
-        // for each language it puts live, each time told that language and all
-        // of them, as publishing every language does: a rule that answers by
-        // language answers for each, and any refusal refuses the write. Judged
-        // here, before the transaction, with what goes live (above).
-        const permissionDenied =
-          sweepAllLocales && transitionOp === "publish"
-            ? ((await this.refusedInALanguage({
-                collectionName: params.collectionName,
-                entryId: params.entryId,
-                row: existingEntry as Record<string, unknown>,
-                ask: transitionDenied,
-              })) ?? null)
-            : await transitionDenied();
-        if (permissionDenied) {
+        if (sweepAllLocales && transitionOp === "publish") {
+          // A write to every language that publishes asks the publish rule
+          // once for each language it puts live, each time told that language
+          // and all of them, as publishing every language does: a rule that
+          // answers by language answers for each, and any refusal refuses the
+          // write. Asked under the row lock (below), on the statuses this
+          // transaction sees, so a translation drafted after a read here
+          // cannot go live unasked.
           transitionGuard = {
             op: transitionOp,
-            permissionDenied,
+            permissionDenied: null,
+            askEachLanguage: executor => transitionDenied(executor),
           };
+        } else {
+          const permissionDenied = await transitionDenied();
+          if (permissionDenied) {
+            transitionGuard = {
+              op: transitionOp,
+              permissionDenied,
+            };
+          }
         }
       }
 
@@ -9135,6 +9143,20 @@ export class CollectionMutationService extends BaseService {
               if (transitionGuard.permissionDenied) {
                 transitionDeniedResult = transitionGuard.permissionDenied;
                 throw new StatusTransitionDeniedError();
+              }
+              const { askEachLanguage } = transitionGuard;
+              if (askEachLanguage) {
+                const refusal = await this.refusedInALanguage({
+                  collectionName: params.collectionName,
+                  entryId: params.entryId,
+                  row: preUpdateRow as Record<string, unknown>,
+                  tx,
+                  ask: () => askEachLanguage(tx.getDrizzle()),
+                });
+                if (refusal) {
+                  transitionDeniedResult = refusal;
+                  throw new StatusTransitionDeniedError();
+                }
               }
               // The permission above is the whole decision: no rule judges the
               // row, so the row-locked document cannot change the answer.

@@ -30,10 +30,15 @@ afterEach(async () => {
 
 const ARTICLES = "articles";
 const BANNER = "banner";
+const NO_ENGLISH = "noenglishbanner";
+const UNPUBLISHABLE = "unpublishablebanner";
 const USER = { id: "user-1", isActive: true };
 
 /** Every question the publish rule was asked, in order. */
 let asked: { locale?: string; locales: string[] }[] = [];
+
+/** Refuses English, the default language. */
+const englishRefused = ({ locale }: AccessRuleContext) => locale !== "en";
 
 /** Refuses French, and records what it was asked. */
 const frenchRefused = ({ locale, locales }: AccessRuleContext) => {
@@ -69,6 +74,30 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           read: () => true,
           update: () => true,
           publish: frenchRefused,
+        },
+        fields: [text({ name: "headline" })],
+      }),
+      defineSingle({
+        slug: NO_ENGLISH,
+        localized: true,
+        status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: englishRefused,
+        },
+        fields: [text({ name: "headline" })],
+      }),
+      defineSingle({
+        slug: UNPUBLISHABLE,
+        localized: true,
+        status: true,
+        // Keeps drafts, so a status-less save on a published Single is held.
+        versions: { drafts: true },
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => false,
         },
         fields: [text({ name: "headline" })],
       }),
@@ -230,6 +259,58 @@ describe.each(getConfiguredTestDialects())(
         { overrideAccess: true, locale: "fr" }
       );
       const refused = await publishEvery();
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(403);
+    });
+
+    it("asks the default language when a Single's main row goes live, beside its translations", async () => {
+      const t = await boot(dialect);
+      // A German draft and no English translation: publishing every language
+      // still puts the main row, the default language's shared content, live.
+      await singlesOf(t).update(
+        NO_ENGLISH,
+        { headline: "de" },
+        { overrideAccess: true, locale: "de" }
+      );
+      const refused = await singlesOf(t).publishAllLocales(NO_ENGLISH, {
+        overrideAccess: false,
+        user: USER,
+      });
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(403);
+    });
+
+    it("refuses a caller who may not publish before saying which languages hold unreleased work", async () => {
+      const t = await boot(dialect);
+      // Published in every language, then a German edit held as a draft.
+      await singlesOf(t).update(
+        UNPUBLISHABLE,
+        { headline: "de", status: "published" },
+        { overrideAccess: true, locale: "de" }
+      );
+      await singlesOf(t).update(
+        UNPUBLISHABLE,
+        { status: "published" },
+        { overrideAccess: true, locale: "*" }
+      );
+      await singlesOf(t).update(
+        UNPUBLISHABLE,
+        { headline: "de pending" },
+        { overrideAccess: true, locale: "de" }
+      );
+      // The control: a trusted publish of every language meets the held draft.
+      const held = await singlesOf(t).update(
+        UNPUBLISHABLE,
+        { status: "published" },
+        { overrideAccess: true, locale: "*" }
+      );
+      expect(held.statusCode).toBe(409);
+
+      const refused = await singlesOf(t).update(
+        UNPUBLISHABLE,
+        { status: "published" },
+        { overrideAccess: false, user: USER, locale: "*" }
+      );
       expect(refused.success).toBe(false);
       expect(refused.statusCode).toBe(403);
     });

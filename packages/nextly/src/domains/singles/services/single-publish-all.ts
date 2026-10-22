@@ -48,6 +48,7 @@ import {
 } from "../../field-groups/services/field-group-mutation-service";
 import { readCompanionLocaleStatusAll } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { languagesGoingLiveFrom } from "../../i18n/languages-going-live";
 import {
   type LocalizationSource,
   localizationNow,
@@ -507,6 +508,26 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
+   * The languages a publish of every language asks its rule about: those it
+   * judges, and those the one answer to "what goes live" names, the default
+   * language among them whenever the main row goes live, which the judged
+   * list leaves to the translations it carries.
+   */
+  private languagesToAsk(
+    judged: ReadonlyArray<{ locale: string | null }>,
+    priorCompanionStatuses: ReadonlyMap<string, string | null>,
+    lockedRow: Record<string, unknown>
+  ): { locale: string | null }[] {
+    const goingLive = languagesGoingLiveFrom({
+      statuses: priorCompanionStatuses,
+      configured: this.localization?.locales.map(locale => locale.code) ?? [],
+      defaultLocale: this.localization?.defaultLocale,
+      mainPublished: lockedRow.status === "published",
+    });
+    return [...judged, ...goingLive.map(locale => ({ locale }))];
+  }
+
+  /**
    * The publish itself: lock, re-check, write every status, capture, record.
    *
    * Runs inside `withVersionConflictRetry`, so the whole body may re-run — it
@@ -577,7 +598,11 @@ export class SinglePublishAllService extends BaseService {
       tx,
       plan,
       options,
-      [...stored, ...alsoGoingLive],
+      this.languagesToAsk(
+        [...stored, ...alsoGoingLive],
+        priorCompanionStatuses,
+        lockedRow
+      ),
       refused
     );
 
