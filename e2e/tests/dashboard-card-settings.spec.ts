@@ -90,21 +90,38 @@ function rows(page: Page) {
   return rowsIn(cell(page));
 }
 
+/** A widget query the dashboard sends. */
+const isQuery = (request: Request) =>
+  request.url().includes("/api/dashboard/query");
+
+/** A card body the reader is told is still being read. */
+const busyCards = (page: Page) =>
+  page.locator('[data-testid="widget-card-body"][aria-busy="true"]');
+
 /**
  * Give the page focus, and let what focus starts finish. The dashboard reads every card again
  * when its window gains focus, by design, and a test's first click is what first focuses the
  * page; watched from before it, that read would be counted as caused by whatever was clicked.
+ *
+ * Finished means what the reader sees: no card is marked busy. The read focus starts is caught
+ * first, when there is one, because a card is marked busy only once React draws the read, and
+ * an assertion made in that gap would pass before the read had begun. (Not `networkidle`: the
+ * dev server holds a long poll open, so the page never goes idle.)
  */
 async function focusPage(page: Page): Promise<void> {
+  const focusRead = page
+    .waitForRequest(isQuery, { timeout: 1_000 })
+    .catch(() => undefined);
   await page.getByRole("heading", { level: 1 }).first().click();
-  await page.waitForLoadState("networkidle");
+  await (await focusRead)?.response();
+  await expect(busyCards(page)).toHaveCount(0);
 }
 
 /** Every widget query the dashboard sends from now on. */
 function watchQueries(page: Page): Request[] {
   const sent: Request[] = [];
   page.on("request", request => {
-    if (request.url().includes("/api/dashboard/query")) sent.push(request);
+    if (isQuery(request)) sent.push(request);
   });
   return sent;
 }
