@@ -1,3 +1,4 @@
+import { LANGUAGES_TABLE } from "../schemas/languages/table-name";
 import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
 import { NOTICES_TABLE } from "../schemas/notices/table-name";
 import { RBAC_EPOCH_TABLE } from "../schemas/rbac-epoch/table-name";
@@ -514,6 +515,19 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_preview_links" ("revoked_by")`,
     `CREATE INDEX IF NOT EXISTS "nextly_preview_links_revoked_idx"
       ON "nextly_preview_links" ("revoked_at")`,
+    // The site's stored content languages. Columns match schemas/languages/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "${LANGUAGES_TABLE}" (
+      "code" TEXT PRIMARY KEY NOT NULL,
+      "label" TEXT NOT NULL,
+      "direction" TEXT NOT NULL DEFAULT 'ltr',
+      "fallback" TEXT NOT NULL DEFAULT '[]',
+      "position" INTEGER NOT NULL,
+      "is_default" INTEGER NOT NULL DEFAULT 0,
+      "active" INTEGER NOT NULL DEFAULT 1,
+      "revision" INTEGER NOT NULL DEFAULT 1,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
     // Content releases. Columns match schemas/releases/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_releases" (
       "id" TEXT PRIMARY KEY NOT NULL,
