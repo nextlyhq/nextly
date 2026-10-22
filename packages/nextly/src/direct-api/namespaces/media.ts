@@ -14,7 +14,10 @@
  * @packageDocumentation
  */
 
-import { runWithCallerScope } from "../../auth/caller-scope";
+import {
+  currentCallerScope,
+  runWithCallerScope,
+} from "../../auth/caller-scope";
 import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
@@ -37,6 +40,7 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
+  checkedCaller,
   checkedScope,
   checkWrite,
   createRequestContext,
@@ -93,11 +97,29 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
   // The check and the work run under the key scope the call is checked with,
   // so what the write sets going (an event handler's own service calls) is
   // held to that key, not to a broader one the request around it carries.
-  const asChecked = <T>(
+  const asChecked = async <T>(
     args: Parameters<typeof createRequestContext>[0],
     work: () => Promise<T>
-  ): Promise<T> =>
-    runWithCallerScope(checkedScope(ctx.defaultConfig, args), work);
+  ): Promise<T> => {
+    const scope = checkedScope(ctx.defaultConfig, args);
+    // A checked call that names a person and no key, made inside a request
+    // authenticated with a key, is ambiguous: judged as the person, its work
+    // would still run under the request's key, and either could be the
+    // broader. It is refused rather than resolved either way.
+    if (
+      scope === undefined &&
+      currentCallerScope()?.actorType === "apiKey" &&
+      checkedCaller(ctx.defaultConfig, args) !== null
+    ) {
+      throw new NextlyError({
+        code: "FORBIDDEN",
+        publicMessage:
+          "This request is authenticated with an API key. Pass the key's scope, or call trusted.",
+        logContext: { reason: "checked-media-call-names-user-inside-key" },
+      });
+    }
+    return runWithCallerScope(scope, work);
+  };
 
   const folders: MediaFoldersNamespace = {
     async list(args: ListFoldersArgs = {}): Promise<MediaFolder[]> {
