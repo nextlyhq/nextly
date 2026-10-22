@@ -6,6 +6,8 @@ import {
   type UpdateEmailTemplatePayload,
 } from "@admin/services/emailTemplateApi";
 
+import { ownsContent } from "./workbench-model";
+
 // ============================================================
 // Form id (external submit hooks may still reference it).
 // ============================================================
@@ -178,7 +180,44 @@ export function formValuesToCreatePayload(
   };
 }
 
+/** The fields an owner sets on its email: locked until the site overrides it. */
+const OWNER_FIELDS = [
+  "subject",
+  "preheader",
+  "htmlContent",
+  "plainTextContent",
+  "description",
+  "variables",
+] as const;
+
+/**
+ * The update a save sends. Given the saved record, it leaves out what the
+ * site can't change right now, rather than sending it back as it was read:
+ *
+ * - on an owner's email, the owner's fields. The owner can update them while
+ *   the form is open (the boot reconciles in the background), and the server
+ *   reads a stale copy sent back as an edit, which overrides the email with
+ *   the owner's previous text;
+ * - on an email that carries a secret, the copies. Ones stored before it was
+ *   marked stay stored but aren't sent, and the server refuses any it's sent,
+ *   so sending them back would refuse every save.
+ */
 export function formValuesToUpdatePayload(
+  values: TemplateFormValues,
+  record?: EmailTemplateRecord
+): UpdateEmailTemplatePayload {
+  const payload = fullUpdatePayload(values);
+  if (record && !ownsContent(record)) {
+    for (const field of OWNER_FIELDS) delete payload[field];
+  }
+  if (record?.carriesSecret) {
+    delete payload.cc;
+    delete payload.bcc;
+  }
+  return payload;
+}
+
+function fullUpdatePayload(
   values: TemplateFormValues
 ): UpdateEmailTemplatePayload {
   return {

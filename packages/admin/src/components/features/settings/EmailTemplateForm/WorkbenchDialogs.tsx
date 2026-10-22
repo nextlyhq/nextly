@@ -7,7 +7,7 @@ import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 import {
   OverrideDialog,
   ResetDialog,
-  UnsavedBeforeReviewDialog,
+  UnsavedBeforeActDialog,
 } from "./OwnershipDialogs";
 import { OwnerUpdateReview } from "./OwnerUpdateReview";
 import type { OwnershipActs, WorkbenchDialog } from "./useOwnershipActs";
@@ -19,7 +19,7 @@ export function WorkbenchDialogs({
 }: {
   template: EmailTemplateRecord;
   acts: OwnershipActs;
-  /** Put the form back to the saved email, so a review can start from it. */
+  /** Put the form back to the saved email, so an act can start from it. */
   onDiscardEdits: () => void;
 }) {
   const { dialog, setDialog, owner } = acts;
@@ -43,12 +43,12 @@ export function WorkbenchDialogs({
         isPending={acts.isResetting}
         onConfirm={acts.confirmReset}
       />
-      <UnsavedBeforeReviewDialog
+      <UnsavedBeforeActDialog
         open={dialog === "unsaved"}
         onOpenChange={openIf("unsaved")}
         onDiscard={() => {
           onDiscardEdits();
-          setDialog("review");
+          acts.continueAfterUnsaved();
         }}
       />
       <OwnerUpdateReview

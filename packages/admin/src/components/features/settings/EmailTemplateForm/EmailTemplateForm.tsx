@@ -91,9 +91,9 @@ function ContentColumn({
         ownsContent={owns}
         keptOnOldEngine={keptOnOldEngine}
         undo={acts.undoNote}
-        onOverride={() => acts.setDialog("override")}
-        onReview={acts.startReview}
-        onReset={() => acts.setDialog("reset")}
+        onOverride={() => acts.startAct("override")}
+        onReview={() => acts.startAct("review")}
+        onReset={() => acts.startAct("reset")}
       />
       {isLayoutRow ? null : (
         <InboxStrip
@@ -139,6 +139,7 @@ export function EmailTemplateForm({
 
   const [editorTab, setEditorTab] = useState<"html" | "text">("html");
   const [sheet, setSheet] = useState<SheetPanel | null>(null);
+  const [detailsRequest, setDetailsRequest] = useState(0);
   const [sampleOverride, setSampleOverride] = useState<string | null>(null);
   const [sendTestOpen, setSendTestOpen] = useState(false);
 
@@ -247,7 +248,7 @@ export function EmailTemplateForm({
   const toggleSheet = (panel: SheetPanel) =>
     setSheet(current => (current === panel ? null : panel));
   const openSendTest = () => setSendTestOpen(true);
-  const openOverride = () => acts.setDialog("override");
+  const openOverride = () => acts.startAct("override");
 
   return (
     <Form {...form}>
@@ -264,6 +265,7 @@ export function EmailTemplateForm({
           void form.handleSubmit(onSubmit, errors => {
             if (regionsForRefusal(Object.keys(errors)).details) {
               setSheet("details");
+              setDetailsRequest(count => count + 1);
             }
           })(e);
         }}
@@ -274,6 +276,7 @@ export function EmailTemplateForm({
           splitLabel="Editor and preview"
           sheet={sheet}
           onSheetChange={setSheet}
+          detailsRequest={detailsRequest}
           header={tier => (
             <WorkbenchHeader
               tier={tier}

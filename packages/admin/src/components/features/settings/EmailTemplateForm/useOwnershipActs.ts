@@ -21,6 +21,7 @@ import {
   useOverrideEmailTemplate,
   useResetEmailTemplate,
   useUndoOwnerUpdate,
+  useUpdateEmailTemplate,
 } from "@admin/hooks/queries/useEmailTemplates";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { navigateTo } from "@admin/lib/navigation";
@@ -41,10 +42,16 @@ export type WorkbenchDialog =
   | "unsaved"
   | "delete";
 
-/** What an Undo puts back: the site's text before a Reset, or a review's. */
+/** What a Reset replaces beside the text: the site's description and declarations. */
+type SiteDetails = Pick<EmailTemplateRecord, "description" | "variables">;
+
+/** What an Undo puts back: the site's version before a Reset, or a review's. */
 type Undoable =
-  | { kind: "reset"; version: EmailTemplateVersion }
+  | { kind: "reset"; version: EmailTemplateVersion; details: SiteDetails }
   | { kind: "review"; undo: OwnerUpdateUndo };
+
+/** The acts that start from the saved email, so unsaved edits go first. */
+type SavedAct = "override" | "reset" | "review";
 
 function versionOf(template: EmailTemplateRecord): EmailTemplateVersion {
   return {
@@ -84,12 +91,12 @@ function undoNoteFor(
 function menuFor({
   template,
   hasPermission,
-  startReview,
+  startAct,
   setDialog,
 }: {
   template: EmailTemplateRecord | undefined;
   hasPermission: (slug: string) => boolean;
-  startReview: () => void;
+  startAct: (act: SavedAct) => void;
   setDialog: (dialog: WorkbenchDialog) => void;
 }): WorkbenchMenu {
   if (!template) return {};
@@ -106,8 +113,8 @@ function menuFor({
             withQuery(ROUTES.EMAIL_MESSAGES_CREATE, { duplicate: template.id })
           )
       : undefined,
-    onReview: template.ownerChanged ? startReview : undefined,
-    onReset: template.overridden ? () => setDialog("reset") : undefined,
+    onReview: template.ownerChanged ? () => startAct("review") : undefined,
+    onReset: template.overridden ? () => startAct("reset") : undefined,
     onDelete: canDelete ? () => setDialog("delete") : undefined,
     deleteRefusal: deleteRefusalFor(template),
   };
@@ -129,10 +136,13 @@ export function useOwnershipActs({
 }) {
   const [dialog, setDialog] = useState<WorkbenchDialog | null>(null);
   const [undoable, setUndoable] = useState<Undoable | null>(null);
+  // The act the unsaved-edits question was asked for, to continue to.
+  const [afterUnsaved, setAfterUnsaved] = useState<SavedAct>("review");
   const { hasPermission } = useCurrentUserPermissions();
   const override = useOverrideEmailTemplate();
   const reset = useResetEmailTemplate();
   const undoUpdate = useUndoOwnerUpdate();
+  const update = useUpdateEmailTemplate();
   const remove = useDeleteEmailTemplate();
   const owner = template ? ownerName(template) : "";
 
@@ -154,11 +164,15 @@ export function useOwnershipActs({
 
   const confirmReset = () => {
     if (!template) return;
-    const before = versionOf(template);
+    const version = versionOf(template);
+    const details = {
+      description: template.description,
+      variables: template.variables,
+    };
     reset.mutate(template.id, {
       onSuccess: () => {
         setDialog(null);
-        setUndoable({ kind: "reset", version: before });
+        setUndoable({ kind: "reset", version, details });
       },
       onError: failed("It couldn't be reset"),
     });
@@ -177,37 +191,50 @@ export function useOwnershipActs({
     });
   };
 
-  /** A review starts from what's saved, so unsaved edits are asked about first. */
-  const startReview = () => setDialog(isDirty ? "unsaved" : "review");
+  /**
+   * Override, Reset and a review each start from the saved email and replace
+   * the form with what the server returns, so unsaved edits (a setting, say)
+   * are asked about first rather than silently dropped.
+   */
+  const startAct = (act: SavedAct) => {
+    setAfterUnsaved(act);
+    setDialog(isDirty ? "unsaved" : act);
+  };
+
+  /** Put back what the last Reset or review replaced. */
+  const restore = async (id: string, last: Undoable) => {
+    if (last.kind === "review") {
+      await undoUpdate.mutateAsync({ id, undo: last.undo });
+      return;
+    }
+    // The text comes back as an override; the site's description and
+    // declarations, which Reset gave back to the owner, come back after it.
+    await override.mutateAsync({ id, version: last.version });
+    await update.mutateAsync({ id, data: last.details });
+  };
 
   const runUndo = () => {
     if (!template || !undoable) return;
-    const done = {
-      onSuccess: () => {
-        setUndoable(null);
-        toast.success("Undone");
-      },
-      onError: failed("It couldn't be undone"),
-    };
-    if (undoable.kind === "reset") {
-      override.mutate({ id: template.id, version: undoable.version }, done);
-    } else {
-      undoUpdate.mutate({ id: template.id, undo: undoable.undo }, done);
-    }
+    restore(template.id, undoable).then(() => {
+      setUndoable(null);
+      toast.success("Undone");
+    }, failed("It couldn't be undone"));
   };
 
   return {
     dialog,
     setDialog,
     owner,
-    menu: menuFor({ template, hasPermission, startReview, setDialog }),
+    menu: menuFor({ template, hasPermission, startAct, setDialog }),
     undoNote: undoNoteFor(
       undoable,
       owner,
       runUndo,
-      override.isPending || undoUpdate.isPending
+      override.isPending || undoUpdate.isPending || update.isPending
     ),
-    startReview,
+    startAct,
+    /** After discarding unsaved edits: on to the act they were asked for. */
+    continueAfterUnsaved: () => setDialog(afterUnsaved),
     confirmOverride,
     confirmReset,
     confirmDelete,

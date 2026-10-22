@@ -160,8 +160,11 @@ export function ResetDialog({
   );
 }
 
-/** A review starts from what's saved, so unsaved edits go first. */
-export function UnsavedBeforeReviewDialog({
+/**
+ * Override, Reset and a review start from what's saved and replace what's on
+ * screen, so unsaved edits go first.
+ */
+export function UnsavedBeforeActDialog({
   open,
   onOpenChange,
   onDiscard,
@@ -176,8 +179,9 @@ export function UnsavedBeforeReviewDialog({
         <DialogHeader>
           <DialogTitle>Save or discard your changes first</DialogTitle>
           <DialogDescription>
-            The review compares the owner&apos;s update with your saved version,
-            so it can&apos;t include changes you haven&apos;t saved.
+            Overriding, resetting and reviewing an update start from the saved
+            version of this email, so they can&apos;t keep changes you
+            haven&apos;t saved.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -189,7 +193,7 @@ export function UnsavedBeforeReviewDialog({
             Keep editing
           </Button>
           <Button type="button" variant="destructive" onClick={onDiscard}>
-            Discard changes and review
+            Discard changes and continue
           </Button>
         </DialogFooter>
       </DialogContent>

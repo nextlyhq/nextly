@@ -38,8 +38,9 @@ function mount({
 }) {
   const onSheetChange = vi.fn();
   const header = vi.fn(tier => <h1>header at {tier}</h1>);
-  render(
+  const layout = (detailsRequest: number) => (
     <WorkbenchLayout
+      detailsRequest={detailsRequest}
       splitLabel="Editor and preview"
       header={header}
       content={<p>the content</p>}
@@ -51,7 +52,12 @@ function mount({
       phoneBar={<button type="button">Save</button>}
     />
   );
-  return { onSheetChange, header };
+  const { rerender } = render(layout(0));
+  return {
+    onSheetChange,
+    header,
+    requestDetails: (count: number) => rerender(layout(count)),
+  };
 }
 
 describe("on a desktop", () => {
@@ -125,6 +131,22 @@ describe("on a phone", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Preview" }));
     expect(screen.getByText("the preview")).toBeDefined();
     expect(screen.queryByText("the content")).toBeNull();
+  });
+
+  it("switches to Details when a refused save's message is there", () => {
+    atWidth(390);
+    const { requestDetails } = mount({});
+    expect(screen.getByText("the content")).toBeDefined();
+    requestDetails(1);
+    expect(
+      screen.getByRole("tab", { name: "Details" }).getAttribute("aria-selected")
+    ).toBe("true");
+    expect(screen.getByText("the details")).toBeDefined();
+
+    // Asked again after the person went back to Edit: it switches again.
+    fireEvent.click(screen.getByRole("tab", { name: "Edit" }));
+    requestDetails(2);
+    expect(screen.getByText("the details")).toBeDefined();
   });
 
   it("has no Data tab where there's no test data (a layout)", () => {

@@ -25,7 +25,7 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@nextlyhq/ui";
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { X } from "@admin/components/icons";
 import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppression";
@@ -69,6 +69,12 @@ export interface WorkbenchLayoutProps {
   phoneBar: ReactNode;
   /** Accessible name for the resize handle between content and preview. */
   splitLabel: string;
+  /**
+   * Raised each time something must be shown in Details (a refused save whose
+   * message is there). The sheet opens through `sheet`; a phone, which has no
+   * sheet, switches to its Details tab, even when it was already asked once.
+   */
+  detailsRequest: number;
 }
 
 /** The side sheet: Data and Details behind one strip of tabs, and a close. */
@@ -139,11 +145,15 @@ function PhoneLayout({
   data,
   details,
   phoneBar,
+  detailsRequest,
 }: Pick<
   WorkbenchLayoutProps,
-  "content" | "preview" | "data" | "details" | "phoneBar"
+  "content" | "preview" | "data" | "details" | "phoneBar" | "detailsRequest"
 >) {
   const [tab, setTab] = useState<PhoneTab>("edit");
+  useEffect(() => {
+    if (detailsRequest > 0) setTab("details");
+  }, [detailsRequest]);
   const tabs: PhoneTab[] = data
     ? ["edit", "preview", "data", "details"]
     : ["edit", "preview", "details"];
@@ -206,6 +216,7 @@ export function WorkbenchLayout({
   onSheetChange,
   phoneBar,
   splitLabel,
+  detailsRequest,
 }: WorkbenchLayoutProps) {
   // The settings navigation and the page's padding: a full-width workbench
   // reads them as a mistake rather than as a margin. The header draws the way
@@ -227,6 +238,7 @@ export function WorkbenchLayout({
         data={data}
         details={details}
         phoneBar={phoneBar}
+        detailsRequest={detailsRequest}
       />
     );
   } else if (tier === "tablet") {

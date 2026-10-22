@@ -339,6 +339,10 @@ export function useEmailTemplateComparison(id: string, enabled: boolean) {
     staleTime: 0,
     gcTime: 0,
     retry: false,
+    // Not behind the person's back while they choose: the review reloads
+    // itself only when an apply is refused as stale.
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 }
 

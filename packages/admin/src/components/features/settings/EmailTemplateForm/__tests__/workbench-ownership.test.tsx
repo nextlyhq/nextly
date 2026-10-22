@@ -29,6 +29,7 @@ const api = vi.hoisted(() => ({
   compareTemplate: vi.fn(),
   applyOwnerUpdate: vi.fn(),
   undoOwnerUpdate: vi.fn(),
+  updateTemplate: vi.fn(),
 }));
 
 vi.mock("@admin/services/emailTemplateApi", async importOriginal => {
@@ -154,10 +155,18 @@ describe("the site's own email", () => {
 });
 
 describe("a customised email", () => {
-  it("resets to the owner's version, and Undo puts the site's text back", async () => {
-    const record = template({ owner: { kind: "core" }, overridden: true });
+  it("resets to the owner's version, and Undo puts the site's version back", async () => {
+    // The site changed what the owner says about it, too: Reset gives that
+    // back to the owner, and Undo must bring it back.
+    const record = template({
+      owner: { kind: "core" },
+      overridden: true,
+      description: "Our welcome",
+      variables: [{ name: "plan", description: "The plan", required: true }],
+    });
     api.resetTemplate.mockResolvedValue({ ...record, overridden: false });
     api.overrideTemplate.mockResolvedValue(record);
+    api.updateTemplate.mockResolvedValue(record);
     mount(record);
 
     expect(subjectField().readOnly).toBe(false);
@@ -177,6 +186,33 @@ describe("a customised email", () => {
         preheader: record.preheader,
       })
     );
+    await waitFor(() =>
+      expect(api.updateTemplate).toHaveBeenCalledWith("t1", {
+        description: "Our welcome",
+        variables: record.variables,
+      })
+    );
+  });
+
+  it("asks before Override or Reset drop unsaved settings", async () => {
+    mount(template({ owner: { kind: "core" }, overridden: true }));
+    fireEvent.change(screen.getByRole("textbox", { name: "From" }), {
+      target: { value: "Shop <shop@example.com>" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reset to Nextly's version" })
+    );
+    expect(
+      await screen.findByText("Save or discard your changes first")
+    ).toBeDefined();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Discard changes and continue" })
+    );
+    // On to the act it was asked for.
+    expect(
+      await screen.findByText("Reset Welcome to Nextly's version?")
+    ).toBeDefined();
+    expect(api.resetTemplate).not.toHaveBeenCalled();
   });
 
   it("opens the review when the owner updated it", async () => {
@@ -215,7 +251,7 @@ describe("a customised email", () => {
     expect(api.compareTemplate).not.toHaveBeenCalled();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Discard changes and review" })
+      screen.getByRole("button", { name: "Discard changes and continue" })
     );
     await waitFor(() => expect(api.compareTemplate).toHaveBeenCalled());
     // Behind the open review, so hidden from the accessibility tree.

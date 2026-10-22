@@ -23,7 +23,7 @@ import {
   DialogTitle,
   Textarea,
 } from "@nextlyhq/ui";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Loader2 } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
@@ -413,6 +413,14 @@ export function OwnerUpdateReview({
   const comparison = useEmailTemplateComparison(templateId, open);
   const apply = useApplyOwnerUpdate();
   const [choices, setChoices] = useState<Record<string, OwnerChangeChoice>>({});
+
+  // Choices belong to the comparison they were made on. A refetch can bring
+  // a different one under the same change ids; keeping the choices would send
+  // them with its new token, applying decisions made about other text.
+  const review = comparison.data?.review;
+  useEffect(() => {
+    setChoices({});
+  }, [review]);
 
   const changes = comparison.data?.changes ?? [];
   const chosen = changes.filter(change => choices[change.id]).length;

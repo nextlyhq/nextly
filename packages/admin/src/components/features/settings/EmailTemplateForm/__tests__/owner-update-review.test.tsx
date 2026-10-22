@@ -93,7 +93,7 @@ function mount(onApplied = vi.fn()) {
       />
     </QueryClientProvider>
   );
-  return { onApplied };
+  return { onApplied, client };
 }
 
 function card(index: number) {
@@ -164,6 +164,28 @@ describe("reviewing an owner's update", () => {
     await waitFor(() => expect(api.compareTemplate).toHaveBeenCalledTimes(2));
     expect(onApplied).not.toHaveBeenCalled();
     // The choices were made on the old comparison, so they're cleared.
+    await screen.findByText("0 of 2 chosen");
+  });
+
+  it("clears the choices when the comparison it shows is a new one", async () => {
+    api.compareTemplate.mockResolvedValueOnce(comparison);
+    const { client } = mount();
+    await screen.findByText("Change 1 of 2 · Subject");
+    fireEvent.click(
+      within(card(0)).getByRole("button", { name: "Keep yours" })
+    );
+    fireEvent.click(
+      within(card(1)).getByRole("button", { name: "Keep yours" })
+    );
+    expect(screen.getByText("2 of 2 chosen")).toBeDefined();
+
+    // The owner changed it again: the same change ids, different text and
+    // a new token. Choices made about the old text must not ride along.
+    api.compareTemplate.mockResolvedValueOnce({
+      ...comparison,
+      review: "a-newer-review",
+    });
+    await client.refetchQueries();
     await screen.findByText("0 of 2 chosen");
   });
 
