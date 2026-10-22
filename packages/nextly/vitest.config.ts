@@ -100,6 +100,13 @@ export default defineConfig({
           include: ["src/**/*.test.ts", "src/**/*.spec.ts"],
           exclude: isolatedFiles,
           isolate: false,
+          setupFiles: ["./src/__tests__/shared-module-guards.ts"],
+          // A worker keeps every module its files load: about 1.2 GB live once
+          // it has run the files that reach nextly's service graph. V8 lets a
+          // heap grow well past that before collecting, to about 2.9 GB
+          // resident in one worker; capped at 2 GB it stays near 2.3 GB, every
+          // file order tried passes, and a 1.5 GB cap ran out of memory.
+          execArgv: ["--max-old-space-size=2048"],
         },
       },
       {
