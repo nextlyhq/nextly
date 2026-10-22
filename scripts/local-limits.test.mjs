@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  GIB_PER_VITEST_WORKER,
   MAX_CONCURRENCY,
   MAX_WORKERS,
   deriveLimits,
@@ -32,6 +33,36 @@ describe("budgeting a machine", () => {
     const limits = machine(9.7, 8);
     expect(limits.concurrency).toBe(2);
     expect(limits.maxWorkers).toBe(2);
+  });
+
+  /*
+   * A Vitest worker that shares its modules across files keeps nextly's
+   * service graph loaded: measured at about 2.3 GB resident under its 2 GB
+   * heap cap. Planned at the 1.5 GiB of an ordinary process, an 8 GiB laptop
+   * got 3 of them, about 6.9 GB against its 5.6 GiB usable.
+   */
+  it("gives an 8 GiB laptop the workers its memory holds at a shared worker's size", () => {
+    const limits = machine(8, 8);
+    expect(limits.maxWorkers).toBe(2);
+    expect(limits.maxWorkers * GIB_PER_VITEST_WORKER).toBeLessThanOrEqual(
+      limits.usableGiB
+    );
+  });
+
+  it("never plans more workers for one task than usable memory holds", () => {
+    for (const [gib, cpus] of [
+      [8, 4],
+      [9.7, 8],
+      [14.5, 22],
+      [16, 8],
+      [32, 12],
+      [48, 14],
+    ]) {
+      const limits = machine(gib, cpus);
+      expect(limits.maxWorkers * GIB_PER_VITEST_WORKER).toBeLessThanOrEqual(
+        limits.usableGiB
+      );
+    }
   });
 
   it("protects a small machine rather than assuming everyone has headroom", () => {

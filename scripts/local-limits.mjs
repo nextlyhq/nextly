@@ -45,6 +45,19 @@ const GIB = 1024 ** 3;
  */
 export const GIB_PER_PROCESS = 1.5;
 
+/**
+ * Memory one Vitest worker may reach, in GiB.
+ *
+ * nextly's unit files mostly share a worker's modules (`isolate: false` in
+ * its Vitest config), so a worker keeps the package's service graph loaded:
+ * about 1.2 GB live, and about 2.3 GB resident under the 2 GB heap cap that
+ * config sets. One package's test task runs that many of them at once, so its
+ * workers have to fit in usable memory at this size, not at the ordinary
+ * process's figure above. Only one such task runs at a time; a task beside it
+ * runs isolated workers, which the process budget already covers.
+ */
+export const GIB_PER_VITEST_WORKER = 2.25;
+
 /** Never take the whole machine: the OS, an editor and a browser need room. */
 export const MIN_RESERVED_GIB = 2;
 export const RESERVED_FRACTION = 0.3;
@@ -83,7 +96,10 @@ export function deriveLimits({ totalBytes, cpus, env = {} }) {
 
   const derivedConcurrency = clamp(Math.floor(Math.sqrt(processBudget)), 1, MAX_CONCURRENCY);
   const derivedWorkers = clamp(
-    Math.floor(processBudget / derivedConcurrency),
+    Math.min(
+      Math.floor(processBudget / derivedConcurrency),
+      Math.floor(usableGiB / GIB_PER_VITEST_WORKER)
+    ),
     1,
     MAX_WORKERS
   );
