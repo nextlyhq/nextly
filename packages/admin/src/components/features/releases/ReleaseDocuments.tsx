@@ -73,7 +73,7 @@ import { releaseErrorMessage } from "./release-error";
 import { describeUnshownNeedFix } from "./release-hidden";
 import { describeMemberActions, documentCount } from "./release-list";
 import { memberControls, type MemberControls } from "./release-member-controls";
-import { memberLimitLine, readinessHeadline } from "./release-page";
+import { readinessHeadline } from "./release-page";
 import {
   problemsByMember,
   type MemberProblems,
@@ -154,7 +154,6 @@ function documentsView({
       actions && hidden && hidden.length > 0
         ? `Of those you can view, ${actions}`
         : actions,
-    limitLine: readiness.ahead ? memberLimitLine(total) : null,
   };
 }
 
@@ -173,9 +172,6 @@ export function ReleaseDocuments(props: ReleaseDocumentsProps) {
           readiness={readiness}
           firstProblemId={view.firstProblem ? FIRST_PROBLEM_ID : null}
         />
-      ) : null}
-      {view.limitLine ? (
-        <p className="text-sm text-muted-foreground">{view.limitLine}</p>
       ) : null}
       <DocumentsHeading total={view.total} actionsLine={view.actionsLine} />
       <DocumentsBody

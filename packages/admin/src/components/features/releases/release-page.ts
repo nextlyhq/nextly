@@ -1,6 +1,6 @@
 /**
  * What a release's own page says about the release as a whole: where it
- * stands, when it runs, how ready it is, and how full it is.
+ * stands, when it runs, and how ready it is.
  *
  * Plain functions over what the server sent, so each sentence is one a test
  * can hold and the page only lays them out. Times read through
@@ -8,8 +8,6 @@
  *
  * @module components/features/releases/release-page
  */
-import { RELEASE_MEMBER_LIMIT } from "nextly/schemas";
-
 import type { Release, ReleaseReadiness } from "@admin/types/releases";
 
 import {
@@ -119,22 +117,6 @@ export function readinessHeadline(
     detail: `${describeNeedFix(summary.needFix)} before this release can be scheduled or published.`,
     summary,
   };
-}
-
-/**
- * What the page says about the member limit, or `null` while there is room.
- *
- * A release at the limit takes no more; one made before the limit and over
- * it still runs and can lose documents, but takes none.
- */
-export function memberLimitLine(total: number): string | null {
-  if (total > RELEASE_MEMBER_LIMIT) {
-    return `This release holds ${total} documents, more than the ${RELEASE_MEMBER_LIMIT} a release may now hold. It still runs, and documents can be taken out, but none can be added.`;
-  }
-  if (total === RELEASE_MEMBER_LIMIT) {
-    return `This release holds its limit of ${RELEASE_MEMBER_LIMIT} documents.`;
-  }
-  return null;
 }
 
 /** Whether a release still has a moment ahead, so its readiness matters. */

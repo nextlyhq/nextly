@@ -1,6 +1,6 @@
 /**
  * What a release's page says about the release as a whole: when it runs,
- * how ready it is, and how full it is.
+ * and how ready it is.
  *
  * @module components/features/releases/__tests__/release-page.test
  */
@@ -10,7 +10,6 @@ import type { ReleaseReadiness } from "@admin/types/releases";
 
 import {
   commitBlockedBy,
-  memberLimitLine,
   readinessHeadline,
   releaseWhenLine,
 } from "../release-page";
@@ -176,17 +175,5 @@ describe("commitBlockedBy", () => {
     expect(
       commitBlockedBy({ data: undefined, isPending: false, isError: true }, 3)
     ).toBeNull();
-  });
-});
-
-describe("memberLimitLine", () => {
-  it("says a release is full at the limit, and over it when made before it", () => {
-    expect(memberLimitLine(199)).toBeNull();
-    expect(memberLimitLine(200)).toBe(
-      "This release holds its limit of 200 documents."
-    );
-    expect(memberLimitLine(240)).toMatch(
-      /^This release holds 240 documents, more than the 200 a release may now hold\./
-    );
   });
 });
