@@ -1277,20 +1277,28 @@ jobs:
   # Covers the class of failure the unit and integration suites structurally
   # cannot: jsdom has no layout engine, so a column that grew to 1024px or a
   # control outline that fails contrast measures the same whether the bug is
-  # there or not. Runs after `ci` so a broken tree does not spend browser
-  # minutes.
+  # there or not.
+  #
+  # `needs: changes`, not `needs: ci`, so it queues for a runner beside the
+  # lint, typecheck and build instead of after them. Behind `ci` it waited 26
+  # to 70 minutes for a runner in 7 of 9 runs on 2026-10-22, after `ci` had
+  # already finished. The cost is a runner spent on browser tests for a tree
+  # whose `ci` fails; the verdict arriving that much sooner on every other
+  # push is the trade. It repeats `ci`'s condition rather than inheriting it,
+  # so an inert change (documentation only) still skips it.
   #
   # The suite brings up its own playground on its own port, against its own
   # throwaway sqlite file. Nothing here touches a database anyone wanted.
-  # This job and the two below inherit the scope decision through `ci` rather
-  # than repeating its condition: a job whose `needs` was skipped is skipped
-  # too. That is load-bearing, so it survives being read — adding `if:
-  # always()` or `if: !cancelled()` here to make the job run after a FAILING
-  # `ci` also makes it run after a SKIPPED one, which restores the full cost on
+  # The two jobs below inherit the scope decision through `ci` rather than
+  # repeating its condition: a job whose `needs` was skipped is skipped too.
+  # That is load-bearing, so it survives being read — adding `if: always()`
+  # or `if: !cancelled()` to one of them to make it run after a FAILING `ci`
+  # also makes it run after a SKIPPED one, which restores the full cost on
   # every documentation change.
   e2e:
     name: Browser tests
-    needs: [ci]
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
     runs-on: ubuntu-latest
     # 30, not 20. On a loaded runner pool this job's suite runs on one worker
     # and a full pass took 17 minutes on main, so a 20-minute budget cancelled
