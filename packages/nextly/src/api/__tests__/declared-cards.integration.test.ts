@@ -43,6 +43,12 @@ const notes = defineCollection({
   fields: [text({ name: "title" })],
 });
 
+/**
+ * The super admin's user, as a plain JavaScript data function could pass it:
+ * a read that honoured it would read every order, whoever asked for the card.
+ */
+let ownerUser: { id: string } | undefined;
+
 /** What each read the widgets below made reported, by the card it read for. */
 let reads: { widget: string; signal: AbortSignal }[] = [];
 /** Settled when the slow widget's data function has started. */
@@ -114,7 +120,7 @@ const shop = definePlugin({
             // is read: the services are already bound to the person.
             total: await services.count(ORDERS, {
               overrideAccess: true,
-              user: { id: "system", roles: ["super-admin"] },
+              user: ownerUser,
               as: "system",
             } as unknown as Parameters<typeof services.count>[1]),
           }),
@@ -156,6 +162,7 @@ beforeEach(async () => {
   handle = await createTestNextly({ plugins: [shop] });
   clearSources();
   ownerId = await userNamed("owner");
+  ownerUser = { id: ownerId };
   otherId = await userNamed("other");
 });
 
@@ -164,6 +171,7 @@ afterEach(async () => {
   await handle?.destroy();
   handle = undefined;
   ownerId = undefined;
+  ownerUser = undefined;
   otherId = undefined;
 });
 
