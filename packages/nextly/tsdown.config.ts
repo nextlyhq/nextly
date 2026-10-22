@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { defineConfig } from "tsdown";
+import { defineConfig, type Rolldown } from "tsdown";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -13,6 +13,29 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const { version: coreVersion } = require("./package.json") as {
   version: string;
+};
+
+/**
+ * Drops `import "node:…";` lines that bind nothing.
+ *
+ * The bundler's shared runtime chunk keeps a bare `import "node:module"` even
+ * when nothing in it uses `createRequire`. Every client-safe entry that shares
+ * that chunk then reaches a Node built-in, and a browser bundler refuses it
+ * (Turbopack: "does not support external modules (request: node:module)").
+ * Importing a built-in has no side effects, so an import that binds nothing
+ * does nothing, and removing it changes no behaviour. postbuild.cjs checks
+ * that no client-safe entry reaches a built-in.
+ */
+const dropUnboundBuiltinImports: Rolldown.Plugin = {
+  name: "nextly:drop-unbound-builtin-imports",
+  // On the finished chunks: the import is added after `renderChunk`.
+  generateBundle(_options, bundle) {
+    for (const file of Object.values(bundle)) {
+      if (file.type === "chunk") {
+        file.code = file.code.replace(/^import "node:[\w/]+";\n/gm, "");
+      }
+    }
+  },
 };
 
 // Server-only entry points that need Node.js shims (__dirname, import.meta.url, etc.)
@@ -224,6 +247,7 @@ export default defineConfig({
     return { js: ".mjs", dts: ".d.mts" };
   },
   clean: true,
+  plugins: [dropUnboundBuiltinImports],
   // No shims — output is native ESM (.mjs). A `require` shim throws "Dynamic
   // require of X is not supported" for Node builtins (events, net, etc.) when
   // loaded by Turbopack on Vercel. Code that needs __dirname already has ESM
