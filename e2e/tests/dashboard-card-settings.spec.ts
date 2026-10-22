@@ -94,36 +94,26 @@ function rows(page: Page) {
 const isQuery = (request: Request) =>
   request.url().includes("/api/dashboard/query");
 
-/** A card body the reader is told is still being read. */
-const busyCards = (page: Page) =>
-  page.locator('[data-testid="widget-card-body"][aria-busy="true"]');
+/** The write that keeps a card's settings. */
+const isSettingsWrite = (request: Request) =>
+  request.method() === "PUT" && request.url().includes("/api/dashboard/layout");
 
 /**
- * Give the page focus, and let what focus starts finish. The dashboard reads every card again
- * when its window gains focus, by design, and a test's first click is what first focuses the
- * page; watched from before it, that read would be counted as caused by whatever was clicked.
- *
- * Finished means what the reader sees: no card is marked busy. The read focus starts is caught
- * first, when there is one, because a card is marked busy only once React draws the read, and
- * an assertion made in that gap would pass before the read had begun. (Not `networkidle`: the
- * dev server holds a long poll open, so the page never goes idle.)
+ * Every request the page sends from now on, in the order it sent them, so a test can ask what
+ * went out after a given one. Order, not time: what a write causes is sent after the write, on
+ * any machine, while a read the page started for another reason before it is not the write's
+ * doing and is not counted against it.
  */
-async function focusPage(page: Page): Promise<void> {
-  const focusRead = page
-    .waitForRequest(isQuery, { timeout: 1_000 })
-    .catch(() => undefined);
-  await page.getByRole("heading", { level: 1 }).first().click();
-  await (await focusRead)?.response();
-  await expect(busyCards(page)).toHaveCount(0);
+function watchRequests(page: Page): Request[] {
+  const sent: Request[] = [];
+  page.on("request", request => sent.push(request));
+  return sent;
 }
 
-/** Every widget query the dashboard sends from now on. */
-function watchQueries(page: Page): Request[] {
-  const sent: Request[] = [];
-  page.on("request", request => {
-    if (isQuery(request)) sent.push(request);
-  });
-  return sent;
+/** The widget queries sent after the first settings write, or none if no write was sent. */
+function queriesAfterWrite(sent: readonly Request[]): Request[] {
+  const write = sent.findIndex(isSettingsWrite);
+  return write === -1 ? [] : sent.slice(write + 1).filter(isQuery);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -153,8 +143,7 @@ for (const viewport of WIDTHS) {
     await page.setViewportSize(viewport);
     await page.reload();
     await expect(rows(page)).toHaveCount(3);
-    await focusPage(page);
-    const sent = watchQueries(page);
+    const sent = watchRequests(page);
 
     const accent = cell(page).getByRole("combobox", {
       name: `Accent for ${TITLE}`,
@@ -165,9 +154,13 @@ for (const viewport of WIDTHS) {
     await expect(page.getByTestId("widget-grid-live")).toHaveText(
       `${TITLE}: Accent set to Bold.`
     );
+    // The setting was kept by its write, so what it asked again went out after that write.
+    expect(sent.some(isSettingsWrite), "the setting's write was sent").toBe(
+      true
+    );
     // Only this card may be asked again for its own setting, never another card: each request
-    // sent carries this card's question alone.
-    const asked = sent.map(
+    // sent after the write carries this card's question alone.
+    const asked = queriesAfterWrite(sent).map(
       request =>
         (request.postDataJSON() as { queries?: Array<{ source?: string }> })
           .queries ?? []
