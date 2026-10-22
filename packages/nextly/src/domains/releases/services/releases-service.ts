@@ -547,13 +547,16 @@ function editCapabilities(
     );
   return {
     addMember: mayChange("add") && takesAnother(release.kind, held),
-    // Taking the document out of a single release that has not run cancels
-    // it, through `cancel`: offered to whoever may remove a document AND may
-    // cancel, the cancel answer being the one `runCapabilities` gives, so the
-    // two cannot come to ask for different permissions.
-    removeMember: removalCancels(release)
-      ? may.mayCreate && runCapabilities(release, held, may).cancel
-      : mayChange("remove"),
+    // `removeMember` means "may change this release's documents". Taking the
+    // document out of a single release that has not run cancels it, through
+    // `cancel`, so for one it is the authority every membership change asks
+    // first (`create`), in each state that removal is answered in rather than
+    // refused, the scheduled one included. Whether this reader may also
+    // cancel is `cancel`, which `runCapabilities` answers beside it, so a
+    // client shows the control disabled with its reason instead of hiding
+    // it; the write still refuses a caller who may not cancel
+    // (`REMOVAL_CANCELS_REFUSAL`).
+    removeMember: removalCancels(release) ? may.mayCreate : mayChange("remove"),
     // Any state, as `update` writes it: the title is a label.
     update: may.mayUpdate,
     delete: may.mayDelete && whyNotDeletable(release, history) === null,

@@ -470,20 +470,28 @@ describe("ReleasesService keeps a single-document release to one document", () =
   });
 
   it("refuses taking it out to whoever may not cancel, and changes nothing", async () => {
-    const { svc, repo, deps } = service({ holds: ["create"] });
-    repo.findMember.mockResolvedValue({ id: "m0", releaseId: "r1" });
-    repo.findReleases.mockResolvedValue([
-      { id: "r1", state: "draft", kind: "single" },
-    ]);
-    await expect(svc.removeMember("m0", ADMIN)).rejects.toMatchObject({
-      code: "FORBIDDEN",
-      publicMessage:
-        "Removing the last document cancels this release, which needs permission to schedule or cancel releases.",
-    });
-    // Refused on the permission `cancel` asks for, and nothing written.
-    expect(deps.canManageReleases).toHaveBeenCalledWith("u1", "publish");
-    expect(repo.cancelRelease).not.toHaveBeenCalled();
-    expect(repo.removeMember).not.toHaveBeenCalled();
+    // In every unrun state: `capabilities` offers this caller the removal
+    // (they may change the release's documents), so the write is what holds
+    // the cancel permission.
+    for (const state of ["draft", "scheduled", "blocked"]) {
+      const { svc, repo, deps } = service({ holds: ["create"] });
+      repo.findMember.mockResolvedValue({ id: "m0", releaseId: "r1" });
+      repo.findReleases.mockResolvedValue([
+        { id: "r1", state, kind: "single" },
+      ]);
+      await expect(svc.removeMember("m0", ADMIN), state).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        publicMessage:
+          "Removing the last document cancels this release, which needs permission to schedule or cancel releases.",
+      });
+      // Refused on the permission `cancel` asks for, and nothing written.
+      expect(deps.canManageReleases, state).toHaveBeenCalledWith(
+        "u1",
+        "publish"
+      );
+      expect(repo.cancelRelease, state).not.toHaveBeenCalled();
+      expect(repo.removeMember, state).not.toHaveBeenCalled();
+    }
   });
 
   it("tells whoever may not remove documents at all only what any refusal says", async () => {
