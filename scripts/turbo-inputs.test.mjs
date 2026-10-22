@@ -405,6 +405,12 @@ describe("a package's hash covers the program it actually compiles", () => {
     );
     const exempt = withCommand.filter(task => writesNoBuildInfo(String(task.command)));
     expect(exempt.map(task => task.package)).toEqual(["playground"]);
+    // And the exemption is used: an exempt task that still waited for its own
+    // build would keep that build (for the playground, `next build`) in every
+    // type-check's graph.
+    for (const task of exempt) {
+      expect(task.resolvedTaskDefinition.dependsOn, `${task.package} writes no build-info yet still waits for its own build`).not.toContain("build");
+    }
     for (const task of withCommand.filter(candidate => !exempt.includes(candidate))) {
       expect(
         task.resolvedTaskDefinition.dependsOn,
