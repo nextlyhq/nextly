@@ -17,7 +17,7 @@
  * @module components/features/widgets/archetypes/table
  */
 
-import { selectsNothing } from "./cell-text";
+import { declaredAnswerFields, selectsNothing } from "./cell-text";
 import { TieredRows } from "./tiered-rows";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
@@ -48,7 +48,13 @@ export const tableBody: ArchetypeBody = (result, definition) => {
     };
   }
 
-  const columns = result.fields ?? [];
+  // A card core answered on the server describes its own rows: the rows are its
+  // data function's own answer, so they are not ones a query heading could
+  // misname (`declaredAnswerFields`).
+  const columns =
+    definition.serverData === true
+      ? declaredAnswerFields(result)
+      : (result.fields ?? []);
   if (columns.length === 0) {
     // Rows arrived and nothing described them. A declaration with no `select`
     // never reaches here -- `tableAccepts` refuses it before the query runs --

@@ -253,3 +253,21 @@ export function withQuery(
   const queryString = params.toString();
   return queryString ? `${route}?${queryString}` : route;
 }
+
+/**
+ * The href of a path a plugin wrote relative to the admin, such as
+ * `"collections/orders"`, or `undefined` when the path is not one.
+ *
+ * 🔴 The one place such a path becomes an href, so wherever the admin is served
+ * changes here alone. The rule is startup's own: no scheme (so never
+ * `javascript:`), no leading slash (so never `//host`), no backslash. A path
+ * that breaks it is not drawn as a link at all, whatever startup let through.
+ */
+export function adminHref(relative: string): string | undefined {
+  const usable =
+    relative.trim() !== "" &&
+    !/^[a-z][a-z0-9+.-]*:/i.test(relative) &&
+    !relative.startsWith("/") &&
+    !relative.includes("\\");
+  return usable ? `${ROUTES.DASHBOARD}/${relative}` : undefined;
+}

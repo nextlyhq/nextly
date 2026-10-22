@@ -138,3 +138,23 @@ export function asPresentedText(
     text
   );
 }
+
+/**
+ * The fields a declared widget's answer is drawn by, for a card core answered
+ * on the server, which has no query to select them: the answer's own `fields`
+ * when it describes them, else the first row's own keys, in their order.
+ *
+ * 🔴 The first row's keys only: a key a later row carries and the first does
+ * not is not drawn. The rows are what the widget's own data function answered,
+ * through reads already bound to this reader, so its first row is its own
+ * description of them, not a guess at fields the reader may not see.
+ */
+export function declaredAnswerFields(result: {
+  items: readonly Record<string, unknown>[];
+  fields?: readonly WidgetResultField[];
+}): WidgetResultField[] {
+  if (result.fields !== undefined && result.fields.length > 0) {
+    return [...result.fields];
+  }
+  return Object.keys(result.items[0] ?? {}).map(name => ({ name }));
+}

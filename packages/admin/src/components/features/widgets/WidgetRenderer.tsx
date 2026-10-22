@@ -72,7 +72,9 @@ function awaitsFreshnessFor(
   definition: DashboardWidget,
   slot: WidgetSlot | undefined
 ): boolean {
-  return definition.query !== undefined && slot?.ok !== false;
+  // A card core answers on the server asks for its data as surely as one with a query does.
+  const asks = definition.query !== undefined || definition.serverData === true;
+  return asks && slot?.ok !== false;
 }
 
 function skeletonFor(archetype: string): SkeletonShape {

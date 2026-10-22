@@ -26,3 +26,18 @@ export function widgetAsAsked(
   const query = applyWidgetSettings(widget.query, widget.settings, config);
   return query === widget.query ? widget : { ...widget, query };
 }
+
+/**
+ * What a card asks with `config`, as one comparable string: its query as its
+ * settings apply to it, or, for a card core answers on the server, its settings
+ * themselves, since core builds its data from them. One reading, so a quick
+ * setting and the settings preview agree on whether a change asks again.
+ */
+export function questionOf(
+  widget: DashboardWidget,
+  config: Record<string, unknown> | undefined
+): string {
+  return widget.serverData === true
+    ? JSON.stringify({ settings: config ?? {} })
+    : JSON.stringify(widgetAsAsked(widget, config).query ?? null);
+}

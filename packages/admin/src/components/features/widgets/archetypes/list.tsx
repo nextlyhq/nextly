@@ -20,7 +20,7 @@
  * @module components/features/widgets/archetypes/list
  */
 
-import { selectsNothing } from "./cell-text";
+import { declaredAnswerFields, selectsNothing } from "./cell-text";
 import { TieredRows } from "./tiered-rows";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
@@ -65,20 +65,10 @@ export const listBody: ArchetypeBody = (result, definition) => {
     };
   }
 
-  const select = definition.query?.select ?? [];
-  // Keep in step with LIST_RENDERED_FIELDS: this destructure IS the number that
-  // constant declares, and a third name here without raising it would let a
-  // card select a field the guard still calls undrawable.
-  const [labelField, detailField] = select;
-  if (!labelField) {
-    // Unreachable through the grid, which declines this declaration before it
-    // batches. Kept because a body must be safe to call on its own -- a test,
-    // or a future caller that has a result in hand -- and because the sentence
-    // is one thing said in one place.
-    return { ok: false, message: listAccepts(definition) ?? "" };
-  }
-
   if (result.items.length === 0) {
+    // Before the fields are read: a card core answered on the server names its
+    // fields by its first row, and an answer with no rows is empty, not one
+    // that names nothing to draw.
     // The frame's one empty state, worded for a list. Source-neutral: the card may read any
     // collection's, system's or plugin's data, so it names no kind of row it cannot know.
     return {
@@ -88,6 +78,33 @@ export const listBody: ArchetypeBody = (result, definition) => {
         detail: "Items appear here once something matches this card.",
       },
     };
+  }
+
+  // A card core answered on the server has no query: its answer says which
+  // fields it is drawn by (`declaredAnswerFields`).
+  const select =
+    definition.serverData === true
+      ? declaredAnswerFields(result).map(field => field.name)
+      : (definition.query?.select ?? []);
+  // Keep in step with LIST_RENDERED_FIELDS: this destructure IS the number that
+  // constant declares, and a third name here without raising it would let a
+  // card select a field the guard still calls undrawable.
+  const [labelField, detailField] = select;
+  if (!labelField) {
+    // A card core answered whose rows carry no field at all: its data function
+    // answered rows with nothing in them to draw, which no declaration check
+    // could have seen before it ran.
+    if (definition.serverData === true) {
+      return {
+        ok: false,
+        message: `"${definition.title}" answered rows with no fields to draw.`,
+      };
+    }
+    // Unreachable through the grid, which declines this declaration before it
+    // batches. Kept because a body must be safe to call on its own -- a test,
+    // or a future caller that has a result in hand -- and because the sentence
+    // is one thing said in one place.
+    return { ok: false, message: listAccepts(definition) ?? "" };
   }
 
   return {

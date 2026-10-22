@@ -177,8 +177,11 @@ function grewPast(
   action: Extract<RetryAction, { type: "grow" }>
 ): boolean {
   const fetchedAt = settled ? settled.tier : action.batchFetchedAt;
+  // A card asked for by id or with its settings is never sized, so it has no
+  // tier and no query to grow past; only a sized query can.
   return (
     action.tier !== undefined &&
+    action.query !== undefined &&
     fetchedAt !== undefined &&
     asksAgainAt(action.query, fetchedAt, action.tier)
   );
