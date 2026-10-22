@@ -13,8 +13,6 @@ const only =
 
 const NONE = {
   canViewSettings: false,
-  canManageEmailProviders: false,
-  canManageEmailTemplates: false,
   canViewUsers: false,
   canViewRoles: false,
 };
@@ -70,17 +68,14 @@ describe("hasSettingsSection", () => {
     );
   });
 
-  it.each([
-    "canViewSettings",
-    "canManageEmailProviders",
-    "canManageEmailTemplates",
-    "canViewUsers",
-    "canViewRoles",
-  ] as const)("shows it for a reader holding %s alone", capability => {
-    expect(hasSettingsSection({ ...NONE, [capability]: true }, settled)).toBe(
-      true
-    );
-  });
+  it.each(["canViewSettings", "canViewUsers", "canViewRoles"] as const)(
+    "shows it for a reader holding %s alone",
+    capability => {
+      expect(hasSettingsSection({ ...NONE, [capability]: true }, settled)).toBe(
+        true
+      );
+    }
+  );
 
   /**
    * The two that arrive as permissions rather than capabilities. A reader whose

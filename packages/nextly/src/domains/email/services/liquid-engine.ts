@@ -363,6 +363,18 @@ export function writesOutput(source: string, output: string): boolean {
 }
 
 /**
+ * Whether a template reads the top-level variable `name` anywhere: written
+ * out, tested in a tag, or passed to a filter. Read from the parsed template,
+ * so a mention in raw text or a comment does not count. False when the
+ * template does not parse.
+ */
+export function readsVariable(source: string, name: string): boolean {
+  const parsed = parseLiquid(source);
+  if ("problem" in parsed) return false;
+  return ENGINES.html.globalVariablesSync(parsed.template).includes(name);
+}
+
+/**
  * Render a template in one of the three contexts.
  *
  * @throws NextlyError when the template does not parse or the render fails;

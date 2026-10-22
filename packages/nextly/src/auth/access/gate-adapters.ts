@@ -17,7 +17,8 @@ import { isSuperAdminContext } from "../../services/access";
 import type { AccessOperation } from "../../services/access/types";
 import {
   apiKeyWriteAllowed,
-  scopeGrants,
+  scopeRowsAgree,
+  slugGrants,
   type AuthenticatedScope,
 } from "../authenticated-scope";
 import { effectiveCallerScope } from "../caller-scope";
@@ -39,7 +40,7 @@ import {
   type Decision,
   type RuleOutcome,
 } from "./decide";
-import { declaredTarget } from "./declared-rules";
+import { targetAsDeclared } from "./declared-rules";
 import { deviate } from "./deviations";
 import {
   actorForKey,
@@ -126,8 +127,7 @@ const decided = async (
   action: AccessOperation,
   target: AccessTarget
 ): Promise<boolean> =>
-  (await decide(await actor, action, declaredTarget(target.slug) ?? target))
-    .allowed;
+  (await decide(await actor, action, targetAsDeclared(target))).allowed;
 
 export function collectionGateVerdict(
   q: CollectionQuestion
@@ -272,7 +272,7 @@ async function keyVerdict(
   scope: AuthenticatedScope,
   user: { id: string; roles?: string[] }
 ): Promise<GateVerdict> {
-  const rows = rowsAgree(scope);
+  const rows = scopeRowsAgree(scope);
   const actor = keyActorOf(scope, user);
   // A key holds an action by its stored slug, `<action>-<target>`. The
   // decision reads the grant's action and target, which agree with the slug
@@ -291,12 +291,12 @@ function keyActorOf(
   scope: AuthenticatedScope,
   user: { id: string; roles?: string[] }
 ): KeyActor {
-  return rowsAgree(scope)
+  return scopeRowsAgree(scope)
     ? actorForScope(scope, user)
     : actorForKey({
         keyId: "",
         userId: user.id,
-        grants: scope.grants ?? [],
+        grants: slugGrants(scope.permissions),
         roles: scope.roles ?? user.roles ?? [],
       });
 }
@@ -360,17 +360,6 @@ async function grantJudgedVerdict(
       decided(actor, q.action, target)
     )
   );
-}
-
-/** Whether the scope carries grant rows its slugs were derived from. */
-function rowsAgree(scope: AuthenticatedScope): boolean {
-  if (!scope.grants) return false;
-  try {
-    scopeGrants(scope);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /** A key's rule allows only by answering `true`; no rule adds no limit. */
