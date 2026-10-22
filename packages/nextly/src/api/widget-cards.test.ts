@@ -155,9 +155,11 @@ describe("a card asked for by widget and card id", () => {
     });
     const signal = new AbortController().signal;
     const scope = createBatchScope().forOwner("plugin @acme/shop");
+    const now = new Date(Date.UTC(2026, 9, 22));
     const answered = await (entry as { answer: Function }).answer({
       signal,
       scope,
+      now,
     });
     expect(answered).toEqual({
       result: { op: "count", total: 7 },
@@ -171,6 +173,7 @@ describe("a card asked for by widget and card id", () => {
       user: { id: "reader" },
       signal,
       scope,
+      now,
     });
     // Its reads are the batch's own: checked by the same door as a card's query.
     await (input.services as { count: Function }).count("orders");
@@ -189,6 +192,7 @@ describe("a card asked for by widget and card id", () => {
     const answered = await (prepared.get(0) as { answer: Function }).answer({
       signal: new AbortController().signal,
       scope: createBatchScope().forOwner("plugin @acme/shop"),
+      now: new Date(Date.UTC(2026, 9, 22)),
     });
     expect(answered).toEqual({
       result: { op: "count", total: 0 },
@@ -204,6 +208,7 @@ describe("a card asked for by widget and card id", () => {
     const answered = await (prepared.get(0) as { answer: Function }).answer({
       signal: new AbortController().signal,
       scope: createBatchScope().forOwner("plugin @acme/shop"),
+      now: new Date(Date.UTC(2026, 9, 22)),
     });
     expect(check).toHaveBeenCalledWith({
       op: "list",
@@ -212,6 +217,9 @@ describe("a card asked for by widget and card id", () => {
       source: "collection:shop_orders",
     });
     expect(vi.mocked(executeWidgetQuery).mock.calls[0]?.[1]).toBe(person);
+    // The batch's instant, as a copy the source cannot move for anyone else.
+    const handed = vi.mocked(executeWidgetQuery).mock.calls[0]?.[2]?.now;
+    expect(handed?.getTime()).toBe(Date.UTC(2026, 9, 22));
     expect(answered).toEqual({
       result: { op: "list", items: [{ id: "row" }] },
       empty: false,
@@ -251,6 +259,7 @@ describe("a card asked for by widget and card id", () => {
     await (prepared.get(0) as { answer: Function }).answer({
       signal: new AbortController().signal,
       scope: createBatchScope().forOwner("plugin @acme/shop"),
+      now: new Date(Date.UTC(2026, 9, 22)),
     });
     const [input] = ordersFunction.mock.calls[0] as unknown as [
       Record<string, unknown>,

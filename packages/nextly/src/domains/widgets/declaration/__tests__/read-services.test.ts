@@ -16,12 +16,15 @@ const executed = vi.mocked(executeWidgetQuery);
 
 const person = { user: { id: "reader" } } as never;
 const prepare = vi.fn(async (query: unknown) => query as WidgetQuery);
+/** The batch's instant the card was handed. */
+const NOW = new Date(Date.UTC(2026, 9, 22, 12));
 
 function services(card = new AbortController().signal) {
   return bindReadServices({
     caller: person,
     prepare,
     signal: card,
+    now: NOW,
     collections: { orders: "shop_orders" },
   });
 }
@@ -106,6 +109,18 @@ describe("a data function's reads", () => {
     expect(executed).not.toHaveBeenCalled();
   });
 
+  it("measure from the batch's instant, each read with its own copy", async () => {
+    const bound = services();
+    await bound.count("orders");
+    await bound.find("orders");
+    const [first, second] = executed.mock.calls.map(call => call[2]?.now);
+    expect(first?.getTime()).toBe(NOW.getTime());
+    expect(second?.getTime()).toBe(NOW.getTime());
+    // A source moving its copy moves neither the card's nor the next read's.
+    expect(first).not.toBe(NOW);
+    expect(first).not.toBe(second);
+  });
+
   it("stop with the call's own signal too, beside the card's", async () => {
     const own = new AbortController();
     await services().count("orders", { signal: own.signal });
@@ -116,7 +131,9 @@ describe("a data function's reads", () => {
   });
 
   it("pass on the refusal the card's own query would get", async () => {
-    const refused = NextlyError.forbidden({ message: "no" });
+    const refused = NextlyError.forbidden({
+      logContext: { reason: "a refusal the check made" },
+    });
     prepare.mockRejectedValueOnce(refused);
     await expect(services().count("orders")).rejects.toBe(refused);
     expect(executed).not.toHaveBeenCalled();

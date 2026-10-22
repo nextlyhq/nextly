@@ -26,7 +26,6 @@ import { bindReadServices } from "../domains/widgets/declaration/read-services";
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import type { WidgetPlacement } from "../domains/widgets/layout";
 import type { WidgetQuery } from "../domains/widgets/query";
-import type { WidgetScope } from "../domains/widgets/resolved-sources";
 import type { WidgetResult, WidgetSlot } from "../domains/widgets/result";
 import { failUnavailableSourceOrOp } from "../domains/widgets/sources";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
@@ -172,8 +171,7 @@ function cardEntryFor(
     index,
     widgetId: widget,
     owner: declared.owner,
-    answer: ({ signal, scope }) =>
-      answerCard(declared, placement, batch, signal, scope),
+    answer: asked => answerCard(declared, placement, batch, asked),
   };
 }
 
@@ -201,9 +199,9 @@ async function answerCard(
   declared: DeclaredWidget,
   placement: WidgetPlacement,
   batch: CardBatch,
-  signal: AbortSignal,
-  scope: WidgetScope
+  asked: Parameters<ReadyCardData["answer"]>[0]
 ): Promise<{ result: WidgetResult; empty: boolean }> {
+  const { signal, scope, now } = asked;
   const { declaration, collections } = declared;
   const isEmpty = emptyTestOf(declaration);
   if (typeof declaration.data === "function") {
@@ -213,10 +211,12 @@ async function answerCard(
       user: batch.caller.user,
       signal,
       scope,
+      now,
       services: bindReadServices({
         caller: batch.caller,
         prepare: batch.check,
         signal,
+        now,
         ...(collections === undefined ? {} : { collections }),
       }),
     });
@@ -234,7 +234,11 @@ async function answerCard(
   const query = await batch.check(built);
   const result = answerAsAsked(
     query,
-    await executeWidgetQuery(query, batch.caller, { signal, scope })
+    await executeWidgetQuery(query, batch.caller, {
+      signal,
+      scope,
+      now: new Date(now),
+    })
   );
   return { result, empty: isEmpty?.(result) === true };
 }

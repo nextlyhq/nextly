@@ -46,6 +46,8 @@ export interface ReadServiceBinding {
   prepare: (query: unknown) => Promise<WidgetQuery>;
   /** Aborted at the card's budget, or when the batch is given up. */
   signal: AbortSignal;
+  /** The batch's instant, which every read measures its spans from. */
+  now: Date;
   /** The owner's collections the site renamed: declared slug to the site's. */
   collections?: Readonly<Record<string, string>>;
 }
@@ -103,7 +105,7 @@ function cardGaveUp(): NextlyError {
 export function bindReadServices(
   binding: ReadServiceBinding
 ): WidgetReadServices {
-  const { caller, prepare, signal: card, collections } = binding;
+  const { caller, prepare, signal: card, now, collections } = binding;
 
   async function read(
     collection: unknown,
@@ -138,7 +140,7 @@ export function bindReadServices(
       // that answered anything else is a fault, never a quiet zero.
       const answer = answerAsAsked(
         query,
-        await executeWidgetQuery(query, caller, { signal })
+        await executeWidgetQuery(query, caller, { signal, now: new Date(now) })
       );
       return answer.op === "count" ? answer.total : 0;
     },
@@ -153,7 +155,7 @@ export function bindReadServices(
       );
       const answer = answerAsAsked(
         query,
-        await executeWidgetQuery(query, caller, { signal })
+        await executeWidgetQuery(query, caller, { signal, now: new Date(now) })
       );
       // As the browser would receive them, so the function may answer them
       // as they are and the card's transport check passes.

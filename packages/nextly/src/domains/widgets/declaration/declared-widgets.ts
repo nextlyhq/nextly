@@ -26,7 +26,12 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { getNextlyLogger } from "../../../observability/logger";
 import type { WidgetDefinition } from "../definition";
 import type { WidgetQuery } from "../query";
-import { registerDeclaredDefinition } from "../registry";
+import {
+  deregisterWidget,
+  getWidget,
+  registerDeclaredDefinition,
+  widgetSource,
+} from "../registry";
 import type { AnyWidgetSetting } from "../settings";
 import { sizeFromWidth, WIDGET_WIDTHS, type WidgetWidth } from "../widths";
 
@@ -346,7 +351,19 @@ export function cardQueryFor(
   return query;
 }
 
-/** Forgets every declared widget. Called at boot before declaring again. */
+/**
+ * Forgets every declared widget, and withdraws the definitions they published.
+ * The registry's declared widgets are derived from this store, so clearing one
+ * without the other would offer the admin widgets with no declaration left to
+ * answer their cards from, and refuse the same declaration made again. Only
+ * what a declaration published goes: its id, under its owner, with
+ * `serverData`. Called at boot before declaring again.
+ */
 export function clearDeclaredWidgets(): void {
+  for (const [id, { owner }] of store()) {
+    if (widgetSource(id) === owner && getWidget(id)?.serverData === true) {
+      deregisterWidget(id);
+    }
+  }
   store().clear();
 }

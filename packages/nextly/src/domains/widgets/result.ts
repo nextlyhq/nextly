@@ -259,14 +259,17 @@ export type WidgetComponentProps = {
    *
    * 🔴 `undefined` means TWO different things, and a component that treats them
    * alike will draw an empty state over a request that is still running: the
-   * widget declared no query, so no answer is ever coming; or the batch carrying
-   * this card's query has not answered YET. `isFetching` tells them apart.
+   * widget asks for nothing (no query, and no data of its own core builds), so
+   * no answer is ever coming; or the batch carrying this card's question has not
+   * answered YET. `isFetching` tells them apart. A widget that declares its own
+   * data gets it here as `{ op: "data", data }`.
    */
   slot: WidgetSlot | undefined;
   /**
-   * Whether this card's query is in flight, the FIRST request included.
+   * Whether this card's question is in flight, the FIRST request included: its
+   * query, or the data core builds for a widget that declares its own.
    *
-   * Always `false` for a widget that declared no query, which is what makes it
+   * Always `false` for a widget that asks for nothing, which is what makes it
    * the discriminator for an absent `slot`.
    */
   isFetching: boolean;

@@ -75,6 +75,28 @@ describe("a declared card's own data in the batch", () => {
     expect(sourceSide).toHaveBeenCalledTimes(1);
   });
 
+  it("hands every card the batch's one instant, each its own copy", async () => {
+    // Only the clock is faked: the budget's own timers stay real.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.UTC(2026, 9, 22, 23, 59, 59);
+    vi.setSystemTime(start);
+    const seen: number[] = [];
+    const clock: ReadyCardData["answer"] = async ({ now }) => {
+      seen.push(now.getTime());
+      // The batch running past midnight before the next card is asked, and a
+      // function moving its own copy: neither reaches another card.
+      vi.setSystemTime(start + 60_000);
+      now.setUTCFullYear(1999);
+      return { result: count(1), empty: false };
+    };
+    await answerReadyQueries(
+      [card(0, clock), card(1, clock)],
+      caller,
+      createBatchScope()
+    );
+    expect(seen).toEqual([start, start]);
+  });
+
   it("fails its own slot alone when it throws, naming nothing internal to the reader", async () => {
     const slots = await answerReadyQueries(
       [

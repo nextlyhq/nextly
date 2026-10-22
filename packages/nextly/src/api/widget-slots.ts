@@ -282,6 +282,8 @@ export interface ReadyCardData {
   answer(input: {
     signal: AbortSignal;
     scope: WidgetScope;
+    /** The batch's instant, the card's own copy. */
+    now: Date;
   }): Promise<{ result: WidgetResult; empty: boolean }>;
 }
 
@@ -330,6 +332,8 @@ export interface SettledSlot {
 interface SlotRun {
   caller: ReadCaller;
   scope: BatchScope;
+  /** The batch's one instant, taken once where the run is built. */
+  now: Date;
   signal: AbortSignal | undefined;
   settle(entries: readonly ReadyEntry[], slots: readonly QuerySlot[]): void;
 }
@@ -379,7 +383,14 @@ async function answerCardData(
   let slot: QuerySlot;
   try {
     const { result, empty } = await withinSlotBudget(
-      signal => card.answer({ signal, scope: run.scope.forOwner(card.owner) }),
+      signal =>
+        card.answer({
+          signal,
+          scope: run.scope.forOwner(card.owner),
+          // A copy: a Date is mutable, and a data function that moved its own
+          // would move every later card's.
+          now: new Date(run.now),
+        }),
       () => slotTimedOut({ widget }),
       run.signal
     );
@@ -559,6 +570,7 @@ export async function answerReadyQueries(
   const run: SlotRun = {
     caller,
     scope,
+    now: new Date(),
     signal: options.signal,
     settle(entries, slots) {
       const settled: SettledSlot[] = [];

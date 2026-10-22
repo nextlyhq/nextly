@@ -89,6 +89,14 @@ export interface WidgetDataInput<Values> {
    * @experimental
    */
   scope: WidgetScope;
+  /**
+   * The batch's one instant: measure "since" and "until" from it rather than
+   * from `new Date()`, so every card on the dashboard, and every read this
+   * function makes, asks about the same days. This card's own copy.
+   *
+   * @experimental
+   */
+  now: Date;
 }
 
 /** A widget's own data function, run on the server for each card. */
