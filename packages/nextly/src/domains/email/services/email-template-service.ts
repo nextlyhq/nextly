@@ -361,16 +361,19 @@ function textReadsBrand(
   template: Pick<
     TemplateFields,
     "subject" | "htmlContent" | "plainTextContent" | "preheader"
-  >
+  >,
+  legacy = false
 ): boolean {
-  return LIQUID_FIELDS.some(([field]) => readsBrand(template[field] ?? ""));
+  return LIQUID_FIELDS.some(([field]) =>
+    readsBrand(template[field] ?? "", legacy)
+  );
 }
 
 /** Whether a template's text reads the settings, under either name, on its engine. */
-function readsBrand(source: string): boolean {
+function readsBrand(source: string, legacy = false): boolean {
   return (
-    templateReadsVariable(source, "brand") ||
-    templateReadsVariable(source, BRAND_BINDING)
+    templateReadsVariable(source, "brand", legacy) ||
+    templateReadsVariable(source, BRAND_BINDING, legacy)
   );
 }
 
@@ -1027,13 +1030,14 @@ export class EmailTemplateService extends BaseService {
     const layout = template.useLayout
       ? await this.getLayoutFor(template)
       : null;
+    const legacy = await this.keptOnOldEngine(template);
     return renderTemplate(
-      { ...template, legacy: await this.keptOnOldEngine(template) },
+      { ...template, legacy },
       layout && { ...layout, legacy: await this.keptOnOldEngine(layout) },
       data,
       {
         appName: options?.appName ?? this.appName,
-        brand: await this.brandFor(template, layout),
+        brand: await this.brandFor({ ...template, legacy }, layout),
       }
     );
   }
@@ -1046,11 +1050,20 @@ export class EmailTemplateService extends BaseService {
   private async brandFor(
     template: Pick<
       TemplateFields,
-      "kind" | "subject" | "htmlContent" | "plainTextContent" | "preheader"
+      | "kind"
+      | "subject"
+      | "htmlContent"
+      | "plainTextContent"
+      | "preheader"
+      | "legacy"
     >,
     layout: EmailTemplateRecord | null
   ): Promise<BrandSettings | undefined> {
-    if (!layout && template.kind !== "layout" && !textReadsBrand(template)) {
+    if (
+      !layout &&
+      template.kind !== "layout" &&
+      !textReadsBrand(template, template.legacy)
+    ) {
       return undefined;
     }
     return this.brandStore.read();
@@ -1922,7 +1935,10 @@ export class EmailTemplateService extends BaseService {
         legacy: await this.keptOnOldEngine(layout),
       },
       sampleData,
-      { appName: this.appName, brand: await this.brandFor(draft, layout) }
+      {
+        appName: this.appName,
+        brand: await this.brandFor({ ...draft, legacy }, layout),
+      }
     );
   }
 
@@ -2405,6 +2421,9 @@ export class EmailTemplateService extends BaseService {
           record.slug === DEFAULT_LAYOUT_SLUG && record.kind === "layout"
       ) ?? null;
 
+    // Which of them render on the engine before Liquid, from one read.
+    const kept = await this.keptOnOldEngineIds(records);
+
     const reach: BrandReach[] = [];
     for (const [i, row] of rows.entries()) {
       if (records[i].kind === "layout") continue;
@@ -2412,6 +2431,7 @@ export class EmailTemplateService extends BaseService {
         await this.reachOf(row, records[i], {
           find: id => byId.get(id) ?? null,
           defaultLayout,
+          kept,
         })
       );
     }
@@ -2425,6 +2445,8 @@ export class EmailTemplateService extends BaseService {
     layouts: {
       find: (id: string) => EmailTemplateRecord | null;
       defaultLayout: EmailTemplateRecord | null;
+      /** The ids of the templates kept on the engine before Liquid. */
+      kept: ReadonlySet<string>;
     }
   ): Promise<BrandReach> {
     const base = {
@@ -2455,8 +2477,10 @@ export class EmailTemplateService extends BaseService {
     // The render gives the settings to the body (when its send supplies no
     // `brand`) and to the layout, so the email is reached through either.
     const via = {
-      body: textReadsBrand(template),
-      layout: layout !== null && readsBrand(layout.htmlContent),
+      body: textReadsBrand(template, layouts.kept.has(template.id)),
+      layout:
+        layout !== null &&
+        readsBrand(layout.htmlContent, layouts.kept.has(layout.id)),
     };
     const reached = via.body || via.layout;
     return {

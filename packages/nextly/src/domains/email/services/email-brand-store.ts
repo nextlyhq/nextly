@@ -47,7 +47,8 @@ export class EmailBrandStore extends BaseService {
   /**
    * Moved by every save, when it starts and when its read-back lands. A read
    * keeps what it read only if no save moved this while it ran, so a read that
-   * began before a save can never replace the save's settings with older ones.
+   * began before a save can never replace the save's settings with older ones,
+   * and a save keeps its read-back only if no later save has started.
    */
   private generation = 0;
 
@@ -103,7 +104,7 @@ export class EmailBrandStore extends BaseService {
    * returns to its starting value.
    */
   async update(change: BrandSettingsUpdate): Promise<BrandSettings> {
-    this.generation++;
+    const mine = ++this.generation;
     const set: Record<string, unknown> = { updatedAt: new Date() };
     for (const [key, value] of Object.entries(change)) {
       if (value !== undefined) set[key] = value;
@@ -127,8 +128,12 @@ export class EmailBrandStore extends BaseService {
     // Read back from the table whatever the flow, so what is returned, and
     // what this instance renders with from now on, is what was written.
     const saved = await this.readTable();
-    this.generation++;
-    this.snapshot = saved;
+    // Kept only if no later save started meanwhile: of two saves at once,
+    // the later one's read-back is the one that stays.
+    if (this.generation === mine) {
+      this.snapshot = saved;
+      this.generation++;
+    }
     return saved;
   }
 }

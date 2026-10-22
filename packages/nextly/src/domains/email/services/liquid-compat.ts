@@ -90,11 +90,18 @@ export function oldEngineReason(
 
 /**
  * Whether a template reads the top-level variable `name`, on the engine it
- * renders with: as Liquid reads it, or, for text Liquid can't parse (which is
- * kept on the old engine), as the old engine's `{{path}}` tokens do.
+ * renders with: as the old engine's `{{path}}` tokens do for a template kept
+ * on it (`legacy`) or text Liquid can't parse, and as Liquid reads it
+ * otherwise.
  */
-export function templateReadsVariable(source: string, name: string): boolean {
-  if (!("problem" in parseLiquid(source))) return readsVariable(source, name);
+export function templateReadsVariable(
+  source: string,
+  name: string,
+  legacy = false
+): boolean {
+  if (!legacy && !("problem" in parseLiquid(source))) {
+    return readsVariable(source, name);
+  }
   for (const match of source.matchAll(OLD_TOKEN)) {
     if (match[1].split(".")[0] === name) return true;
   }

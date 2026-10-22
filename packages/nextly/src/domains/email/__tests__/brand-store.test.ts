@@ -82,6 +82,32 @@ describe("the copy of the settings a render inside a transaction reads", () => {
     expect((await store.read()).accentColor).toBe("#ff0066");
   });
 
+  it("holds the later of two saves made at once", async () => {
+    const store = new EmailBrandStore(adapter, silentLogger);
+    await store.load();
+
+    // The first save's read-back comes back only after the second save has
+    // landed, carrying the settings as the first save left them.
+    let release: (settings: BrandSettings) => void = () => {};
+    const slow = new Promise<BrandSettings>(resolve => {
+      release = resolve;
+    });
+    const reader = store as unknown as TableReader;
+    const original = reader.readTable.bind(store);
+    vi.spyOn(reader, "readTable")
+      .mockImplementationOnce(() => slow)
+      .mockImplementation(original);
+
+    const first = store.update({ accentColor: "#111111" });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await store.update({ accentColor: "#222222" });
+    release({ ...STARTING_BRAND, footerLinks: [], accentColor: "#111111" });
+    await first;
+
+    transactionOpen = true;
+    expect((await store.read()).accentColor).toBe("#222222");
+  });
+
   it("is what a read outside a transaction last found", async () => {
     const store = new EmailBrandStore(adapter, silentLogger);
     await store.load();

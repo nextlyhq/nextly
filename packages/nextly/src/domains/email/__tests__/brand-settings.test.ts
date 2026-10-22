@@ -520,6 +520,19 @@ describe("whether a template reads a variable on the engine it renders with", ()
   });
 });
 
+describe("a template kept on the engine before Liquid", () => {
+  it("reads a variable only as that engine's plain tokens do", () => {
+    // Liquid reads `brand` here; the engine before it leaves the filter
+    // expression as text, so a kept template does not read it.
+    const filtered = "{{ brand.accentColor | upcase }}";
+    expect(templateReadsVariable(filtered, "brand")).toBe(true);
+    expect(templateReadsVariable(filtered, "brand", true)).toBe(false);
+    expect(templateReadsVariable("{{brand.accentColor}}", "brand", true)).toBe(
+      true
+    );
+  });
+});
+
 describe("whether a template reads a variable", () => {
   it.each([
     ["{{ brand.accentColor }}", true],
