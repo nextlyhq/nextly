@@ -77,6 +77,44 @@ describe("applyComponentReadAccess", () => {
     expect(entry.hero.title).toBe("a");
   });
 
+  it("judges a live dynamic-zone block with no declared type by every component the zone allows", async () => {
+    registerFieldFunctions("fieldGroup", "card", [
+      { name: "title", type: "text" },
+      { name: "secret", type: "text", access: denied },
+    ]);
+    registerFieldFunctions("fieldGroup", "quote", [
+      { name: "secret", type: "text" },
+    ]);
+    // `plain` declares no rule and the zone does not allow it.
+    registerFieldFunctions("fieldGroup", "plain", [
+      { name: "secret", type: "text" },
+    ]);
+    const entry = {
+      blocks: [
+        { title: "untagged", secret: "S-1" },
+        { _componentType: "ghost", secret: "S-2" },
+        { _componentType: "plain", secret: "S-3" },
+        // A type the zone allows is still judged by its own rules alone.
+        { _componentType: "quote", secret: "kept" },
+      ],
+    };
+
+    await applyComponentReadAccess(
+      entry,
+      fields({
+        name: "blocks",
+        type: "component",
+        components: ["card", "quote"],
+      }),
+      new Map(),
+      { ...caller, declaredComponentDecides: true }
+    );
+
+    expect(JSON.stringify(entry)).not.toMatch(/S-\d/);
+    expect(entry.blocks[0].title).toBe("untagged");
+    expect(entry.blocks[3].secret).toBe("kept");
+  });
+
   it("judges a version's single component by the type it was captured under", async () => {
     // The field now names `plain`; the snapshot was captured under `card`,
     // whose rule still withholds what the snapshot holds.
