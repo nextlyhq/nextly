@@ -55,6 +55,7 @@ import {
 } from "../../plugins/dashboard-declarations";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { contributedWidgetSummaries } from "../../plugins/validate-admin-widgets";
+import { registerActivityWidgetSource } from "../../services/dashboard/activity-widget-source";
 
 export function resetWidgetRegistries(
   plugins: readonly PluginDefinition[] = []
@@ -116,6 +117,7 @@ export function resetWidgetRegistries(
   // most of the codebase in order to offer a card.
   registerReleasesWidgetSource();
   registerVersionsWidgetSource();
+  registerActivityWidgetSource();
 
   // 🔴 A plugin's sources are NOT registered here, and the reason is a hard
   // ordering fact rather than a preference: this runs before any plugin

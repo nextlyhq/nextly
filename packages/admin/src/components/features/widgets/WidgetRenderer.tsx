@@ -289,6 +289,9 @@ export function WidgetRenderer({
     settings: placement?.settings ?? {},
     slot,
     isFetching,
+    // The query as asked, which `definition` already is: the grid draws each card
+    // from the same declaration the batch sent.
+    ...(definition.query ? { query: definition.query } : {}),
   };
 
   // The escape hatch. A plugin component draws its own body, so the card

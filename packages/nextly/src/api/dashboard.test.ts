@@ -481,6 +481,34 @@ describe("dashboard activity scope", () => {
     );
   });
 
+  it("hands its limit to the service as asked, where the one clamp is", async () => {
+    // The service clamps for every door onto the feed, this endpoint and the
+    // Recent activity card's widget source alike. A clamp here as well would be
+    // a second rule that could come to disagree with it.
+    readableEntities.mockResolvedValue(new Set(["posts"]));
+    const getRecentActivity = vi.fn().mockResolvedValue({
+      activities: [],
+      hasMore: false,
+    } satisfies ActivityLogResult);
+    serviceStub = { getRecentActivity };
+
+    await getDashboardActivity(
+      makeReq("http://localhost/api/dashboard/activity?limit=500")
+    );
+    expect(getRecentActivity).toHaveBeenLastCalledWith(
+      expect.objectContaining({ limit: 500 })
+    );
+
+    // Not given, zero, or not a number: the default, as the route has always
+    // answered them, so no limit is handed on and the service's 5 applies.
+    for (const query of ["", "?limit=0", "?limit=abc"]) {
+      await getDashboardActivity(
+        makeReq(`http://localhost/api/dashboard/activity${query}`)
+      );
+      expect(getRecentActivity.mock.lastCall?.[0]).not.toHaveProperty("limit");
+    }
+  });
+
   it("passes an EMPTY scope through rather than omitting it", async () => {
     readableEntities.mockResolvedValue(new Set());
 

@@ -12,6 +12,7 @@
 
 import type { TimeseriesInterval } from "../collections/query/timeseries-interval";
 
+import type { WidgetQuery } from "./query";
 import type { WidgetFieldChoice, WidgetSourceFieldType } from "./sources";
 
 /**
@@ -246,4 +247,15 @@ export type WidgetComponentProps = {
    * the discriminator for an absent `slot`.
    */
   isFetching: boolean;
+  /**
+   * The query this card ASKED: its declaration's, with its reader's settings
+   * applied, the "Number of items" among them. The batch sent it sized to the
+   * card, one row more than the card draws, so that extra row says more exist;
+   * a component drawing rows sizes them from this, as core's lists do.
+   *
+   * Absent for a widget that declared no query.
+   *
+   * @experimental
+   */
+  query?: WidgetQuery;
 };

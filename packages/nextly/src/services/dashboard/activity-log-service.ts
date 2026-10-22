@@ -24,6 +24,7 @@ import { toDbError } from "../../database/errors";
 // the underlying DbError is preserved as `cause` and rich DB context
 // (kind, dialect, code) flows into logContext automatically.
 import { insertErasureAware } from "../../domains/audit/erasure-aware-insert";
+import { effectiveWidgetLimit } from "../../domains/widgets/query-limits";
 import { NextlyError } from "../../errors";
 import type { LockableRead } from "../../shared/lib/row-lock";
 import { BaseService } from "../base-service";
@@ -947,7 +948,9 @@ export class ActivityLogService extends BaseService {
   async getRecentActivity(
     options?: ActivityLogQueryOptions
   ): Promise<ActivityLogResult> {
-    const limit = Math.min(options?.limit ?? 10, 50);
+    // The one clamp for every door onto the feed, the endpoint's and the
+    // widget source's: what any widget query is held to.
+    const limit = effectiveWidgetLimit(options?.limit);
     const start = firstReadOf(options);
     if (start === null) return { activities: [], hasMore: false };
 

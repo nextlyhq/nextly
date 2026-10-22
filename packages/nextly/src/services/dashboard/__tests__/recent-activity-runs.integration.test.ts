@@ -20,13 +20,16 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { executeWidgetQuery } from "../../../domains/widgets/execute";
 import { readActivitySingles } from "../activity-singles";
+import { ACTIVITY_SOURCE_ID } from "../activity-widget-source";
 import {
   allResources,
   someResources,
   type ReadableResources,
   type ReadCaller,
 } from "../readable-resources";
+import { resolveReadableResources } from "../resolve-readable-resources";
 
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run on a reused database.
 const NOTES = "rr_notes";
@@ -251,6 +254,42 @@ describe.each(getConfiguredTestDialects())(
         [secret, 1],
         [note, 1],
       ]);
+    });
+
+    it("answers the Recent activity card exactly as the activity endpoint, for each reader", async () => {
+      // One door: the card's source and the endpoint hand the feed the same
+      // caller, the same scope and the same limit, so a reader is shown the
+      // same rows by both, a row they may not read left out of both alike.
+      const t = await boot(dialect);
+      const note = await entry(t, NOTES);
+      const secret = await entry(t, SECRET);
+      await written(t, at(3), () => logSave(t, ANA, NOTES, note));
+      await written(t, at(2), () => logSave(t, BEN, SECRET, secret));
+      await written(t, at(1), () => logSave(t, BEN, NOTES, note));
+
+      for (const reader of [as(ANA), as(BOSS)]) {
+        const card = (await executeWidgetQuery(
+          { source: ACTIVITY_SOURCE_ID, op: "list", limit: 10 },
+          reader
+        )) as { items: { id: string; count: number }[] };
+        const endpoint = await t
+          .getService("activityLogService")
+          .getRecentActivity({
+            limit: 10,
+            scope: await resolveReadableResources(reader),
+            caller: reader,
+            singles: await readActivitySingles(),
+          });
+        expect(card.items.map(row => [row.id, row.count])).toEqual(
+          endpoint.activities.map(row => [row.id, row.count])
+        );
+      }
+      // The must-differ half: the two readers really are shown different feeds.
+      const forAna = (await executeWidgetQuery(
+        { source: ACTIVITY_SOURCE_ID, op: "list", limit: 10 },
+        as(ANA)
+      )) as { items: { entryId: string }[] };
+      expect(forAna.items.map(row => row.entryId)).toEqual([note, note]);
     });
 
     it("lists status only when it changed, so a plain save of a live entry joins and an unpublish does not", async () => {

@@ -159,3 +159,21 @@ describe("the feed's runs", () => {
     });
   });
 });
+
+describe("the feed's row limit", () => {
+  it("holds every door to one clamp: at most 50 rows, and 5 when none is asked", async () => {
+    // Sixty different notes, so each is a row of its own.
+    const rows = trail(
+      Array.from({ length: 60 }, (_, i) => ({ entryId: `n${i}`, minutes: i }))
+    );
+
+    const many = await feed(serviceOver(rows).service, 500);
+    expect(many.activities).toHaveLength(50);
+
+    const unasked = await serviceOver(rows).service.getRecentActivity({
+      scope: someResources(["notes"]),
+      caller: { user: { id: "reader", roles: [] } },
+    });
+    expect(unasked.activities).toHaveLength(5);
+  });
+});
