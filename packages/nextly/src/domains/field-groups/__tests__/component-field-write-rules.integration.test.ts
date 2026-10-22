@@ -381,7 +381,12 @@ describe.each(getConfiguredTestDialects())(
         fieldGroups: [
           defineFieldGroup({
             slug: "note",
-            fields: [text({ name: "heading" }), ...guarded()],
+            fields: [
+              text({ name: "heading" }),
+              ...guarded(),
+              // Never set on a new instance; any update may change it.
+              text({ name: "later", access: { create: false } }),
+            ],
           }),
           defineFieldGroup({
             slug: "quote",
@@ -396,6 +401,16 @@ describe.each(getConfiguredTestDialects())(
             status: true,
             versions: { drafts: true },
             fields: pageFields(),
+          }),
+          // A held draft whose only field rules are its field groups'.
+          defineCollection({
+            slug: "groupdrafted",
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "one", component: "note" }),
+            ],
           }),
           // History to restore from.
           defineCollection({
@@ -447,6 +462,10 @@ describe.each(getConfiguredTestDialects())(
                 `update-${slug}`,
               ]),
               "publish-drafted",
+              "create-groupdrafted",
+              "read-groupdrafted",
+              "update-groupdrafted",
+              "publish-groupdrafted",
               "read-site",
               "update-site",
               "read-board",
@@ -724,6 +743,141 @@ describe.each(getConfiguredTestDialects())(
           slug: "board",
         } as never)) as Doc;
         expect((after.one as Doc).locked).toBe("locked-board");
+      });
+    });
+
+    describe("a held draft and its publish", () => {
+      /** A `drafted` page, published, with every guarded value set. */
+      async function publishedPage(tag: string): Promise<string> {
+        const id = await seeded(tag, "drafted");
+        await trusted.update({
+          collection: "drafted",
+          id,
+          data: { status: "published" },
+        } as never);
+        return id;
+      }
+
+      it("keeps the fields its author may not write at their live values", async () => {
+        const id = await publishedPage("hd");
+        const live = await stored("drafted", id);
+        // The editor's draft changes `locked`, which they may not write and
+        // the publisher may.
+        await checkedAs("editor").update({
+          collection: "drafted",
+          id,
+          data: {
+            one: {
+              ...(live.one as Doc),
+              heading: "h-draft",
+              locked: "locked-hd-draft",
+            },
+          },
+        } as never);
+        // The allowed person may write all of it, and publishes the draft.
+        await checkedAs("allowed").update({
+          collection: "drafted",
+          id,
+          data: { status: "published" },
+        } as never);
+
+        const after = await stored("drafted", id);
+        const one = after.one as Doc;
+        expect(one.heading).toBe("h-draft");
+        expect(one.locked).toBe((live.one as Doc).locked);
+      });
+
+      it("is refused when it adds an instance with a field no create may set", async () => {
+        const id = await publishedPage("hn");
+        const live = await stored("drafted", id);
+        // A draft written by trusted code adds a new instance carrying a
+        // field any update may change and no create may set.
+        await trusted.update({
+          collection: "drafted",
+          id,
+          data: {
+            many: [...list(live.many), { heading: "h-new", later: "set" }],
+          },
+        } as never);
+
+        await expect(
+          checkedAs("allowed").update({
+            collection: "drafted",
+            id,
+            data: { status: "published" },
+          } as never)
+        ).rejects.toMatchObject({ statusCode: 400 });
+        expect(list((await stored("drafted", id)).many)).toHaveLength(
+          list(live.many).length
+        );
+      });
+
+      it("publishes a collection whose only field rules are its field groups'", async () => {
+        const { item } = await trusted.create({
+          collection: "groupdrafted",
+          data: {
+            title: "g",
+            status: "published",
+            one: { heading: "h", ...guardedValues("g") },
+          },
+        } as never);
+        const id = String(item.id);
+        const live = await stored("groupdrafted", id);
+        await checkedAs("allowed").update({
+          collection: "groupdrafted",
+          id,
+          data: { one: { ...(live.one as Doc), heading: "h-g2" } },
+        } as never);
+
+        await checkedAs("allowed").update({
+          collection: "groupdrafted",
+          id,
+          data: { status: "published" },
+        } as never);
+
+        expect(((await stored("groupdrafted", id)).one as Doc).heading).toBe(
+          "h-g2"
+        );
+      });
+    });
+
+    describe("an update that removes a stored instance", () => {
+      it("keeps one holding a value the updater may not change", async () => {
+        const id = await seeded("rm");
+        const before = await stored("pages", id);
+        await updateAs("direct", "editor", id, {
+          one: null,
+          many: list(before.many).slice(0, 1),
+        });
+
+        const after = await stored("pages", id);
+        expect((after.one as Doc).locked).toBe("locked-rm-one");
+        expect(list(after.many).map(note => note.locked)).toEqual([
+          "locked-rm-many0",
+          "locked-rm-many1",
+        ]);
+      });
+
+      it("removes it for an updater who may change everything it holds", async () => {
+        // The control: nothing it holds is beyond them, so it goes.
+        const { item } = await trusted.create({
+          collection: "pages",
+          data: {
+            title: "rm2",
+            one: { heading: "h", locked: "locked-rm2" },
+            many: [{ heading: "a" }, { heading: "b" }],
+          },
+        } as never);
+        const id = String(item.id);
+        const before = await stored("pages", id);
+        await updateAs("direct", "allowed", id, {
+          one: null,
+          many: list(before.many).slice(0, 1),
+        });
+
+        const after = await stored("pages", id);
+        expect(list(after.one)).toEqual([]);
+        expect(list(after.many).map(note => note.heading)).toEqual(["a"]);
       });
     });
 
