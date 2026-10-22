@@ -243,10 +243,22 @@ export class DynamicCollectionService extends BaseService {
    * unconfigured by a container it never used. Undefined defers to DI, which is
    * the registered-services path every dispatcher request takes.
    */
-  private readonly localizationConfigured?: boolean;
+  private readonly localizationConfiguredGiven?: boolean;
 
   /** Lazily built field-group registry, owned by this instance's adapter. */
   private fieldGroupRegistry?: FieldGroupRegistryService;
+
+  /**
+   * Whether localization is configured, as the caller said or, handed the language registry, as
+   * the registry says now. Undefined defers to DI.
+   */
+  private get localizationConfigured(): boolean | undefined {
+    if (this.localizationConfiguredGiven !== undefined) {
+      return this.localizationConfiguredGiven;
+    }
+    const source = this.defaultLocaleSource;
+    return typeof source === "string" ? undefined : source.current() != null;
+  }
 
   /**
    * The default language as it is now. Handed the language registry, a language list changed in
@@ -267,7 +279,7 @@ export class DynamicCollectionService extends BaseService {
   ) {
     super(adapter, logger);
     this.defaultLocaleSource = defaultLocale;
-    this.localizationConfigured = localizationConfigured;
+    this.localizationConfiguredGiven = localizationConfigured;
 
     this.validationService = new DynamicCollectionValidationService();
     this.schemaService = new DynamicCollectionSchemaService(

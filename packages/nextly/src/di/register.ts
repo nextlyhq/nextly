@@ -73,6 +73,8 @@ import {
   resolveTypeColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import { LanguageRegistry } from "../domains/i18n/language-registry";
+import { storedLanguageReader } from "../domains/i18n/stored-language-reader";
 import type { AnyJobDefinition } from "../domains/jobs/job-registry";
 import { coreRateLimitStoreFor } from "../domains/limits/core-limit-store";
 import type { LimitStore } from "../domains/limits/limit-store";
@@ -551,6 +553,8 @@ export interface ServiceMap {
   dashboardService: DashboardService;
   metaService: MetaService;
   versionsService: VersionsService;
+  /** The site's content languages, configured or stored in Settings. */
+  languageRegistry: LanguageRegistry;
   // Registered by registerCollectionServices but previously untyped here, so
   // consumers had to reach past getService() to use it.
   collectionsHandler: CollectionsHandler;
@@ -1017,6 +1021,10 @@ async function registerServicesOnce(
     logger: resolvedLogger,
     config: transformedConfig,
     basePath: resolvedBasePath,
+    languages: new LanguageRegistry({
+      configured: transformedConfig.localization,
+      reader: storedLanguageReader(adapter),
+    }),
     schemasDir,
     migrationsDir,
     storage,
@@ -1025,6 +1033,13 @@ async function registerServicesOnce(
     hookRegistry,
     passwordHasher,
   };
+
+  // Reachable by name for the request path, which refreshes it, and for code that asks which
+  // languages the site has without a service of its own.
+  container.registerSingleton<LanguageRegistry>(
+    "languageRegistry",
+    () => ctx.languages
+  );
 
   registerDomainServices(ctx);
 

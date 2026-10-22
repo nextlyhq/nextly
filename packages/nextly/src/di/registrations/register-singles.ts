@@ -86,7 +86,7 @@ export function registerSingleServices(ctx: RegistrationContext): void {
       rbacAccessControlService,
       // i18n: forward the normalized localization config so localized singles resolve
       // and write translatable fields via their companion table (mirrors collections).
-      ctx.config.localization,
+      ctx.languages,
       // The single write path appends outbox events through this service, so it
       // gets its own retention runner (the handler's is not on this path),
       // matching the collection write path.

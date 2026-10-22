@@ -116,12 +116,10 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
     const dynamicCollectionService = new DynamicCollectionService(
       adapter,
       logger,
-      // i18n: the default locale seeds/restores the companion on a localization toggle.
-      ctx.config.localization?.defaultLocale,
-      // The config being registered right now is the authority for this
-      // service; reading it back out of the container would depend on the
-      // registration order within this same function.
-      ctx.config.localization != null
+      // i18n: the site's languages, read as they are now: the default locale seeds/restores the
+      // companion on a localization toggle, and whether localization is configured follows the
+      // list rather than the container, whose registration order would otherwise decide it.
+      ctx.languages
     );
 
     const metadataService = new CollectionMetadataService(
@@ -176,7 +174,7 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       rbacAccessControlService,
       // i18n M4: forward normalized localization config so localized reads resolve
       // translatable fields from the companion table.
-      ctx.config.localization,
+      ctx.languages,
       // CollectionService writes append events through this same service, so it
       // needs its own runner — the handler's is not on this path.
       buildRetentionRunner({
@@ -221,7 +219,7 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       logger,
       basePath,
       // i18n M4: enable companion-aware reads on the dispatcher-facing handler.
-      ctx.config.localization,
+      ctx.languages,
       // Content writes offer a retention pass, so the ledgers stay bounded in
       // installs that never run the drain. EVERY policy is passed: this handler
       // is the seam a dispatcher-driven install writes through, so one missing
