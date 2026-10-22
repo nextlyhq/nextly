@@ -35,7 +35,7 @@ import {
 } from "../test-nextly";
 
 /** The version whose language the gate refuses, set by a case. */
-const refuse = vi.hoisted(() => ({ versionOf: "" }));
+const refuse = vi.hoisted(() => ({ versionOf: "", updateOf: "" }));
 const asked = vi.hoisted(() => ({
   versions: [] as number[],
   hookInputs: [] as unknown[],
@@ -60,6 +60,19 @@ vi.mock("../../api/versions-access", async importOriginal => {
           });
         }
         return null;
+      }
+    ),
+    // The document's own update rule, refused for the document a case names.
+    assertDocumentUpdatable: vi.fn(
+      async (
+        ...args: Parameters<typeof actual.assertDocumentUpdatable>
+      ): Promise<void> => {
+        if (args[2] === refuse.updateOf) {
+          throw NextlyError.forbidden({
+            logContext: { reason: "test-update-refused" },
+          });
+        }
+        return actual.assertDocumentUpdatable(...args);
       }
     ),
   };
@@ -165,6 +178,23 @@ describe.each(getConfiguredTestDialects())(
         context: { tenant: "acme" },
       });
       expect(asked.hookInputs).toEqual([{ context: { tenant: "acme" } }]);
+    });
+
+    it("asks about the language before the update rule, as REST does", async () => {
+      // Refused both, the caller is told the version is not there, as REST
+      // tells them, so the refusal does not confirm history in that language.
+      const ref = await published("refused twice");
+      refuse.versionOf = ref.entryId;
+      refuse.updateOf = ref.entryId;
+      try {
+        await expect(
+          versions.setLabel(ref, 1, "named", undefined, asEditor())
+        ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      } finally {
+        refuse.versionOf = "";
+        refuse.updateOf = "";
+      }
+      expect((await versions.get(ref, 1)).label ?? null).toBeNull();
     });
 
     it("asks about the version it names, and names it when allowed", async () => {
