@@ -11,8 +11,10 @@
   // cannot happen.
   //
   // The production build still runs where it proves what tsc cannot (server-only
-  // code reaching a client bundle, bundling and route errors): in CI's build
-  // step and the browser tests, on every pull request and in the merge queue.
+  // code reaching a client bundle, bundling and route errors): CI's build step
+  // builds the playground for production on every pull request and in the
+  // merge queue, and the production browser tests run on it after a merge to
+  // `main`.
   "$schema": "https://v2-9-7.turborepo.dev/schema.json",
   "extends": ["//"],
   "tasks": {
