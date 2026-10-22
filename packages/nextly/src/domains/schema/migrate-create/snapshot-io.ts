@@ -218,6 +218,13 @@ export async function writeSnapshot(
                 ...(t.localizedColumns !== undefined
                   ? { localizedColumns: [...t.localizedColumns].sort() }
                   : {}),
+                ...(t.uniqueLocalizedColumns !== undefined
+                  ? {
+                      uniqueLocalizedColumns: [
+                        ...t.uniqueLocalizedColumns,
+                      ].sort(),
+                    }
+                  : {}),
               }
             : {}),
         }))

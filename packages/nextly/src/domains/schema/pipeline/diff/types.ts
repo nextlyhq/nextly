@@ -179,6 +179,10 @@ export interface TableSpec {
   // translatable field ADDED in the same edit would be restored from a companion that never
   // held it (emitting SQL that fails on apply). Present only when `localized` is true.
   localizedColumns?: string[];
+  // Which of those columns are unique within each language, and so carry a per-language unique
+  // index on the companion. `migrate:create` compares it with the next config to add or drop
+  // those indexes, which nothing else in the snapshot records. Present only when some are.
+  uniqueLocalizedColumns?: string[];
 }
 
 /**
