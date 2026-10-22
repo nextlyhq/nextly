@@ -385,6 +385,8 @@ async function seedEphemeral(
   const now = new Date();
   const entryId = randomUUID();
   const lockId = documentLockKey(kind, slug, entryId);
+  // Only an empty slug or entry id has no key, and neither is empty here.
+  if (lockId === undefined) throw new Error(`no lock key for ${slug}`);
   await adapter.insert("nextly_document_lock", {
     id: lockId,
     scopeKind: kind,
