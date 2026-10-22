@@ -18,8 +18,10 @@ import {
   and,
   Column,
   eq,
+  inArray,
   is,
   isNull,
+  or,
   sql,
   type SQL,
   type SQLWrapper,
@@ -66,12 +68,19 @@ function shapeCondition(
 
 /**
  * The condition keeping entries of one collection whose draft holds changes not
- * yet published, in any language.
+ * yet published, in any of the languages `locales` names.
  *
- * Any language, because the condition keeps ENTRIES: an entry with a pending
+ * Any of them, because the condition keeps ENTRIES: an entry with a pending
  * change in one language has something waiting, and is kept once. Narrowing to
  * one language is the language filter's question (`_translated`), which this
  * one combines with.
+ *
+ * `locales` is the languages the read's access rules were judged for. A draft
+ * in another language is withheld from that read, so its existence must not
+ * keep the entry either: an English read of a collection whose rule refuses
+ * French would otherwise show which entries hold French drafts. A row with no
+ * language is an unlocalized document's and is always considered. `null`
+ * considers every language, for a trusted read or a site with no languages.
  *
  * `entryId` is the read's own id column, so the condition is correlated with
  * the row being judged and the versions index on
@@ -83,12 +92,23 @@ export function pendingChangeCondition(args: {
   dialect: SupportedDialect;
   collectionName: string;
   entryId: SQLWrapper;
+  locales: readonly string[] | null;
 }): SQL {
   const versions = versionsTables(args.dialect).nextlyVersions;
   return sql`EXISTS (SELECT 1 FROM ${versions} WHERE ${and(
     eq(versions.scopeKind, "collection"),
     eq(versions.scopeSlug, args.collectionName),
     eq(versions.entryId, args.entryId),
-    ...WORKING_DRAFT_SHAPE.map(condition => shapeCondition(versions, condition))
+    ...WORKING_DRAFT_SHAPE.map(condition =>
+      shapeCondition(versions, condition)
+    ),
+    args.locales === null
+      ? undefined
+      : args.locales.length === 0
+        ? isNull(versions.locale)
+        : or(
+            isNull(versions.locale),
+            inArray(versions.locale, [...args.locales])
+          )
   )})`;
 }

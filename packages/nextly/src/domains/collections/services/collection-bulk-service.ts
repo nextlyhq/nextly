@@ -922,7 +922,7 @@ export class CollectionBulkService extends BaseService {
       }
       throw NextlyError.forbidden({ logContext });
     }
-    await assertCallerFilterReadable(params);
+    await assertCallerFilterReadable(params, this.queryService);
 
     // 2. Enumerate the target rows under the UPDATE rule. The collection-level
     // UPDATE access was already checked above, so this runs with overrideAccess
@@ -1108,7 +1108,7 @@ export class CollectionBulkService extends BaseService {
       }
       throw NextlyError.forbidden({ logContext });
     }
-    await assertCallerFilterReadable(params);
+    await assertCallerFilterReadable(params, this.queryService);
 
     // 2. Enumerate the target rows under the DELETE rule. overrideAccess skips
     // the READ rules (a role allowed to delete but not read must still see its
@@ -2242,13 +2242,22 @@ export class CollectionBulkService extends BaseService {
  * the trusted read is, so every way in (the Direct API, a plugin's service
  * call, the REST bulk routes) is held to it.
  */
-async function assertCallerFilterReadable(params: {
-  collectionName: string;
-  where: WhereFilter;
-  overrideAccess?: boolean;
-  user?: UserContext;
-  authenticatedScope?: AuthenticatedScope;
-}): Promise<void> {
+async function assertCallerFilterReadable(
+  params: {
+    collectionName: string;
+    where: WhereFilter;
+    overrideAccess?: boolean;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  },
+  queryService: CollectionQueryService
+): Promise<void> {
+  // A reserved condition on another table is not a field, so the field check
+  // below never sees it. `_inRelease` selects rows by what releases hold, which
+  // a caller who may not read releases must not learn from which rows a write
+  // reached, so it is judged here by the same decision a read makes. A new
+  // reserved key that discloses another table needs its own judgement here too.
+  await queryService.assertReleaseFilterReadable(params);
   await assertFilterableFields(
     "collection",
     params.collectionName,
