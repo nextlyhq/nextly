@@ -23,7 +23,8 @@ const { discardSpy, getEntrySpy, unlockedDeleteSpy } = vi.hoisted(() => ({
 vi.mock("../../../di", () => ({
   getService: vi.fn((name: string) => {
     if (name === "collectionsHandler") {
-      return { discardWorkingDraft: discardSpy, getEntry: getEntrySpy };
+      // The counted form: the discard answers how many drafts it removed.
+      return { discardWorkingDraftCounted: discardSpy, getEntry: getEntrySpy };
     }
     // The lock-less path the discard must no longer take; wired so the test can
     // assert it is never called.
@@ -62,7 +63,7 @@ const args = {
 describe("discardWorkingDraft", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    discardSpy.mockResolvedValue(undefined);
+    discardSpy.mockResolvedValue(1);
   });
 
   it("reads the live row, then removes the sidecar through the locked handler, not the lock-less versions-service delete", async () => {
@@ -71,9 +72,10 @@ describe("discardWorkingDraft", () => {
       data: { id: "e1", title: "live", status: "published" },
     });
 
+    // The live document, and the count the locked handler removed.
     await expect(discardWorkingDraft(args)).resolves.toMatchObject({
-      title: "live",
-      status: "published",
+      document: { title: "live", status: "published" },
+      removed: 1,
     });
     // A request naming no language reaches the handler as an explicit null, so
     // the one rule that resolves a language decides what that means rather than

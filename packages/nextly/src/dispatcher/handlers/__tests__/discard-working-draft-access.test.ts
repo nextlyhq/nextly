@@ -58,10 +58,11 @@ describe("discardWorkingDraftForDocument — the gate chain", () => {
     canReadSpy.mockResolvedValue(true);
     readableSpy.mockResolvedValue(undefined);
     updatableSpy.mockResolvedValue(undefined);
+    // The shared discard hands back the live document and how many drafts
+    // it removed; the route answers with the document.
     discardSpy.mockResolvedValue({
-      id: "e1",
-      title: "live",
-      status: "published",
+      document: { id: "e1", title: "live", status: "published" },
+      removed: 1,
     });
   });
 

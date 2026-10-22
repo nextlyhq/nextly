@@ -1738,6 +1738,16 @@ const EMAIL_TEMPLATE_ITEM_ROUTES: Record<string, EmailTemplateRoute> = {
   DELETE: { operation: "delete", method: "deleteTemplate" },
 };
 
+/**
+ * `/api/email-templates/brand`, by HTTP method: the brand settings. Reading
+ * them needs the permission to read templates, and changing them the
+ * permission to update templates, as editing the default layout does.
+ */
+const EMAIL_TEMPLATE_BRAND_ROUTES: Record<string, EmailTemplateRoute> = {
+  GET: { operation: "single", method: "getBrand" },
+  PATCH: { operation: "update", method: "updateBrand" },
+};
+
 /** `/api/email-templates/[id]/<subresource>`: preview with sample data, and the ownership steps. */
 function emailTemplateSubresourceRoute(
   subresource: string,
@@ -1746,6 +1756,13 @@ function emailTemplateSubresourceRoute(
   if (subresource === "preview") {
     return httpMethod === "POST"
       ? { operation: "single", method: "previewTemplate" }
+      : undefined;
+  }
+  // A test send of the saved template, to the signed-in user's own address.
+  // PATCH so the method-derived permission is `update-email-templates`.
+  if (subresource === "send-test") {
+    return httpMethod === "PATCH"
+      ? { operation: "update", method: "sendTestTemplate" }
       : undefined;
   }
   // The ownership steps. Each changes the template, so each is a PATCH and
@@ -1766,11 +1783,14 @@ function emailTemplateSubresourceRoute(
  * - POST /api/email-templates → create template
  * - GET /api/email-templates/layout → get shared layout (header/footer)
  * - PATCH /api/email-templates/layout → update shared layout
+ * - GET /api/email-templates/brand → the brand settings and which emails they reach
+ * - PATCH /api/email-templates/brand → change the brand settings
  * - GET /api/email-templates/[id] → get template by id
  * - PATCH /api/email-templates/[id] → update template
  * - DELETE /api/email-templates/[id] → delete template
  * - POST /api/email-templates/preview → render unsaved fields (draft)
  * - POST /api/email-templates/[id]/preview → preview with sample data
+ * - PATCH /api/email-templates/[id]/send-test → send the saved template to the signed-in user
  * - PATCH /api/email-templates/[id]/override → override an owned template
  * - PATCH /api/email-templates/[id]/reset → return it to its owner's version
  * - GET /api/email-templates/[id]/compare → the owner's changes since the override
@@ -1807,6 +1827,12 @@ function parseEmailTemplateRoutes(
   // create-or-manage on email-templates either way.
   if (id === "preview" && !subresource && httpMethod === "POST") {
     return parsed({ operation: "single", method: "previewDraft" });
+  }
+
+  // /api/email-templates/brand → the brand settings. Ahead of the `[id]`
+  // branches for the reason `preview` is: this segment is a route, not an id.
+  if (id === "brand" && !subresource) {
+    return parsed(EMAIL_TEMPLATE_BRAND_ROUTES[httpMethod]);
   }
 
   const route = subresource
@@ -2808,42 +2834,6 @@ function parseSchemaRoutes(
 }
 
 // ============================================================================
-// Email Routes Parser
-// ============================================================================
-
-/**
- * Parse Email send routes
- *
- * Handles email send endpoints (no specific permission required, any
- * authenticated request including API keys can call these):
- * - POST /api/email/send → send raw email
- * - POST /api/email/send-with-template → send templated email
- */
-function parseEmailRoutes(
-  id: string | undefined,
-  httpMethod: string,
-  routeParams: Record<string, string>
-): ParsedRoute | null {
-  if (id === "send" && httpMethod === "POST") {
-    return {
-      service: "email",
-      operation: "create",
-      method: "send",
-      routeParams,
-    };
-  }
-  if (id === "send-with-template" && httpMethod === "POST") {
-    return {
-      service: "email",
-      operation: "create",
-      method: "sendWithTemplate",
-      routeParams,
-    };
-  }
-  return null;
-}
-
-// ============================================================================
 // Main Route Parser
 // ============================================================================
 
@@ -3038,12 +3028,6 @@ export function parseRestRoute(
       subresource,
       subId
     );
-    if (result) return result;
-  }
-
-  // Handle Email send endpoints (any authenticated request)
-  if (resource === "email") {
-    const result = parseEmailRoutes(id, httpMethod, routeParams);
     if (result) return result;
   }
 
