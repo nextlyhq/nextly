@@ -266,6 +266,12 @@ describe("the REST route gate, asking a rule that closes French", () => {
     ).toBe(403);
   });
 
+  it("judges sharing a preview link in the language it names, and one the site does not configure in every language", async () => {
+    expect(await status("update", "sharePreviewLink", "?locale=en")).toBe(200);
+    expect(await status("update", "sharePreviewLink", "?locale=fr")).toBe(403);
+    expect(await status("update", "sharePreviewLink", "?locale=xx")).toBe(403);
+  });
+
   it("judges an autosave read in every language, whatever language the request names", async () => {
     // The autosave returned is the caller's latest, in whatever language it
     // was saved; `?locale=` does not choose it.

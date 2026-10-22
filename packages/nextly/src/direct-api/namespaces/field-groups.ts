@@ -27,6 +27,7 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
+  checkedCaller,
   checkWrite,
   isNotFoundError,
   mapFieldGroupRecord,
@@ -62,6 +63,9 @@ export function createFieldGroupsNamespace(
     async find(
       args: FindFieldGroupsArgs = {}
     ): Promise<ListResult<FieldGroupDefinition>> {
+      // A checked read asks only that the call names someone, as REST serves
+      // field groups to any signed-in caller: the builder's palette reads them.
+      checkedCaller(ctx.defaultConfig, args);
       const result = await ctx.fieldGroupRegistryService.listComponents({
         source: args.source,
         migrationStatus: args.migrationStatus,
@@ -96,6 +100,8 @@ export function createFieldGroupsNamespace(
     async findBySlug(
       args: FindFieldGroupBySlugArgs
     ): Promise<FieldGroupDefinition | null> {
+      // As `find` above, before the lookup.
+      checkedCaller(ctx.defaultConfig, args);
       const config = mergeConfig(ctx.defaultConfig, args);
 
       if (!args.slug) {

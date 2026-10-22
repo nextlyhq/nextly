@@ -30,7 +30,6 @@
 ---
 
 An email sent to several `to` addresses now reaches every one of them, through
-`nextly.email`, a plugin's `ctx.services.email` and the REST send routes;
+`nextly.email` and a plugin's `ctx.services.email`;
 before, only the first address received it. `from` and a new `replyTo` take
-effect on every way of sending, and the REST routes now say an email was sent or
-could not be sent instead of "queued".
+effect on every way of sending.

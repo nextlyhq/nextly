@@ -26,6 +26,7 @@ import { readsSystemResource } from "./access/system-resource-read";
 import {
   apiKeyScopeAllows,
   scopeRowsAgree,
+  slugGrants,
   type AuthenticatedScope,
 } from "./authenticated-scope";
 
@@ -66,10 +67,12 @@ export async function canReadSystemResource(
     const rows = scopeRowsAgree(authenticatedScope);
     const actor = rows
       ? actorForScope(authenticatedScope, user)
-      : actorForKey({
+      : // A scope without rows is compared with the grants its slugs name,
+        // which is what the decision would judge if it could read them.
+        actorForKey({
           keyId: "",
           userId: user.id,
-          grants: authenticatedScope.grants ?? [],
+          grants: slugGrants(authenticatedScope.permissions),
           roles: authenticatedScope.roles ?? [],
         });
     // A key holds the read by its stored slug, `read-<resource>`. The
