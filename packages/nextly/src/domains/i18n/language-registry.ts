@@ -58,7 +58,9 @@ export class LanguageRegistry {
     this.configured = options.configured;
     this.reader = options.reader;
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
-    this.now = options.now ?? Date.now;
+    // A monotonic clock: the wall clock can jump, backwards or forwards, which would hold a stale
+    // list past its lifetime or reread on every call.
+    this.now = options.now ?? (() => performance.now());
   }
 
   /** Whether the configuration declares the languages, so Settings may not change them. */
