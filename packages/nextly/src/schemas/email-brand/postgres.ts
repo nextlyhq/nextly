@@ -1,5 +1,5 @@
 /**
- * `nextly_email_brand` on PostgreSQL: the site's email brand settings.
+ * `email_brand` on PostgreSQL: the site's email brand settings.
  *
  * One row (`id` is always `default`). Each setting is nullable, and null is
  * its starting value, which `domains/email/brand-settings.ts` defines; a site

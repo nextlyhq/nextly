@@ -47,6 +47,20 @@ describe("the brand settings table is identical across dialects", () => {
   });
 });
 
+describe("the brand settings table's name", () => {
+  it("is email_brand, beside the other email tables", () => {
+    // Spelled out, since every other test reads the constant it pins.
+    expect(EMAIL_BRAND_TABLE).toBe("email_brand");
+    for (const table of [
+      pg.nextlyEmailBrandPg,
+      my.nextlyEmailBrandMysql,
+      sl.nextlyEmailBrandSqlite,
+    ]) {
+      expect(getTableName(table)).toBe("email_brand");
+    }
+  });
+});
+
 describe("the brand settings table is registered as a core table", () => {
   it("is named in CORE_TABLE_NAMES", () => {
     expect(CORE_TABLE_NAMES).toContain(EMAIL_BRAND_TABLE);

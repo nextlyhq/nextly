@@ -32,6 +32,16 @@ export function declaredTarget(slug: string): AccessTarget | undefined {
   return declared.get(slug);
 }
 
+/**
+ * The target as its app declared it: with the rules declared for its slug when
+ * any were, else as given. What a way in hands the decision when it compares
+ * today's answer with the decision's, whatever the access-control service's
+ * state.
+ */
+export function targetAsDeclared(target: AccessTarget): AccessTarget {
+  return declaredTarget(target.slug) ?? target;
+}
+
 /** Forgets every declared rule, as a re-sync does before registering again. */
 export function clearDeclaredTargets(): void {
   declared.clear();

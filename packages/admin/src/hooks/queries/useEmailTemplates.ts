@@ -229,15 +229,17 @@ export function usePreviewEmailTemplate() {
 }
 
 /**
- * useSendTestEmailTemplate — send a real test email from a saved template.
+ * useSendTestEmailTemplate — send a real test email from a saved template to
+ * the signed-in user's own address.
  */
 export function useSendTestEmailTemplate() {
   return useMutation<
     SendTestEmailResult,
     Error,
-    { slug: string; to: string; variables: Record<string, unknown> }
+    { templateId: string; variables: Record<string, unknown> }
   >({
-    mutationFn: ({ slug, to, variables }) => sendTestEmail(slug, to, variables),
+    mutationFn: ({ templateId, variables }) =>
+      sendTestEmail(templateId, variables),
   });
 }
 
