@@ -331,6 +331,24 @@ describe.each(getConfiguredTestDialects())(
         expect(seen).toEqual(narrow.permissions);
       });
 
+      it("refuses a checked call naming a user but no key inside a keyed request", async () => {
+        // Inside a request made with a key, a call that names a person and no
+        // key is ambiguous: judged as the person, its work would still run
+        // under the key, and either could be the broader. It is refused, so
+        // the caller passes the key's scope or calls trusted.
+        const key: AuthenticatedScope = {
+          actorType: "apiKey",
+          permissions: ["read-media", "create-media"],
+        };
+        const before = await fileCount();
+        await expect(
+          runWithCallerScope(key, () =>
+            checkedAs(holderId).media.upload({ file: file("ambiguous.pdf") })
+          )
+        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+        expect(await fileCount()).toBe(before);
+      });
+
       it("records a write made as a person as that person", async () => {
         const uploaded = await checkedAs(holderId).media.upload({
           file: file("personal.pdf"),
