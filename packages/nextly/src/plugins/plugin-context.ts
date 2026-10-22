@@ -87,6 +87,7 @@ import { type PluginConfig, pluginConfigView } from "./plugin-config-view";
 import { NO_PLUGIN_GRANTS, type PluginGrants } from "./plugin-consent";
 import { currentDependencies } from "./plugin-dependencies";
 import { createPluginFetchFor } from "./plugin-fetch-provider";
+import { mediaForPlugin, type PluginMediaService } from "./plugin-media";
 import { createPluginSettings } from "./plugin-settings-provider";
 import { wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
@@ -390,29 +391,6 @@ const PLUGIN_USER_METHODS = [
   "updateProfile",
 ] as const satisfies readonly (keyof UserService)[];
 
-const PLUGIN_MEDIA_METHODS = [
-  "upload",
-  "findById",
-  "listMedia",
-  "update",
-  "delete",
-  "bulkUpload",
-  "bulkDelete",
-  "moveToFolder",
-  "getStorageType",
-  "hasStorage",
-  "createFolder",
-  "findFolderById",
-  "listRootFolders",
-  "listSubfolders",
-  "getFolderContents",
-  "updateFolder",
-  "deleteFolder",
-  "isImage",
-  "validateImage",
-  "getImageDimensions",
-] as const satisfies readonly (keyof MediaService)[];
-
 const PLUGIN_EMAIL_METHODS = [
   "send",
   "sendWithTemplate",
@@ -439,10 +417,7 @@ export type PluginUserService = Pick<
   (typeof PLUGIN_USER_METHODS)[number]
 >;
 /** @experimental `ctx.services.media`. */
-export type PluginMediaService = Pick<
-  MediaService,
-  (typeof PLUGIN_MEDIA_METHODS)[number]
->;
+export type { PluginMediaService } from "./plugin-media";
 /** @experimental `ctx.services.email`. */
 export type PluginEmailService = Pick<
   EmailService,
@@ -2104,7 +2079,7 @@ export function createPluginContext(
       get users() {
         return methodFacade(userService.forPlugins(), PLUGIN_USER_METHODS);
       },
-      media: methodFacade(mediaService, PLUGIN_MEDIA_METHODS),
+      media: mediaForPlugin(mediaService),
       // A plugin's keys are its own: scoped to its name, so two plugins, or a
       // plugin and the site, never name one send with the same key.
       email: methodFacade(
