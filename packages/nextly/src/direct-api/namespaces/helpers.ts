@@ -108,7 +108,11 @@ export function withLanguagesPinned<N extends object>(namespace: N): N {
       name,
       typeof member === "function"
         ? (...args: unknown[]) =>
-            withCurrentLanguages(async () => member.apply(namespace, args))
+            // Every method of these namespaces returns a promise; wrapped, a value one returned
+            // directly still reaches the caller as a resolved promise.
+            withCurrentLanguages(() =>
+              Promise.resolve(member.apply(namespace, args))
+            )
         : member,
     ])
   ) as N;
