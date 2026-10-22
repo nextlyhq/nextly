@@ -126,9 +126,32 @@ export async function withFieldGroupEvidence(
   } finally {
     // Out again, unless the pass replaced the value, which is then its own.
     for (const { at, key, value } of putBack) {
-      if (at[key] === value) delete at[key];
+      if (at[key] !== value) continue;
+      delete at[key];
+      keepAsEvidence(redactions, at, key, value);
     }
   }
+}
+
+/**
+ * Record a value put back for a pass as evidence again, after it is taken out.
+ *
+ * A pass that judged it allowed (a hook changed what its rule reads, without
+ * putting the value back) took it for the row's own and dropped its record.
+ * It never was the row's: it was the stored value, shown as evidence. Left
+ * unrecorded, a later pass over the same row could be shown neither the value
+ * nor its record, and a rule reading it could allow what the stored content
+ * denies.
+ */
+function keepAsEvidence(
+  redactions: ReadAccessRedactions,
+  at: Record<string, unknown>,
+  key: string,
+  value: unknown
+): void {
+  const removed = redactions.get(at) ?? {};
+  removed[key] = value;
+  redactions.set(at, removed);
 }
 
 /** A value put back for one pass, to be taken out again after it. */
