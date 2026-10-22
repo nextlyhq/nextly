@@ -127,10 +127,13 @@ jobs:
           substantive-job: |
             Integration (postgres) shard (1)
             Integration (postgres) shard (2)
+            Integration (postgres) shard (3)
             Integration (mysql) shard (1)
             Integration (mysql) shard (2)
+            Integration (mysql) shard (3)
             Integration (sqlite) shard (1)
             Integration (sqlite) shard (2)
+            Integration (sqlite) shard (3)
           token: ${{ github.token }}
       - name: Decide
         id: decide
@@ -169,8 +172,8 @@ jobs:
   integration-postgres-shards:
     # Not a required check: `Integration (postgres)` below is, and it passes
     # only when every shard did. GitHub appends the matrix value to a name
-    # with no expression in it, so the shards report as `... shard (1)` and
-    # `... shard (2)`, and a skipped run as one `... shard`.
+    # with no expression in it, so the shards report as `... shard (1)` to
+    # `... shard (3)`, and a skipped run as one `... shard`.
     name: Integration (postgres) shard
     needs: changes
     # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
@@ -187,10 +190,14 @@ jobs:
       fail-fast: false
       # `--shard` hands each job the same number of files, not the same amount
       # of time, so shards finish apart by however their files differ. The
-      # count is read from `strategy.job-total`, so adding a value here is the
-      # whole change to run three.
+      # count is read from `strategy.job-total`; the `changes` job's list and
+      # scripts/main-catch-up.mjs name each shard, and tests hold both to this.
+      #
+      # Three, because two were not enough on any leg: MySQL shards ran into
+      # INTEGRATION_SUITE_BUDGET, postgres shards took 32 to 53 minutes of it,
+      # and the core suite only grows (its files run one at a time on purpose).
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     # A BACKSTOP now, not the bound that should ever fire.
     #
     # 25 minutes until the suite outgrew it. The MySQL leg's last GREEN run
@@ -271,8 +278,8 @@ jobs:
       # step that runs however the job ended, and splitting restore from save is the
       # supported way to make that conditional (`save-always` was deprecated for it).
       - name: Save Turbo cache
-        # One shard saves: both build the same packages under the same key,
-        # and a cache key can be written once.
+        # One shard saves: all of them build the same packages under the same
+        # key, and a cache key can be written once.
         if: success() && matrix.shard == 1
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -311,8 +318,8 @@ jobs:
   integration-mysql-shards:
     # Not a required check: `Integration (mysql)` below is, and it passes
     # only when every shard did. GitHub appends the matrix value to a name
-    # with no expression in it, so the shards report as `... shard (1)` and
-    # `... shard (2)`, and a skipped run as one `... shard`.
+    # with no expression in it, so the shards report as `... shard (1)` to
+    # `... shard (3)`, and a skipped run as one `... shard`.
     name: Integration (mysql) shard
     needs: changes
     # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
@@ -327,7 +334,7 @@ jobs:
       # The same split as the postgres leg, for the same reasons.
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     # The same backstop as the postgres leg, for the same reasons.
     timeout-minutes: 75
 
@@ -421,8 +428,8 @@ jobs:
       # step that runs however the job ended, and splitting restore from save is the
       # supported way to make that conditional (`save-always` was deprecated for it).
       - name: Save Turbo cache
-        # One shard saves: both build the same packages under the same key,
-        # and a cache key can be written once.
+        # One shard saves: all of them build the same packages under the same
+        # key, and a cache key can be written once.
         if: success() && matrix.shard == 1
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -464,8 +471,8 @@ jobs:
   integration-sqlite-shards:
     # Not a required check: `Integration (sqlite)` below is, and it passes
     # only when every shard did. GitHub appends the matrix value to a name
-    # with no expression in it, so the shards report as `... shard (1)` and
-    # `... shard (2)`, and a skipped run as one `... shard`.
+    # with no expression in it, so the shards report as `... shard (1)` to
+    # `... shard (3)`, and a skipped run as one `... shard`.
     name: Integration (sqlite) shard
     needs: changes
     # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
@@ -482,7 +489,7 @@ jobs:
       # requests alike, so a run ended red with files still to go.
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     # The same backstop as the database legs, for the same reasons: the bound
     # that should ever fire is INTEGRATION_SUITE_BUDGET on the step, which
     # reports as a failure. It moves with its siblings so there is one rule to
@@ -517,7 +524,7 @@ jobs:
       #
       # Every package of the lane takes the same shard, so each one splits its
       # own files between the jobs; a package with fewer files than shards
-      # passes the shard that gets none (merge-queue-workflows.test.mjs).
+      # passes the shards that get none (merge-queue-workflows.test.mjs).
       - name: Run integration tests (sqlite)
         run: |
           pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-seo --filter=@nextlyhq/plugin-form-builder
@@ -532,8 +539,8 @@ jobs:
       # step that runs however the job ended, and splitting restore from save is the
       # supported way to make that conditional (`save-always` was deprecated for it).
       - name: Save Turbo cache
-        # One shard saves: both build the same packages under the same key,
-        # and a cache key can be written once.
+        # One shard saves: all of them build the same packages under the same
+        # key, and a cache key can be written once.
         if: success() && matrix.shard == 1
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
