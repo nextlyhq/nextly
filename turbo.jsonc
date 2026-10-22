@@ -298,9 +298,9 @@
       // `build` WITHOUT the caret is this package's own, and it is here for a
       // different reason than the two beside it: ordering, not coverage.
       // `${configDir}/.tsbuildinfo` is one file per package, `incremental` is on
-      // in the shared config, and BOTH tasks write it — `tsup`'s declaration
-      // pass and this `tsc --noEmit` alike, which is why both declare it under
-      // `outputs`. Before `^build` existed the two never shared a run, so
+      // in the shared config, and this `tsc --noEmit` writes it. tsup's
+      // declaration pass wrote it too, which is why both tasks declare it under
+      // `outputs`; tsdown's writes none, and the order below costs nothing. Before `^build` existed the two never shared a run, so
       // nothing ordered them and nothing had to. Pulling every dependency's
       // build into this graph put 19 packages' `build` and `check-types` in one
       // run as unordered siblings, free to write and restore that file at the
@@ -488,8 +488,8 @@
       "dependsOn": ["^build"],
       "inputs": [
         "src/**/*.{ts,tsx,mts,cts}",
-        "tsup.config.ts",
-        "tsup.server-safe.config.ts",
+        "tsdown.config.ts",
+        "tsdown.server-safe.config.ts",
         "tsconfig.json",
         "package.json",
         // The scripts BUILD it, and one of them decides what gets built:
@@ -540,13 +540,12 @@
         "vitest.config.ts",
         "tsconfig.json",
         // Scripts and build configs are read BY tests, not only by builds: the ui suite derives
-        // its entry-point guards from `scripts/published-entries.ts`, which the tsup configs
+        // its entry-point guards from `scripts/published-entries.ts`, which the tsdown configs
         // also consume, and nextly's suites read the client entries out of its tsdown config.
         // Without these, retargeting a source barrel or changing an entry's client/server
         // classification leaves the cache key untouched, so CI replays the previous pass
         // precisely when the source of truth those guards read has changed.
         "scripts/**",
-        "tsup*.config.ts",
         "tsdown*.config.ts"
       ],
       "outputs": ["coverage/**"], // Coverage reports

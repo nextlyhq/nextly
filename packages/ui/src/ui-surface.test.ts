@@ -376,7 +376,7 @@ describe("ui release tags reach the published types", () => {
       // A doc block, the tag inside it, then the declaration it belongs to.
       // Anchored on `/**` so the capture cannot start mid-comment and pick up
       // a tag belonging to something further up the file.
-      /\/\*\*(?:(?!\*\/)[\s\S])*?@(public|experimental)(?:(?!\*\/)[\s\S])*\*\/\s*(?:declare\s+)?(?:const|function|interface|type|class)\s+([A-Za-z0-9_$]+)/g
+      /\/\*\*(?:(?!\*\/)[\s\S])*?@(public|experimental)(?:(?!\*\/)[\s\S])*\*\/\s*(?:export\s+)?(?:declare\s+)?(?:const|function|interface|type|class)\s+([A-Za-z0-9_$]+)/g
     )) {
       byName.set(m[2], m[1]);
     }
