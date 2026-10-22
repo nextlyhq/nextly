@@ -81,8 +81,11 @@ function nameOf(field: FieldConfig): string | undefined {
  * In a live document (`declaredComponentDecides`), a field declared with one
  * component holds only that one, so its instances are judged by it whatever
  * type they claim: a value a hook retagged as a component with no rules is
- * still judged by the rules it was declared under. A version keeps the type
- * it was captured under, so there the type decides.
+ * still judged by the rules it was declared under. A block of a live dynamic
+ * zone is judged by its own type only when the zone allows that type; one
+ * with no type, or one the zone does not allow, is judged by every type the
+ * zone allows, so a field any of them withholds stays withheld. A version
+ * keeps the type it was captured under, so there the type decides.
  */
 function componentInstances(
   field: FieldConfig,
@@ -90,18 +93,38 @@ function componentInstances(
   declaredComponentDecides: boolean
 ): { slug: string; instance: Record<string, unknown> }[] {
   const { single, many } = extractFieldGroupReferences(field);
-  return rowsOf(value).flatMap(instance => {
-    if (
-      declaredComponentDecides &&
-      single !== undefined &&
-      many === undefined
-    ) {
-      return [{ slug: single, instance }];
-    }
-    const own = readFieldGroupType(instance);
-    const slug = own !== undefined && own !== "" ? own : single;
-    return slug ? [{ slug, instance }] : [];
-  });
+  const allowed = fieldGroupSlugList(field);
+  return rowsOf(value).flatMap(instance =>
+    judgingSlugs(readFieldGroupType(instance), {
+      single,
+      zone: declaredComponentDecides && many !== undefined ? allowed : null,
+      declaredComponentDecides,
+    }).map(slug => ({ slug, instance }))
+  );
+}
+
+/**
+ * The components one instance is judged by, given the type it claims
+ * (`own`); see {@link componentInstances}. `zone` is the live dynamic zone's
+ * allowed types, or `null` where the claimed type decides.
+ */
+function judgingSlugs(
+  own: string | undefined,
+  declared: {
+    single: string | undefined;
+    zone: readonly string[] | null;
+    declaredComponentDecides: boolean;
+  }
+): readonly string[] {
+  const { single, zone } = declared;
+  if (zone !== null) {
+    return own !== undefined && zone.includes(own) ? [own] : zone;
+  }
+  if (declared.declaredComponentDecides && single !== undefined) {
+    return [single];
+  }
+  const slug = own !== undefined && own !== "" ? own : single;
+  return slug ? [slug] : [];
 }
 
 /**
