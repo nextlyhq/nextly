@@ -163,13 +163,17 @@ import {
   isBlank,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
-import { languagesGoingLiveFrom } from "../../i18n/languages-going-live";
+import {
+  languagesGoingLiveFrom,
+  languagesToAsk,
+} from "../../i18n/languages-going-live";
 import { EVERY_LOCALE } from "../../i18n/locale-selector";
 import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
 import { COMPANION_DEFAULT_STATUS } from "../../i18n/migration/generate-up";
+import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
 import {
   isValidLocale,
   resolveRequestedLocale,
@@ -3219,9 +3223,12 @@ export class CollectionMutationService extends BaseService {
     collectionName: string;
     entryId: string;
     row: Record<string, unknown>;
+    /** The collection's fields, for whether its content reaches a localized field group. */
+    fields: readonly { type: string; name?: string }[];
     tx?: TransactionContext;
     ask: () => Promise<CollectionServiceResult | null>;
   }): Promise<CollectionServiceResult | undefined> {
+    const defaultLocale = this.localization?.defaultLocale;
     const goingLive = (
       await this.languagesGoingLive({
         collectionName: args.collectionName,
@@ -3232,8 +3239,19 @@ export class CollectionMutationService extends BaseService {
         everyLanguage: true,
         ...(args.tx === undefined ? {} : { tx: args.tx }),
       })
-    ).filter((locale): locale is string => typeof locale === "string");
-    const denied = await askEachLanguage(goingLive, args.ask);
+    )
+      // A main row going live with no translation of its own is the default
+      // language's content going live, so it is asked as that language.
+      .map(locale => locale ?? defaultLocale)
+      .filter((locale): locale is string => typeof locale === "string");
+    const languages = languagesToAsk([...new Set(goingLive)], {
+      configured: this.localization?.locales.map(locale => locale.code) ?? [],
+      reachesLocalizedFieldGroup: await this.reachesLocalizedFieldGroup(
+        args.fields,
+        args.tx
+      ),
+    });
+    const denied = await askEachLanguage(languages, args.ask);
     if (!denied) return undefined;
     this.logger.warn("Publish refused in some languages", {
       collectionName: args.collectionName,
@@ -3241,6 +3259,22 @@ export class CollectionMutationService extends BaseService {
       refusedLanguages: denied.refused,
     });
     return denied.refusal;
+  }
+
+  /**
+   * Whether `fields` reach a field group whose definition is localized, read
+   * on `tx` where one is given. None without the field-group service, which
+   * a boot without field groups does not register.
+   */
+  private reachesLocalizedFieldGroup(
+    fields: readonly { type: string; name?: string }[],
+    tx?: TransactionContext
+  ): Promise<boolean> {
+    const service = this.fieldGroupDataService;
+    if (!service) return Promise.resolve(false);
+    return reachesLocalizedFieldGroup(fields, slug =>
+      service.isComponentLocalized(slug, tx?.getDrizzle())
+    );
   }
 
   /**
@@ -6274,6 +6308,7 @@ export class CollectionMutationService extends BaseService {
               collectionName: params.collectionName,
               entryId: params.entryId,
               row: preImageRow,
+              fields,
               tx,
               ask: () => lifecycleDenied(tx.getDrizzle()),
               onRefusal: refusal => {
@@ -8881,41 +8916,6 @@ export class CollectionMutationService extends BaseService {
           // does not exist.
           await tx.lockRow(tableName, params.entryId);
 
-          // A wildcard must not decide the fate of work somebody saved and has
-          // not released yet (`languagesHoldingWorkingDrafts` says why) — asked
-          // UNDER THE LOCK, because the answer changes: a draft save serialises
-          // on this same parent lock, so a check that ran earlier can be
-          // overtaken by a save that commits first, and the release would then
-          // proceed over work it never saw. The refusal travels out on the
-          // same out-of-band result the transition gate uses, since the adapter
-          // re-wraps a thrown sentinel before the catch can identify it.
-          if (sweepAllLocales && this.keepsWorkingDrafts(collection)) {
-            const heldBy = this.heldLanguages(
-              collection,
-              (
-                await new VersionsRepository(tx).findAllWorkingDrafts({
-                  scopeKind: "collection",
-                  scopeSlug: params.collectionName,
-                  entryId: params.entryId,
-                })
-              ).map(draft => draft.locale)
-            );
-            if (heldBy.length > 0) {
-              transitionDeniedResult = {
-                success: false,
-                statusCode: 409,
-                message:
-                  `This document has unpublished changes in ${heldBy.join(", ")}. ` +
-                  `Publish or discard them first, or publish each language on ` +
-                  `its own — locale '${EVERY_LOCALE}' moves every language's ` +
-                  `status and will not decide what happens to work that has ` +
-                  `not been released.`,
-                data: null,
-              };
-              throw new StatusTransitionDeniedError();
-            }
-          }
-
           // Read the committed state before this attempt's UPDATE. Nothing read
           // after the write can serve as prior state: the UPDATE below, the
           // companion upsert, and the many-to-many rewrite have all run by then.
@@ -9150,6 +9150,7 @@ export class CollectionMutationService extends BaseService {
                   collectionName: params.collectionName,
                   entryId: params.entryId,
                   row: preUpdateRow as Record<string, unknown>,
+                  fields,
                   tx,
                   ask: () => askEachLanguage(tx.getDrizzle()),
                 });
@@ -9160,6 +9161,45 @@ export class CollectionMutationService extends BaseService {
               }
               // The permission above is the whole decision: no rule judges the
               // row, so the row-locked document cannot change the answer.
+            }
+          }
+
+          // After the lifecycle permission and rule above, so a caller who may
+          // not publish or unpublish is refused before it learns which
+          // languages hold unreleased work.
+          //
+          // A wildcard must not decide the fate of work somebody saved and has
+          // not released yet (`languagesHoldingWorkingDrafts` says why) — asked
+          // UNDER THE LOCK, because the answer changes: a draft save serialises
+          // on this same parent lock, so a check that ran earlier can be
+          // overtaken by a save that commits first, and the release would then
+          // proceed over work it never saw. The refusal travels out on the
+          // same out-of-band result the transition gate uses, since the adapter
+          // re-wraps a thrown sentinel before the catch can identify it.
+          if (sweepAllLocales && this.keepsWorkingDrafts(collection)) {
+            const heldBy = this.heldLanguages(
+              collection,
+              (
+                await new VersionsRepository(tx).findAllWorkingDrafts({
+                  scopeKind: "collection",
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                })
+              ).map(draft => draft.locale)
+            );
+            if (heldBy.length > 0) {
+              transitionDeniedResult = {
+                success: false,
+                statusCode: 409,
+                message:
+                  `This document has unpublished changes in ${heldBy.join(", ")}. ` +
+                  `Publish or discard them first, or publish each language on ` +
+                  `its own — locale '${EVERY_LOCALE}' moves every language's ` +
+                  `status and will not decide what happens to work that has ` +
+                  `not been released.`,
+                data: null,
+              };
+              throw new StatusTransitionDeniedError();
             }
           }
 

@@ -111,8 +111,12 @@ import {
   readCompanionLocaleStatusAll,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
-import { languagesGoingLiveFrom } from "../../i18n/languages-going-live";
+import {
+  languagesGoingLiveFrom,
+  languagesToAsk,
+} from "../../i18n/languages-going-live";
 import { EVERY_LOCALE } from "../../i18n/locale-selector";
+import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
 import {
   type LocalizationSource,
   localizationNow,
@@ -1206,6 +1210,17 @@ export class SingleMutationService extends BaseService {
 
       const fieldConfigs = singleMeta.fields;
 
+      // Whether a write to every language reaches a localized field group,
+      // whose values go live in each language it stores: resolved OFF the
+      // transaction, for the reason the component schemas below are.
+      const fieldGroupService = this.fieldGroupDataService;
+      const reachesLocalizedGroup =
+        sweepAllLocales &&
+        fieldGroupService !== undefined &&
+        (await reachesLocalizedFieldGroup(fieldConfigs, slug =>
+          fieldGroupService.isComponentLocalized(slug)
+        ));
+
       // The component schemas the hold decision needs, resolved OFF the
       // transaction: this reads the component registry, and a registry read
       // inside the transaction would take a second pooled connection that the
@@ -1970,13 +1985,20 @@ export class SingleMutationService extends BaseService {
               !options.overrideAccess &&
               mainStatusWritten === "published"
             ) {
-              const goingLive = languagesGoingLiveFrom({
-                statuses: priorStatuses,
-                configured:
-                  this.localization?.locales.map(locale => locale.code) ?? [],
-                defaultLocale: this.localization?.defaultLocale,
-                mainPublished: preRowMainStatus === "published",
-              });
+              const configured =
+                this.localization?.locales.map(locale => locale.code) ?? [];
+              const goingLive = languagesToAsk(
+                languagesGoingLiveFrom({
+                  statuses: priorStatuses,
+                  configured,
+                  defaultLocale: this.localization?.defaultLocale,
+                  mainPublished: preRowMainStatus === "published",
+                }),
+                {
+                  configured,
+                  reachesLocalizedFieldGroup: reachesLocalizedGroup,
+                }
+              );
               const denied = await askEachLanguage(goingLive, () =>
                 checkSingleAccess({
                   slug,

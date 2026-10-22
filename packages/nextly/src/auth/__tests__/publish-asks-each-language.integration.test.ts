@@ -11,7 +11,13 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, defineSingle, text } from "../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  defineSingle,
+  fieldGroup,
+  text,
+} from "../../config";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import {
   createTestNextly,
@@ -29,6 +35,9 @@ afterEach(async () => {
 });
 
 const ARTICLES = "articles";
+const NO_ENGLISH_ARTICLES = "noenglisharticles";
+const GROUPED_ARTICLES = "groupedarticles";
+const HELD_PAGES = "heldpages";
 const BANNER = "banner";
 const NO_ENGLISH = "noenglishbanner";
 const UNPUBLISHABLE = "unpublishablebanner";
@@ -51,7 +60,56 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
     localization: { locales: ["en", "fr", "de"], defaultLocale: "en" },
+    fieldGroups: [
+      defineFieldGroup({
+        slug: "articlemeta",
+        localized: true,
+        fields: [text({ name: "note" })],
+      }),
+    ],
     collections: [
+      defineCollection({
+        slug: NO_ENGLISH_ARTICLES,
+        localized: true,
+        status: true,
+        access: {
+          create: () => true,
+          read: () => true,
+          update: () => true,
+          publish: englishRefused,
+        },
+        fields: [text({ name: "heading" })],
+      }),
+      defineCollection({
+        slug: GROUPED_ARTICLES,
+        localized: true,
+        status: true,
+        access: {
+          create: () => true,
+          read: () => true,
+          update: () => true,
+          publish: frenchRefused,
+        },
+        fields: [
+          text({ name: "heading" }),
+          // Its values are stored per language, in the group's own table.
+          fieldGroup({ name: "meta", component: "articlemeta" }),
+        ],
+      }),
+      defineCollection({
+        slug: HELD_PAGES,
+        localized: true,
+        status: true,
+        // Keeps drafts, so a status-less save on a published entry is held.
+        versions: { drafts: true },
+        access: {
+          create: () => true,
+          read: () => true,
+          update: () => true,
+          publish: () => false,
+        },
+        fields: [text({ name: "title" })],
+      }),
       defineCollection({
         slug: ARTICLES,
         localized: true,
@@ -311,6 +369,103 @@ describe.each(getConfiguredTestDialects())(
         { status: "published" },
         { overrideAccess: false, user: USER, locale: "*" }
       );
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(403);
+    });
+
+    it("asks the default language when an entry with no translation rows goes live", async () => {
+      const t = await boot(dialect);
+      // A draft that stores no translation row, as an entry stored before
+      // its collection was localized does: its main row, the default
+      // language's content, is what publishing every language puts live.
+      const created = await t.nextly.create({
+        collection: NO_ENGLISH_ARTICLES,
+        data: { status: "draft" },
+      });
+      const { id } = created.item;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      const translations = `dc_${NO_ENGLISH_ARTICLES}_locales`;
+      const ofThisEntry = {
+        and: [{ column: "_parent", op: "=" as const, value: id }],
+      };
+      await t.adapter.delete(translations, ofThisEntry);
+      // The state the case is about: no translation row at all.
+      expect(
+        await t.adapter.select(translations, { where: ofThisEntry })
+      ).toHaveLength(0);
+
+      const refused = await handlerOf(t).publishAllLocales({
+        collectionName: NO_ENGLISH_ARTICLES,
+        entryId: id,
+        overrideAccess: false,
+        user: USER,
+      });
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(403);
+    });
+
+    it("asks every configured language when an entry reaches a localized field group", async () => {
+      const t = await boot(dialect);
+      // English alone in the entry's own table; the field group stores its
+      // values per language in a table of its own, which those statuses do
+      // not cover, so every language is asked.
+      const created = await t.nextly.create({
+        collection: GROUPED_ARTICLES,
+        data: { heading: "en", status: "draft" },
+      });
+      const { id } = created.item;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      asked = [];
+
+      const refused = await handlerOf(t).publishAllLocales({
+        collectionName: GROUPED_ARTICLES,
+        entryId: id,
+        overrideAccess: false,
+        user: USER,
+      });
+      expect(publishedLocales().map(question => question.locale)).toContain(
+        "fr"
+      );
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(403);
+    });
+
+    it("refuses a caller who may not publish an entry before saying which languages hold unreleased work", async () => {
+      const t = await boot(dialect);
+      // Published in English, then a German edit held as a draft.
+      const created = await handlerOf(t).createEntry(
+        { collectionName: HELD_PAGES, overrideAccess: true, locale: "en" },
+        { title: "en", status: "published" }
+      );
+      const id = (created.data as { id?: string } | undefined)?.id;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: HELD_PAGES,
+          entryId: id,
+          overrideAccess: true,
+          locale: "de",
+        },
+        { title: "de pending" }
+      );
+      const publishEvery = (trusted: boolean) =>
+        handlerOf(t).updateEntry(
+          {
+            collectionName: HELD_PAGES,
+            entryId: id,
+            overrideAccess: trusted,
+            ...(trusted ? {} : { user: USER }),
+            locale: "*",
+          },
+          { status: "published" }
+        );
+      // The control: a trusted publish of every language meets the held draft.
+      expect((await publishEvery(true)).statusCode).toBe(409);
+
+      const refused = await publishEvery(false);
       expect(refused.success).toBe(false);
       expect(refused.statusCode).toBe(403);
     });

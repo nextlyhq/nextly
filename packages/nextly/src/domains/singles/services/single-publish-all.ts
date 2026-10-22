@@ -48,7 +48,14 @@ import {
 } from "../../field-groups/services/field-group-mutation-service";
 import { readCompanionLocaleStatusAll } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
-import { languagesGoingLiveFrom } from "../../i18n/languages-going-live";
+import {
+  languagesGoingLiveFrom,
+  languagesToAsk,
+} from "../../i18n/languages-going-live";
+import {
+  perLanguageFieldNames,
+  reachesLocalizedFieldGroup,
+} from "../../i18n/per-language-fields";
 import {
   type LocalizationSource,
   localizationNow,
@@ -104,7 +111,7 @@ import {
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
-import { liveSharedSingle, perLanguageFieldNames } from "./live-shared-single";
+import { liveSharedSingle } from "./live-shared-single";
 import {
   assertDraftsMayBePromoted,
   liveStoredDocument,
@@ -511,20 +518,37 @@ export class SinglePublishAllService extends BaseService {
    * The languages a publish of every language asks its rule about: those it
    * judges, and those the one answer to "what goes live" names, the default
    * language among them whenever the main row goes live, which the judged
-   * list leaves to the translations it carries.
+   * list leaves to the translations it carries; every configured language
+   * where the Single reaches a localized field group.
    */
-  private languagesToAsk(
+  private async publishLanguages(
+    tx: TransactionContext,
+    plan: PublishPlan,
     judged: ReadonlyArray<{ locale: string | null }>,
     priorCompanionStatuses: ReadonlyMap<string, string | null>,
     lockedRow: Record<string, unknown>
-  ): { locale: string | null }[] {
+  ): Promise<{ locale: string | null }[]> {
+    const configured =
+      this.localization?.locales.map(locale => locale.code) ?? [];
     const goingLive = languagesGoingLiveFrom({
       statuses: priorCompanionStatuses,
-      configured: this.localization?.locales.map(locale => locale.code) ?? [],
+      configured,
       defaultLocale: this.localization?.defaultLocale,
       mainPublished: lockedRow.status === "published",
     });
-    return [...judged, ...goingLive.map(locale => ({ locale }))];
+    const service = this.fieldGroupDataService;
+    const reaches =
+      service !== undefined &&
+      (await reachesLocalizedFieldGroup(plan.fieldConfigs, slug =>
+        service.isComponentLocalized(slug, tx.getDrizzle())
+      ));
+    return [
+      ...judged,
+      ...languagesToAsk(goingLive, {
+        configured,
+        reachesLocalizedFieldGroup: reaches,
+      }).map(locale => ({ locale })),
+    ];
   }
 
   /**
@@ -598,7 +622,9 @@ export class SinglePublishAllService extends BaseService {
       tx,
       plan,
       options,
-      this.languagesToAsk(
+      await this.publishLanguages(
+        tx,
+        plan,
         [...stored, ...alsoGoingLive],
         priorCompanionStatuses,
         lockedRow

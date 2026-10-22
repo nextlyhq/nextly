@@ -45,3 +45,22 @@ export function languagesGoingLiveFrom(args: {
   }
   return going;
 }
+
+/**
+ * The languages a publish of every language asks its rule about: those going
+ * live, and every configured language where the content reaches a localized
+ * field group. Such a group stores its values per language in a table of its
+ * own, which the statuses `goingLive` was read from do not cover, so each
+ * language is asked rather than fewer than the publish puts live.
+ */
+export function languagesToAsk(
+  goingLive: readonly string[],
+  args: {
+    configured: readonly string[];
+    reachesLocalizedFieldGroup: boolean;
+  }
+): string[] {
+  return args.reachesLocalizedFieldGroup
+    ? [...new Set([...goingLive, ...args.configured])]
+    : [...goingLive];
+}
