@@ -257,6 +257,36 @@ export async function clearReview(tx: TransactionContext, ref: VersionRef) {
 A plugin's `ctx.db.transaction` hands it a handle to its own tables, not the
 `TransactionContext` above, so a plugin cannot pin through it.
 
+## Renaming a collection or Single
+
+History is kept by the slug of the collection or Single it belongs to. When a Schema Builder
+collection or Single is renamed, its history moves to the new slug in the same transaction as
+the rename, so the two commit together or not at all. The Builder's settings don't offer a slug
+change after creation, so today that means a rename made through Nextly's collection service
+(`DynamicCollectionService.updateCollectionMetadata` with a new `slug`).
+
+What moves to the new slug:
+
+- versions, autosaves and working drafts;
+- version pins, and each person's "last looked at" marker;
+- content events and the languages each one involved;
+- the releases that hold its documents;
+- its schema events, its activity feed rows, and translations archived when localization was
+  turned off.
+
+What ends with the old slug: its document locks and its preview links. A preview link names
+the slug it was made for, so a link made before the rename no longer opens; make a new one.
+
+A rename onto a slug that still holds history from an earlier collection or Single of the same
+kind (one that was deleted, for example) is refused, and nothing changes. Moving one entity's
+history in beside another's would merge the two.
+
+<Callout type="info">
+  Changing the `slug` of a code-first collection or Single in your config is not
+  a rename. Nextly cannot tell it from removing one entity and adding another,
+  so nothing is moved: the entity under the new slug starts with no history.
+</Callout>
+
 ## Related
 
 - [Draft and published status](/docs/guides/draft-published-status)
