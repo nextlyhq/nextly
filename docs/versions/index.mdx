@@ -274,12 +274,27 @@ What moves to the new slug:
 - its schema events, its activity feed rows, and translations archived when localization was
   turned off.
 
-What ends with the old slug: its document locks and its preview links. A preview link names
-the slug it was made for, so a link made before the rename no longer opens; make a new one.
+A renamed collection or Single also keeps who may use it and where its webhooks go:
 
-A rename onto a slug that still holds history from an earlier collection or Single of the same
-kind (one that was deleted, for example) is refused, and nothing changes. Moving one entity's
-history in beside another's would merge the two.
+- its permissions (`read-posts` becomes `read-articles`, and so on for each action) move to the
+  new slug, and every role that held one holds it under the new name. No other role's access
+  changes. A plugin's own permissions stay as the plugin declares them;
+- a webhook endpoint whose filter lists the collection now lists the new slug, and events for
+  the renamed collection reach it;
+- its choice to record webhook events or not carries over to the new slug.
+
+What ends with the old slug: its document locks, its preview links and any kept answers about
+who may use it. A preview link names the slug it was made for, so a link made before the rename
+no longer opens; make a new one.
+
+So a collection or Single created later under the old slug starts clean: it gets the
+permissions any new entity gets, none of the renamed one's grants, history or webhook filters.
+The renamed entity keeps its database table, so a Schema Builder collection or Single can't be
+created under the old slug while that table carries the old name.
+
+A rename onto a slug that still holds an earlier collection or Single's records (its history, its
+permissions, or a webhook filter that lists it, for example after it was deleted) is refused,
+and nothing changes. Moving one entity's records in beside another's would merge the two.
 
 <Callout type="info">
   Changing the `slug` of a code-first collection or Single in your config is not
