@@ -71,6 +71,9 @@ describe("collectJobs", () => {
     expect(() =>
       collectJobs(config(), [plugin("acme", [job("email:send")])])
     ).toThrow(/"email:send", which is a built-in job type/);
+    expect(() =>
+      collectJobs(config(), [plugin("acme", [job("email:queue-prune")])])
+    ).toThrow(/"email:queue-prune", which is a built-in job type/);
     expect(
       collectJobs(config(), [plugin("acme", [job("email:digest")])]).map(
         c => c.definition.slug

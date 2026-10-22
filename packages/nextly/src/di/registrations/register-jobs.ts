@@ -24,7 +24,10 @@ import {
   createDocumentLockSweepJob,
   type DocumentLockService,
 } from "../../domains/document-lock";
-import { createQueuedEmailJob } from "../../domains/email/queued-send";
+import {
+  createQueuedEmailJob,
+  createQueuedEmailPruneJob,
+} from "../../domains/email/queued-send";
 import { scopedSender } from "../../domains/email/send-claims";
 import type { EmailService } from "../../domains/email/services/email-service";
 import { JobRegistry } from "../../domains/jobs/job-registry";
@@ -244,6 +247,10 @@ export function registerJobServices(ctx: RegistrationContext): void {
         secrets: pluginSettingsSecrets(env),
       }))
     );
+    // Settled queued emails, removed on every jobs run whatever the delivery
+    // records' retention, so a held message is gone seven days after it
+    // settles.
+    registry.register(createQueuedEmailPruneJob(() => adapter));
 
     // Job types the application and its plugins declared. Registered AFTER the
     // built-ins so a plugin cannot shadow one: `collectJobs` already refuses a

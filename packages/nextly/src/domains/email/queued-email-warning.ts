@@ -20,7 +20,9 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { Logger } from "../../shared/types";
 import { JobsRepository } from "../jobs/jobs-repository";
+import { warnQuietly } from "../retention/safe-log";
 
 import { QUEUED_EMAIL_JOB } from "./queued-email-job";
 
@@ -31,9 +33,7 @@ export const LATE_QUEUED_EMAIL_MS = 15 * 60_000;
 const COUNTED = 100;
 
 /** What the warning is written to. */
-export interface LateQueuedEmailLogger {
-  warn(message: string, context?: Record<string, unknown>): void;
-}
+export type LateQueuedEmailLogger = Logger;
 
 /**
  * How many queued emails are more than `LATE_QUEUED_EMAIL_MS` past due, up
@@ -72,7 +72,8 @@ export async function warnAboutLateQueuedEmail(
   }
   if (late === 0) return;
   const count = late >= COUNTED ? `${COUNTED} or more` : String(late);
-  logger.warn(
+  warnQuietly(
+    logger,
     `${count} queued email${late === 1 ? " is" : "s are"} more than 15 minutes past due, so the jobs trigger isn't running. Call /api/jobs/run every few minutes (a cron job or a scheduler) so queued email is retried.`,
     { lateQueuedEmails: late }
   );

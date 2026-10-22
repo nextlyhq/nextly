@@ -43,6 +43,7 @@ import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { runAdapterTransaction } from "../../../shared/lib/run-adapter-transaction";
 import { pluginSettingsSecrets } from "../../plugins/settings-service";
+import { warnQuietly } from "../../retention/safe-log";
 import {
   isRecognisedMessageId,
   mailboxOf,
@@ -1374,7 +1375,8 @@ export class EmailService extends BaseService {
     try {
       return (await queuedEmailState(this.adapter, id)) ?? "waiting";
     } catch (error) {
-      this.logger.warn(
+      warnQuietly(
+        this.logger,
         "A queued email's state could not be read after its first attempt.",
         { error: error instanceof Error ? error.message : String(error) }
       );
@@ -1391,7 +1393,10 @@ export class EmailService extends BaseService {
     try {
       await this.runQueuedJob?.(jobId);
     } catch (error) {
-      this.logger.warn(
+      // Contained: the email is stored, and a logger that throws must not
+      // turn that into a failed queue the caller would repeat.
+      warnQuietly(
+        this.logger,
         "A queued email's first attempt did not start; the jobs trigger will make it.",
         { error: error instanceof Error ? error.message : String(error) }
       );

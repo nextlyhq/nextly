@@ -17,7 +17,10 @@
  */
 
 import type { NextlyServiceConfig } from "../../di/register";
-import { QUEUED_EMAIL_JOB } from "../../domains/email/queued-email-job";
+import {
+  QUEUED_EMAIL_JOB,
+  QUEUED_EMAIL_PRUNE_JOB,
+} from "../../domains/email/queued-email-job";
 import {
   normalizeJobSlug,
   type JobDefinition,
@@ -45,7 +48,7 @@ const RESERVED_JOB_PREFIXES = ["releases:", "webhooks:", "nextly:"];
  * Exact slugs core registers outside those namespaces. Exact rather than a
  * prefix, so a plugin that already declares another `email:` job still boots.
  */
-const RESERVED_JOB_SLUGS = [QUEUED_EMAIL_JOB];
+const RESERVED_JOB_SLUGS = [QUEUED_EMAIL_JOB, QUEUED_EMAIL_PRUNE_JOB];
 
 /**
  * Fold `config.jobs` and every plugin's `contributes.jobs` into one list.

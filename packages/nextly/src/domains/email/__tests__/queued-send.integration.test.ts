@@ -40,8 +40,6 @@ import { runJobsPass } from "../../jobs/jobs-runner";
 import { pluginSettingsSecrets } from "../../plugins/settings-service";
 import { withEmailFailure } from "../failure";
 import { defineEmailProvider } from "../provider-definition";
-import { resolveEmailRetentionConfig } from "../retention-config";
-import { pruneEmailDataSafely } from "../prune";
 import {
   LATE_QUEUED_EMAIL_MS,
   warnAboutLateQueuedEmail,
@@ -268,7 +266,9 @@ describe.each(getConfiguredTestDialects())("a queued email (%s)", dialect => {
     expect(sent.message).toBeNull();
   });
 
-  it("is removed seven days after it settles, and never while it waits", async () => {
+  it("is removed by a jobs run seven days after it settles, and never while it waits", async () => {
+    // By the queue's own sweep, so it holds whatever the delivery records'
+    // retention is, kept for ever included.
     const t = await boot(dialect);
     const sent = await t.nextly.email.queue(message);
     behaviour.failures = Number.MAX_SAFE_INTEGER;
@@ -276,13 +276,7 @@ describe.each(getConfiguredTestDialects())("a queued email (%s)", dialect => {
     expect([sent.state, waiting.state]).toEqual(["sent", "waiting"]);
     const day = 24 * 60 * 60_000;
     const pass = (days: number) =>
-      pruneEmailDataSafely(
-        {
-          adapter: t.adapter as never,
-          now: () => new Date(Date.now() + days * day),
-        },
-        resolveEmailRetentionConfig()
-      );
+      trigger(t, new Date(Date.now() + days * day));
 
     await pass(6);
     expect((await queued(t)).map(row => row.id).sort()).toEqual(

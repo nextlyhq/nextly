@@ -136,6 +136,21 @@ describe("a queued template's variables", () => {
     expect(variables.body).toEqual({ h: "<script>x</script>" });
   });
 
+  it("keep a key named __proto__ as the key it is", () => {
+    // As JSON from a request arrives: an own `__proto__` key.
+    const variables = roundTrip(
+      JSON.parse('{"data":{"__proto__":"kept","a":1}}') as Record<
+        string,
+        unknown
+      >
+    );
+    const data = variables.data as Record<string, unknown>;
+    expect(Object.keys(data).sort()).toEqual(["__proto__", "a"]);
+    expect(Object.getOwnPropertyDescriptor(data, "__proto__")?.value).toBe(
+      "kept"
+    );
+  });
+
   it("drop what JSON drops, and honour toJSON as JSON does", () => {
     expect(
       roundTrip({

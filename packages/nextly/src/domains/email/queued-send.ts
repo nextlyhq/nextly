@@ -47,9 +47,11 @@ import { openSetting, sealSetting } from "../plugins/settings-crypto";
 
 import { storableError } from "./delivery-record";
 import { type EmailFailure, httpFailure } from "./failure";
+import { pruneQueuedEmails } from "./prune";
 import {
   QUEUED_EMAIL_JOB,
   QUEUED_EMAIL_MAX_ATTEMPTS,
+  QUEUED_EMAIL_PRUNE_JOB,
 } from "./queued-email-job";
 import type { EmailService } from "./services/email-service";
 import { markHtml, TrustedHtml } from "./services/liquid-engine";
@@ -233,7 +235,9 @@ function storedObject(
     if (Array.isArray(value)) {
       return { a: value.map(item => storedValue(item, seen) ?? null) };
     }
-    const entries: Record<string, StoredValue> = {};
+    // No prototype, so a key named `__proto__` is stored as the key it is
+    // rather than taken for the prototype setter and lost.
+    const entries = Object.create(null) as Record<string, StoredValue>;
     for (const [key, item] of Object.entries(value)) {
       const stored = storedValue(item, seen);
       if (stored !== undefined) entries[key] = stored;
@@ -585,6 +589,22 @@ export function createQueuedEmailJob(
       // email, and there is nothing to attempt.
       if (typeof input?.queuedId !== "string") return;
       await attemptQueuedEmail(deps(), input, context);
+    },
+  });
+}
+
+/**
+ * The `email:queue-prune` sweep: a jobs trigger keeps one queued, so settled
+ * queued emails are removed on every jobs run (`pruneQueuedEmails`).
+ */
+export function createQueuedEmailPruneJob(
+  adapter: () => DrizzleAdapter
+): JobDefinition {
+  return defineJob({
+    slug: QUEUED_EMAIL_PRUNE_JOB,
+    sweep: true,
+    handler: async (_input, context) => {
+      await pruneQueuedEmails(adapter(), context.now);
     },
   });
 }

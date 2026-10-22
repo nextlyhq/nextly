@@ -9,6 +9,12 @@
 export const QUEUED_EMAIL_JOB = "email:send";
 
 /**
+ * The slug of the sweep that removes settled queued emails, on every jobs
+ * run, whatever the delivery records' retention.
+ */
+export const QUEUED_EMAIL_PRUNE_JOB = "email:queue-prune";
+
+/**
  * How many attempts a queued email gets before it fails for good.
  *
  * The job queue's backoff doubles from one second and is capped at an hour,

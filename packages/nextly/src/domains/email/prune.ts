@@ -266,6 +266,10 @@ export async function pruneSendClaims(
  * bounded batch: sent, cancelled, or failed for good, each with whatever of
  * its message is still held. An email still waiting or sending is never
  * removed, however old.
+ *
+ * Run by the `email:queue-prune` sweep on every jobs run, not by the
+ * retention pass: an install that keeps its delivery records for ever still
+ * holds a queued message seven days at most.
  */
 export async function pruneQueuedEmails(
   adapter: EmailPruneAdapter,
@@ -295,7 +299,7 @@ export async function pruneQueuedEmails(
 
 /**
  * {@link pruneEmailData}, with failure absorbed and reported, and then the
- * send claims, which the same window governs, and the settled queued emails.
+ * send claims, which the same window governs.
  *
  * A send must not fail because housekeeping did. The failure is logged with its
  * cause rather than swallowed, because a pass that silently stops leaves the
@@ -310,7 +314,6 @@ export async function pruneEmailDataSafely(
   try {
     const result = await pruneEmailData(deps, policy, maxBatches);
     await pruneClaimsAfter(deps, policy);
-    await pruneQueueAfter(deps);
     return result;
   } catch (error) {
     // `warnQuietly` rather than the logger directly: this is inside the catch
@@ -350,22 +353,5 @@ async function pruneClaimsAfter(
     warnQuietly(deps.logger, "Email send claims could not be pruned", {
       error,
     });
-  }
-}
-
-/**
- * The queue's part of a pass, contained as the claims' part is, and left to
- * the next pass inside a caller's transaction for the same reason.
- */
-async function pruneQueueAfter(deps: EmailPruneDeps): Promise<void> {
-  const now = (deps.now ?? (() => new Date()))();
-  const inTransaction = deps.adapter.transactionOpenInFlow?.() === true;
-  if (inTransaction || (deps.deadline !== undefined && now >= deps.deadline)) {
-    return;
-  }
-  try {
-    await pruneQueuedEmails(deps.adapter, now);
-  } catch (error) {
-    warnQuietly(deps.logger, "Queued emails could not be pruned", { error });
   }
 }
