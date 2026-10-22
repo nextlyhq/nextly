@@ -1160,6 +1160,19 @@ export async function ensureLocalizedCompanions(
           "Newly translatable fields will fail to save until it matches"
         )
       );
+      // Its per-language unique indexes, once its columns are in step. A field whose rule cannot
+      // hold is reported, which fails the command, and left without its index.
+      const { reconcileCompanionUniqueIndexes } = await import(
+        "../../domains/i18n/runtime/companion-unique-reconcile"
+      );
+      await reconcileCompanionUniqueIndexes(
+        adapter as unknown as DrizzleAdapter,
+        companionEntityArgs,
+        reportCompanionFailure(
+          "index",
+          "Unique translated fields are not enforced in each language until it is"
+        )
+      );
     }
   }
   // Fail the command. Exiting 0 here would tell deployment automation the schema is

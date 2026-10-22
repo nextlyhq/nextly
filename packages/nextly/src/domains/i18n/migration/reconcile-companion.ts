@@ -9,6 +9,7 @@ import { isFieldLocalized } from "../classify-fields";
 import {
   companionUniqueIndexName,
   companionUniqueIndexStatements,
+  translatedColumnNames,
   type UniqueFieldLike,
   uniqueTranslatedColumns,
 } from "./companion-unique-indexes";
@@ -1055,10 +1056,12 @@ function uniqueIndexDelta(args: CompanionTransitionArgs): string[] {
   const had = columnsOf(args.oldFields, args.wasLocalized).map(c =>
     companionUniqueIndexName(companionTable, c.column)
   );
-  const translatedColumns = [...args.oldFields, ...args.newFields]
-    .filter(f => isFieldLocalized(f, true))
-    .map(f => fieldToLocalizedColumnSpec(f, dialect, builtBy)?.name)
-    .filter((name): name is string => typeof name === "string");
+  const translatedColumns = translatedColumnNames({
+    fields: [...args.oldFields, ...args.newFields],
+    entityLocalized: true,
+    dialect,
+    builtBy,
+  });
   return companionUniqueIndexStatements({
     dialect,
     companionTable,

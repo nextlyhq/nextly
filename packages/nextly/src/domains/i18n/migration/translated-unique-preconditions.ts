@@ -43,8 +43,16 @@ export interface TranslatedUniqueRefusal {
   message: string;
 }
 
+/** The adapter surface these preconditions read: what the server can do, and its rows. */
+export type TranslatedUniqueAdapter = Pick<
+  DrizzleAdapter,
+  "getCapabilities" | "queryStatement"
+>;
+
 /** Whether the adapter's server can key a unique index on an expression. */
-export function canKeyOnExpressions(adapter: DrizzleAdapter): boolean {
+export function canKeyOnExpressions(
+  adapter: Pick<DrizzleAdapter, "getCapabilities">
+): boolean {
   const capabilities = adapter.getCapabilities();
   return (
     capabilities.dialect !== "mysql" || capabilities.functionalIndexes === true
@@ -53,7 +61,7 @@ export function canKeyOnExpressions(adapter: DrizzleAdapter): boolean {
 
 /** The refusal for each translated unique field a server cannot index per language. */
 export function refusalsForUnindexableTranslatedUnique(
-  adapter: DrizzleAdapter,
+  adapter: Pick<DrizzleAdapter, "getCapabilities">,
   columns: readonly UniqueTranslatedColumn[]
 ): TranslatedUniqueRefusal[] {
   if (canKeyOnExpressions(adapter)) return [];
@@ -90,7 +98,7 @@ export interface TranslatedUniqueChange {
  * @throws NextlyError `VALIDATION_ERROR` naming each field the server cannot index
  */
 export function refuseUnindexableTranslatedUnique(
-  adapter: DrizzleAdapter,
+  adapter: Pick<DrizzleAdapter, "getCapabilities">,
   change: TranslatedUniqueChange
 ): UniqueTranslatedColumn[] {
   if (!change.isLocalized || !change.newFields.some(f => f.unique === true))
@@ -121,7 +129,7 @@ export function refuseUnindexableTranslatedUnique(
 
 /** The documents in each language that already share a value of one of `columns`. */
 export async function duplicateTranslatedValues(
-  adapter: DrizzleAdapter,
+  adapter: Pick<DrizzleAdapter, "queryStatement">,
   companionTable: string,
   columns: readonly UniqueTranslatedColumn[]
 ): Promise<TranslatedDuplicate[]> {

@@ -205,18 +205,20 @@ export class FieldGroupMetadataService {
     assertValidPluginFieldOptions(input.fields);
     // A translated field marked unique needs an index this server may not be able to key. Refused
     // here, before the main table: the companion is provisioned after it, and a failure there is
-    // recorded rather than raised.
-    const { refuseUnindexableTranslatedUnique } = await import(
-      "../../i18n/migration/translated-unique-preconditions"
-    );
-    refuseUnindexableTranslatedUnique(this.adapter, {
-      entity: input.slug,
-      builtBy: "fieldGroup",
-      oldFields: [],
-      newFields: input.fields as unknown as FieldDefinition[],
-      wasLocalized: false,
-      isLocalized: input.localized === true,
-    });
+    // recorded rather than raised. With no adapter, nothing is applied at all.
+    if (this.adapter) {
+      const { refuseUnindexableTranslatedUnique } = await import(
+        "../../i18n/migration/translated-unique-preconditions"
+      );
+      refuseUnindexableTranslatedUnique(this.adapter, {
+        entity: input.slug,
+        builtBy: "fieldGroup",
+        oldFields: [],
+        newFields: input.fields as unknown as FieldDefinition[],
+        wasLocalized: false,
+        isLocalized: input.localized === true,
+      });
+    }
 
     // 1. PLAN. The generator validates as well as renders, so a request it refuses leaves no table
     // and no row behind.

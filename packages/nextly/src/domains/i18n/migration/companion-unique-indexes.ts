@@ -46,6 +46,23 @@ export function uniqueTranslatedColumns(args: {
   });
 }
 
+/**
+ * The companion column of every translated field in `fields`, unique or not: the columns whose
+ * per-language index a change may have to drop.
+ */
+export function translatedColumnNames(args: {
+  fields: readonly UniqueFieldLike[];
+  entityLocalized: boolean;
+  dialect: SupportedDialect;
+  builtBy: ColumnOrigin;
+}): string[] {
+  return args.fields.flatMap(field => {
+    if (!isFieldLocalized(field, args.entityLocalized)) return [];
+    const spec = fieldToLocalizedColumnSpec(field, args.dialect, args.builtBy);
+    return spec ? [spec.name] : [];
+  });
+}
+
 /** The name of a column's per-language unique index on a companion table. */
 export function companionUniqueIndexName(
   companionTable: string,
