@@ -126,7 +126,7 @@ import { readServiceConfig } from "./dispatcher/dispatcher";
 import {
   roleChangeCallerFor,
   runAsRoleChangeCaller,
-} from "./domains/auth/services/super-admin-grant";
+} from "./domains/auth/services/role-change-caller";
 import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
 import {

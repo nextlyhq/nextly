@@ -32,6 +32,7 @@ import {
 
 import { NextlyError } from "../../../errors";
 import { roleAssignmentInForce } from "../../../services/lib/role-assignments";
+import { refuseUnlessSuperAdminCaller } from "../../auth/services/role-change-caller";
 
 const SUPER_ADMIN_ROLE_SLUG = "super-admin";
 
@@ -63,6 +64,18 @@ export type SuperAdminChange =
   | { kind: "replaceChildren"; roleId: string; childRoleIds: readonly string[] }
   /** The role `roleId` is deleted, with its assignments and inheritance. */
   | { kind: "deleteRole"; roleId: string };
+
+/**
+ * The changes to roles, as opposed to accounts, that can take super-admin
+ * authority from someone. Each is a super-admin person's to make.
+ */
+const ROLE_CHANGES: ReadonlySet<SuperAdminChange["kind"]> = new Set([
+  "replaceRoles",
+  "unassignRole",
+  "removeInheritance",
+  "replaceChildren",
+  "deleteRole",
+]);
 
 type Rows = Array<Record<string, unknown>>;
 
@@ -128,6 +141,14 @@ export interface FirstAdministratorTables extends LastSuperAdminTables {
  * stands and as the change would leave it, and the change is refused when it
  * would take the set from some to none. A failed read refuses, by throwing.
  *
+ * Before that, a role change that would take super-admin authority from
+ * anyone, the last or not, is refused unless a super-admin person or trusted
+ * server code makes it, as giving that authority is. Here everyone holding it
+ * now counts, an expiring assignment or a deactivated account included, since
+ * it is theirs until it lapses or they are reactivated.
+ *
+ * @throws NextlyError(FORBIDDEN) when a role change would take super-admin
+ *   authority from someone and its caller may not.
  * @throws NextlyError(CONFLICT) when the change would leave no active
  *   super-admin.
  */
@@ -161,31 +182,36 @@ export async function refuseRemovingLastSuperAdmin(
   const before = conferringFrom(edges, superAdminRoleId);
   const after = conferringFrom(edgesAfter(edges, change), superAdminRoleId);
   if (change.kind === "deleteRole") after.delete(change.roleId);
+  const roleIds = new Set([...before, ...after]);
 
-  const assignments = await permanentAssignments(
-    tx,
-    tables,
-    dialect,
-    new Set([...before, ...after])
-  );
-  const holdersBefore = new Set(
-    assignments.filter(a => before.has(a.roleId)).map(a => a.userId)
+  // Who may make the change comes first: a caller who may not is refused
+  // whether or not the last super-admin would go.
+  if (ROLE_CHANGES.has(change.kind)) {
+    const held = holdersAround(
+      await assignments(tx, tables, dialect, roleIds, "in-force"),
+      before,
+      after,
+      change
+    );
+    const losing = [...held.before].filter(userId => !held.after.has(userId));
+    if (losing.length > 0) {
+      await refuseUnlessSuperAdminCaller(tx, {
+        reason: "super-admin-removal-refused",
+        change: change.kind,
+        userIds: losing,
+      });
+    }
+  }
+
+  const kept = holdersAround(
+    await assignments(tx, tables, dialect, roleIds, "permanent"),
+    before,
+    after,
+    change
   );
   // Nobody to keep: the install already has no permanent super-admin.
-  if (holdersBefore.size === 0) return;
-
-  const holdersAfter = new Set(
-    assignments
-      .filter(a => after.has(a.roleId) && survives(a, change))
-      .map(a => a.userId)
-  );
-  if (
-    change.kind === "replaceRoles" &&
-    change.roleIds.some(id => after.has(String(id)))
-  ) {
-    holdersAfter.add(String(change.userId));
-  }
-  if (holdersAfter.size > 0) return;
+  if (kept.before.size === 0) return;
+  if (kept.after.size > 0) return;
 
   const toAccount =
     change.kind === "delete" ||
@@ -260,18 +286,24 @@ function edgesAfter(edges: readonly Edge[], change: SuperAdminChange): Edge[] {
   }
 }
 
-/** An active account's assignment, with no expiry, of a role. */
+/** An account's assignment of a role. */
 interface Assignment {
   userId: string;
   roleId: string;
 }
 
-/** The permanent assignments of `roleIds` held by active accounts. */
-async function permanentAssignments(
+/**
+ * The assignments of `roleIds`: `permanent`, those of active accounts with no
+ * expiry, the super-admins the guard keeps; `in-force`, every assignment not
+ * yet lapsed, whatever the account, the super-admins a change can take the
+ * authority from.
+ */
+async function assignments(
   tx: LastSuperAdminTx,
   tables: LastSuperAdminTables,
   dialect: SupportedDialect,
-  roleIds: ReadonlySet<string>
+  roleIds: ReadonlySet<string>,
+  held: "permanent" | "in-force"
 ): Promise<Assignment[]> {
   const { users, userRoles } = tables;
   const rows = await latestRows(
@@ -280,11 +312,16 @@ async function permanentAssignments(
       .from(userRoles)
       .innerJoin(users, eq(users.id, userRoles.userId))
       .where(
-        and(
-          inArray(userRoles.roleId, [...roleIds]),
-          isNull(userRoles.expiresAt),
-          eq(users.isActive, true)
-        )
+        held === "permanent"
+          ? and(
+              inArray(userRoles.roleId, [...roleIds]),
+              isNull(userRoles.expiresAt),
+              eq(users.isActive, true)
+            )
+          : and(
+              inArray(userRoles.roleId, [...roleIds]),
+              roleAssignmentInForce(userRoles, new Date())
+            )
       ),
     dialect
   );
@@ -292,6 +329,34 @@ async function permanentAssignments(
     userId: String(row.userId),
     roleId: String(row.roleId),
   }));
+}
+
+/**
+ * Who holds super-admin authority through `held`: `before` the change, over
+ * the roles that confer it now, and `after`, over the roles that will, through
+ * the assignments the change leaves and any it gives.
+ */
+function holdersAround(
+  held: readonly Assignment[],
+  before: ReadonlySet<string>,
+  after: ReadonlySet<string>,
+  change: SuperAdminChange
+): { before: Set<string>; after: Set<string> } {
+  const holdersBefore = new Set(
+    held.filter(a => before.has(a.roleId)).map(a => a.userId)
+  );
+  const holdersAfter = new Set(
+    held
+      .filter(a => after.has(a.roleId) && survives(a, change))
+      .map(a => a.userId)
+  );
+  if (
+    change.kind === "replaceRoles" &&
+    change.roleIds.some(id => after.has(String(id)))
+  ) {
+    holdersAfter.add(String(change.userId));
+  }
+  return { before: holdersBefore, after: holdersAfter };
 }
 
 /** Whether `assignment` is still held once the change lands. */
