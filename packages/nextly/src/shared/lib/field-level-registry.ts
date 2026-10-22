@@ -445,7 +445,7 @@ function nestedRows(value: unknown): Record<string, unknown>[] {
  * container back in the shape it arrived in, so a string column stays a string.
  * Returns null when there is nothing to descend into.
  */
-function openNestedContainer(
+export function openNestedContainer(
   value: unknown
 ): { rows: Record<string, unknown>[]; serialize: () => unknown } | null {
   if (typeof value !== "string") {

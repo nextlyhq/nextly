@@ -19,6 +19,7 @@ import type { FieldConfig } from "../../collections/fields/types";
 import {
   applyFieldReadAccess,
   getFieldFunctions,
+  openNestedContainer,
   type CallerGrants,
   type FieldFunctions,
   type ReadAccessRedactions,
@@ -167,18 +168,37 @@ async function judgeField(
     open.delete(field);
     return;
   }
+  if (!isFieldGroupField(field) && !sub) return;
+  // A value held as JSON text (SQLite's shape, or what a hook returned) is
+  // parsed, judged, and written back as text, as the entity's own pass does.
+  const container = openNestedContainer(entry[name]);
+  if (container === null) return;
+  await judgeRows(container.rows, field, componentFields, caller);
+  entry[name] = container.serialize();
+}
+
+/**
+ * The rows a named field holds: as instances of its field groups, or as the
+ * rows of a group or repeater whose fields may reach more.
+ */
+async function judgeRows(
+  rows: Record<string, unknown>[],
+  field: FieldConfig,
+  componentFields: ComponentFieldMap,
+  caller: ComponentReadCaller
+): Promise<void> {
   if (isFieldGroupField(field)) {
     for (const { slug, instance } of componentInstances(
       field,
-      entry[name],
+      rows,
       caller.declaredComponentDecides === true
     )) {
       await judgeInstance(instance, slug, componentFields, caller);
     }
     return;
   }
-  if (!sub) return;
-  for (const row of rowsOf(entry[name])) {
+  const sub = subFieldsOf(field) ?? [];
+  for (const row of rows) {
     await applyComponentReadAccess(row, sub, componentFields, caller);
   }
 }
