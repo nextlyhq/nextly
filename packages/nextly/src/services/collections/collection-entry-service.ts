@@ -40,7 +40,7 @@ import type {
   BulkUpdateEntry,
 } from "../../domains/collections/services/collection-types";
 import type { DynamicCollectionService } from "../../domains/dynamic-collections";
-import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
+import { type LocalizationSource } from "../../domains/i18n/localization-source";
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import type { RetentionRunner } from "../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
@@ -129,7 +129,7 @@ export class CollectionEntryService extends BaseService {
     fieldGroupDataService?: FieldGroupDataService,
     rbacAccessControlService?: RBACAccessControlService,
     /** Normalized localization config (i18n M4) — forwarded to the query service. */
-    localization?: SanitizedLocalizationConfig,
+    localization?: LocalizationSource,
     /**
      * Offers a retention pass after a write — both of them: the webhook event
      * ledger and the audit trails, each on its own window and its own gate. The

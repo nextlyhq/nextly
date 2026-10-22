@@ -14,6 +14,11 @@ import type { RBACAccessControlService } from "../domains/auth/services/rbac-acc
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import {
+  isLiveLocalization,
+  type LocalizationSource,
+  localizationNow,
+} from "../domains/i18n/localization-source";
 import { releaseVisibilityFor } from "../domains/releases/release-visibility";
 import { MetaRetentionGate } from "../domains/retention/gate";
 import {
@@ -76,13 +81,18 @@ export class CollectionsHandler {
   private readonly fileManager: CollectionFileManager;
   private readonly logger: Logger;
 
+  /** The site's languages as they are now: the source may be the language registry. */
+  private get localization(): SanitizedLocalizationConfig | undefined {
+    return localizationNow(this.localizationSource);
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     db: DatabaseInstance,
     logger: Logger = consoleLogger,
     consumerAppRoot?: string,
     /** Normalized localization config (i18n M4) — enables companion-aware reads. */
-    private readonly localization?: SanitizedLocalizationConfig,
+    private readonly localizationSource?: LocalizationSource,
     /**
      * Resolved webhook retention policy. Content writes offer to run a pass so
      * the event ledger stays bounded in installs that never configure a webhook
@@ -120,7 +130,10 @@ export class CollectionsHandler {
     this.collectionService = new DynamicCollectionService(
       adapter,
       logger,
-      this.localization?.defaultLocale,
+      // A live source decides the default as the language list changes; a block decides it once.
+      isLiveLocalization(this.localizationSource)
+        ? this.localizationSource
+        : this.localization?.defaultLocale,
       // Affirmative only. `NextlyServices` builds this handler lazily with no
       // localization argument even in apps that registered one, so passing an
       // explicit `false` here would tell that instance localization is
@@ -263,7 +276,7 @@ export class CollectionsHandler {
       hookRegistry,
       fieldGroupDataService,
       rbacAccessControlService,
-      this.localization,
+      this.localizationSource,
       retentionRunner,
       fastDrainScheduler,
       resolveCacheRevalidator

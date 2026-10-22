@@ -32,6 +32,10 @@ import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import { hashPasswordFieldValues } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import {
+  type LocalizationSource,
+  localizationNow,
+} from "../../i18n/localization-source";
 import { resolveRequestedLocale } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
@@ -136,13 +140,18 @@ function resolveZoneInstances(
 export class FieldGroupMutationService extends BaseService {
   private readonly registryService: FieldGroupRegistryService;
 
+  /** The site's languages as they are now: the source may be the language registry. */
+  private get localization(): SanitizedLocalizationConfig | undefined {
+    return localizationNow(this.localizationSource);
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
     registryService: FieldGroupRegistryService,
     // i18n: when set and an embedded component is localized, translatable field values are
     // routed to the component's companion `comp_<slug>_locales` row for the write locale.
-    private readonly localization?: SanitizedLocalizationConfig
+    private readonly localizationSource?: LocalizationSource
   ) {
     super(adapter, logger);
     this.registryService = registryService;

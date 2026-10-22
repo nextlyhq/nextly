@@ -23,7 +23,7 @@ import type { CacheRevalidator } from "../../../revalidation/types";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
-import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { type LocalizationSource } from "../../i18n/localization-source";
 import { releaseVisibilityFor } from "../../releases/release-visibility";
 import type { WebhookFastDrainScheduler } from "../../webhooks/after-drain";
 import type {
@@ -73,7 +73,7 @@ export class SingleEntryService extends BaseService {
     rbacAccessControlService?: RBACAccessControlService,
     // i18n: normalized localization config so a localized single resolves/writes
     // translatable fields via its companion `single_<slug>_locales` table.
-    localization?: SanitizedLocalizationConfig,
+    localization?: LocalizationSource,
     /**
      * Retention passes offered after a write, so a frequently-written single
      * trims what it fills without waiting for a scheduled drain. The shared

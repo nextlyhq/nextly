@@ -22,6 +22,7 @@ import { FieldGroupRegistryService } from "../../field-groups/services/field-gro
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../i18n/config/require-app-config";
+import type { LiveLocalization } from "../../i18n/localization-source";
 import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import {
@@ -234,7 +235,7 @@ export class DynamicCollectionService extends BaseService {
    * localization is enabled/disabled on an existing collection. Injected from the localization
    * config; defaults to "en" for setups without localization (where transitions never run).
    */
-  private readonly defaultLocale: string;
+  private readonly defaultLocaleSource: string | LiveLocalization;
   /**
    * i18n: whether the constructing caller holds a localization config, when it
    * knows. `CollectionsHandler` takes one as a constructor argument and can be
@@ -247,14 +248,25 @@ export class DynamicCollectionService extends BaseService {
   /** Lazily built field-group registry, owned by this instance's adapter. */
   private fieldGroupRegistry?: FieldGroupRegistryService;
 
+  /**
+   * The default language as it is now. Handed the language registry, a language list changed in
+   * Settings after this service was built still decides it.
+   */
+  private get defaultLocale(): string {
+    const source = this.defaultLocaleSource;
+    return typeof source === "string"
+      ? source
+      : (source.current()?.defaultLocale ?? "en");
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
-    defaultLocale = "en",
+    defaultLocale: string | LiveLocalization = "en",
     localizationConfigured?: boolean
   ) {
     super(adapter, logger);
-    this.defaultLocale = defaultLocale;
+    this.defaultLocaleSource = defaultLocale;
     this.localizationConfigured = localizationConfigured;
 
     this.validationService = new DynamicCollectionValidationService();
