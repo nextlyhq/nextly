@@ -62,7 +62,19 @@ function fixtures() {
         slug: PLAIN,
         status: true,
         versions: { drafts: true },
-        fields: [text({ name: "title" })],
+        fields: [
+          text({ name: "title" }),
+          // Readable by a super-admin alone, judged on the user a read is
+          // handed, so a caller passed off as one would see it.
+          text({
+            name: "secret",
+            access: {
+              read: ({ req }) =>
+                req.user?.roles?.includes("super-admin") === true ||
+                req.user?.email === "root@writes.test",
+            },
+          }),
+        ],
       }),
     ],
     singles: [
@@ -93,6 +105,8 @@ interface Callers {
   creator: Headers;
   /** Read and update on `plain` and `s_status`, but no publish. */
   noPublisher: Headers;
+  /** The install's first user, its super-admin. */
+  rootId: string;
 }
 
 /** The ids of the permissions whose slug `keep` accepts. */
@@ -149,7 +163,7 @@ async function seedCallers(t: TestNextly): Promise<Callers> {
   await seedAllPermissions();
   // The first user an install makes is its super-admin, who passes every
   // rule, so one is made before the callers under test.
-  await t.nextly.users.create({
+  const root = await t.nextly.users.create({
     email: "root@writes.test",
     password: "Password123!",
     data: { name: "root", isActive: true },
@@ -188,6 +202,7 @@ async function seedCallers(t: TestNextly): Promise<Callers> {
     updater: updater.headers,
     creator: creator.headers,
     noPublisher: noPublisher.headers,
+    rootId: String((root.item as { id: string | number }).id),
   };
 }
 
@@ -200,7 +215,8 @@ function rest(
   headers: Headers,
   body?: unknown
 ): Promise<Response> {
-  const segments = path.split("/").filter(Boolean);
+  // The route is the path before any query; the query rides on the URL.
+  const segments = (path.split("?")[0] ?? "").split("/").filter(Boolean);
   const handlers = createDynamicHandlers();
   const req = new Request(`${ORIGIN}/api/${path}`, {
     method,
@@ -504,6 +520,84 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(body.error?.code).toBe("CONFLICT");
       const res = await mint(HIDDEN_READ, await makeEntry(t, HIDDEN_READ));
       expect(REFUSED).toContain(res.status);
+    });
+
+    describe("identity sent in the query string", () => {
+      /**
+       * Every name identity once travelled under in route params, naming the
+       * super-admin and its role. A query string fills route params, so a
+       * caller that could set one would be judged as someone else.
+       */
+      const forged = () =>
+        "?" +
+        new URLSearchParams({
+          _authenticatedUserId: callers.rootId,
+          _authenticatedUserName: "root",
+          _authenticatedUserEmail: "root@writes.test",
+          _authenticatedUserRoles: JSON.stringify(["super-admin"]),
+          _authenticatedActorType: "user",
+          _authenticatedActorId: callers.rootId,
+          _authenticatedPermissions: JSON.stringify([`read-${HIDDEN_READ}`]),
+          _authenticatedClaims: JSON.stringify({ tenant: "any" }),
+        }).toString();
+
+      it("never reaches the user a field rule is handed", async () => {
+        // `noPublisher` may read `plain`, so the read is past every gate and
+        // only the field rule, which reads the user, can hide `secret`.
+        const entryId = await makeEntry(t, PLAIN, {
+          status: "published",
+          secret: "classified",
+        });
+        // Stored, so its absence below is the rule's doing.
+        const stored = (await t.nextly.findByID({
+          collection: PLAIN,
+          id: entryId,
+        })) as { secret?: unknown } | null;
+        expect(stored?.secret).toBe("classified");
+        const entry = `collections/${PLAIN}/entries/${entryId}`;
+        for (const path of [entry, entry + forged()]) {
+          const res = await rest("GET", path, callers.noPublisher);
+          expect(res.status, path).toBe(200);
+          const body = (await res.json()) as Record<string, unknown>;
+          const item = (body.item ?? body) as Record<string, unknown>;
+          expect(item.title, path).toBe("original");
+          expect(item.secret, path).toBeUndefined();
+        }
+      });
+
+      it("never changes who a session is judged as", async () => {
+        const entryId = await makeEntry(t, PLAIN);
+        const entry = `collections/${PLAIN}/entries/${entryId}`;
+        // `updater` may not read `plain`; the forged super-admin may.
+        const plainRead = await rest("GET", entry, callers.updater);
+        expect(REFUSED).toContain(plainRead.status);
+        const forgedRead = await rest("GET", entry + forged(), callers.updater);
+        expect(forgedRead.status).toBe(plainRead.status);
+        const forgedDelete = await rest(
+          "DELETE",
+          entry + forged(),
+          callers.updater
+        );
+        expect(REFUSED).toContain(forgedDelete.status);
+        expect(
+          await t.nextly.findByID({ collection: PLAIN, id: entryId })
+        ).not.toBeNull();
+      });
+
+      it("never changes who an API key is judged as", async () => {
+        // The key holds `read-hidden_read`, and the collection's read rule
+        // refuses everyone but a super-admin; a forged super-admin identity
+        // or a forged session actor must not lift it.
+        const entry = `collections/${HIDDEN_READ}/entries/${await makeEntry(t, HIDDEN_READ)}`;
+        const plainRead = await rest("GET", entry, callers.editorKey);
+        expect(REFUSED).toContain(plainRead.status);
+        const forgedRead = await rest(
+          "GET",
+          entry + forged(),
+          callers.editorKey
+        );
+        expect(forgedRead.status).toBe(plainRead.status);
+      });
     });
   });
 }

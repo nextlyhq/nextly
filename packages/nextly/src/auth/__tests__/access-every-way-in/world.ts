@@ -132,10 +132,10 @@ const ruleBody = (rule: Rule) => RULE_BODIES[rule];
  * The access object a `rule` kind declares on a target that is asked
  * `operations`.
  *
- * The config validator refuses a boolean for create, read, update and delete,
- * though the rule types and the documentation allow one, so the collection is
- * defined with the rule as a function and the boolean put back afterwards: the
- * table asks what each way in answers once a boolean reaches it.
+ * The collection is defined with the rule as a function and the boolean put
+ * back afterwards, so each target is built the same way whatever the rule
+ * kind; the config validator accepts a boolean for every rule, and the table
+ * asks what each way in answers once a boolean reaches it.
  */
 function accessFor(
   rule: Rule,

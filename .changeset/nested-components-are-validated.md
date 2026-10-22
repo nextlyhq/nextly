@@ -29,5 +29,5 @@
 "nextly": patch
 ---
 
-A component held inside a group or repeater, or inside a component held in one, is now validated against its own fields on every write, its own `validate` included; until now nothing judged it, so existing content that fails it is refused on its next save or publish. A component nested inside a top-level component, directly or through a group or repeater in it, is not validated yet.
+A component held inside a group or repeater, or inside a component held in one, is now validated against its own fields on every write, its own `validate` included; until now nothing judged it, so existing content that fails it is refused on its next save or publish. A component held in a group or repeater of another component is validated the same way; one placed directly in another component's fields is stored and validated where the outer component is held in a named group or a repeater, and elsewhere isn't stored, and a write that carries a value for it is refused with `NOT_STORED`.
 A held Single's first draft records the type of every component it holds, including those it didn't change, so a restore after a retarget stays correct.

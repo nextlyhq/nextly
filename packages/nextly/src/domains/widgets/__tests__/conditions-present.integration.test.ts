@@ -44,6 +44,12 @@ afterEach(async () => {
 const readable = { read: () => true, create: () => true, update: () => true };
 /** Refused to everyone, by code. The reader-scoping control. */
 const refused = { read: () => false, create: () => true, update: () => true };
+/**
+ * The same two rules for a single, which has no `create`: its row exists from
+ * the start, and its config names only the operations a single has.
+ */
+const singleReadable = { read: () => true, update: () => true };
+const singleRefused = { read: () => false, update: () => true };
 
 async function boot(options: {
   collections?: Parameters<typeof defineCollection>[0][];
@@ -119,7 +125,11 @@ describe("collections:present against a real instance", () => {
     // collections card appear, or the card would list nothing.
     await boot({
       singles: [
-        { slug: "homepage", access: readable, fields: [text({ name: "h" })] },
+        {
+          slug: "homepage",
+          access: singleReadable,
+          fields: [text({ name: "h" })],
+        },
       ],
     });
     expect(await holds("collections:present")).toBe(false);
@@ -130,7 +140,11 @@ describe("singles:present against a real instance", () => {
   it("holds while there is a single the reader may read", async () => {
     await boot({
       singles: [
-        { slug: "homepage", access: readable, fields: [text({ name: "h" })] },
+        {
+          slug: "homepage",
+          access: singleReadable,
+          fields: [text({ name: "h" })],
+        },
       ],
     });
     expect(await holds("singles:present")).toBe(true);
@@ -142,7 +156,11 @@ describe("singles:present against a real instance", () => {
     // for collections proves nothing about this registry.
     await boot({
       singles: [
-        { slug: "private", access: refused, fields: [text({ name: "h" })] },
+        {
+          slug: "private",
+          access: singleRefused,
+          fields: [text({ name: "h" })],
+        },
       ],
     });
     expect(await holds("singles:present")).toBe(false);
@@ -154,7 +172,11 @@ describe("singles:present against a real instance", () => {
     // migration filter. The withheld source is the control.
     const t = await boot({
       singles: [
-        { slug: "homepage", access: readable, fields: [text({ name: "h" })] },
+        {
+          slug: "homepage",
+          access: singleReadable,
+          fields: [text({ name: "h" })],
+        },
       ],
     });
     await (

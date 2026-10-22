@@ -61,6 +61,35 @@ type ApiErrorResult = {
 
 export type ApiResult<T> = ApiSuccess<T> | ApiErrorResult;
 
+/**
+ * Notes the schema version a response announces, for cross-flow schema change
+ * detection. If the version increased and this tab did not just apply changes
+ * itself (a code-first change, or another tab), dispatches an event so the UI
+ * can refetch collection data.
+ *
+ * Exported so a request that cannot go through {@link fetcher} -- the widget
+ * batch, read as a stream rather than whole -- notes it the same way, through
+ * this one check rather than a copy of it.
+ */
+export function noteSchemaVersion(res: Response): void {
+  const schemaVersionHeader = res.headers.get("X-Nextly-Schema-Version");
+  if (!schemaVersionHeader || typeof window === "undefined") return;
+  const version = parseInt(schemaVersionHeader, 10);
+  if (isNaN(version)) return;
+  const stored = window.__nextlySchemaVersion;
+  if (
+    stored !== undefined &&
+    version > stored &&
+    !window.__nextlySchemaApplying
+  ) {
+    // Schema changed externally (code-first or another tab)
+    window.dispatchEvent(
+      new CustomEvent("nextly:schema-updated", { detail: { version } })
+    );
+  }
+  window.__nextlySchemaVersion = version;
+}
+
 /** Distinguishes "the body could not be parsed" from a body that IS `null`. */
 const PARSE_FAILED = Symbol("fetcher.parse-failed");
 
@@ -87,27 +116,7 @@ export async function fetcher<T = unknown>(
     ? await authFetch(fullUrl, fetchOptions)
     : await fetch(fullUrl, fetchOptions);
 
-  // Check X-Nextly-Schema-Version header for cross-flow schema change detection.
-  // If the version increased and we didn't just apply changes ourselves,
-  // dispatch an event so the UI can refetch collection data.
-  const schemaVersionHeader = res.headers.get("X-Nextly-Schema-Version");
-  if (schemaVersionHeader && typeof window !== "undefined") {
-    const version = parseInt(schemaVersionHeader, 10);
-    if (!isNaN(version)) {
-      const stored = window.__nextlySchemaVersion;
-      if (
-        stored !== undefined &&
-        version > stored &&
-        !window.__nextlySchemaApplying
-      ) {
-        // Schema changed externally (code-first or another tab)
-        window.dispatchEvent(
-          new CustomEvent("nextly:schema-updated", { detail: { version } })
-        );
-      }
-      window.__nextlySchemaVersion = version;
-    }
-  }
+  noteSchemaVersion(res);
 
   if (!res.ok) {
     const json = await res.json().catch(() => null);

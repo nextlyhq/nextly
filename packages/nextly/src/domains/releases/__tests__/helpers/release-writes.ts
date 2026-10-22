@@ -16,6 +16,8 @@ import {
   RELEASE_SCHEDULABLE_FROM,
   type ReleaseState,
 } from "../../../../schemas/releases/types";
+import type { RowLockServer } from "../../../../shared/lib/row-lock";
+import { rowLockServer } from "../../../audit/audit-log-writer";
 import type { ReleasesRepository } from "../../releases-repository";
 
 /** Every state a membership change can land on, for a caller who may publish. */
@@ -66,4 +68,14 @@ export async function publishAsItStands(
     at
   );
   return settled.length === 1;
+}
+
+/**
+ * A test install's row-lock facts, for `createReleaseMutations`, read from its
+ * own adapter as the drain job reads them from its database.
+ */
+export function lockServerOf(t: {
+  adapter: { getCapabilities(): { dialect: RowLockServer["dialect"] } };
+}): RowLockServer {
+  return rowLockServer(t.adapter, t.adapter.getCapabilities().dialect);
 }

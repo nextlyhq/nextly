@@ -10,9 +10,11 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { appLocalization } from "../../domains/i18n/configured-locales";
+import { offeredCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { previewBodyWithLeavingTranslation } from "../../domains/i18n/migration/preview-leaving-translation";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
+import type { RenameCandidate } from "../../domains/schema/pipeline/pushschema-pipeline-interfaces";
 import { toRenameCandidateWire } from "../../domains/schema/pipeline/rename-candidate-wire";
 import type { DesiredSchema } from "../../domains/schema/pipeline/types";
 import type { ColumnOrigin } from "../../domains/schema/services/field-column-descriptor";
@@ -50,8 +52,19 @@ export async function builderSchemaPreviewBody(args: {
     db,
     dialect,
   });
+  // Detected by the same pipeline run, so they describe the same diff; a translated field's
+  // rename, which the pipeline cannot see on the main table, is offered on its companion.
+  const renamed = [
+    ...pipelinePreview.candidates,
+    ...(await translatedFieldRename(args, args.entity.localized === true)),
+  ];
   return previewBodyWithLeavingTranslation(
-    legacyShape,
+    // A rename offered on the companion is a change though the main table has none, so the
+    // builder opens its dialog to ask for the answer the apply requires.
+    {
+      ...legacyShape,
+      hasChanges: legacyShape.hasChanges || renamed.length > 0,
+    },
     {
       db,
       dialect,
@@ -65,9 +78,28 @@ export async function builderSchemaPreviewBody(args: {
       requestedLocalized: args.requestedLocalized,
     },
     {
-      // Detected by the same pipeline run, so they describe the same diff.
-      renamed: pipelinePreview.candidates.map(toRenameCandidateWire),
+      renamed: renamed.map(toRenameCandidateWire),
       schemaVersion: args.schemaVersion,
     }
   );
+}
+
+/**
+ * The rename of a translated field, which lives on the companion and so is not among the
+ * pipeline's candidates: the one the apply accepts back (`offeredCompanionRename`).
+ */
+async function translatedFieldRename(
+  args: Parameters<typeof builderSchemaPreviewBody>[0],
+  wasLocalized: boolean
+): Promise<RenameCandidate[]> {
+  const offered = await offeredCompanionRename({
+    tableName: args.tableName,
+    oldFields: args.currentFields,
+    newFields: args.newFields,
+    wasLocalized,
+    isLocalized: args.requestedLocalized ?? wasLocalized,
+    dialect: args.dialect,
+    builtBy: args.builtBy,
+  });
+  return offered ? [offered.candidate] : [];
 }

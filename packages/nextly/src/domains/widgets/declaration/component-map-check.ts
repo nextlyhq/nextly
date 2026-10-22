@@ -31,7 +31,8 @@
  * @module domains/widgets/declaration/component-map-check
  */
 
-import { dirname, relative, sep } from "node:path";
+import { readFile } from "node:fs/promises";
+import { dirname, join, relative, sep } from "node:path";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { getNextly } from "../../../init";
@@ -41,9 +42,11 @@ import {
   COMPONENT_PATHS_FILENAME,
   componentUses,
   type ComponentMapEntry,
+  configImportOf,
 } from "../../../plugins/codegen/component-import-map";
 import { writeComponentMapFiles } from "../../../plugins/codegen/write-component-map";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
+import { findConfigFile } from "../../../shared/lib/config-file";
 import { generatedTypesFile } from "../../../shared/lib/generated-output-paths";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../../shared/types/config";
 
@@ -183,10 +186,20 @@ async function rewriteInDevelopment(
   obsolete: readonly string[]
 ): Promise<void> {
   try {
+    // The config the map already checks against, kept as it was written: `generate:types` may
+    // have been given a `--config` path this process cannot know. Only a map that names none
+    // takes the config file found as the loader finds it.
+    const kept = configImportOf(
+      await readFile(
+        join(dirname(place.typesOutputPath), COMPONENT_IMPORT_MAP_FILENAME),
+        "utf-8"
+      ).catch(() => "")
+    );
     await writeComponentMapFiles(
       [...plugins],
       place.typesOutputPath,
-      process.cwd()
+      process.cwd(),
+      kept === undefined ? findConfigFile(process.cwd()) : { import: kept }
     );
     getNextlyLogger().info({
       kind: "admin-component-map-regenerated",

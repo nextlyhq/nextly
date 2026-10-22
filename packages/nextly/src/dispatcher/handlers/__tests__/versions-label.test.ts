@@ -52,7 +52,7 @@ const args = (label: unknown, versionNo = 3) => ({
   versionNo,
   body: { label },
   user: { id: "u1", roles: ["editor"] },
-  params: { _authenticatedUserId: "u1" },
+  params: {},
 });
 
 /** A request that names no label at all, as distinct from one naming null. */
@@ -63,7 +63,7 @@ const argsWithoutLabel = (body: unknown = {}) => ({
   versionNo: 3,
   body,
   user: { id: "u1", roles: ["editor"] },
-  params: { _authenticatedUserId: "u1" },
+  params: {},
 });
 
 /** Who the label is set by, as the dispatcher hands it to the service. */

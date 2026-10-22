@@ -413,6 +413,118 @@ describe("what a provider's own answer may and may not carry", () => {
     });
     expect(JSON.stringify(result)).not.toContain("451");
   });
+
+  it("withholds such a status from a refusal that gave no reason", async () => {
+    const provider = defineEmailProvider<{ pin: string }>({
+      type: "pin-refuser",
+      label: "PIN",
+      configFields: [
+        {
+          name: "pin",
+          label: "PIN",
+          kind: "password",
+          required: true,
+          secret: true,
+        },
+      ],
+      parseConfig: input => input as { pin: string },
+      createAdapter: config => ({
+        send: () =>
+          Promise.resolve({
+            success: true,
+            messageId: "m-1",
+            rejected: ["a@example.com"],
+            refusals: [
+              {
+                address: "a@example.com",
+                retryable: false,
+                status: Number(config.pin),
+              },
+            ],
+          }),
+      }),
+    });
+    const { plugin } = build(provider.createAdapterFrom({ pin: "451" }));
+
+    const result = await plugin.send(message);
+
+    expect(result.failure).toEqual({
+      retryable: false,
+      reason: "The email provider refused the message.",
+    });
+    expect(result.refused).toEqual([
+      { kind: "to", position: 0, retryable: false },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("451");
+  });
+
+  it("is retryable when any refused to recipient can still be sent to", async () => {
+    // A permanent refusal first, then a temporary one: the send can still
+    // reach the second recipient, so a caller must be told to retry.
+    const { plugin } = build({
+      maxToPerMessage: 10,
+      send: () =>
+        Promise.resolve({
+          success: true,
+          messageId: "m-1",
+          rejected: ["a@example.com", "b@example.com"],
+          refusals: [
+            { address: "a@example.com", retryable: false, status: 550 },
+            { address: "b@example.com", retryable: true, status: 450 },
+          ],
+        }),
+    });
+
+    const result = await plugin.send({
+      ...message,
+      to: ["a@example.com", "b@example.com"],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.failure).toEqual({
+      retryable: true,
+      status: 450,
+      reason:
+        "The email provider could not take the message right now (status 450).",
+    });
+  });
+
+  it.each([
+    [
+      "a refusal described as unreachable",
+      {
+        retryable: false,
+        reason: "The email provider could not be reached.",
+      },
+      {
+        retryable: false,
+        reason: "The email provider refused the message.",
+      },
+    ],
+    [
+      "a sentence naming another status",
+      {
+        retryable: false,
+        status: 401,
+        reason: "The email provider refused the message (status 500).",
+      },
+      {
+        retryable: false,
+        status: 401,
+        reason: "The email provider refused the message (status 401).",
+      },
+    ],
+  ])(
+    "replaces %s with the sentence its fields give",
+    async (_case, given, reported) => {
+      const { plugin } = build({
+        send: () =>
+          Promise.reject(withEmailFailure(new Error("x"), given as never)),
+      });
+
+      expect((await plugin.send(message)).failure).toEqual(reported);
+    }
+  );
 });
 
 describe("what the send path carried over from the recipient work", () => {

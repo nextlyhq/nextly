@@ -37,7 +37,7 @@ import {
   DEFAULT_SQL_KEYWORDS_SET,
   validateComponentFieldRefShared,
   validateContainerFieldsShared,
-  validateFieldNameShared,
+  validateFieldBasicsShared,
   validateFieldTypeShared,
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
@@ -117,7 +117,12 @@ export type FieldGroupValidationErrorCode =
   | "COMPONENT_REF_REQUIRED"
   | "COMPONENT_REF_CONFLICT"
   | "COMPONENT_REF_INVALID"
-  | "COMPONENT_REF_EMPTY";
+  | "COMPONENT_REF_EMPTY"
+  // A field's own access rules: not an object, a rule that is neither a
+  // function nor a boolean, or a key a field does not have.
+  | "ACCESS_INVALID_TYPE"
+  | "ACCESS_FUNCTION_INVALID"
+  | "ACCESS_KEY_UNKNOWN";
 
 /**
  * A single validation error with path and context.
@@ -199,13 +204,7 @@ function validateField(
   // the deferral returns before this, and the boot gate asks only whether the
   // token was claimed. A duplicate or SQL-reserved name reached schema
   // generation as a colliding column.
-  validateFieldNameShared(
-    f.name,
-    path,
-    errsBase,
-    seenNames,
-    DEFAULT_SQL_KEYWORDS_SET
-  );
+  validateFieldBasicsShared(f, path, errsBase, seenNames);
 
   if (
     !validateFieldTypeShared(f.type, path, errsBase, type =>

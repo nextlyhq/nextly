@@ -61,6 +61,7 @@ export { siteSettingsMysql as siteSettings } from "../site-settings/mysql";
 export { userFieldDefinitionsMysql as userFieldDefinitions } from "../user-field-definitions/mysql";
 export { emailProvidersMysql as emailProviders } from "../email-providers/mysql";
 export { emailDeliveriesMysql as emailDeliveries } from "../email-deliveries/mysql";
+export { emailSendClaimsMysql as emailSendClaims } from "../email-send-claims/mysql";
 export { emailTemplatesMysql as emailTemplates } from "../email-templates/mysql";
 
 export { nextlySchemaEventsMysql as nextlySchemaEvents } from "../schema-events/mysql";

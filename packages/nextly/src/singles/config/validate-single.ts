@@ -46,7 +46,6 @@ import {
   DEFAULT_SQL_KEYWORDS_SET,
   validateComponentFieldRefShared,
   validateContainerFieldsShared,
-  validateFieldNameShared,
   validateFieldTypeShared,
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
@@ -54,6 +53,8 @@ import {
   validateSelectOptionsShared,
   validateSlugShared,
   validateAccessShared,
+  SINGLE_ACCESS_KEYS,
+  validateFieldBasicsShared,
 } from "../../shared/base-validator";
 
 import type { SingleConfig } from "./types";
@@ -125,7 +126,8 @@ export type SingleValidationErrorCode =
   | "COMPONENT_REF_EMPTY"
   // Access errors (Single-specific: only read/update)
   | "ACCESS_INVALID_TYPE"
-  | "ACCESS_FUNCTION_INVALID";
+  | "ACCESS_FUNCTION_INVALID"
+  | "ACCESS_KEY_UNKNOWN";
 
 /**
  * A single validation error with path and context.
@@ -210,13 +212,7 @@ function validateField(
   // the deferral returns before this, and the boot gate asks only whether the
   // token was claimed. A duplicate or SQL-reserved name reached schema
   // generation as a colliding column.
-  validateFieldNameShared(
-    f.name,
-    path,
-    errsBase,
-    seenNames,
-    DEFAULT_SQL_KEYWORDS_SET
-  );
+  validateFieldBasicsShared(f, path, errsBase, seenNames);
 
   if (
     !validateFieldTypeShared(f.type, path, errsBase, type =>
@@ -439,7 +435,7 @@ function validateAccess(
   access: unknown,
   errors: SingleValidationError[]
 ): void {
-  validateAccessShared(access, ["read", "update"], errors);
+  validateAccessShared(access, SINGLE_ACCESS_KEYS, errors);
 }
 
 // ============================================================

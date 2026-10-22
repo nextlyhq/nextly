@@ -39,6 +39,7 @@ import { container } from "../../di/container";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { appLocalization } from "../../domains/i18n/configured-locales";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { movedOnto } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -89,8 +90,10 @@ import {
   readAuthenticatedActor,
   readAuthenticatedScope,
 } from "../helpers/authenticated-actor";
-import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
-import { readAuthenticatedUser } from "../helpers/authenticated-user";
+import {
+  readAuthenticatedUser,
+  requireAuthenticatedUser,
+} from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -131,7 +134,6 @@ import {
   setVersionLabelForDocument,
   respondSubjectEvents,
   respondVersionPage,
-  userFromParams,
   readComparisonParams,
 } from "./versions-methods";
 
@@ -263,8 +265,8 @@ export const SINGLE_VERSION_METHODS: Record<
         scopeKind: "single",
         slug,
         entryId,
-        user: userFromParams(p),
-        actor: readAuthenticatedActor(p),
+        user: requireAuthenticatedUser(),
+        actor: readAuthenticatedActor(),
         versionNo: Number(p.versionNo),
         params: p,
         // A restore replays a snapshot through the ordinary update, so its
@@ -282,8 +284,8 @@ export const SINGLE_VERSION_METHODS: Record<
         scopeKind: "single",
         slug,
         entryId,
-        user: userFromParams(p),
-        authenticatedScope: readAuthenticatedScope(p),
+        user: requireAuthenticatedUser(),
+        authenticatedScope: readAuthenticatedScope(),
         versionNo: Number(p.versionNo),
       });
       return respondDoc(row);
@@ -302,8 +304,8 @@ export const SINGLE_VERSION_METHODS: Record<
         scopeKind: "single",
         slug,
         entryId,
-        user: userFromParams(p),
-        authenticatedScope: readAuthenticatedScope(p),
+        user: requireAuthenticatedUser(),
+        authenticatedScope: readAuthenticatedScope(),
         ...comparison,
       });
       // Private to the caller: a comparison from where this person last
@@ -321,8 +323,8 @@ export const SINGLE_VERSION_METHODS: Record<
         scopeKind: "single",
         slug,
         entryId,
-        user: userFromParams(p),
-        authenticatedScope: readAuthenticatedScope(p),
+        user: requireAuthenticatedUser(),
+        authenticatedScope: readAuthenticatedScope(),
         versionNo: Number(p.versionNo),
       });
       return respondMutation("Marked as seen.", seen);
@@ -342,7 +344,7 @@ export const SINGLE_VERSION_METHODS: Record<
         scopeKind: "single",
         slug,
         entryId,
-        user: userFromParams(p),
+        user: requireAuthenticatedUser(),
         versionNo: Number(p.versionNo),
         // See the collection handler: the body goes through whole.
         body,
@@ -368,7 +370,7 @@ export const SINGLE_VERSION_METHODS: Record<
         scopeKind: "single",
         slug,
         entryId,
-        user: userFromParams(p),
+        user: requireAuthenticatedUser(),
         params: p,
         // The body IS the snapshot. See the collection handler.
         snapshot,
@@ -385,7 +387,7 @@ export const SINGLE_VERSION_METHODS: Record<
         scopeKind: "single",
         slug,
         entryId,
-        user: userFromParams(p),
+        user: requireAuthenticatedUser(),
         params: p,
       });
       // Private, never shared. This returns one author's unpublished snapshot
@@ -417,7 +419,7 @@ export const SINGLE_VERSION_METHODS: Record<
         scopeKind: "single",
         slug,
         entryId,
-        user: userFromParams(p),
+        user: requireAuthenticatedUser(),
         params: p,
         // `?locale=` names the language whose pending change is being thrown
         // away. An empty value is the same as none: the request named no
@@ -441,39 +443,6 @@ async function requireLiveSingleId(slug: string): Promise<string> {
     });
   }
   return id;
-}
-
-/**
- * The caller a Single write is performed as, or undefined for an unauthenticated
- * request.
- *
- * Both write handlers need the same shape and for the same reasons: the decoded
- * role SET, so role-based access and the super-admin bypass evaluate
- * against the real authorized scope; and a representative singular `role`, for a
- * rule or a field-level `access` callback reading `req.user.role`. Two copies
- * agreed the day they were written and would drift the moment either learned a
- * new claim, which for an authorization input is the expensive kind of drift.
- *
- * Distinct from `userFromParams`, which the version handlers use: that one
- * always returns a user, defaulting the id to the empty string, because its
- * callers pass it into a gate that treats an unknown caller as unauthorized.
- * A write needs the absence itself, so that the service can tell an anonymous
- * request from one made by a user with no id.
- */
-function authenticatedSingleUser(p: Params) {
-  if (!p._authenticatedUserId) return undefined;
-  const roles = readAuthenticatedRoles(p);
-  return {
-    id: String(p._authenticatedUserId),
-    name: p._authenticatedUserName
-      ? String(p._authenticatedUserName)
-      : undefined,
-    email: p._authenticatedUserEmail
-      ? String(p._authenticatedUserEmail)
-      : undefined,
-    roles,
-    role: roles?.[0],
-  };
 }
 
 const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
@@ -505,9 +474,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // with `undefined`, which means "no filter"; anyone else gets an
       // explicit list, possibly empty, which the registry short-circuits to a
       // zero-row, zero-total response.
-      const user = authenticatedSingleUser(p);
+      const user = readAuthenticatedUser();
       const slugAllowlist = await readableSlugAllowlist(
-        user ? readAccessCallerForDispatch(p, user) : undefined,
+        user ? readAccessCallerForDispatch(user) : undefined,
         "single"
       );
 
@@ -729,7 +698,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // asks who is reading has no one to judge, so the admin's read setting
       // silently did nothing over HTTP. `routeAuthorized` attests the route
       // already ran the coarse RBAC gate, so only that re-check is skipped.
-      const user = readAuthenticatedUser(p);
+      const user = readAuthenticatedUser();
 
       const result = await svc.entry.get(slug, {
         // The request this read's hooks are told about.
@@ -738,7 +707,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         routeAuthorized: !!user,
         // A scoped API key is judged on its own read grant rather than on the
         // permissions of the account that issued it.
-        authenticatedScope: readAuthenticatedScope(p),
+        authenticatedScope: readAuthenticatedScope(),
         depth: toNumber(p.depth),
         // `?locale=` selects the content language; `?fallback-locale=none`
         // disables fallback so an untranslated field reads empty (admin editor relies on
@@ -784,7 +753,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     execute: async (svc, p, body, request) => {
       const slug = requireParam(p, "slug", "Single slug");
       if (!body) throw new Error("Update data is required");
-      const user = authenticatedSingleUser(p);
+      const user = readAuthenticatedUser();
       const result = await svc.entry.update(
         slug,
         body as Record<string, unknown>,
@@ -796,7 +765,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // Who performed the write, recorded on the outbox event: an API-key
           // caller attributes to the key itself rather than the user that owns
           // it. Mirrors the collection update handler.
-          actor: readAuthenticatedActor(p),
+          actor: readAuthenticatedActor(),
           // Route auth already ran the RBAC gate; `routeAuthorized` skips only
           // that re-check while field-level write access + response redaction
           // still run for this user (overrideAccess stays false).
@@ -804,7 +773,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           routeAuthorized: !!user,
           // The route authorized only `update` against an API key's scope; the
           // service-side publish/unpublish gate judges the key's own grants.
-          authenticatedScope: readAuthenticatedScope(p),
+          authenticatedScope: readAuthenticatedScope(),
         }
       );
       const doc = unwrapServiceResult(result, { slug });
@@ -820,19 +789,19 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     // equivalent of the collection entry's publish-all.
     execute: async (svc, p) => {
       const slug = requireParam(p, "slug", "Single slug");
-      const user = authenticatedSingleUser(p);
+      const user = readAuthenticatedUser();
       const result = await svc.entry.publishAllLocales(slug, {
         user,
         // Who performed the publish, recorded on the outbox events: an API-key
         // caller attributes to the key rather than the user that owns it.
-        actor: readAuthenticatedActor(p),
+        actor: readAuthenticatedActor(),
         overrideAccess: false,
         // Route auth already ran the RBAC gate for `update`; attesting it skips
         // only that re-check. The publish gate always runs.
         routeAuthorized: !!user,
         // The route authorized this POST as `update` against an API key's
         // scope; the service judges the key's own `publish-{slug}` grant.
-        authenticatedScope: readAuthenticatedScope(p),
+        authenticatedScope: readAuthenticatedScope(),
       });
       const published = unwrapServiceResult<{
         id: string;
@@ -1228,11 +1197,26 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       const adapter = getAdapterFromDI();
       if (!adapter) throw new Error("Database adapter not initialized");
+      // The dialog's answer on a translated field's rename, refused when it does not say,
+      // before anything changes.
+      const companionRename = await resolveCompanionRename(renameResolutions, {
+        tableName,
+        oldFields: single.fields as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
+        dialect: adapter.dialect,
+        // A Single's table is built by the collection's generator.
+        builtBy: "collection",
+      });
       // A field leaving translation has preconditions of its own, asked before the push alters
       // anything.
       await archiveFieldsLeavingTranslation({
         // This builder made the table, which decides the column bounds compared.
         builtBy: "collection",
+        // The rename the admin chose, or that none was; when none was offered (a storage change,
+        // or no single candidate), the preflight finds it from the fields and refuses what it must.
+        renamed: companionRename,
         tableName: single.tableName,
         defaultLocale: appLocalization()?.defaultLocale ?? "en",
         adapter,
@@ -1327,6 +1311,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           adapter,
           // Added to the companion, with their values, by the apply before its drop.
           joinedBefore: movedOnto(result, tableName),
+          // A translated field the admin renamed: the dialog's answer naming the companion.
+          renamed: companionRename ?? undefined,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

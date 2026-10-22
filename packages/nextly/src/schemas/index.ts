@@ -52,6 +52,10 @@ import { emailDeliveriesSqlite } from "./email-deliveries/sqlite";
 import { emailProvidersMysql } from "./email-providers/mysql";
 import { emailProvidersPg } from "./email-providers/postgres";
 import { emailProvidersSqlite } from "./email-providers/sqlite";
+import { emailSendClaimsMysql } from "./email-send-claims/mysql";
+import { emailSendClaimsPg } from "./email-send-claims/postgres";
+import { emailSendClaimsSqlite } from "./email-send-claims/sqlite";
+import { EMAIL_SEND_CLAIMS_TABLE } from "./email-send-claims/table-name";
 import { emailTemplatesMysql } from "./email-templates/mysql";
 import { emailTemplatesPg } from "./email-templates/postgres";
 import { emailTemplatesSqlite } from "./email-templates/sqlite";
@@ -300,7 +304,8 @@ export function getCoreSchema(
         userFieldDefinitionsPg,
         emailProvidersPg,
         emailTemplatesPg,
-        emailDeliveriesPg
+        emailDeliveriesPg,
+        emailSendClaimsPg
       );
       break;
     case "mysql":
@@ -312,7 +317,8 @@ export function getCoreSchema(
         userFieldDefinitionsMysql,
         emailProvidersMysql,
         emailTemplatesMysql,
-        emailDeliveriesMysql
+        emailDeliveriesMysql,
+        emailSendClaimsMysql
       );
       break;
     case "sqlite":
@@ -324,7 +330,8 @@ export function getCoreSchema(
         userFieldDefinitionsSqlite,
         emailProvidersSqlite,
         emailTemplatesSqlite,
-        emailDeliveriesSqlite
+        emailDeliveriesSqlite,
+        emailSendClaimsSqlite
       );
       break;
     default: {
@@ -387,6 +394,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "email_providers",
   "email_templates",
   "email_deliveries",
+  EMAIL_SEND_CLAIMS_TABLE,
   "nextly_schema_events",
   "nextly_i18n_archive",
   "nextly_versions",

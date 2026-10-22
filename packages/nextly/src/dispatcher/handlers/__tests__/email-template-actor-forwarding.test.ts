@@ -18,6 +18,7 @@ vi.mock("../../helpers/di", () => ({
   getEmailTemplateServiceFromDI: vi.fn(),
 }));
 
+import { asCaller, sessionCaller } from "../../__tests__/request-caller";
 import { getEmailTemplateServiceFromDI } from "../../helpers/di";
 import { dispatchEmailTemplates } from "../email-dispatcher";
 
@@ -30,19 +31,15 @@ const TEMPLATE = {
   htmlContent: "<p>x</p>",
 };
 
+const PARAMS = { templateId: "t1" };
+
 /**
- * The shape the dispatcher reads an actor out of.
- *
- * Route params are strings, so the actor arrives split across two of them —
- * `readAuthenticatedActor` reads exactly these names. A fixture carrying a
- * `user` object instead resolves to no actor, which would make this suite pass
- * against a handler that forwards nothing.
+ * The request caller the dispatcher reads an actor out of, set the way the
+ * route handler sets it. A fixture carrying a `user` object or identity params
+ * instead resolves to no actor, which would make this suite pass against a
+ * handler that forwards nothing.
  */
-const PARAMS = {
-  templateId: "t1",
-  _authenticatedActorType: "user",
-  _authenticatedActorId: "user-1",
-};
+const CALLER = sessionCaller({ userId: "user-1" });
 
 describe("template mutations forward the actor through the dispatcher", () => {
   let service: {
@@ -64,31 +61,37 @@ describe("template mutations forward the actor through the dispatcher", () => {
   });
 
   it("passes an actor to createTemplate", async () => {
-    await dispatchEmailTemplates("createTemplate", PARAMS, {
-      name: TEMPLATE.name,
-      slug: TEMPLATE.slug,
-      subject: TEMPLATE.subject,
-      htmlContent: TEMPLATE.htmlContent,
-    });
+    await asCaller(CALLER, () =>
+      dispatchEmailTemplates("createTemplate", PARAMS, {
+        name: TEMPLATE.name,
+        slug: TEMPLATE.slug,
+        subject: TEMPLATE.subject,
+        htmlContent: TEMPLATE.htmlContent,
+      })
+    );
 
     expect(service.createTemplate).toHaveBeenCalledTimes(1);
     // The SECOND argument is the actor. Asserted as defined rather than as a
-    // particular shape: what the dispatcher resolves out of its params is that
+    // particular shape: what the dispatcher resolves out of the caller is that
     // helper's business, and pinning it here would duplicate its rules.
     expect(service.createTemplate.mock.calls[0]?.[1]).toBeDefined();
   });
 
   it("passes an actor to updateTemplate", async () => {
-    await dispatchEmailTemplates("updateTemplate", PARAMS, {
-      subject: "Changed",
-    });
+    await asCaller(CALLER, () =>
+      dispatchEmailTemplates("updateTemplate", PARAMS, {
+        subject: "Changed",
+      })
+    );
 
     expect(service.updateTemplate).toHaveBeenCalledTimes(1);
     expect(service.updateTemplate.mock.calls[0]?.[2]).toBeDefined();
   });
 
   it("passes an actor to deleteTemplate", async () => {
-    await dispatchEmailTemplates("deleteTemplate", PARAMS, undefined);
+    await asCaller(CALLER, () =>
+      dispatchEmailTemplates("deleteTemplate", PARAMS, undefined)
+    );
 
     expect(service.deleteTemplate).toHaveBeenCalledTimes(1);
     expect(service.deleteTemplate.mock.calls[0]?.[1]).toBeDefined();

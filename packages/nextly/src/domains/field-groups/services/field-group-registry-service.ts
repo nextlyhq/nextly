@@ -28,6 +28,11 @@ import {
 } from "../../schema/services/schema-hash";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
+  omitDirectComponentFields,
+  storesItsChildren,
+  type DirectField,
+} from "../direct-component-fields";
+import {
   extractFieldGroupReferences,
   isFieldGroupFieldType,
 } from "../storage/field-group-field-type";
@@ -1090,7 +1095,9 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   private async enrichFieldsRecursive(
     fields: Record<string, unknown>[],
     componentMap: Map<string, DynamicFieldGroupRecord>,
-    currentDepth: number
+    currentDepth: number,
+    /** Inside a group or a repeater, whose value is stored as JSON; see `drawnComponentFields`. */
+    inContainer = false
   ): Promise<EnrichedFieldConfig[]> {
     const enrichedFields: EnrichedFieldConfig[] = [];
 
@@ -1104,34 +1111,12 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         if (componentSlug) {
           const component = componentMap.get(componentSlug);
           if (component) {
-            let componentFields = component.fields as unknown as Record<
-              string,
-              unknown
-            >[];
-            if (
-              currentDepth < MAX_FIELD_GROUP_NESTING_DEPTH &&
-              Array.isArray(componentFields)
-            ) {
-              const nestedSlugs = this.collectComponentSlugs(componentFields);
-              if (nestedSlugs.size > 0) {
-                const missingSlugsFetch = [...nestedSlugs].filter(
-                  s => !componentMap.has(s)
-                );
-                if (missingSlugsFetch.length > 0) {
-                  const nestedMap =
-                    await this.fetchComponentsBySlugsBatch(missingSlugsFetch);
-                  for (const [slug, record] of nestedMap) {
-                    componentMap.set(slug, record);
-                  }
-                }
-                componentFields = await this.enrichFieldsRecursive(
-                  componentFields,
-                  componentMap,
-                  currentDepth + 1
-                );
-              }
-            }
-            enrichedField.componentFields = componentFields;
+            enrichedField.componentFields = await this.drawnComponentFields(
+              component,
+              componentMap,
+              currentDepth,
+              inContainer
+            );
           }
         }
 
@@ -1141,37 +1126,14 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           for (const slug of componentsArray) {
             const component = componentMap.get(slug);
             if (component) {
-              let componentFields = component.fields as unknown as Record<
-                string,
-                unknown
-              >[];
-              if (
-                currentDepth < MAX_FIELD_GROUP_NESTING_DEPTH &&
-                Array.isArray(componentFields)
-              ) {
-                const nestedSlugs = this.collectComponentSlugs(componentFields);
-                if (nestedSlugs.size > 0) {
-                  const missingSlugsFetch = [...nestedSlugs].filter(
-                    s => !componentMap.has(s)
-                  );
-                  if (missingSlugsFetch.length > 0) {
-                    const nestedMap =
-                      await this.fetchComponentsBySlugsBatch(missingSlugsFetch);
-                    for (const [s, record] of nestedMap) {
-                      componentMap.set(s, record);
-                    }
-                  }
-                  componentFields = await this.enrichFieldsRecursive(
-                    componentFields,
-                    componentMap,
-                    currentDepth + 1
-                  );
-                }
-              }
-
               componentSchemas[slug] = {
                 label: component.label,
-                fields: componentFields,
+                fields: await this.drawnComponentFields(
+                  component,
+                  componentMap,
+                  currentDepth,
+                  inContainer
+                ),
                 admin: component.admin,
               };
             }
@@ -1190,7 +1152,10 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         enrichedField.fields = await this.enrichFieldsRecursive(
           nestedFields,
           componentMap,
-          currentDepth
+          currentDepth,
+          // A named group or a repeater stores its children in its own JSON value; a container
+          // with no name only arranges the form and keeps them where it sits.
+          inContainer || storesItsChildren(field)
         );
       }
 
@@ -1198,6 +1163,49 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     }
 
     return enrichedFields;
+  }
+
+  /**
+   * The fields a form draws for one component, with the components nested in it enriched in turn.
+   *
+   * Where it matters where the component sits: outside any group or repeater, its instance is a row
+   * of its own table, and a component field placed directly among its fields gets no column there
+   * and no table write, so nothing stores it and a form must not render, seed or send it. Held in a
+   * group or repeater, the component's whole value is stored in that container's JSON, a directly
+   * placed component included, so nothing is left out. The component write and the entry's
+   * validation make the same distinction.
+   */
+  private async drawnComponentFields(
+    component: DynamicFieldGroupRecord,
+    componentMap: Map<string, DynamicFieldGroupRecord>,
+    currentDepth: number,
+    inContainer: boolean
+  ): Promise<Record<string, unknown>[]> {
+    const own = component.fields as unknown as Record<string, unknown>[];
+    if (!Array.isArray(own)) return own;
+    const fields = inContainer
+      ? own
+      : (omitDirectComponentFields(own as DirectField[]) as Record<
+          string,
+          unknown
+        >[]);
+    if (currentDepth >= MAX_FIELD_GROUP_NESTING_DEPTH) return fields;
+    const nestedSlugs = this.collectComponentSlugs(fields);
+    if (nestedSlugs.size === 0) return fields;
+    const missing = [...nestedSlugs].filter(slug => !componentMap.has(slug));
+    if (missing.length > 0) {
+      for (const [slug, record] of await this.fetchComponentsBySlugsBatch(
+        missing
+      )) {
+        componentMap.set(slug, record);
+      }
+    }
+    return this.enrichFieldsRecursive(
+      fields,
+      componentMap,
+      currentDepth + 1,
+      inContainer
+    );
   }
 
   private parseJsonField(value: unknown): Record<string, unknown>[] | null {

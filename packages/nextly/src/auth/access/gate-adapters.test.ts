@@ -13,11 +13,13 @@ import {
 } from "../../domains/collections/__tests__/collection-test-helpers";
 import type { CollectionAccessControl } from "../../shared/types/access";
 import { apiKeyScope } from "../authenticated-scope";
+import { runWithCallerScope } from "../caller-scope";
 
 import type { AccessTarget } from "./decide";
 import { recordingDeviations } from "./deviations";
 import {
   collectionGateVerdict,
+  singleGateVerdict,
   type CollectionQuestion,
 } from "./gate-adapters";
 
@@ -114,6 +116,43 @@ describe("a key that lacks the grant", () => {
     );
     expect(verdict.allowed).toBe(false);
     expect(publish).not.toHaveBeenCalled();
+  });
+});
+
+describe("a Single asked inside a key's request, without the key's scope", () => {
+  it("is compared with the decision for the key, not with a second run of the gate", async () => {
+    // Today the gate judges the user, and the key's publish passes its rule
+    // while its update rule refuses: a second run of the gate as the key
+    // would take the lifecycle deviation and record it, though the real
+    // answer never did.
+    const publish = vi.fn(() => true);
+    const update = vi.fn(() => false);
+    const target: AccessTarget = {
+      kind: "single",
+      slug: "homepage",
+      access: { publish, update },
+    };
+    const grants = ["read", "update", "publish"].map(action => ({
+      slug: `${action}-homepage`,
+      action,
+      resource: "homepage",
+    }));
+    const { result, deviations } = await recordingDeviations(() =>
+      runWithCallerScope(apiKeyScope(grants), () =>
+        singleGateVerdict({
+          slug: "homepage",
+          action: "publish",
+          principal: null,
+          user: { id: "owner" },
+          rules: { getRegisteredTarget: () => target },
+        })
+      )
+    );
+    expect(result.allowed).toBe(true);
+    expect(deviations).toEqual([
+      "rule-alone-for-people",
+      "single-explicit-scope-only",
+    ]);
   });
 });
 

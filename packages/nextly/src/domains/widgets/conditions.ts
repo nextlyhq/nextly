@@ -39,7 +39,10 @@ import { onboardingIsIncomplete } from "./onboarding";
  * with the counting, in `reader-content.ts`.
  */
 async function contentIsEmpty(probe: ConditionProbe): Promise<boolean> {
-  return !(await probe.hasContent());
+  // Empty only when the check KNOWS it: an answer that ran out of time is not
+  // "no content", and offering a reader with content the empty-install cards
+  // would be the wrong half of a guess.
+  return (await probe.hasContent()) === false;
 }
 
 /**

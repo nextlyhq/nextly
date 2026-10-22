@@ -101,6 +101,7 @@ export function staleKnownEscapes(
   return known.filter(
     entry =>
       dialects.has(entry.dialect) &&
+      entry.witness !== null &&
       ran.has(entry.witness) &&
       !lines.some(
         line =>

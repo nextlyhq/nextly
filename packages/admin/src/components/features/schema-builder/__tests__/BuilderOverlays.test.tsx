@@ -238,4 +238,28 @@ describe("BuilderOverlays", () => {
 
     expect(builder.handleFieldDelete).toHaveBeenCalledWith("field_body");
   });
+  // A component's own fields cannot hold a field group directly: no write stores it there. Held in
+  // a group or a repeater it is stored in that container's value, so it is offered there.
+  it("offers a field group in a component only inside a group or repeater", () => {
+    const component: BuilderConfig = { ...config, kind: "field-group" };
+
+    const top = renderOverlays(
+      { kind: "picker", insertAt: 0 },
+      { config: component }
+    );
+    expect(screen.getByText("Text")).toBeInTheDocument();
+    expect(screen.queryByText("Field Group")).not.toBeInTheDocument();
+    top.unmount();
+
+    renderOverlays(
+      { kind: "picker", insertAt: 0, parentFieldId: "field_items" },
+      { config: component }
+    );
+    expect(screen.getByText("Field Group")).toBeInTheDocument();
+  });
+
+  it("still offers a field group at a collection's top level", () => {
+    renderOverlays({ kind: "picker", insertAt: 0 });
+    expect(screen.getByText("Field Group")).toBeInTheDocument();
+  });
 });

@@ -13,16 +13,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getEventBus } from "../../../events/event-bus";
 import type { CommandContext } from "../../program";
-import { runPluginInstall } from "../plugin-lifecycle-runner";
+import {
+  runPluginInstall,
+  runPluginUninstall,
+} from "../plugin-lifecycle-runner";
 
 // Hoisted with the mocks that close over it.
 const state = vi.hoisted(() => {
   const onInstall = vi.fn();
+  const onUninstall = vi.fn();
   // The loader's two configs: the transformed one commands read, and the
   // one the app wrote, which a boot must start from.
   const appConfig = {
     db: { migrationsDir: "./migrations" },
-    plugins: [{ name: "@acme/fx", version: "1.0.0", onInstall }],
+    plugins: [{ name: "@acme/fx", version: "1.0.0", onInstall, onUninstall }],
   };
   return {
     calls: [] as string[],
@@ -30,13 +34,14 @@ const state = vi.hoisted(() => {
     /** Whether `nextly migrate` has created the ledger and owner registry. */
     migrated: true,
     onInstall,
+    onUninstall,
     registerServices: vi.fn(),
     appConfig,
     loadedConfig: { ...appConfig, plugins: [...appConfig.plugins] },
     bootedFrom: [] as unknown[],
   };
 });
-const { calls, onInstall, registerServices } = state;
+const { calls, onInstall, onUninstall, registerServices } = state;
 
 vi.mock("../../utils/config-loader", () => ({
   loadConfig: async () => ({
@@ -50,6 +55,12 @@ vi.mock("../../utils/adapter", () => ({
     dialect: "sqlite",
     getDrizzle: () => ({}),
     tableExists: async () => state.migrated,
+    // Each read of SQLite's schema version, so the order of the
+    // uninstall's reads around the boot and the hook can be told.
+    queryStatement: async () => {
+      state.calls.push("schemaVersion");
+      return [{ schema_version: 1 }];
+    },
     disconnect: async () => {
       state.calls.push("disconnect");
     },
@@ -128,6 +139,9 @@ beforeEach(() => {
   state.alreadyRegistered = false;
   onInstall.mockReset().mockImplementation(async () => {
     calls.push("onInstall");
+  });
+  onUninstall.mockReset().mockImplementation(async () => {
+    calls.push("onUninstall");
   });
   registerServices.mockReset().mockImplementation(async () => {
     calls.push("register");
@@ -348,5 +362,30 @@ describe("the lifecycle hook's boot", () => {
       ...state.appConfig,
       db: { ...state.appConfig.db, runMigrationsOnBoot: false },
     });
+  });
+});
+
+describe("an uninstall's table baseline", () => {
+  it("is read after the hook's boot, right before onUninstall", async () => {
+    // The boot syncs code-first schema and can create tables; read before
+    // it, those read as tables onUninstall created.
+    await runPluginUninstall(
+      "@acme/fx",
+      { keepData: false, yes: true },
+      context
+    );
+
+    expect(calls).toEqual([
+      // Read before anything changes, to refuse an unreadable identity.
+      "schemaVersion",
+      "register",
+      "schemaVersion",
+      "onUninstall",
+      "destroy",
+      "clear",
+      // And once the hook has run, to compare with.
+      "schemaVersion",
+      "disconnect",
+    ]);
   });
 });

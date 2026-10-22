@@ -36,6 +36,9 @@ const REFUSED_REASON = "The email provider refused this recipient.";
 /** The reason given when a provider answers that it did not send. */
 const NOT_ACCEPTED_REASON = "The email provider did not accept the message.";
 
+/** The reason given when another send with the same key has not finished. */
+const IN_PROGRESS_REASON = "A send with this idempotency key is in progress.";
+
 /**
  * What the provider's answer says about one refused mailbox: its own
  * classification when it gave one, else retryable, as any unclassified
@@ -104,8 +107,10 @@ export function refusedRecipients(
 
 /**
  * Why a message the provider answered did not reach the caller's `to`: the
- * first refused `to` recipient's refusal, or, when the provider answered that
- * it did not send at all, an unclassified failure.
+ * first retryable refusal of a `to` recipient, else the first refusal, or,
+ * when the provider answered that it did not send at all, an unclassified
+ * failure. Retryable whenever any refused `to` recipient can still be sent
+ * to, as a split send's failures are combined.
  */
 export function answeredFailure(
   result: AdapterResult,
@@ -118,12 +123,15 @@ export function answeredFailure(
   // A refused `to` recipient's own classification first, whether or not the
   // provider also answered that it did not send: it is the more specific
   // fact, and the result's `refused` entry for it says the same.
-  const primary = recipients.find(
+  const primaries = recipients.filter(
     recipient =>
       recipient.recipientKind === "to" &&
       refused.has(recipient.to.trim().toLowerCase())
   );
-  if (primary) return refusalOf(result, primary.to);
+  const refusal = combinedFailure(
+    primaries.map(primary => refusalOf(result, primary.to))
+  );
+  if (refusal) return refusal;
   return result.success !== true ? notAcceptedFailure() : unclassifiedFailure();
 }
 
@@ -185,6 +193,19 @@ export interface EmailSendOutcome {
   failure?: EmailFailure;
   /** @experimental Recipients the provider refused while taking the message. */
   refused?: RefusedRecipient[];
+  /**
+   * @experimental The result came from an earlier send with the same
+   * idempotency key, and nothing was sent this time.
+   */
+  repeat?: true;
+}
+
+/**
+ * The failure for a send whose key another send holds: nothing was sent, and
+ * a retry returns that send's result once it has one.
+ */
+export function inProgressFailure(): EmailFailure {
+  return { retryable: true, reason: IN_PROGRESS_REASON };
 }
 
 /** The failure for a provider that answered that it did not send. */

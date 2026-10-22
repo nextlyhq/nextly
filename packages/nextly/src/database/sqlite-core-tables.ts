@@ -1,3 +1,4 @@
+import { EMAIL_SEND_CLAIMS_TABLE } from "../schemas/email-send-claims/table-name";
 import { LANGUAGES_TABLE } from "../schemas/languages/table-name";
 import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
 import { NOTICES_TABLE } from "../schemas/notices/table-name";
@@ -774,6 +775,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "retention_class" TEXT NOT NULL,
       "principal_kind" TEXT,
       "principal_id" TEXT,
+      "key_digest" TEXT,
       "created_at" INTEGER NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_created_idx"
@@ -788,6 +790,26 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "email_deliveries" ("retention_class", "created_at")`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_principal_idx"
       ON "email_deliveries" ("principal_kind", "principal_id")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_key_idx"
+      ON "email_deliveries" ("key_digest")`,
+    `CREATE TABLE IF NOT EXISTS "${EMAIL_SEND_CLAIMS_TABLE}" (
+      "id" TEXT PRIMARY KEY,
+      "scope" TEXT NOT NULL,
+      "key_digest" TEXT,
+      "message_digest" TEXT,
+      "state" TEXT NOT NULL,
+      "holder" TEXT NOT NULL,
+      "result" TEXT,
+      "claimed_at" INTEGER NOT NULL,
+      "lease_expires_at" INTEGER NOT NULL,
+      "settled_at" INTEGER
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "email_send_claims_key_idx"
+      ON "${EMAIL_SEND_CLAIMS_TABLE}" ("key_digest")`,
+    `CREATE INDEX IF NOT EXISTS "email_send_claims_state_idx"
+      ON "${EMAIL_SEND_CLAIMS_TABLE}" ("state", "settled_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_send_claims_lease_idx"
+      ON "${EMAIL_SEND_CLAIMS_TABLE}" ("lease_expires_at")`,
   ];
 }
 

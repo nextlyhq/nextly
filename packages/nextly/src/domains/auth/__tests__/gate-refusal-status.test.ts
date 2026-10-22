@@ -44,16 +44,6 @@ beforeEach(() => {
   resetCallerAccess();
 });
 
-/** An RBAC service whose check refuses with `refusal`. */
-function refusingRbac(refusal: unknown) {
-  return {
-    checkAccess: vi.fn().mockRejectedValue(refusal),
-    checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
-    getRegisteredAccess: vi.fn().mockReturnValue(undefined),
-    getRegisteredTarget: () => undefined,
-  };
-}
-
 const user = { id: "user-1", roles: ["editor"] };
 
 /**
@@ -83,13 +73,19 @@ async function collectionGate(refusal: unknown) {
   });
 }
 
+/** The Single gate, asked the same way as the collection gate above. */
 async function singleGate(refusal: unknown) {
+  callerLookupFails(refusal as Error);
+  const access = { read: () => true };
   return checkSingleAccess({
     slug: "site",
     operation: "read",
     user,
     overrideAccess: false,
-    rbacAccessControlService: refusingRbac(refusal) as never,
+    rbacAccessControlService: {
+      getRegisteredAccess: () => access,
+      getRegisteredTarget: () => ({ kind: "single", slug: "site", access }),
+    } as never,
     logger: silentLogger as never,
   });
 }

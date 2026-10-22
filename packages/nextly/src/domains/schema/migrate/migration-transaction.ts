@@ -106,19 +106,25 @@ export async function executeTransaction<T>(
 ): Promise<T> {
   const dialect = adapter.getCapabilities().dialect;
   if (dialect !== "sqlite") {
-    return adapter.transaction(ctx =>
-      work({
-        execute: async statement => {
-          await ctx.execute(statement);
-        },
-        db: ctx.getDrizzle(),
-        // MySQL has no transaction-scoped setting a unit can change that
-        // reroutes a table name: `USE` is refused before anything runs.
-        restoreSession: () =>
-          dialect === "postgresql"
-            ? restoreSessionDefaults(ctx)
-            : Promise.resolve(),
-      })
+    return adapter.transaction(
+      ctx =>
+        work({
+          execute: async statement => {
+            await ctx.execute(statement);
+          },
+          db: ctx.getDrizzle(),
+          // MySQL has no transaction-scoped setting a unit can change that
+          // reroutes a table name: `USE` is refused before anything runs.
+          restoreSession: () =>
+            dialect === "postgresql"
+              ? restoreSessionDefaults(ctx)
+              : Promise.resolve(),
+        }),
+      // A migration runs with nobody there to read a warning, so on MySQL it
+      // runs in strict mode whatever the server's own mode: a statement that
+      // would cut a value short, such as a column narrowed below a stored
+      // value's length, fails and changes nothing instead.
+      dialect === "mysql" ? { strictSqlMode: true } : undefined
     );
   }
 
