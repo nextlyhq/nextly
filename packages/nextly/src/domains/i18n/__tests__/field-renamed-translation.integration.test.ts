@@ -557,6 +557,210 @@ describeEachDialect("a translated field that is renamed", dialect => {
     }
   );
 
+  /** A shared collection whose `heading` holds "Hello" on its main table. */
+  async function seedSharedCollection(): Promise<string> {
+    const created = await handler().createCollection({
+      name: "posts",
+      label: "Post",
+      fields: TRANSLATED,
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const entry = await handler()
+      .getEntryService()
+      .createEntry(
+        { collectionName: "posts", overrideAccess: true },
+        { heading: "Hello", views: 7 }
+      );
+    expect(entry.success, JSON.stringify(entry)).toBe(true);
+    return String((entry.data as { id: unknown }).id);
+  }
+
+  /** The same, for a shared Single. */
+  async function seedSharedSingle(): Promise<string> {
+    await dispatchSingles(
+      "createSingle",
+      {},
+      { slug: "hero", label: "Hero", fields: TRANSLATED }
+    );
+    const singles: SingleEntryService =
+      current.getService("singleEntryService");
+    const written = await singles.update(
+      "hero",
+      { heading: "Hello", views: 7 },
+      { overrideAccess: true }
+    );
+    expect(written.success, JSON.stringify(written)).toBe(true);
+    const [row] = await query<{ id: string }>(
+      `SELECT ${quote(dialect, "id")} AS id FROM ${quote(dialect, "single_hero")}`
+    );
+    return String(row.id);
+  }
+
+  /** The settings saves that turn translation on, given the new field list. */
+  const ENABLING_SAVES = [
+    {
+      path: "the builder saves the collection",
+      table: "dc_posts",
+      seed: seedSharedCollection,
+      save: async (fields: unknown[]) => {
+        const saved = await handler().updateCollection(
+          { collectionName: "posts" },
+          { localized: true, fields }
+        );
+        if (!saved.success) throw new Error(JSON.stringify(saved));
+      },
+    },
+    {
+      path: "a Single's schema is saved",
+      table: "single_hero",
+      seed: seedSharedSingle,
+      save: async (fields: unknown[]) =>
+        dispatchSingles(
+          "updateSingleSchema",
+          { slug: "hero" },
+          { localized: true, fields }
+        ),
+    },
+  ];
+
+  // Turning translation on moves each field's main column to the companion only under a name the
+  // field has before and after the save, so a field that will be translated, taken away beside an
+  // added one, would have its value dropped with its main column and nothing seeded in its place.
+  it.each(
+    [
+      {
+        shape: "replaced by two fields",
+        fields: [
+          { name: "headline", type: "text" },
+          { name: "teaser", type: "text" },
+          { name: "views", type: "number" },
+        ],
+      },
+      {
+        shape: "renamed",
+        fields: [
+          { name: "headline", type: "text" },
+          { name: "views", type: "number" },
+        ],
+      },
+    ].flatMap(shape => ENABLING_SAVES.map(save => ({ ...shape, ...save })))
+  )(
+    "refuses a field $shape in the save that turns translation on, keeping its value, when $path",
+    async ({ table, seed, save, fields }) => {
+      const id = await seed();
+
+      const refusal = await save(fields).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(reported(refusal)).toMatch(
+        /TRANSLATED_FIELD_REMOVED_BESIDE_ADDED/
+      );
+      expect(reported(refusal)).toMatch(/heading/);
+      expect(reported(refusal)).toMatch(/Turn translation on/);
+      expect(await mainValue(table, "heading", id)).toBe("Hello");
+      expect(await columnsOf(`${table}_locales`)).toEqual([]);
+    }
+  );
+
+  /** The schema dialogs' applies that turn translation on, given the admin's answers. */
+  const ENABLING_DIALOGS = [
+    {
+      path: "the collection's schema dialog",
+      table: "dc_posts",
+      seed: seedSharedCollection,
+      apply: async (fields: unknown[], resolutions: Record<string, unknown>) =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: "posts" },
+          {
+            fields,
+            confirmed: true,
+            localized: true,
+            renameResolutions: [],
+            resolutions,
+            schemaVersion: await schemaVersionOf(
+              "dynamic_collections",
+              "posts"
+            ),
+          }
+        ),
+    },
+    {
+      path: "a Single's schema dialog",
+      table: "single_hero",
+      seed: seedSharedSingle,
+      apply: async (fields: unknown[], resolutions: Record<string, unknown>) =>
+        dispatchSingles(
+          "applySingleSchemaChanges",
+          { slug: "hero" },
+          {
+            fields,
+            confirmed: true,
+            localized: true,
+            renameResolutions: [],
+            resolutions,
+            schemaVersion: await schemaVersionOf("dynamic_singles", "hero"),
+          }
+        ),
+    },
+  ];
+
+  /** `heading` replaced by two fields in the save that turns translation on. */
+  const REPLACED_AS_TRANSLATION_STARTS = [
+    { name: "headline", type: "text" },
+    { name: "teaser", type: "text" },
+    { name: "views", type: "number" },
+  ];
+
+  // Before translation is on, `heading` is a main-table column, so a schema dialog's push asks
+  // about its drop like any other: refused with no answer, and applied once the admin confirms it.
+  it.each(ENABLING_DIALOGS)(
+    "refuses an unconfirmed drop in the save that turns translation on, when $path applies",
+    async ({ table, seed, apply }) => {
+      const id = await seed();
+
+      const refusal = await apply(REPLACED_AS_TRANSLATION_STARTS, {}).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(reported(refusal)).toMatch(/cancelled/);
+      expect(await mainValue(table, "heading", id)).toBe("Hello");
+    }
+  );
+
+  it.each(ENABLING_DIALOGS)(
+    "applies a drop the admin confirmed in the save that turns translation on, when $path applies",
+    async ({ table, seed, apply }) => {
+      await seed();
+
+      await apply(REPLACED_AS_TRANSLATION_STARTS, {
+        heading: { action: "confirm_drop" },
+      });
+
+      expect(await columnsOf(table)).not.toContain("heading");
+      expect(await columnsOf(`${table}_locales`)).toContain("headline");
+    }
+  );
+
+  // The positive control for the refusal above: turning translation on beside an added field
+  // moves the kept field's value to the default language's row.
+  it.each(ENABLING_SAVES)(
+    "turns translation on beside an added field, keeping the value, when $path",
+    async ({ table, seed, save }) => {
+      const id = await seed();
+
+      await save([...TRANSLATED, { name: "teaser", type: "text" }]);
+
+      expect(await companionValues(table, "heading", id)).toEqual({
+        en: "Hello",
+      });
+    }
+  );
+
   // A field group keeps a many-to-many relationship on its own row, as a column, where a
   // collection keeps it in a junction table, so replacing a translated field with one is the
   // same removal beside an addition. Asked of the preflight directly: the schema dialog's payload

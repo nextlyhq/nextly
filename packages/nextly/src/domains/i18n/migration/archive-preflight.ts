@@ -98,6 +98,8 @@ async function writeArchiveFirst(
  *
  * Nothing is asked when no field leaves translation, or when the entity is not translated before
  * and after the change (turning translation off for the whole entity archives by its own path).
+ * Turning translation off or on still refuses a field that is or becomes translated removed beside
+ * an added one, as neither move can follow it to its new name.
  *
  * @throws NextlyError `VALIDATION_ERROR` naming each reshaped or constrained field and the order
  *   that works, leaving or joining, or `NEXTLY_MIGRATION_APPLY_FAILED` when the archive refuses the values
@@ -124,8 +126,26 @@ export async function archiveFieldsLeavingTranslation(args: {
    * decides by the main table's rule (`detectFieldRename`) instead.
    */
   renamed?: FieldRename | null;
+  /**
+   * Set by the schema dialogs, whose push refuses a main-table column drop the admin did not
+   * confirm (`BrowserPromptDispatcher`). Before translation is on, every field is a main-table
+   * column, so that refusal already asks about each one the change takes away.
+   */
+  mainDropsConfirmed?: boolean;
 }): Promise<void> {
-  if (!args.wasLocalized) return;
+  if (!args.wasLocalized) {
+    // Turning translation on moves a field's main column to the companion only under a name the
+    // field has before and after the change (`buildCompanionTransitionStatements`), so one that
+    // becomes translated and is removed beside an added field, a rename included, would lose its
+    // value with its main column. A rename is not carried by that move, so only an explicit
+    // drop-and-add answer passes, or a save whose main-table drops are confirmed on their own.
+    if (args.isLocalized && !args.mainDropsConfirmed) {
+      refuseTranslatedFieldsRemovedBesideAdded(args, args.oldFields, {
+        translationStarts: true,
+      });
+    }
+    return;
+  }
   if (!args.isLocalized) {
     await refuseRenameAsTranslationEnds(args);
     // Turning translation off restores each field from the companion under the name it had, so
@@ -217,7 +237,9 @@ export async function archiveFieldsLeavingTranslation(args: {
  */
 function refuseTranslatedFieldsRemovedBesideAdded(
   args: Parameters<typeof archiveFieldsLeavingTranslation>[0],
-  oldFields: readonly LeavingFieldLike[]
+  oldFields: readonly LeavingFieldLike[],
+  /** Set for the change that turns translation on, whose refusal names that save first. */
+  options: { translationStarts?: boolean } = {}
 ): void {
   if (args.renamed === null) return;
   const before = new Set(oldFields.map(f => f.name));
@@ -245,6 +267,7 @@ function refuseTranslatedFieldsRemovedBesideAdded(
       )
       .map(f => f.name),
     added,
+    translationStarts: options.translationStarts,
   });
   if (refusals.length === 0) return;
   throw NextlyError.validation({

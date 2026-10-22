@@ -319,25 +319,41 @@ export function refusalsForTranslatedFieldRenamedAndReshaped(args: {
  * language's value, and the change cannot tell that from a rename the rule could not pick (two
  * renames, a rename beside a new field, a rename to another type), so nothing asked the admin
  * about the column. A removal on its own, or an addition on its own, is not refused.
+ *
+ * The change that turns translation on is refused the same way for the fields that become
+ * translated: it moves each one's main column under a name the field keeps, so it follows no
+ * rename at all, and its refusal names turning translation on as the first save.
  */
 export function refusalsForTranslatedFieldsRemovedBesideAdded(args: {
   /** The translated fields the change removes, each of which has a companion column. */
   removed: readonly string[];
   /** The fields the change adds that get a column, translated or shared. */
   added: readonly string[];
+  /** Whether this change turns translation on, so the removed fields become translated in it. */
+  translationStarts?: boolean;
 }): LeavingTranslationRefusal[] {
   if (args.removed.length === 0 || args.added.length === 0) return [];
   const added = args.added.map(name => `"${name}"`).join(", ");
+  const steps = [
+    "Rename or remove one translated field and save.",
+    "Then add or change the other fields and save.",
+  ];
   return args.removed.map(name =>
     refusal(
       `fields.${name}`,
       "TRANSLATED_FIELD_REMOVED_BESIDE_ADDED",
-      `"${name}" is translated, and this change removes it while adding ${added}. Removing it ` +
-        `deletes every language's value, and in one change that cannot be told from a rename.`,
-      [
-        "Rename or remove one translated field and save.",
-        "Then add or change the other fields and save.",
-      ]
+      args.translationStarts
+        ? `"${name}" becomes translated, and this change removes it while adding ${added}. ` +
+            `Turning translation on keeps a field's value only under the name it already has, ` +
+            `so its value would be deleted, and in one change that cannot be told from a rename.`
+        : `"${name}" is translated, and this change removes it while adding ${added}. Removing it ` +
+            `deletes every language's value, and in one change that cannot be told from a rename.`,
+      args.translationStarts
+        ? [
+            "Turn translation on with the fields as they are and save.",
+            ...steps,
+          ]
+        : steps
     )
   );
 }
