@@ -6,13 +6,11 @@
  * Without strict mode MySQL cuts an overlong value to a narrowed column's
  * length with only a warning, and a migration runs with nobody there to read
  * it. A file marked to run outside a transaction runs statement by statement,
- * each committing as it runs, so its statements share one connection whose
- * session is put in strict mode, and that connection is closed afterwards
- * rather than pooled, so strict mode reaches nothing else.
+ * each committing as it runs, so its statements share one connection of their
+ * own whose session is put in strict mode, closed afterwards.
  *
- * One pooled connection, set to no strict mode, stands for a server
- * configured that way: the runner gets that connection, and the pool's next
- * connection is a different one.
+ * The server's own mode is set to no strict mode for each case, and put back
+ * afterwards: a new connection starts with it.
  *
  * Self-skips when TEST_MYSQL_URL is unset.
  */
@@ -50,12 +48,18 @@ describeMysql(
     let url: string;
     let dir: string;
     let lax: DrizzleAdapter;
+    let serverMode: string;
 
     beforeEach(async () => {
       dbName = `nextly_nt_strict_${RUN_ID}_${seq++}`;
       const server = new URL(MYSQL_URL);
       server.pathname = "/";
       root = await mysql.createConnection(server.toString());
+      const [modes] = await root.query<mysql.RowDataPacket[]>(
+        "SELECT @@GLOBAL.sql_mode AS mode"
+      );
+      serverMode = String(modes[0]?.mode);
+      await root.query("SET GLOBAL sql_mode = ''");
       await root.query(`CREATE DATABASE \`${dbName}\``);
       await root.query(`USE \`${dbName}\``);
       await root.query(`CREATE TABLE ${TABLE} (id int PRIMARY KEY, v TEXT)`);
@@ -68,17 +72,18 @@ describeMysql(
       lax = (await createAdapter({
         type: "mysql",
         url,
-        pool: { max: 1 },
       } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
       // The ledger, as `nextly migrate` bootstraps it.
       for (const statement of getSchemaEventsDdl("mysql")) {
         await lax.executeQuery(statement);
       }
-      await lax.executeQuery("SET SESSION sql_mode = ''");
     });
 
     afterEach(async () => {
       await lax?.disconnect();
+      if (serverMode !== undefined) {
+        await root?.query("SET GLOBAL sql_mode = ?", [serverMode]);
+      }
       await root?.query(`DROP DATABASE IF EXISTS \`${dbName}\``);
       await root?.end();
       if (dir) rmSync(dir, { recursive: true, force: true });
@@ -117,15 +122,7 @@ describeMysql(
       return { type: String(cols[0]?.type), length: Number(rows[0]?.n) };
     }
 
-    async function connectionId(): Promise<number> {
-      const [row] = await lax.executeQuery<{ id: number }>(
-        "SELECT CONNECTION_ID() AS id"
-      );
-      return Number(row.id);
-    }
-
-    it("refuses a narrowing that would cut a stored value, keeps the value, and closes the strict connection", async () => {
-      const laxId = await connectionId();
+    it("refuses a narrowing that would cut a stored value, and keeps the value", async () => {
       writeMarked(`20261021_000000_${RUN_ID}_narrow`, [
         `ALTER TABLE ${TABLE} MODIFY COLUMN v varchar(255)`,
       ]);
@@ -140,7 +137,6 @@ describeMysql(
       expect(error.code).toBe("NEXTLY_MIGRATION_PARTIALLY_APPLIED");
       expect(error.logMessage).toMatch(/Data too long/);
       expect(await stored()).toEqual({ type: "text", length: 300 });
-      expect(await connectionId()).not.toBe(laxId);
     });
 
     it("applies a narrowing every stored value fits", async () => {

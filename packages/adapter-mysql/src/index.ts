@@ -79,6 +79,7 @@ import type {
 } from "mysql2";
 import mysql from "mysql2/promise";
 import type {
+  ConnectionOptions,
   PoolOptions,
   RowDataPacket,
   ResultSetHeader,
@@ -116,6 +117,14 @@ interface Pool extends Queryable {
     _freeConnections?: { length: number };
     _connectionQueue?: { length: number };
   };
+}
+
+/**
+ * A mysql2 connection of its own, outside the pool
+ */
+interface OwnConnection extends Queryable {
+  /** Closes the connection. */
+  destroy(): void;
 }
 
 /**
@@ -575,30 +584,36 @@ export class MySqlAdapter extends DrizzleAdapter {
   }
 
   /**
-   * Runs `work` on one connection taken from the pool, outside a
-   * transaction, each statement committing as it runs.
+   * Runs `work` on a connection of its own, opened for it with the pool's
+   * connection settings, outside a transaction, each statement committing as
+   * it runs.
    *
    * @remarks
+   * Not a pooled connection: on a server whose sessions start with autocommit
+   * off, one can hold a transaction an earlier caller left open, and turning
+   * autocommit on would commit that caller's writes. A new connection holds
+   * nothing. It does not count against `pool.max`.
+   *
    * Each statement commits as it runs, whatever the server's own autocommit
    * default. With `strictSqlMode` the session runs in strict mode, as a
    * transaction given the same option does, so a statement that would cut a
    * value short fails and changes nothing. The connection is closed
-   * afterwards, whether `work` finished or threw, never handed back to the
-   * pool: whatever `work` set on its session (a temporary table, a session
-   * variable, a lock) ends with it instead of reaching a later query.
+   * afterwards, whether `work` finished or threw, so whatever `work` set on
+   * its session (a temporary table, a session variable, a lock) ends with it.
    */
   override async withSession<T>(
     work: (session: StatementSession) => Promise<T>,
     options?: SessionOptions
   ): Promise<T> {
-    // A precondition: before any connection is taken.
+    // A precondition: before any connection is opened.
     this.refuseSessionInTransaction();
-    const pool = this.ensurePool();
-    // A checkout, taken from the pool like `executeQuery`'s queries are.
-    this.notePoolAccess();
-    let connection: PoolConnection;
+    // Connected first, as every other call requires.
+    this.ensurePool();
+    let connection: OwnConnection;
     try {
-      connection = await pool.getConnection();
+      connection = (await mysql.createConnection(
+        this.buildConnectionConfig()
+      )) as unknown as OwnConnection;
     } catch (error) {
       throw this.classifyError(error);
     }
@@ -880,44 +895,35 @@ export class MySqlAdapter extends DrizzleAdapter {
    * Builds mysql2 Pool configuration from adapter config.
    */
   private buildPoolConfig(): PoolOptions {
-    const config: PoolOptions = {};
-
-    // Connection string or explicit options
-    if (this.config.url) {
-      config.uri = this.config.url;
-    } else {
-      if (this.config.host) config.host = this.config.host;
-      if (this.config.port) config.port = this.config.port;
-      if (this.config.database) config.database = this.config.database;
-      if (this.config.user) config.user = this.config.user;
-      if (this.config.password) config.password = this.config.password;
-    }
+    const config: PoolOptions = this.buildConnectionConfig();
 
     // Pool settings - mysql2 uses different property names
     config.connectionLimit = this.config.pool?.max ?? DEFAULT_POOL_CONFIG.max;
     config.idleTimeout =
       this.config.pool?.idleTimeoutMs ?? DEFAULT_POOL_CONFIG.idleTimeoutMs;
-    config.connectTimeout =
-      this.config.pool?.connectionTimeoutMs ??
-      DEFAULT_POOL_CONFIG.connectionTimeoutMs;
 
     // A request waits for a connection when the pool is full. The queue has
     // no length limit; each wait in it is bounded instead (`boundPoolWait`).
     config.waitForConnections = true;
     config.queueLimit = 0;
 
+    return config;
+  }
+
+  /**
+   * Builds the settings every connection opens with, pooled or not, from
+   * adapter config.
+   */
+  private buildConnectionConfig(): ConnectionOptions {
+    const config: ConnectionOptions = this.buildAddressConfig();
+
+    config.connectTimeout =
+      this.config.pool?.connectionTimeoutMs ??
+      DEFAULT_POOL_CONFIG.connectionTimeoutMs;
+
     // SSL configuration
     if (this.config.ssl) {
-      if (typeof this.config.ssl === "boolean") {
-        config.ssl = this.config.ssl ? {} : undefined;
-      } else {
-        config.ssl = {
-          rejectUnauthorized: this.config.ssl.rejectUnauthorized,
-          ca: this.config.ssl.ca,
-          cert: this.config.ssl.cert,
-          key: this.config.ssl.key,
-        };
-      }
+      config.ssl = this.buildSslConfig(this.config.ssl);
     }
 
     // MySQL-specific options
@@ -936,6 +942,33 @@ export class MySqlAdapter extends DrizzleAdapter {
     config.dateStrings = false; // Return Date objects
 
     return config;
+  }
+
+  /** Where to connect: the connection string, or the explicit options. */
+  private buildAddressConfig(): ConnectionOptions {
+    if (this.config.url) return { uri: this.config.url };
+    const { host, port, database, user, password } = this.config;
+    const config: ConnectionOptions = { host, port, database, user, password };
+    // An option left unset is left out, for mysql2's own default.
+    for (const key of Object.keys(config) as (keyof ConnectionOptions)[]) {
+      if (!config[key]) delete config[key];
+    }
+    return config;
+  }
+
+  /** mysql2's `ssl` option for the adapter's `ssl` setting. */
+  private buildSslConfig(
+    ssl: NonNullable<MySqlAdapterConfig["ssl"]>
+  ): ConnectionOptions["ssl"] {
+    if (typeof ssl === "boolean") {
+      return ssl ? {} : undefined;
+    }
+    return {
+      rejectUnauthorized: ssl.rejectUnauthorized,
+      ca: ssl.ca,
+      cert: ssl.cert,
+      key: ssl.key,
+    };
   }
 
   /**
@@ -999,7 +1032,7 @@ export class MySqlAdapter extends DrizzleAdapter {
    * recorded in `changed` for `restoreSession` to put back.
    */
   private async enterStrictMode(
-    connection: PoolConnection,
+    connection: Queryable,
     changed: NonNullable<SessionRestore>
   ): Promise<void> {
     const [rows] = await connection.query<RowDataPacket[]>(
