@@ -18,6 +18,7 @@ import type { AccessOperation } from "../../services/access/types";
 import {
   apiKeyWriteAllowed,
   scopeRowsAgree,
+  slugGrants,
   type AuthenticatedScope,
 } from "../authenticated-scope";
 import { effectiveCallerScope } from "../caller-scope";
@@ -39,7 +40,7 @@ import {
   type Decision,
   type RuleOutcome,
 } from "./decide";
-import { declaredTarget } from "./declared-rules";
+import { targetAsDeclared } from "./declared-rules";
 import { deviate } from "./deviations";
 import {
   actorForKey,
@@ -126,8 +127,7 @@ const decided = async (
   action: AccessOperation,
   target: AccessTarget
 ): Promise<boolean> =>
-  (await decide(await actor, action, declaredTarget(target.slug) ?? target))
-    .allowed;
+  (await decide(await actor, action, targetAsDeclared(target))).allowed;
 
 export function collectionGateVerdict(
   q: CollectionQuestion
@@ -296,7 +296,7 @@ function keyActorOf(
     : actorForKey({
         keyId: "",
         userId: user.id,
-        grants: scope.grants ?? [],
+        grants: slugGrants(scope.permissions),
         roles: scope.roles ?? user.roles ?? [],
       });
 }
