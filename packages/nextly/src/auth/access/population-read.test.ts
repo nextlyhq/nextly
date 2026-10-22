@@ -26,6 +26,8 @@ vi.mock("./resolve-actor", async importOriginal => ({
   actorForUser: throwingSpy,
 }));
 
+import { makePrincipal } from "../../plugins/principals/principal";
+
 import { userActor } from "./actor";
 import { clearDeclaredTargets, declareTarget } from "./declared-rules";
 import { relatedRowReads } from "./population-read";
@@ -158,5 +160,25 @@ describe("a signed-in user", () => {
       )
     ).resolves.toBe(true);
     expect(failingClosedSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("a plugin's signed-in person", () => {
+  it("is judged as the person, not as a user the read also names", async () => {
+    // The user's path would hand back the service's answer for the rule,
+    // `true` here; the person is judged by the rule itself, which refuses.
+    checkAccess.mockResolvedValue(true);
+
+    await expect(
+      relatedRowReads(
+        "posts",
+        {
+          user: { id: "u1" },
+          principal: makePrincipal("members:member", "m1", {}),
+        },
+        service({ read: false })
+      )
+    ).resolves.toBe(false);
+    expect(checkAccess).not.toHaveBeenCalled();
   });
 });

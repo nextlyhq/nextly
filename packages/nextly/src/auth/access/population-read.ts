@@ -198,6 +198,8 @@ export function relatedRowReads(
     }
     return decided(person, target);
   }
+  // A read with no user is a visitor's, a key scope included, as it was
+  // before: no door populates for a key without naming the user it acts for.
   if (!caller.user) return visitorReads(target, rbac);
   if (scope) return keyReads(target, scope, caller.user, rbac);
   return userReads(target, caller.user.id, rbac);

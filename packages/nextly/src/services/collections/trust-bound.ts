@@ -140,8 +140,9 @@ export async function identifiedCallerMayRead(
   resource: string
 ): Promise<boolean> {
   if (!hasCallerIdentity(access)) {
-    // Kept until visitors read media through the Public role: the decision
-    // refuses a caller with no grant, a plugin's person included.
+    // Kept until a read with no caller identity, a visitor's or a plugin's
+    // person's, reads media through the Public role: the decision refuses a
+    // caller with no grant.
     const principal = currentPrincipal();
     return deviate(
       "visitor-keeps-media",
