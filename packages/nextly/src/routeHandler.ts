@@ -121,6 +121,7 @@ import { hasAuthRateLimit } from "./auth/handlers/router";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
+import { appLocalization } from "./domains/i18n/configured-locales";
 import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
 import {
@@ -1957,8 +1958,9 @@ async function buildAdminMeta(
   // would dial exists.
   workspace.devReload = isDevServerRuntime();
 
-  // Content-localization config for the admin (present only when i18n is enabled).
-  const localization = config?.localization;
+  // The site's languages for the admin (present only when i18n is enabled): the language list as
+  // it is now, so a language added in Settings shows without a restart.
+  const localization = appLocalization() ?? config?.localization;
   if (localization) {
     workspace.locales = {
       defaultLocale: localization.defaultLocale,
