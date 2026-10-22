@@ -18,6 +18,11 @@ vi.mock("../../helpers/di", () => ({
 }));
 
 import type { ServiceContainer } from "../../../services";
+import {
+  asCaller,
+  keyCaller,
+  sessionCaller,
+} from "../../__tests__/request-caller";
 import { dispatchCollections } from "../collection-dispatcher";
 
 function makeContainer(
@@ -58,25 +63,28 @@ const countResult = {
   data: { totalDocs: 0 },
 };
 
-/** The reserved params the route handler stamps once it has authenticated. */
-const authedParams = {
-  collectionName: "posts",
-  _authenticatedUserId: "u1",
-  _authenticatedUserName: "Ada",
-  _authenticatedUserEmail: "ada@example.com",
-  _authenticatedUserRoles: JSON.stringify(["editor", "author"]),
-};
+/** The caller the route handler sets once it has authenticated. */
+const authed = sessionCaller({
+  userId: "u1",
+  name: "Ada",
+  email: "ada@example.com",
+  roles: ["editor", "author"],
+});
 
 /**
  * The same caller arriving through a scoped API key. The key's own grants are
- * stamped separately from the owner's roles, which is the whole point: the key
- * is authoritative on its scope, never on the account that issued it.
+ * pinned as its scope, apart from the owner's roles, which is the whole point:
+ * the key is authoritative on its scope, never on the account that issued it.
  */
-const apiKeyParams = {
-  ...authedParams,
-  _authenticatedActorType: "apiKey",
-  _authenticatedActorId: "key-1",
-  _authenticatedPermissions: JSON.stringify(["collections:read"]),
+const apiKey = keyCaller("key-1", {
+  userId: "u1",
+  name: "Ada",
+  email: "ada@example.com",
+  roles: ["editor", "author"],
+});
+const apiKeyScope = {
+  actorType: "apiKey" as const,
+  permissions: ["collections:read"],
 };
 
 describe("collection read handlers forward the caller to the query service", () => {
@@ -86,11 +94,13 @@ describe("collection read handlers forward the caller to the query service", () 
 
   it("listEntries passes the authenticated user and attests route authorization", async () => {
     const listEntries = vi.fn().mockResolvedValue(listResult);
-    await dispatchCollections(
-      makeContainer({ listEntries }),
-      "listEntries",
-      { ...authedParams },
-      undefined
+    await asCaller(authed, () =>
+      dispatchCollections(
+        makeContainer({ listEntries }),
+        "listEntries",
+        { collectionName: "posts" },
+        undefined
+      )
     );
 
     expect(listEntries).toHaveBeenCalledTimes(1);
@@ -110,11 +120,13 @@ describe("collection read handlers forward the caller to the query service", () 
 
   it("listEntries sends no user for an anonymous caller", async () => {
     const listEntries = vi.fn().mockResolvedValue(listResult);
-    await dispatchCollections(
-      makeContainer({ listEntries }),
-      "listEntries",
-      { collectionName: "posts" },
-      undefined
+    await asCaller(undefined, () =>
+      dispatchCollections(
+        makeContainer({ listEntries }),
+        "listEntries",
+        { collectionName: "posts" },
+        undefined
+      )
     );
 
     const args = listEntries.mock.calls[0][0];
@@ -126,11 +138,13 @@ describe("collection read handlers forward the caller to the query service", () 
 
   it("getEntry passes the user, route attestation, and the API-key scope", async () => {
     const getEntry = vi.fn().mockResolvedValue(docResult);
-    await dispatchCollections(
-      makeContainer({ getEntry }),
-      "getEntry",
-      { ...authedParams, entryId: "e1" },
-      undefined
+    await asCaller(authed, () =>
+      dispatchCollections(
+        makeContainer({ getEntry }),
+        "getEntry",
+        { collectionName: "posts", entryId: "e1" },
+        undefined
+      )
     );
 
     const args = getEntry.mock.calls[0][0];
@@ -145,11 +159,13 @@ describe("collection read handlers forward the caller to the query service", () 
     // Without this the merged draft/published-split engine is unreachable over
     // HTTP: the query service honors `includeWorkingDraft`, but nothing sets it.
     const getEntry = vi.fn().mockResolvedValue(docResult);
-    await dispatchCollections(
-      makeContainer({ getEntry }),
-      "getEntry",
-      { ...authedParams, entryId: "e1", draft: "true" },
-      undefined
+    await asCaller(authed, () =>
+      dispatchCollections(
+        makeContainer({ getEntry }),
+        "getEntry",
+        { collectionName: "posts", entryId: "e1", draft: "true" },
+        undefined
+      )
     );
 
     expect(getEntry.mock.calls[0][0].includeWorkingDraft).toBe(true);
@@ -159,11 +175,13 @@ describe("collection read handlers forward the caller to the query service", () 
     // The overlay is opt-in: a plain read must keep returning the live row, so
     // the flag is explicitly false rather than undefined-and-forgotten.
     const getEntry = vi.fn().mockResolvedValue(docResult);
-    await dispatchCollections(
-      makeContainer({ getEntry }),
-      "getEntry",
-      { ...authedParams, entryId: "e1" },
-      undefined
+    await asCaller(authed, () =>
+      dispatchCollections(
+        makeContainer({ getEntry }),
+        "getEntry",
+        { collectionName: "posts", entryId: "e1" },
+        undefined
+      )
     );
 
     expect(getEntry.mock.calls[0][0].includeWorkingDraft).toBe(false);
@@ -174,17 +192,21 @@ describe("collection read handlers forward the caller to the query service", () 
     const countEntries = vi.fn().mockResolvedValue(countResult);
     const container = makeContainer({ listEntries, countEntries });
 
-    await dispatchCollections(
-      container,
-      "listEntries",
-      { ...authedParams },
-      undefined
+    await asCaller(authed, () =>
+      dispatchCollections(
+        container,
+        "listEntries",
+        { collectionName: "posts" },
+        undefined
+      )
     );
-    await dispatchCollections(
-      container,
-      "countEntries",
-      { ...authedParams },
-      undefined
+    await asCaller(authed, () =>
+      dispatchCollections(
+        container,
+        "countEntries",
+        { collectionName: "posts" },
+        undefined
+      )
     );
 
     const listArgs = listEntries.mock.calls[0][0];
@@ -210,23 +232,38 @@ describe("collection read handlers forward the caller to the query service", () 
     const getEntry = vi.fn().mockResolvedValue(docResult);
     const container = makeContainer({ listEntries, countEntries, getEntry });
 
-    await dispatchCollections(
-      container,
-      "listEntries",
-      { ...apiKeyParams },
-      undefined
+    await asCaller(
+      apiKey,
+      () =>
+        dispatchCollections(
+          container,
+          "listEntries",
+          { collectionName: "posts" },
+          undefined
+        ),
+      apiKeyScope
     );
-    await dispatchCollections(
-      container,
-      "countEntries",
-      { ...apiKeyParams },
-      undefined
+    await asCaller(
+      apiKey,
+      () =>
+        dispatchCollections(
+          container,
+          "countEntries",
+          { collectionName: "posts" },
+          undefined
+        ),
+      apiKeyScope
     );
-    await dispatchCollections(
-      container,
-      "getEntry",
-      { ...apiKeyParams, entryId: "e1" },
-      undefined
+    await asCaller(
+      apiKey,
+      () =>
+        dispatchCollections(
+          container,
+          "getEntry",
+          { collectionName: "posts", entryId: "e1" },
+          undefined
+        ),
+      apiKeyScope
     );
 
     const expected = {
@@ -238,19 +275,17 @@ describe("collection read handlers forward the caller to the query service", () 
     expect(getEntry.mock.calls[0][0].authenticatedScope).toEqual(expected);
   });
 
-  it("ignores a malformed role payload rather than forwarding a partial set", async () => {
+  it("reads an empty role set as no roles rather than an empty grant", async () => {
+    // A caller resolved to no roles reaches the rules the same way as one
+    // whose route resolves none: no `roles`, and no `role` to match on.
     const listEntries = vi.fn().mockResolvedValue(listResult);
-    await dispatchCollections(
-      makeContainer({ listEntries }),
-      "listEntries",
-      {
-        collectionName: "posts",
-        _authenticatedUserId: "u1",
-        // Route params are strings, so roles arrive JSON-encoded; a mixed-type
-        // array must degrade to "no roles" instead of granting a partial set.
-        _authenticatedUserRoles: JSON.stringify(["editor", 7]),
-      },
-      undefined
+    await asCaller(sessionCaller({ userId: "u1", roles: [] }), () =>
+      dispatchCollections(
+        makeContainer({ listEntries }),
+        "listEntries",
+        { collectionName: "posts" },
+        undefined
+      )
     );
 
     const args = listEntries.mock.calls[0][0];

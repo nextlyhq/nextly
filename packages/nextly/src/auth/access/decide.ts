@@ -29,6 +29,7 @@ import type {
 } from "../../shared/types/access";
 
 import {
+  holdsByManage,
   holdsPermission,
   isSuperAdmin,
   ruleContext,
@@ -275,4 +276,26 @@ export async function decide(
   target: AccessTarget
 ): Promise<Decision> {
   return judge(actor, action, target, await askRules(actor, action, target));
+}
+
+/**
+ * The decision where no rule can apply: a resource that is not an entry, such
+ * as settings, roles or email providers, or an action no rule is declared for,
+ * such as `manage`. The permission alone answers: trusted work is allowed, a
+ * super-admin is allowed, a plugin's person, who holds no role and meets no
+ * rule here, is refused, and anyone else needs the permission, which on a
+ * system resource its `manage-` permission also gives ({@link holdsByManage}).
+ */
+export function decidePermission(
+  actor: Actor,
+  action: string,
+  resource: string
+): Decision {
+  if (actor.kind === "system") return ALLOW;
+  if (actor.kind === "principal") return refuse("principal-without-rule");
+  if (isSuperAdmin(actor)) return ALLOW;
+  return holdsPermission(actor, action, resource) ||
+    holdsByManage(actor, action, resource)
+    ? ALLOW
+    : refuse("no-permission");
 }

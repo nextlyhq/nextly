@@ -25,7 +25,7 @@ import { z } from "zod";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import { scopedSender, SITE_KEY_SCOPE } from "../domains/email/send-claims";
+import { restKeyScope, scopedSender } from "../domains/email/send-claims";
 import { sendOutcomeMessage } from "../domains/email/send-outcome";
 import { sendRequestSchema } from "../domains/email/send-request";
 import { NextlyError } from "../errors/nextly-error";
@@ -60,7 +60,9 @@ const sendEmailSchema = sendRequestSchema({
  * - `providerId` (string, optional): use a specific email provider
  * - `attachments` (array, optional): `[{ mediaId, filename? }]`
  * - `idempotencyKey` (string, optional): send this message once for the key;
- *   a repeat answers `repeat: true` and sends nothing
+ *   a repeat answers `repeat: true` and sends nothing. The key is the
+ *   caller's own (its API key, or the signed-in person), so it never meets
+ *   the site's keys or another caller's.
  *
  * Response codes:
  * - 200 OK: `{ message, success, messageId? }` via `respondAction`.
@@ -106,8 +108,11 @@ export const POST = withErrorHandler(
     }
 
     const service = await getEmailService();
-    // A key sent here is the site's, as one from the Direct API is.
-    const result = await scopedSender(service, SITE_KEY_SCOPE).send(args);
+    // A key sent here is this caller's own: it never meets a key the site's
+    // code sends with, nor another caller's.
+    const result = await scopedSender(service, restKeyScope(authResult)).send(
+      args
+    );
     // The service constructs its public result explicitly, so this spread
     // carries only `{ success, messageId? }` — never a provider's own extra
     // fields. Spread onto the action

@@ -236,6 +236,21 @@ export function scopeGrants(
 }
 
 /**
+ * Whether the scope carries the grant rows its permission slugs came from, so
+ * its key can be judged on those rows. A scope rebuilt from slugs alone, or
+ * one whose slugs were narrowed apart from its rows, does not.
+ */
+export function scopeRowsAgree(scope: AuthenticatedScope): boolean {
+  if (!scope.grants) return false;
+  try {
+    scopeGrants(scope);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Whether a scoped API key's OWN grants authorize `operation` on `resource`.
  *
  * Returns `null` when the caller is not a scoped API key, so the caller falls

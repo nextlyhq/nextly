@@ -38,6 +38,7 @@ import type {
 } from "../domains/schema/extension/types";
 import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { VersionsService } from "../domains/versions/versions-service";
+import type { AnyWidget } from "../domains/widgets/declaration/define-widget";
 import { NextlyError } from "../errors/nextly-error";
 import type { EventBus, EventHandler, EventName } from "../events/event-bus";
 import { getEventBus, isReservedEventName } from "../events/event-bus";
@@ -988,8 +989,13 @@ export interface PluginAdminConfig {
  *   }
  * });
  * ```
+ *
+ * `W` is the plugin's dashboard widgets, which `definePlugin` infers from `contributes.dashboard`
+ * so a site's config, and the admin component map generated from it, can see each one's id,
+ * component path and props. It defaults to any widget, which is today's type: a plugin written
+ * as a plain object, or in JavaScript, means exactly what it meant.
  */
-export interface PluginDefinition {
+export interface PluginDefinition<W extends AnyWidget = AnyWidget> {
   /**
    * Unique plugin name.
    * Used for identification and error messages.
@@ -1109,7 +1115,7 @@ export interface PluginDefinition {
    * @public Declarative contributions — introspectable without running
    * the plugin. Consumed incrementally by later phases. See {@link PluginContributions}.
    */
-  contributes?: PluginContributions;
+  contributes?: PluginContributions<W>;
 
   /**
    * Collections provided by this plugin.
@@ -1203,7 +1209,7 @@ export interface PluginDefinition {
    * defineConfig({ plugins: [formBuilder().plugin.rename({ forms: "contact-forms" })] })
    * ```
    */
-  rename?: (map: Record<string, string>) => PluginDefinition;
+  rename?: (map: Record<string, string>) => PluginDefinition<W>;
 
   /**
    * @internal Accumulated declared-slug → new-slug map from `rename()`.
@@ -1248,12 +1254,19 @@ export type {
   PluginSummary,
 } from "./plugin-config-view";
 
-export function definePlugin(definition: PluginDefinition): PluginDefinition {
-  const withRename: PluginDefinition = {
+// Generic over the widgets only, inferred from `contributes.dashboard.widgets`, so each keeps its
+// id, component path and props for the site's config and the admin component map generated from
+// it. Not over the whole definition: inferring that would narrow every field of every plugin,
+// and a variable holding one plugin could no longer be given another. With no dashboard, `W`
+// has nothing to infer from and stays any widget, which is today's type.
+export function definePlugin<W extends AnyWidget = AnyWidget>(
+  definition: PluginDefinition<W>
+): PluginDefinition<W> {
+  const withRename: PluginDefinition<W> = {
     ...definition,
     // Framework remap: returns a NEW definition with the rename map
     // merged. The original is left untouched (pure); chainable.
-    rename(map: Record<string, string>): PluginDefinition {
+    rename(map: Record<string, string>): PluginDefinition<W> {
       return definePlugin({
         ...withRename,
         renameMap: { ...(withRename.renameMap ?? {}), ...map },

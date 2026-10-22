@@ -69,7 +69,10 @@ import {
   readAuthenticatedActor,
   readAuthenticatedScope,
 } from "../helpers/authenticated-actor";
-import { readAuthenticatedUser } from "../helpers/authenticated-user";
+import {
+  readAuthenticatedUser,
+  requireAuthenticatedUser,
+} from "../helpers/authenticated-user";
 import type { Params } from "../types";
 
 import { readAccessCallerForDispatch } from "./read-access-caller";
@@ -178,41 +181,6 @@ export interface VersionMethodArgs {
 }
 
 /**
- * Rebuild the caller from the params the route handler stamped on.
- *
- * `setAuthenticatedRouteParams` writes the authenticated identity onto
- * `routeParams` as `_authenticatedUser*` values, so dispatcher methods recover
- * it from there rather than receiving a user object directly.
- */
-export function userFromParams(p: Params): UserContext {
-  let roles: string[] | undefined;
-  if (p._authenticatedUserRoles) {
-    try {
-      const parsed: unknown = JSON.parse(String(p._authenticatedUserRoles));
-      if (Array.isArray(parsed)) roles = parsed as string[];
-    } catch {
-      // A corrupt value must not turn a read into a server error; treat it as
-      // no roles and let the access rules decide.
-      roles = undefined;
-    }
-  }
-
-  return {
-    id: String(p._authenticatedUserId ?? ""),
-    name: p._authenticatedUserName
-      ? String(p._authenticatedUserName)
-      : undefined,
-    email: p._authenticatedUserEmail
-      ? String(p._authenticatedUserEmail)
-      : undefined,
-    roles,
-    // A representative singular role, matching what the standalone routes
-    // pass, so a callback reading `user.role` sees an authorized value.
-    role: roles?.[0],
-  };
-}
-
-/**
  * Version metadata for one document, newest-first, each row carrying the
  * display identity of whoever wrote it. Snapshots are never included here — a
  * history list does not need them and they are large.
@@ -304,8 +272,8 @@ export async function respondVersionPage(
 ): Promise<Response> {
   const result = await listVersionsForDocument({
     ...document,
-    user: userFromParams(p),
-    authenticatedScope: readAuthenticatedScope(p),
+    user: requireAuthenticatedUser(),
+    authenticatedScope: readAuthenticatedScope(),
     limit: p.limit !== undefined ? Number(p.limit) : undefined,
     cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
     locale: p.locale !== undefined ? String(p.locale) : undefined,
@@ -326,10 +294,10 @@ export async function respondSubjectEvents(
 ): Promise<Response> {
   // The caller as every REST collection operation reads it, verified claims
   // included, so a document's hooks judge the same caller here.
-  const user = readAuthenticatedUser(p);
+  const user = readAuthenticatedUser();
   const result = await readSubjectEvents(subject, parseSubjectEventsQuery(p), {
     ...(user === undefined ? {} : { user }),
-    authenticatedScope: readAuthenticatedScope(p),
+    authenticatedScope: readAuthenticatedScope(),
   });
   return withSessionCacheHeaders(respondList(result.items, result.meta));
 }
@@ -698,7 +666,7 @@ export async function setVersionLabelForDocument(
   assertPositiveInteger(args.versionNo, "versionNo");
   const { provided, label } = readLabelFromBody(args.body);
 
-  const caller = readAccessCallerForDispatch(args.params, args.user);
+  const caller = readAccessCallerForDispatch(args.user);
 
   if (!(await canReadEntity(args.slug, caller))) {
     throw NextlyError.notFound({
@@ -717,12 +685,12 @@ export async function setVersionLabelForDocument(
     args.slug,
     args.entryId,
     args.user,
-    readAuthenticatedScope(args.params)
+    readAuthenticatedScope()
   );
   // A version is named in its own language's history, so the caller must be
   // able to read that language before it is named or shown.
   await assertVersionLanguageReadable(
-    { ...args, authenticatedScope: readAuthenticatedScope(args.params) },
+    { ...args, authenticatedScope: readAuthenticatedScope() },
     args.versionNo
   );
 
@@ -739,7 +707,7 @@ export async function setVersionLabelForDocument(
     // The route authorized `update` against the key's scope; judge the label
     // edit on the key's OWN grant so a super-admin-owned key does not skip
     // stored owner/role update rules.
-    readAuthenticatedScope(args.params)
+    readAuthenticatedScope()
   );
 
   const versions = getService("versionsService");
@@ -755,7 +723,7 @@ export async function setVersionLabelForDocument(
   // document's history in the same transaction; clearing one records nothing.
   const row = provided
     ? await versions.setLabel(ref, args.versionNo, label, {
-        actor: actorForWrite(readAuthenticatedActor(args.params), args.user),
+        actor: actorForWrite(readAuthenticatedActor(), args.user),
         personName: args.user.name ?? null,
       })
     : await versions.get(ref, args.versionNo);
@@ -797,7 +765,7 @@ export async function restoreVersionForDocument(
     request?: Request;
   }
 ): Promise<{ restoredFrom: number; droppedFields: string[] }> {
-  const caller = readAccessCallerForDispatch(args.params, args.user);
+  const caller = readAccessCallerForDispatch(args.user);
 
   if (!(await canReadEntity(args.slug, caller))) {
     // "Not found" rather than "forbidden", matching the document gate below: a
@@ -819,12 +787,12 @@ export async function restoreVersionForDocument(
     args.slug,
     args.entryId,
     args.user,
-    readAuthenticatedScope(args.params)
+    readAuthenticatedScope()
   );
   // A restore reads the version's snapshot back into its own language, so
   // the caller must be able to read that language before anything is written.
   await assertVersionLanguageReadable(
-    { ...args, authenticatedScope: readAuthenticatedScope(args.params) },
+    { ...args, authenticatedScope: readAuthenticatedScope() },
     args.versionNo
   );
 
@@ -839,7 +807,7 @@ export async function restoreVersionForDocument(
     ...(args.actor ? { actor: args.actor } : {}),
     // The publish gate a restore-to-published triggers must judge the key's own
     // scope, not the owner's RBAC.
-    authenticatedScope: readAuthenticatedScope(args.params),
+    authenticatedScope: readAuthenticatedScope(),
     request: args.request,
   });
 }
@@ -877,7 +845,7 @@ export async function discardWorkingDraftForDocument(
     locale?: string | null;
   }
 ): Promise<unknown> {
-  const caller = readAccessCallerForDispatch(args.params, args.user);
+  const caller = readAccessCallerForDispatch(args.user);
 
   // Read gate first: the route authorized this as an update, not a read, so a
   // caller who cannot read the document is refused here — as "not found" so the
@@ -894,7 +862,7 @@ export async function discardWorkingDraftForDocument(
     });
   }
 
-  const authenticatedScope = readAuthenticatedScope(args.params);
+  const authenticatedScope = readAuthenticatedScope();
 
   // Per-document read (404 when the row is gone or hidden by an owner-only rule)
   // then the update gate (403): the coarse update-<slug> permission ran at the
@@ -922,7 +890,7 @@ export async function discardWorkingDraftForDocument(
     user: args.user,
     locale: args.locale ?? null,
     authenticatedScope,
-    actor: readAuthenticatedActor(args.params),
+    actor: readAuthenticatedActor(),
   });
 }
 
@@ -954,7 +922,7 @@ export async function autosaveForDocument(
     locale?: string | null;
   }
 ): Promise<unknown> {
-  const caller = readAccessCallerForDispatch(args.params, args.user);
+  const caller = readAccessCallerForDispatch(args.user);
 
   if (!(await canReadEntity(args.slug, caller))) {
     throw NextlyError.notFound({
@@ -968,7 +936,7 @@ export async function autosaveForDocument(
     });
   }
 
-  const authenticatedScope = readAuthenticatedScope(args.params);
+  const authenticatedScope = readAuthenticatedScope();
 
   await assertVersionDocumentReadable(
     args.scopeKind,
@@ -1118,7 +1086,7 @@ export async function autosaveForDocument(
 export async function getAutosaveForDocument(
   args: Omit<VersionMethodArgs, "locale"> & { params: Params }
 ): Promise<unknown> {
-  const caller = readAccessCallerForDispatch(args.params, args.user);
+  const caller = readAccessCallerForDispatch(args.user);
 
   if (!(await canReadEntity(args.slug, caller))) {
     throw NextlyError.notFound({
@@ -1132,7 +1100,7 @@ export async function getAutosaveForDocument(
     });
   }
 
-  const authenticatedScope = readAuthenticatedScope(args.params);
+  const authenticatedScope = readAuthenticatedScope();
   await assertVersionDocumentReadable(
     args.scopeKind,
     args.slug,

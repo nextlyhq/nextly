@@ -21,6 +21,7 @@ import type { PluginDefinition } from "../plugin-context";
 
 import {
   COMPONENT_IMPORT_MAP_FILENAME,
+  configImportOf,
   COMPONENT_PATHS_FILENAME,
 } from "./component-import-map";
 import { writeComponentMapFiles } from "./write-component-map";
@@ -74,6 +75,25 @@ describe("writing the component map", () => {
     expect(await readFile(written.paths[1], "utf-8")).toContain(
       '["@acme/shop/admin#Revenue"]'
     );
+  });
+
+  // A rewrite that keeps the config an earlier write chose, `--config` included, hands over that
+  // import as it stands rather than a file to find again.
+  it("writes a config import it is handed as it stands", async () => {
+    const cwd = await app();
+    const [map] = (
+      await writeComponentMapFiles(
+        [shop],
+        "./src/types/generated/nextly-types.ts",
+        cwd,
+        { import: "../../../config/site.config.mjs" }
+      )
+    ).paths;
+    const code = await readFile(map, "utf-8");
+    expect(code).toContain(
+      'import type * as siteConfig from "../../../config/site.config.mjs";'
+    );
+    expect(configImportOf(code)).toBe("../../../config/site.config.mjs");
   });
 
   it("leaves a file whose content is already right untouched", async () => {

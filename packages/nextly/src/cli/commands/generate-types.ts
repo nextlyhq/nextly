@@ -153,9 +153,15 @@ interface GenerationResult {
 async function settleImportMap(
   plugins: Parameters<typeof writeComponentMapFiles>[0],
   typesOutputPath: string,
-  cwd: string
+  cwd: string,
+  configFile: string | undefined
 ): Promise<string | undefined> {
-  const written = await writeComponentMapFiles(plugins, typesOutputPath, cwd);
+  const written = await writeComponentMapFiles(
+    plugins,
+    typesOutputPath,
+    cwd,
+    configFile
+  );
   return written.paths[0];
 }
 
@@ -251,7 +257,10 @@ export async function runGenerateTypes(
   const writtenImportMapPath = await settleImportMap(
     configResult.config.plugins ?? [],
     generatedTypesFile(manifestCwd, configResult.config.typescript.outputFile),
-    manifestCwd
+    manifestCwd,
+    // The config file it was loaded from, whose type the map imports to check each widget
+    // component against its widget. None for a site running on the default config.
+    configResult.configPath
   );
   if (writtenImportMapPath) {
     logger.debug(`Written plugin admin import map to: ${writtenImportMapPath}`);

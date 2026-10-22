@@ -51,6 +51,7 @@ describe("a refusal is visible where the field is", () => {
             onNameChange={(v, onChange) => onChange(v)}
             onSendTest={() => {}}
             onOpenSettings={() => {}}
+            listHref="/admin/email"
           />
         )}
       </WithError>

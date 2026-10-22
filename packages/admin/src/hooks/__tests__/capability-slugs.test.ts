@@ -41,14 +41,17 @@ describe("an UMBRELLA grant reveals what it covers", () => {
     expect(from("manage-media").canViewMedia).toBe(true);
   });
 
-  it("an api-key or email grant that opens a screen reveals settings", () => {
-    for (const slug of [
-      "read-api-keys",
-      "update-api-keys",
-      "manage-email-providers",
-      "manage-email-templates",
-    ]) {
+  it("an api-key grant that opens a screen reveals settings", () => {
+    for (const slug of ["read-api-keys", "update-api-keys"]) {
       expect(from(slug).canViewSettings, slug).toBe(true);
+    }
+  });
+
+  // Email is its own area now, with its own rail entry, so an email grant
+  // opens nothing in the Settings panel and must not reveal it.
+  it("an email grant does not reveal settings", () => {
+    for (const slug of ["manage-email-providers", "manage-email-templates"]) {
+      expect(from(slug).canViewSettings, slug).toBe(false);
     }
   });
 

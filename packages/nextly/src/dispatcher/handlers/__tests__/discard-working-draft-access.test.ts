@@ -36,13 +36,12 @@ vi.mock("../../../auth/entity-read-access", async importOriginal => ({
   canReadEntity: canReadSpy,
 }));
 
+import { asCaller, keyCaller } from "../../__tests__/request-caller";
 import { discardWorkingDraftForDocument } from "../versions-methods";
 
 const baseParams = {
   collectionName: "posts",
   entryId: "e1",
-  _authenticatedUserId: "u1",
-  _authenticatedUserRoles: JSON.stringify(["editor"]),
 };
 
 const argsFor = (params: Record<string, string>) => ({
@@ -111,15 +110,11 @@ describe("discardWorkingDraftForDocument — the gate chain", () => {
   });
 
   it("forwards the API-key scope to the discard so the re-read is judged on its own grant", async () => {
-    await discardWorkingDraftForDocument(
-      argsFor({
-        ...baseParams,
-        _authenticatedActorType: "apiKey",
-        _authenticatedPermissions: JSON.stringify([
-          "read-posts",
-          "update-posts",
-        ]),
-      })
+    // The scope the route handler pins for an API-key request.
+    await asCaller(
+      keyCaller("key-1", { userId: "u1", roles: ["editor"] }),
+      () => discardWorkingDraftForDocument(argsFor(baseParams)),
+      { actorType: "apiKey", permissions: ["read-posts", "update-posts"] }
     );
 
     expect(discardSpy).toHaveBeenCalledWith(

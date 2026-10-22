@@ -119,6 +119,54 @@ describe("the owner registry", () => {
     expect([...registry.setInCode]).toEqual(["password-reset"]);
   });
 
+  it("records the engine a plugin declares, and refuses one there is none of", () => {
+    const declared = (engine: unknown, slug: string) => ({
+      slug,
+      name: slug,
+      subject: "s",
+      htmlContent: "<p>h</p>",
+      engine: engine as "liquid" | "legacy",
+    });
+    const { registry, refused } = buildTemplateOwnerRegistry({
+      builtIns: BUILT_IN_TEMPLATES,
+      plugins: [
+        {
+          name: "@acme/plugin-orders",
+          templates: [
+            declared("legacy", "orders-legacy"),
+            declared("liquid", "orders-liquid"),
+            declared(undefined, "orders-undeclared"),
+            declared("handlebars", "orders-other"),
+            {
+              ...declared("liquid", "orders-unreadable"),
+              htmlContent: "<p>Use {%SPRING25%}</p>",
+            },
+          ],
+        },
+      ],
+      complete: true,
+    });
+    expect(registry.owned.get("orders-legacy")?.engine).toBe("legacy");
+    expect(registry.owned.get("orders-liquid")?.engine).toBe("liquid");
+    expect(registry.owned.get("orders-undeclared")?.engine).toBeUndefined();
+    expect(registry.owned.has("orders-other")).toBe(false);
+    expect(registry.owned.has("orders-unreadable")).toBe(false);
+    expect(refused).toEqual([
+      {
+        slug: "orders-other",
+        plugin: "@acme/plugin-orders",
+        engine: "handlebars",
+        reason: expect.stringContaining("names an engine there is none of"),
+      },
+      {
+        slug: "orders-unreadable",
+        plugin: "@acme/plugin-orders",
+        engine: "liquid",
+        reason: expect.stringContaining("htmlContent, line 1"),
+      },
+    ]);
+  });
+
   it("reads a stored owner, and a plugin's template as not installed when it isn't running", () => {
     const { registry } = buildTemplateOwnerRegistry({
       builtIns: BUILT_IN_TEMPLATES,

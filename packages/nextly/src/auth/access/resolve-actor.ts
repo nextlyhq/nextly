@@ -23,6 +23,7 @@ import {
   listEffectiveGrants,
   listRoleSlugsForUser,
 } from "../../services/lib/permissions";
+import { consoleLogger } from "../../shared/types";
 import { scopeGrants, type AuthenticatedScope } from "../authenticated-scope";
 
 import {
@@ -52,6 +53,36 @@ export async function actorForUser(
     listEffectiveGrants(userId, options.executor),
   ]);
   return userActor({ userId, roles, permissions });
+}
+
+/**
+ * A signed-in user's actor for a reader that refuses rather than fails: each
+ * lookup that fails counts as holding nothing of its kind, and is logged. A
+ * failed role lookup keeps the grants that were read, and a failed grant
+ * lookup keeps the roles, and with them a super-admin's authority, as the
+ * separate super-admin and permission checks such a reader replaced each
+ * answered on their own.
+ */
+export async function actorForUserFailingClosed(
+  userId: string
+): Promise<UserActor> {
+  const [roles, permissions] = await Promise.allSettled([
+    listRoleSlugsForUser(userId),
+    listEffectiveGrants(userId),
+  ]);
+  const settled = { roles, grants: permissions };
+  for (const [lookup, result] of Object.entries(settled)) {
+    if (result.status === "rejected") {
+      consoleLogger.error(`[rbac] Could not read the ${lookup} of ${userId}`, {
+        error: result.reason,
+      });
+    }
+  }
+  return userActor({
+    userId,
+    roles: roles.status === "fulfilled" ? roles.value : [],
+    permissions: permissions.status === "fulfilled" ? permissions.value : [],
+  });
 }
 
 /**
