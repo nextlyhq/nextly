@@ -1456,24 +1456,37 @@ function validateEmpty(d: Partial<WidgetDefinition>): void {
 }
 
 /**
- * Confirms `serverData`, when stated, is `true` and stands alone. A query
- * beside it would leave two answers to what the card shows: the one the
- * definition carries and the one core builds from the declaration.
+ * Why a definition's query, or its want of one, does not fit its archetype:
+ * the ONE reading of that question, for every way a data archetype's card can
+ * be answered.
+ *
+ * A data archetype is answered by a query it carries, or, marked `serverData`,
+ * by core from the widget's declaration, with no query. The mark may only be
+ * `true`, and a query beside it would leave two answers to what the card
+ * shows: the one the definition carries and the one core builds.
  */
-function validateServerData(d: Partial<WidgetDefinition>): void {
-  const stated: unknown = d.serverData;
-  if (stated === undefined) return;
-  if (stated !== true) fail(`${d.id}: serverData may only be true`);
-  if (d.query !== undefined) {
-    fail(`${d.id}: a widget whose data is built on the server takes no query`);
+export function widgetQueryShapeProblem(
+  d: Partial<WidgetDefinition>
+): string | undefined {
+  const marked: unknown = d.serverData;
+  if (marked !== undefined) {
+    if (marked !== true) return "serverData may only be true";
+    if (d.query !== undefined) {
+      return "a widget whose data is built on the server takes no query";
+    }
+    return undefined;
   }
+  const archetype = d.archetype as WidgetArchetype;
+  if (DATA_ARCHETYPE_SET.has(archetype) && !d.query) {
+    return `archetype "${d.archetype}" requires a query`;
+  }
+  return undefined;
 }
 
 function validateQuery(d: Partial<WidgetDefinition>): void {
   const archetype = d.archetype as WidgetArchetype;
-  if (DATA_ARCHETYPE_SET.has(archetype) && !d.query && d.serverData !== true) {
-    fail(`${d.id}: archetype "${d.archetype}" requires a query`);
-  }
+  const shape = widgetQueryShapeProblem(d);
+  if (shape !== undefined) fail(`${d.id}: ${shape}`);
   // Refused with its OWN reason rather than the queryless one, which would say
   // this archetype takes no data -- the opposite of true. Its numbers come from
   // `cells`, and an author who wrote `query` needs to be told where to move it.
@@ -1507,7 +1520,6 @@ export function validateWidgetDefinition(
   validateComponent(d);
   validateActions(d);
   validateText(d);
-  validateServerData(d);
   validateQuery(d);
   validateWidths(d);
   validateEmpty(d);

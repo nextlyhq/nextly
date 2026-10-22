@@ -487,6 +487,19 @@ export interface WidgetWidthFacts {
 }
 
 /**
+ * Whether a widget enters the default arrangement: the ONE answer, for every
+ * reader that follows the default.
+ *
+ * A plugin's declared widget is offered, never placed by default: where a
+ * plugin may put one is its suggestion, which the site may decline, and an
+ * unsuggested one stays in the add panel. Until suggestions are placed, no
+ * declared widget enters it at all.
+ */
+export function placedByDefault(widget: CanonicalWidget): boolean {
+  return widget.serverData !== true;
+}
+
+/**
  * The ONE reading of a widget's widths, for the default arrangement, the
  * layout read and the check on a write alike.
  *

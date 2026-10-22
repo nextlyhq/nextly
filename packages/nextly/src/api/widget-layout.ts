@@ -38,6 +38,7 @@ import { container } from "../di";
 import { addPanelFacts, inAddPanelOrder } from "../domains/widgets/add-panel";
 import {
   declaredWidgets,
+  placedByDefault,
   widthFacts,
   type CanonicalWidget,
   type WidgetWidthFacts,
@@ -137,11 +138,7 @@ function placeable(widget: CanonicalWidget) {
  * removal it was given, and comes back removed the day they can.
  */
 function followedDefault(unarranged?: StoredLayout): WidgetPlacement[] {
-  // A plugin's declared widget is offered, never placed by default: where a
-  // plugin may put one is its suggestion, which the site may decline, and an
-  // unsuggested one stays in the add panel. Until suggestions are placed, no
-  // declared widget enters the default arrangement at all.
-  const placed = declaredWidgets().filter(widget => widget.serverData !== true);
+  const placed = declaredWidgets().filter(placedByDefault);
   return dismissalsApplied(
     defaultPlacements(placed.map(placeable)),
     unarranged
