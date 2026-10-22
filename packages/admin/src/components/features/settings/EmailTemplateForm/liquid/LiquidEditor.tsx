@@ -58,9 +58,16 @@ const oneLine = EditorState.transactionFilter.of(transaction =>
   transaction.newDoc.lines > 1 ? [] : transaction
 );
 
-/** A single-line editor sized and spaced like the admin's inputs. */
+/**
+ * A single-line editor sized, spaced and set like the admin's inputs: a
+ * subject is prose with Liquid in it, not code, so it reads in the body face.
+ * `&.cm-editor` outranks the chrome's mono rule for the scroller.
+ */
 const inputLike = EditorView.theme({
   "&": { minHeight: "36px" },
+  "&.cm-editor .cm-scroller": {
+    fontFamily: "var(--font-sans, ui-sans-serif, system-ui, sans-serif)",
+  },
   ".cm-content": { padding: "7px 0" },
   ".cm-line": { padding: "0 10px" },
   ".cm-scroller": { overflowX: "auto", overflowY: "hidden" },
@@ -123,7 +130,10 @@ export function LiquidEditor({
         ...(disabled ? {} : { tabindex: "0" }),
       }),
       nextlyHighlighting,
-      nextlyEditorChrome({ fontSize: 13, dark: resolvedTheme === "dark" }),
+      nextlyEditorChrome({
+        fontSize: singleLine ? 14 : 13,
+        dark: resolvedTheme === "dark",
+      }),
       ...(singleLine ? [oneLine, inputLike] : [EditorView.lineWrapping]),
     ],
     [mode, label, singleLine, disabled, resolvedTheme]
