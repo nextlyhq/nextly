@@ -32,6 +32,7 @@ import {
   text,
   upload,
 } from "../../../config";
+import { canReadSystemResource } from "../../../auth/resource-readable";
 import { getDialectTables } from "../../../database/index";
 import { container } from "../../../di/container";
 import {
@@ -46,6 +47,17 @@ import { _resetEnvCache } from "../../../shared/lib/env";
 import type { TrustBound } from "../../../services/collections/trust-grant";
 import { ApiKeyService } from "../../auth/services/api-key-service";
 import { CollectionAccessService } from "../services/collection-access-service";
+
+// Watched, not changed: every call is answered by the real reader, so a
+// population of `users` can be counted where it is decided.
+vi.mock("../../../auth/resource-readable", async importOriginal => {
+  const real =
+    await importOriginal<typeof import("../../../auth/resource-readable")>();
+  return {
+    ...real,
+    canReadSystemResource: vi.fn(real.canReadSystemResource),
+  };
+});
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -487,13 +499,9 @@ describe.each(getConfiguredTestDialects())(
 
       it("asks once per expansion whether the caller may read users, however many fields relate to them", async () => {
         const fx = await boot(dialect);
-        const rbac = container.get<{
-          checkAccess: (query: {
-            operation: string;
-            resource: string;
-          }) => Promise<boolean>;
-        }>("rbacAccessControlService");
-        const checks = vi.spyOn(rbac, "checkAccess");
+        // A related `users` row is decided by the system-resource reader, the
+        // question a direct read of users asks, kept for the expansion.
+        const checks = vi.mocked(canReadSystemResource);
         try {
           // Depth 2: a component is a level of its own, so a relationship
           // inside one is populated from the second level.
@@ -510,13 +518,12 @@ describe.each(getConfiguredTestDialects())(
               expect(shows(byline, TITLE.user)).toBe(true);
             }
             const usersReads = checks.mock.calls.filter(
-              ([query]) =>
-                query.operation === "read" && query.resource === "users"
+              ([resource]) => resource === "users"
             );
             expect(usersReads).toHaveLength(1);
           }
         } finally {
-          checks.mockRestore();
+          checks.mockClear();
         }
       });
 
