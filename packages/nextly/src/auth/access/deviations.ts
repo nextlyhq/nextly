@@ -25,7 +25,10 @@ export const DEVIATIONS = [
   // A publish or an unpublish is judged on its own permission and rule, not
   // on update's as well.
   "lifecycle-judged-alone",
-  // Without the access-control service, no rule is read.
+  // Without the access-control service, no rule is read, and a signed-in
+  // user's grants are read only where a way in reads them without it: the
+  // collection gate and relationship population judge them alone, while the
+  // entity readers and the system-resource readers refuse the user.
   "no-service",
   // A Single asked by a route that authorized no user falls through to the
   // visitor's answer, where a collection refuses.
@@ -41,8 +44,9 @@ export const DEVIATIONS = [
   // A route that accepts any of several permissions asks no rule, for people
   // or keys, even where the target declares one.
   "any-of-skips-rules",
-  // A route asking one permission on a system resource does not count that
-  // resource's `manage-` permission as read, create, update or delete on it.
+  // A route asking one permission on a system resource, and the
+  // system-resource readers, do not count that resource's `manage-`
+  // permission as read, create, update or delete on it.
   "manage-not-counted",
 ] as const;
 

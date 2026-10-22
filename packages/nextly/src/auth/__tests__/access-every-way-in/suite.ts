@@ -111,7 +111,6 @@ const NOT_YET_ONE_ANSWER: ReadonlySet<Door> = new Set<Door>([
   "entity",
   "schema",
   "population",
-  "system",
   "widget",
 ]);
 
@@ -127,6 +126,7 @@ const ASKS_THE_DECISION: ReadonlySet<Door> = new Set<Door>([
   "website",
   "route",
   "lock",
+  "system",
 ]);
 
 const ANSWERS_FILE = join(__dirname, "answers-today.txt");
