@@ -78,14 +78,15 @@ describe("groupReleaseDocuments", () => {
       {
         heading: "Posts",
         total: 3,
-        hiddenLine: "2 documents you can't view · Posts",
+        hiddenLine:
+          "2 documents can't be shown (deleted, or you can't view them)",
         hiddenNeedFix: 1,
       },
       {
         heading: "Secret notes",
         total: 1,
         members: [],
-        hiddenLine: "1 document you can't view · Secret note",
+        hiddenLine: "1 document can't be shown (deleted, or you can't view it)",
       },
     ]);
   });

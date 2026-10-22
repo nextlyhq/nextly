@@ -20,6 +20,7 @@ const CONTEXT: ReleaseHistoryContext = {
   pluralOf: slug => (slug === "posts" ? "Posts" : slug),
   readerZone: "Asia/Karachi",
   now: Date.parse("2026-10-14T04:00:00.000Z"),
+  viewerId: "u-me",
 };
 
 function event(
@@ -102,6 +103,23 @@ describe("releaseHistoryLine", () => {
   it("says a kind it has no sentence for in that kind's own words", () => {
     expect(releaseHistoryLine(event("approval-granted"), CONTEXT).text).toBe(
       "Approval granted"
+    );
+  });
+});
+
+describe("who the history names", () => {
+  it("names the reader You, and everyone else by name", () => {
+    expect(
+      releaseHistoryLine(
+        event("release-created", null, {
+          actorId: "u-me",
+          actorName: "Mobeen",
+        }),
+        CONTEXT
+      ).actor
+    ).toEqual({ kind: "person", name: "You" });
+    expect(releaseHistoryLine(event("release-created"), CONTEXT).actor).toEqual(
+      { kind: "person", name: "Aqib Khan" }
     );
   });
 });

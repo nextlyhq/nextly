@@ -21,7 +21,7 @@ import type {
   ReleaseScopeNames,
 } from "@admin/types/releases";
 
-import { describeHidden } from "./release-hidden";
+import { describeUnshown } from "./release-hidden";
 
 /** One group of the documents list. */
 export interface ReleaseDocumentGroup {
@@ -32,7 +32,10 @@ export interface ReleaseDocumentGroup {
   heading: string;
   /** The documents the reader may read, in the order they were added. */
   members: ReleaseMember[];
-  /** "2 documents you can't view · Posts", or `null` when none are hidden. */
+  /**
+   * "2 documents can't be shown (deleted, or you can't view them)", or `null`
+   * when none are hidden. The group's heading names the collection.
+   */
   hiddenLine: string | null;
   /** How many of the hidden documents have a hard problem. */
   hiddenNeedFix: number;
@@ -103,7 +106,7 @@ export function groupReleaseDocuments({
       entry.scopeSlug,
       entry.labels?.plural
     );
-    group.hiddenLine = describeHidden([entry]);
+    group.hiddenLine = describeUnshown(entry.count);
     group.total += entry.count;
   }
   for (const entry of hiddenProblems) {

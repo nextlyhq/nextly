@@ -20,17 +20,21 @@ import { useState } from "react";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import {
+  useEveryReleaseId,
   useRelease,
   useReleaseDocumentNames,
   useReleaseMembers,
   useReleaseReadiness,
   useReleaseTitles,
 } from "@admin/hooks/queries/useReleases";
+import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import { navigateTo } from "@admin/lib/navigation";
 import type { Release } from "@admin/types/releases";
 
+import { releaseCalendarStatus } from "./release-calendar";
 import { hiddenTotal } from "./release-hidden";
 import type { ReleaseHistoryContext } from "./release-history";
+import type { ReleaseRowStatus } from "./release-list";
 import { commitBlockedBy, releaseIsAhead } from "./release-page";
 import { otherReleaseIds } from "./release-problems";
 import { readerZone as browserZone } from "./release-timezone";
@@ -69,6 +73,42 @@ export function ReleaseDetail({ id }: { id: string }) {
   return <ReleasePage release={release.data} />;
 }
 
+/**
+ * Where the release stands in the list's words, or `null` while that is not
+ * known.
+ *
+ * A scheduled release past its time is overdue only by the server's rule, so
+ * it is asked of the same Needs attention read the list and the calendar ask,
+ * narrowed to this release's instant, and read through the calendar's own
+ * status rule: "Overdue" where the read holds it, "Scheduled" where it does
+ * not, and no state at all while the read is on its way or failed. A release
+ * whose time is still ahead cannot be overdue, so nothing is asked for it.
+ */
+function useReleasePageStatus(
+  release: Release,
+  now: number
+): ReleaseRowStatus | null {
+  const at = release.scheduledAt ? Date.parse(release.scheduledAt) : NaN;
+  const asked = release.state === "scheduled" && at < now;
+  const read = useEveryReleaseId(
+    {
+      tab: "attention",
+      reason: "overdue",
+      // One second either side of the instant: the window is inclusive, and
+      // a stored time may have lost its milliseconds.
+      scheduledAfter: new Date((asked ? at : now) - 1000).toISOString(),
+      scheduledBefore: new Date((asked ? at : now) + 1000).toISOString(),
+    },
+    asked
+  );
+  if (!asked) return releaseCalendarStatus(release, NOT_OVERDUE);
+  const ids = read.isError ? undefined : read.data;
+  return releaseCalendarStatus(release, ids ? new Set(ids) : null);
+}
+
+/** Nothing is overdue: the answer for a release whose time is still ahead. */
+const NOT_OVERDUE: ReadonlySet<string> = new Set();
+
 function ReleasePage({ release }: { release: Release }) {
   const now = useMinuteClock();
   const [zone] = useState(browserZone);
@@ -80,9 +120,11 @@ function ReleasePage({ release }: { release: Release }) {
   const releaseTitleOf = useReleaseTitles(otherReleaseIds(readiness.data));
   const [dialog, setDialog] = useState<OpenDialog | null>(null);
   const commitBlockedReason = commitBlockedBy(
-    ahead ? readiness.data : undefined,
+    ahead ? readiness : { data: undefined, isPending: false, isError: false },
     items.length + hiddenTotal(members.data?.meta.hidden)
   );
+  const status = useReleasePageStatus(release, now);
+  const { user: viewer } = useDashboardUser();
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const historyContext: ReleaseHistoryContext = {
@@ -100,6 +142,7 @@ function ReleasePage({ release }: { release: Release }) {
       slug,
     readerZone: zone,
     now,
+    viewerId: viewer?.id ?? null,
   };
 
   return (
@@ -108,6 +151,7 @@ function ReleasePage({ release }: { release: Release }) {
         release={release}
         readerZone={zone}
         now={now}
+        status={status}
         commitBlockedReason={commitBlockedReason}
         onOpenDialog={next => {
           setDialog(next);

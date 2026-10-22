@@ -37,7 +37,8 @@ import { cn } from "@admin/lib/utils";
 import type { Release } from "@admin/types/releases";
 
 import { releaseErrorMessage } from "./release-error";
-import { releasePageStatus, releaseWhenLine } from "./release-page";
+import type { ReleaseRowStatus } from "./release-list";
+import { releaseWhenLine } from "./release-page";
 import { ReleaseStatusBadge } from "./ReleaseListCells";
 import type { ReleaseRowAction } from "./ReleaseRowActionDialog";
 import { releaseActionsFor, type OpenDialog } from "./ReleaseRowMenu";
@@ -55,12 +56,18 @@ export function ReleasePageHeader({
   release,
   readerZone,
   now,
+  status,
   commitBlockedReason,
   onOpenDialog,
 }: {
   release: Release;
   readerZone: string;
   now: number;
+  /**
+   * Where the release stands in the list's words, or `null` while that is
+   * not known, when no state is claimed at all, as the calendar does.
+   */
+  status: ReleaseRowStatus | null;
   /**
    * Why the release cannot be scheduled or published now, from its checks,
    * or `null` when nothing stops it. The server refuses both while a hard
@@ -95,7 +102,12 @@ export function ReleasePageHeader({
           </div>
         )}
 
-        <WhenLine release={release} readerZone={readerZone} now={now} />
+        <WhenLine
+          release={release}
+          readerZone={readerZone}
+          now={now}
+          status={status}
+        />
 
         {editing === "description" ? (
           <DescriptionEditor
@@ -128,15 +140,17 @@ function WhenLine({
   release,
   readerZone,
   now,
+  status,
 }: {
   release: Release;
   readerZone: string;
   now: number;
+  status: ReleaseRowStatus | null;
 }) {
-  const { lead, time } = releaseWhenLine(release, { readerZone, now });
+  const { lead, time } = releaseWhenLine(release, { readerZone, now }, status);
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-sm text-muted-foreground">
-      <ReleaseStatusBadge status={releasePageStatus(release)} />
+      {status ? <ReleaseStatusBadge status={status} /> : null}
       {release.kind === "single" ? (
         <span className="inline-flex h-[22px] items-center gap-1 rounded-sm border border-border px-1.5 text-xs text-muted-foreground">
           <FileText className="size-3" aria-hidden />

@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   change: vi.fn(),
   remove: vi.fn(),
   navigateTo: vi.fn(),
+  overdue: vi.fn(),
 }));
 
 function idle(mutate: (...args: unknown[]) => void = vi.fn()) {
@@ -69,6 +70,7 @@ vi.mock("@admin/hooks/queries/useReleases", () => ({
   useReleaseReadiness: () => mocks.readiness(),
   useReleaseHistory: () => mocks.history(),
   useReleaseCreation: () => ({ data: null, isPending: false }),
+  useEveryReleaseId: (...args: unknown[]) => mocks.overdue(...args),
   useReleaseTitles: () => () => undefined,
   useReleaseDocumentNames: () => ({
     documentOf: (member: { entryId: string }) => DOCUMENTS[member.entryId],
@@ -227,6 +229,7 @@ function row(title: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.overdue.mockReturnValue({ data: [], isError: false });
   mocks.history.mockReturnValue({
     data: { pages: [{ items: [], meta: { total: 0, hasNext: false } }] },
     isPending: false,
@@ -259,7 +262,7 @@ describe("a release's documents", () => {
 
     expect(
       group("History notes").getByText(
-        "2 documents you can't view · History notes"
+        "2 documents can't be shown (deleted, or you can't view them)"
       )
     ).toBeTruthy();
     // Five in all, the two hidden ones included; one needs a fix.
@@ -270,7 +273,9 @@ describe("a release's documents", () => {
     setUp({ members: [] });
     render(<ReleaseDetail id="r1" />);
     expect(
-      screen.getByText("2 documents you can't view · History notes")
+      screen.getByText(
+        "2 documents can't be shown (deleted, or you can't view them)"
+      )
     ).toBeTruthy();
     expect(screen.queryByText(/nothing has been added/i)).toBeNull();
   });
@@ -488,7 +493,11 @@ describe("a release's history", () => {
               }),
               added("h3", "e1"),
               added("h2", "e2"),
-              event("h1", "release-created"),
+              {
+                ...event("h1", "release-created"),
+                actorId: "u-me",
+                actorName: "Mobeen Abdullah",
+              },
             ],
             meta: { total: 5, hasNext: false },
           },
@@ -504,10 +513,127 @@ describe("a release's history", () => {
     expect(history.getByText("renamed it “Spring launch”")).toBeTruthy();
     expect(history.getByText("added 2 documents")).toBeTruthy();
     expect(history.getByText("created the release")).toBeTruthy();
-    expect(history.getAllByText("Aqib Khan").length).toBe(3);
+    expect(history.getAllByText("Aqib Khan").length).toBe(2);
+    // The reader's own act, named as About names them.
+    expect(history.getByText("You")).toBeTruthy();
 
     await user.click(history.getByText("Show them"));
     expect(history.getByText("“Launch post” · goes live")).toBeTruthy();
     expect(history.getByText("“Old post” · goes live")).toBeTruthy();
+  });
+});
+
+describe("where a release stands", () => {
+  const past = {
+    state: "scheduled" as const,
+    scheduledAt: "2026-01-01T09:00:00.000Z",
+    timezone: "UTC",
+  };
+
+  it("says a release past its time is overdue when the list's read says so", () => {
+    mocks.overdue.mockReturnValue({ data: ["r1"], isError: false });
+    setUp(past);
+    render(<ReleaseDetail id="r1" />);
+    expect(screen.getByText("Overdue")).toBeTruthy();
+    expect(screen.queryByText("Scheduled")).toBeNull();
+    // The Needs attention read the list uses, narrowed to this release's time.
+    expect(mocks.overdue).toHaveBeenCalledWith(
+      expect.objectContaining({ tab: "attention", reason: "overdue" }),
+      true
+    );
+  });
+
+  it("says Scheduled when the read does not hold it", () => {
+    mocks.overdue.mockReturnValue({ data: ["someone-else"], isError: false });
+    setUp(past);
+    render(<ReleaseDetail id="r1" />);
+    expect(screen.getByText("Scheduled")).toBeTruthy();
+  });
+
+  it("claims no state while overdue is unknown, loading or failed", () => {
+    for (const read of [
+      { data: undefined, isError: false },
+      { data: undefined, isError: true },
+    ]) {
+      mocks.overdue.mockReturnValue(read);
+      setUp(past);
+      const { unmount } = render(<ReleaseDetail id="r1" />);
+      expect(screen.queryByText("Scheduled")).toBeNull();
+      expect(screen.queryByText("Overdue")).toBeNull();
+      unmount();
+    }
+  });
+});
+
+describe("Schedule and Publish now while the checks are read", () => {
+  const can = { ...NOTHING, schedule: true, publishNow: true };
+  const buttons = () => [
+    screen.getByRole("button", { name: "Schedule…" }),
+    screen.getByRole("button", { name: "Publish now…" }),
+  ];
+
+  it("waits, saying so, while readiness loads", () => {
+    setUp({ can });
+    mocks.readiness.mockReturnValue({
+      data: undefined,
+      isPending: true,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    render(<ReleaseDetail id="r1" />);
+    for (const button of buttons()) {
+      expect(button).toHaveProperty("disabled", true);
+    }
+    expect(screen.getByText("Checking…")).toBeTruthy();
+  });
+
+  it("does not lock the reader out when readiness fails, and offers a retry", async () => {
+    const user = userEvent.setup();
+    const refetch = vi.fn();
+    setUp({ can });
+    mocks.readiness.mockReturnValue({
+      data: undefined,
+      isPending: false,
+      isError: true,
+      refetch,
+    });
+    render(<ReleaseDetail id="r1" />);
+    for (const button of buttons()) {
+      expect(button).toHaveProperty("disabled", false);
+    }
+    expect(screen.getByText("Readiness couldn't be checked")).toBeTruthy();
+    // Each document says it, as the releases list does, rather than loading.
+    expect(row("Launch post").getByText("Could not check")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /Try again/i }));
+    expect(refetch).toHaveBeenCalled();
+  });
+
+  it("never asks the reader to fix a document they cannot see", () => {
+    setUp({
+      can,
+      readiness: {
+        ...ONE_HARD,
+        hidden: [{ ...HIDDEN[0], hard: 1, soft: 0 }],
+      },
+    });
+    render(<ReleaseDetail id="r1" />);
+    expect(
+      screen.getByText(
+        "Fix the document marked below first; 1 more needs someone who can view it."
+      )
+    ).toBeTruthy();
+    expect(
+      group("History notes").getByText(
+        "1 document that can't be shown needs a fix"
+      )
+    ).toBeTruthy();
+  });
+
+  it("leads to the first document to fix", () => {
+    setUp({ can, readiness: ONE_HARD });
+    render(<ReleaseDetail id="r1" />);
+    expect(
+      screen.getByRole("button", { name: "Show the first to fix" })
+    ).toBeTruthy();
   });
 });

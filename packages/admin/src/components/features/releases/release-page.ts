@@ -15,25 +15,11 @@ import type { Release, ReleaseReadiness } from "@admin/types/releases";
 import {
   describeNeedFix,
   describeReadiness,
-  releaseRowStatus,
   summariseReadiness,
   type ReleaseReadinessSummary,
   type ReleaseRowStatus,
 } from "./release-list";
 import { releaseTimeText, type ReleaseTimeText } from "./release-time";
-
-/**
- * Where a release stands, in the list's words.
- *
- * Read as the Upcoming tab reads it: a release's own read does not say
- * whether it is overdue, and the list's rule for that is the server's, so the
- * page says "Scheduled" with a time already past rather than a second rule.
- */
-export function releasePageStatus(
-  release: Pick<Release, "state">
-): ReleaseRowStatus {
-  return releaseRowStatus(release, "upcoming");
-}
 
 /** When the release runs or ran, as the header's line says it. */
 export interface ReleaseWhenLine {
@@ -48,7 +34,9 @@ export function releaseWhenLine(
     Release,
     "state" | "scheduledAt" | "timezone" | "publishedAt" | "updatedAt"
   >,
-  context: { readerZone: string; now: number }
+  context: { readerZone: string; now: number },
+  /** Where it stands, when known: an overdue release was due, not upcoming. */
+  status?: ReleaseRowStatus | null
 ): ReleaseWhenLine {
   const scheduled = (lead: string): ReleaseWhenLine => ({
     lead,
@@ -59,7 +47,7 @@ export function releaseWhenLine(
   });
   switch (release.state) {
     case "scheduled":
-      return scheduled("Goes live");
+      return scheduled(status === "overdue" ? "Was due" : "Goes live");
     case "blocked":
       return scheduled("Was due");
     case "published":
@@ -158,19 +146,54 @@ export function releaseIsAhead(release: Pick<Release, "state">): boolean {
   );
 }
 
+/** What the page knows of the checks, as `commitBlockedBy` reads it. */
+export interface ReadinessRead {
+  data: Pick<ReleaseReadiness, "hard" | "hidden"> | undefined;
+  isPending: boolean;
+  isError: boolean;
+}
+
+/** "1 more needs someone who can view it", "2 more need … them". */
+function forSomeoneWhoCanView(count: number, lead: string): string {
+  return count === 1
+    ? `${lead} needs someone who can view it`
+    : `${lead} need someone who can view them`;
+}
+
 /**
- * Why the release cannot be scheduled or published now, or `null` when its
- * checks have answered and nothing stops it. Unknown readiness is not a
- * reason: the server judges again when asked, and refuses then.
+ * Why Schedule and Publish now wait, or `null` when they need not.
+ *
+ * They wait while the checks are read ("Checking…"), and while a document
+ * needs a fix, asking the reader to fix only the documents they can see: one
+ * they cannot see needs someone who can. A failed read is not a reason: the
+ * server judges again when either is used, and the page says the check
+ * failed rather than locking the reader out.
  */
 export function commitBlockedBy(
-  readiness: Pick<ReleaseReadiness, "hard" | "hidden"> | undefined,
+  readiness: ReadinessRead,
   total: number
 ): string | null {
-  if (!readiness) return null;
-  const { needFix } = summariseReadiness(total, readiness);
+  const { data } = readiness;
+  if (data === undefined) {
+    return readiness.isPending && !readiness.isError ? "Checking…" : null;
+  }
+  const { needFix } = summariseReadiness(total, data);
   if (needFix === 0) return null;
-  return needFix === 1
-    ? "Fix the document marked below first."
-    : `Fix the ${needFix} documents marked below first.`;
+  const hidden = Math.min(
+    needFix,
+    (data.hidden ?? []).reduce((count, entry) => count + entry.hard, 0)
+  );
+  const visible = needFix - hidden;
+  if (visible === 0) {
+    return `${forSomeoneWhoCanView(hidden, `${hidden} ${hidden === 1 ? "document" : "documents"}`)}.`;
+  }
+  const fix =
+    visible === 1
+      ? "Fix the document marked below first"
+      : hidden > 0
+        ? "Fix the documents marked below first"
+        : `Fix the ${visible} documents marked below first`;
+  return hidden === 0
+    ? `${fix}.`
+    : `${fix}; ${forSomeoneWhoCanView(hidden, `${hidden} more`)}.`;
 }

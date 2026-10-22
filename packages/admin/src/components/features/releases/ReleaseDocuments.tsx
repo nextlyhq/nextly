@@ -23,8 +23,8 @@ import {
   EyeOff,
   Info,
   MoreHorizontal,
-  RefreshCw,
 } from "@admin/components/icons";
+import { SectionErrorFallback } from "@admin/components/shared/error-fallbacks";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -70,7 +70,7 @@ import {
   type ReleaseDocumentGroup,
 } from "./release-documents";
 import { releaseErrorMessage } from "./release-error";
-import { describeHiddenNeedFix } from "./release-hidden";
+import { describeUnshownNeedFix } from "./release-hidden";
 import { describeMemberActions, documentCount } from "./release-list";
 import { memberControls, type MemberControls } from "./release-member-controls";
 import { memberLimitLine, readinessHeadline } from "./release-page";
@@ -268,7 +268,7 @@ function DocumentsBody({
           group={group}
           names={names}
           problemsOf={problemsOf}
-          readinessKnown={readiness.ahead && readiness.data !== undefined}
+          readinessKnown={rowReadiness(readiness)}
           ahead={readiness.ahead}
           controls={controls}
           firstProblemMemberId={firstProblemMemberId}
@@ -295,23 +295,15 @@ function ReadinessPanel({
 }) {
   if (readiness.data === undefined) {
     if (readiness.isError) {
+      // The admin's own section error, as the releases list shows a read
+      // that failed. Scheduling stays open: the server judges again then.
       return (
-        <div
-          role="alert"
-          className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm"
-        >
-          <AlertCircle
-            className="size-4 text-destructive-700 dark:text-destructive"
-            aria-hidden
-          />
-          <span className="text-foreground">
-            Whether these documents are ready could not be checked.
-          </span>
-          <Button variant="outline" size="sm" onClick={readiness.refetch}>
-            <RefreshCw className="size-3.5" aria-hidden />
-            Check again
-          </Button>
-        </div>
+        <SectionErrorFallback
+          title="Readiness couldn't be checked"
+          description="Whether these documents are ready is unknown for now. Schedule and Publish now still work, and are checked again when you use them."
+          reset={readiness.refetch}
+          showDetails={false}
+        />
       );
     }
     return <Skeleton className="h-[60px] w-full rounded-lg" aria-busy="true" />;
@@ -363,7 +355,7 @@ function ReadinessPanel({
             row?.focus({ preventScroll: true });
           }}
         >
-          Show the first
+          Show the first to fix
         </Button>
       ) : null}
     </div>
@@ -384,7 +376,7 @@ function DocumentGroup({
   group: ReleaseDocumentGroup;
   names: ReleaseDocumentNames;
   problemsOf: (memberId: string) => MemberProblems;
-  readinessKnown: boolean;
+  readinessKnown: RowReadiness;
   ahead: boolean;
   controls: MemberControls;
   firstProblemMemberId: string | undefined;
@@ -418,15 +410,18 @@ function DocumentGroup({
           />
         ))}
         {group.hiddenLine ? (
-          <li className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-sm text-muted-foreground">
-            <EyeOff className="size-4 shrink-0" aria-hidden />
-            <span>{group.hiddenLine}</span>
-            {group.hiddenNeedFix > 0 ? (
-              <span className="inline-flex items-center gap-1 font-medium text-destructive-700 dark:text-destructive">
-                <AlertCircle className="size-3.5" aria-hidden />
-                {describeHiddenNeedFix(group.hiddenNeedFix)}
-              </span>
-            ) : null}
+          <li className="flex items-start gap-3 px-4 py-3 text-sm text-muted-foreground">
+            {/* The icon stays beside the first line when the text wraps. */}
+            <EyeOff className="mt-0.5 size-4 shrink-0" aria-hidden />
+            <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+              <span>{group.hiddenLine}</span>
+              {group.hiddenNeedFix > 0 ? (
+                <span className="inline-flex items-center gap-1 font-medium text-destructive-700 dark:text-destructive">
+                  <AlertCircle className="size-3.5 shrink-0" aria-hidden />
+                  {describeUnshownNeedFix(group.hiddenNeedFix)}
+                </span>
+              ) : null}
+            </span>
           </li>
         ) : null}
       </ul>
@@ -510,7 +505,7 @@ function DocumentRow({
   member: ReleaseMember;
   names: ReleaseDocumentNames;
   problems: MemberProblems;
-  readinessKnown: boolean;
+  readinessKnown: RowReadiness;
   ahead: boolean;
   controls: MemberControls;
   first: boolean;
@@ -653,9 +648,33 @@ function ProblemList({
   );
 }
 
-/** Whether the document is ready, in a word and an icon. */
-function ReadinessMark({ known, ready }: { known: boolean; ready: boolean }) {
-  if (!known) return <Skeleton className="h-5 w-16" />;
+/** What a row knows of its readiness: the checks answered, are on their way, or failed. */
+type RowReadiness = "known" | "pending" | "failed";
+
+function rowReadiness(readiness: ReadinessState): RowReadiness {
+  if (readiness.data !== undefined) return "known";
+  return readiness.isError ? "failed" : "pending";
+}
+
+/**
+ * Whether the document is ready, in a word and an icon; "Could not check",
+ * as the releases list says it, when the checks failed.
+ */
+function ReadinessMark({
+  known,
+  ready,
+}: {
+  known: RowReadiness;
+  ready: boolean;
+}) {
+  if (known === "pending") return <Skeleton className="h-5 w-16" />;
+  if (known === "failed") {
+    return (
+      <span className="inline-flex min-w-[5.75rem] text-xs text-muted-foreground">
+        Could not check
+      </span>
+    );
+  }
   return ready ? (
     <span className="inline-flex min-w-[5.75rem] items-center gap-1 text-xs font-medium text-success-700 dark:text-success-400">
       <CheckCircle2 className="size-3.5" aria-hidden />
@@ -867,7 +886,9 @@ function RemoveDialog({
     >
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>
+          {/* A title that names the document runs to two lines; the theme's
+              snug leading keeps them apart where the shared style sets none. */}
+          <AlertDialogTitle className="leading-snug">
             {cancelsRelease
               ? `Remove “${title}” and cancel this release?`
               : `Remove “${title}” from this release?`}

@@ -50,6 +50,25 @@ export interface ReleaseHistoryContext {
   pluralOf: (scopeSlug: string) => string;
   readerZone: string;
   now: number;
+  /** The signed-in reader, named "You" in the history as in About. */
+  viewerId: string | null;
+}
+
+/**
+ * Who did it, as the history names them: the reader as "You", as the
+ * release's owner line and the releases list name them, and anyone else as
+ * the document history names them.
+ */
+function actorOf(
+  event: DocumentEvent,
+  context: ReleaseHistoryContext
+): StoryActor {
+  const actor = eventActor(event);
+  return event.actorKind === "person" &&
+    context.viewerId !== null &&
+    event.actorId === context.viewerId
+    ? { ...actor, name: "You" }
+    : actor;
 }
 
 /** A payload string, when it is one. */
@@ -157,7 +176,7 @@ export function releaseHistoryLine(
   if (sentence !== null) {
     return {
       id: event.id,
-      actor: eventActor(event),
+      actor: actorOf(event, context),
       text: sentence,
       at: event.occurredAt,
     };
@@ -166,7 +185,7 @@ export function releaseHistoryLine(
   // them, said as the document history says a kind it has no verb for.
   return {
     id: event.id,
-    actor: eventActor(event),
+    actor: actorOf(event, context),
     text: runner ?? eventSentence(event, () => ""),
     at: event.occurredAt,
   };
@@ -219,7 +238,7 @@ export function releaseHistoryRows(
     } else {
       rows.push({
         id: first.id,
-        actor: eventActor(first),
+        actor: actorOf(first, context),
         text: `added ${run.events.length} documents`,
         // Newest first, as the rows are; the oldest of the run is when it began.
         at: first.occurredAt,

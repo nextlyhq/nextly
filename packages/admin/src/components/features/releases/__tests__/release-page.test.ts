@@ -119,30 +119,63 @@ describe("readinessHeadline", () => {
 });
 
 describe("commitBlockedBy", () => {
-  it("holds scheduling back while a document needs a fix, and only then", () => {
-    expect(commitBlockedBy({ hard: [finding("m1")] }, 3)).toBe(
+  const hidden = (hard: number) => [
+    {
+      scopeKind: "collection" as const,
+      scopeSlug: "s",
+      count: 3,
+      hard,
+      soft: 0,
+    },
+  ];
+  const known = (data: Pick<ReleaseReadiness, "hard" | "hidden">) => ({
+    data,
+    isPending: false,
+    isError: false,
+  });
+
+  it("holds scheduling back while a document the reader can see needs a fix", () => {
+    expect(commitBlockedBy(known({ hard: [finding("m1")] }), 3)).toBe(
       "Fix the document marked below first."
     );
     expect(
-      commitBlockedBy(
-        {
-          hard: [],
-          hidden: [
-            {
-              scopeKind: "collection",
-              scopeSlug: "s",
-              count: 2,
-              hard: 2,
-              soft: 0,
-            },
-          ],
-        },
-        3
-      )
+      commitBlockedBy(known({ hard: [finding("m1"), finding("m2")] }), 3)
     ).toBe("Fix the 2 documents marked below first.");
-    expect(commitBlockedBy({ hard: [] }, 3)).toBeNull();
-    // Not yet checked is not a reason: the server judges when asked.
-    expect(commitBlockedBy(undefined, 3)).toBeNull();
+    expect(commitBlockedBy(known({ hard: [] }), 3)).toBeNull();
+  });
+
+  it("never asks the reader to fix what they cannot see", () => {
+    expect(
+      commitBlockedBy(known({ hard: [finding("m1")], hidden: hidden(1) }), 4)
+    ).toBe(
+      "Fix the document marked below first; 1 more needs someone who can view it."
+    );
+    expect(
+      commitBlockedBy(
+        known({ hard: [finding("m1"), finding("m2")], hidden: hidden(2) }),
+        6
+      )
+    ).toBe(
+      "Fix the documents marked below first; 2 more need someone who can view them."
+    );
+    expect(commitBlockedBy(known({ hard: [], hidden: hidden(2) }), 3)).toBe(
+      "2 documents need someone who can view them."
+    );
+    expect(commitBlockedBy(known({ hard: [], hidden: hidden(1) }), 3)).toBe(
+      "1 document needs someone who can view it."
+    );
+  });
+
+  it("holds scheduling back while the checks are still being read", () => {
+    expect(
+      commitBlockedBy({ data: undefined, isPending: true, isError: false }, 3)
+    ).toBe("Checking…");
+  });
+
+  it("lets the server judge when the checks could not be read", () => {
+    expect(
+      commitBlockedBy({ data: undefined, isPending: false, isError: true }, 3)
+    ).toBeNull();
   });
 });
 

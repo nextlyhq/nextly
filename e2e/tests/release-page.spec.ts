@@ -167,7 +167,9 @@ test.describe("a release's page", () => {
 
     // The note is counted in its collection, and never named.
     await expect(
-      notes.getByText("1 document you can't view · History note")
+      notes.getByText(
+        "1 document can't be shown (deleted, or you can't view it)"
+      )
     ).toBeVisible();
     await expect(page.getByText(/Private note/)).toHaveCount(0);
     // No document is named by its id.
