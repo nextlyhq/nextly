@@ -1,6 +1,7 @@
 /**
  * The Releases list in a real browser: its four tabs, their counts and pages,
- * and its times in the reader's own zone.
+ * its times in the reader's own zone, and every tab under axe with the
+ * suite's brand colour applied.
  *
  * The releases are written through the API, each named with a stamp this run
  * owns, and the list is searched for that stamp, so the counts and rows are
@@ -10,66 +11,21 @@ import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { expectBrandColourApplied, expectNoAxeViolations } from "./support/axe";
 import {
   leaveReleasesAsTheRunnerWould,
   type RunnerOutcome,
 } from "./support/release-states";
+import {
+  cancel,
+  post,
+  publishNow,
+  release,
+  schedule,
+} from "./support/releases-api";
 
-const API = "/admin/api";
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
-
-async function ok<T>(
-  response: Awaited<ReturnType<Page["request"]["post"]>>
-): Promise<T> {
-  expect(response.ok(), await response.text()).toBe(true);
-  return (await response.json()) as T;
-}
-
-/** A post to put in releases: a release with no documents is not scheduled. */
-async function post(page: Page, stamp: string): Promise<string> {
-  const { item } = await ok<{ item: { id: string } }>(
-    await page.request.post(`${API}/collections/posts/entries`, {
-      data: { title: `Release e2e ${stamp}`, slug: `release-e2e-${stamp}` },
-    })
-  );
-  return item.id;
-}
-
-/** A release holding one post, created as a draft. */
-async function release(
-  page: Page,
-  title: string,
-  postId: string
-): Promise<string> {
-  const { item } = await ok<{ item: { id: string } }>(
-    await page.request.post(`${API}/releases`, { data: { title } })
-  );
-  await ok(
-    await page.request.post(`${API}/releases/${item.id}/members`, {
-      data: {
-        scopeKind: "collection",
-        scopeSlug: "posts",
-        entryId: postId,
-        action: "publish",
-      },
-    })
-  );
-  return item.id;
-}
-
-async function schedule(
-  page: Page,
-  id: string,
-  at: Date,
-  timezone: string
-): Promise<void> {
-  await ok(
-    await page.request.post(`${API}/releases/${id}/schedule`, {
-      data: { at: at.toISOString(), timezone },
-    })
-  );
-}
 
 /** Rows per page: the list starts at 25. */
 const PAGE_SIZE = 25;
@@ -156,19 +112,9 @@ test.describe("the Releases list", () => {
     const draft = name("Draft");
     await release(page, draft, postId);
     const published = name("Published");
-    await ok(
-      await page.request.post(
-        `${API}/releases/${await release(page, published, postId)}/publish`,
-        { data: {} }
-      )
-    );
+    await publishNow(page, await release(page, published, postId));
     const cancelled = name("Cancelled");
-    await ok(
-      await page.request.post(
-        `${API}/releases/${await release(page, cancelled, postId)}/cancel`,
-        { data: {} }
-      )
-    );
+    await cancel(page, await release(page, cancelled, postId));
 
     await leaveReleasesAsTheRunnerWould(page, needAttention);
 
@@ -257,4 +203,73 @@ test.describe("the Releases list, read from New York", () => {
     await expect(home).not.toContainText("your time");
     await expect(home).not.toContainText("as scheduled");
   });
+});
+
+/**
+ * The state badges, which are what this check holds to AA.
+ *
+ * Scoped to them rather than the whole page because, under the brand colour,
+ * a whole-page scan of this list also fails on parts drawn by shared
+ * components, not by the releases screens: the selected tab's brand-coloured
+ * text, the table row that is both a link and a holder of its menu, the
+ * rows-per-page select's missing name, and the search box's clear button's
+ * size. Each is a design-system defect to fix where it lives; scanning the
+ * whole page here would keep this check red for reasons the releases code
+ * cannot change, and so stop it saying anything about the badges.
+ */
+const STATE_BADGES = '[role="tabpanel"] [data-slot^="badge."]';
+
+test.describe("the Releases list, under a brand colour", () => {
+  for (const theme of ["light", "dark"] as const) {
+    test(`draws every state's badge at AA contrast, at desk and phone widths (${theme})`, async ({
+      page,
+    }) => {
+      test.setTimeout(120_000);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      const stamp = `${Date.now()}`;
+      const postId = await post(page, `list-axe-${stamp}`);
+      const name = (what: string) => `Contrast ${what} ${stamp}`;
+
+      // One release in each state the list draws a badge for.
+      await schedule(
+        page,
+        await release(page, name("upcoming"), postId),
+        new Date(Date.now() + 3 * DAY),
+        "UTC"
+      );
+      await release(page, name("draft"), postId);
+      await publishNow(page, await release(page, name("published"), postId));
+      await cancel(page, await release(page, name("cancelled"), postId));
+      const attention: Array<{ id: string; outcome: RunnerOutcome }> = [];
+      for (const outcome of ["overdue", "stopped"] as const) {
+        const id = await release(page, name(outcome), postId);
+        await schedule(page, id, new Date(Date.now() + 40 * DAY), "UTC");
+        attention.push({ id, outcome });
+      }
+      // Last, since Publish now runs a pass of the runner.
+      await leaveReleasesAsTheRunnerWould(page, attention);
+
+      await gotoAdmin(page, "/releases", theme);
+      await expectBrandColourApplied(page);
+      await searchFor(page, stamp);
+
+      for (const label of [
+        "Upcoming (1)",
+        "Needs attention (2)",
+        "Drafts (1)",
+        "Done (2)",
+      ]) {
+        const tab = page.getByRole("tab", { name: label });
+        await tab.click();
+        await expect(tab).toHaveAttribute("aria-selected", "true");
+        // The table at a desk's width and a card per row at a phone's, which
+        // draw each badge on a different surface.
+        for (const width of [1440, 390]) {
+          await page.setViewportSize({ width, height: 900 });
+          await expectNoAxeViolations(page, { include: STATE_BADGES });
+        }
+        await page.setViewportSize({ width: 1440, height: 900 });
+      }
+    });
+  }
 });

@@ -178,6 +178,16 @@ export const emailTemplatesSqlite = sqliteTable(
     replyTo: text("reply_to"),
 
     /**
+     * Fixed addresses copied on every send of the template, after the send's
+     * own copies. Never variables, and never on a template carrying a secret.
+     * Nullable, so it reaches an existing table as a plain ADD COLUMN.
+     */
+    cc: text("cc", { mode: "json" }).$type<string[]>(),
+
+    /** Fixed addresses blind-copied on every send, on the same rules as `cc`. */
+    bcc: text("bcc", { mode: "json" }).$type<string[]>(),
+
+    /**
      * Default attachments for this template. Merged with per-send
      * attachments at send time (dedupe by mediaId, per-send wins).
      * Stored as a JSON string; null when no default attachments apply.
@@ -218,6 +228,14 @@ export const emailTemplatesSqlite = sqliteTable(
     baseVersion: text("base_version", {
       mode: "json",
     }).$type<EmailTemplateVersion>(),
+
+    /**
+     * Whether the template's owner marks it as carrying a secret (a reset or
+     * verification link). Written from the owner's declaration, never by an
+     * edit; kept so a plugin that is not running keeps its mark. Null reads as
+     * false.
+     */
+    carriesSecret: integer("carries_secret", { mode: "boolean" }),
 
     /** When the template is sent, written by its owner (or the site). */
     description: text("description"),

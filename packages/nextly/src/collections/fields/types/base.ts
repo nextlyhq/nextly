@@ -172,7 +172,9 @@ export type AccessFunction = (
  * Field-level access control configuration.
  *
  * Defines granular permissions for create, read, and update operations
- * on a specific field. If not specified, access defaults to `true`.
+ * on a specific field. If not specified, access defaults to `true`. Each
+ * rule is a function, or `true` or `false` for a field always allowed or
+ * always withheld.
  *
  * @example
  * ```typescript
@@ -188,11 +190,11 @@ export type AccessFunction = (
  */
 export interface FieldAccess {
   /** Access control for field creation */
-  create?: AccessFunction;
+  create?: AccessFunction | boolean;
   /** Access control for field reading */
-  read?: AccessFunction;
+  read?: AccessFunction | boolean;
   /** Access control for field updates */
-  update?: AccessFunction;
+  update?: AccessFunction | boolean;
 }
 
 // ============================================================

@@ -8,12 +8,16 @@
  * @module components/features/versions/diff/diff-primitives
  */
 
+import { createContext, useContext } from "react";
+
 import { Badge } from "@admin/components/ui";
 import type {
   ComparableStatus,
   FieldDiff,
   TextSegment,
 } from "@admin/services/versionApi";
+
+import { fieldNameOf, placeOf, type NamedNode } from "./field-path";
 
 export type DiffStatus = FieldDiff["status"];
 
@@ -45,21 +49,53 @@ export function StatusBadge({ status }: { status: ComparableStatus }) {
   return <Badge variant={badge.variant}>{badge.label}</Badge>;
 }
 
-/** A labelled block wrapping one field's diff. */
+/**
+ * How many of a field's containers, outermost first, the comparison already
+ * draws around it: a group's box places its fields, so they need not name it.
+ */
+const DrawnContainersContext = createContext(0);
+
+/** Declares the containers drawn around the field rows below it. */
+export const DrawnContainersProvider = DrawnContainersContext.Provider;
+
+/** The containers drawn around the field rows here. */
+export function useDrawnContainers(): number {
+  return useContext(DrawnContainersContext);
+}
+
+/**
+ * A labelled block wrapping one field's diff.
+ *
+ * Given the node, it names the field as the editor does, after the containers
+ * it sits in that are not drawn around it ("SEO › Meta title"); given only a
+ * label, it shows that.
+ */
 export function FieldRow({
   label,
+  node,
   status,
   children,
 }: {
-  label: string;
+  label?: string;
+  node?: NamedNode;
   status: ComparableStatus;
   children: React.ReactNode;
 }) {
+  const drawn = useDrawnContainers();
+  const place = node ? placeOf(node.path, drawn) : [];
+  const name = node ? fieldNameOf(node) : (label ?? "Field");
   return (
     <div className="py-2.5 border-b border-border last:border-b-0">
       <div className="flex items-center gap-2 mb-1.5">
         <span className="text-xs font-medium text-muted-foreground">
-          {label}
+          {place.map(container => (
+            <span key={container}>
+              {container}
+              <span aria-hidden="true"> › </span>
+              <span className="sr-only">, </span>
+            </span>
+          ))}
+          <span className="text-foreground">{name}</span>
         </span>
         <StatusBadge status={status} />
       </div>
@@ -72,7 +108,9 @@ export function TextSegmentSpan({ segment }: { segment: TextSegment }) {
   if (segment.op === 0) return <span>{segment.text}</span>;
   if (segment.op === 1) {
     return (
-      <ins className="rounded-sm px-0.5 no-underline bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100">
+      // Underlined as well as coloured, so an addition reads as one without
+      // telling colours apart, as a removal reads by its strike.
+      <ins className="rounded-sm px-0.5 underline decoration-1 underline-offset-2 bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100">
         {segment.text}
       </ins>
     );

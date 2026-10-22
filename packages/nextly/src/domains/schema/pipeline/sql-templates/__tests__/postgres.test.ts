@@ -183,3 +183,24 @@ describe("generateSQL — postgres", () => {
     ).toBe('ALTER TABLE "dc_posts" ALTER COLUMN "views" DROP DEFAULT');
   });
 });
+
+// The same rule for a migration file: an explicit `::varchar(N)` would cut an overlong value with
+// no error when `nextly migrate` runs it; the bare column makes PostgreSQL refuse it.
+describe("generateSQL — postgres string narrowing", () => {
+  it("converts with the bare column, so an overlong value is refused rather than cut", () => {
+    expect(
+      generateSQL(
+        {
+          type: "change_column_type",
+          tableName: "single_site",
+          columnName: "title",
+          fromType: "varchar(500)",
+          toType: "varchar(100)",
+        },
+        "postgresql"
+      )
+    ).toBe(
+      'ALTER TABLE "single_site" ALTER COLUMN "title" TYPE varchar(100) USING "title"'
+    );
+  });
+});

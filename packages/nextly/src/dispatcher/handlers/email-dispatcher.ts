@@ -3,7 +3,7 @@
  *
  * Groups the two email service maps into one handler file because both
  * share the same DI-resolution pattern and neither has enough logic to
- * warrant its own module. Routes 7 provider ops and 8 template ops.
+ * warrant its own module. Routes 7 provider ops and the template ops.
  *
  * Every handler returns a Response built via the respondX helpers in
  * `../../api/response-shapes.ts`. The dispatcher passes the Response
@@ -24,6 +24,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
+import { brandSettingsUpdateSchema } from "../../domains/email/brand-settings";
 import { draftPreviewSchema } from "../../domains/email/draft-preview-request";
 import { toDescriptor } from "../../domains/email/provider-definition";
 import { getEmailProviderRegistry } from "../../domains/email/services/email-provider-registry";
@@ -92,7 +93,7 @@ const EMAIL_PROVIDER_METHODS: Record<
     execute: async (svc, p, body) => {
       const provider = await svc.providerService.createProvider(
         body as Parameters<typeof svc.providerService.createProvider>[0],
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondMutation("Email provider created.", provider, {
         status: 201,
@@ -112,7 +113,7 @@ const EMAIL_PROVIDER_METHODS: Record<
       const provider = await svc.providerService.updateProvider(
         p.providerId,
         body as Parameters<typeof svc.providerService.updateProvider>[1],
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondMutation("Email provider updated.", provider);
     },
@@ -128,7 +129,7 @@ const EMAIL_PROVIDER_METHODS: Record<
     execute: async (svc, p) => {
       await svc.providerService.deleteProvider(
         p.providerId,
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondAction("Email provider deleted.", {
         providerId: p.providerId,
@@ -143,7 +144,7 @@ const EMAIL_PROVIDER_METHODS: Record<
     execute: async (svc, p) => {
       const provider = await svc.providerService.setDefault(
         p.providerId,
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondAction("Default email provider updated.", { provider });
     },
@@ -172,9 +173,17 @@ const EMAIL_TEMPLATE_METHODS: Record<
   MethodHandler<EmailTemplateServices>
 > = {
   listTemplates: {
-    // Plain array, no pagination; same rationale as listProviders.
+    // Plain array, no pagination; same rationale as listProviders. Each row
+    // says whether it is kept on the previous engine, so the admin's list can
+    // name those emails without asking once per row; the service answers for
+    // the whole list in one pass.
     execute: async svc => {
-      const templates = await svc.templateService.listTemplates();
+      const records = await svc.templateService.listTemplates();
+      const kept = await svc.templateService.keptOnOldEngineIds(records);
+      const templates = records.map(record => ({
+        ...record,
+        keptOnOldEngine: kept.has(record.id),
+      }));
       return respondData({ templates });
     },
   },
@@ -182,7 +191,7 @@ const EMAIL_TEMPLATE_METHODS: Record<
     execute: async (svc, p, body) => {
       const template = await svc.templateService.createTemplate(
         body as Parameters<typeof svc.templateService.createTemplate>[0],
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondMutation("Email template created.", template, {
         status: 201,
@@ -200,7 +209,7 @@ const EMAIL_TEMPLATE_METHODS: Record<
       const template = await svc.templateService.updateTemplate(
         p.templateId,
         body as Parameters<typeof svc.templateService.updateTemplate>[1],
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondMutation("Email template updated.", template);
     },
@@ -216,7 +225,7 @@ const EMAIL_TEMPLATE_METHODS: Record<
     execute: async (svc, p) => {
       await svc.templateService.deleteTemplate(
         p.templateId,
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondAction("Email template deleted.", {
         templateId: p.templateId,
@@ -254,7 +263,7 @@ const EMAIL_TEMPLATE_METHODS: Record<
       const template = await svc.templateService.overrideTemplate(
         p.templateId,
         { version },
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondMutation("Email template overridden.", template);
     },
@@ -263,7 +272,7 @@ const EMAIL_TEMPLATE_METHODS: Record<
     execute: async (svc, p) => {
       const template = await svc.templateService.resetTemplate(
         p.templateId,
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondMutation(
         "Email template reset to its owner's version.",
@@ -287,7 +296,7 @@ const EMAIL_TEMPLATE_METHODS: Record<
         p.templateId,
         choices,
         review,
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       // A non-CRUD write with a result beside the item: Undo needs it.
       return respondAction("Owner's update applied.", {
@@ -302,9 +311,21 @@ const EMAIL_TEMPLATE_METHODS: Record<
       const template = await svc.templateService.undoOwnerUpdate(
         p.templateId,
         undo,
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondMutation("Owner's update undone.", template);
+    },
+  },
+  getBrand: {
+    // A non-CRUD read: the brand settings, what each starts from, the fonts
+    // they can use and which emails they reach.
+    execute: async svc => respondData(await svc.templateService.getBrand()),
+  },
+  updateBrand: {
+    execute: async (svc, _p, body) => {
+      const change = parseBody(brandSettingsUpdateSchema, body ?? {});
+      const settings = await svc.templateService.updateBrand(change);
+      return respondMutation("Email brand settings saved.", settings);
     },
   },
   previewTemplate: {

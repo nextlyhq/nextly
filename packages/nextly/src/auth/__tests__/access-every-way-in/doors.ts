@@ -26,6 +26,7 @@ import { widgetAudience } from "../../../domains/widgets/visibility";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { resolveContent } from "../../../runtime/routing/resolve-content";
 import { consoleLogger } from "../../../services/shared";
+import { recordingDeviations, type Deviation } from "../../access/deviations";
 import { canReadEntity, readAccessCaller } from "../../entity-read-access";
 import { canReadSystemResource } from "../../resource-readable";
 
@@ -649,15 +650,26 @@ async function withoutService<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
-/** One door's answer to one row. */
-function answer(world: World, row: Row, door: Door): Promise<Answer> {
+/**
+ * One door's answer to one row, and each deviation from the one decision that
+ * changed an answer on the way (`auth/access/deviations`).
+ */
+async function answer(
+  world: World,
+  row: Row,
+  door: Door
+): Promise<{ answer: Answer; deviations: Deviation[] }> {
   const who = world.callers.get(row.caller);
   if (!who) throw new Error(`no caller ${row.caller}`);
-  if (row.setup === "no-service") {
-    const adapter = door === "direct" ? directWithoutService : ADAPTERS[door];
-    return withoutService(() => settle(() => adapter(world, row, who)));
-  }
-  return settle(() => ADAPTERS[door](world, row, who));
+  const adapter =
+    row.setup === "no-service" && door === "direct"
+      ? directWithoutService
+      : ADAPTERS[door];
+  const asked = () => settle(() => adapter(world, row, who));
+  const { result, deviations } = await recordingDeviations(() =>
+    row.setup === "no-service" ? withoutService(asked) : asked()
+  );
+  return { answer: result, deviations };
 }
 
 /**
@@ -766,11 +778,16 @@ export async function ask(
   world: World,
   row: Row,
   door: Door
-): Promise<{ answer: Answer; landed?: boolean; done?: boolean }> {
-  if (!writes(row, door)) return { answer: await answer(world, row, door) };
+): Promise<{
+  answer: Answer;
+  deviations: Deviation[];
+  landed?: boolean;
+  done?: boolean;
+}> {
+  if (!writes(row, door)) return answer(world, row, door);
   await markUpdated(world, row);
   const before = await storedTable(world, row);
-  const given = await answer(world, row, door);
+  const { answer: given, deviations } = await answer(world, row, door);
   const after = await storedTable(world, row);
   const landed = !isDeepStrictEqual(before, after);
   // A Single's publish or unpublish is done only when its status moved: a
@@ -780,5 +797,5 @@ export async function ask(
     row.target === "single-pub"
       ? after[0]?.status === statusAfter(row)
       : landed;
-  return { answer: given, landed, done };
+  return { answer: given, deviations, landed, done };
 }

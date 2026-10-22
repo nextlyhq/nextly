@@ -263,6 +263,19 @@ export function createMockCollectionService(
  * one. Allowing by default so a test that does not care about access does not
  * have to say so.
  */
+// ── The caller the collection gate reads ────────────────────────────────
+
+export {
+  callerIsSuperAdmin,
+  callerLookupFails,
+  callerMay,
+  callerMayNot,
+  fakeActorForUser,
+  fakeUserHoldsPermission,
+  fakeUserIsSuperAdmin,
+  resetCallerAccess,
+} from "../../../auth/access/__tests__/fake-caller";
+
 export function createMockRbacAccessControlService(): MockRecord {
   const getRegisteredAccess = vi.fn().mockReturnValue(undefined);
   return {

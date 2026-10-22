@@ -22,9 +22,19 @@
  * @module domains/email/erase-recipient
  */
 
-import { and, eq, inArray, type Column, type Table, isNull } from "drizzle-orm";
+import {
+  and,
+  eq,
+  inArray,
+  type Column,
+  type SQL,
+  type Table,
+  isNotNull,
+  isNull,
+} from "drizzle-orm";
 
 import { ERASED_RECIPIENT_HASH, recipientDigests } from "./delivery-record";
+import { sendClaimsTableBeside } from "./send-claims";
 
 /**
  * The Drizzle surface this needs: one scoped UPDATE.
@@ -34,13 +44,65 @@ import { ERASED_RECIPIENT_HASH, recipientDigests } from "./delivery-record";
  * while the fluent API is identical across all three.
  */
 export interface RecipientErasureCapableDb {
+  select(fields: unknown): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        limit(count: number): PromiseLike<unknown[]>;
+      };
+    };
+  };
   update(table: unknown): {
     set(data: unknown): { where(condition: unknown): Promise<unknown> };
   };
 }
 
 /** The delivery table, as a dialect bundle exposes it. */
-export type ErasableDeliveriesTable = Table & { recipientHash: Column };
+export type ErasableDeliveriesTable = Table & {
+  recipientHash: Column;
+  keyDigest: Column;
+};
+
+/** Key digests cleared per statement, inside SQLite's bind-parameter limit. */
+const KEY_DIGEST_BATCH = 500;
+
+/**
+ * Clear the idempotency key's digest from every record of each send that one
+ * of the rows `erased` selects belongs to, before those rows are erased, and
+ * from the send's claim, with the claim's message digest.
+ *
+ * A key is the caller's own text and may be built from an address, so its
+ * digest is cleared wherever it sits, not only on the erased person's row: a
+ * copy of a send to someone else carries the same digest, and the claim
+ * carries it beside a digest of a message naming the person. A claim left
+ * with neither names no send, and is pruned with the others. Batched until
+ * none is left, each batch clearing every record that carries it.
+ */
+async function clearSendKeyDigests(
+  db: RecipientErasureCapableDb,
+  deliveries: ErasableDeliveriesTable,
+  erased: SQL | undefined
+): Promise<void> {
+  for (;;) {
+    const rows = (await db
+      .select({ keyDigest: deliveries.keyDigest })
+      .from(deliveries)
+      .where(and(erased, isNotNull(deliveries.keyDigest)))
+      .limit(KEY_DIGEST_BATCH)) as Array<{ keyDigest: string }>;
+    if (rows.length === 0) return;
+    const digests = [...new Set(rows.map(row => row.keyDigest))];
+    await db
+      .update(deliveries)
+      .set({ keyDigest: null })
+      .where(inArray(deliveries.keyDigest, digests));
+    const claims = sendClaimsTableBeside(deliveries);
+    if (claims) {
+      await db
+        .update(claims)
+        .set({ keyDigest: null, messageDigest: null })
+        .where(inArray(claims.keyDigest, digests));
+    }
+  }
+}
 
 /**
  * Erase every delivery row recorded for an address.
@@ -103,10 +165,12 @@ export async function eraseRecipientDeliveries(
   deliveries: ErasableDeliveriesTable,
   address: string
 ): Promise<void> {
+  const erased = inArray(deliveries.recipientHash, recipientDigests(address));
+  await clearSendKeyDigests(db, deliveries, erased);
   await db
     .update(deliveries)
     .set({ recipientHash: ERASED_RECIPIENT_HASH })
-    .where(inArray(deliveries.recipientHash, recipientDigests(address)));
+    .where(erased);
 }
 
 /** The delivery table's columns a person's erasure reads and writes. */
@@ -128,15 +192,15 @@ export async function eraseUnnamedRecipientDeliveries(
   deliveries: PersonDeliveriesTable,
   address: string
 ): Promise<void> {
+  const erased = and(
+    inArray(deliveries.recipientHash, recipientDigests(address)),
+    isNull(deliveries.principalKind)
+  );
+  await clearSendKeyDigests(db, deliveries, erased);
   await db
     .update(deliveries)
     .set({ recipientHash: ERASED_RECIPIENT_HASH })
-    .where(
-      and(
-        inArray(deliveries.recipientHash, recipientDigests(address)),
-        isNull(deliveries.principalKind)
-      )
-    );
+    .where(erased);
 }
 
 /**
@@ -153,13 +217,13 @@ export async function erasePrincipalDeliveries(
   person: { kind: string; id: string },
   digest: string
 ): Promise<void> {
+  const erased = and(
+    eq(deliveries.principalKind, person.kind),
+    eq(deliveries.principalId, person.id)
+  );
+  await clearSendKeyDigests(db, deliveries, erased);
   await db
     .update(deliveries)
     .set({ recipientHash: ERASED_RECIPIENT_HASH, principalId: digest })
-    .where(
-      and(
-        eq(deliveries.principalKind, person.kind),
-        eq(deliveries.principalId, person.id)
-      )
-    );
+    .where(erased);
 }

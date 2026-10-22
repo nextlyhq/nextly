@@ -14,8 +14,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Form } from "@admin/components/ui/form";
 
 import { BodyEditor } from "../BodyEditor";
-import { EditorBar } from "../EditorBar";
 import { DEFAULT_VALUES, type TemplateFormValues } from "../schema";
+import { WorkbenchHeader } from "../WorkbenchHeader";
 
 afterEach(cleanup);
 
@@ -37,20 +37,27 @@ function WithError({
 }
 
 describe("a refusal is visible where the field is", () => {
-  it("reports a rejected template name in the bar", () => {
+  it("reports a rejected template name in the header", () => {
     render(
       <WithError field="name" message="Template name is required">
         {form => (
-          <EditorBar
+          <WorkbenchHeader
+            tier="desktop"
             control={form.control}
+            onNameChange={(v, onChange) => onChange(v)}
             isEdit={false}
             isPending={false}
-            isActive
             isDirty={false}
-            slug="welcome"
-            onNameChange={(v, onChange) => onChange(v)}
+            isActive
+            ownsContent
+            hasData
+            sheet={null}
+            onToggleSheet={() => {}}
+            onExit={() => {}}
+            exitLabel="Back to Messages"
             onSendTest={() => {}}
-            onOpenSettings={() => {}}
+            onOverride={() => {}}
+            menu={{}}
           />
         )}
       </WithError>
@@ -70,6 +77,7 @@ describe("a refusal is visible where the field is", () => {
             isPending={false}
             editorWrapRef={{ current: null }}
             htmlEditorViewRef={{ current: null }}
+            readOnly={false}
           />
         )}
       </WithError>
@@ -92,6 +100,7 @@ describe("a refusal is visible where the field is", () => {
             isPending={false}
             editorWrapRef={{ current: null }}
             htmlEditorViewRef={{ current: null }}
+            readOnly={false}
           />
         )}
       </WithError>
@@ -121,6 +130,7 @@ describe("a refusal is visible where the field is", () => {
             isPending={false}
             editorWrapRef={{ current: null }}
             htmlEditorViewRef={{ current: null }}
+            readOnly={false}
             chips={<span>{"{{appName}}"}</span>}
           />
         )}
@@ -147,6 +157,7 @@ describe("a refusal is visible where the field is", () => {
             isPending={false}
             editorWrapRef={{ current: null }}
             htmlEditorViewRef={{ current: null }}
+            readOnly={false}
           />
         )}
       </WithError>

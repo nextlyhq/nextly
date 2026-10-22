@@ -54,6 +54,7 @@ import {
   type PreparedModuleDown,
 } from "./plugin-lifecycle";
 import { pluginModuleDown } from "./plugin-module-rollback";
+import { readSqliteSchemaVersion, readTableIdentities } from "./table-identity";
 
 interface RunnerOptions {
   config?: string;
@@ -517,6 +518,16 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     return new Set(present.filter(table => table !== undefined));
   };
 
+  /** Which table each of `tables` reaches now (`readTableIdentities`). */
+  const tableIdentities = (
+    tables: readonly string[]
+  ): Promise<ReadonlyMap<string, string | null>> =>
+    readTableIdentities(drizzleAdapter, dialect, tables);
+
+  /** SQLite's schema version (`readSqliteSchemaVersion`). */
+  const schemaVersion = (): Promise<number | null> =>
+    readSqliteSchemaVersion(drizzleAdapter);
+
   /**
    * Run one plugin's own `onInstall` / `onUninstall` against a real context.
    *
@@ -543,7 +554,8 @@ async function connect(options: RunnerOptions, context: CommandContext) {
   const runLifecycleHook = async (
     plugin: LifecyclePlugin,
     hook: "onInstall" | "onUninstall",
-    opts: { keepData: boolean }
+    opts: { keepData: boolean },
+    beforeHook?: () => Promise<void>
   ): Promise<void> => {
     const definition = definitions.find(d => d.name === plugin.name);
     if (definition?.[hook] === undefined) return;
@@ -620,6 +632,9 @@ async function connect(options: RunnerOptions, context: CommandContext) {
         );
         return;
       }
+      // After the boot, which can change the schema itself, and right before
+      // the hook: what the caller reads here is what the hook started from.
+      await beforeHook?.();
       // Branched rather than called through `definition[hook]`: the two hooks
       // take different arguments, and a union of them accepts neither call.
       // Run under the hook's cause, so every event it sets off, and every one
@@ -722,6 +737,8 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     refreshPlan,
     readAppliedModules,
     liveTables,
+    tableIdentities,
+    schemaVersion,
     runLifecycleHook,
     migrationsDir: config.db?.migrationsDir,
     logger: context.logger,

@@ -53,6 +53,12 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
     delete: vi.fn(),
   },
 }));
+// The batch answered as the `protectedApi.post` mock above describes it; see `batch-over-post`.
+vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
+  (
+    await import("@admin/hooks/queries/__tests__/batch-over-post")
+  ).streamOverPost()
+);
 /*
  * Spread over the real module rather than replacing it: the grid's own tree
  * draws from this package, so a wholesale mock would leave every card

@@ -16,6 +16,8 @@ export interface ContentStats {
   totalMedia?: number;
   contentTypes: number;
   recentChanges24h: number;
+  /** True when the server stopped counting at its bound: at least that many, drawn `N+`. */
+  recentChanges24hAtLeast?: true;
 }
 
 /**

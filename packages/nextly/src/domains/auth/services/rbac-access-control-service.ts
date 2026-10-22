@@ -40,6 +40,10 @@
  */
 
 import type { AccessTarget } from "../../../auth/access/decide";
+import {
+  clearDeclaredTargets,
+  declareTarget,
+} from "../../../auth/access/declared-rules";
 import { buildRuleContext } from "../../../auth/access/rule-context";
 import type { Principal } from "../../../plugins/principals/types";
 import type { AccessOperation } from "../../../services/access/types";
@@ -90,6 +94,8 @@ export class RBACAccessControlService {
     access: CollectionAccessControl
   ): void {
     this.collectionAccessMap.set(slug, access);
+    // Kept where the decision reads it whatever this service's state.
+    declareTarget({ kind: "collection", slug, access });
   }
 
   /**
@@ -102,6 +108,7 @@ export class RBACAccessControlService {
    */
   registerSingleAccess(slug: string, access: SingleAccessControl): void {
     this.singleAccessMap.set(slug, access);
+    declareTarget({ kind: "single", slug, access });
   }
 
   /**
@@ -156,6 +163,7 @@ export class RBACAccessControlService {
   clearRegisteredAccess(): void {
     this.collectionAccessMap.clear();
     this.singleAccessMap.clear();
+    clearDeclaredTargets();
   }
 
   /**

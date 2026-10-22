@@ -21,6 +21,10 @@ import { getDialectTables } from "../../../database/index";
 import { seedPermissions } from "../../../database/seeders/permissions";
 import { seedSuperAdmin } from "../../../database/seeders/super-admin";
 import { generateSqliteCoreTableStatements } from "../../../database/sqlite-core-tables";
+import {
+  asCaller,
+  sessionCaller,
+} from "../../../dispatcher/__tests__/request-caller";
 import { dispatchUser } from "../../../dispatcher/handlers/user-dispatcher";
 import {
   createTestNextly,
@@ -39,6 +43,17 @@ afterEach(async () => {
 });
 
 /** Forty characters with colons, and strong enough for every schema. */
+
+/** A users route dispatched as `adminId`, as the route handler dispatches it. */
+function dispatchAsAdmin(
+  adminId: string,
+  ...args: Parameters<typeof dispatchUser>
+): ReturnType<typeof dispatchUser> {
+  return asCaller(sessionCaller({ userId: adminId }), () =>
+    dispatchUser(...args)
+  );
+}
+
 const PASSPHRASE = "Correct-Horse:Battery-Staple:2026-Phrase";
 const OTHER = "Str0ng-P@ssw0rd!";
 
@@ -174,10 +189,11 @@ describe.each(getConfiguredTestDialects())(
     it("hashes it when an administrator creates an account through the admin route", async () => {
       const t = await boot(dialect);
       const adminId = await seedFounder(t);
-      await dispatchUser(
+      await dispatchAsAdmin(
+        adminId,
         services(t),
         "createLocalUser",
-        { _authenticatedActorType: "user", _authenticatedActorId: adminId },
+        {},
         { email: "routed@example.com", name: "Routed", password: PASSPHRASE }
       );
       await expectHashed(t, "routed@example.com", PASSPHRASE);
@@ -317,10 +333,11 @@ describe.each(getConfiguredTestDialects())(
     it("keeps it when an administrator creates an account", async () => {
       const t = await boot(dialect);
       const adminId = await seedFounder(t);
-      await dispatchUser(
+      await dispatchAsAdmin(
+        adminId,
         services(t),
         "createLocalUser",
-        { _authenticatedActorType: "user", _authenticatedActorId: adminId },
+        {},
         { email: "routed@example.com", name: "Routed", password: EDGED }
       );
       await expectStoredAsTyped(t, "routed@example.com");

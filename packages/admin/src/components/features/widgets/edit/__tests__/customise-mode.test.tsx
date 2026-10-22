@@ -54,6 +54,12 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
     delete: vi.fn(),
   },
 }));
+// The batch answered as the `protectedApi.post` mock above describes it; see `batch-over-post`.
+vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
+  (
+    await import("@admin/hooks/queries/__tests__/batch-over-post")
+  ).streamOverPost()
+);
 
 const api = vi.mocked(protectedApi);
 

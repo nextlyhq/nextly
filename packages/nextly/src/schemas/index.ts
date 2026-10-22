@@ -46,12 +46,17 @@ import {
 import { dynamicSinglesMysql } from "./dynamic-singles/mysql";
 import { dynamicSinglesPg } from "./dynamic-singles/postgres";
 import { dynamicSinglesSqlite } from "./dynamic-singles/sqlite";
+import { emailBrandTables } from "./email-brand";
 import { emailDeliveriesMysql } from "./email-deliveries/mysql";
 import { emailDeliveriesPg } from "./email-deliveries/postgres";
 import { emailDeliveriesSqlite } from "./email-deliveries/sqlite";
 import { emailProvidersMysql } from "./email-providers/mysql";
 import { emailProvidersPg } from "./email-providers/postgres";
 import { emailProvidersSqlite } from "./email-providers/sqlite";
+import { emailSendClaimsMysql } from "./email-send-claims/mysql";
+import { emailSendClaimsPg } from "./email-send-claims/postgres";
+import { emailSendClaimsSqlite } from "./email-send-claims/sqlite";
+import { EMAIL_SEND_CLAIMS_TABLE } from "./email-send-claims/table-name";
 import { emailTemplatesMysql } from "./email-templates/mysql";
 import { emailTemplatesPg } from "./email-templates/postgres";
 import { emailTemplatesSqlite } from "./email-templates/sqlite";
@@ -281,6 +286,9 @@ export function getCoreSchema(
     // `nextly_notices` — each person's own notices. In the snapshot for the
     // reason every table above is: it is the set `nextly migrate` creates.
     ...Object.values(noticesTables(dialect)),
+    // `nextly_email_brand` — the site's email brand settings, one row. In the
+    // snapshot for the reason every table above is.
+    ...Object.values(emailBrandTables(dialect)),
   ];
 
   const fieldGroupRegistry = fieldGroupRegistryFor(dialect, options);
@@ -296,7 +304,8 @@ export function getCoreSchema(
         userFieldDefinitionsPg,
         emailProvidersPg,
         emailTemplatesPg,
-        emailDeliveriesPg
+        emailDeliveriesPg,
+        emailSendClaimsPg
       );
       break;
     case "mysql":
@@ -308,7 +317,8 @@ export function getCoreSchema(
         userFieldDefinitionsMysql,
         emailProvidersMysql,
         emailTemplatesMysql,
-        emailDeliveriesMysql
+        emailDeliveriesMysql,
+        emailSendClaimsMysql
       );
       break;
     case "sqlite":
@@ -320,7 +330,8 @@ export function getCoreSchema(
         userFieldDefinitionsSqlite,
         emailProvidersSqlite,
         emailTemplatesSqlite,
-        emailDeliveriesSqlite
+        emailDeliveriesSqlite,
+        emailSendClaimsSqlite
       );
       break;
     default: {
@@ -383,6 +394,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "email_providers",
   "email_templates",
   "email_deliveries",
+  EMAIL_SEND_CLAIMS_TABLE,
   "nextly_schema_events",
   "nextly_i18n_archive",
   "nextly_versions",
@@ -398,6 +410,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_webhooks",
   "nextly_webhook_deliveries",
   "nextly_notices",
+  "nextly_email_brand",
 ] as const;
 
 /**

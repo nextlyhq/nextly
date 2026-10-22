@@ -10,7 +10,18 @@ import { describe, it, expect } from "vitest";
 import { render, screen, within } from "@admin/__tests__/utils";
 import type { FieldDiff } from "@admin/services/versionApi";
 
-import { FieldDiffNode } from "../FieldDiffNode";
+import { ChangesLayoutProvider } from "../changes-layout";
+import { DrawnContainersProvider } from "../diff-primitives";
+import { FieldDiffNode, SystemFieldsProvider } from "../FieldDiffNode";
+
+/** A node drawn side by side, the layout a reader can choose. */
+function renderSideBySide(node: FieldDiff) {
+  return render(
+    <ChangesLayoutProvider value="split">
+      <FieldDiffNode node={node} />
+    </ChangesLayoutProvider>
+  );
+}
 
 /**
  * The subtree holding one side of a comparison, found through the caption that
@@ -150,7 +161,7 @@ describe("FieldDiffNode", () => {
       before: 1,
       after: 2,
     };
-    render(<FieldDiffNode node={node} />);
+    renderSideBySide(node);
 
     // Both values being on screen is what the older stacked layout also did.
     // The claim here is stronger: the old value is in the older version's
@@ -174,7 +185,7 @@ describe("FieldDiffNode", () => {
         { op: 1, text: "there" },
       ],
     };
-    render(<FieldDiffNode node={node} />);
+    renderSideBySide(node);
 
     // A deletion belongs to the older version only, an insertion to the newer
     // only, and the common run to both — so it appears in each column.
@@ -195,7 +206,7 @@ describe("FieldDiffNode", () => {
       before: null,
       after: "brand new",
     };
-    render(<FieldDiffNode node={node} />);
+    renderSideBySide(node);
 
     // An added field HAS a before column, and leaving it blank would read the
     // same as a field that existed and held nothing.
@@ -215,7 +226,7 @@ describe("FieldDiffNode", () => {
       status: "added",
       segments: [{ op: 1, text: "written from scratch" }],
     };
-    render(<FieldDiffNode node={node} />);
+    renderSideBySide(node);
 
     // Splitting leaves the older side with no runs at all, and an empty
     // paragraph reads as a field that existed and held nothing.
@@ -236,7 +247,7 @@ describe("FieldDiffNode", () => {
       status: "removed",
       segments: [{ op: -1, text: "deleted wholesale" }],
     };
-    render(<FieldDiffNode node={node} />);
+    renderSideBySide(node);
 
     expect(
       within(column("Before")).getByText("deleted wholesale")
@@ -256,7 +267,7 @@ describe("FieldDiffNode", () => {
       before: "was here",
       after: null,
     };
-    render(<FieldDiffNode node={node} />);
+    renderSideBySide(node);
 
     expect(within(column("Before")).getByText("was here")).toBeInTheDocument();
     expect(
@@ -332,7 +343,7 @@ describe("FieldDiffNode", () => {
     expect(screen.getByText("cta")).toBeInTheDocument();
     expect(screen.getByText("Added")).toBeInTheDocument();
     // Engine indexes are zero-based; the badge reads them as human positions.
-    expect(screen.getByText(/Moved 2/)).toBeInTheDocument();
+    expect(screen.getByText("Moved from 2 to 1")).toBeInTheDocument();
   });
 
   it("recurses into a group", () => {
@@ -415,16 +426,40 @@ describe("FieldDiffNode", () => {
     expect(screen.getByText("new body")).toBeInTheDocument();
   });
 
-  it("marks a field no longer in the schema without exposing its value", () => {
+  it("says a field is no longer in the content type, without its value", () => {
     const node: FieldDiff = {
       kind: "unknown",
       name: "legacyKeyword",
       status: "removed",
+      reason: "removed",
     };
     render(<FieldDiffNode node={node} />);
 
-    expect(screen.getByText("legacyKeyword")).toBeInTheDocument();
-    expect(screen.getByText(/Value hidden/)).toBeInTheDocument();
+    // Named as the editor names a field with no label.
+    expect(screen.getByText("Legacy Keyword")).toBeInTheDocument();
+    expect(
+      screen.getByText("No longer in this content type.")
+    ).toBeInTheDocument();
+  });
+
+  it("keeps a system field back until system fields are asked for", () => {
+    const node: FieldDiff = {
+      kind: "unknown",
+      name: "firstPublishedAt",
+      status: "changed",
+      reason: "system",
+    };
+    const { unmount } = render(<FieldDiffNode node={node} />);
+    expect(screen.queryByText("First Published At")).toBeNull();
+    unmount();
+
+    render(
+      <SystemFieldsProvider value={true}>
+        <FieldDiffNode node={node} />
+      </SystemFieldsProvider>
+    );
+    expect(screen.getByText("First Published At")).toBeInTheDocument();
+    expect(screen.getByText(/System field/)).toBeInTheDocument();
   });
 
   it("shows the component type transition on a swapped list item", () => {
@@ -498,5 +533,109 @@ describe("FieldDiffNode", () => {
     // With "Changed only" off an unchanged set carries no targets; it says so
     // rather than leaving a blank body under the "Unchanged" badge.
     expect(screen.getByText("No change")).toBeInTheDocument();
+  });
+  it("draws a changed value inline by default: the earlier struck, the later underlined", () => {
+    const node: FieldDiff = {
+      kind: "value",
+      name: "views",
+      label: "Views",
+      type: "number",
+      status: "changed",
+      before: 1,
+      after: 2,
+    };
+    render(<FieldDiffNode node={node} />);
+
+    const before = screen.getByText("1").closest("del");
+    const after = screen.getByText("2").closest("ins");
+    expect(before).not.toBeNull();
+    expect(after).not.toBeNull();
+    // Underlined as well as coloured, so it reads without telling colours apart.
+    expect(after?.className).toMatch(/\bunderline\b/);
+    // No columns inline.
+    expect(screen.queryByText("Before")).toBeNull();
+  });
+
+  it("draws an added value inline as its new value alone", () => {
+    const node: FieldDiff = {
+      kind: "value",
+      name: "views",
+      label: "Views",
+      type: "number",
+      status: "added",
+      before: undefined,
+      after: 5,
+    };
+    const { container } = render(<FieldDiffNode node={node} />);
+
+    expect(screen.getByText("5").closest("ins")).not.toBeNull();
+    expect(container.querySelector("del")).toBeNull();
+    expect(screen.queryByText("Not present")).toBeNull();
+  });
+
+  it("draws a changed text field inline as one run with the change in place", () => {
+    const node: FieldDiff = {
+      kind: "text",
+      name: "title",
+      label: "Title",
+      type: "text",
+      status: "changed",
+      segments: [
+        { op: 0, text: "Hello " },
+        { op: -1, text: "world" },
+        { op: 1, text: "there" },
+      ],
+    };
+    render(<FieldDiffNode node={node} />);
+
+    // One paragraph holds the kept, removed and added text alike.
+    const run = screen.getByText("world").closest("p");
+    expect(run).not.toBeNull();
+    expect(within(run!).getByText("world").tagName).toBe("DEL");
+    expect(within(run!).getByText("there").tagName).toBe("INS");
+    expect(run!.textContent).toBe("Hello worldthere");
+  });
+
+  it("names a field by its place in containers the comparison does not draw", () => {
+    const node: FieldDiff = {
+      kind: "value",
+      name: "metaTitle",
+      label: "metaTitle",
+      declaredLabel: "Meta title",
+      path: [{ name: null, declaredLabel: "SEO", type: "collapsible" }],
+      type: "text",
+      status: "changed",
+      before: "a",
+      after: "b",
+    };
+    const { unmount } = render(<FieldDiffNode node={node} />);
+    expect(screen.getByText("SEO")).toBeInTheDocument();
+    expect(screen.getByText("Meta title")).toBeInTheDocument();
+    unmount();
+
+    // Inside a drawn container, its box places the field: no repeated crumb.
+    render(
+      <DrawnContainersProvider value={1}>
+        <FieldDiffNode node={node} />
+      </DrawnContainersProvider>
+    );
+    expect(screen.queryByText("SEO")).toBeNull();
+    expect(screen.getByText("Meta title")).toBeInTheDocument();
+  });
+
+  it("names an unlabelled field as the editor does, not by its key", () => {
+    const node: FieldDiff = {
+      kind: "value",
+      name: "heroImage",
+      label: "heroImage",
+      declaredLabel: null,
+      path: [],
+      type: "text",
+      status: "changed",
+      before: "a",
+      after: "b",
+    };
+    render(<FieldDiffNode node={node} />);
+    expect(screen.getByText("Hero Image")).toBeInTheDocument();
   });
 });

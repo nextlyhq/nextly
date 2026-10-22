@@ -211,7 +211,7 @@ export interface ActivitySingles {
  * one shown.
  */
 function singlesKeptOffClause(
-  singles: ActivitySingles | undefined
+  singles: SinglesKeptOff | undefined
 ): WhereClause | undefined {
   const complete = singles?.complete === true;
   // Nothing to leave out: no clause, rather than one every row satisfies.
@@ -231,6 +231,70 @@ function singlesKeptOffClause(
         : []),
     ],
   };
+}
+
+/** What the feed needs of the Singles to leave the hidden ones out: not their labels. */
+type SinglesKeptOff = Pick<ActivitySingles, "keptOff" | "complete">;
+
+/**
+ * The conditions every read of the feed starts from: inside what the caller may read, and
+ * without the rows of Singles kept off the dashboard. `null` when the scope admits nothing,
+ * which is answered without a query: an empty `IN ()` is a syntax error on some dialects.
+ */
+function feedConditions(
+  scope: ReadableResources,
+  singles: SinglesKeptOff | undefined
+): NonNullable<WhereClause["and"]> | null {
+  const conditions: NonNullable<WhereClause["and"]> = [];
+  if (scope.kind === "some") {
+    if (scope.resources.size === 0) return null;
+    conditions.push({
+      column: "collection",
+      op: "IN",
+      value: [...scope.resources],
+    });
+  }
+  const singlesClause = singlesKeptOffClause(singles);
+  if (singlesClause !== undefined) conditions.push(singlesClause);
+  return conditions;
+}
+
+/**
+ * The condition that leaves the rows of collections kept off the dashboard out of a count. A
+ * row that states no kind is read as a collection's, as the feed reads it, so only rows stating
+ * another kind are spared; `IN` is unknown on that row's NULL, and the slug decides.
+ */
+function collectionsKeptOffClause(
+  keptOff: ReadonlySet<string>
+): WhereClause | undefined {
+  if (keptOff.size === 0) return undefined;
+  return {
+    or: [
+      { column: "subjectKind", op: "IN", value: ["single", "settings"] },
+      { column: "collection", op: "NOT IN", value: [...keptOff] },
+    ],
+  };
+}
+
+/** Options for counting recent activity; see `countRecentActivity`. */
+export interface RecentActivityCountOptions {
+  /** Rows after this instant are counted. */
+  since: Date;
+  /** Which resources the caller may read; omitted denies, as the feed's does. */
+  scope?: ReadableResources;
+  /** Who is reading, so each row's document is authorized as the feed's is. */
+  caller?: ReadCaller;
+  /** The Singles kept off the dashboard, as the feed is given them. */
+  singles?: SinglesKeptOff;
+  /** The collections kept off the dashboard, whose rows the figure leaves out. */
+  keptOffCollections?: ReadonlySet<string>;
+}
+
+/** A count of the feed's rows: whole, or a floor when the walk stopped at its bound. */
+export interface RecentActivityCount {
+  count: number;
+  /** The walk stopped at its bound with rows unread: at least `count` rows. */
+  atLeast: boolean;
 }
 
 const TABLE = "activity_log";
@@ -767,30 +831,17 @@ export class ActivityLogService extends BaseService {
           value: options.userId,
         });
       }
-      if (scope.kind === "some") {
-        // An empty scope yields an `IN ()`, which matches nothing -- the
-        // intended answer for a caller who may read nothing. Short-circuit
-        // instead, because an empty IN list is a syntax error on some
-        // dialects, and the short-circuit must happen BEFORE the query is
-        // built rather than let the driver reject it.
-        if (scope.resources.size === 0) {
-          return { activities: [], hasMore: false };
-        }
-        filters.push({
-          property: "collection",
-          op: "IN",
-          value: [...scope.resources],
-        });
-      }
-
-      const singlesClause = singlesKeptOffClause(options?.singles);
+      // A scope that admits nothing matches nothing, the intended answer for a caller who may
+      // read nothing, and is answered before any query is built.
+      const starting = feedConditions(scope, options?.singles);
+      if (starting === null) return { activities: [], hasMore: false };
       const conditions: NonNullable<WhereClause["and"]> = [
         ...filters.map(f => ({
           column: f.property,
           op: f.op,
           value: f.value,
         })),
-        ...(singlesClause === undefined ? [] : [singlesClause]),
+        ...starting,
       ];
       const where = conditions.length > 0 ? { and: conditions } : undefined;
 
@@ -827,6 +878,50 @@ export class ActivityLogService extends BaseService {
       // collapsing to INTERNAL_ERROR / 500.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+  }
+
+  /**
+   * How many activity rows after `since` this caller may be told about: the rows the feed itself
+   * would show, counted by the feed's own walk rather than by an aggregate beside it.
+   *
+   * 🔴 Not a `COUNT(*)`. A document read rule cannot be pushed into a query over this table (see
+   * `visibleActivity`), so a count of what the scope admits counts edits to documents the caller
+   * may not open, and the number then says such edits happened. Walking and authorizing is
+   * bounded work instead: the walk reads at most its rounds of pages, and past that the count is
+   * a floor, said plainly (`atLeast`), the rule every bounded count in the dashboard follows.
+   * The cost is up to that many page reads and their authorization, where one aggregate used to
+   * run.
+   *
+   * Collections kept off the dashboard are left out as well, which the feed itself does not do:
+   * the figure promises to leave them out. Their rows are removed from the candidates before the
+   * walk, so the walk is still the only thing deciding what may be seen.
+   */
+  async countRecentActivity(
+    options: RecentActivityCountOptions
+  ): Promise<RecentActivityCount> {
+    const starting = feedConditions(
+      options.scope ?? someResources([]),
+      options.singles
+    );
+    if (starting === null) return { count: 0, atLeast: false };
+    const keptOff = collectionsKeptOffClause(
+      options.keptOffCollections ?? new Set()
+    );
+    const where: WhereClause = {
+      and: [
+        ...starting,
+        { column: "createdAt", op: ">", value: options.since },
+        ...(keptOff === undefined ? [] : [keptOff]),
+      ],
+    };
+    // As many rows as the walk can find, so it stops at the table's end or at its own bound.
+    const visible = await this.visibleActivity(
+      where,
+      Number.MAX_SAFE_INTEGER,
+      0,
+      options.caller
+    );
+    return { count: visible.rows.length, atLeast: !visible.end };
   }
 
   /**

@@ -94,6 +94,11 @@ describe("staleKnownEscapes", () => {
     ]);
   });
 
+  it("judges no entry without a witness, whose escape does not happen on every run", () => {
+    const unwitnessed = { ...entry, witness: null };
+    expect(staleKnownEscapes([unwitnessed], [], ran, postgres)).toEqual([]);
+  });
+
   it("judges nothing when the witness did not run, or ran without the entry's dialect", () => {
     expect(staleKnownEscapes([entry], [], new Set(), postgres)).toEqual([]);
     expect(staleKnownEscapes([entry], [], ran, new Set(["mysql"]))).toEqual([]);
@@ -106,8 +111,13 @@ describe("the known escape baseline", () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("names a witness test file and a reason for every entry", () => {
+  it("names a witness test file and a reason for every entry, or says why it has none", () => {
     for (const entry of KNOWN_ESCAPES) {
+      if (entry.witness === null) {
+        // Only an escape that does not happen on every run may go unwitnessed.
+        expect(entry.reason).toMatch(/^known, timing-dependent: /);
+        continue;
+      }
       expect(entry.witness).toMatch(
         /^packages\/[\w./-]+\.integration\.test\.ts$/
       );
