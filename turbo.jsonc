@@ -192,7 +192,20 @@
     //     served from a cached build.
     "build": {
       "dependsOn": ["^build"], // Build dependencies first (critical for npm packages)
-      "inputs": ["$TURBO_DEFAULT$", ".env*"], // Source files + env files
+      // Source files and env files, less tests and prose: every build reads
+      // only what it ships (tsdown follows imports from the entries, and its
+      // declarations from those), so a test-only or README edit no longer
+      // rebuilds a package and everything that depends on it.
+      // scripts/turbo-inputs.test.mjs refuses this for a build that reads them.
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".env*",
+        "!**/*.test.{ts,tsx,mts,cts}",
+        "!**/*.spec.{ts,tsx,mts,cts}",
+        "!**/*.test-d.ts",
+        "!**/__tests__/**",
+        "!**/*.md"
+      ],
       "outputs": ["dist/**", ".next/**", "!.next/cache/**", "**/*.tsbuildinfo"],
       "env": ["NODE_ENV", "NEXTLY_DEV_DIAGNOSTICS"]
     },
