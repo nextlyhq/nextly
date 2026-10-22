@@ -60,13 +60,13 @@ export async function GET(req: Request) {
 
 The `SessionUser` shape:
 
-| Field      | Type       | Description                            |
-|------------|------------|----------------------------------------|
-| `id`       | `string`   | User's unique ID                       |
-| `email`    | `string`   | User's email address                   |
-| `name`     | `string`   | Display name                           |
-| `image`    | `string?`  | Profile image URL                      |
-| `roleIds`  | `string[]` | Array of role IDs from the JWT claims  |
+| Field     | Type       | Description                           |
+| --------- | ---------- | ------------------------------------- |
+| `id`      | `string`   | User's unique ID                      |
+| `email`   | `string`   | User's email address                  |
+| `name`    | `string`   | Display name                          |
+| `image`   | `string?`  | Profile image URL                     |
+| `roleIds` | `string[]` | Array of role IDs from the JWT claims |
 
 Custom user fields defined via `defineConfig({ users: { fields } })` are also surfaced on the session user object.
 
@@ -266,41 +266,42 @@ Roles are managed in the admin UI at **Settings -> Roles** (`/admin/security/rol
 
 The seeded `Super Admin` role bypasses every check. Other roles you create are gated by their assigned permissions.
 
-### Checking roles in code
+### Checking access in code
+
+Ask whether the user may do something, rather than which roles they hold: a custom role, or an API key, that holds the permission is then allowed too. `nextly.access.check` asks the same access decision every route uses, collection and Single rules included.
 
 ```typescript
 import { getNextly } from "nextly";
-import {
-  getSession,
-  hasRole,
-  hasAnyRole,
-  hasAllRoles,
-} from "nextly/auth";
+import { getSession, isSuperAdmin } from "nextly/auth";
 
 import config from "../../../nextly.config";
 
 export async function GET(req: Request) {
-  await getNextly({ config });
+  const nextly = await getNextly({ config });
   const result = await getSession(req, process.env.NEXTLY_SECRET ?? "");
   if (!result.authenticated) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const user = result.user;
+  const userId = result.user.id;
 
-  if (hasRole(user, "admin")) {
-    // user has the "admin" role
+  if (
+    await nextly.access.check({
+      userId,
+      resource: "posts",
+      operation: "update",
+    })
+  ) {
+    // the user may update posts
   }
 
-  if (hasAnyRole(user, ["admin", "editor"])) {
-    // user has at least one of these roles
-  }
-
-  if (hasAllRoles(user, ["editor", "reviewer"])) {
-    // user has both roles
+  if (await isSuperAdmin(userId)) {
+    // the user holds super-admin authority
   }
 }
 ```
+
+`hasRole`, `hasAnyRole`, `hasAllRoles` and the `requireRole*` guards are deprecated and are removed in the next release. They compare the user's role ids with role names, so they never match a role by its name.
 
 ## Permissions
 
@@ -341,10 +342,10 @@ Nextly supports API keys via the `Authorization: Bearer nx_live_...` header (no 
 
 ### Token types
 
-| Type          | Permissions                                             |
-|---------------|---------------------------------------------------------|
-| `read-only`   | Only the `read-*` slugs from the creator's roles.       |
-| `full-access` | All permissions of the creator's roles.                 |
+| Type          | Permissions                                                            |
+| ------------- | ---------------------------------------------------------------------- |
+| `read-only`   | Only the `read-*` slugs from the creator's roles.                      |
+| `full-access` | All permissions of the creator's roles.                                |
 | `role-based`  | Permissions of an explicitly chosen role (independent of the creator). |
 
 A key created by a Super Admin copies the whole permission catalogue rather than the role's rows, because the Super Admin's power is a bypass and the role only holds the permissions that existed when the install was set up: a `read-only` key of theirs can read every collection, including one added later, and still cannot write. A role that inherits Super Admin counts, the same way it counts everywhere else.
@@ -393,11 +394,11 @@ A separate rate limit guards `/auth/login`, `/auth/register`, `/auth/forgot-pass
 
 **When it cannot**, which is every request while `security.trustProxy` is unset (the default), each request counts against the account it names instead:
 
-| Request | Counts against |
-|---|---|
-| Sign-in, registration, password-reset request, verification resend | The email address in the body, compared the way sign-in compares it (case and surrounding spaces ignored), whether or not an account has it. |
-| Password reset, email verification, invite acceptance, second-factor answer, initial-password set | The account the request's token belongs to. |
-| A body that names no address, or a token that belongs to no account | One shared account-less budget. |
+| Request                                                                                           | Counts against                                                                                                                               |
+| ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sign-in, registration, password-reset request, verification resend                                | The email address in the body, compared the way sign-in compares it (case and surrounding spaces ignored), whether or not an account has it. |
+| Password reset, email verification, invite acceptance, second-factor answer, initial-password set | The account the request's token belongs to.                                                                                                  |
+| A body that names no address, or a token that belongs to no account                               | One shared account-less budget.                                                                                                              |
 
 Sign-in is keyed on the `email` its body carries, which is what the built-in password strategy reads. A [custom strategy](/docs/plugins/auth#naming-the-account-to-the-sign-in-rate-limit) that signs people in from something else, such as a username or an OAuth code, names what it reads with `limitKey`, and its sign-ins are then keyed on that, in a budget of their own per name; rotating the `email` buys nothing. A strategy without `limitKey` leaves the limiter unable to tell which strategy will handle a sign-in, so sign-ins are keyed on the `email` they carry, one that carries none counts against the account-less budget below (30 an hour by default), and the server names that strategy at startup. Behind a proxy, `security.trustProxy` keeps every strategy's sign-in per client instead.
 
@@ -475,25 +476,25 @@ Self-registration is off unless the `auth` block sets `allowRegistration: true`.
 
 Built-in defaults you can rely on (not configurable yet):
 
-| Setting                | Default     |
-|------------------------|-------------|
-| Access-token TTL       | 15 minutes  |
-| Refresh-token TTL      | 7 days      |
-| Max login attempts     | 5           |
-| Lockout duration       | 15 minutes  |
-| Login stall time       | 500ms       |
-| Bcrypt salt rounds     | 12          |
-| Require email verification | true    |
+| Setting                    | Default    |
+| -------------------------- | ---------- |
+| Access-token TTL           | 15 minutes |
+| Refresh-token TTL          | 7 days     |
+| Max login attempts         | 5          |
+| Lockout duration           | 15 minutes |
+| Login stall time           | 500ms      |
+| Bcrypt salt rounds         | 12         |
+| Require email verification | true       |
 
 ## Environment variables
 
-| Variable                 | Required   | Description                                     |
-|--------------------------|------------|-------------------------------------------------|
-| `NEXTLY_SECRET`          | yes (prod) | JWT signing secret. **Min 32 characters in production.** |
-| `NEXTLY_ALLOWED_ORIGINS` | self-hosted | Comma-separated additional CSRF origins; include the origin browsers use whenever it differs from the address the server listens on. |
-| `NEXT_PUBLIC_APP_URL`    | yes (prod) | Public URL of the deployment, used in email links. |
-| `NEXTLY_SETUP_TOKEN`     | no         | The production [setup token](#in-production-the-setup-token), at least 43 characters with at least 16 distinct ones. Unset, Nextly generates one and prints it to the server's output. |
-| `NEXTLY_ADMIN_PASSWORD`  | no         | The password `nextly users:create-admin` gives the [first administrator](#from-the-command-line), read instead of prompting. Set it only for that command. |
+| Variable                 | Required    | Description                                                                                                                                                                            |
+| ------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NEXTLY_SECRET`          | yes (prod)  | JWT signing secret. **Min 32 characters in production.**                                                                                                                               |
+| `NEXTLY_ALLOWED_ORIGINS` | self-hosted | Comma-separated additional CSRF origins; include the origin browsers use whenever it differs from the address the server listens on.                                                   |
+| `NEXT_PUBLIC_APP_URL`    | yes (prod)  | Public URL of the deployment, used in email links.                                                                                                                                     |
+| `NEXTLY_SETUP_TOKEN`     | no          | The production [setup token](#in-production-the-setup-token), at least 43 characters with at least 16 distinct ones. Unset, Nextly generates one and prints it to the server's output. |
+| `NEXTLY_ADMIN_PASSWORD`  | no          | The password `nextly users:create-admin` gives the [first administrator](#from-the-command-line), read instead of prompting. Set it only for that command.                             |
 
 Generate `NEXTLY_SECRET` with:
 
@@ -503,26 +504,26 @@ openssl rand -base64 32
 
 ## Auth endpoints
 
-| Method | Path                           | Description                                  |
-|--------|--------------------------------|----------------------------------------------|
-| GET    | `/admin/api/auth/setup-status`       | Is setup still open, and does it need a setup token (`requiresSetupToken`)? |
-| GET    | `/admin/api/auth/session`            | Get the current session.                     |
-| GET    | `/admin/api/auth/csrf`               | Mint a CSRF token.                           |
-| GET    | `/admin/api/auth/pending`            | Which second factor an interrupted sign-in left outstanding. Never returns the token itself. |
-| GET    | `/admin/api/auth/ui`                 | The login page's provider buttons, challenge views and slots. |
-| POST   | `/admin/api/auth/setup`              | Create the first super-admin (auto-logs in); in production, with the setup token. |
-| POST   | `/admin/api/auth/login`              | Email + password login.                      |
-| POST   | `/admin/api/auth/challenge/resolve`  | Answer a second factor with the pending token. |
-| POST   | `/admin/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in. |
-| POST   | `/admin/api/auth/logout`             | Revoke the current session.                  |
-| POST   | `/admin/api/auth/refresh`            | Rotate access + refresh tokens.              |
-| POST   | `/admin/api/auth/register`           | User registration, when `auth.allowRegistration` is on. |
-| PATCH  | `/admin/api/auth/change-password`    | Change password (auth required).             |
-| POST   | `/admin/api/auth/forgot-password`    | Request a password-reset email.              |
-| POST   | `/admin/api/auth/reset-password`     | Reset password with the email token.         |
-| POST   | `/admin/api/auth/accept-invite`      | Set a password from an invite link.          |
-| POST   | `/admin/api/auth/verify-email`       | Verify email with the email token.           |
-| POST   | `/admin/api/auth/verify-email/resend`| Resend the verification email.               |
+| Method | Path                                   | Description                                                                                  |
+| ------ | -------------------------------------- | -------------------------------------------------------------------------------------------- |
+| GET    | `/admin/api/auth/setup-status`         | Is setup still open, and does it need a setup token (`requiresSetupToken`)?                  |
+| GET    | `/admin/api/auth/session`              | Get the current session.                                                                     |
+| GET    | `/admin/api/auth/csrf`                 | Mint a CSRF token.                                                                           |
+| GET    | `/admin/api/auth/pending`              | Which second factor an interrupted sign-in left outstanding. Never returns the token itself. |
+| GET    | `/admin/api/auth/ui`                   | The login page's provider buttons, challenge views and slots.                                |
+| POST   | `/admin/api/auth/setup`                | Create the first super-admin (auto-logs in); in production, with the setup token.            |
+| POST   | `/admin/api/auth/login`                | Email + password login.                                                                      |
+| POST   | `/admin/api/auth/challenge/resolve`    | Answer a second factor with the pending token.                                               |
+| POST   | `/admin/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in.                                      |
+| POST   | `/admin/api/auth/logout`               | Revoke the current session.                                                                  |
+| POST   | `/admin/api/auth/refresh`              | Rotate access + refresh tokens.                                                              |
+| POST   | `/admin/api/auth/register`             | User registration, when `auth.allowRegistration` is on.                                      |
+| PATCH  | `/admin/api/auth/change-password`      | Change password (auth required).                                                             |
+| POST   | `/admin/api/auth/forgot-password`      | Request a password-reset email.                                                              |
+| POST   | `/admin/api/auth/reset-password`       | Reset password with the email token.                                                         |
+| POST   | `/admin/api/auth/accept-invite`        | Set a password from an invite link.                                                          |
+| POST   | `/admin/api/auth/verify-email`         | Verify email with the email token.                                                           |
+| POST   | `/admin/api/auth/verify-email/resend`  | Resend the verification email.                                                               |
 
 ## Next steps
 
