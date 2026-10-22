@@ -12,6 +12,7 @@
 
 import type { TimeseriesInterval } from "../collections/query/timeseries-interval";
 
+import type { TransportableValue } from "./declaration/transportable";
 import type { WidgetFieldChoice, WidgetSourceFieldType } from "./sources";
 
 /**
@@ -146,6 +147,19 @@ export type WidgetResult =
       points: { start: string; count: number }[];
       /** The interval the points were bucketed by. */
       interval: TimeseriesInterval;
+    }
+  | {
+      /**
+       * A declared widget's own data, for the component it draws itself with.
+       *
+       * 🔴 A RESULT kind only, never a query's op: no query asks for it and no
+       * source answers with it. Core's runner makes it, for a widget declared
+       * with its own display, from what that widget's data function answered
+       * once the value is known to reach the browser as itself. Anything else
+       * answering with it is refused as a malformed answer.
+       */
+      op: "data";
+      data: TransportableValue;
     };
 
 /**
@@ -164,7 +178,17 @@ export type WidgetResult =
  * discover it.
  */
 export type WidgetSlot =
-  | { ok: true; result: WidgetResult }
+  | {
+      ok: true;
+      result: WidgetResult;
+      /**
+       * Present when a declared widget's empty test holds for this answer: the
+       * card shows its empty state, with the answer still carried. Not a failure,
+       * so never a Retry; absent for every answer that is not empty, and for
+       * every widget that declares no test.
+       */
+      empty?: true;
+    }
   | {
       ok: false;
       error: string;
