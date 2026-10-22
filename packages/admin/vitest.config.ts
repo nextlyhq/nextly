@@ -25,19 +25,17 @@ const TOUCHES_DOM =
 
 /** The test files that run without a DOM, relative to this folder. */
 function filesWithoutDom(): string[] {
-  const found: string[] = [];
-  for (const root of ["src", "scripts"]) {
-    for (const entry of readdirSync(path.join(__dirname, root), {
-      recursive: true,
-    })) {
-      const file = path.join(root, String(entry)).split(path.sep).join("/");
-      if (!/\.test\.(?:ts|mjs)$/.test(file)) continue;
-      if (TOUCHES_DOM.test(readFileSync(path.join(__dirname, file), "utf8")))
-        continue;
-      found.push(file);
-    }
-  }
-  return found;
+  return ["src", "scripts"]
+    .flatMap(root =>
+      readdirSync(path.join(__dirname, root), { recursive: true }).map(entry =>
+        path.join(root, String(entry)).split(path.sep).join("/")
+      )
+    )
+    .filter(
+      file =>
+        /\.test\.(?:ts|mjs)$/.test(file) &&
+        !TOUCHES_DOM.test(readFileSync(path.join(__dirname, file), "utf8"))
+    );
 }
 
 const nodeFiles = filesWithoutDom();
