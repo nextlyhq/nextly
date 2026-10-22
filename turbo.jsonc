@@ -386,9 +386,9 @@
     // ==================== CODE QUALITY TASKS ====================
     // Linting, formatting, and code style enforcement
 
-    // Lint is not a task here: one oxlint process reads the whole repository
-    // (`pnpm lint`, configured by oxlint.config.mjs), faster than turbo could
-    // fan it out per package.
+    // Lint is not a task here: oxlint reads the whole repository in three
+    // passes (`pnpm lint`, scripts/lint.mjs, configured by oxlint.config.mjs),
+    // faster than turbo could fan it out per package.
 
     // format - Run Prettier to format all files
     //
