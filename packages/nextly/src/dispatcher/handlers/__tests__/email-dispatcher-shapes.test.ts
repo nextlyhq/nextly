@@ -50,6 +50,7 @@ type TemplateService = {
   deleteTemplate: ReturnType<typeof vi.fn>;
   previewTemplate: ReturnType<typeof vi.fn>;
   previewDraft: ReturnType<typeof vi.fn>;
+  keptOnOldEngineIds: ReturnType<typeof vi.fn>;
 };
 
 function makeProviderService(
@@ -78,6 +79,7 @@ function makeTemplateService(
     deleteTemplate: vi.fn(),
     previewTemplate: vi.fn(),
     previewDraft: vi.fn(),
+    keptOnOldEngineIds: vi.fn().mockResolvedValue(new Set()),
     ...overrides,
   };
 }
@@ -279,9 +281,11 @@ describe("dispatchEmailTemplates, non-paginated reads (respondData)", () => {
       { id: "t1", slug: "welcome" },
       { id: "t2", slug: "password-reset" },
     ];
+    const keptOnOldEngineIds = vi.fn().mockResolvedValue(new Set(["t2"]));
     wireTemplates(
       makeTemplateService({
         listTemplates: vi.fn().mockResolvedValue(fakeTemplates),
+        keptOnOldEngineIds,
       })
     );
 
@@ -290,7 +294,16 @@ describe("dispatchEmailTemplates, non-paginated reads (respondData)", () => {
     const response = result as Response;
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body).toEqual({ templates: fakeTemplates });
+    // Each row says whether it is kept on the previous engine, asked of the
+    // service once for the whole list.
+    expect(body).toEqual({
+      templates: [
+        { id: "t1", slug: "welcome", keptOnOldEngine: false },
+        { id: "t2", slug: "password-reset", keptOnOldEngine: true },
+      ],
+    });
+    expect(keptOnOldEngineIds).toHaveBeenCalledTimes(1);
+    expect(keptOnOldEngineIds).toHaveBeenCalledWith(fakeTemplates);
     expect(body).not.toHaveProperty("data");
     expect(body).not.toHaveProperty("items");
   });

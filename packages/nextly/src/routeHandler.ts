@@ -111,7 +111,11 @@ import {
 import { postWidgetQuery } from "./api/widget-query";
 import { runWithAccessMemo } from "./auth/access/request-memo";
 import { apiKeyScopeFrom } from "./auth/authenticated-scope";
-import { runWithCallerScope } from "./auth/caller-scope";
+import {
+  runWithCallerScope,
+  runWithRequestCaller,
+  type RequestCaller,
+} from "./auth/caller-scope";
 import {
   COLLECTION_DEFINITION_ACTION,
   COLLECTION_DEFINITION_RESOURCE,
@@ -121,6 +125,10 @@ import { hasAuthRateLimit } from "./auth/handlers/router";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
+import {
+  roleChangeCallerFor,
+  runAsRoleChangeCaller,
+} from "./domains/auth/services/super-admin-grant";
 import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
 import {
@@ -189,11 +197,7 @@ import { handleDevSchemaRequest } from "./route-handler/dev-schema-handler";
 import { registerNextCacheRevalidator } from "./runtime/cache/register";
 import type { CollectionsHandler } from "./services/collections-handler";
 import type { GeneralSettingsService } from "./services/general-settings/general-settings-service";
-import {
-  isSuperAdmin,
-  containsSuperAdminRole,
-  resolveRoleSlugs,
-} from "./services/lib/permissions";
+import { resolveRoleSlugs } from "./services/lib/permissions";
 import {
   builderDisabledError,
   isBuilderEnabled,
@@ -309,57 +313,6 @@ async function applyGlobalDateFormatting(
   }
 
   return withTimezoneFormatting(clean);
-}
-
-// ============================================================================
-// Super-Admin Role Protection
-// ============================================================================
-
-/**
- * Prevent non-super-admins from assigning the super_admin role.
- *
- * Applies to three paths:
- * - createLocalUser: body.roles array
- * - updateUser: body.roles array
- * - assignRoleToUser: body.roleId
- *
- * @returns A 403 Response if protection triggers, or null if allowed.
- */
-async function guardSuperAdminRoleAssignment(
-  requestingUserId: string,
-  method: string,
-  body: unknown
-): Promise<Response | null> {
-  // Collect the role IDs being assigned
-  let roleIdsToCheck: string[] = [];
-
-  if (method === "createLocalUser" || method === "updateUser") {
-    const b = body as Record<string, unknown> | undefined;
-    if (Array.isArray(b?.roles) && (b.roles as unknown[]).length > 0) {
-      roleIdsToCheck = b.roles as string[];
-    }
-  } else if (method === "assignRoleToUser") {
-    const b = body as Record<string, unknown> | undefined;
-    const roleId = b?.roleId as string | undefined;
-    if (roleId) roleIdsToCheck = [roleId];
-  }
-
-  if (roleIdsToCheck.length === 0) return null;
-
-  // Check if any role being assigned is super_admin
-  const hasSuperAdmin = await containsSuperAdminRole(roleIdsToCheck);
-  if (!hasSuperAdmin) return null;
-
-  // Verify the requesting user is themselves a super-admin
-  const callerIsSuperAdmin = await isSuperAdmin(requestingUserId);
-  if (callerIsSuperAdmin) return null;
-
-  return new Response(
-    JSON.stringify({
-      error: "Only super-admins can assign the super_admin role",
-    }),
-    { status: 403, headers: { "Content-Type": "application/json" } }
-  );
 }
 
 // ============================================================================
@@ -900,11 +853,17 @@ async function resolveAuthorization(
       // Entry operations → {action}-{collectionSlug}
       const action = getActionFromOperation(operation);
       const slug = routeParams?.collectionName || "";
-      return requireCollectionAccess(req, action, slug);
+      return requireCollectionAccess(req, action, slug, {
+        method,
+        params: routeParams ?? {},
+      });
     }
     if (method === "getCollection") {
       const slug = routeParams?.collectionName || "";
-      return requireCollectionAccess(req, "read", slug);
+      return requireCollectionAccess(req, "read", slug, {
+        method,
+        params: routeParams ?? {},
+      });
     }
     // Definition mutations (create/update/delete collection). The grant is
     // declared once, in `auth/collection-definition-policy`, because the
@@ -934,11 +893,17 @@ async function resolveAuthorization(
           ? "read"
           : "update";
       const slug = routeParams?.slug || "";
-      return requireCollectionAccess(req, action, slug);
+      return requireCollectionAccess(req, action, slug, {
+        method,
+        params: routeParams ?? {},
+      });
     }
     if (method === "getSingleSchema") {
       const slug = routeParams?.slug || "";
-      return requireCollectionAccess(req, "read", slug);
+      return requireCollectionAccess(req, "read", slug, {
+        method,
+        params: routeParams ?? {},
+      });
     }
     // Definition mutations (create/delete single, update schema) → manage-settings
     return requirePermission(req, "manage", "settings");
@@ -1616,28 +1581,17 @@ async function handleServiceRequest(
     }
   }
 
-  // ==================== SUPER-ADMIN ROLE PROTECTION ====================
-  if (authorizedUser) {
-    const guardResult = await guardSuperAdminRoleAssignment(
-      authorizedUser.userId,
-      method,
-      body
-    );
-    if (guardResult) return guardResult;
-    // Removing the last active super-admin, by its role or otherwise, is
-    // refused by the user services themselves, inside the write's own
-    // transaction: there it holds for every path and when requests race.
-  }
+  // Who may give super-admin authority, and removing the last active
+  // super-admin, are both decided by the role and user services themselves,
+  // so they hold for every path. The caller they judge is pinned around the
+  // dispatch below.
 
   // ==================== DISPATCH REQUEST ====================
-  // Inject the authenticated user's ID into route params so that downstream
-  // service methods (e.g. createEntry, updateEntry, deleteEntry) can pass it
-  // into hook contexts. Without this, activity-log hooks have no user and
-  // are silently skipped.
-  // NOTE: We use _authenticatedUserId (not userId) to avoid colliding with
-  // the existing routeParams.userId which is the target user ID from URL params.
-  await setAuthenticatedRouteParams(
-    routeParams,
+  // The caller travels in request context, never in route params, which a
+  // query string also fills. Handlers read it to pass the user into service
+  // calls and hook contexts; without it activity-log hooks have no user.
+  stripReservedIdentityParams(routeParams);
+  const caller = await requestCallerFor(
     authorizedUser,
     needsResolvedRoles(service, method, httpMethod)
   );
@@ -1648,7 +1602,6 @@ async function handleServiceRequest(
     method,
     params: routeParams,
     body,
-    userId: authorizedUser?.userId,
     request: req, // Pass request for accessing headers (IP, user-agent, etc.)
   };
 
@@ -1664,7 +1617,12 @@ async function handleServiceRequest(
     authorizedUser?.authMethod === "api-key"
       ? apiKeyScopeFrom(authorizedUser)
       : undefined,
-    () => dispatcher.dispatch(dispatchRequest)
+    () =>
+      runWithRequestCaller(caller, () =>
+        runAsRoleChangeCaller(roleChangeCallerFor(authorizedUser), () =>
+          dispatcher.dispatch(dispatchRequest)
+        )
+      )
   );
 
   if (result.status === 204 || result.status === 205 || result.status === 304) {
@@ -2734,68 +2692,61 @@ export const _handleAdminMetaSidebarGroupsForTest =
   handleAdminMetaSidebarGroups;
 
 /**
- * Populate the reserved `_authenticated*` route params from the authorized
- * user so downstream services get the caller's identity and roles.
- *
- * `parseRestRoute` copies every query-string key into `routeParams`, so these
- * reserved keys are stripped first: they are server-authored and a
- * client-supplied copy (e.g. `?_authenticatedUserRoles=["admin"]`) must never
- * be trusted. Roles are forwarded as SLUGS — session auth carries role IDs on
- * `AuthContext.roles`, so those are resolved; API-key auth already carries
- * key-scoped slugs.
+ * The route param names identity used to travel under. Nothing writes or reads
+ * them any more, but `parseRestRoute` copies every query-string key into
+ * `routeParams`, so a client can still send them; they are dropped before
+ * dispatch, so a handler that ever read one again would find nothing forged.
  */
-async function setAuthenticatedRouteParams(
-  routeParams: Record<string, string> | undefined,
-  authorizedUser: AuthContext | undefined,
-  // Whether `_authenticatedUserRoles` is consumed downstream, per
-  // {@link needsResolvedRoles}. Roles are resolved (a DB query for session auth)
-  // only when needed, so routes that never read them don't pay for a
-  // permissions lookup.
-  needsRoles: boolean
-): Promise<void> {
+const RESERVED_IDENTITY_PARAMS = [
+  "_authenticatedUserId",
+  "_authenticatedUserName",
+  "_authenticatedUserEmail",
+  "_authenticatedUserRoles",
+  "_authenticatedActorType",
+  "_authenticatedActorId",
+  "_authenticatedPermissions",
+  "_authenticatedClaims",
+] as const;
+
+function stripReservedIdentityParams(
+  routeParams: Record<string, string> | undefined
+): void {
   if (!routeParams) return;
-
-  delete routeParams._authenticatedUserId;
-  delete routeParams._authenticatedUserName;
-  delete routeParams._authenticatedUserEmail;
-  delete routeParams._authenticatedUserRoles;
-  delete routeParams._authenticatedActorType;
-  delete routeParams._authenticatedActorId;
-  delete routeParams._authenticatedPermissions;
-  delete routeParams._authenticatedClaims;
-
-  if (!authorizedUser) return;
-
-  routeParams._authenticatedUserId = authorizedUser.userId;
-  // The acting identity is resolved here, the only place that knows how the
-  // request authenticated: a write attributes to the API key itself when one
-  // was used, rather than silently to the user that owns the key.
-  const actor = actorFromAuthContext(authorizedUser);
-  routeParams._authenticatedActorType = actor.type;
-  if (actor.id) routeParams._authenticatedActorId = actor.id;
-  if (authorizedUser.userName)
-    routeParams._authenticatedUserName = authorizedUser.userName;
-  if (authorizedUser.userEmail)
-    routeParams._authenticatedUserEmail = authorizedUser.userEmail;
-  // The API key's own scoped grants, so a handler deciding access after
-  // dispatch judges the key rather than the account that issued it. Empty for
-  // session auth, whose grants are resolved from the database instead.
-  if (authorizedUser.authMethod === "api-key") {
-    routeParams._authenticatedPermissions = JSON.stringify(
-      authorizedUser.permissions ?? []
-    );
-  }
-  // Verified extra claims, so a stored `custom` rule decides on the same
-  // identity over HTTP that it gets through the Direct API. Server-authored
-  // like the keys above: the client-supplied copy was deleted first.
-  if (authorizedUser.claims) {
-    routeParams._authenticatedClaims = JSON.stringify(authorizedUser.claims);
-  }
-
-  if (!needsRoles) return;
-
-  const roleSlugs = await resolveRoleSlugs(authorizedUser);
-  routeParams._authenticatedUserRoles = JSON.stringify(roleSlugs ?? []);
+  for (const name of RESERVED_IDENTITY_PARAMS) delete routeParams[name];
 }
 
-export const _setAuthenticatedRouteParamsForTest = setAuthenticatedRouteParams;
+/**
+ * Who the authorized caller is, for the handlers dispatched on its behalf,
+ * carried in request context (`runWithRequestCaller`) rather than in params.
+ *
+ * The acting identity is resolved here, the only place that knows how the
+ * request authenticated: a write attributes to the API key itself when one was
+ * used, rather than silently to the user that owns the key. Verified extra
+ * claims travel with it, so a rule decides on the same identity over HTTP that
+ * it gets through the Direct API.
+ */
+async function requestCallerFor(
+  authorizedUser: AuthContext | undefined,
+  // Whether the handler hands roles to access rules, per
+  // {@link needsResolvedRoles}. Roles are resolved (a DB query for session auth)
+  // only when needed, so routes that never read them don't pay for a lookup.
+  needsRoles: boolean
+): Promise<RequestCaller | undefined> {
+  if (!authorizedUser) return undefined;
+  const roles = needsRoles
+    ? ((await resolveRoleSlugs(authorizedUser)) ?? [])
+    : undefined;
+  return Object.freeze({
+    userId: authorizedUser.userId,
+    ...(authorizedUser.userName ? { name: authorizedUser.userName } : {}),
+    ...(authorizedUser.userEmail ? { email: authorizedUser.userEmail } : {}),
+    ...(authorizedUser.claims
+      ? { claims: Object.freeze({ ...authorizedUser.claims }) }
+      : {}),
+    actor: Object.freeze(actorFromAuthContext(authorizedUser)),
+    ...(roles ? { roles: Object.freeze([...roles]) } : {}),
+  });
+}
+
+export const _requestCallerForTest = requestCallerFor;
+export const _stripReservedIdentityParamsForTest = stripReservedIdentityParams;

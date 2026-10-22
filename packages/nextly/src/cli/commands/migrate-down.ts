@@ -53,12 +53,12 @@ import {
 import {
   assertNoForeignDrops,
   columnsAfter,
+  liveTablesAfter,
   readLiveColumns,
   readLiveElements,
   readLiveIndexTables,
   readLiveTables,
   rebuildBlockStatements,
-  tablesCreatedBy,
   type LiveColumns,
   type LiveElements,
 } from "../../domains/schema/ownership/drop-guard";
@@ -376,9 +376,10 @@ async function readLiveState(
     p.liveTables = tables;
     p.liveIndexTables = indexTables;
     columns = columnsAfter(p.statements, deps.dialect, columns);
-    tables =
-      tables &&
-      new Set([...tables, ...tablesCreatedBy(p.statements, deps.dialect)]);
+    // Kept with the descendants the live reading carries, followed through
+    // the target's renames, so each later target is judged against the
+    // inheritance tree as well.
+    tables = tables && liveTablesAfter(tables, p.statements, deps.dialect);
   }
 }
 

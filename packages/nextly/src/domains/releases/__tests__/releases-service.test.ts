@@ -72,6 +72,8 @@ function repository() {
     ),
     liveAuthors: vi.fn(async (ids: string[]) => new Set(ids)),
     scheduleRelease: vi.fn(async (..._args: unknown[]) => true),
+    // Publish now on a release already due: its event, with no move.
+    recordPublishNow: vi.fn(async (..._args: unknown[]) => true),
     cancelRelease: vi.fn(async () => true),
     updateReleaseDetails: vi.fn(
       async (
@@ -1220,7 +1222,38 @@ describe("ReleasesService.publishNow", () => {
     ]);
     await svc.publishNow("r1", ADMIN);
     expect(repo.scheduleRelease).not.toHaveBeenCalled();
+    // Not moved, but the history still says who asked.
+    expect(repo.recordPublishNow).toHaveBeenCalledWith(
+      "r1",
+      { kind: "person", userId: "u1" },
+      2
+    );
     expect(deps.runDrainNow).toHaveBeenCalledWith({ maxDurationMs: 15_000 });
+  });
+
+  it("refuses Publish now on a release already due that moved since it was read, and runs nothing", async () => {
+    // Rescheduled or cancelled between the read and the event's lock: the
+    // repository's fence misses, and the caller is told rather than handed a
+    // release it did not run.
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([
+      {
+        id: "r1",
+        state: "scheduled",
+        revision: 2,
+        scheduledAt: new Date(Date.now() - 60_000),
+      },
+    ]);
+    repo.recordPublishNow.mockResolvedValueOnce(false);
+    await expect(svc.publishNow("r1", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(repo.recordPublishNow).toHaveBeenCalledWith(
+      "r1",
+      { kind: "person", userId: "u1" },
+      2
+    );
+    expect(deps.runDrainNow).not.toHaveBeenCalled();
   });
 
   it("still moves a draft to now before running the drain", async () => {
@@ -1682,6 +1715,70 @@ describe("ReleasesService.update renames a release under its own permission", ()
   });
 });
 
+describe("ReleasesService.historyVisibleTo lists only documents the reader may read", () => {
+  const about = (entryId: string) => ({
+    scopeKind: "collection",
+    scopeSlug: "posts",
+    entryId,
+    locale: null,
+    action: "publish",
+  });
+  const events = [
+    { id: "e1", kind: "release-created", payload: null },
+    { id: "e2", kind: "release-document-added", payload: about("readable") },
+    { id: "e3", kind: "release-document-added", payload: about("unreadable") },
+    // A document event whose payload does not say which document.
+    {
+      id: "e4",
+      kind: "release-document-removed",
+      payload: { scopeKind: "collection" },
+    },
+  ];
+
+  /** A service whose reader may read only the document `readable`. */
+  function judging() {
+    const made = service();
+    made.deps.readableMembers = async (
+      members: readonly { id: string; entryId?: string }[],
+      actor?: { userId: string | null }
+    ) =>
+      new Set(
+        actor?.userId === null
+          ? []
+          : members
+              .filter(member => member.entryId === "readable")
+              .map(member => member.id)
+      );
+    return made;
+  }
+
+  it("keeps an event about no document and one about a document the reader may read", async () => {
+    const { svc } = judging();
+    expect(
+      (await svc.historyVisibleTo(events, ADMIN)).map(event => event.id)
+    ).toEqual(["e1", "e2"]);
+  });
+
+  it("shows a trusted caller every event", async () => {
+    const { svc } = judging();
+    expect(
+      (
+        await svc.historyVisibleTo(events, {
+          userId: null,
+          overrideAccess: true,
+        })
+      ).map(event => event.id)
+    ).toEqual(["e1", "e2", "e3", "e4"]);
+  });
+
+  it("shows a caller with no user no document", async () => {
+    const { svc } = judging();
+    expect(
+      (await svc.historyVisibleTo(events, ANON)).map(event => event.id)
+    ).toEqual(["e1"]);
+  });
+});
+
 describe("ReleasesService.delete deletes only a release that never ran", () => {
   it("refuses a caller without delete, whatever else it holds, and deletes nothing", async () => {
     const { svc, repo, deps } = service({
@@ -1733,8 +1830,8 @@ describe("ReleasesService.delete deletes only a release that never ran", () => {
   );
 
   it.each([
-    ["scheduled", "Cancelling it calls it off"],
-    ["blocked", "Cancelling it calls it off"],
+    ["scheduled", "Cancel it first to call it off"],
+    ["blocked", "Cancel it first to call it off"],
     ["published", "record of what went live"],
   ])(
     "refuses a %s release with a CONFLICT saying what to do, and deletes nothing",

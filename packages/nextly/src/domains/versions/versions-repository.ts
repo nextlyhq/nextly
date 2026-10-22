@@ -355,18 +355,7 @@ export class VersionsRepository {
    * error or a NULL write.
    */
   private serializeSnapshot(snapshot: unknown): string {
-    try {
-      const serialized = JSON.stringify(snapshot);
-      if (typeof serialized !== "string") {
-        throw new TypeError("snapshot did not serialize to a JSON string");
-      }
-      return serialized;
-    } catch (cause) {
-      throw NextlyError.internal({
-        cause: cause instanceof Error ? cause : undefined,
-        logContext: { reason: "version-snapshot-not-serializable" },
-      });
-    }
+    return serializeVersionSnapshot(snapshot);
   }
 
   /**
@@ -1315,5 +1304,25 @@ export class VersionsRepository {
       });
     }
     return deleted;
+  }
+}
+
+/**
+ * A snapshot as the versions table stores it: its JSON text, or a refusal when
+ * it has none. Exported so a caller that must copy a snapshot before storing
+ * it copies exactly what the store would keep, rather than by rules of its own.
+ */
+export function serializeVersionSnapshot(snapshot: unknown): string {
+  try {
+    const serialized = JSON.stringify(snapshot);
+    if (typeof serialized !== "string") {
+      throw new TypeError("snapshot did not serialize to a JSON string");
+    }
+    return serialized;
+  } catch (cause) {
+    throw NextlyError.internal({
+      cause: cause instanceof Error ? cause : undefined,
+      logContext: { reason: "version-snapshot-not-serializable" },
+    });
   }
 }

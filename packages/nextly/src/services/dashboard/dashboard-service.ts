@@ -33,6 +33,10 @@ import { entryHeading } from "../../lib/entry-heading";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
 
+import type {
+  ActivityLogService,
+  RecentActivityCount,
+} from "./activity-log-service";
 import type { AdminCount, ApiKeyCountScope } from "./admin-counts";
 import {
   filterByResource,
@@ -48,6 +52,11 @@ export interface ContentStats {
   totalMedia?: number;
   contentTypes: number;
   recentChanges24h: number;
+  /**
+   * Present, and true, when counting stopped at its bound: at least `recentChanges24h` changes,
+   * drawn `N+`. Absent means the figure is whole.
+   */
+  recentChanges24hAtLeast?: true;
 }
 
 /** Draft vs Published breakdown. */
@@ -230,7 +239,7 @@ export class DashboardService extends BaseService {
       statusBreakdown,
     ] = await Promise.all([
       ifAllowed("media", () => this.countTable("media")),
-      this.countRecentChangesOutside(scope, {
+      this.countRecentChangesOutside(scope, options.caller, {
         collection: keptOffCollections,
         single: keptOffSingles,
       }),
@@ -261,7 +270,10 @@ export class DashboardService extends BaseService {
         totalEntries,
         ...present("totalMedia", mediaCount),
         contentTypes: collections.length,
-        recentChanges24h: recentChanges,
+        recentChanges24h: recentChanges.count,
+        ...(recentChanges.atLeast
+          ? { recentChanges24hAtLeast: true as const }
+          : {}),
       },
       status: statusBreakdown,
       collectionCounts,
@@ -543,120 +555,41 @@ export class DashboardService extends BaseService {
   }
 
   /**
-   * Count the last 24 hours of `activity_log` rows the caller may READ.
+   * The last 24 hours of activity this caller may be told about, without the collections and
+   * Singles kept off the dashboard, counted by the activity feed's own walk.
    *
-   * `activity_log` spans every collection, so an unscoped count answers a
-   * different question from the `collectionCounts` beside it in the same
-   * `/stats` response: one honours the caller's scope and the other does not,
-   * and the number itself then discloses that changes exist outside the
-   * caller's reach. `ActivityLogService.getRecentActivity` filters this table
-   * with an `IN` on `collection`; this is the same filter applied to the count.
+   * 🔴 One question, one implementation: the feed authorizes each row's DOCUMENT as the caller,
+   * and a count beside it that filtered only by the resource scope counted rows the feed would
+   * withhold, so the figure said changes existed that the caller could not see. The walk is
+   * bounded; past its bound the figure is a floor (`atLeast`), drawn `N+`.
    *
-   * The other counters in `getStats` (`media`, `users`, `roles`, `permissions`,
-   * active API keys) stay unscoped. They are uniformly unscoped rather than
-   * newly inconsistent, and what a scoped admin metric should mean is a design
-   * question rather than a defect in this table's filter.
-   *
-   * @param scope - What the caller may read. An empty `some` returns 0 without
-   *   querying: it admits nothing, and an empty `IN ()` is a syntax error on
-   *   some dialects, so the short-circuit has to happen before the query is
-   *   built rather than as a driver rejection swallowed by the catch below.
+   * 0 when either registry read that names the kept-off content did not complete: counting then
+   * would include exactly the activity the figure promises to leave out. 0 is also the answer on
+   * a failure, as it always was for this figure.
    */
-  /**
-   * The recent-changes figure without the collections and Singles kept off the dashboard, or 0
-   * when either registry read that names them did not complete: counting then would include
-   * exactly the activity the figure promises to leave out. 0 is what the count itself answers on
-   * a failure.
-   */
-  private countRecentChangesOutside(
+  private async countRecentChangesOutside(
     scope: ReadableResources,
+    caller: ReadCaller,
     keptOff: Record<DashboardContentKind, KeptOffRead>
-  ): Promise<number> {
-    return keptOff.collection.complete && keptOff.single.complete
-      ? this.countRecentChanges24h(scope, {
-          collection: keptOff.collection.slugs,
-          single: keptOff.single.slugs,
-        })
-      : Promise.resolve(0);
-  }
-
-  private async countRecentChanges24h(
-    scope: ReadableResources,
-    /** Kept off the dashboard, by kind: their activity is not counted. */
-    keptOff: Record<DashboardContentKind, ReadonlySet<string>>
-  ): Promise<number> {
-    if (scope.kind === "some" && scope.resources.size === 0) return 0;
-
+  ): Promise<RecentActivityCount> {
+    const none: RecentActivityCount = { count: 0, atLeast: false };
+    if (!keptOff.collection.complete || !keptOff.single.complete) return none;
     try {
-      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      // Phase A follow-up: same dialect-aware formatter as above. The
-      // legacy `this.formatDateForDb(cutoff)` returns the raw Date which
-      // SQLite rejects.
-      const cutoffParam = this.dateForRawBind(cutoff);
-      const q = this.dialect === "mysql" ? "`" : '"';
-
-      // Placeholder numbering derives from `params.length` at the moment each
-      // value is pushed, never from a fixed index: the `IN` list contributes
-      // as many parameters as the scope has resources, so a hardcoded `$1`/`$2`
-      // -- correct only while the query bound exactly one value -- would bind
-      // the cutoff and the collection names to the wrong positions. Every
-      // value goes through here, so no collection name is ever interpolated
-      // into the SQL text.
-      const params: SqlParam[] = [];
-      const bind = (value: SqlParam): string => {
-        params.push(value);
-        return this.dialect === "postgresql" ? `$${params.length}` : "?";
-      };
-
-      const sql =
-        `SELECT COUNT(*) as count FROM ${q}activity_log${q} ` +
-        `WHERE ${q}created_at${q} > ${bind(cutoffParam)}` +
-        this.recentChangesCollectionFilter(scope, keptOff, bind, q);
-
-      const result = await this.adapter.executeQuery<{
-        count: number | string;
-      }>(sql, params);
-
-      return Number(result[0]?.count ?? 0);
+      return await container
+        .get<ActivityLogService>("activityLogService")
+        .countRecentActivity({
+          since: new Date(Date.now() - 24 * 60 * 60 * 1000),
+          scope,
+          caller,
+          singles: { keptOff: keptOff.single.slugs, complete: true },
+          keptOffCollections: keptOff.collection.slugs,
+        });
     } catch (error) {
       this.logger.error("Failed to count recent changes", {
         error: error instanceof Error ? error.message : String(error),
       });
-      return 0;
+      return none;
     }
-  }
-
-  /**
-   * The `collection` conditions of the recent-changes count: inside what the caller may read, and
-   * outside what is kept off the dashboard. Every value goes through `bind`, after the cutoff, so
-   * the placeholders number in the order the values were pushed.
-   */
-  private recentChangesCollectionFilter(
-    scope: ReadableResources,
-    keptOff: Record<DashboardContentKind, ReadonlySet<string>>,
-    bind: (value: SqlParam) => string,
-    q: string
-  ): string {
-    let sql = "";
-    if (scope.kind === "some") {
-      const placeholders = [...scope.resources]
-        .map(resource => bind(resource))
-        .join(", ");
-      sql += ` AND ${q}collection${q} IN (${placeholders})`;
-    }
-    for (const kind of ["collection", "single"] as const) {
-      const slugs = keptOff[kind];
-      if (slugs.size === 0) continue;
-      // Each kind's hidden slugs remove only that kind's rows, so a Single and a collection
-      // sharing a slug never remove each other's. A row written before the kind was recorded
-      // states none and is read as a collection's, as the feed reads it. COALESCE keeps the
-      // condition true or false on such a row: compared bare, a NULL kind makes the whole NOT
-      // unknown, and the row would be dropped from the count whatever its slug.
-      const kindIs = `COALESCE(${q}subject_kind${q}, ${bind("collection")}) = ${bind(kind)}`;
-      const excluded = [...slugs].map(slug => bind(slug)).join(", ");
-      sql += ` AND NOT (${kindIs} AND ${q}collection${q} IN (${excluded}))`;
-    }
-    return sql;
   }
 
   private async countRegistryItems(serviceName: string): Promise<number> {

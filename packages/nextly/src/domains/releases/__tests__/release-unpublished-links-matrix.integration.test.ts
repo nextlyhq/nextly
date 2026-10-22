@@ -17,7 +17,10 @@
  *   adding up to what a trusted read reports, deleted links by their count;
  *   for a reader who may not read the post at all, the post itself is the
  *   one count (the release's hidden documents), and no link is reported;
- * - what the reader may see is named.
+ * - what the reader may see is named;
+ * - a reader who may not read the authors is told exactly the same of a
+ *   link to one whether it is a draft, deleted or live: one hidden count
+ *   per link, with no cause, field or id.
  *
  * Each cell's assertions are soft, so one run reports every cell that fails
  * rather than stopping at the first.
@@ -302,7 +305,7 @@ function toldByReport(report: {
 /** One cell: a placement, a link state, and the two authors it links to. */
 interface Cell {
   placement: Placement;
-  state: "draft" | "deleted";
+  state: "draft" | "deleted" | "live";
   open: string;
   secret: string;
   post: string;
@@ -373,17 +376,39 @@ function forbiddenFor(cell: Cell, reader: Reader): string[] {
 }
 
 /** Every assertion of one cell, reader and surface, all soft. */
-function judgeSurface(cell: Cell, reader: Reader, surface: string, told: Told) {
-  const where = `${cell.placement.name}, ${cell.state}, ${reader}, ${surface}`;
-  // Counted exactly once: a post the reader may not read is one hidden
-  // document, and none of its links is reported.
+/**
+ * A reader who may not read the authors: the same answer for a draft, a
+ * deleted and a live author, each link one count, never a cause, a field or
+ * an id.
+ */
+function judgeNonReader(where: string, told: Told) {
+  expect.soft(told.named, `${where}: classifies`).toBe(0);
+  expect.soft(told.inHiddenFields, `${where}: classifies a field`).toBe(0);
+  expect.soft(told.hidden, `${where}: counts`).toBe(2);
+  expect.soft(told.text, `${where}: names a cause`).not.toContain("cause");
+  expect.soft(told.text, `${where}: names a field`).not.toContain("fields");
+}
+
+/**
+ * Every link counted exactly once: a post the reader may not read is one
+ * hidden document, and none of its links is reported.
+ */
+function judgeCounts(cell: Cell, reader: Reader, where: string, told: Told) {
   const postHidden = reader === "noSource";
-  expect
-    .soft(told.named + told.hidden + told.inHiddenFields, `${where}: counts`)
-    .toBe(postHidden ? 0 : cell.total);
+  if (reader === "noTarget") judgeNonReader(where, told);
+  else {
+    expect
+      .soft(told.named + told.hidden + told.inHiddenFields, `${where}: counts`)
+      .toBe(postHidden ? 0 : cell.total);
+  }
   expect
     .soft(told.hiddenDocuments, `${where}: hidden documents`)
     .toBe(postHidden ? 1 : 0);
+}
+
+function judgeSurface(cell: Cell, reader: Reader, surface: string, told: Told) {
+  const where = `${cell.placement.name}, ${cell.state}, ${reader}, ${surface}`;
+  judgeCounts(cell, reader, where, told);
   // Nothing it may not see.
   for (const word of forbiddenFor(cell, reader)) {
     expect.soft(told.text, `${where}: leaks ${word}`).not.toContain(word);
@@ -444,8 +469,9 @@ async function layOut(
     })) as unknown as { item?: { id?: string }; id?: string };
     return String(made.item?.id ?? made.id);
   };
-  const open = await create("authors", {});
-  const secret = await create("authors", {});
+  const status = state === "live" ? "published" : "draft";
+  const open = await create("authors", { status });
+  const secret = await create("authors", { status });
   const post = await create("posts", placement.data(open, secret));
   if (state === "deleted") {
     for (const id of [open, secret]) {
@@ -466,8 +492,9 @@ async function layOut(
     await t.nextly.releases.readiness({ releaseId: release.id })
   );
   const where = `${placement.name}, ${state}`;
-  // Both links are found at all, so the cell reaches the mechanism.
-  expect(trusted.named, `${where}: trusted`).toBe(2);
+  // Both links are found at all, so the cell reaches the mechanism; a live
+  // link is nothing to note.
+  expect(trusted.named, `${where}: trusted`).toBe(state === "live" ? 0 : 2);
   if (state === "draft") {
     expect(trusted.namedIds.sort(), where).toEqual([open, secret].sort());
   }
@@ -491,7 +518,7 @@ describe.each(getConfiguredTestDialects())(
       const keys = await readerKeys(t);
       let judged = 0;
       for (const placement of PLACEMENTS) {
-        for (const state of ["draft", "deleted"] as const) {
+        for (const state of ["draft", "deleted", "live"] as const) {
           const cell = await layOut(t, author, placement, state);
           for (const reader of READERS) {
             for (const [surface, told] of await surfacesFor(
@@ -505,8 +532,8 @@ describe.each(getConfiguredTestDialects())(
           }
         }
       }
-      // 6 placements x 2 states x (4 readers x 2 readiness surfaces + 3 adds).
-      expect(judged).toBe(6 * 2 * (4 * 2 + 3));
+      // 6 placements x 3 states x (4 readers x 2 readiness surfaces + 3 adds).
+      expect(judged).toBe(6 * 3 * (4 * 2 + 3));
     }, 900_000);
   }
 );

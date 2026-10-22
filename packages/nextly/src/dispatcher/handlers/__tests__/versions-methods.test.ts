@@ -58,11 +58,15 @@ vi.mock("../../../domains/versions/author-hydration", () => ({
 }));
 
 import {
+  asCaller,
+  keyCaller,
+  sessionCaller,
+} from "../../__tests__/request-caller";
+import {
   getAutosaveForDocument,
   getVersionForDocument,
   listVersionsForDocument,
   respondVersionPage,
-  userFromParams,
 } from "../versions-methods";
 
 const user = { id: "user-1" };
@@ -70,24 +74,26 @@ const user = { id: "user-1" };
 describe("respondVersionPage", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("rebuilds the caller and paging from the params, and answers privately", async () => {
+  it("reads the caller from the request and paging from the params, and answers privately", async () => {
     listSpy.mockResolvedValue([]);
 
-    const response = await respondVersionPage(
-      { scopeKind: "collection", slug: "posts", entryId: "e1" },
-      {
-        limit: "10",
-        _authenticatedUserId: "user-1",
-        _authenticatedUserRoles: JSON.stringify(["editor"]),
-      }
+    const response = await asCaller(
+      sessionCaller({ userId: "user-1", roles: ["editor"] }),
+      () =>
+        respondVersionPage(
+          { scopeKind: "collection", slug: "posts", entryId: "e1" },
+          { limit: "10" }
+        )
     );
 
+    // A session caller is judged with an empty scope of its own actor type,
+    // so the document gate resolves the account's grants.
     expect(assertReadableSpy).toHaveBeenCalledWith(
       "collection",
       "posts",
       "e1",
       expect.objectContaining({ id: "user-1", roles: ["editor"] }),
-      undefined
+      { actorType: "user", permissions: [] }
     );
     expect(listSpy).toHaveBeenCalledWith(
       expect.anything(),
@@ -96,6 +102,64 @@ describe("respondVersionPage", () => {
     // The page marks where this person last looked, so no shared cache may
     // keep it.
     expect(response.headers.get("cache-control")).toMatch(/private/);
+  });
+
+  it("judges the document as the whole caller the route authenticated", async () => {
+    listSpy.mockResolvedValue([]);
+
+    await asCaller(
+      sessionCaller({
+        userId: "user-9",
+        name: "Ada",
+        email: "ada@example.com",
+        roles: ["editor", "author"],
+      }),
+      () =>
+        respondVersionPage(
+          { scopeKind: "collection", slug: "posts", entryId: "e1" },
+          {}
+        )
+    );
+
+    expect(assertReadableSpy.mock.calls[0][3]).toMatchObject({
+      id: "user-9",
+      name: "Ada",
+      email: "ada@example.com",
+      roles: ["editor", "author"],
+      // A representative singular role, so a callback reading `user.role`
+      // sees an authorized value rather than stripping fields.
+      role: "editor",
+    });
+  });
+
+  it("tolerates a caller with no roles", async () => {
+    listSpy.mockResolvedValue([]);
+
+    await asCaller(sessionCaller({ userId: "user-9" }), () =>
+      respondVersionPage(
+        { scopeKind: "collection", slug: "posts", entryId: "e1" },
+        {}
+      )
+    );
+
+    const judged = assertReadableSpy.mock.calls[0][3];
+    expect(judged.id).toBe("user-9");
+    expect(judged.roles).toBeUndefined();
+  });
+
+  it("refuses a request with no caller rather than reading as an empty id", async () => {
+    // Version history is only routed for an authenticated caller; reaching it
+    // without one is refused before the document gate or the history read.
+    await expect(
+      asCaller(undefined, () =>
+        respondVersionPage(
+          { scopeKind: "collection", slug: "posts", entryId: "e1" },
+          {}
+        )
+      )
+    ).rejects.toMatchObject({ code: "AUTH_REQUIRED" });
+    expect(assertReadableSpy).not.toHaveBeenCalled();
+    expect(listSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -279,62 +343,26 @@ describe("getVersionForDocument", () => {
   });
 });
 
-describe("userFromParams", () => {
-  it("rebuilds the caller the route handler stamped onto params", () => {
-    const result = userFromParams({
-      _authenticatedUserId: "user-9",
-      _authenticatedUserName: "Ada",
-      _authenticatedUserEmail: "ada@example.com",
-      _authenticatedUserRoles: JSON.stringify(["editor", "author"]),
-    });
-
-    expect(result).toMatchObject({
-      id: "user-9",
-      name: "Ada",
-      email: "ada@example.com",
-      roles: ["editor", "author"],
-      // A representative singular role, so a callback reading `user.role`
-      // sees an authorized value rather than stripping fields.
-      role: "editor",
-    });
-  });
-
-  it("tolerates a caller with no roles stamped on", () => {
-    const result = userFromParams({ _authenticatedUserId: "user-9" });
-
-    expect(result.id).toBe("user-9");
-    expect(result.roles).toBeUndefined();
-  });
-
-  it("does not throw on a malformed roles value", () => {
-    // Defensive: a corrupt value must not turn a read into a 500.
-    const result = userFromParams({
-      _authenticatedUserId: "user-9",
-      _authenticatedUserRoles: "not-json",
-    });
-
-    expect(result.roles).toBeUndefined();
-  });
-});
-
 describe("getAutosaveForDocument", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("redacts with the key scope the request carries", async () => {
     getAutosaveSpy.mockResolvedValue({ snapshot: { title: "x" } });
 
-    // A direct dispatch: the key's scope arrives in the params only, not as an
-    // argument, and the read decodes it from there.
-    await getAutosaveForDocument({
-      scopeKind: "collection",
-      slug: "posts",
-      entryId: "e1",
-      user,
-      params: {
-        _authenticatedActorType: "apiKey",
-        _authenticatedPermissions: JSON.stringify(["read-posts"]),
-      },
-    });
+    // The key's scope is not an argument: the route handler pins it for the
+    // request, and the read takes it from there.
+    await asCaller(
+      keyCaller("key-1", { userId: "user-1" }),
+      () =>
+        getAutosaveForDocument({
+          scopeKind: "collection",
+          slug: "posts",
+          entryId: "e1",
+          user,
+          params: {},
+        }),
+      { actorType: "apiKey", permissions: ["read-posts"] }
+    );
 
     expect(redactSpy).toHaveBeenCalledWith(
       { title: "x" },

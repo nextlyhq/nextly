@@ -280,7 +280,7 @@ function Line({
 export function SourceDiff({ node }: { node: SourceFieldDiff }) {
   const spans = useSourceSpans(node);
   return (
-    <FieldRow label={node.label} status={node.status}>
+    <FieldRow node={node} status={node.status}>
       <div className="overflow-x-auto rounded-md border border-border bg-muted/40">
         <div className="min-w-max p-2 font-mono text-xs leading-relaxed">
           {node.lines.map((line, index) => (

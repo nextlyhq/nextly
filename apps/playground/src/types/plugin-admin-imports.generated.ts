@@ -5,12 +5,16 @@
 
 import { registerComponents } from "@nextlyhq/admin";
 import * as _p0 from "@nextlyhq/plugin-page-builder/admin";
+import type { DeclaredComponentMap } from "nextly";
+
+import type * as siteConfig from "../../nextly.config";
 
 import { registeredComponentPaths as listed } from "./plugin-admin-components.generated";
 
 const registered = {
   "@nextlyhq/plugin-page-builder/admin#BlocksField": _p0.BlocksField,
-};
+  "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p0.PageBuilderView,
+} satisfies DeclaredComponentMap<typeof siteConfig>;
 
 type Registered = keyof typeof registered;
 type Listed = (typeof listed)[number];

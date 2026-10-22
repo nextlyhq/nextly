@@ -132,18 +132,14 @@ describe("the RAIL above that entry, which the item's own gate cannot see", () =
       ).toBe(true);
     }
     // The premise: this walked real destinations, not an empty list.
-    expect(gated.length).toBeGreaterThan(3);
+    expect(gated.length).toBeGreaterThan(2);
   });
 
   it("keeps revealing it for the grants it always revealed for", () => {
     // Adding to this list must not narrow it. One representative grant per
-    // group it already covered.
-    for (const grant of [
-      "manage-settings",
-      "read-api-keys",
-      "manage-email-providers",
-      "manage-email-templates",
-    ]) {
+    // group it already covered. (Email left the panel for its own rail entry,
+    // so its grants no longer reveal it.)
+    for (const grant of ["manage-settings", "read-api-keys"]) {
       expect(buildCapabilities([grant], false).canViewSettings, grant).toBe(
         true
       );

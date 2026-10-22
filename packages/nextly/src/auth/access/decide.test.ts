@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { makePrincipal } from "../../plugins/principals/principal";
+import { consoleLogger } from "../../shared/types";
 import type { Principal } from "../../plugins/principals/types";
 import type {
   AccessControlContext,
@@ -28,7 +29,14 @@ import {
   type Actor,
   type PermissionGrant,
 } from "./actor";
-import { askRule, decide, type AccessTarget } from "./decide";
+import {
+  askRule,
+  askRules,
+  decide,
+  decidePermission,
+  judge,
+  type AccessTarget,
+} from "./decide";
 
 const ACTIONS: AccessAction[] = [
   "create",
@@ -508,5 +516,242 @@ describe("askRule", () => {
         access: { read: () => true },
       })
     ).toEqual({ declared: false });
+  });
+});
+
+/**
+ * The decision's expected answer, written out from the composition apart
+ * from the code: what each caller holds is stated here by hand rather than
+ * read off its actor, so a judgement that slipped would disagree with it.
+ */
+const HOLDS: Record<CallerName, "principal" | "super-admin" | AccessAction[]> =
+  {
+    visitor: [],
+    "visitor-public-read": ["read", "update", "publish", "unpublish"],
+    principal: "principal",
+    "user-with": [...ACTIONS],
+    "user-without": [],
+    "super-admin": "super-admin",
+    "key-with": [...ACTIONS],
+    "key-without": [],
+  };
+
+const changesState = (action: AccessAction) =>
+  action === "publish" || action === "unpublish";
+
+/** Holds the action, and update as well for a publish or an unpublish. */
+const holdsFor = (held: AccessAction[], action: AccessAction) =>
+  held.includes(action) && (!changesState(action) || held.includes("update"));
+
+/** The same rule answers every action, the update rule included. */
+function expected(
+  caller: CallerName,
+  action: AccessAction,
+  rule: RuleName
+): boolean {
+  const ruleAllows = ALLOWING.includes(rule);
+  const held = HOLDS[caller];
+  if (held === "principal") {
+    return !changesState(action) && rule !== "absent" && ruleAllows;
+  }
+  if (caller.startsWith("visitor") && changesState(action)) return false;
+  if (held === "super-admin") return true;
+  return holdsFor(held, action) && ruleAllows;
+}
+
+describe("the judge seam", () => {
+  it("judges the outcomes it is handed as the decision's composition says", async () => {
+    for (const caller of Object.keys(callers) as CallerName[]) {
+      for (const action of ACTIONS) {
+        for (const rule of Object.keys(RULES) as RuleName[]) {
+          const target = postsWith(rule);
+          const actor = callers[caller];
+          const outcomes = await askRules(actor, action, target);
+          expect(
+            judge(actor, action, target, outcomes).allowed,
+            `${caller} ${action} ${rule}`
+          ).toBe(expected(caller, action, rule));
+        }
+      }
+    }
+  });
+
+  it("asks no rule where the answer is reached without one", async () => {
+    const rule = vi.fn(() => true);
+    const target: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: { read: rule, publish: rule, update: rule },
+    };
+    expect(await askRules(systemActor(), "read", target)).toBeNull();
+    expect(await askRules(callers["super-admin"], "read", target)).toBeNull();
+    expect(await askRules(callers["user-without"], "read", target)).toBeNull();
+    expect(await askRules(callers.visitor, "publish", target)).toBeNull();
+    expect(rule).not.toHaveBeenCalled();
+  });
+
+  it("asks each rule once, and the update rule only after the action's own allows", async () => {
+    const publish = vi.fn(() => false);
+    const update = vi.fn(() => true);
+    const target: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: { publish, update },
+    };
+    const refused = await askRules(callers["user-with"], "publish", target);
+    expect(refused).toEqual({ action: { declared: true, value: false } });
+    expect(update).not.toHaveBeenCalled();
+    publish.mockReturnValue(true);
+    expect(await askRules(callers["user-with"], "publish", target)).toEqual({
+      action: { declared: true, value: true },
+      update: { declared: true, value: true },
+    });
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to judge a publish whose update rule was not asked", () => {
+    // The update rule may refuse the change; judging without it would allow
+    // a publish it never saw.
+    const target: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: { publish: () => true, update: () => false },
+    };
+    expect(() =>
+      judge(callers["user-with"], "publish", target, {
+        action: { declared: true, value: true },
+      })
+    ).toThrow();
+  });
+
+  it("refuses to judge a question whose rules were not asked", () => {
+    expect(() =>
+      judge(callers["user-with"], "read", postsWith("true"), null)
+    ).toThrow();
+  });
+});
+
+describe("a rule that fails", () => {
+  it("is logged once, with what it was asked, and refuses", async () => {
+    const logged = vi
+      .spyOn(consoleLogger, "error")
+      .mockImplementation(() => {});
+    const failure = new Error("the rule failed");
+    try {
+      const outcome = await askRule(callers["user-with"], "read", {
+        kind: "collection",
+        slug: "posts",
+        access: {
+          read: () => {
+            throw failure;
+          },
+        },
+      });
+      expect(outcome).toEqual({ declared: true, threw: true });
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(logged).toHaveBeenCalledWith(
+        "[rbac] Code access function for read:posts threw",
+        { error: failure }
+      );
+    } finally {
+      logged.mockRestore();
+    }
+  });
+});
+
+describe("something no rule can name", () => {
+  // Settings is no entry, and `manage` no operation a rule declares, so the
+  // permission alone answers.
+  const settingsGrant = {
+    slug: "manage-settings",
+    action: "manage",
+    resource: "settings",
+  };
+  const manager = userActor({
+    userId: "u10",
+    roles: ["manager"],
+    permissions: [settingsGrant],
+  });
+
+  it("is allowed to whoever holds the permission, and refused to whoever does not", () => {
+    expect(decidePermission(manager, "manage", "settings").allowed).toBe(true);
+    // `export` is no action a `manage-` permission counts as.
+    expect(decidePermission(manager, "export", "settings")).toEqual({
+      allowed: false,
+      reason: "no-permission",
+    });
+  });
+
+  it("is allowed to trusted work and a super-admin, holding nothing", () => {
+    const admin = userActor({
+      userId: "u11",
+      roles: ["super-admin"],
+      permissions: [],
+    });
+    expect(decidePermission(systemActor(), "manage", "").allowed).toBe(true);
+    expect(decidePermission(admin, "manage", "").allowed).toBe(true);
+  });
+
+  it("is judged on a key's grants, and gives a key no super-admin authority", () => {
+    const key = keyActor({
+      keyId: "k3",
+      userId: "u11",
+      roles: ["super-admin"],
+      permissions: [settingsGrant],
+    });
+    expect(decidePermission(key, "manage", "settings").allowed).toBe(true);
+    expect(decidePermission(key, "export", "settings").allowed).toBe(false);
+  });
+
+  it("counts a system resource's manage permission as its read, create, update and delete, and nothing else", () => {
+    const holder = (resource: string) =>
+      userActor({
+        userId: "u12",
+        roles: ["holder"],
+        permissions: [
+          { slug: `manage-${resource}`, action: "manage", resource },
+        ],
+      });
+    for (const resource of [
+      "media",
+      "settings",
+      "email-providers",
+      "email-templates",
+    ]) {
+      for (const action of ["read", "create", "update", "delete"]) {
+        expect(
+          decidePermission(holder(resource), action, resource).allowed,
+          `${action} ${resource}`
+        ).toBe(true);
+      }
+      // Never a publish or an unpublish, nor another resource's actions.
+      expect(
+        decidePermission(holder(resource), "publish", resource).allowed
+      ).toBe(false);
+      expect(decidePermission(holder(resource), "read", "roles").allowed).toBe(
+        false
+      );
+    }
+    // A resource outside the four, and a collection, get nothing from it.
+    expect(
+      decidePermission(holder("background-jobs"), "read", "background-jobs")
+        .allowed
+    ).toBe(false);
+    expect(decidePermission(holder("posts"), "read", "posts").allowed).toBe(
+      false
+    );
+  });
+
+  it("is refused to a visitor and a plugin's person, who hold no permission", () => {
+    const person = principalActor(MEMBER);
+    expect(decidePermission(visitorActor(), "read", "settings")).toEqual({
+      allowed: false,
+      reason: "no-permission",
+    });
+    expect(decidePermission(person, "read", "settings")).toEqual({
+      allowed: false,
+      reason: "principal-without-rule",
+    });
   });
 });

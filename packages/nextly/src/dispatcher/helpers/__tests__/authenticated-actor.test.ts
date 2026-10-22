@@ -1,59 +1,54 @@
 /**
- * Decoding the acting identity forwarded through route params.
+ * Reading the acting identity off the request caller.
  *
- * The actor is persisted into durable event history, so a malformed or
- * unrecognized value must degrade to "no actor" rather than being stored.
+ * The actor is persisted into durable event history, so it is read from the
+ * caller the route handler authenticated, never from a value a request could
+ * supply, and an unauthenticated request has none.
  */
 import { describe, expect, it } from "vitest";
 
-import type { Params } from "../../types";
+import { runWithRequestCaller } from "../../../auth/caller-scope";
+import {
+  asCaller,
+  keyCaller,
+  sessionCaller,
+} from "../../__tests__/request-caller";
 import { readAuthenticatedActor } from "../authenticated-actor";
 
-function params(values: Record<string, string>): Params {
-  return values as unknown as Params;
-}
-
 describe("readAuthenticatedActor", () => {
-  it("decodes a user actor", () => {
+  it("reads a user actor", () => {
     expect(
-      readAuthenticatedActor(
-        params({
-          _authenticatedActorType: "user",
-          _authenticatedActorId: "usr_1",
-        })
+      asCaller(sessionCaller({ userId: "usr_1" }), () =>
+        readAuthenticatedActor()
       )
     ).toEqual({ type: "user", id: "usr_1" });
   });
 
-  it("decodes an apiKey actor", () => {
+  it("reads an apiKey actor, not the user that owns the key", () => {
     expect(
-      readAuthenticatedActor(
-        params({
-          _authenticatedActorType: "apiKey",
-          _authenticatedActorId: "key_1",
-        })
+      asCaller(keyCaller("key_1", { userId: "usr_1" }), () =>
+        readAuthenticatedActor()
       )
     ).toEqual({ type: "apiKey", id: "key_1" });
   });
 
-  it("returns undefined when no actor was forwarded", () => {
-    expect(readAuthenticatedActor(params({}))).toBeUndefined();
+  it("returns undefined when the request has no caller", () => {
+    expect(asCaller(undefined, () => readAuthenticatedActor())).toBeUndefined();
   });
 
-  it("rejects an unrecognized actor type rather than storing it", () => {
+  it("keeps the actor when it carries only a type", () => {
     expect(
-      readAuthenticatedActor(
-        params({
-          _authenticatedActorType: "root",
-          _authenticatedActorId: "x",
-        })
+      runWithRequestCaller({ userId: "u1", actor: { type: "system" } }, () =>
+        readAuthenticatedActor()
       )
-    ).toBeUndefined();
+    ).toEqual({ type: "system" });
   });
 
-  it("keeps the actor when only a type was forwarded", () => {
-    expect(
-      readAuthenticatedActor(params({ _authenticatedActorType: "system" }))
-    ).toEqual({ type: "system" });
+  it("hands out a copy, so a write cannot rewrite the request's actor", () => {
+    const caller = sessionCaller({ userId: "usr_1" });
+    const actor = asCaller(caller, () => readAuthenticatedActor());
+
+    expect(actor).not.toBe(caller.actor);
+    expect(actor).toEqual(caller.actor);
   });
 });

@@ -642,6 +642,23 @@ function groupAnswer(
   };
 }
 
+/**
+ * One query's answer from a tally the batch shares, or the error it was
+ * refused with. Some refusals come only as the answer is read -- a filter
+ * operator this source does not take passes the host's checks -- and one of
+ * them must fail its own card, never every card the scan was shared with.
+ */
+function answerOrError(
+  query: Parameters<PluginSourceResolver>[0],
+  tally: IssueTally
+): ReturnType<typeof answerFrom> | Error {
+  try {
+    return answerFrom(query, tally);
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+}
+
 /** Refuse what this source cannot answer, before any row is read. */
 function assertAnswerable(query: Parameters<PluginSourceResolver>[0]): void {
   assertStatusIsAnswerable(query.status);
@@ -720,7 +737,7 @@ export function seoIssuesWidgetSource(
     }
     const tally = await tallyFor(caller, ctx, opts);
     return queries.map(
-      (query, index) => refusals[index] ?? answerFrom(query, tally)
+      (query, index) => refusals[index] ?? answerOrError(query, tally)
     );
   };
 

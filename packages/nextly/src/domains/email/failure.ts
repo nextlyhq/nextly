@@ -41,22 +41,28 @@ export const UNCLASSIFIED_REASON = "The email provider failed.";
 const UNREACHABLE_REASON = "The email provider could not be reached.";
 
 /**
- * Whether `reason` is one of core's own sentences.
+ * Whether `reason` is core's own sentence for this classification.
  *
  * A reason reaches the caller, and through the REST routes whoever called
  * them. Text an adapter wrote can hold anything its configuration holds, an
  * endpoint or an account as much as a credential, and no scrubbing can know
- * what all of that is. So only core's sentences are passed on; any other
- * reason is replaced by the sentence its classification gives, and the
- * adapter's own text stays in the log, where the failure is recorded with it.
+ * what all of that is. So only core's sentences are passed on, and only the
+ * one that says what `retryable` and `status` say: a refusal described as
+ * unreachable, or a sentence naming another status, would contradict the
+ * fields beside it. Any other reason is replaced by the sentence the
+ * classification gives, and the adapter's own text stays in the log, where
+ * the failure is recorded with it.
  */
-function isCoreReason(reason: string): boolean {
+function isCoreReason(
+  reason: string,
+  retryable: boolean,
+  status: number | undefined
+): boolean {
+  if (reason === describeClass(retryable, status)) return true;
   return (
-    reason === UNCLASSIFIED_REASON ||
-    reason === UNREACHABLE_REASON ||
-    /^The email provider (could not take the message right now|refused the message)( \(status \d+\))?\.$/.test(
-      reason
-    )
+    retryable &&
+    status === undefined &&
+    (reason === UNCLASSIFIED_REASON || reason === UNREACHABLE_REASON)
   );
 }
 
@@ -86,9 +92,11 @@ export function failureOf(error: unknown): EmailFailure | undefined {
   if (candidate === null || typeof candidate !== "object") return undefined;
   const { retryable, status, reason } = candidate as Record<string, unknown>;
   if (typeof retryable !== "boolean") return undefined;
-  const usableReason =
-    typeof reason === "string" && isCoreReason(reason) ? reason : undefined;
   const usableStatus = isProviderStatus(status) ? status : undefined;
+  const usableReason =
+    typeof reason === "string" && isCoreReason(reason, retryable, usableStatus)
+      ? reason
+      : undefined;
   return {
     retryable,
     ...(usableStatus !== undefined ? { status: usableStatus } : {}),

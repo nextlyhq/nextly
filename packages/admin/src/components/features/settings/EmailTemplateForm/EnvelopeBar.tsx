@@ -56,10 +56,16 @@ export function EnvelopeBar({
   control,
   isPending,
   isLayoutRow,
+  ownsContent,
 }: {
   control: ReturnType<typeof useForm<TemplateFormValues>>["control"];
   isPending: boolean;
   isLayoutRow: boolean;
+  /**
+   * Whether the site may change the subject and preview text. From and
+   * Reply-To are the site's settings on any email.
+   */
+  ownsContent: boolean;
 }) {
   if (isLayoutRow) {
     return (
@@ -86,6 +92,7 @@ export function EnvelopeBar({
                   {...field}
                   id="envelope-subject"
                   disabled={isPending}
+                  readOnly={!ownsContent}
                   placeholder="Welcome to {{appName}}"
                   className="w-full bg-transparent text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground"
                 />
@@ -103,12 +110,13 @@ export function EnvelopeBar({
         name="preheader"
         render={({ field }) => (
           <FormItem className="space-y-1">
-            <EnvelopeField label="Preheader" htmlFor="envelope-preheader">
+            <EnvelopeField label="Preview text" htmlFor="envelope-preheader">
               <FormControl>
                 <input
                   {...field}
                   id="envelope-preheader"
                   disabled={isPending}
+                  readOnly={!ownsContent}
                   placeholder="Preview line shown after the subject"
                   className="w-full bg-transparent text-sm text-muted-foreground outline-none placeholder:text-muted-foreground"
                 />

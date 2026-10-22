@@ -19,6 +19,10 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import {
+  asCaller,
+  sessionCaller,
+} from "../../../../dispatcher/__tests__/request-caller";
 import { discardWorkingDraftForDocument } from "../../../../dispatcher/handlers/versions-methods";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
 import type { CollectionEntryService } from "../../../../services/collections/collection-entry-service";
@@ -460,17 +464,20 @@ describe("draft/published split — discard working draft (integration)", () => 
     );
     expect(await workingDraftCount(id)).toBe(1);
 
-    const discarded = await discardWorkingDraftForDocument({
-      scopeKind: "collection",
-      slug: COLLECTION,
-      entryId: id,
-      user: { id: "editor-1" },
-      params: {
-        collectionName: COLLECTION,
-        entryId: id,
-        _authenticatedUserId: "editor-1",
-      },
-    });
+    const discarded = await asCaller(
+      sessionCaller({ userId: "editor-1" }),
+      () =>
+        discardWorkingDraftForDocument({
+          scopeKind: "collection",
+          slug: COLLECTION,
+          entryId: id,
+          user: { id: "editor-1" },
+          params: {
+            collectionName: COLLECTION,
+            entryId: id,
+          },
+        })
+    );
 
     // The sidecar is gone...
     expect(await workingDraftCount(id)).toBe(0);
@@ -517,17 +524,18 @@ describe("draft/published split — discard working draft (integration)", () => 
     expect(await workingDraftCount(id)).toBe(1);
 
     await expect(
-      discardWorkingDraftForDocument({
-        scopeKind: "collection",
-        slug: COLLECTION,
-        entryId: id,
-        user: { id: "reader-1" },
-        params: {
-          collectionName: COLLECTION,
+      asCaller(sessionCaller({ userId: "reader-1" }), () =>
+        discardWorkingDraftForDocument({
+          scopeKind: "collection",
+          slug: COLLECTION,
           entryId: id,
-          _authenticatedUserId: "reader-1",
-        },
-      })
+          user: { id: "reader-1" },
+          params: {
+            collectionName: COLLECTION,
+            entryId: id,
+          },
+        })
+      )
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
 
     // The pending draft survives a refused discard.
@@ -617,18 +625,19 @@ describe("draft/published split — discard working draft (integration)", () => 
     expect(await workingDraftLocales(id)).toEqual(["en", "es"]);
 
     // The editor is on Spanish and discards. The request names that language.
-    await discardWorkingDraftForDocument({
-      scopeKind: "collection",
-      slug: COLLECTION,
-      entryId: id,
-      user: { id: "editor-1" },
-      locale: "es",
-      params: {
-        collectionName: COLLECTION,
+    await asCaller(sessionCaller({ userId: "editor-1" }), () =>
+      discardWorkingDraftForDocument({
+        scopeKind: "collection",
+        slug: COLLECTION,
         entryId: id,
-        _authenticatedUserId: "editor-1",
-      },
-    });
+        user: { id: "editor-1" },
+        locale: "es",
+        params: {
+          collectionName: COLLECTION,
+          entryId: id,
+        },
+      })
+    );
 
     // Spanish is gone and English survives untouched.
     expect(await workingDraftLocales(id)).toEqual(["en"]);
@@ -1789,7 +1798,17 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(await workingDraftCount(id)).toBe(0);
   });
 
-  it("recursively merges nested single-component sub-field edits across draft saves", async () => {
+  /**
+   * A collection whose "seo" component holds a "social" component in a group,
+   * "links": the supported way to nest one component in another, stored in the
+   * group's JSON. A component placed directly in another's fields has no
+   * storage, and a write carrying one is refused.
+   */
+  async function seoWithLinks(): Promise<{
+    entries: CollectionEntryService;
+    ctx: { collectionName: string; overrideAccess: true };
+    id: string;
+  }> {
     handle = await createTestNextly({
       fieldGroups: [
         defineFieldGroup({
@@ -1800,7 +1819,10 @@ describe("draft/published split — promote on publish (integration)", () => {
           slug: "seo",
           fields: [
             text({ name: "metaTitle" }),
-            fieldGroup({ name: "social", component: "social" }),
+            group({
+              name: "links",
+              fields: [fieldGroup({ name: "social", component: "social" })],
+            }),
           ],
         }),
       ],
@@ -1819,37 +1841,88 @@ describe("draft/published split — promote on publish (integration)", () => {
     const entries = handle
       .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
-    const ctx = { collectionName: COLLECTION, overrideAccess: true };
-
+    const ctx = { collectionName: COLLECTION, overrideAccess: true as const };
     const created = await entries.createEntry(ctx, {
       title: "live",
       status: "published",
     });
     expect(created.success).toBe(true);
-    const id = (created.data as { id: string }).id;
+    return { entries, ctx, id: (created.data as { id: string }).id };
+  }
 
-    // Two saves each touching a DIFFERENT field of the DEEPLY NESTED component.
-    await entries.updateEntry(
-      { ...ctx, entryId: id },
-      { seo: { social: { twitter: "draft-tw" } } }
-    );
-    await entries.updateEntry(
-      { ...ctx, entryId: id },
-      { seo: { social: { facebook: "draft-fb" } } }
-    );
-
-    const draftRead = await entries.getEntry({
-      ...ctx,
-      entryId: id,
-      includeWorkingDraft: true,
-    });
-    const social = (
-      draftRead.data as {
-        seo?: { social?: { twitter?: string; facebook?: string } };
+  /** The "social" component inside "seo.links", as a read returns it. */
+  function socialOf(read: {
+    data: unknown;
+  }): { twitter?: string; facebook?: string } | undefined {
+    return (
+      read.data as {
+        seo?: { links?: { social?: { twitter?: string; facebook?: string } } };
       }
-    ).seo?.social;
-    expect(social?.twitter).toBe("draft-tw");
+    ).seo?.links?.social;
+  }
+
+  it("replaces a group held in a component on each draft save that names it, keeping what that save sent", async () => {
+    // A group is one value: a save that names it replaces it whole, and what
+    // it holds is what that save sent. Read after each save, so the second
+    // save's replacement is told apart from the first save never landing.
+    const { entries, ctx, id } = await seoWithLinks();
+    const draftOf = async () =>
+      socialOf(
+        await entries.getEntry({
+          ...ctx,
+          entryId: id,
+          includeWorkingDraft: true,
+        })
+      );
+
+    const first = await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { seo: { links: { social: { twitter: "draft-tw" } } } }
+    );
+    expect(first.success).toBe(true);
+    expect(await draftOf()).toEqual(
+      expect.objectContaining({ twitter: "draft-tw" })
+    );
+
+    const second = await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { seo: { links: { social: { facebook: "draft-fb" } } } }
+    );
+    expect(second.success).toBe(true);
+    const social = await draftOf();
     expect(social?.facebook).toBe("draft-fb");
+    expect(social?.twitter ?? null).toBeNull();
+  });
+
+  it("replaces a group held in a component on each live save that names it, as a draft save does", async () => {
+    // The same two saves, made live: a draft holds what a live save would.
+    const { entries, ctx, id } = await seoWithLinks();
+    const liveOf = async () =>
+      socialOf(await entries.getEntry({ ...ctx, entryId: id }));
+
+    const first = await entries.updateEntry(
+      { ...ctx, entryId: id },
+      {
+        seo: { links: { social: { twitter: "live-tw" } } },
+        status: "published",
+      }
+    );
+    expect(first.success).toBe(true);
+    expect(await liveOf()).toEqual(
+      expect.objectContaining({ twitter: "live-tw" })
+    );
+
+    const second = await entries.updateEntry(
+      { ...ctx, entryId: id },
+      {
+        seo: { links: { social: { facebook: "live-fb" } } },
+        status: "published",
+      }
+    );
+    expect(second.success).toBe(true);
+    const social = await liveOf();
+    expect(social?.facebook).toBe("live-fb");
+    expect(social?.twitter ?? null).toBeNull();
   });
 
   it("merges a partial component publish patch into the promoted draft", async () => {

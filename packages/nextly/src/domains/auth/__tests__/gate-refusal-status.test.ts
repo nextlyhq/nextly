@@ -8,35 +8,62 @@
  * internal error rather than as the retryable DATABASE_BUSY it is. A refusal
  * that is not a NextlyError still denies with the gate's own 500.
  */
-import { describe, expect, it, vi } from "vitest";
+import { poolWaitTimeoutError } from "@nextlyhq/adapter-drizzle/types";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
-import { DATABASE_BUSY_RETRY_AFTER_SECONDS } from "../../../errors/retry-after";
+import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
 import {
+  DATABASE_BUSY_RETRY_AFTER_SECONDS,
+  retryAfterSeconds,
+} from "../../../errors/retry-after";
+import {
+  callerLookupFails,
   createMockAdapter,
   createMockDb,
+  resetCallerAccess,
   silentLogger,
 } from "../../collections/__tests__/collection-test-helpers";
 import { CollectionAccessService } from "../../collections/services/collection-access-service";
 import { checkSingleAccess } from "../../singles/services/single-query-service";
 
-/** An RBAC service whose check refuses with `refusal`. */
-function refusingRbac(refusal: unknown) {
+// The caller the collection gate looks up, made to fail per test.
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
+  const fake = await import(
+    "../../collections/__tests__/collection-test-helpers"
+  );
   return {
-    checkAccess: vi.fn().mockRejectedValue(refusal),
-    checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
-    getRegisteredAccess: vi.fn().mockReturnValue(undefined),
-    getRegisteredTarget: () => undefined,
+    ...(await importOriginal<object>()),
+    actorForUser: fake.fakeActorForUser,
+    userHoldsPermission: fake.fakeUserHoldsPermission,
+    userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
   };
-}
+});
+
+beforeEach(() => {
+  resetCallerAccess();
+});
 
 const user = { id: "user-1", roles: ["editor"] };
 
+/**
+ * The collection gate, asked about a collection whose read rule is handed the
+ * caller's roles and permissions, while reading them refuses with `refusal`.
+ */
 async function collectionGate(refusal: unknown) {
+  callerLookupFails(refusal as Error);
+  const access = { read: () => true };
   const service = new CollectionAccessService(
     createMockAdapter(createMockDb({ rows: [] })) as never,
     silentLogger as never,
-    refusingRbac(refusal) as never
+    {
+      getRegisteredAccess: () => access,
+      getRegisteredTarget: () => ({
+        kind: "collection",
+        slug: "posts",
+        access,
+      }),
+    } as never
   );
   return service.checkCollectionAccess({
     collectionName: "posts",
@@ -46,13 +73,19 @@ async function collectionGate(refusal: unknown) {
   });
 }
 
+/** The Single gate, asked the same way as the collection gate above. */
 async function singleGate(refusal: unknown) {
+  callerLookupFails(refusal as Error);
+  const access = { read: () => true };
   return checkSingleAccess({
     slug: "site",
     operation: "read",
     user,
     overrideAccess: false,
-    rbacAccessControlService: refusingRbac(refusal) as never,
+    rbacAccessControlService: {
+      getRegisteredAccess: () => access,
+      getRegisteredTarget: () => ({ kind: "single", slug: "site", access }),
+    } as never,
     logger: silentLogger as never,
   });
 }
@@ -72,6 +105,23 @@ describe.each(GATES)("$name, refused by its access check", ({ gate }) => {
       code: "DATABASE_BUSY",
       publicData: { retryAfterSeconds: DATABASE_BUSY_RETRY_AFTER_SECONDS },
     });
+  });
+
+  it("answers DATABASE_BUSY for a raw pool-wait timeout, through the boundary too", async () => {
+    // The error the adapters raise, unconverted: what a role or permission
+    // read throws when it waits out its bound for a connection.
+    const result = await gate(poolWaitTimeoutError(15000));
+
+    expect(result).toMatchObject({
+      success: false,
+      statusCode: 503,
+      code: "DATABASE_BUSY",
+      publicData: { retryAfterSeconds: DATABASE_BUSY_RETRY_AFTER_SECONDS },
+    });
+    // What the REST and Direct API boundaries rebuild from the gate result.
+    const rebuilt = errorFromServiceEnvelope(result as never);
+    expect(rebuilt.code).toBe("DATABASE_BUSY");
+    expect(retryAfterSeconds(rebuilt)).toBe(DATABASE_BUSY_RETRY_AFTER_SECONDS);
   });
 
   it("keeps an internal refusal a 500", async () => {

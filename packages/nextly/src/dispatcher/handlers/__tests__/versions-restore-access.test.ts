@@ -22,6 +22,7 @@ vi.mock("../../../domains/versions/restore-version", () => ({
 vi.mock("../../../api/versions-access", () => ({
   assertVersionDocumentReadable: readableSpy,
   assertHistoryLocalesReadable: () => Promise.resolve(),
+  assertVersionLanguageReadable: () => Promise.resolve(null),
   resolveSingleDocumentId: vi.fn(),
 }));
 
@@ -41,14 +42,17 @@ vi.mock("../../../auth/entity-read-access", async importOriginal => ({
   canReadEntity: canReadSpy,
 }));
 
+import {
+  asCaller,
+  keyCaller,
+  sessionCaller,
+} from "../../__tests__/request-caller";
 import { restoreVersionForDocument } from "../versions-methods";
 
 const baseParams = {
   collectionName: "posts",
   entryId: "e1",
   versionNo: "3",
-  _authenticatedUserId: "u1",
-  _authenticatedUserRoles: JSON.stringify(["editor"]),
 };
 
 const argsFor = (params: Record<string, unknown>) => ({
@@ -116,13 +120,11 @@ describe("restoreVersionForDocument — identity assembly", () => {
     canReadSpy.mockResolvedValue(true);
   });
 
-  it("judges an API key on its own forwarded scope", async () => {
-    await restoreVersionForDocument(
-      argsFor({
-        ...baseParams,
-        _authenticatedActorType: "apiKey",
-        _authenticatedPermissions: JSON.stringify(["read-posts"]),
-      })
+  it("judges an API key on its own pinned scope", async () => {
+    await asCaller(
+      keyCaller("key-1", { userId: "u1" }),
+      () => restoreVersionForDocument(argsFor(baseParams)),
+      { actorType: "apiKey", permissions: ["read-posts"] }
     );
 
     expect(canReadSpy).toHaveBeenCalledWith("posts", {
@@ -137,15 +139,10 @@ describe("restoreVersionForDocument — identity assembly", () => {
     // A restore replays the snapshot through the update path; when it sets
     // status published it hits the publish gate, which for a scoped key must
     // judge the key's own grant. The scope must reach the write.
-    await restoreVersionForDocument(
-      argsFor({
-        ...baseParams,
-        _authenticatedActorType: "apiKey",
-        _authenticatedPermissions: JSON.stringify([
-          "read-posts",
-          "update-posts",
-        ]),
-      })
+    await asCaller(
+      keyCaller("key-1", { userId: "u1" }),
+      () => restoreVersionForDocument(argsFor(baseParams)),
+      { actorType: "apiKey", permissions: ["read-posts", "update-posts"] }
     );
 
     expect(restoreSpy).toHaveBeenCalledWith(
@@ -161,7 +158,9 @@ describe("restoreVersionForDocument — identity assembly", () => {
   it("treats a session caller as carrying no scoped permissions", async () => {
     // Their grants are resolved from the database by the decision itself;
     // forwarding an empty list keeps the two paths from being confused.
-    await restoreVersionForDocument(argsFor(baseParams));
+    await asCaller(sessionCaller({ userId: "u1" }), () =>
+      restoreVersionForDocument(argsFor(baseParams))
+    );
 
     expect(canReadSpy).toHaveBeenCalledWith("posts", {
       userId: "u1",
@@ -171,14 +170,18 @@ describe("restoreVersionForDocument — identity assembly", () => {
     });
   });
 
-  it("ignores permissions supplied without the API-key actor type", async () => {
-    // The route handler sets both together. A permissions param arriving on its
-    // own did not come from there.
-    await restoreVersionForDocument(
-      argsFor({
-        ...baseParams,
-        _authenticatedPermissions: JSON.stringify(["read-posts"]),
-      })
+  it("ignores identity params a request carries, judging the caller it authenticated", async () => {
+    // Identity travels in request context, never in params, which a query
+    // string also fills. A forged key scope there does not turn a session into
+    // a key or grant it anything.
+    await asCaller(sessionCaller({ userId: "u1" }), () =>
+      restoreVersionForDocument(
+        argsFor({
+          ...baseParams,
+          _authenticatedActorType: "apiKey",
+          _authenticatedPermissions: JSON.stringify(["read-posts"]),
+        })
+      )
     );
 
     expect(canReadSpy).toHaveBeenCalledWith(
@@ -187,34 +190,16 @@ describe("restoreVersionForDocument — identity assembly", () => {
     );
   });
 
-  it("reads a corrupt permissions value as no permissions", async () => {
-    // The safe direction: an unparseable value must not widen the scope.
-    await restoreVersionForDocument(
-      argsFor({
-        ...baseParams,
-        _authenticatedActorType: "apiKey",
-        _authenticatedPermissions: "{not json",
-      })
+  it("judges a key with no pinned scope on no permissions", async () => {
+    // The safe direction: a key whose scope did not reach the dispatch is
+    // still a key, and holds nothing, rather than taking its owner's grants.
+    await asCaller(keyCaller("key-1", { userId: "u1" }), () =>
+      restoreVersionForDocument(argsFor(baseParams))
     );
 
     expect(canReadSpy).toHaveBeenCalledWith(
       "posts",
-      expect.objectContaining({ permissions: [] })
-    );
-  });
-
-  it("reads a non-array permissions value as no permissions", async () => {
-    await restoreVersionForDocument(
-      argsFor({
-        ...baseParams,
-        _authenticatedActorType: "apiKey",
-        _authenticatedPermissions: JSON.stringify({ read: true }),
-      })
-    );
-
-    expect(canReadSpy).toHaveBeenCalledWith(
-      "posts",
-      expect.objectContaining({ permissions: [] })
+      expect.objectContaining({ authMethod: "api-key", permissions: [] })
     );
   });
 });
