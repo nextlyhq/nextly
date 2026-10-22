@@ -1031,6 +1031,24 @@ class DropReader {
   }
 
   /**
+   * A `CREATE TABLE IF NOT EXISTS` under `table`'s name: it fills the name
+   * only when an earlier statement of this list vacated it, since nothing
+   * stands there then, and the create makes the table. Not when this list
+   * created a table of the name before: a temporary one shadows a real one,
+   * and dropping it leaves the real one standing, which the create leaves in
+   * place. Nor once a statement may have changed which schema an unqualified
+   * name reaches (`resolutionMayChange`): the create may then find another
+   * table of the name, and make nothing. Credited with nothing else
+   * (`create`).
+   */
+  fillIfVacated(table: TableRef): void {
+    const at = this.vacated.get(table.name);
+    if (at === undefined || at >= this.statementIndex) return;
+    if (this.creating.has(table.name) || this.resolutionMayChange) return;
+    this.occupy(table);
+  }
+
+  /**
    * A name looked up in the live database before the list ran. Refused when
    * an earlier statement vacated it; one statement's own drop or rename does
    * not count against its own lookup, which PostgreSQL resolves first.
@@ -2006,6 +2024,8 @@ class StatementWalk {
    * succeed. `IF NOT EXISTS` may create nothing, and a rebuild's twin is
    * judged as the table it rebuilds, so neither is recorded; nor is a name
    * that is not local (`TableRef`), which the reader declines to record.
+   * `IF NOT EXISTS` under a name this list vacated fills that name again
+   * (`DropReader.fillIfVacated`).
    */
   private readCreateTable(at: number): void {
     // Only a statement that opens with CREATE: one inside a routine body is
@@ -2066,10 +2086,25 @@ class StatementWalk {
 
   /** The table a plain `CREATE TABLE` names at `at`, recorded as created. */
   private readCreatedTable(at: number): void {
-    if (this.word(at) === "IF") return;
+    if (this.word(at) === "IF") {
+      this.readCreatedIfAbsent(at);
+      return;
+    }
     const created = this.qualifiedName(at);
     if (created === undefined || created.twin) return;
     this.reader.create(created);
+  }
+
+  /**
+   * The table a `CREATE TABLE IF NOT EXISTS` names after the `IF` at `at`:
+   * it fills a name this list vacated (`DropReader.fillIfVacated`), and is
+   * recorded as nothing else.
+   */
+  private readCreatedIfAbsent(at: number): void {
+    if (this.word(at + 1) !== "NOT" || this.word(at + 2) !== "EXISTS") return;
+    const created = this.qualifiedName(at + 3);
+    if (created === undefined || created.twin) return;
+    this.reader.fillIfVacated(created);
   }
 
   /**
