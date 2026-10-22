@@ -14,10 +14,11 @@
  */
 
 import { NextlyError } from "../errors/nextly-error";
+import { parsePermissionSlug } from "../plugins/routes/permission-slug";
 import { permissionSlug } from "../schemas/_zod/rbac";
 
 import type { AccessTarget } from "./access/decide";
-import { codeAccessAllows, getRBACService } from "./code-access";
+import { codeAccessAllows } from "./code-access";
 import type { RequestActorType } from "./request-actor";
 
 /**
@@ -216,13 +217,7 @@ export function scopeGrants(
 ): readonly GrantedPermission[] | undefined {
   if (!scope.grants) return undefined;
   const { grants } = scope;
-  // Positional, because both halves come from one `map` over one list. A set
-  // comparison would accept a reordering that no constructor can produce, and
-  // accepting shapes nothing builds is how a check stops separating anything.
-  const agree =
-    grants.length === scope.permissions.length &&
-    grants.every((grant, index) => grant.slug === scope.permissions[index]);
-  if (!agree) {
+  if (!slugsNameGrants(grants, scope.permissions)) {
     throw NextlyError.internal({
       logContext: {
         reason:
@@ -236,18 +231,49 @@ export function scopeGrants(
 }
 
 /**
- * Whether the scope carries the grant rows its permission slugs came from, so
- * its key can be judged on those rows. A scope rebuilt from slugs alone, or
- * one whose slugs were narrowed apart from its rows, does not.
+ * Whether `permissions` are exactly the slugs of `grants`, in order.
+ *
+ * Positional, because both halves come from one `map` over one list. A set
+ * comparison would accept a reordering that no constructor can produce, and
+ * accepting shapes nothing builds is how a check stops separating anything.
  */
-export function scopeRowsAgree(scope: AuthenticatedScope): boolean {
-  if (!scope.grants) return false;
-  try {
-    scopeGrants(scope);
-    return true;
-  } catch {
-    return false;
-  }
+function slugsNameGrants(
+  grants: readonly GrantedPermission[],
+  permissions: readonly string[]
+): boolean {
+  return (
+    grants.length === permissions.length &&
+    grants.every((grant, index) => grant.slug === permissions[index])
+  );
+}
+
+/**
+ * Whether a key's scope, or a reader's caller built from one, carries the
+ * grant rows its permission slugs came from, so the key can be judged on
+ * those rows. A scope rebuilt from slugs alone, or one whose slugs were
+ * narrowed apart from its rows, does not.
+ */
+export function scopeRowsAgree(scope: {
+  readonly grants?: readonly GrantedPermission[];
+  readonly permissions: readonly string[];
+}): boolean {
+  return (
+    scope.grants !== undefined &&
+    slugsNameGrants(scope.grants, scope.permissions)
+  );
+}
+
+/**
+ * The grants a scope's stored slugs name, for a scope that carries no rows.
+ *
+ * Only what a decision that could read the slugs would see, for comparing a
+ * key judged on its slugs with the decision: never an answer itself. A slug
+ * is split on its first hyphen, the inverse of how permission slugs are made.
+ */
+export function slugGrants(
+  permissions: readonly string[]
+): GrantedPermission[] {
+  return permissions.map(slug => ({ slug, ...parsePermissionSlug(slug) }));
 }
 
 /**
@@ -314,65 +340,5 @@ export async function apiKeyWriteAllowed(
     // on. The read paths resolve the key's roles onto the user before calling
     // here, which is why that remains the fallback rather than an error.
     roles: [...(scope.roles ?? user.roles ?? [])],
-  });
-}
-
-/**
- * Whether this caller may perform `action` on `resource`, whichever way they
- * authenticated.
- *
- * The two branches of the decision, composed: a scoped API key is judged on its
- * OWN stamped grants by {@link apiKeyWriteAllowed} (permission grant AND the
- * code-defined access rule), and everyone else falls through to
- * `rbac.checkAccess`, which is where the super-admin bypass, the code-defined
- * rule and the stored grants already live. Neither half is reproduced here.
- *
- * That asymmetry is the rule, not an omission: a super admin does NOT bypass an
- * API key's scope, for the reason spelled out on `canReadEntity` — a read-only
- * key issued by an administrator must not become equivalent to their full
- * account. The bypass belongs to the session path, and reaching it through
- * `checkAccess` is what keeps that true without restating it.
- *
- * `action` is a plain string rather than the CRUD union because a permission
- * slug's action is not bounded by those four — `export-submissions` and
- * `manage-settings` are both real grants here. `checkAccess` reads it as a
- * string throughout (it indexes `codeAccess` by it and forwards it to
- * `hasPermission`), so the value travels correctly; the type is simply narrower
- * than the implementation. This is the identical cast `requirePermission` and
- * `callerHoldsPermission` make, for the identical reason.
- *
- * Deny-by-default: an unreachable RBAC service answers false rather than
- * falling through to a permissive default.
- *
- * Distinct from `callerHoldsPermission`, which answers the same question for a
- * WIDGET's declared slug and whose api-key branch is the bare permission check.
- * This one also evaluates the code-defined rule against the key's scope, so its
- * answer agrees with what a write on the same resource will actually enforce —
- * which is the property a caller gating a verb on it needs.
- */
-export async function callerMayPerform(
-  scope: AuthenticatedScope | undefined,
-  action: string,
-  resource: string,
-  user: { id: string; roles?: string[] }
-): Promise<boolean> {
-  if (!user.id || !action || !resource) return false;
-
-  const rbac = getRBACService();
-
-  const byKey = await apiKeyWriteAllowed(
-    scope,
-    action as "create" | "read" | "update" | "delete",
-    resource,
-    user,
-    rbac
-  );
-  if (byKey !== null) return byKey;
-
-  if (!rbac) return false;
-  return rbac.checkAccess({
-    userId: user.id,
-    operation: action as "create" | "read" | "update" | "delete",
-    resource,
   });
 }

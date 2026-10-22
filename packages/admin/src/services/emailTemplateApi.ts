@@ -368,19 +368,20 @@ export interface SendTestEmailResult {
 }
 
 /**
- * Send a real test email from a saved template via the shared
- * send-with-template endpoint. Tests the SAVED template (not unsaved edits).
+ * Send a real test email from a saved template to the signed-in user's own
+ * address: the server picks the recipient, never the caller. Tests the SAVED
+ * template (not unsaved edits).
  */
 export async function sendTestEmail(
-  slug: string,
-  to: string,
+  templateId: string,
   variables: Record<string, unknown>
 ): Promise<SendTestEmailResult> {
   return fetcher<SendTestEmailResult>(
-    "/email/send-with-template",
+    `/email-templates/${encodeURIComponent(templateId)}/send-test`,
     {
-      method: "POST",
-      body: JSON.stringify({ to, template: slug, variables }),
+      // PATCH: the server gates it by the update permission on templates.
+      method: "PATCH",
+      body: JSON.stringify({ variables }),
     },
     true
   );

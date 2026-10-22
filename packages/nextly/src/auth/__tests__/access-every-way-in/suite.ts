@@ -107,11 +107,6 @@ import { boot, type World } from "./world";
  */
 const NOT_YET_ONE_ANSWER: ReadonlySet<Door> = new Set<Door>([
   "rest",
-  "can",
-  "entity",
-  "schema",
-  "population",
-  "widget",
 ]);
 
 /**
@@ -127,6 +122,11 @@ const ASKS_THE_DECISION: ReadonlySet<Door> = new Set<Door>([
   "route",
   "lock",
   "system",
+  "entity",
+  "population",
+  "can",
+  "schema",
+  "widget",
 ]);
 
 const ANSWERS_FILE = join(__dirname, "answers-today.txt");
