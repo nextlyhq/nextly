@@ -16,6 +16,13 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import {
+  everyLanguageOf,
+  readLanguagesFor,
+  withRuleLanguage,
+  writeAsNamedLanguagesFor,
+  writeLanguagesFor,
+} from "../../../auth/access/rule-language";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import type { RetentionRunner } from "../../../domains/retention/runner";
 import type { HookRegistry } from "../../../hooks/hook-registry";
@@ -73,7 +80,11 @@ export class SingleEntryService extends BaseService {
     rbacAccessControlService?: RBACAccessControlService,
     // i18n: normalized localization config so a localized single resolves/writes
     // translatable fields via its companion `single_<slug>_locales` table.
-    localization?: SanitizedLocalizationConfig,
+    // Kept here too: every operation runs inside `withRuleLanguage` with the
+    // languages it involves, so each rule it asks is told them. A read is told
+    // its language and the ones it falls back to, a write the language it
+    // writes, and an operation on the whole Single every language.
+    private readonly localization?: SanitizedLocalizationConfig,
     /**
      * Retention passes offered after a write, so a frequently-written single
      * trims what it fills without waiting for a scheduled drain. The shared
@@ -162,7 +173,15 @@ export class SingleEntryService extends BaseService {
    * field values.
    */
   get(slug: string, options?: GetSingleOptions): Promise<SingleResult> {
-    return this.queryService.get(slug, options);
+    return withRuleLanguage(
+      readLanguagesFor(
+        this.localization,
+        options?.locale,
+        options?.fallbackLocale,
+        options
+      ),
+      () => this.queryService.get(slug, options)
+    );
   }
 
   // ============================================================
@@ -180,7 +199,10 @@ export class SingleEntryService extends BaseService {
     data: Record<string, unknown>,
     options?: UpdateSingleOptions
   ): Promise<SingleResult> {
-    const result = await this.mutationService.update(slug, data, options);
+    const result = await withRuleLanguage(
+      writeLanguagesFor(this.localization, options?.locale),
+      () => this.mutationService.update(slug, data, options)
+    );
     await this.afterWrite(result, options?.disableRevalidate === true);
     return result;
   }
@@ -197,7 +219,12 @@ export class SingleEntryService extends BaseService {
   async discardWorkingDraft(
     params: Parameters<SingleMutationService["discardWorkingDraft"]>[0]
   ): Promise<void> {
-    return this.mutationService.discardWorkingDraft(params);
+    // The draft is deleted under the language as named, so one the site no
+    // longer configures is told every language, not the default.
+    return withRuleLanguage(
+      writeAsNamedLanguagesFor(this.localization, params.locale ?? undefined),
+      () => this.mutationService.discardWorkingDraft(params)
+    );
   }
 
   /**
@@ -209,7 +236,9 @@ export class SingleEntryService extends BaseService {
   async releasePublishIssues(
     params: Parameters<SingleMutationService["releasePublishIssues"]>[0]
   ): ReturnType<SingleMutationService["releasePublishIssues"]> {
-    return this.mutationService.releasePublishIssues(params);
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.releasePublishIssues(params)
+    );
   }
 
   /**
@@ -233,7 +262,9 @@ export class SingleEntryService extends BaseService {
   async releaseHeldDraftLocales(
     params: Parameters<SingleMutationService["releaseHeldDraftLocales"]>[0]
   ): ReturnType<SingleMutationService["releaseHeldDraftLocales"]> {
-    return this.mutationService.releaseHeldDraftLocales(params);
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.releaseHeldDraftLocales(params)
+    );
   }
 
   /**
@@ -248,9 +279,9 @@ export class SingleEntryService extends BaseService {
     slug: string,
     options?: PublishAllSingleLocalesOptions
   ): Promise<SingleResult<PublishAllSingleResult>> {
-    const result = await this.publishAllService.publishAllLocales(
-      slug,
-      options
+    const result = await withRuleLanguage(
+      everyLanguageOf(this.localization),
+      () => this.publishAllService.publishAllLocales(slug, options)
     );
     await this.afterWrite(result, options?.disableRevalidate === true);
     return result;

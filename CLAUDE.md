@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (85d6b42219254634). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (ec9f9b7eee8a8066). Edit that file, never this one. -->
 
 # Nextly Monorepo: Agent Guide
 
@@ -389,10 +389,10 @@ already in hand may move; preconditions may not.
 
 `overrideAccess: false` is judged by a single gate. Flag a second place that
 decides whether a caller may read or write, a hand-assembled caller literal
-instead of `readAccessCaller`, or a rule handed the stored `action-resource`
-permission spelling rather than the rule-facing `resource:action` one. Two
-doors that answer one key differently is a defect this repository has already
-had.
+instead of `readAccessCaller`, or a rule handed permissions not spelled as
+stored (`read-posts`); the earlier `posts:read` also rides along, warned, for
+one release. Two doors that answer one key differently is a defect this
+repository has already had.
 
 ### One question has one implementation
 

@@ -853,11 +853,17 @@ async function resolveAuthorization(
       // Entry operations → {action}-{collectionSlug}
       const action = getActionFromOperation(operation);
       const slug = routeParams?.collectionName || "";
-      return requireCollectionAccess(req, action, slug);
+      return requireCollectionAccess(req, action, slug, {
+        method,
+        params: routeParams ?? {},
+      });
     }
     if (method === "getCollection") {
       const slug = routeParams?.collectionName || "";
-      return requireCollectionAccess(req, "read", slug);
+      return requireCollectionAccess(req, "read", slug, {
+        method,
+        params: routeParams ?? {},
+      });
     }
     // Definition mutations (create/update/delete collection). The grant is
     // declared once, in `auth/collection-definition-policy`, because the
@@ -887,11 +893,17 @@ async function resolveAuthorization(
           ? "read"
           : "update";
       const slug = routeParams?.slug || "";
-      return requireCollectionAccess(req, action, slug);
+      return requireCollectionAccess(req, action, slug, {
+        method,
+        params: routeParams ?? {},
+      });
     }
     if (method === "getSingleSchema") {
       const slug = routeParams?.slug || "";
-      return requireCollectionAccess(req, "read", slug);
+      return requireCollectionAccess(req, "read", slug, {
+        method,
+        params: routeParams ?? {},
+      });
     }
     // Definition mutations (create/delete single, update schema) → manage-settings
     return requirePermission(req, "manage", "settings");

@@ -17,7 +17,7 @@ import { isSuperAdminContext } from "../../services/access";
 import type { AccessOperation } from "../../services/access/types";
 import {
   apiKeyWriteAllowed,
-  scopeGrants,
+  scopeRowsAgree,
   type AuthenticatedScope,
 } from "../authenticated-scope";
 import { effectiveCallerScope } from "../caller-scope";
@@ -272,7 +272,7 @@ async function keyVerdict(
   scope: AuthenticatedScope,
   user: { id: string; roles?: string[] }
 ): Promise<GateVerdict> {
-  const rows = rowsAgree(scope);
+  const rows = scopeRowsAgree(scope);
   const actor = keyActorOf(scope, user);
   // A key holds an action by its stored slug, `<action>-<target>`. The
   // decision reads the grant's action and target, which agree with the slug
@@ -291,7 +291,7 @@ function keyActorOf(
   scope: AuthenticatedScope,
   user: { id: string; roles?: string[] }
 ): KeyActor {
-  return rowsAgree(scope)
+  return scopeRowsAgree(scope)
     ? actorForScope(scope, user)
     : actorForKey({
         keyId: "",
@@ -360,17 +360,6 @@ async function grantJudgedVerdict(
       decided(actor, q.action, target)
     )
   );
-}
-
-/** Whether the scope carries grant rows its slugs were derived from. */
-function rowsAgree(scope: AuthenticatedScope): boolean {
-  if (!scope.grants) return false;
-  try {
-    scopeGrants(scope);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /** A key's rule allows only by answering `true`; no rule adds no limit. */
