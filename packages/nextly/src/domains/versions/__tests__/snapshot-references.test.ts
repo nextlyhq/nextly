@@ -20,7 +20,7 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
   ...(await importOriginal<
     typeof import("../../../auth/access/resolve-actor")
   >()),
-  actorForUser: actorForUserSpy,
+  actorForUserFailingClosed: actorForUserSpy,
 }));
 
 vi.mock("../../../di", () => ({

@@ -44,8 +44,9 @@ export const DEVIATIONS = [
   // A route that accepts any of several permissions asks no rule, for people
   // or keys, even where the target declares one.
   "any-of-skips-rules",
-  // A route asking one permission on a system resource does not count that
-  // resource's `manage-` permission as read, create, update or delete on it.
+  // A route asking one permission on a system resource, and the
+  // system-resource readers, do not count that resource's `manage-`
+  // permission as read, create, update or delete on it.
   "manage-not-counted",
 ] as const;
 

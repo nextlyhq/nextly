@@ -12,16 +12,14 @@
  */
 
 import { container } from "../di/container";
-import { SUPER_ADMIN_SLUG } from "../services/access/super-admin";
-import { listRoleSlugsForUser } from "../services/lib/permissions";
-import { consoleLogger } from "../shared/types";
 
-import { holdsPermission, type Actor } from "./access/actor";
+import { holdsPermission } from "./access/actor";
+import { decidePermission } from "./access/decide";
 import { deviate } from "./access/deviations";
 import {
   actorForKey,
   actorForScope,
-  actorForUser,
+  actorForUserFailingClosed,
   actorForVisitor,
 } from "./access/resolve-actor";
 import { readsSystemResource } from "./access/system-resource-read";
@@ -92,36 +90,18 @@ export async function canReadSystemResource(
     // Without the service a signed-in user is refused whatever they hold, as
     // before, so nothing is looked up to say so. The decision it is compared
     // with is the one the service's presence would give.
-    return deviate("no-service", false, async () =>
-      readsSystemResource(await actorForUser(userId), {
-        ...read,
-        serviceRegistered: true,
-      })
+    return deviate(
+      "no-service",
+      false,
+      async () =>
+        decidePermission(
+          await actorForUserFailingClosed(userId),
+          "read",
+          resource
+        ).allowed
     );
   }
-  let actor: Actor;
-  try {
-    actor = await actorForUser(userId);
-  } catch (error) {
-    // A lookup that fails refuses the read, as the permission check this
-    // replaced did, so a relationship withholds the row and the read goes on.
-    // That check asked whether the user is a super-admin before reading any
-    // grant, so a super-admin, who needs none, is still let through when only
-    // the grants could not be read.
-    consoleLogger.error(
-      `[rbac] Could not resolve user ${userId} to read ${resource}`,
-      { error }
-    );
-    return holdsSuperAdminRole(userId);
-  }
-  return readsSystemResource(actor, read);
-}
-
-/** Whether the user holds the super-admin role; `false` when it cannot be read. */
-async function holdsSuperAdminRole(userId: string): Promise<boolean> {
-  try {
-    return (await listRoleSlugsForUser(userId)).includes(SUPER_ADMIN_SLUG);
-  } catch {
-    return false;
-  }
+  // Each lookup that fails refuses only what it would have given, so a
+  // relationship withholds the row and the read goes on rather than failing.
+  return readsSystemResource(await actorForUserFailingClosed(userId), read);
 }
