@@ -27,6 +27,11 @@ vi.mock("../send-timing", () => ({
 
 import { container } from "../../../di/container";
 import {
+  FilterSeams,
+  getFilterRegistry,
+  resetFilterRegistry,
+} from "../../../filters";
+import {
   definePlugin,
   type PluginContext,
 } from "../../../plugins/plugin-context";
@@ -36,6 +41,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { withEmailFailure } from "../failure";
 import { defineEmailProvider } from "../provider-definition";
 import type { EmailDeliveryService } from "../services/email-delivery-service";
 import type { EmailProviderAdapter } from "../types";
@@ -43,11 +49,15 @@ import type { EmailProviderAdapter } from "../types";
 type SentOptions = Parameters<EmailProviderAdapter["send"]>[0];
 
 const A = "a@example.com";
+const B = "b@example.com";
 const KEY = "order-1:confirmation";
 
 const calls: SentOptions[] = [];
-/** Calls wait on this while it is set; `release` lets them answer. */
-const hold: { until?: Promise<void>; release?: () => void } = {};
+/**
+ * Calls wait on this while it is set; `release` lets them answer. With `only`,
+ * only the call to that address waits.
+ */
+const hold: { until?: Promise<void>; release?: () => void; only?: string } = {};
 
 let current: TestNextly | undefined;
 
@@ -58,6 +68,8 @@ afterEach(async () => {
   calls.length = 0;
   hold.until = undefined;
   hold.release = undefined;
+  hold.only = undefined;
+  resetFilterRegistry();
 });
 
 function holdCalls(): void {
@@ -81,8 +93,34 @@ const slowMailer = definePlugin({
           send: async (options: SentOptions) => {
             calls.push(options);
             const waiting = hold.until;
-            if (waiting) await waiting;
+            if (waiting && (!hold.only || hold.only === options.to)) {
+              await waiting;
+            }
             return { success: true, messageId: `slow-${calls.length}` };
+          },
+        }),
+      }),
+      defineEmailProvider<Record<string, never>>({
+        type: "stopping-keyless",
+        label: "Stopping",
+        configFields: [],
+        parseConfig: () => ({}),
+        createAdapter: () => ({
+          // Takes no key, and stops when told: its request may still be
+          // processing at the provider, so it reports the answer as lost.
+          send: (options: SentOptions) => {
+            calls.push(options);
+            return new Promise((_resolve, reject) => {
+              options.signal?.addEventListener("abort", () =>
+                reject(
+                  withEmailFailure(new Error("stopped"), {
+                    retryable: true,
+                    unknown: true,
+                    reason: "The email provider's answer was lost.",
+                  })
+                )
+              );
+            });
           },
         }),
       }),
@@ -103,8 +141,19 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       isDefault: true,
     },
   });
+  const stopping = await t.nextly.emailProviders.create({
+    data: {
+      name: "Stopping",
+      type: "stopping-keyless",
+      fromEmail: "provider@example.com",
+      configuration: {},
+    },
+  });
+  stoppingProvider = stopping.item.id;
   return t;
 }
+
+let stoppingProvider = "";
 
 const keyed = {
   to: [A],
@@ -183,6 +232,54 @@ describe.each(getConfiguredTestDialects())(
       expect(await t.adapter.select("email_send_claims")).toEqual([
         expect.objectContaining({ state: "sent" }),
       ]);
+    }, 120_000);
+
+    it("runs a keyed send's after-send actions only once its outcome is committed", async () => {
+      const t = await boot(dialect);
+      const seen: string[] = [];
+      getFilterRegistry().addAction(FilterSeams.EmailAfterSend, async () => {
+        const [claim] = await t.adapter.select<{ state: string }>(
+          "email_send_claims"
+        );
+        seen.push(claim?.state ?? "none");
+      });
+
+      await t.nextly.email.send(keyed);
+
+      expect(seen).toEqual(["sent"]);
+    }, 120_000);
+
+    it("runs the after-send action of a split send's call that answers late", async () => {
+      const t = await boot(dialect);
+      const actions: unknown[] = [];
+      getFilterRegistry().addAction(FilterSeams.EmailAfterSend, value => {
+        actions.push(value.to);
+      });
+      holdCalls();
+      hold.only = B;
+
+      await t.nextly.email.send({ ...keyed, to: [A, B] });
+      expect(actions).toEqual([A]);
+      hold.release?.();
+      await wait(300);
+
+      expect(actions).toEqual([A, B]);
+    }, 120_000);
+
+    it("holds the claim of a call its adapter stopped, as unknown, to the lease limit", async () => {
+      const t = await boot(dialect);
+      const send = () =>
+        t.nextly.email.send({ ...keyed, providerId: stoppingProvider });
+
+      const first = await send();
+      expect(first).toMatchObject({ failure: { unknown: true } });
+      // Past the takeover period, before the lease limit: still held.
+      await wait(800);
+      await expect(send()).resolves.toMatchObject({
+        success: false,
+        failure: { retryable: true },
+      });
+      expect(calls).toHaveLength(1);
     }, 120_000);
 
     it("lets a later send take over a call that never answers, after the lease limit, with the same provider key", async () => {

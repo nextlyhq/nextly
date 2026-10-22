@@ -130,6 +130,7 @@ async function boot(dialect: TestDialect): Promise<{
   t: TestNextly;
   keyless: string;
   oneAtATime: string;
+  keyedOneAtATime: string;
 }> {
   const t = await createTestNextly({
     dialect,
@@ -139,6 +140,8 @@ async function boot(dialect: TestDialect): Promise<{
         capturing("capturing-keyless", false),
         // One `to` per message, so a send to two people is two calls.
         capturing("capturing-one", false, 1),
+        // Takes a key and one `to` per message.
+        capturing("capturing-keyed-one", true, 1),
       ]),
       mailerPlugin("other-mailer", []),
     ],
@@ -178,7 +181,20 @@ async function boot(dialect: TestDialect): Promise<{
       configuration: {},
     },
   });
-  return { t, keyless: keyless.item.id, oneAtATime: one.item.id };
+  const keyedOne = await t.nextly.emailProviders.create({
+    data: {
+      name: "Keyed one",
+      type: "capturing-keyed-one",
+      fromEmail: "provider@example.com",
+      configuration: {},
+    },
+  });
+  return {
+    t,
+    keyless: keyless.item.id,
+    oneAtATime: one.item.id,
+    keyedOneAtATime: keyedOne.item.id,
+  };
 }
 
 function plugin(name = "mailer"): PluginContext {
@@ -464,6 +480,34 @@ describe.each(getConfiguredTestDialects())(
         success: true,
         refused: [{ kind: "cc", position: 0, retryable: false, status: 550 }],
       });
+    }, 120_000);
+
+    it("honours a partly delivered claim that recorded its accepted calls, as claims did before", async () => {
+      const { t, keyedOneAtATime } = await boot(dialect);
+      behaviour.failures = 1;
+      behaviour.failFor = B;
+      const keyed = {
+        to: [A, B],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: KEY,
+        providerId: keyedOneAtATime,
+      };
+      await t.nextly.email.send(keyed);
+      // As an earlier version wrote it: the call to A, by its provider key.
+      await t.adapter.update(
+        "email_send_claims",
+        {
+          result: JSON.stringify({
+            acceptedLegs: [messages[0].options.idempotencyKey],
+          }),
+        },
+        { and: [{ column: "state", op: "=", value: "partial" }] }
+      );
+
+      await t.nextly.email.send(keyed);
+
+      expect(messages.map(m => m.options.to)).toEqual([A, B, B]);
     }, 120_000);
 
     it("refuses the key with a different message, through the Direct API", async () => {
