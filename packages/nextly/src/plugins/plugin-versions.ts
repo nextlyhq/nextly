@@ -168,7 +168,9 @@ async function assertHandlerGates(
   user: UserContext,
   resolved: ResolvedOpts,
   write: "label" | "discard" | "autosave",
-  logContext: Record<string, unknown>
+  logContext: Record<string, unknown>,
+  // The version a label names, whose own language is asked about.
+  versionNo?: number
 ): Promise<void> {
   const authenticatedScope = resolved.authenticatedScope;
   if (
@@ -191,6 +193,23 @@ async function assertHandlerGates(
     authenticatedScope,
     hookInputsOf(resolved)
   );
+  // A version is named in its own language's history, so the writer must be
+  // able to read that language. Asked before the update rule, as REST's label
+  // route asks it, so a caller refused both is told the version is not there
+  // rather than that it may not change it.
+  if (versionNo !== undefined) {
+    await assertVersionLanguageReadable(
+      {
+        scopeKind: ref.scopeKind,
+        slug: ref.scopeSlug,
+        entryId: ref.entryId,
+        user,
+        authenticatedScope,
+      },
+      versionNo,
+      hookInputsOf(resolved)
+    );
+  }
   await assertDocumentUpdatable(
     ref.scopeKind,
     ref.scopeSlug,
@@ -221,7 +240,8 @@ async function assertHandlerGates(
 async function checkedWriter(
   ref: VersionRef,
   resolved: ResolvedOpts,
-  write: "label" | "discard" | "autosave"
+  write: "label" | "discard" | "autosave",
+  versionNo?: number
 ): Promise<HistoryWriter | null> {
   const config: DirectAPIConfig = {
     overrideAccess: resolved.overrideAccess,
@@ -260,7 +280,8 @@ async function checkedWriter(
     user,
     resolved,
     write,
-    logContext
+    logContext,
+    versionNo
   );
   const authenticatedScope = resolved.authenticatedScope;
 
@@ -346,25 +367,11 @@ export function pluginVersionWrites(
   return {
     setLabel(ref, versionNo, label, by, opts) {
       return asCalled(opts, async resolved => {
-        const writer = await checkedWriter(ref, resolved, "label");
+        const writer = await checkedWriter(ref, resolved, "label", versionNo);
         if (!writer) return service().setLabel(ref, versionNo, label, by);
         if (by && !namesWriter(by.actor, writer)) {
           refuseOtherAuthor(ref, "label");
         }
-        // The version is named in its own language's history, so the writer
-        // must be able to read that language before it is named or handed
-        // back, as REST's label route asks.
-        await assertVersionLanguageReadable(
-          {
-            scopeKind: ref.scopeKind,
-            slug: ref.scopeSlug,
-            entryId: ref.entryId,
-            user: writer.user,
-            authenticatedScope: writer.authenticatedScope,
-          },
-          versionNo,
-          writer.hookInputs
-        );
         // The namer is the writer, by the name the writer is known by: never
         // a name the plugin passes, which could be anyone's. A key whose own
         // id is not known here is named by no one, as an event naming its
