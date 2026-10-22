@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A renamed collection or Single keeps its history: its versions, pins, "last looked at" markers, content events, release membership, schema events, activity and archived translations move to the new slug in the same transaction as the rename, instead of staying behind for the next entity under the old slug. A rename onto a slug that still holds an earlier entity's history is refused, and document locks and preview links end with the old slug.
+A renamed collection or Single keeps its history, who may use it and where its webhooks go: its versions, pins, "last looked at" markers, content events, release membership, schema events, activity, archived translations, permissions (with every role's grants of them), webhook filters and webhook recording choice move to the new slug in the same transaction as the rename, instead of staying behind for the next entity under the old slug. A rename onto a slug that still holds an earlier entity's records is refused, and document locks, preview links and kept permission answers end with the old slug.
