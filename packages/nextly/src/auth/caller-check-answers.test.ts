@@ -31,6 +31,7 @@ import { RBACAccessControlService } from "../domains/auth/services/rbac-access-c
 import type { CollectionAccessControl } from "../shared/types/access";
 
 import { callerMayPerform } from "./access/route-gate-adapters";
+import { authorizeCaller, type AuthContext } from "./middleware";
 import {
   apiKeyScopeFrom,
   type AuthenticatedScope,
@@ -321,5 +322,35 @@ describe("the caller checks' answers", () => {
     await expect(`${text}\n`).toMatchFileSnapshot(
       join(__dirname, "caller-check-answers.txt")
     );
+  });
+});
+
+describe("an entity that registered a rule under a system resource's name", () => {
+  it("is asked with its rule, before any `manage-` permission counts", async () => {
+    // Config validation reserves these names, so only a rule registered
+    // directly reaches here; the rule must still be read wherever it is.
+    const rbac = new RBACAccessControlService();
+    rbac.registerCollectionAccess("settings", { read: () => false });
+    registered.rbac = rbac;
+    const editor = session("editor");
+    const caller = readAccessCaller({ user: editor.user });
+    const auth: AuthContext = {
+      userId: "editor",
+      permissions: [],
+      roles: [],
+      authMethod: "session",
+    };
+
+    // POPULATION CONTROL: the editor holds read-settings and manage-settings,
+    // so a check that skipped the rule would allow.
+    expect(holds("editor", "read", "settings")).toBe(true);
+    await expect(
+      callerMayPerform(undefined, "read", "settings", editor.user)
+    ).resolves.toBe(false);
+    await expect(callerHoldsPermission("read-settings", caller)).resolves.toBe(
+      false
+    );
+    const gate = await authorizeCaller(auth, "read", "settings");
+    expect("statusCode" in gate && gate.statusCode).toBe(403);
   });
 });

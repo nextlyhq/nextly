@@ -95,14 +95,19 @@ function isAccessOperation(action: string): action is AccessOperation {
  * Whether one permission is an entity's operation, asked of the target with
  * its rules, rather than a permission alone. A route naming no resource
  * (`requiredPermission: "manage"`) asks about nothing a rule or a permission
- * row can name, and a system resource a `manage-` permission still counts on
- * declares no rule either.
+ * row can name. A system resource a `manage-` permission still counts on
+ * declares no rule, so it is a permission alone, unless an entity registered
+ * rules under its name: those rules are read whatever the name.
  */
-function asksTheEntity(action: string, resource: string): boolean {
+function asksTheEntity(
+  action: string,
+  resource: string,
+  target: AccessTarget | undefined
+): boolean {
   return (
     isAccessOperation(action) &&
     resource !== "" &&
-    !manageCounts(action, resource)
+    (target !== undefined || !manageCounts(action, resource))
   );
 }
 
@@ -162,7 +167,9 @@ function gateVerdict(
   rules: RouteRules,
   permissionWithoutService: () => Promise<boolean>
 ): Promise<GateVerdict> {
-  if (!asksTheEntity(action, resource)) {
+  const registered =
+    resource === "" ? undefined : rules?.getRegisteredTarget(resource);
+  if (!asksTheEntity(action, resource, registered)) {
     return permissionVerdict(caller, action, resource, rules);
   }
   return collectionGateVerdict({
@@ -306,14 +313,17 @@ async function decidedOne(
   resource: string,
   rules: RouteRules
 ): Promise<boolean> {
-  if (!asksTheEntity(action, resource)) {
+  const declared =
+    resource === ""
+      ? undefined
+      : (declaredTarget(resource) ?? rules?.getRegisteredTarget(resource));
+  if (!asksTheEntity(action, resource, declared)) {
     return decidePermission(actor, action, resource).allowed;
   }
-  const target: AccessTarget = declaredTarget(resource) ??
-    rules?.getRegisteredTarget(resource) ?? {
-      kind: "collection",
-      slug: resource,
-    };
+  const target: AccessTarget = declared ?? {
+    kind: "collection",
+    slug: resource,
+  };
   return (await decide(actor, action as AccessOperation, target)).allowed;
 }
 
