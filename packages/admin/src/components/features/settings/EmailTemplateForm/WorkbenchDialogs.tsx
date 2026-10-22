@@ -4,11 +4,7 @@
 import { TemplateDeleteDialog } from "@admin/components/features/email-hub/TemplateDialogs";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
-import {
-  OverrideDialog,
-  ResetDialog,
-  UnsavedBeforeActDialog,
-} from "./OwnershipDialogs";
+import { OwnershipConfirm, UnsavedBeforeActDialog } from "./OwnershipDialogs";
 import { OwnerUpdateReview } from "./OwnerUpdateReview";
 import type { OwnershipActs, WorkbenchDialog } from "./useOwnershipActs";
 
@@ -27,7 +23,8 @@ export function WorkbenchDialogs({
     setDialog(open ? which : null);
   return (
     <>
-      <OverrideDialog
+      <OwnershipConfirm
+        act="override"
         open={dialog === "override"}
         onOpenChange={openIf("override")}
         name={template.name}
@@ -35,7 +32,8 @@ export function WorkbenchDialogs({
         isPending={acts.isOverriding}
         onConfirm={acts.confirmOverride}
       />
-      <ResetDialog
+      <OwnershipConfirm
+        act="reset"
         open={dialog === "reset"}
         onOpenChange={openIf("reset")}
         name={template.name}

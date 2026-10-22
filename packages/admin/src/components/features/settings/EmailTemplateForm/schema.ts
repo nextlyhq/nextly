@@ -150,34 +150,47 @@ export const USE_DEFAULT_LAYOUT = "__default_layout__";
 // Payload transforms
 // ============================================================
 
+/** An optional text field as the API takes it: empty is none. */
+const orNull = (value: string): string | null => value || null;
+
+/** An optional list as the API takes it: empty is none. */
+function listOrNull<T>(list: T[]): T[] | null {
+  return list.length > 0 ? list : null;
+}
+
+/** Everything a save or a create sends, but the slug. */
+function payloadFields(
+  values: TemplateFormValues
+): Omit<CreateEmailTemplatePayload, "slug"> {
+  return {
+    name: values.name,
+    subject: values.subject,
+    preheader: orNull(values.preheader),
+    htmlContent: values.htmlContent,
+    plainTextContent: orNull(values.plainTextContent),
+    useLayout: values.useLayout,
+    isActive: values.isActive,
+    providerId: orNull(values.providerId),
+    layoutId: orNull(values.layoutId),
+    fromOverride: orNull(values.fromOverride),
+    replyTo: orNull(values.replyTo),
+    variables: listOrNull(values.variables),
+    attachments: listOrNull(
+      values.attachments.map(a => ({
+        mediaId: a.mediaId,
+        ...(a.filename ? { filename: a.filename } : {}),
+      }))
+    ),
+    description: orNull(values.description),
+    cc: listOrNull(values.cc),
+    bcc: listOrNull(values.bcc),
+  };
+}
+
 export function formValuesToCreatePayload(
   values: TemplateFormValues
 ): CreateEmailTemplatePayload {
-  return {
-    name: values.name,
-    slug: values.slug,
-    subject: values.subject,
-    preheader: values.preheader || null,
-    htmlContent: values.htmlContent,
-    plainTextContent: values.plainTextContent || null,
-    useLayout: values.useLayout,
-    isActive: values.isActive,
-    providerId: values.providerId || null,
-    layoutId: values.layoutId || null,
-    fromOverride: values.fromOverride || null,
-    replyTo: values.replyTo || null,
-    variables: values.variables.length > 0 ? values.variables : null,
-    attachments:
-      values.attachments.length > 0
-        ? values.attachments.map(a => ({
-            mediaId: a.mediaId,
-            ...(a.filename ? { filename: a.filename } : {}),
-          }))
-        : null,
-    description: values.description || null,
-    cc: values.cc.length > 0 ? values.cc : null,
-    bcc: values.bcc.length > 0 ? values.bcc : null,
-  };
+  return { slug: values.slug, ...payloadFields(values) };
 }
 
 /** The fields an owner sets on its email: locked until the site overrides it. */
@@ -206,7 +219,7 @@ export function formValuesToUpdatePayload(
   values: TemplateFormValues,
   record?: EmailTemplateRecord
 ): UpdateEmailTemplatePayload {
-  const payload = fullUpdatePayload(values);
+  const payload: UpdateEmailTemplatePayload = payloadFields(values);
   if (record && !ownsContent(record)) {
     for (const field of OWNER_FIELDS) delete payload[field];
   }
@@ -215,35 +228,6 @@ export function formValuesToUpdatePayload(
     delete payload.bcc;
   }
   return payload;
-}
-
-function fullUpdatePayload(
-  values: TemplateFormValues
-): UpdateEmailTemplatePayload {
-  return {
-    name: values.name,
-    subject: values.subject,
-    preheader: values.preheader || null,
-    htmlContent: values.htmlContent,
-    plainTextContent: values.plainTextContent || null,
-    useLayout: values.useLayout,
-    isActive: values.isActive,
-    providerId: values.providerId || null,
-    layoutId: values.layoutId || null,
-    fromOverride: values.fromOverride || null,
-    replyTo: values.replyTo || null,
-    variables: values.variables.length > 0 ? values.variables : null,
-    attachments:
-      values.attachments.length > 0
-        ? values.attachments.map(a => ({
-            mediaId: a.mediaId,
-            ...(a.filename ? { filename: a.filename } : {}),
-          }))
-        : null,
-    description: values.description || null,
-    cc: values.cc.length > 0 ? values.cc : null,
-    bcc: values.bcc.length > 0 ? values.bcc : null,
-  };
 }
 
 export function templateToFormValues(

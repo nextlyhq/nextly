@@ -206,17 +206,101 @@ function PhoneLayout({
   );
 }
 
-export function WorkbenchLayout({
-  header,
+type BodyProps = Omit<
+  WorkbenchLayoutProps,
+  "header" | "phoneBar" | "detailsRequest"
+>;
+
+/** Two equal panes; an open sheet takes the content's, beside the preview. */
+function TabletBody({
   content,
   preview,
   data,
   details,
   sheet,
   onSheetChange,
-  phoneBar,
+}: BodyProps) {
+  return (
+    <div className="grid min-h-0 flex-1 grid-cols-2">
+      {sheet ? (
+        <Sheet
+          data={data}
+          details={details}
+          sheet={sheet}
+          onSheetChange={onSheetChange}
+          className="border-r border-border"
+        />
+      ) : (
+        <div
+          data-testid="workbench-content"
+          className="flex min-h-0 min-w-0 flex-col overflow-y-auto"
+        >
+          {content}
+        </div>
+      )}
+      <div
+        data-testid="workbench-preview"
+        className="flex min-h-0 min-w-0 flex-col"
+      >
+        {preview}
+      </div>
+    </div>
+  );
+}
+
+/** Content and preview, resizable, with the sheet as a column beside them. */
+function DesktopBody({
+  content,
+  preview,
+  data,
+  details,
+  sheet,
+  onSheetChange,
   splitLabel,
+}: BodyProps) {
+  return (
+    <div className="flex min-h-0 flex-1">
+      <ResizablePanelGroup
+        orientation="horizontal"
+        className="min-h-0 min-w-0 flex-1"
+      >
+        {/* Percentage strings: the library reads a bare number as pixels. */}
+        <ResizablePanel id="content" minSize="30%">
+          <div
+            data-testid="workbench-content"
+            className="flex h-full min-h-0 flex-col overflow-y-auto"
+          >
+            {content}
+          </div>
+        </ResizablePanel>
+        <ResizableHandle withGrip aria-label={splitLabel} />
+        <ResizablePanel id="preview" minSize="30%">
+          <div
+            data-testid="workbench-preview"
+            className="flex h-full min-h-0 flex-col"
+          >
+            {preview}
+          </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
+      {sheet ? (
+        <Sheet
+          data={data}
+          details={details}
+          sheet={sheet}
+          onSheetChange={onSheetChange}
+          className="w-90 shrink-0 border-l border-border"
+        />
+      ) : null}
+    </div>
+  );
+}
+
+export function WorkbenchLayout({
+  header,
+  phoneBar,
   detailsRequest,
+  ...body
 }: WorkbenchLayoutProps) {
   // The settings navigation and the page's padding: a full-width workbench
   // reads them as a mistake rather than as a margin. The header draws the way
@@ -229,84 +313,6 @@ export function WorkbenchLayout({
   const rootRef = useRef<HTMLDivElement>(null);
   const tier = tierFor(useMeasuredWidth(rootRef));
 
-  let body: ReactNode;
-  if (tier === "phone") {
-    body = (
-      <PhoneLayout
-        content={content}
-        preview={preview}
-        data={data}
-        details={details}
-        phoneBar={phoneBar}
-        detailsRequest={detailsRequest}
-      />
-    );
-  } else if (tier === "tablet") {
-    body = (
-      <div className="grid min-h-0 flex-1 grid-cols-2">
-        {sheet ? (
-          <Sheet
-            data={data}
-            details={details}
-            sheet={sheet}
-            onSheetChange={onSheetChange}
-            className="border-r border-border"
-          />
-        ) : (
-          <div
-            data-testid="workbench-content"
-            className="flex min-h-0 min-w-0 flex-col overflow-y-auto"
-          >
-            {content}
-          </div>
-        )}
-        <div
-          data-testid="workbench-preview"
-          className="flex min-h-0 min-w-0 flex-col"
-        >
-          {preview}
-        </div>
-      </div>
-    );
-  } else {
-    body = (
-      <div className="flex min-h-0 flex-1">
-        <ResizablePanelGroup
-          orientation="horizontal"
-          className="min-h-0 min-w-0 flex-1"
-        >
-          {/* Percentage strings: the library reads a bare number as pixels. */}
-          <ResizablePanel id="content" minSize="30%">
-            <div
-              data-testid="workbench-content"
-              className="flex h-full min-h-0 flex-col overflow-y-auto"
-            >
-              {content}
-            </div>
-          </ResizablePanel>
-          <ResizableHandle withGrip aria-label={splitLabel} />
-          <ResizablePanel id="preview" minSize="30%">
-            <div
-              data-testid="workbench-preview"
-              className="flex h-full min-h-0 flex-col"
-            >
-              {preview}
-            </div>
-          </ResizablePanel>
-        </ResizablePanelGroup>
-        {sheet ? (
-          <Sheet
-            data={data}
-            details={details}
-            sheet={sheet}
-            onSheetChange={onSheetChange}
-            className="w-90 shrink-0 border-l border-border"
-          />
-        ) : null}
-      </div>
-    );
-  }
-
   return (
     <div
       ref={rootRef}
@@ -314,7 +320,17 @@ export function WorkbenchLayout({
       className="flex h-full min-h-0 min-w-0 flex-col bg-background"
     >
       {header(tier)}
-      {body}
+      {tier === "phone" ? (
+        <PhoneLayout
+          {...body}
+          phoneBar={phoneBar}
+          detailsRequest={detailsRequest}
+        />
+      ) : tier === "tablet" ? (
+        <TabletBody {...body} />
+      ) : (
+        <DesktopBody {...body} />
+      )}
     </div>
   );
 }

@@ -91,48 +91,42 @@ function Confirm({
   );
 }
 
-export function OverrideDialog({
-  open,
-  onOpenChange,
-  name,
-  owner,
-  isPending,
-  onConfirm,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  name: string;
-  owner: string;
-  isPending: boolean;
-  onConfirm: () => void;
-}) {
-  return (
-    <Confirm
-      open={open}
-      onOpenChange={onOpenChange}
-      title={`Override ${name}?`}
-      description={`Your site will have its own version of ${owner}'s email.`}
-      bullets={[
-        `Your version starts as ${owner}'s current one, and you can then change its subject, preview text and body.`,
-        `${owner}'s later updates wait for your review instead of replacing your version.`,
-        `You can reset to ${owner}'s version at any time. Both are recorded in the activity log.`,
-      ]}
-      confirmLabel="Override"
-      pendingLabel="Overriding…"
-      isPending={isPending}
-      onConfirm={onConfirm}
-    />
-  );
-}
+/** What each confirmation says, by act. */
+const CONFIRM_COPY = {
+  override: (name: string, owner: string) => ({
+    title: `Override ${name}?`,
+    description: `Your site will have its own version of ${owner}'s email.`,
+    bullets: [
+      `Your version starts as ${owner}'s current one, and you can then change its subject, preview text and body.`,
+      `${owner}'s later updates wait for your review instead of replacing your version.`,
+      `You can reset to ${owner}'s version at any time. Both are recorded in the activity log.`,
+    ],
+    confirmLabel: "Override",
+    pendingLabel: "Overriding…",
+    destructive: false,
+  }),
+  reset: (name: string, owner: string) => ({
+    title: `Reset ${name} to ${owner}'s version?`,
+    description: `Your site's version is replaced by ${owner}'s current one.`,
+    bullets: [
+      `The subject, preview text and both bodies become ${owner}'s again, and ${owner} keeps them up to date.`,
+      "Your settings stay as they are: name, layout, provider, sending, From, Reply-To, copies and attachments.",
+      "You can undo it until you leave this email.",
+    ],
+    confirmLabel: "Reset",
+    pendingLabel: "Resetting…",
+    destructive: true,
+  }),
+};
 
-export function ResetDialog({
-  open,
-  onOpenChange,
+/** The confirmation before an email changes hands: Override or Reset. */
+export function OwnershipConfirm({
+  act,
   name,
   owner,
-  isPending,
-  onConfirm,
+  ...rest
 }: {
+  act: keyof typeof CONFIRM_COPY;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   name: string;
@@ -140,24 +134,7 @@ export function ResetDialog({
   isPending: boolean;
   onConfirm: () => void;
 }) {
-  return (
-    <Confirm
-      open={open}
-      onOpenChange={onOpenChange}
-      title={`Reset ${name} to ${owner}'s version?`}
-      description={`Your site's version is replaced by ${owner}'s current one.`}
-      bullets={[
-        `The subject, preview text and both bodies become ${owner}'s again, and ${owner} keeps them up to date.`,
-        "Your settings stay as they are: name, layout, provider, sending, From, Reply-To, copies and attachments.",
-        "You can undo it until you leave this email.",
-      ]}
-      confirmLabel="Reset"
-      pendingLabel="Resetting…"
-      destructive
-      isPending={isPending}
-      onConfirm={onConfirm}
-    />
-  );
+  return <Confirm {...rest} {...CONFIRM_COPY[act](name, owner)} />;
 }
 
 /**
