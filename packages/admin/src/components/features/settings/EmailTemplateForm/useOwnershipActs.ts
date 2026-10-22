@@ -65,6 +65,54 @@ function deleteRefusalFor(
     : `Can't delete: ${ownerName(template)}'s email`;
 }
 
+/** The note offering to undo the last reset or applied review. */
+function undoNoteFor(
+  undoable: Undoable | null,
+  owner: string,
+  onUndo: () => void,
+  isPending: boolean
+): UndoNote | null {
+  if (!undoable) return null;
+  const message =
+    undoable.kind === "reset"
+      ? `Reset to ${owner}'s version.`
+      : `${owner}'s update applied.`;
+  return { message, onUndo, isPending };
+}
+
+/** The header menu's acts for this email and this reader. */
+function menuFor({
+  template,
+  hasPermission,
+  startReview,
+  setDialog,
+}: {
+  template: EmailTemplateRecord | undefined;
+  hasPermission: (slug: string) => boolean;
+  startReview: () => void;
+  setDialog: (dialog: WorkbenchDialog) => void;
+}): WorkbenchMenu {
+  if (!template) return {};
+  const canDuplicate =
+    template.kind === "template" &&
+    holdsAny(hasPermission, EMAIL_TEMPLATE_CREATE_PERMISSIONS);
+  const canDelete =
+    isDeletable(template) &&
+    holdsAny(hasPermission, EMAIL_TEMPLATE_DELETE_PERMISSIONS);
+  return {
+    onDuplicate: canDuplicate
+      ? () =>
+          navigateTo(
+            withQuery(ROUTES.EMAIL_MESSAGES_CREATE, { duplicate: template.id })
+          )
+      : undefined,
+    onReview: template.ownerChanged ? startReview : undefined,
+    onReset: template.overridden ? () => setDialog("reset") : undefined,
+    onDelete: canDelete ? () => setDialog("delete") : undefined,
+    deleteRefusal: deleteRefusalFor(template),
+  };
+}
+
 const failed = (title: string) => (error: Error) =>
   toast.error(title, { description: error.message });
 
@@ -148,47 +196,17 @@ export function useOwnershipActs({
     }
   };
 
-  const undoNote: UndoNote | null = undoable
-    ? {
-        message:
-          undoable.kind === "reset"
-            ? `Reset to ${owner}'s version.`
-            : `${owner}'s update applied.`,
-        onUndo: runUndo,
-        isPending: override.isPending || undoUpdate.isPending,
-      }
-    : null;
-
-  const canDuplicate =
-    template?.kind === "template" &&
-    holdsAny(hasPermission, EMAIL_TEMPLATE_CREATE_PERMISSIONS);
-  const canDelete =
-    template !== undefined &&
-    isDeletable(template) &&
-    holdsAny(hasPermission, EMAIL_TEMPLATE_DELETE_PERMISSIONS);
-
-  const menu: WorkbenchMenu = {
-    onDuplicate:
-      canDuplicate && template
-        ? () =>
-            navigateTo(
-              withQuery(ROUTES.EMAIL_MESSAGES_CREATE, {
-                duplicate: template.id,
-              })
-            )
-        : undefined,
-    onReview: template?.ownerChanged ? startReview : undefined,
-    onReset: template?.overridden ? () => setDialog("reset") : undefined,
-    onDelete: canDelete ? () => setDialog("delete") : undefined,
-    deleteRefusal: deleteRefusalFor(template),
-  };
-
   return {
     dialog,
     setDialog,
     owner,
-    menu,
-    undoNote,
+    menu: menuFor({ template, hasPermission, startReview, setDialog }),
+    undoNote: undoNoteFor(
+      undoable,
+      owner,
+      runUndo,
+      override.isPending || undoUpdate.isPending
+    ),
     startReview,
     confirmOverride,
     confirmReset,
