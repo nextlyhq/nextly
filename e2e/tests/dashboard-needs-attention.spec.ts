@@ -61,8 +61,13 @@ test("the card's link opens the posts it counted", async ({ page }) => {
 
   await postsLink.click();
   await expect(page).toHaveURL(/\/admin\/collections\/posts\?/);
+  // The post in the list. Visible matches only: the page also holds hidden
+  // copies of each title, which a plain text match finds first.
   await expect(
-    page.getByText(`Needs attention e2e ${stamp}`, { exact: false }).first()
+    page
+      .getByText(`Needs attention e2e ${stamp}`, { exact: false })
+      .filter({ visible: true })
+      .first()
   ).toBeVisible();
 
   // The list the link opened holds as many entries as the card counted: the

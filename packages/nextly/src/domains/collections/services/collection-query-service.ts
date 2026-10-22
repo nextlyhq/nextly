@@ -3806,20 +3806,11 @@ export class CollectionQueryService extends BaseService {
       if (!plan.allowed) return plan.denied;
       const { schema, whereConditions } = plan;
 
-      // Build the count query
-      let query = this.db.select({ count: sql<number>`count(*)` }).from(schema);
-
-      // Apply combined where conditions
-      if (whereConditions.length > 0) {
-        query = query.where(
-          whereConditions.length === 1
-            ? whereConditions[0]
-            : and(...whereConditions)
-        );
-      }
-
-      // Execute count query
-      const result = await query;
+      const result = await this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(schema)
+        // `and` of none is no filter, and of one is that condition alone.
+        .where(and(...whereConditions));
       const totalDocs = Number(result[0]?.count || 0);
 
       return {
@@ -3829,24 +3820,35 @@ export class CollectionQueryService extends BaseService {
         data: { totalDocs },
       };
     } catch (error: unknown) {
-      const message =
-        error instanceof Error ? error.message : "Failed to count entries";
-      this.logger.error("Error counting entries", {
-        collectionName: params.collectionName,
-        error: message,
-      });
-      return {
-        success: false,
-        // Mirrors listEntries: a refusal is a 403, not a server fault, and the
-        // count must report it the same way.
-        statusCode: NextlyError.is(error) ? error.statusCode : 500,
-        message,
-        data: null,
-        // Same reason as listEntries: without the code the boundary rebuilds a
-        // typed refusal as a generic internal error.
-        ...errorEnvelopeFields(error),
-      };
+      return this.countFailed(params.collectionName, error);
     }
+  }
+
+  /**
+   * A count that failed, as both counts report it: logged, and returned with
+   * the error's own status and code.
+   */
+  private countFailed(
+    collectionName: string,
+    error: unknown
+  ): CollectionServiceResult<never> {
+    const message =
+      error instanceof Error ? error.message : "Failed to count entries";
+    this.logger.error("Error counting entries", {
+      collectionName,
+      error: message,
+    });
+    return {
+      success: false,
+      // Mirrors listEntries: a refusal is a 403, not a server fault, and the
+      // count must report it the same way.
+      statusCode: NextlyError.is(error) ? error.statusCode : 500,
+      message,
+      data: null,
+      // Same reason as listEntries: without the code the boundary rebuilds a
+      // typed refusal as a generic internal error.
+      ...errorEnvelopeFields(error),
+    };
   }
 
   /**
@@ -3880,15 +3882,11 @@ export class CollectionQueryService extends BaseService {
       if (!plan.allowed) return plan.denied;
       const { schema, whereConditions } = plan;
 
-      let query = this.db.select({ id: schema.id }).from(schema);
-      if (whereConditions.length > 0) {
-        query = query.where(
-          whereConditions.length === 1
-            ? whereConditions[0]
-            : and(...whereConditions)
-        );
-      }
-      const rows = await query.limit(params.cap + 1);
+      const rows = await this.db
+        .select({ id: schema.id })
+        .from(schema)
+        .where(and(...whereConditions))
+        .limit(params.cap + 1);
 
       return {
         success: true,
@@ -3900,20 +3898,8 @@ export class CollectionQueryService extends BaseService {
         },
       };
     } catch (error: unknown) {
-      const message =
-        error instanceof Error ? error.message : "Failed to count entries";
-      this.logger.error("Error counting entries", {
-        collectionName: params.collectionName,
-        error: message,
-      });
       // Reported as `countEntries` reports it, so a refusal stays a typed 403.
-      return {
-        success: false,
-        statusCode: NextlyError.is(error) ? error.statusCode : 500,
-        message,
-        data: null,
-        ...errorEnvelopeFields(error),
-      };
+      return this.countFailed(params.collectionName, error);
     }
   }
 

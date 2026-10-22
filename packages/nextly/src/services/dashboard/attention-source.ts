@@ -275,6 +275,42 @@ function partLabel(part: AttentionPart): string {
   return getSource(`${part.contentKind}:${part.slug}`)?.label ?? part.slug;
 }
 
+/** One bucket of the answer: a kind's total or one part's count. */
+interface AttentionBucket {
+  value: string;
+  count: number;
+  atLeast?: boolean;
+}
+
+/**
+ * One kind's buckets: its total, then a bucket per part with something in it,
+ * each part with the label its link is shown under. None for an empty kind.
+ */
+function answerBuckets(answer: AttentionAnswer): {
+  buckets: AttentionBucket[];
+  choices: { value: string; label: string }[];
+} {
+  const parts = answer.parts.filter(part => part.count > 0);
+  const total =
+    answer.count ?? parts.reduce((sum, part) => sum + part.count, 0);
+  if (total === 0) return { buckets: [], choices: [] };
+  const atLeast = answer.atLeast || parts.some(part => part.atLeast);
+  const buckets: AttentionBucket[] = [
+    { value: answer.kind, count: total, ...(atLeast ? { atLeast: true } : {}) },
+  ];
+  const choices: { value: string; label: string }[] = [];
+  for (const part of parts) {
+    const value = attentionPartKey(answer.kind, part.contentKind, part.slug);
+    buckets.push({
+      value,
+      count: part.count,
+      ...(part.atLeast ? { atLeast: true } : {}),
+    });
+    choices.push({ value, label: partLabel(part) });
+  }
+  return { buckets, choices };
+}
+
 /**
  * The answers as a grouped result: a bucket per kind with something waiting,
  * then a bucket per part with something waiting, largest first as every
@@ -282,28 +318,12 @@ function partLabel(part: AttentionPart): string {
  * read the same.
  */
 function asGroupedResult(answers: readonly AttentionAnswer[]): WidgetResult {
-  const buckets: { value: string; count: number; atLeast?: boolean }[] = [];
+  const buckets: AttentionBucket[] = [];
   const choices: { value: string; label: string }[] = [];
   for (const answer of answers) {
-    const parts = answer.parts.filter(part => part.count > 0);
-    const total =
-      answer.count ?? parts.reduce((sum, part) => sum + part.count, 0);
-    if (total === 0) continue;
-    const atLeast = answer.atLeast || parts.some(part => part.atLeast);
-    buckets.push({
-      value: answer.kind,
-      count: total,
-      ...(atLeast ? { atLeast: true } : {}),
-    });
-    for (const part of parts) {
-      const value = attentionPartKey(answer.kind, part.contentKind, part.slug);
-      buckets.push({
-        value,
-        count: part.count,
-        ...(part.atLeast ? { atLeast: true } : {}),
-      });
-      choices.push({ value, label: partLabel(part) });
-    }
+    const read = answerBuckets(answer);
+    buckets.push(...read.buckets);
+    choices.push(...read.choices);
   }
   // Stable, so equal counts keep the kind-then-part order they were built in.
   buckets.sort((a, b) => b.count - a.count);

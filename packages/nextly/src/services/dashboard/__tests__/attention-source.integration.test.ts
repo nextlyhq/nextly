@@ -360,6 +360,25 @@ describe.each(getConfiguredTestDialects())(
       expect(exact.data?.totalDocs).toBe(ATTENTION_COUNT_CAP + 1);
     });
 
+    it("counts every row when nothing narrows the read", async () => {
+      // A trusted read of a collection with no lifecycle, no hooks and no
+      // filter: the plan holds no condition at all, and both counts must read
+      // the whole table rather than none of it.
+      const { handler } = await boot();
+      await seed(handler, 3);
+      const exact = await handler.countEntries({
+        collectionName: SLUG,
+        overrideAccess: true,
+      });
+      expect(exact.data?.totalDocs).toBe(3);
+      const bounded = await handler.countEntriesUpTo({
+        collectionName: SLUG,
+        overrideAccess: true,
+        cap: ATTENTION_COUNT_CAP,
+      });
+      expect(bounded.data).toEqual({ count: 3, atLeast: false });
+    });
+
     it("counts the rows a read hook narrows to, as the exact count does", async () => {
       const { handler } = await boot();
       await seed(handler, 5);

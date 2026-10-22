@@ -20,7 +20,7 @@ import {
   IN_RELEASE_KEY,
   PENDING_CHANGE_KEY,
 } from "nextly/reserved-filter-keys";
-import type { WidgetSlot } from "nextly/widget-result";
+import type { WidgetResult, WidgetSlot } from "nextly/widget-result";
 
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 
@@ -96,39 +96,32 @@ function partHref(
   return filteredListHref(slug, { [PENDING_CHANGE_KEY]: true });
 }
 
+/** A grouped answer, the one shape this card's source gives. */
+type GroupedResult = Extract<WidgetResult, { op: "groupBy" }>;
+
+/** Each kind's own row and each kind's parts, as the buckets name them. */
+interface ReadBuckets {
+  rows: Map<AttentionKind, AttentionKindRow>;
+  partsOf: Map<AttentionKind, AttentionPartRow[]>;
+}
+
 /**
- * The card's view of its slot. `now` is when the links are built, so the week
- * a "Publishing this week" link opens ends a week from the click's page.
+ * Sorts the answer's buckets into kinds and parts by their keys. A bucket with
+ * nothing in it, or with a key this admin does not know, is left out.
  */
-export function attentionView(
-  slot: WidgetSlot | undefined,
-  now: number
-): AttentionView {
-  if (slot === undefined) return { state: "loading" };
-  if (!slot.ok) {
-    return slot.code === "unavailable"
-      ? { state: "unavailable" }
-      : { state: "error", message: slot.error };
-  }
-  const { result } = slot;
-  if (result.op !== "groupBy") {
-    return {
-      state: "error",
-      message: "This card received an unexpected answer.",
-    };
-  }
+function readBuckets(result: GroupedResult, now: number): ReadBuckets {
   const labels = new Map(
     (result.field?.choices ?? []).map(choice => [choice.value, choice.label])
   );
-  const rows = new Map<AttentionKind, AttentionKindRow>();
-  const partsOf = new Map<AttentionKind, AttentionPartRow[]>();
+  const read: ReadBuckets = { rows: new Map(), partsOf: new Map() };
   for (const bucket of result.buckets) {
-    if (bucket.value === null || bucket.count <= 0) continue;
-    const key = parseAttentionKey(bucket.value);
+    const value = bucket.value;
+    if (value === null || bucket.count <= 0) continue;
+    const key = parseAttentionKey(value);
     if (key === null) continue;
     const atLeast = bucket.atLeast === true;
     if (!("part" in key)) {
-      rows.set(key.kind, {
+      read.rows.set(key.kind, {
         kind: key.kind,
         label: KIND_LABELS[key.kind],
         count: bucket.count,
@@ -138,17 +131,22 @@ export function attentionView(
       });
       continue;
     }
-    const parts = partsOf.get(key.kind) ?? [];
+    const parts = read.partsOf.get(key.kind) ?? [];
     parts.push({
-      key: bucket.value,
-      label: labels.get(bucket.value) ?? key.part.slug,
+      key: value,
+      label: labels.get(value) ?? key.part.slug,
       count: bucket.count,
       atLeast,
       href: partHref(key.kind, key.part.contentKind, key.part.slug, now),
     });
-    partsOf.set(key.kind, parts);
+    read.partsOf.set(key.kind, parts);
   }
-  const kinds = ATTENTION_KINDS.flatMap(kind => {
+  return read;
+}
+
+/** The kinds with something waiting, in the order the card lists them. */
+function kindRows({ rows, partsOf }: ReadBuckets): AttentionKindRow[] {
+  return ATTENTION_KINDS.flatMap(kind => {
     const row = rows.get(kind);
     if (row === undefined) return [];
     const parts = partsOf.get(kind) ?? [];
@@ -165,6 +163,29 @@ export function attentionView(
       },
     ];
   });
+}
+
+/**
+ * The card's view of its slot. `now` is when the links are built, so the week
+ * a "Publishing this week" link opens ends a week from the click's page.
+ */
+export function attentionView(
+  slot: WidgetSlot | undefined,
+  now: number
+): AttentionView {
+  if (slot === undefined) return { state: "loading" };
+  if (!slot.ok) {
+    return slot.code === "unavailable"
+      ? { state: "unavailable" }
+      : { state: "error", message: slot.error };
+  }
+  if (slot.result.op !== "groupBy") {
+    return {
+      state: "error",
+      message: "This card received an unexpected answer.",
+    };
+  }
+  const kinds = kindRows(readBuckets(slot.result, now));
   return kinds.length === 0 ? { state: "clear" } : { state: "ready", kinds };
 }
 
