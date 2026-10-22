@@ -10,7 +10,7 @@
 // Self-skips when TEST_MYSQL_URL is unset.
 
 import mysql from "mysql2/promise";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createMySqlAdapter, type MySqlAdapter } from "../index";
 
@@ -61,20 +61,28 @@ describe("MySQL transaction strictSqlMode", async () => {
     return Number(row.id);
   };
 
-  // Runs `run` with the server's own mode set to `mode`, which a new connection starts with, and
-  // puts the server's mode back afterwards.
-  const withServerMode = async <T>(
-    mode: string,
+  // Runs `run` with each connection the adapter opens of its own starting as a server configured
+  // by `setup` would start it: the statements run on it as it opens. The server's own settings are
+  // left alone, since other suites share it while this one runs.
+  const withNewSessions = async <T>(
+    setup: string[],
     run: () => Promise<T>
   ): Promise<T> => {
-    const [row] = await adapter.executeQuery<{ mode: string }>(
-      "SELECT @@GLOBAL.sql_mode AS mode"
-    );
-    await adapter.executeQuery("SET GLOBAL sql_mode = ?", [mode]);
+    const open = mysql.createConnection.bind(mysql);
+    const opened = vi
+      .spyOn(mysql, "createConnection")
+      .mockImplementation((async (config: unknown) => {
+        const connection = await open(config as never);
+        for (const statement of setup) await connection.query(statement);
+        return connection;
+      }) as never);
     try {
-      return await run();
+      const result = await run();
+      // The case ran on a connection set up this way, not on the server's own defaults.
+      expect(opened).toHaveBeenCalled();
+      return result;
     } finally {
-      await adapter.executeQuery("SET GLOBAL sql_mode = ?", [row.mode]);
+      opened.mockRestore();
     }
   };
 
@@ -166,7 +174,7 @@ describe("MySQL transaction strictSqlMode", async () => {
   // A migration file marked to run outside a transaction runs statement by statement, each
   // committing as it runs; `withSession` keeps them on one connection of its own so its session's
   // mode can be set for all of them. That connection is new, so it starts with the server's mode,
-  // which these cases set server-wide for the length of the case.
+  // which these cases stand in for (`withNewSessions`).
   it("runs a session outside a transaction in strict mode, refusing a narrowing that would cut a value, on a connection of its own", async () => {
     await adapter.executeQuery(`DELETE FROM ${TABLE}`);
     await adapter.executeQuery(`ALTER TABLE ${TABLE} MODIFY COLUMN v TEXT`);
@@ -174,7 +182,7 @@ describe("MySQL transaction strictSqlMode", async () => {
 
     let inside = "";
     let sessionId = 0;
-    await withServerMode("", async () => {
+    await withNewSessions(["SET SESSION sql_mode = ''"], async () => {
       await expect(
         adapter.withSession(
           async session => {
@@ -194,6 +202,8 @@ describe("MySQL transaction strictSqlMode", async () => {
 
     // mysql2's client flags add IGNORE_SPACE to every connection's mode.
     expect(inside.split(",")).toContain("STRICT_ALL_TABLES");
+    // The session started without the server's default strict flag, as a lax server's would.
+    expect(inside.split(",")).not.toContain("STRICT_TRANS_TABLES");
     expect(await stored()).toEqual(["abcdefgh"]);
     // Not the pool's connection, and closed once the session ended.
     expect(sessionId).not.toBe(await connectionId());
@@ -202,7 +212,7 @@ describe("MySQL transaction strictSqlMode", async () => {
 
   it("keeps every flag the server's mode has in a session outside a transaction", async () => {
     let inside = "";
-    await withServerMode("NO_ZERO_DATE", () =>
+    await withNewSessions(["SET SESSION sql_mode = 'PIPES_AS_CONCAT'"], () =>
       adapter.withSession(
         async session => {
           const [row] = await session.execute<{ mode: string }>(
@@ -214,7 +224,7 @@ describe("MySQL transaction strictSqlMode", async () => {
       )
     );
     expect(inside.split(",")).toEqual(
-      expect.arrayContaining(["NO_ZERO_DATE", "STRICT_ALL_TABLES"])
+      expect.arrayContaining(["PIPES_AS_CONCAT", "STRICT_ALL_TABLES"])
     );
   });
 
@@ -247,19 +257,11 @@ describe("MySQL transaction strictSqlMode", async () => {
 
   it("commits a session's statements on a server whose sessions start with autocommit off", async () => {
     await adapter.executeQuery(`DELETE FROM ${TABLE}`);
-    const [row] = await adapter.executeQuery<{ autocommit: number }>(
-      "SELECT @@GLOBAL.autocommit AS autocommit"
-    );
-    await adapter.executeQuery("SET GLOBAL autocommit = 0");
-    try {
-      await adapter.withSession(async session => {
+    await withNewSessions(["SET SESSION autocommit = 0"], () =>
+      adapter.withSession(async session => {
         await session.execute(`INSERT INTO ${TABLE} (v) VALUES ('committed')`);
-      });
-    } finally {
-      await adapter.executeQuery(
-        `SET GLOBAL autocommit = ${Number(row.autocommit)}`
-      );
-    }
+      })
+    );
     // Read from a connection of its own: a row left in the session's open transaction is
     // invisible there.
     const other = await mysql.createConnection(TEST_DB_URL as string);

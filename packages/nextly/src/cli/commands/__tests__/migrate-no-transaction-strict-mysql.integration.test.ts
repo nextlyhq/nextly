@@ -9,19 +9,29 @@
  * each committing as it runs, so its statements share one connection of their
  * own whose session is put in strict mode, closed afterwards.
  *
- * The server's own mode is set to no strict mode for each case, and put back
- * afterwards: a new connection starts with it.
+ * Each connection the adapter opens of its own starts with no strict mode, as
+ * on a server configured that way. The server's own mode is left alone, since
+ * other suites share it while this one runs.
  *
  * Self-skips when TEST_MYSQL_URL is unset.
  */
 import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import mysql from "mysql2/promise";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 
 import { createAdapter } from "../../../database/factory";
 import { getSchemaEventsDdl } from "../../../domains/schema/events/schema-events-ddl";
@@ -38,6 +48,12 @@ const LONG = "x".repeat(300);
 
 const logger = createLogger({ quiet: true });
 
+// The driver the MySQL adapter loads, which may be another copy than this
+// package's: the one whose connections a session opens.
+const adapterDriver = createRequire(
+  createRequire(import.meta.url).resolve("@nextlyhq/adapter-mysql")
+)("mysql2/promise") as typeof mysql;
+
 let seq = 0;
 
 describeMysql(
@@ -48,18 +64,13 @@ describeMysql(
     let url: string;
     let dir: string;
     let lax: DrizzleAdapter;
-    let serverMode: string;
+    let opened: MockInstance | undefined;
 
     beforeEach(async () => {
       dbName = `nextly_nt_strict_${RUN_ID}_${seq++}`;
       const server = new URL(MYSQL_URL);
       server.pathname = "/";
       root = await mysql.createConnection(server.toString());
-      const [modes] = await root.query<mysql.RowDataPacket[]>(
-        "SELECT @@GLOBAL.sql_mode AS mode"
-      );
-      serverMode = String(modes[0]?.mode);
-      await root.query("SET GLOBAL sql_mode = ''");
       await root.query(`CREATE DATABASE \`${dbName}\``);
       await root.query(`USE \`${dbName}\``);
       await root.query(`CREATE TABLE ${TABLE} (id int PRIMARY KEY, v TEXT)`);
@@ -77,13 +88,19 @@ describeMysql(
       for (const statement of getSchemaEventsDdl("mysql")) {
         await lax.executeQuery(statement);
       }
+      const open = adapterDriver.createConnection.bind(adapterDriver);
+      opened = vi
+        .spyOn(adapterDriver, "createConnection")
+        .mockImplementation((async (config: unknown) => {
+          const connection = await open(config as never);
+          await connection.query("SET SESSION sql_mode = ''");
+          return connection;
+        }) as never);
     });
 
     afterEach(async () => {
+      opened?.mockRestore();
       await lax?.disconnect();
-      if (serverMode !== undefined) {
-        await root?.query("SET GLOBAL sql_mode = ?", [serverMode]);
-      }
       await root?.query(`DROP DATABASE IF EXISTS \`${dbName}\``);
       await root?.end();
       if (dir) rmSync(dir, { recursive: true, force: true });
@@ -131,6 +148,8 @@ describeMysql(
         () => undefined,
         (caught: unknown) => caught
       );
+      // The file ran on a connection that started with no strict mode.
+      expect(opened).toHaveBeenCalled();
 
       expect(thrown).toBeInstanceOf(NextlyError);
       const error = thrown as NextlyError;
