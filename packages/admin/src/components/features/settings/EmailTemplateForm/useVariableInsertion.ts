@@ -3,8 +3,8 @@
  *
  * Its own module because the rule it encodes is subtle enough to be worth
  * naming, and easy to lose in a component this size: the insert must target the
- * body being EDITED. On the plain-text tab the only mounted textarea is bound to
- * `plainTextContent`, so writing to `htmlContent` would silently corrupt the
+ * body being EDITED. Each tab mounts its own editor, bound to its own field, so
+ * writing to `htmlContent` from the plain-text tab would silently corrupt the
  * HTML at an unrelated offset — a defect with no visible symptom until the mail
  * is sent.
  */
@@ -17,30 +17,21 @@ import type { TemplateFormValues } from "./schema";
 export function useVariableInsertion({
   form,
   editorTab,
-  editorWrapRef,
-  htmlEditorViewRef,
+  bodyViewRef,
 }: {
   form: ReturnType<typeof useForm<TemplateFormValues>>;
   editorTab: "html" | "text";
-  editorWrapRef: RefObject<HTMLDivElement | null>;
-  htmlEditorViewRef: RefObject<EditorView | null>;
+  /** The mounted body editor: the tab being edited. */
+  bodyViewRef: RefObject<EditorView | null>;
 }): (name: string) => void {
   return useCallback(
     (name: string) => {
       const token = `{{${name}}}`;
-      // Insert into whichever body is being edited; on the plain-text tab the
-      // only mounted textarea is bound to plainTextContent, so writing to
-      // htmlContent would silently corrupt the HTML at an unrelated offset.
-      const fieldName =
-        editorTab === "html" ? "htmlContent" : "plainTextContent";
-      const current = form.getValues(fieldName) ?? "";
-
-      // The HTML tab is CodeMirror, which owns its document and has no
-      // textarea to read a caret from. Dispatching the insert lets it update
-      // the document and the cursor together; onChange then carries the new
-      // value back to the form.
-      const view = htmlEditorViewRef.current;
-      if (editorTab === "html" && view) {
+      // The editor owns its document, so the insert is dispatched to it: it
+      // updates the text and the caret together, and its onChange carries the
+      // new value to the field this tab is bound to.
+      const view = bodyViewRef.current;
+      if (view) {
         const { from, to } = view.state.selection.main;
         view.dispatch({
           changes: { from, to, insert: token },
@@ -49,28 +40,14 @@ export function useVariableInsertion({
         view.focus();
         return;
       }
-
-      const ta = editorWrapRef.current?.querySelector("textarea");
-      if (!ta) {
-        form.setValue(fieldName, current + token, {
-          shouldDirty: true,
-          shouldValidate: true,
-        });
-        return;
-      }
-      const start = ta.selectionStart ?? current.length;
-      const end = ta.selectionEnd ?? current.length;
-      const next = current.slice(0, start) + token + current.slice(end);
-      form.setValue(fieldName, next, {
+      // The editor is still loading: append to the field being edited.
+      const fieldName =
+        editorTab === "html" ? "htmlContent" : "plainTextContent";
+      form.setValue(fieldName, (form.getValues(fieldName) ?? "") + token, {
         shouldDirty: true,
         shouldValidate: true,
       });
-      requestAnimationFrame(() => {
-        ta.focus();
-        const pos = start + token.length;
-        ta.setSelectionRange(pos, pos);
-      });
     },
-    [form, editorTab, editorWrapRef, htmlEditorViewRef]
+    [form, editorTab, bodyViewRef]
   );
 }

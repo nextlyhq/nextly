@@ -116,6 +116,7 @@ function ContentColumn({
           isPending={isPending}
           isLayoutRow={isLayoutRow}
           ownsContent={owns}
+          completion={editor.completion}
         />
       </div>
       <div className="flex min-h-105 flex-1 flex-col overflow-hidden rounded-lg border border-border">
@@ -139,8 +140,7 @@ export function EmailTemplateForm({
 }: EmailTemplateFormProps): JSX.Element {
   const isEdit = mode === "edit";
   const slugTouchedRef = useRef(false);
-  const editorWrapRef = useRef<HTMLDivElement>(null);
-  const htmlEditorViewRef = useRef<EditorView | null>(null);
+  const bodyViewRef = useRef<EditorView | null>(null);
 
   const [editorTab, setEditorTab] = useState<"html" | "text">("html");
   const [sheet, setSheet] = useState<SheetPanel | null>(null);
@@ -239,8 +239,7 @@ export function EmailTemplateForm({
   const insertVariable = useVariableInsertion({
     form,
     editorTab,
-    editorWrapRef,
-    htmlEditorViewRef,
+    bodyViewRef,
   });
 
   const derived = useDerivedTemplateState({
@@ -254,6 +253,13 @@ export function EmailTemplateForm({
     layoutId,
     kind: currentKind,
   });
+
+  // What the editors complete: the declared variables, and the test data's
+  // shape for their properties.
+  const completion = useMemo(
+    () => ({ declared: variables ?? [], sample: derived.sampleData }),
+    [variables, derived.sampleData]
+  );
 
   const toggleSheet = (panel: SheetPanel) =>
     setSheet(current => (current === panel ? null : panel));
@@ -327,8 +333,8 @@ export function EmailTemplateForm({
               editor={{
                 editorTab,
                 onEditorTabChange: setEditorTab,
-                editorWrapRef,
-                htmlEditorViewRef,
+                bodyViewRef,
+                completion,
                 chips: (
                   <VariableChips
                     declared={variables ?? []}

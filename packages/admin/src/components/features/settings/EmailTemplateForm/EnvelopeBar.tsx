@@ -1,24 +1,19 @@
 "use client";
 
 /**
- * Everything that ADDRESSES the mail, in one strip.
+ * Everything that ADDRESSES the mail: who it's from, who replies go to, the
+ * subject, and the preview text an inbox shows after it.
  *
- * From, Reply-to, Subject and Preheader answer one question — who receives
- * this and what do they see before opening it — and they were split across two
- * places: Subject sat above the editor while the other three were three clicks
- * away behind a Settings tab. An author writing a subject line and an author
- * setting the preheader are the same person in the same moment, and the
- * preheader is literally the text that follows the subject in an inbox.
+ * Each is a single line of Liquid in the email editor, so a variable or a
+ * filter completes here as it does in the body, and a problem is named under
+ * its field. The subject and preview text are the owner's on an owner's email,
+ * read-only until the site overrides it; From and Reply-To are the site's on
+ * any email.
  *
- * Kept as a band above the panes rather than inside the inspector because all
- * four change what the preview renders, and a field whose effect is visible
- * belongs where its effect is.
- *
- * A LAYOUT row addresses nothing — it is a wrapper other templates are poured
- * into — so it gets the `{{content}}` guidance in this space instead.
+ * A LAYOUT row addresses nothing (it's a wrapper other emails are poured
+ * into), so it gets the `{{content}}` guidance in this space instead.
  */
-import { Input } from "@nextlyhq/ui";
-import type { JSX } from "react";
+import { useState, type JSX } from "react";
 import type { useForm } from "react-hook-form";
 
 import {
@@ -28,28 +23,97 @@ import {
   FormMessage,
 } from "@admin/components/ui/form";
 
+import { LazyLiquidEditor } from "./liquid/LazyLiquidEditor";
+import type { CompletionData } from "./liquid/liquid-completion";
+import type { LiquidProblem } from "./liquid/liquid-problems";
 import type { TemplateFormValues } from "./schema";
 
-/** One labelled field in the strip, laid out inline so the band stays shallow. */
-function EnvelopeField({
-  label,
-  htmlFor,
-  children,
-}: {
+type EnvelopeField = "subject" | "preheader" | "fromOverride" | "replyTo";
+
+const FIELDS: {
+  name: EnvelopeField;
   label: string;
-  htmlFor?: string;
-  children: React.ReactNode;
+  placeholder: string;
+  /** The owner's part of the email, locked until the site overrides it. */
+  owners: boolean;
+}[] = [
+  {
+    name: "subject",
+    label: "Subject",
+    placeholder: "Welcome to {{appName}}",
+    owners: true,
+  },
+  {
+    name: "preheader",
+    label: "Preview text",
+    placeholder: "The line an inbox shows after the subject",
+    owners: true,
+  },
+  {
+    name: "fromOverride",
+    label: "From",
+    placeholder: "The provider's sender",
+    owners: false,
+  },
+  {
+    name: "replyTo",
+    label: "Reply-To",
+    placeholder: "replies@example.com",
+    owners: false,
+  },
+];
+
+/** One labelled line, with its problem (or a refused save's message) under it. */
+function EnvelopeRow({
+  control,
+  field: spec,
+  isPending,
+  readOnly,
+  completion,
+}: {
+  control: ReturnType<typeof useForm<TemplateFormValues>>["control"];
+  field: (typeof FIELDS)[number];
+  isPending: boolean;
+  readOnly: boolean;
+  completion: CompletionData;
 }) {
+  const [problem, setProblem] = useState<LiquidProblem | null>(null);
   return (
-    <div className="flex min-w-0 flex-1 items-baseline gap-2">
-      <label
-        htmlFor={htmlFor}
-        className="shrink-0 text-xs font-medium uppercase tracking-wide text-muted-foreground"
-      >
-        {label}
-      </label>
-      <div className="min-w-0 flex-1">{children}</div>
-    </div>
+    <FormField
+      control={control}
+      name={spec.name}
+      render={({ field }) => (
+        <FormItem className="grid grid-cols-1 items-start gap-1 space-y-0 sm:grid-cols-[6.5rem_minmax(0,1fr)] sm:gap-3">
+          <span className="pt-2 text-sm font-medium text-foreground">
+            {spec.label}
+          </span>
+          <div className="min-w-0 space-y-1">
+            <FormControl>
+              <div>
+                <LazyLiquidEditor
+                  singleLine
+                  mode="text"
+                  label={spec.label}
+                  value={field.value ?? ""}
+                  onChange={field.onChange}
+                  readOnly={readOnly}
+                  disabled={isPending}
+                  placeholder={spec.placeholder}
+                  completion={completion}
+                  onProblems={problems => setProblem(problems[0] ?? null)}
+                />
+              </div>
+            </FormControl>
+            {problem ? (
+              <p className="text-xs text-destructive" role="alert">
+                {problem.message}
+              </p>
+            ) : null}
+            <FormMessage />
+          </div>
+        </FormItem>
+      )}
+    />
   );
 }
 
@@ -58,6 +122,7 @@ export function EnvelopeBar({
   isPending,
   isLayoutRow,
   ownsContent,
+  completion,
 }: {
   control: ReturnType<typeof useForm<TemplateFormValues>>["control"];
   isPending: boolean;
@@ -67,6 +132,8 @@ export function EnvelopeBar({
    * Reply-To are the site's settings on any email.
    */
   ownsContent: boolean;
+  /** What the fields complete: the template's variables and test data. */
+  completion: CompletionData;
 }): JSX.Element {
   if (isLayoutRow) {
     return (
@@ -81,95 +148,17 @@ export function EnvelopeBar({
   }
 
   return (
-    <div className="flex flex-col gap-2 border-b border-border px-4 py-2.5">
-      <FormField
-        control={control}
-        name="subject"
-        render={({ field }) => (
-          <FormItem className="space-y-1">
-            <EnvelopeField label="Subject" htmlFor="envelope-subject">
-              <FormControl>
-                <input
-                  {...field}
-                  id="envelope-subject"
-                  disabled={isPending}
-                  readOnly={!ownsContent}
-                  placeholder="Welcome to {{appName}}"
-                  className="w-full bg-transparent text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground"
-                />
-              </FormControl>
-            </EnvelopeField>
-            <FormMessage />
-          </FormItem>
-        )}
-      />
-
-      {/* The inbox preview line — the text that follows the subject, which is
-          why it sits under it rather than in a settings panel. */}
-      <FormField
-        control={control}
-        name="preheader"
-        render={({ field }) => (
-          <FormItem className="space-y-1">
-            <EnvelopeField label="Preview text" htmlFor="envelope-preheader">
-              <FormControl>
-                <input
-                  {...field}
-                  id="envelope-preheader"
-                  disabled={isPending}
-                  readOnly={!ownsContent}
-                  placeholder="Preview line shown after the subject"
-                  className="w-full bg-transparent text-sm text-muted-foreground outline-none placeholder:text-muted-foreground"
-                />
-              </FormControl>
-            </EnvelopeField>
-            <FormMessage />
-          </FormItem>
-        )}
-      />
-
-      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2 border-t border-border pt-2">
-        <FormField
+    <div className="flex flex-col gap-2.5 px-4 py-3">
+      {FIELDS.map(field => (
+        <EnvelopeRow
+          key={field.name}
           control={control}
-          name="fromOverride"
-          render={({ field }) => (
-            <FormItem className="min-w-0 flex-1 space-y-1">
-              <EnvelopeField label="From" htmlFor="envelope-from">
-                <FormControl>
-                  <Input
-                    {...field}
-                    id="envelope-from"
-                    disabled={isPending}
-                    placeholder="Provider default"
-                    className="h-7 border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0"
-                  />
-                </FormControl>
-              </EnvelopeField>
-              <FormMessage />
-            </FormItem>
-          )}
+          field={field}
+          isPending={isPending}
+          readOnly={field.owners && !ownsContent}
+          completion={completion}
         />
-        <FormField
-          control={control}
-          name="replyTo"
-          render={({ field }) => (
-            <FormItem className="min-w-0 flex-1 space-y-1">
-              <EnvelopeField label="Reply-to" htmlFor="envelope-reply-to">
-                <FormControl>
-                  <Input
-                    {...field}
-                    id="envelope-reply-to"
-                    disabled={isPending}
-                    placeholder="replies@example.com"
-                    className="h-7 border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0"
-                  />
-                </FormControl>
-              </EnvelopeField>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-      </div>
+      ))}
     </div>
   );
 }
