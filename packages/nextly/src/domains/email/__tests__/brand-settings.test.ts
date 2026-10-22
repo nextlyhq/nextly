@@ -18,7 +18,10 @@ import {
   STARTING_BRAND,
   type BrandSettings,
 } from "../brand-settings";
-import { oldEngineReasons } from "../services/liquid-compat";
+import {
+  oldEngineReasons,
+  templateReadsVariable,
+} from "../services/liquid-compat";
 import { readsVariable } from "../services/liquid-engine";
 import {
   renderTemplate,
@@ -180,6 +183,71 @@ describe("core's built-in emails with a changed accent", () => {
       { appName: "Acme", brand: accent }
     );
     expect(html).toBe("<p>Contoso</p>");
+  });
+});
+
+describe("a send that supplies its own `brand`", () => {
+  // Sites already send data of their own under `brand` (a product's brand
+  // name, say). Core's built-ins read the settings under a name no send can
+  // reach, so such a send renders exactly as it does without the key.
+  const bodies = BUILT_IN_TEMPLATES.filter(t => t.kind !== "layout");
+  const data = {
+    userName: "Priya",
+    resetLink: "https://x.test/r",
+    verifyLink: "https://x.test/v",
+  };
+
+  it.each(
+    bodies.flatMap(t =>
+      ["Nike", null, { accentColor: "red" }].map(
+        value => [t.slug, JSON.stringify(value), t, value] as const
+      )
+    )
+  )(
+    "renders %s with `brand` = %s exactly as without it",
+    (_slug, _shown, template, value) => {
+      for (const settings of [brand({}), brand({ accentColor: "#ff0066" })]) {
+        const render = (extra: Record<string, unknown>) =>
+          renderTemplate(
+            fieldsOf(template),
+            defaultLayoutTemplate,
+            { ...data, ...extra },
+            {
+              appName: "Acme",
+              brand: settings,
+            }
+          );
+        expect(render({ brand: value })).toEqual(render({}));
+      }
+    }
+  );
+
+  it("keeps the configured accent on the button", () => {
+    const reset = bodies.find(t => t.slug === "password-reset");
+    if (!reset) throw new Error("no password-reset");
+    const { html } = renderTemplate(
+      fieldsOf(reset),
+      null,
+      { brand: "Nike" },
+      {
+        appName: "Acme",
+        brand: brand({ accentColor: "#ff0066" }),
+      }
+    );
+    expect(html).toContain(`fillcolor="#ff0066"`);
+    expect(html).toContain(`background-color: #ff0066; color: #ffffff;`);
+  });
+
+  it("cannot reach the settings under the reserved name", () => {
+    const { html } = renderTemplate(
+      body("<p>{{ nextly_brand.accentColor }}</p>"),
+      null,
+      {
+        nextly_brand: { accentColor: "red" },
+      },
+      { appName: "Acme", brand: brand({ accentColor: "#ff0066" }) }
+    );
+    expect(html).toBe("<p>#ff0066</p>");
   });
 });
 
@@ -436,6 +504,19 @@ describe("resolving what is stored", () => {
       ...STARTING_BRAND,
       accentColor: "#123456",
     });
+  });
+});
+
+describe("whether a template reads a variable on the engine it renders with", () => {
+  it.each([
+    ["{{brand.accentColor}}", true],
+    // Liquid can't parse it, so it is kept on the old engine, which reads it.
+    ["{% if %} {{brand.accentColor}}", true],
+    ["{% if %} {{ brand.accentColor }}", true],
+    ["{% if %} {{ other.value }}", false],
+    ["{% if %} brand.accentColor", false],
+  ])("%s → %s", (source, expected) => {
+    expect(templateReadsVariable(source, "brand")).toBe(expected);
   });
 });
 

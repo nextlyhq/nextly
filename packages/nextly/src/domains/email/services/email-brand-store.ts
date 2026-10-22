@@ -44,6 +44,12 @@ export class EmailBrandStore extends BaseService {
    * there.
    */
   private snapshot: BrandSettings | null = null;
+  /**
+   * Moved by every save, when it starts and when its read-back lands. A read
+   * keeps what it read only if no save moved this while it ran, so a read that
+   * began before a save can never replace the save's settings with older ones.
+   */
+  private generation = 0;
 
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
@@ -55,13 +61,20 @@ export class EmailBrandStore extends BaseService {
     if (this.snapshot && transactionOpenInFlow(this.adapter)) {
       return this.snapshot;
     }
-    this.snapshot = await this.readTable();
-    return this.snapshot;
+    return this.refresh();
   }
 
   /** Read the settings into the snapshot (at the end of a boot). */
   async load(): Promise<void> {
-    this.snapshot = await this.readTable();
+    await this.refresh();
+  }
+
+  /** Read the table, keeping the result as the snapshot unless a save overtook the read. */
+  private async refresh(): Promise<BrandSettings> {
+    const started = this.generation;
+    const settings = await this.readTable();
+    if (this.generation === started) this.snapshot = settings;
+    return settings;
   }
 
   private async readTable(): Promise<BrandSettings> {
@@ -90,6 +103,7 @@ export class EmailBrandStore extends BaseService {
    * returns to its starting value.
    */
   async update(change: BrandSettingsUpdate): Promise<BrandSettings> {
+    this.generation++;
     const set: Record<string, unknown> = { updatedAt: new Date() };
     for (const [key, value] of Object.entries(change)) {
       if (value !== undefined) set[key] = value;
@@ -112,7 +126,9 @@ export class EmailBrandStore extends BaseService {
     }
     // Read back from the table whatever the flow, so what is returned, and
     // what this instance renders with from now on, is what was written.
-    this.snapshot = await this.readTable();
-    return this.snapshot;
+    const saved = await this.readTable();
+    this.generation++;
+    this.snapshot = saved;
+    return saved;
   }
 }

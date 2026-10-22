@@ -45,6 +45,7 @@ import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { isMissingTable } from "../../field-groups/migration/session";
 import { MetaService } from "../../meta";
 import {
+  BRAND_BINDING,
   EMAIL_SAFE_FONTS,
   resolveBrand,
   type BrandOverview,
@@ -88,8 +89,12 @@ import { transactionOpenInFlow } from "../transaction-flow";
 import type { EmailConfig } from "../types";
 
 import { EmailBrandStore } from "./email-brand-store";
-import { LIQUID_FIELDS, oldEngineReasons } from "./liquid-compat";
-import { parseLiquid, readsVariable, writesOutput } from "./liquid-engine";
+import {
+  LIQUID_FIELDS,
+  oldEngineReasons,
+  templateReadsVariable,
+} from "./liquid-compat";
+import { parseLiquid, writesOutput } from "./liquid-engine";
 import {
   DEFAULT_APP_NAME,
   renderTemplate,
@@ -352,9 +357,20 @@ async function chooseLayout(
 }
 
 /** Whether any of a template's own fields reads `brand`. */
-function textReadsBrand(template: EmailTemplateRecord): boolean {
-  return LIQUID_FIELDS.some(([field]) =>
-    readsVariable(template[field] ?? "", "brand")
+function textReadsBrand(
+  template: Pick<
+    TemplateFields,
+    "subject" | "htmlContent" | "plainTextContent" | "preheader"
+  >
+): boolean {
+  return LIQUID_FIELDS.some(([field]) => readsBrand(template[field] ?? ""));
+}
+
+/** Whether a template's text reads the settings, under either name, on its engine. */
+function readsBrand(source: string): boolean {
+  return (
+    templateReadsVariable(source, "brand") ||
+    templateReadsVariable(source, BRAND_BINDING)
   );
 }
 
@@ -1017,9 +1033,27 @@ export class EmailTemplateService extends BaseService {
       data,
       {
         appName: options?.appName ?? this.appName,
-        brand: await this.brandStore.read(),
+        brand: await this.brandFor(template, layout),
       }
     );
+  }
+
+  /**
+   * The brand settings, for a render that can use them: one with a layout, a
+   * layout rendering itself, or a template whose own text reads them. Nothing
+   * is read for any other, so an email without them never waits on the table.
+   */
+  private async brandFor(
+    template: Pick<
+      TemplateFields,
+      "kind" | "subject" | "htmlContent" | "plainTextContent" | "preheader"
+    >,
+    layout: EmailTemplateRecord | null
+  ): Promise<BrandSettings | undefined> {
+    if (!layout && template.kind !== "layout" && !textReadsBrand(template)) {
+      return undefined;
+    }
+    return this.brandStore.read();
   }
 
   /**
@@ -1888,7 +1922,7 @@ export class EmailTemplateService extends BaseService {
         legacy: await this.keptOnOldEngine(layout),
       },
       sampleData,
-      { appName: this.appName, brand: await this.brandStore.read() }
+      { appName: this.appName, brand: await this.brandFor(draft, layout) }
     );
   }
 
@@ -2422,7 +2456,7 @@ export class EmailTemplateService extends BaseService {
     // `brand`) and to the layout, so the email is reached through either.
     const via = {
       body: textReadsBrand(template),
-      layout: layout !== null && readsVariable(layout.htmlContent, "brand"),
+      layout: layout !== null && readsBrand(layout.htmlContent),
     };
     const reached = via.body || via.layout;
     return {

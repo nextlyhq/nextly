@@ -12,7 +12,7 @@
  * flagged, so no stored email changes without a person deciding it should.
  */
 
-import { parseLiquid } from "./liquid-engine";
+import { parseLiquid, readsVariable } from "./liquid-engine";
 import type { TemplateFields } from "./render-template";
 
 /** The fields Liquid renders. */
@@ -86,6 +86,19 @@ export function oldEngineReason(
   if ("problem" in parsed)
     return `Liquid can't read it: ${parsed.problem.message}`;
   return null;
+}
+
+/**
+ * Whether a template reads the top-level variable `name`, on the engine it
+ * renders with: as Liquid reads it, or, for text Liquid can't parse (which is
+ * kept on the old engine), as the old engine's `{{path}}` tokens do.
+ */
+export function templateReadsVariable(source: string, name: string): boolean {
+  if (!("problem" in parseLiquid(source))) return readsVariable(source, name);
+  for (const match of source.matchAll(OLD_TOKEN)) {
+    if (match[1].split(".")[0] === name) return true;
+  }
+  return false;
 }
 
 /** Each field of a template that would render differently as Liquid, with why. */

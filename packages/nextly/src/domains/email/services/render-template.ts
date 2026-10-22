@@ -24,6 +24,7 @@ import type {
   EmailTemplateRecord,
 } from "../../../schemas/email-templates/types";
 import {
+  BRAND_BINDING,
   brandVariables,
   STARTING_BRAND,
   type BrandSettings,
@@ -155,12 +156,17 @@ export function renderTemplate(
 ): RenderedTemplate {
   const legacy = template.legacy;
   const layoutData = withLayoutChrome(data, options);
-  // The body reads the brand settings as `brand` too, so a template can write
-  // its buttons in the accent, as core's built-ins do. A send's own `brand`
-  // wins here, as every explicit value does in a body: a template written for
-  // a `brand` its sends supply keeps reading it.
-  const bodyData =
-    data.brand === undefined ? { ...data, brand: layoutData.brand } : data;
+  // The body reads the brand settings as `brand` too, so a site's template
+  // can write in them. A send's own `brand` wins there, as every explicit value
+  // does in a body: a template written for a `brand` its sends supply keeps
+  // reading it.
+  // Under `nextly_brand` (BRAND_BINDING) the settings are there whatever the
+  // send holds, which is what core's built-ins read.
+  const bodyData = {
+    ...data,
+    ...(data.brand === undefined ? { brand: layoutData.brand } : {}),
+    [BRAND_BINDING]: layoutData[BRAND_BINDING],
+  };
   // Mail clients render a subject as plain text, so escaping it would show the
   // reader `&amp;` where the value contains `&`.
   const subject = fill(template.subject, bodyData, "line", legacy);
@@ -224,10 +230,8 @@ function withLayoutChrome(
     year: data.year ?? new Date().getFullYear().toString(),
     appName: data.appName ?? options.appName,
   };
-  return {
-    ...chrome,
-    brand: brandVariables(options.brand ?? STARTING_BRAND, chrome),
-  };
+  const brand = brandVariables(options.brand ?? STARTING_BRAND, chrome);
+  return { ...chrome, brand, [BRAND_BINDING]: brand };
 }
 
 /**

@@ -233,6 +233,16 @@ export function resolveBrand(
 // The `brand` variable
 // ============================================================
 
+/**
+ * The name the settings are always under, whatever a send's data holds.
+ * `brand` is a plain word a site's sends may already use for something of
+ * their own (a product's brand name, say), and in a template body a send's
+ * own value wins; core's built-ins read the settings here instead, so no send
+ * can change their buttons. Reserved: a send's value under this name is
+ * ignored.
+ */
+export const BRAND_BINDING = "nextly_brand";
+
 /** The values a layout's chrome is filled with, as the render resolved them. */
 export interface LayoutChrome {
   year: unknown;

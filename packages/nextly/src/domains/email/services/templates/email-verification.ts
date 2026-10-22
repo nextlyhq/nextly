@@ -30,8 +30,8 @@ export const emailVerificationTemplate: OwnerTemplate = {
 <table role="presentation" border="0" cellspacing="0" cellpadding="0" width="100%">
   <tr>
     <td align="center" style="padding: 0 0 24px;">
-      <!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="{{verifyLink}}" style="height:44px;v-text-anchor:middle;width:200px;" arcsize="14%" fillcolor="{{brand.accentColor}}" stroke="f"><v:textbox inset="0,0,0,0"><center style="color:#ffffff;font-family:sans-serif;font-size:16px;font-weight:500;">Verify Email</center></v:textbox></v:roundrect><![endif]-->
-      <!--[if !mso]><!--><a href="{{verifyLink}}" style="display: inline-block; padding: 12px 24px; background-color: {{brand.accentColor}}; color: #ffffff; text-decoration: none; border-radius: 6px; font-size: 16px; font-weight: 500; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 20px;">Verify Email</a><!--<![endif]-->
+      <!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="{{verifyLink}}" style="height:44px;v-text-anchor:middle;width:200px;" arcsize="14%" fillcolor="{{nextly_brand.accentColor}}" stroke="f"><v:textbox inset="0,0,0,0"><center style="color:#ffffff;font-family:sans-serif;font-size:16px;font-weight:500;">Verify Email</center></v:textbox></v:roundrect><![endif]-->
+      <!--[if !mso]><!--><a href="{{verifyLink}}" style="display: inline-block; padding: 12px 24px; background-color: {{nextly_brand.accentColor}}; color: #ffffff; text-decoration: none; border-radius: 6px; font-size: 16px; font-weight: 500; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 20px;">Verify Email</a><!--<![endif]-->
     </td>
   </tr>
 </table>
