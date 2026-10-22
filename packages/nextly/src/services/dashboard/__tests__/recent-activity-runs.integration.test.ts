@@ -20,7 +20,6 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import type { ActivityLogService } from "../activity-log-service";
 import { readActivitySingles } from "../activity-singles";
 import {
   allResources,
@@ -128,7 +127,7 @@ function logSave(
   entryId: string,
   changedFields: string[] = ["title", "updatedAt"]
 ) {
-  return t.getService<ActivityLogService>("activityLogService").logActivity({
+  return t.getService("activityLogService").logActivity({
     actorType: "user",
     userId: person.id,
     action: "update",
@@ -158,15 +157,13 @@ async function feed(
     before?: { createdAt: string; id: string };
   } = {}
 ) {
-  return t
-    .getService<ActivityLogService>("activityLogService")
-    .getRecentActivity({
-      limit: options.limit ?? 20,
-      scope: options.scope ?? allResources(),
-      caller,
-      singles: await readActivitySingles(),
-      ...(options.before ? { before: options.before } : {}),
-    });
+  return t.getService("activityLogService").getRecentActivity({
+    limit: options.limit ?? 20,
+    scope: options.scope ?? allResources(),
+    caller,
+    singles: await readActivitySingles(),
+    ...(options.before ? { before: options.before } : {}),
+  });
 }
 
 const as = (person: { id: string }): ReadCaller => ({
