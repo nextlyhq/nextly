@@ -64,9 +64,14 @@ env:
 # work. The `changes` job asks first, and a run a newer push has overtaken
 # skips its legs; queued runs therefore start, ask and stop within seconds, and
 # only the newest tests. The queue stays short without anything being cancelled.
+#
+# Off a pull request the key also names the event, for the reason the CI
+# workflow gives: a dispatched catch-up run and the push run of the same commit
+# shared one group, and whichever started later cancelled the other. Only a
+# pull request's runs cancel each other.
 concurrency:
-  group: integration-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
-  cancel-in-progress: true
+  group: integration-${{ github.event_name == 'pull_request' && github.ref || format('{0}-{1}', github.event_name, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Whether this run's legs have anything to do. Two answers skip them.
