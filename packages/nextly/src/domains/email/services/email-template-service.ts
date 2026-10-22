@@ -397,6 +397,13 @@ function prefersCode(
   return row.ownerKind !== null && row.overridden !== true;
 }
 
+/**
+ * How a read of the engine state is answered: from the instance's copy, for a
+ * render; or from the table, for a decision that writes the state or reports
+ * it (see engineStateFor).
+ */
+type EngineRead = "render" | "decide";
+
 /** Union of all dialect-specific email_templates table definitions. */
 type EmailTemplatesTable =
   | typeof emailTemplatesPg
@@ -754,10 +761,28 @@ export class EmailTemplateService extends BaseService {
     return this.engineState;
   }
 
+  /**
+   * The engine state a read in `mode` answers from, or null to read the
+   * table. A render answers from the instance's copy (see engineSnapshot). A
+   * decision that writes the engine state, or reports it to an editor, reads
+   * the table, as it always has, except inside a caller's open transaction,
+   * where it uses the copy rather than another connection.
+   */
+  private async engineStateFor(mode: EngineRead): Promise<{
+    adopted: boolean | null;
+    keys: Set<string>;
+  } | null> {
+    if (mode === "render") return this.engineSnapshot();
+    return transactionOpenInFlow(this.adapter) ? this.engineState : null;
+  }
+
   /** Whether an engine-state key is recorded (see engineState). */
-  private async engineKeyPresent(key: string): Promise<boolean> {
-    const snapshot = await this.engineSnapshot();
-    if (snapshot) return snapshot.keys.has(key);
+  private async engineKeyPresent(
+    key: string,
+    mode: EngineRead = "decide"
+  ): Promise<boolean> {
+    const state = await this.engineStateFor(mode);
+    if (state) return state.keys.has(key);
     return (await this.meta.getEntry(key)).present;
   }
 
@@ -804,9 +829,11 @@ export class EmailTemplateService extends BaseService {
    * Whether the switch to Liquid is recorded, or null where nothing can be
    * recorded (a database without the meta table).
    */
-  private async liquidAdopted(): Promise<boolean | null> {
-    const snapshot = await this.engineSnapshot();
-    if (snapshot) return snapshot.adopted;
+  private async liquidAdopted(
+    mode: EngineRead = "decide"
+  ): Promise<boolean | null> {
+    const state = await this.engineStateFor(mode);
+    if (state) return state.adopted;
     try {
       return (await this.meta.getEntry(LIQUID_ADOPTED_KEY)).present;
     } catch (error) {
@@ -827,20 +854,24 @@ export class EmailTemplateService extends BaseService {
    * the meantime.
    */
   private async keptOnOldEngine(
-    template: Pick<EmailTemplateRecord, "id"> & LiquidFieldValues
+    template: Pick<EmailTemplateRecord, "id"> & LiquidFieldValues,
+    mode: EngineRead = "decide"
   ): Promise<boolean> {
-    const adopted = await this.liquidAdopted();
+    const adopted = await this.liquidAdopted(mode);
     if (adopted) {
-      return this.engineKeyPresent(keptKey(template.id));
+      return this.engineKeyPresent(keptKey(template.id), mode);
     }
-    if (adopted === false && (await this.authoredAsLiquid(template.id))) {
+    if (adopted === false && (await this.authoredAsLiquid(template.id, mode))) {
       return false;
     }
     return oldEngineReasons(template).length > 0;
   }
 
-  private async authoredAsLiquid(id: string): Promise<boolean> {
-    return this.engineKeyPresent(authoredKey(id));
+  private async authoredAsLiquid(
+    id: string,
+    mode: EngineRead = "decide"
+  ): Promise<boolean> {
+    return this.engineKeyPresent(authoredKey(id), mode);
   }
 
   /**
@@ -902,10 +933,25 @@ export class EmailTemplateService extends BaseService {
   ): Promise<Set<string>> {
     const kept = new Set<string>();
     if (templates.length === 0) return kept;
-    const adopted = await this.liquidAdopted();
-    // No meta table means nothing was recorded, so every template is judged
-    // by what it holds.
-    const recorded = adopted === null ? {} : await this.meta.getAll();
+    // One read of the whole state answers both whether the switch is
+    // recorded and which templates it kept. No meta table means nothing was
+    // recorded, so every template is judged by what it holds.
+    const state = await this.engineStateFor("decide");
+    let recorded: Record<string, unknown>;
+    let adopted: boolean | null;
+    if (state) {
+      recorded = Object.fromEntries([...state.keys].map(key => [key, true]));
+      adopted = state.adopted;
+    } else {
+      try {
+        recorded = await this.meta.getAll();
+        adopted = Object.hasOwn(recorded, LIQUID_ADOPTED_KEY);
+      } catch (error) {
+        if (!isMissingTable(error, this.dialect)) throw error;
+        recorded = {};
+        adopted = null;
+      }
+    }
     const marked = (key: string) => Object.hasOwn(recorded, key);
     for (const template of templates) {
       if (adopted) {
@@ -1057,10 +1103,13 @@ export class EmailTemplateService extends BaseService {
     const layout = template.useLayout
       ? await this.getLayoutFor(template)
       : null;
-    const legacy = await this.keptOnOldEngine(template);
+    const legacy = await this.keptOnOldEngine(template, "render");
     return renderTemplate(
       { ...template, legacy },
-      layout && { ...layout, legacy: await this.keptOnOldEngine(layout) },
+      layout && {
+        ...layout,
+        legacy: await this.keptOnOldEngine(layout, "render"),
+      },
       data,
       {
         appName: options?.appName ?? this.appName,
@@ -1953,13 +2002,13 @@ export class EmailTemplateService extends BaseService {
     const legacy =
       draft.legacy ??
       (draft.id
-        ? await this.keptOnOldEngine({ ...draft, id: draft.id })
+        ? await this.keptOnOldEngine({ ...draft, id: draft.id }, "render")
         : false);
     return renderTemplate(
       { ...draft, legacy },
       layout && {
         ...layout,
-        legacy: await this.keptOnOldEngine(layout),
+        legacy: await this.keptOnOldEngine(layout, "render"),
       },
       sampleData,
       {
