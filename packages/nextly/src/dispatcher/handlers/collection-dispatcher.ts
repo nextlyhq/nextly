@@ -121,6 +121,7 @@ import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   discardWorkingDraftForDocument,
+  takeLiveSharedValuesForDocument,
   getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
@@ -319,6 +320,20 @@ export const COLLECTION_VERSION_METHODS: Record<
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
       });
       return respondMutation("Working draft discarded.", item);
+    },
+  },
+  takeLiveSharedValues: {
+    execute: async (_svc, p) => {
+      const item = await takeLiveSharedValuesForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: requireAuthenticatedUser(),
+        // `?locale=` names the language whose pending change takes the live
+        // values. An empty value is the same as none: the default language.
+        locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+      });
+      return respondMutation("Live values taken.", item);
     },
   },
   autosaveEntry: {

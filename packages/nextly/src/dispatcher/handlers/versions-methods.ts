@@ -54,6 +54,7 @@ import {
 } from "../../domains/versions/discard-working-draft";
 import { lockDocument, lockPerson } from "../../domains/versions/history-locks";
 import { restoreVersion } from "../../domains/versions/restore-version";
+import type { TakenLiveValues } from "../../domains/versions/shared-publish-base";
 import {
   resolveComponentFieldMap,
   stripPasswordsThroughComponents,
@@ -73,6 +74,7 @@ import {
   readAuthenticatedUser,
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
+import { unwrapServiceResult } from "../helpers/service-envelope";
 import type { Params } from "../types";
 
 import { readAccessCallerForDispatch } from "./read-access-caller";
@@ -813,6 +815,108 @@ export async function restoreVersionForDocument(
 }
 
 /**
+ * The gate a write to one document's pending change owes, before it runs.
+ *
+ * The read gate first: the route authorized the request as an update, not a
+ * read, so a caller who cannot read the document is refused here, as "not
+ * found" so the refusal does not confirm it exists. Then the per-document read
+ * (404 when the row is gone or hidden by an owner-only rule) and the update
+ * gate (403): the coarse update-<slug> permission ran at the route, but a
+ * per-document rule can still refuse THIS document, and changing its pending
+ * edits owes the same rules as any other update to it. Mirrors
+ * restoreVersionForDocument.
+ *
+ * @returns The caller's API-key scope, for the write to judge field rules by.
+ */
+async function assertPendingChangeWritable(
+  args: {
+    scopeKind: DiscardScopeKind;
+    slug: string;
+    entryId: string;
+    user: UserContext;
+  },
+  reason: string
+): Promise<AuthenticatedScope | undefined> {
+  const caller = readAccessCallerForDispatch(args.user);
+  if (!(await canReadEntity(args.slug, caller))) {
+    throw NextlyError.notFound({
+      logContext: {
+        reason,
+        scopeKind: args.scopeKind,
+        scopeSlug: args.slug,
+        entryId: args.entryId,
+        userId: args.user.id,
+      },
+    });
+  }
+  const authenticatedScope = readAuthenticatedScope();
+  await assertVersionDocumentReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    authenticatedScope
+  );
+  await assertDocumentUpdatable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    authenticatedScope
+  );
+  return authenticatedScope;
+}
+
+/**
+ * Bring one language's pending change up to date with the live shared values:
+ * the REST door to the entry services' `takeLiveSharedValues`.
+ *
+ * The same gate as a discard, since both rewrite the pending change. The
+ * service then judges the caller's field rules, in the language named, and
+ * answers which fields it took and which are still out of date.
+ */
+export async function takeLiveSharedValuesForDocument(args: {
+  scopeKind: DiscardScopeKind;
+  slug: string;
+  entryId: string;
+  user: UserContext;
+  /** The language whose pending change takes them; none means the default. */
+  locale?: string | null;
+}): Promise<TakenLiveValues> {
+  const authenticatedScope = await assertPendingChangeWritable(
+    args,
+    "take-live-shared-values-read-denied"
+  );
+  const caller = {
+    user: args.user,
+    locale: args.locale ?? null,
+    actor: readAuthenticatedActor(),
+    // The field rules run; the route's update gate already did, and the
+    // per-document gate above.
+    overrideAccess: false,
+    routeAuthorized: true,
+    authenticatedScope,
+  };
+  const result =
+    args.scopeKind === "single"
+      ? await getService("singleEntryService").takeLiveSharedValues({
+          slug: args.slug,
+          ...caller,
+        })
+      : await getService("collectionsHandler")
+          .getEntryService()
+          .takeLiveSharedValues({
+            collectionName: args.slug,
+            entryId: args.entryId,
+            ...caller,
+          });
+  return unwrapServiceResult<TakenLiveValues>(result, {
+    slug: args.slug,
+    entryId: args.entryId,
+  });
+}
+
+/**
  * Discard a collection entry's pending working draft (draft/published split),
  * reverting the editor to the live published row.
  *
@@ -845,42 +949,9 @@ export async function discardWorkingDraftForDocument(
     locale?: string | null;
   }
 ): Promise<unknown> {
-  const caller = readAccessCallerForDispatch(args.user);
-
-  // Read gate first: the route authorized this as an update, not a read, so a
-  // caller who cannot read the document is refused here — as "not found" so the
-  // refusal does not confirm it exists. Mirrors restoreVersionForDocument.
-  if (!(await canReadEntity(args.slug, caller))) {
-    throw NextlyError.notFound({
-      logContext: {
-        reason: "discard-working-draft-read-denied",
-        scopeKind: args.scopeKind,
-        scopeSlug: args.slug,
-        entryId: args.entryId,
-        userId: args.user.id,
-      },
-    });
-  }
-
-  const authenticatedScope = readAuthenticatedScope();
-
-  // Per-document read (404 when the row is gone or hidden by an owner-only rule)
-  // then the update gate (403): the coarse update-<slug> permission ran at the
-  // route, but a per-document rule can still refuse THIS document, and discarding
-  // its pending edits owes the same rules as any other update to it.
-  await assertVersionDocumentReadable(
-    args.scopeKind,
-    args.slug,
-    args.entryId,
-    args.user,
-    authenticatedScope
-  );
-  await assertDocumentUpdatable(
-    args.scopeKind,
-    args.slug,
-    args.entryId,
-    args.user,
-    authenticatedScope
+  const authenticatedScope = await assertPendingChangeWritable(
+    args,
+    "discard-working-draft-read-denied"
   );
 
   return discardWorkingDraft({
