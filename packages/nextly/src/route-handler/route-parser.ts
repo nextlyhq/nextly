@@ -905,6 +905,25 @@ function parseCollectionEntryVersionRoutes(
     };
   }
 
+  // `versions/working-draft/take-live` POST brings one language's pending
+  // change up to date with the live shared values (`?locale=` names it).
+  // Authorized as an update, as a discard is: it rewrites the pending change.
+  if (
+    additionalParams.length === 3 &&
+    additionalParams[1] === "working-draft" &&
+    additionalParams[2] === "take-live" &&
+    httpMethod === "POST"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    return {
+      service: "collections",
+      operation: "update",
+      method: "takeLiveSharedValues",
+      routeParams,
+    };
+  }
+
   // `versions/autosave` PUT records the author's rolling recovery point.
   // `autosave` is a named sub-resource and a version number is always numeric,
   // so the two can never collide.
@@ -1044,6 +1063,24 @@ function parseSingleVersionRoutes(
 ): ParsedRoute | null {
   if (!id || subresource !== "versions") {
     return null;
+  }
+
+  // `versions/working-draft/take-live` POST: see the collection parser. Matched
+  // before the version actions, whose `versions/{versionNo}/{action}` shape it
+  // shares; `working-draft` is a name, never a version number.
+  if (
+    subId === "working-draft" &&
+    additionalParams.length === 1 &&
+    additionalParams[0] === "take-live" &&
+    httpMethod.toUpperCase() === "POST"
+  ) {
+    routeParams.slug = id;
+    return {
+      service: "singles",
+      operation: "update",
+      method: "takeLiveSingleSharedValues",
+      routeParams,
+    };
   }
 
   // `versions/{versionNo}/{action}`: an action on one version, matched from
@@ -1758,6 +1795,13 @@ function emailTemplateSubresourceRoute(
       ? { operation: "single", method: "previewTemplate" }
       : undefined;
   }
+  // A test send of the saved template, to the signed-in user's own address.
+  // PATCH so the method-derived permission is `update-email-templates`.
+  if (subresource === "send-test") {
+    return httpMethod === "PATCH"
+      ? { operation: "update", method: "sendTestTemplate" }
+      : undefined;
+  }
   // The ownership steps. Each changes the template, so each is a PATCH and
   // needs the update permission, as an edit does; the comparison only reads.
   const ownership = EMAIL_TEMPLATE_OWNERSHIP_ROUTES[subresource];
@@ -1783,6 +1827,7 @@ function emailTemplateSubresourceRoute(
  * - DELETE /api/email-templates/[id] → delete template
  * - POST /api/email-templates/preview → render unsaved fields (draft)
  * - POST /api/email-templates/[id]/preview → preview with sample data
+ * - PATCH /api/email-templates/[id]/send-test → send the saved template to the signed-in user
  * - PATCH /api/email-templates/[id]/override → override an owned template
  * - PATCH /api/email-templates/[id]/reset → return it to its owner's version
  * - GET /api/email-templates/[id]/compare → the owner's changes since the override
@@ -2826,42 +2871,6 @@ function parseSchemaRoutes(
 }
 
 // ============================================================================
-// Email Routes Parser
-// ============================================================================
-
-/**
- * Parse Email send routes
- *
- * Handles email send endpoints (no specific permission required, any
- * authenticated request including API keys can call these):
- * - POST /api/email/send → send raw email
- * - POST /api/email/send-with-template → send templated email
- */
-function parseEmailRoutes(
-  id: string | undefined,
-  httpMethod: string,
-  routeParams: Record<string, string>
-): ParsedRoute | null {
-  if (id === "send" && httpMethod === "POST") {
-    return {
-      service: "email",
-      operation: "create",
-      method: "send",
-      routeParams,
-    };
-  }
-  if (id === "send-with-template" && httpMethod === "POST") {
-    return {
-      service: "email",
-      operation: "create",
-      method: "sendWithTemplate",
-      routeParams,
-    };
-  }
-  return null;
-}
-
-// ============================================================================
 // Main Route Parser
 // ============================================================================
 
@@ -3056,12 +3065,6 @@ export function parseRestRoute(
       subresource,
       subId
     );
-    if (result) return result;
-  }
-
-  // Handle Email send endpoints (any authenticated request)
-  if (resource === "email") {
-    const result = parseEmailRoutes(id, httpMethod, routeParams);
     if (result) return result;
   }
 

@@ -19,6 +19,11 @@ import {
 } from "../../webhooks/recording-policy";
 import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
+import {
+  cachedCollectionRow,
+  clearCollectionRowCache,
+} from "./collection-row-cache";
+
 export interface CollectionMetadata {
   id: string;
   slug: string;
@@ -230,39 +235,45 @@ export class DynamicCollectionRegistryService extends BaseService {
   async registerCollection(metadata: CollectionMetadata): Promise<unknown> {
     await this.ensureGlobalSlugUniqueness(metadata.slug);
 
-    await this.db.insert(this.dynamicCollections).values({
-      id: metadata.id,
-      slug: metadata.slug,
-      tableName: metadata.tableName,
-      description: metadata.description,
-      labels: metadata.labels,
-      fields: metadata.fields,
-      timestamps: metadata.timestamps ?? true,
-      admin: metadata.admin,
-      source: metadata.source ?? "ui",
-      locked: metadata.locked ?? false,
-      // Draft/Published flag — Drizzle's mode:'boolean' on sqlite + native
-      // bool on postgres/mysql both accept a JS boolean here.
-      status: metadata.status === true,
-      // i18n: persist the localized flag so the read/write path routes translatable
-      // fields to the companion table and the admin shows per-language editing. Without
-      // it, a UI-created localized collection is stored as non-localized (shared).
-      localized: metadata.localized === true,
-      // Resolved versioning config (or null when unversioned). Stored as JSON
-      // the same way `admin` is; Drizzle serializes the object per dialect.
-      versions: metadata.versions ?? null,
-      // Cache-revalidation config (or null). Stored as JSON like `versions`.
-      revalidate: metadata.revalidate ?? null,
-      // Webhook recording policy (or null). Stored as JSON like `revalidate`.
-      webhooks: metadata.webhooks ?? null,
-      configPath: metadata.configPath,
-      schemaHash: metadata.schemaHash,
-      schemaVersion: metadata.schemaVersion ?? 1,
-      migrationStatus: metadata.migrationStatus ?? "pending",
-      lastMigrationId: metadata.lastMigrationId,
-      hooks: metadata.hooks,
-      createdBy: metadata.createdBy,
-    });
+    // The cached rows are cleared once the insert has run, landed or not, so a
+    // row read while it ran is not served after it.
+    try {
+      await this.db.insert(this.dynamicCollections).values({
+        id: metadata.id,
+        slug: metadata.slug,
+        tableName: metadata.tableName,
+        description: metadata.description,
+        labels: metadata.labels,
+        fields: metadata.fields,
+        timestamps: metadata.timestamps ?? true,
+        admin: metadata.admin,
+        source: metadata.source ?? "ui",
+        locked: metadata.locked ?? false,
+        // Draft/Published flag — Drizzle's mode:'boolean' on sqlite + native
+        // bool on postgres/mysql both accept a JS boolean here.
+        status: metadata.status === true,
+        // i18n: persist the localized flag so the read/write path routes translatable
+        // fields to the companion table and the admin shows per-language editing. Without
+        // it, a UI-created localized collection is stored as non-localized (shared).
+        localized: metadata.localized === true,
+        // Resolved versioning config (or null when unversioned). Stored as JSON
+        // the same way `admin` is; Drizzle serializes the object per dialect.
+        versions: metadata.versions ?? null,
+        // Cache-revalidation config (or null). Stored as JSON like `versions`.
+        revalidate: metadata.revalidate ?? null,
+        // Webhook recording policy (or null). Stored as JSON like `revalidate`.
+        webhooks: metadata.webhooks ?? null,
+        configPath: metadata.configPath,
+        schemaHash: metadata.schemaHash,
+        schemaVersion: metadata.schemaVersion ?? 1,
+        migrationStatus: metadata.migrationStatus ?? "pending",
+        lastMigrationId: metadata.lastMigrationId,
+        hooks: metadata.hooks,
+        createdBy: metadata.createdBy,
+      });
+    } finally {
+      clearCollectionRowCache();
+    }
 
     // Publish the decision into the live policy as well as the column. The
     // boot-time read only runs at startup, so without this a Builder-created
@@ -325,10 +336,15 @@ export class DynamicCollectionRegistryService extends BaseService {
 
     updateData.updatedAt = new Date();
 
-    await this.db
-      .update(this.dynamicCollections)
-      .set(updateData)
-      .where(eq(this.dynamicCollections.slug, collectionSlug));
+    // Cleared once the update has run, as after an insert.
+    try {
+      await this.db
+        .update(this.dynamicCollections)
+        .set(updateData)
+        .where(eq(this.dynamicCollections.slug, collectionSlug));
+    } finally {
+      clearCollectionRowCache();
+    }
 
     // Mirror the stored change into the live policy so turning the switch off
     // takes effect on the next write rather than the next restart. Keyed on the
@@ -491,7 +507,27 @@ export class DynamicCollectionRegistryService extends BaseService {
     };
   }
 
+  /**
+   * One collection's registry row, by slug. Outside a transaction it comes
+   * from the row cache (`collection-row-cache`): a copy, at most a second old
+   * for a change made elsewhere, and current for one made here. Inside one it
+   * is read on the transaction, uncached, so the transaction sees its own
+   * writes.
+   */
   async getCollection(slug: string, executor?: unknown): Promise<unknown> {
+    if (executor !== undefined || this.adapter.transactionOpenInFlow()) {
+      return this.readCollection(slug, executor);
+    }
+    return cachedCollectionRow(this.adapter, slug, () =>
+      this.readCollection(slug)
+    );
+  }
+
+  /** One collection's registry row from the database, booleans normalized. */
+  private async readCollection(
+    slug: string,
+    executor?: unknown
+  ): Promise<Record<string, unknown>> {
     // Run on the caller's transaction executor when supplied so this metadata
     // read does not take a second pooled connection from inside the caller's
     // transaction (which can stall against a small pool); falls back to the
@@ -527,9 +563,14 @@ export class DynamicCollectionRegistryService extends BaseService {
   }
 
   async unregisterCollection(slug: string): Promise<void> {
-    await this.db
-      .delete(this.dynamicCollections)
-      .where(eq(this.dynamicCollections.slug, slug));
+    // Cleared once the delete has run, as after an insert.
+    try {
+      await this.db
+        .delete(this.dynamicCollections)
+        .where(eq(this.dynamicCollections.slug, slug));
+    } finally {
+      clearCollectionRowCache();
+    }
 
     // Drop the in-process recording decision with the row: this is the path the
     // Builder's delete takes, and a later collection created under the same slug

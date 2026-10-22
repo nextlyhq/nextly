@@ -49,9 +49,17 @@ permissions:
 # A merge-queue run is keyed by its commit as well. Each queued pull request
 # is tested on a commit of its own, and cancelling one entry's run because
 # another entry started would fail a pull request that did nothing wrong.
+#
+# Off a pull request the key also names the event. main-catch-up.yml dispatches
+# a run on a commit whose push run is often still queued, and in one shared
+# group the later of the two to start cancelled the other: on 387b921b4 the
+# dispatched run cancelled the push run ("a higher priority waiting request
+# ... exists"), so the commit main-catch-up existed to test lost a run instead
+# of gaining one. Only a pull request's runs cancel each other; a run of
+# `main`, the queue or a dispatch is never cancelled by another run.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || format('{0}-{1}', github.event_name, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Decides whether this commit can affect any of the jobs below, so a change

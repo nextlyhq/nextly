@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-An idempotency key sent to the REST email send routes now belongs to the calling person or API key, kept apart from the keys the site's own code and other callers send with.
+The email template "send test" route now raises a typed internal error when the email service is not set up, like the other email routes. No change in behaviour: the caller still gets the same generic internal error.
