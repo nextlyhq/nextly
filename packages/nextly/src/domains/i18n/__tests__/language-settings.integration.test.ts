@@ -12,7 +12,8 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import type { LanguageRegistry } from "../language-registry";
+import { LanguageRegistry } from "../language-registry";
+import { storedLanguageReader } from "../stored-language-reader";
 import { LanguageSettingsService } from "../services/language-settings-service";
 
 describeEachDialect("the site's languages in Settings", dialect => {
@@ -111,6 +112,29 @@ describeEachDialect("the site's languages in Settings", dialect => {
     await settings.change({ kind: "add", code: "fr", label: "French" });
     expect(registry.current()?.locales.map(l => l.code)).toEqual(["en", "fr"]);
     expect(await storedRows()).toBe(2);
+  });
+
+  it("reaches another instance on the same database within its interval", async () => {
+    const { settings } = await boot();
+    // Another server: its own registry, reading the same database, as every instance's does.
+    let now = 0;
+    const elsewhere = new LanguageRegistry({
+      reader: storedLanguageReader(current!.adapter),
+      ttlMs: 1000,
+      now: () => now,
+    });
+    await elsewhere.refresh();
+    expect(elsewhere.current()).toBeUndefined();
+
+    await settings.change({ kind: "add", code: "fr", label: "French" });
+
+    // Within the interval the other instance still serves what it read...
+    await elsewhere.refresh();
+    expect(elsewhere.current()).toBeUndefined();
+    // ...and once it has passed, the next request's refresh brings the change.
+    now = 1500;
+    await elsewhere.refresh();
+    expect(elsewhere.current()?.locales.map(l => l.code)).toEqual(["en", "fr"]);
   });
 
   it("refuses to remove the default language", async () => {
