@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  DEFAULT_VALUES,
   EmailTemplateForm,
   formValuesToCreatePayload,
   templateToFormValues,
@@ -14,6 +15,7 @@ import { toast } from "@admin/components/ui";
 import { ROUTES } from "@admin/constants/routes";
 import { useCreateEmailTemplate } from "@admin/hooks/queries/useEmailTemplates";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
+import { generateSlug } from "@admin/lib/fields";
 import { navigateTo } from "@admin/lib/navigation";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 import { getTemplate } from "@admin/services/emailTemplateApi";
@@ -27,6 +29,12 @@ export default function CreateEmailTemplatePage() {
   // failed load forever: without it, `finally` clears the loading flag and the
   // effect's condition is satisfied again, re-requesting on every render.
   const attemptedDuplicateId = useRef<string | null>(null);
+  // The name the create dialog asked for, if it opened this page. Read once:
+  // the URL doesn't change while the page is mounted.
+  const [givenName] = useState(() => {
+    const name = new URLSearchParams(window.location.search).get("name");
+    return name?.trim() ? name.trim() : null;
+  });
 
   // Support duplicating an existing template via ?duplicate=<id>. One-shot: the
   // URL param doesn't change while this page is mounted.
@@ -47,13 +55,20 @@ export default function CreateEmailTemplatePage() {
   }, []);
 
   const initialValues = useMemo(() => {
-    if (!duplicateTemplate) return undefined;
+    if (!duplicateTemplate) {
+      if (!givenName) return undefined;
+      return {
+        ...DEFAULT_VALUES,
+        name: givenName,
+        slug: generateSlug(givenName),
+      };
+    }
     const values = templateToFormValues(duplicateTemplate);
-    values.name = `${values.name} (Copy)`;
-    values.slug = `${values.slug}-copy`;
+    values.name = givenName ?? `${values.name} (Copy)`;
+    values.slug = givenName ? generateSlug(givenName) : `${values.slug}-copy`;
     values.isActive = false;
     return values;
-  }, [duplicateTemplate]);
+  }, [duplicateTemplate, givenName]);
 
   const handleSubmit = useCallback(
     (values: TemplateFormValues) => {
@@ -62,7 +77,7 @@ export default function CreateEmailTemplatePage() {
           toast.success("Template created", {
             description: `${values.name} has been created.`,
           });
-          navigateTo(ROUTES.SETTINGS_EMAIL_TEMPLATES);
+          navigateTo(ROUTES.EMAIL);
         },
         onError: (error: Error) => {
           toast.error("Failed to create template", {

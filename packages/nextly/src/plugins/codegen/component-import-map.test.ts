@@ -201,7 +201,11 @@ describe("the config specifier, as the site's compiler resolves it", () => {
           },
           ts.sys
         ).resolvedModule;
-        expect(resolved?.resolvedFileName).toBe(join(root, file));
+        // TypeScript's resolver reports paths with forward slashes on every platform, while
+        // `join` uses the platform separator, so both sides compare in the forward-slash form.
+        expect(resolved?.resolvedFileName).toBe(
+          join(root, file).replaceAll("\\", "/")
+        );
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

@@ -25,6 +25,17 @@ const {
   useTestProvider: vi.fn(),
 }));
 
+// A provider manager. What a reader without the grants sees is covered in
+// read-only.test.tsx beside this file.
+vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
+  useCurrentUserPermissions: () => ({
+    hasPermission: () => true,
+    hasAnswer: true,
+    isLoading: false,
+    error: null,
+  }),
+}));
+
 vi.mock("@admin/hooks/queries/useEmailProviders", () => ({
   useEmailProviders: (params: unknown) => useEmailProviders(params),
   useEmailProviderTypes: () => useEmailProviderTypes(),

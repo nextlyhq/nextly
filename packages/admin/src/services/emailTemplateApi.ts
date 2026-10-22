@@ -43,6 +43,16 @@ export interface EmailTemplateAttachment {
 /** Row kind discriminator. Layouts wrap templates at their {{content}}. */
 export type EmailTemplateKind = "template" | "layout" | "partial";
 
+/**
+ * Who a template belongs to: core, a plugin (and whether it is still
+ * installed), or the site. An owned template is the owner's until the site
+ * overrides it, and the server refuses to delete it.
+ */
+export type EmailTemplateOwner =
+  | { kind: "core" }
+  | { kind: "plugin"; name: string; installed: boolean }
+  | { kind: "site" };
+
 export interface EmailTemplateRecord {
   id: string;
   name: string;
@@ -62,6 +72,26 @@ export interface EmailTemplateRecord {
   attachments: EmailTemplateAttachment[] | null;
   createdAt: string;
   updatedAt: string;
+  owner: EmailTemplateOwner;
+  /** When the template is sent, in a sentence. */
+  description: string | null;
+  /** The site replaced its owner's version. Never true for the site's own. */
+  overridden: boolean;
+  /** The owner changed its version since the site overrode it. */
+  ownerChanged: boolean;
+  /** A version of it is set in the site's code. */
+  setInCode: boolean;
+  /**
+   * Kept on the previous template engine, so it sends as it always did until
+   * someone changes the flagged text. Only the list reports it.
+   */
+  keptOnOldEngine?: boolean;
+  /**
+   * When it was last sent, from the delivery log: null when never. Absent
+   * when the list doesn't report it, which it does only to someone who may
+   * read deliveries.
+   */
+  lastSentAt?: string | null;
 }
 
 /** Wire shape before normalization: legacy rows may carry a null `kind`. */

@@ -41,7 +41,9 @@ export const slowWidgetFixturePlugin = definePlugin({
           supports: ["count"],
           fields: [{ name: "total", type: "number" }],
         },
-        resolve: async (_query, _caller, _ctx, opts) => {
+        // The unused query parameter carries a longer name: the Drizzle v1 legacy gate refuses the
+        // bare underscore-prefixed name, which is also Drizzle's removed relational escape hatch.
+        resolve: async (_widgetQuery, _caller, _ctx, opts) => {
           await wait(slowWidgetDelayMs(), opts?.signal);
           return { op: "count" as const, total: 42 };
         },
