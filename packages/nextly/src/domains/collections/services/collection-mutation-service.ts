@@ -205,6 +205,7 @@ import {
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import {
+  type VersionRef,
   VersionsRepository,
   type VersionRow,
 } from "../../versions/versions-repository";
@@ -7388,6 +7389,53 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * A language's change records its base when it begins: the version whose
+   * shared values are the live ones it began from. A later save keeps it, so
+   * saving again never makes an old shared value current. Only a collection
+   * with languages has values another language shares.
+   *
+   * @param begins Whether this save begins the change: no working draft held
+   *   for its language yet.
+   */
+  private async recordBaseOfNewChange(
+    tx: TransactionContext,
+    args: {
+      begins: boolean;
+      collection: unknown;
+      collectionName: string;
+      entryId: string;
+      fields: FieldDefinition[];
+      main: Record<string, unknown>;
+      ref: VersionRef;
+      locale: string | null;
+    }
+  ): Promise<void> {
+    if (
+      !args.begins ||
+      (args.collection as { localized?: boolean }).localized !== true
+    ) {
+      return;
+    }
+    // A held save has written nothing live, so the live document read here
+    // is the one the change began from.
+    const { live, shared, views } = await this.liveSharedDocument(tx, {
+      collectionName: args.collectionName,
+      entryId: args.entryId,
+      tableName: collectionTableName(args.collection, args.collectionName),
+      fields: args.fields,
+      main: args.main,
+      locale: args.locale,
+    });
+    await recordSharedBase(tx, {
+      ref: args.ref,
+      locale: args.locale,
+      shared,
+      live,
+      views,
+    });
+  }
+
+  /**
    * Store the pending edit as this document's working draft, on the caller's
    * transaction.
    *
@@ -7489,32 +7537,18 @@ export class CollectionMutationService extends BaseService {
         draftIsPluginCollection
       );
     }
-    // A language's change records its base when it begins: the version whose
-    // shared values are the live ones it began from. A later save keeps it, so
-    // saving again never makes an old shared value current. Recorded before
-    // the save's own capture, whose retention pass then keeps it.
-    if (
-      !existingDraft &&
-      (collection as { localized?: boolean }).localized === true
-    ) {
-      // A held save has written nothing live, so the live document read
-      // here is the one the change began from.
-      const { live, shared, views } = await this.liveSharedDocument(tx, {
-        collectionName: params.collectionName,
-        entryId: params.entryId,
-        tableName: collectionTableName(collection, params.collectionName),
-        fields,
-        main: ctx.liveParentRow,
-        locale: draftLocale,
-      });
-      await recordSharedBase(tx, {
-        ref: draftRef,
-        locale: draftLocale,
-        shared,
-        live,
-        views,
-      });
-    }
+    // Recorded before the save's own capture, whose retention pass then keeps
+    // it.
+    await this.recordBaseOfNewChange(tx, {
+      begins: !existingDraft,
+      collection,
+      collectionName: params.collectionName,
+      entryId: params.entryId,
+      fields,
+      main: ctx.liveParentRow,
+      ref: draftRef,
+      locale: draftLocale,
+    });
     // The draft, and the save as a version of its own, in this transaction.
     // A save that changes nothing against what it replaces records no version.
     const versionsConfig = (collection as Record<string, unknown>).versions as
