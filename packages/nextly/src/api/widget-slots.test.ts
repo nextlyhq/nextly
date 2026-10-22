@@ -119,6 +119,29 @@ describe("a declared card's own data in the batch", () => {
     expect(slots.get(1)).toEqual({ ok: true, result: count(2) });
   });
 
+  it("never delivers an answer that arrives after its deadline, anywhere", async () => {
+    vi.useFakeTimers();
+    let late: (value: {
+      result: WidgetResult;
+      empty: boolean;
+    }) => void = () => {};
+    const settled = vi.fn();
+    const answering = answerReadyQueries(
+      [card(0, () => new Promise(resolve => (late = resolve)))],
+      caller,
+      createBatchScope(),
+      { onSettled: settled }
+    );
+    await vi.advanceTimersByTimeAsync(SLOT_TIMEOUT_MS + 1);
+    const slots = await answering;
+    // The card has its error; then its abandoned read answers after all.
+    late({ result: count(9), empty: false });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(slots.get(0)).toMatchObject({ ok: false });
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(settled.mock.calls)).not.toContain('"total":9');
+  });
+
   it("settles nothing once the batch is given up, since nobody is waiting for it", async () => {
     const giveUp = new AbortController();
     const settled = vi.fn();
