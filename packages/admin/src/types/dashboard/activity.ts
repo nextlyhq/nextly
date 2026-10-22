@@ -74,6 +74,13 @@ export interface Activity {
    * relative time in the admin already is.
    */
   timestamp: string;
+  /**
+   * How many saves this row stands for: one person's repeated saves of one
+   * document are one row, at the latest save's time. 1 for any other row.
+   */
+  count: number;
+  /** Whether `count` is a floor, drawn `N+`: the server stopped reading inside the run. */
+  countAtLeast: boolean;
 }
 
 /**

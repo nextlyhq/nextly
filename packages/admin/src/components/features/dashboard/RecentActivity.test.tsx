@@ -48,6 +48,8 @@ const mockActivities: Activity[] = [
     target: "new user account",
     category: "success",
     timestamp: hoursBefore(READ_AT, 2),
+    count: 1,
+    countAtLeast: false,
   },
   {
     id: "2",
@@ -65,12 +67,63 @@ const mockActivities: Activity[] = [
     target: "role permissions",
     category: "info",
     timestamp: hoursBefore(READ_AT, 3),
+    count: 1,
+    countAtLeast: false,
   },
 ];
 
 describe("RecentActivity", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("says how many saves a row stands for, in its text and in what a screen reader hears", () => {
+    const repeated: Activity = {
+      ...mockActivities[1]!,
+      id: "3",
+      target: "Site style",
+      entryTitle: "Site style",
+      count: 12,
+    };
+    const floor: Activity = {
+      ...repeated,
+      id: "4",
+      count: 1000,
+      countAtLeast: true,
+    };
+    mockUseRecentActivity.mockReturnValue({
+      data: {
+        activities: [repeated, floor, mockActivities[0]!],
+        hasMore: false,
+      },
+      isLoading: false,
+      error: null,
+      isError: false,
+      isSuccess: true,
+      status: "success",
+    } as ReturnType<typeof useRecentActivity>);
+
+    render(<RecentActivity />);
+
+    const rows = screen
+      .getAllByText(/Jane Smith|John Doe/)
+      .map(name => name.closest("p"));
+    /** The row's text without what `hidden` matches, spaced as it reads. */
+    const without = (row: Element | null | undefined, hidden: string) => {
+      const copy = row?.cloneNode(true) as Element | undefined;
+      copy?.querySelectorAll(hidden).forEach(node => node.remove());
+      return (copy?.textContent ?? "").replace(/\s+/g, " ").replace(/ ,/g, ",");
+    };
+    // Seen: the dot and the count. Heard: a comma and the count, no dot.
+    expect(without(rows[0], ".sr-only")).toContain("Site style · 12 times");
+    expect(without(rows[0], '[aria-hidden="true"]')).toContain(
+      "Site style, 12 times"
+    );
+    expect(without(rows[1], '[aria-hidden="true"]')).toContain(
+      "Site style, 1000+ times"
+    );
+    // A single save says nothing about a count.
+    expect(rows[2]?.textContent).not.toMatch(/times/);
   });
 
   it("renders loading state", () => {

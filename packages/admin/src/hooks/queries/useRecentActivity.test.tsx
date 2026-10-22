@@ -91,3 +91,28 @@ describe("a feed row's heading", () => {
     });
   });
 });
+
+describe("a feed row's count", () => {
+  async function counted(entry: Record<string, unknown>) {
+    answer.activities = [{ ...row, collection: "posts", ...entry }];
+    const { result } = renderHook(() => useRecentActivity(5), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const activity = result.current.data?.activities[0];
+    return [activity?.count, activity?.countAtLeast];
+  }
+
+  it("carries how many saves the row stands for, and whether that is a floor", async () => {
+    expect(await counted({ count: 12, countAtLeast: false })).toEqual([
+      12,
+      false,
+    ]);
+    expect(await counted({ count: 1000, countAtLeast: true })).toEqual([
+      1000,
+      true,
+    ]);
+  });
+
+  it("reads a row from a server that sends no count as one save", async () => {
+    expect(await counted({})).toEqual([1, false]);
+  });
+});
