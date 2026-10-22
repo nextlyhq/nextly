@@ -55,6 +55,17 @@ const ALLOWED = "allowed@example.com";
 const onlyAllowed = ({ user }: { user: unknown }) =>
   (user as { email?: string } | null)?.email === ALLOWED;
 
+/**
+ * Writable by a caller holding `publish-board`: the editors' role does, and a
+ * key they own scoped without it does not, so it tells the key's grants from
+ * its owner's.
+ */
+const holdsPublishBoard = ({
+  permissions,
+}: {
+  permissions?: readonly string[];
+}) => permissions?.includes("publish-board") === true;
+
 /** The guarded fields a field group and the collection itself carry. */
 const guarded = () => [
   text({
@@ -358,6 +369,10 @@ describe.each(getConfiguredTestDialects())(
       ];
       const singleFields = () => [
         text({ name: "title" }),
+        text({
+          name: "keyed",
+          access: { create: holdsPublishBoard, update: holdsPublishBoard },
+        }),
         group({ name: "meta", fields: [...guarded()] }),
         fieldGroup({ name: "one", component: "note" }),
       ];
@@ -606,6 +621,44 @@ describe.each(getConfiguredTestDialects())(
           "locked-site-meta",
           "sealed-site-meta",
         ]);
+      });
+    });
+
+    describe("a scoped API key updating a Single", () => {
+      it("is judged by its own grants on the Single's own fields", async () => {
+        await trusted.updateSingle({
+          slug: "site",
+          data: { title: "s", keyed: "stored" },
+        } as never);
+        // Owned by the editor, whose role holds `publish-board`; the key
+        // does not.
+        const asKey = new Nextly({
+          overrideAccess: false,
+          user: { id: editorId },
+          actor: {
+            actorType: "apiKey",
+            permissions: ["read-site", "update-site"],
+          },
+        } as never);
+        await asKey.updateSingle({
+          slug: "site",
+          data: { title: "s-key", keyed: "by-key" },
+        } as never);
+        const afterKey = (await trusted.findSingle({
+          slug: "site",
+        } as never)) as Doc;
+        expect(afterKey.title).toBe("s-key");
+        expect(afterKey.keyed).toBe("stored");
+
+        // The owner, the control: the rule lets them write it.
+        await checkedAs("editor").updateSingle({
+          slug: "site",
+          data: { keyed: "by-owner" },
+        } as never);
+        const afterOwner = (await trusted.findSingle({
+          slug: "site",
+        } as never)) as Doc;
+        expect(afterOwner.keyed).toBe("by-owner");
       });
     });
 
