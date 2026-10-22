@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "module";
 import path from "path";
 
@@ -9,6 +10,49 @@ const require = createRequire(import.meta.url);
 const { version: coreVersion } = require("./package.json") as {
   version: string;
 };
+
+/**
+ * What a test file uses that leaves state behind for the next file in its worker.
+ *
+ * Unit files run in two projects. Most share a worker's module graph
+ * (`isolate: false`), so a module the suite imports a thousand times is
+ * evaluated once per worker instead of once per file: loading modules is most
+ * of this suite's time. A file that changes what it shares with the next one
+ * keeps a module graph of its own:
+ * - module mocks, and anything that resets or reads the real module behind one;
+ * - spies, stubbed globals or environment, and fake timers, which outlive the
+ *   file unless it restores them;
+ * - writes to `process.env` or to a global;
+ * - a real SQLite database.
+ *
+ * Read from each file's source when the config loads, so a file that starts
+ * using one of these moves to the isolated project by itself.
+ */
+const LEAVES_STATE = new RegExp(
+  [
+    String.raw`\bvi\.(?:mock|doMock|unmock|doUnmock|hoisted|resetModules|importActual|importMock|stubGlobal|stubEnv|spyOn|useFakeTimers|setSystemTime)\b`,
+    String.raw`process\.env(?:\.\w+|\[[^\]]+\])\s*(?:=(?!=)|\?\?=|\|\|=)`,
+    String.raw`\bdelete\s+process\.env\b`,
+    String.raw`\b(?:globalThis|global|window)(?:\.\w+|\[[^\]]+\])\s*=(?!=)`,
+    String.raw`better-sqlite3|createTestNextly|:memory:`,
+  ].join("|")
+);
+
+const UNIT_FILE = /\.(?:test|spec)\.ts$/;
+
+/** The unit files that keep a module graph of their own, relative to this folder. */
+function filesThatLeaveState(): string[] {
+  return readdirSync(path.join(__dirname, "src"), { recursive: true })
+    .map(file => path.join("src", String(file)).split(path.sep).join("/"))
+    .filter(
+      file =>
+        UNIT_FILE.test(file) &&
+        !file.endsWith(".integration.test.ts") &&
+        LEAVES_STATE.test(readFileSync(path.join(__dirname, file), "utf8"))
+    );
+}
+
+const isolatedFiles = filesThatLeaveState();
 
 export default defineConfig({
   plugins: [tsconfigPaths()],
@@ -24,7 +68,6 @@ export default defineConfig({
     // What each file loaded on its last run, so `--changed` and `related` pick
     // tests from real dependencies rather than a static import graph.
     experimental: { recordDependencies: true },
-    name: "nextly",
     globals: true,
     environment: "node",
     setupFiles: ["./src/__tests__/setup.ts"],
@@ -40,13 +83,32 @@ export default defineConfig({
     // suites separately. Unit run skips *.integration.test.ts so the suite
     // stays green without a database. Integration run uses
     // vitest.integration.config.ts.
-    include: ["src/**/*.test.ts", "src/**/*.spec.ts"],
     exclude: [
       "node_modules",
       "dist",
       ".turbo",
       "**/*.d.ts",
       "**/*.integration.test.ts",
+    ],
+    // Inline projects inherit everything above and merge their arrays into
+    // it, so `include` is per project and `exclude` is shared.
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "nextly",
+          include: ["src/**/*.test.ts", "src/**/*.spec.ts"],
+          exclude: isolatedFiles,
+          isolate: false,
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "nextly (isolated)",
+          include: isolatedFiles,
+        },
+      },
     ],
     coverage: {
       provider: "v8",
