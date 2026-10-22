@@ -202,6 +202,7 @@ import {
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import {
+  type VersionRef,
   VersionsRepository,
   type VersionRow,
 } from "../../versions/versions-repository";
@@ -7333,6 +7334,46 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * A language's change records its base when it begins: the version whose
+   * shared values are the live ones it began from. A later save keeps it, so
+   * saving again never makes an old shared value current. Only a collection
+   * with languages has values another language shares.
+   *
+   * @param begins Whether this save begins the change: no working draft held
+   *   for its language yet.
+   */
+  private async recordBaseOfNewChange(
+    tx: TransactionContext,
+    args: {
+      begins: boolean;
+      collection: unknown;
+      collectionName: string;
+      fields: FieldDefinition[];
+      main: Record<string, unknown>;
+      ref: VersionRef;
+      locale: string | null;
+    }
+  ): Promise<void> {
+    if (
+      !args.begins ||
+      (args.collection as { localized?: boolean }).localized !== true
+    ) {
+      return;
+    }
+    await recordSharedBase(tx, {
+      ref: args.ref,
+      locale: args.locale,
+      shared: await this.sharedFieldsOf(
+        args.collectionName,
+        args.fields,
+        args.main,
+        tx.getDrizzle()
+      ),
+      live: args.main,
+    });
+  }
+
+  /**
    * Store the pending edit as this document's working draft, on the caller's
    * transaction.
    *
@@ -7434,26 +7475,17 @@ export class CollectionMutationService extends BaseService {
         draftIsPluginCollection
       );
     }
-    // A language's change records its base when it begins: the version whose
-    // shared values are the live ones it began from. A later save keeps it, so
-    // saving again never makes an old shared value current. Recorded before
-    // the save's own capture, whose retention pass then keeps it.
-    if (
-      !existingDraft &&
-      (collection as { localized?: boolean }).localized === true
-    ) {
-      await recordSharedBase(tx, {
-        ref: draftRef,
-        locale: draftLocale,
-        shared: await this.sharedFieldsOf(
-          params.collectionName,
-          fields,
-          ctx.liveParentRow,
-          tx.getDrizzle()
-        ),
-        live: ctx.liveParentRow,
-      });
-    }
+    // Recorded before the save's own capture, whose retention pass then keeps
+    // it.
+    await this.recordBaseOfNewChange(tx, {
+      begins: !existingDraft,
+      collection,
+      collectionName: params.collectionName,
+      fields,
+      main: ctx.liveParentRow,
+      ref: draftRef,
+      locale: draftLocale,
+    });
     // The draft, and the save as a version of its own, in this transaction.
     // A save that changes nothing against what it replaces records no version.
     const versionsConfig = (collection as Record<string, unknown>).versions as
