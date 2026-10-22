@@ -1,6 +1,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq, and, or, like, asc, desc, count, inArray } from "drizzle-orm";
 
+import { resolveRelations } from "../../../database/resolve-relations";
 import { NextlyError } from "../../../errors";
 import type { RevalidateConfig } from "../../../revalidation/types";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
@@ -13,6 +14,11 @@ import type {
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
+import type { DatabaseAdapter } from "../../../shared/types/database-adapter";
+import {
+  moveEntitySlug,
+  slugKeyedTablesPresent,
+} from "../../entity-rename/move-entity-slug";
 import {
   clearWebhookRecording,
   setWebhookRecording,
@@ -325,14 +331,40 @@ export class DynamicCollectionRegistryService extends BaseService {
 
     updateData.updatedAt = new Date();
 
-    await this.db
-      .update(this.dynamicCollections)
-      .set(updateData)
-      .where(eq(this.dynamicCollections.slug, collectionSlug));
+    // The one statement that writes the row, on whichever handle it is given:
+    // the pooled one for an ordinary update, the rename's transaction below.
+    const writeRow = (db: DatabaseAdapter["db"]) =>
+      db
+        .update(this.dynamicCollections)
+        .set(updateData)
+        .where(eq(this.dynamicCollections.slug, collectionSlug));
+
+    if (targetSlug === existing[0].slug) {
+      await writeRow(this.db);
+    } else {
+      // A changed slug is a rename. Everything keyed by the old slug (history,
+      // markers, events, release members) moves in the same transaction as the
+      // registry row, so the two commit together or neither does; otherwise the
+      // renamed collection would lose its history and the next collection
+      // created under the old slug would inherit it.
+      const present = await slugKeyedTablesPresent(this.adapter);
+      await this.adapter.transaction(async tx => {
+        await writeRow(
+          tx.drizzleWithRelations<DatabaseAdapter["db"]>(
+            resolveRelations(this.dialect)
+          )
+        );
+        await moveEntitySlug(tx, {
+          dialect: this.dialect,
+          present,
+          move: { kind: "collection", from: collectionSlug, to: targetSlug },
+        });
+      });
+    }
 
     // Mirror the stored change into the live policy so turning the switch off
     // takes effect on the next write rather than the next restart. Keyed on the
-    // slug the row is stored under rather than a requested rename target, so the
+    // slug the row is now stored under, the new one after a rename, so the
     // policy key and the persisted row can never disagree.
     if (
       updates.webhooks !== undefined &&
@@ -340,13 +372,15 @@ export class DynamicCollectionRegistryService extends BaseService {
     ) {
       setWebhookRecording(
         "collection",
-        collectionSlug,
+        targetSlug,
         updates.webhooks?.record !== false,
         "db"
       );
     }
 
-    return this.getCollection(collectionSlug);
+    // Read back under the slug the row is stored under now: after a rename the
+    // old one names nothing.
+    return this.getCollection(targetSlug);
   }
 
   /**

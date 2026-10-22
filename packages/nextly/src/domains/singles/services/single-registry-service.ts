@@ -48,6 +48,10 @@ import {
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
 import type { SingleConfig } from "../../../singles/config/types";
+import {
+  moveEntitySlug,
+  slugKeyedTablesPresent,
+} from "../../entity-rename/move-entity-slug";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   calculateSchemaHash,
@@ -461,7 +465,13 @@ export class SingleRegistryService extends BaseRegistryService<
   /**
    * Update a Single's metadata.
    *
+   * A `slug` in `data` that differs from the current one renames the Single:
+   * the row and everything keyed by its slug move together (see
+   * `moveEntitySlug`). Its table keeps its name.
+   *
    * @throws NextlyError(NOT_FOUND) when no Single matches the slug.
+   * @throws NextlyError(CONFLICT) when a rename's new slug still holds the
+   *   history of an earlier Single.
    * @throws NextlyError(FORBIDDEN) when the Single is locked and the source isn't "code".
    */
   async updateSingle(
@@ -599,12 +609,17 @@ export class SingleRegistryService extends BaseRegistryService<
     }
 
     try {
-      const results = await this.adapter.update<DynamicSingleRecord>(
-        this.registryTableName,
-        updateData,
-        this.whereEq("slug", slug),
-        { returning: "*" }
-      );
+      // A slug different from the stored one is a rename, written with
+      // everything keyed by the old slug in one transaction.
+      const results =
+        targetSlug === slug
+          ? await this.adapter.update<DynamicSingleRecord>(
+              this.registryTableName,
+              updateData,
+              this.whereEq("slug", slug),
+              { returning: "*" }
+            )
+          : await this.renameSingleRow(slug, targetSlug, updateData);
 
       if (results.length === 0) {
         // §13.8: generic "Not found." — slug in logContext only.
@@ -613,29 +628,30 @@ export class SingleRegistryService extends BaseRegistryService<
 
       // Mirror the stored change into the live policy so turning the switch
       // off takes effect on the next write rather than the next restart. Keyed
-      // on the slug the row is stored under (this method validates a rename but
-      // never writes it), and skipped for code-first sync so the entry keeps its
-      // `code` provenance — a `db` entry survives the reconcile that prunes
-      // removed code-first slugs, which would strand a stale opt-out.
+      // on the slug the row is stored under, the new one after a rename, and
+      // skipped for code-first sync so the entry keeps its `code` provenance —
+      // a `db` entry survives the reconcile that prunes removed code-first
+      // slugs, which would strand a stale opt-out.
       if (
         data.webhooks !== undefined &&
         !isConfigOwnedSource(options?.source)
       ) {
         setWebhookRecording(
           "single",
-          slug,
+          targetSlug,
           data.webhooks?.record !== false,
           "db"
         );
       }
 
-      this.logger.info("Single updated", { slug });
+      this.logger.info("Single updated", { slug, storedAs: targetSlug });
 
       // A stricter schema (a required field added, a rule tightened, the
       // lifecycle switched off) can leave a scheduled release holding this
       // Single with a hard problem: it is checked again once this is durable,
-      // and such a release stops now rather than at its instant.
-      if (judgedDifferently) await this.recheckReleasesHolding(slug);
+      // and such a release stops now rather than at its instant. Asked under
+      // the stored slug, which the release's members now name.
+      if (judgedDifferently) await this.recheckReleasesHolding(targetSlug);
 
       return this.deserializeRecord(results[0]);
     } catch (error) {
@@ -647,6 +663,41 @@ export class SingleRegistryService extends BaseRegistryService<
       }
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+  }
+
+  /**
+   * Write a Single's row under its new slug and move what is keyed by the old
+   * one (history, markers, events, release members), in one transaction, so
+   * the registry and those tables commit together or neither does.
+   *
+   * Read back by the new slug inside the transaction: MySQL has no RETURNING,
+   * and re-reading by the old slug would find nothing once the row has moved.
+   * An empty result means no row held the old slug, and nothing was moved.
+   */
+  private async renameSingleRow(
+    from: string,
+    to: string,
+    updateData: Record<string, unknown>
+  ): Promise<DynamicSingleRecord[]> {
+    const present = await slugKeyedTablesPresent(this.adapter);
+    return this.adapter.transaction(async tx => {
+      const written = await tx.updateCount(
+        this.registryTableName,
+        { ...updateData, slug: to },
+        this.whereEq("slug", from)
+      );
+      if (written === 0) return [];
+      await moveEntitySlug(tx, {
+        dialect: this.dialect,
+        present,
+        move: { kind: "single", from, to },
+      });
+      const row = await tx.selectOne<DynamicSingleRecord>(
+        this.registryTableName,
+        { where: this.whereEq("slug", to) }
+      );
+      return row ? [row] : [];
+    });
   }
 
   /**
