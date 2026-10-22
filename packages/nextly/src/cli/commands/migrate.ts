@@ -1606,6 +1606,26 @@ async function loadTargetSnapshot(
 }
 
 /**
+ * Refuses a `unique` companion file whose per-language unique index cannot hold
+ * (`refuseTranslatedUniqueMigrationThatCannotHold`). Any other file passes untouched.
+ */
+async function refuseUniqueFileThatCannotHold(
+  adapter: DrizzleAdapter,
+  localization: LocalizationMigrationIntent | undefined,
+  filename: string
+): Promise<void> {
+  if (localization?.kind !== "unique") return;
+  const { refuseTranslatedUniqueMigrationThatCannotHold } = await import(
+    "../../domains/i18n/migration/translated-unique-preconditions"
+  );
+  await refuseTranslatedUniqueMigrationThatCannotHold(
+    adapter,
+    localization.spec,
+    filename
+  );
+}
+
+/**
  * Phase 2 — apply pending user migration files via §4.7 drift reconciliation.
  * Walks files in lex order, carrying each file's target snapshot forward as the
  * next file's baseline. Returns the count actually applied.
@@ -1711,6 +1731,9 @@ export async function runFileMigrations(args: {
       transaction: m.transaction,
       unit: "file",
     });
+    // A file adding per-language unique indexes is refused here, before the ledger records an
+    // attempt and before any statement, where one cannot hold.
+    await refuseUniqueFileThatCannotHold(dz, m.localization, filename);
 
     if (!target) {
       // No paired snapshot (hand-written migration): run verbatim + record.

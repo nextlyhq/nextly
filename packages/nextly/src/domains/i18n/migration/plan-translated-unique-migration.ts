@@ -30,7 +30,8 @@ export interface TranslatedUniqueFile {
 /** An entity's `unique` files, each null when it has nothing to do. */
 export interface TranslatedUniquePlan {
   drops: TranslatedUniqueFile | null;
-  creates: TranslatedUniqueFile | null;
+  /** With the fields its UP indexes, which its header records for `nextly migrate`'s pre-check. */
+  creates: (TranslatedUniqueFile & { unique: UniqueTranslatedColumn[] }) | null;
 }
 
 const asSql = (statements: readonly string[]) =>
@@ -93,9 +94,22 @@ export function planTranslatedUniqueMigration(args: {
   });
   const file = (up: string[], down: string[]) =>
     up.length === 0 ? null : { upSql: asSql(up), downSql: asSql(down) };
+  const creates = file(forward.creates, back.drops);
+  const indexedNames = indexed(had);
   const plan = {
     drops: file(forward.drops, back.creates),
-    creates: file(forward.creates, back.drops),
+    creates:
+      creates === null
+        ? null
+        : {
+            ...creates,
+            unique: wanted.filter(
+              c =>
+                !indexedNames.has(
+                  companionUniqueIndexName(companionTable, c.column)
+                )
+            ),
+          },
   };
   return plan.drops === null && plan.creates === null ? null : plan;
 }

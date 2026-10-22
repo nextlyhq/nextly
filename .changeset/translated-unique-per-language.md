@@ -35,7 +35,11 @@ Every way of declaring the field enforces it. The Schema Builder adds the index 
 
 Adding the rule is refused before anything changes where it cannot hold:
 
-- where a language already holds a value twice, naming the documents in each language (`TRANSLATED_UNIQUE_OVER_DUPLICATES`). It never names the value. `db:sync` reports the same and leaves that field without its index;
+- where a language already holds a value twice, naming the documents in each language but never the value (`TRANSLATED_UNIQUE_OVER_DUPLICATES`). The Schema Builder refuses the save. `db:sync` reports it and leaves that field without its index. `nextly migrate` stops at that migration file before running any of it, so nothing is half-applied, even on MySQL;
 - on a database server that cannot build the index (`UNIQUE_NOT_ENFORCEABLE_ON_DIALECT`): MariaDB, and MySQL before 8.0.13.
 
-Before this, a translated unique field was not enforced at all. A field already marked unique and translated gets its index the next time its entity is saved in the Schema Builder, or from the next `db:sync` or `migrate:create`. If a language already holds a value twice, the Schema Builder save and `db:sync` are refused and name the documents. `nextly migrate` stops at the new index with the database's duplicate error. Give those documents different values, or leave one blank, and run it again.
+Give the listed documents different values, or leave one blank, and run it again.
+
+Before this, a translated unique field was not enforced at all. A field already marked unique and translated gets its index the next time its entity is saved in the Schema Builder, or from the next `db:sync`, or from the next `migrate:create` and `nextly migrate`. Each of these is refused, as above, if a language already holds a value twice.
+
+The migration files that add or drop these indexes are a new kind, so their header is version 4. An older version of nextly refuses to run them and says to upgrade, rather than running them wrongly.

@@ -572,7 +572,17 @@ export async function generateMigration(
   const createsAfter = forwardPlans.length + fieldLeavesPlans.length;
   uniquePlans
     .flatMap(({ spec, plan, entity }) =>
-      plan.creates === null ? [] : [{ spec, entity, ...plan.creates }]
+      plan.creates === null
+        ? []
+        : [
+            {
+              // Its header names the fields it indexes, for `nextly migrate`'s pre-check.
+              spec: { ...spec, unique: plan.creates.unique },
+              entity,
+              upSql: plan.creates.upSql,
+              downSql: plan.creates.downSql,
+            },
+          ]
     )
     .forEach(({ spec, ...file }, i) => {
       writeCompanionMigrationFile(args.migrationsDir, spec, {

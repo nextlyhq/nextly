@@ -147,6 +147,11 @@ export function formatLocalizationIntent(
         ? {}
         : { columnsOnMain: s.columnsOnMain }),
       ...(s.status === undefined ? {} : { status: s.status }),
+      ...(s.unique === undefined
+        ? {}
+        : {
+            unique: s.unique.map(u => ({ field: u.field, column: u.column })),
+          }),
     },
   };
   // `JSON.stringify` escapes newlines, so the result is always one line whatever the identifiers
@@ -296,7 +301,18 @@ function isIntentShape(value: unknown): value is LocalizationMigrationIntent {
       !s.columnsOnMain.every(n => typeof n === "string"))
   )
     return false;
-  return s.status === undefined || typeof s.status === "boolean";
+  if (s.status !== undefined && typeof s.status !== "boolean") return false;
+  return (
+    s.unique === undefined ||
+    (Array.isArray(s.unique) &&
+      s.unique.every(
+        u =>
+          typeof u === "object" &&
+          u !== null &&
+          typeof (u as Record<string, unknown>).field === "string" &&
+          typeof (u as Record<string, unknown>).column === "string"
+      ))
+  );
 }
 
 /**

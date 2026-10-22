@@ -182,3 +182,41 @@ export function refusalsForTranslatedUniqueOverDuplicates(
       `${documents.join(", ")}. Give each a different value, or leave one blank, then try again.`,
   }));
 }
+
+/**
+ * Refuses a `unique` migration file before any of its statements runs, where an index it creates
+ * cannot hold: a language already holds a value twice (naming the documents, never the value), or
+ * the server cannot build the index. The same refusals the Schema Builder and `db:sync` give, so
+ * the file stops with nothing changed rather than on the database's own error, part-way through
+ * on MySQL, whose DDL commits as it goes.
+ *
+ * @throws NextlyError `CONFLICT` whose message carries each refusal's code and sentence
+ */
+export async function refuseTranslatedUniqueMigrationThatCannotHold(
+  adapter: TranslatedUniqueAdapter,
+  spec: {
+    collection: string;
+    companionTable: string;
+    unique?: readonly UniqueTranslatedColumn[];
+  },
+  source: string
+): Promise<void> {
+  const columns = spec.unique ?? [];
+  if (columns.length === 0) return;
+  let refusals = refusalsForUnindexableTranslatedUnique(adapter, columns);
+  if (refusals.length === 0) {
+    refusals = refusalsForTranslatedUniqueOverDuplicates(
+      await duplicateTranslatedValues(adapter, spec.companionTable, columns)
+    );
+  }
+  if (refusals.length === 0) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message: refusals.map(r => `${r.code}: ${r.message}`).join(" "),
+    logContext: {
+      source,
+      entity: spec.collection,
+      fields: refusals.map(r => r.path),
+    },
+  });
+}

@@ -78,6 +78,11 @@ describe("migrate:create, a translated unique field", () => {
     const kinds = written.map(f => f.kind);
     expect(kinds).toContain("create-only");
     expect(kinds.at(-1)).toBe("unique");
+    // Its header names what it indexes, which `nextly migrate` checks before running it.
+    const last = written.at(-1)!;
+    expect(parseLocalizationIntent(last.sql, last.name)?.spec.unique).toEqual([
+      { field: "handle", column: "handle" },
+    ]);
     const [up, down] = written.at(-1)!.sql.split("-- DOWN");
     expect(up).toContain(`CREATE UNIQUE INDEX IF NOT EXISTS "${INDEX}"`);
     expect(down).toContain(`DROP INDEX IF EXISTS "${INDEX}"`);
