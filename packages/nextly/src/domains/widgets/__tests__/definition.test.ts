@@ -735,6 +735,20 @@ describe("a widget whose data core builds on the server", () => {
     }
   });
 
+  it("alone may carry an empty state's words and action, which core publishes from its declaration", () => {
+    const empty = {
+      message: "No orders yet",
+      action: { label: "Add", link: "collections/orders" },
+    };
+    expect(() => validateWidgetDefinition({ ...built, empty })).not.toThrow();
+    expect(() => validateWidgetDefinition({ ...valid, empty })).toThrow(
+      /empty is published by core for a declared widget only/
+    );
+    expect(() =>
+      validateWidgetDefinition({ ...built, empty: { message: "  " } })
+    ).toThrow(/not text/);
+  });
+
   it("may hold a content setting, which a widget with its own query may not", () => {
     const collection = {
       name: "collection",

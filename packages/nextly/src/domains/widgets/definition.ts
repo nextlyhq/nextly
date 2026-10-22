@@ -321,6 +321,19 @@ export interface WidgetDefinition {
    */
   sketch?: DataWidgetArchetype;
   /**
+   * What a declared widget's empty state says and offers in place of the
+   * frame's own: one line, and one action, a path relative to the admin,
+   * offered only to a reader holding its `requiredPermission`.
+   *
+   * 🔴 Published by core for a declared widget alone (with `serverData`), from
+   * a declaration startup already held to the empty state's rules. Whether
+   * the card is empty is decided on the server, so no test travels here.
+   */
+  empty?: {
+    message?: string;
+    action?: { label: string; link: string; requiredPermission?: string };
+  };
+  /**
    * Where this widget sits by default, ascending. Omitted means "after
    * everything that states one".
    *
@@ -1415,6 +1428,34 @@ function validateWidths(d: Partial<WidgetDefinition>): void {
 }
 
 /**
+ * Confirms `empty`, when stated, comes with `serverData` and has its shape.
+ *
+ * Only a declared widget's empty state is published, and its words and link
+ * were judged at startup by the empty state's own rules. A registered widget
+ * stating one would bypass them, so it is refused; the shape is still checked,
+ * as a guard over values already in hand.
+ */
+function validateEmpty(d: Partial<WidgetDefinition>): void {
+  const empty: unknown = d.empty;
+  if (empty === undefined) return;
+  if (d.serverData !== true) {
+    fail(`${d.id}: empty is published by core for a declared widget only`);
+  }
+  const text = (value: unknown) =>
+    typeof value === "string" && value.trim() !== "";
+  const { message, action } = empty as { message?: unknown; action?: unknown };
+  const actionOk =
+    action === undefined ||
+    (typeof action === "object" &&
+      action !== null &&
+      text((action as { label?: unknown }).label) &&
+      text((action as { link?: unknown }).link));
+  if ((message !== undefined && !text(message)) || !actionOk) {
+    fail(`${d.id}: empty has a message or an action that is not text`);
+  }
+}
+
+/**
  * Confirms `serverData`, when stated, is `true` and stands alone. A query
  * beside it would leave two answers to what the card shows: the one the
  * definition carries and the one core builds from the declaration.
@@ -1469,6 +1510,7 @@ export function validateWidgetDefinition(
   validateServerData(d);
   validateQuery(d);
   validateWidths(d);
+  validateEmpty(d);
   validateCells(d);
   validateDefaultOrder(d);
   validateChrome(d);

@@ -1737,19 +1737,45 @@ const NO_WIDGETS: WidgetAudience = {
  * An `actions` widget's shortcuts each carry a gate of their own, and a
  * shortcut is a label and an href: shipped whole and hidden by the browser
  * afterwards, the protected ones are readable from the payload regardless.
- * Filtered on the same reading the card's own gate gets. A declaration
- * without actions passes through untouched.
+ * A declared widget's empty-state action is the same kind of thing, and is
+ * withheld the same way. Filtered on the same reading the card's own gate
+ * gets. A declaration with neither passes through untouched.
  */
 function actionsForAudience<
-  W extends { id: string; actions?: readonly WidgetAction[] },
+  W extends {
+    id: string;
+    actions?: readonly WidgetAction[];
+    empty?: { message?: string; action?: { requiredPermission?: string } };
+  },
 >(widget: W, audience: WidgetAudience): W {
-  if (widget.actions === undefined) return widget;
+  const withheldEmpty = emptyForAudience(widget.empty, audience);
+  if (widget.actions === undefined && withheldEmpty === widget.empty) {
+    return widget;
+  }
   return {
     ...widget,
-    actions: widget.actions.filter(action =>
-      audience.holds(action.requiredPermission)
-    ),
+    ...(widget.actions === undefined
+      ? {}
+      : {
+          actions: widget.actions.filter(action =>
+            audience.holds(action.requiredPermission)
+          ),
+        }),
+    ...(withheldEmpty === undefined ? {} : { empty: withheldEmpty }),
   };
+}
+
+/**
+ * A declared widget's empty state with its action withheld from a reader who
+ * may not take it; the same object when there is nothing to withhold.
+ */
+function emptyForAudience<
+  E extends { message?: string; action?: { requiredPermission?: string } },
+>(empty: E | undefined, audience: WidgetAudience): E | undefined {
+  if (empty?.action === undefined) return empty;
+  if (audience.holds(empty.action.requiredPermission)) return empty;
+  const { action: _withheld, ...rest } = empty;
+  return rest as E;
 }
 
 /**

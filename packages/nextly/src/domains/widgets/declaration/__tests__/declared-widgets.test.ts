@@ -68,6 +68,23 @@ describe("registering declared widgets", () => {
       "half",
       "full",
     ]);
+    // A widget drawn by its own component: its empty state's words and action are published,
+    // its test is not, and the action's permission is the gate's own name.
+    registerWidgetDeclarations([{ owner: SHOP, declarations: [revenue] }]);
+    const own = getWidget("acme/revenue");
+    expect(own).toMatchObject({
+      archetype: "custom",
+      component: "@acme/nextly-plugin-shop/admin#RevenueCard",
+      empty: {
+        message: "No takings in this range",
+        action: {
+          label: "Add a product",
+          link: "collections/products/create",
+          requiredPermission: "create-products",
+        },
+      },
+    });
+    expect(Object.keys(own?.empty ?? {})).not.toContain("when");
     // And the declaration itself is still kept whole, for the server to answer its cards from.
     expect(declaredWidget("acme/orders-by-state")).toMatchObject({
       owner: SHOP,

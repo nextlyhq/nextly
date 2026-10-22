@@ -76,7 +76,41 @@ interface DeclaredWidgetShape {
   readonly several?: boolean;
   readonly permission?: string;
   readonly sketch?: WidgetDefinition["sketch"];
+  readonly empty?: {
+    readonly message?: string;
+    readonly action?: { label: string; link: string; permission?: string };
+  };
 }
+
+/**
+ * A declaration's empty state as published: its words and its action, never
+ * its test, which runs on the server. `permission` becomes the gate's own name.
+ */
+function publishedEmpty(
+  empty: DeclaredWidgetShape["empty"]
+): WidgetDefinition["empty"] | undefined {
+  if (empty === undefined) return undefined;
+  const { message, action } = empty;
+  const published: NonNullable<WidgetDefinition["empty"]> = {
+    ...(message === undefined ? {} : { message }),
+    ...(action === undefined
+      ? {}
+      : {
+          action: {
+            label: action.label,
+            link: action.link,
+            ...(action.permission === undefined
+              ? {}
+              : { requiredPermission: action.permission }),
+          },
+        }),
+  };
+  return Object.keys(published).length === 0 ? undefined : published;
+}
+
+/** `{ empty }` when there is one to publish, and nothing otherwise. */
+const withEmpty = (empty: WidgetDefinition["empty"] | undefined) =>
+  empty === undefined ? {} : { empty };
 
 /**
  * A declaration as the registry publishes it: data only.
@@ -118,6 +152,7 @@ function toDefinition(declaration: DeclaredWidgetShape): WidgetDefinition {
       ? {}
       : { requiredPermission: declaration.permission }),
     ...(declaration.sketch === undefined ? {} : { sketch: declaration.sketch }),
+    ...withEmpty(publishedEmpty(declaration.empty)),
     serverData: true,
   };
 }
