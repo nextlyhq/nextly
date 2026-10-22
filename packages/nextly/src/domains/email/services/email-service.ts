@@ -265,9 +265,12 @@ function adapterMessage(
 }
 
 /**
- * The calls a keyed send has had wholly accepted, by provider key: those an
- * earlier attempt recorded and those of this one, kept on the claim for an
- * instance of the earlier version that reads progress only that way.
+ * The calls a keyed send has had accepted, by provider key: those an earlier
+ * attempt recorded and those of this one, kept on the claim for an instance of
+ * the earlier version that reads progress only that way. A call that took
+ * some of its recipients and refused others counts too: that version cannot
+ * record part of a call, and resending the call would send to the accepted
+ * recipients twice, so it does not retry the refused ones instead.
  */
 function acceptedCallsOf(
   claim: HeldClaim,
@@ -276,7 +279,7 @@ function acceptedCallsOf(
   return [
     ...claim.acceptedCalls,
     ...calls
-      .filter(call => call.accepted && call.outcome.success)
+      .filter(call => call.accepted)
       .map(call => claim.providerKey(call.message)),
   ];
 }

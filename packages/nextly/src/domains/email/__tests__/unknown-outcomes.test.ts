@@ -90,6 +90,36 @@ describe.each(http)("%s", (_name, adapter) => {
     expect(await failureOf(adapter())).toEqual(LOST);
   });
 
+  it("reports a request cancelled while its answer's body arrives as unknown", async () => {
+    // The headers arrived, so the call counts as answered; the body did not.
+    const aborted = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.reject(aborted),
+    }) as unknown as typeof fetch;
+    expect(await failureOf(adapter())).toEqual(LOST);
+  });
+
+  it("reports a refusal whose body is cut off by its status, not as unknown", async () => {
+    const aborted = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      statusText: "Unprocessable Entity",
+      json: () => Promise.reject(aborted),
+      text: () => Promise.reject(aborted),
+    }) as unknown as typeof fetch;
+    expect(await failureOf(adapter())).toMatchObject({
+      retryable: false,
+      status: 422,
+    });
+  });
+
   it.each([undefined, "ECONNREFUSED", "ENOTFOUND"])(
     "reports a provider that could not be reached (%s) as before, not unknown",
     async code => {

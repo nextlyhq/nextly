@@ -92,9 +92,11 @@ function capturing(
           behaviour.failures -= 1;
           throw new Error("provider down");
         }
-        const refused = [...(options.cc ?? []), ...(options.bcc ?? [])].filter(
-          address => address === behaviour.refuse
-        );
+        const refused = [
+          ...(options.toList ?? []),
+          ...(options.cc ?? []),
+          ...(options.bcc ?? []),
+        ].filter(address => address === behaviour.refuse);
         return {
           success: true,
           messageId: `captured-${messages.length}`,
@@ -526,6 +528,32 @@ describe.each(getConfiguredTestDialects())(
       const [claim] = await t.adapter.select<{ result: string }>(
         "email_send_claims"
       );
+      expect(JSON.parse(claim.result)).toEqual({
+        accepted: ["to:0"],
+        acceptedLegs: [messages[0].options.idempotencyKey],
+      });
+    }, 120_000);
+
+    it("writes a call that took some of its recipients as accepted, so an instance of the earlier version never sends it again", async () => {
+      const { t } = await boot(dialect);
+      // One call to both, which takes A and refuses B: the send is partly
+      // delivered within the call. The earlier version knows calls only, so
+      // the call is recorded as accepted: B is not retried there, and A is
+      // never sent twice.
+      behaviour.refuse = B;
+
+      await t.nextly.email.send({
+        to: [A, B],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: KEY,
+      });
+
+      expect(messages).toHaveLength(1);
+      const [claim] = await t.adapter.select<{ state: string; result: string }>(
+        "email_send_claims"
+      );
+      expect(claim.state).toBe("partial");
       expect(JSON.parse(claim.result)).toEqual({
         accepted: ["to:0"],
         acceptedLegs: [messages[0].options.idempotencyKey],

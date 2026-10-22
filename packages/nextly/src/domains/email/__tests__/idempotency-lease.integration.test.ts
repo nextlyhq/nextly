@@ -272,6 +272,32 @@ describe.each(getConfiguredTestDialects())(
       expect(actions).toEqual([A]);
     }, 120_000);
 
+    it("commits nothing and runs no action for a late call whose claim another send took over", async () => {
+      const t = await boot(dialect);
+      const actions: unknown[] = [];
+      getFilterRegistry().addAction(FilterSeams.EmailAfterSend, value => {
+        actions.push(value.to);
+      });
+      holdCalls();
+
+      await t.nextly.email.send(keyed);
+      // As a send that took the claim over while this call was still out
+      // leaves it: that send owns the outcome now.
+      await t.adapter.update(
+        "email_send_claims",
+        { holder: "another-send" },
+        { and: [{ column: "state", op: "=", value: "claimed" }] }
+      );
+      hold.release?.();
+      await wait(300);
+
+      expect(actions).toEqual([]);
+      expect(await t.adapter.select("email_deliveries")).toEqual([]);
+      expect(await t.adapter.select("email_send_claims")).toEqual([
+        expect.objectContaining({ holder: "another-send", state: "claimed" }),
+      ]);
+    }, 120_000);
+
     it("runs the after-send action of a split send's call that answers late", async () => {
       const t = await boot(dialect);
       const actions: unknown[] = [];

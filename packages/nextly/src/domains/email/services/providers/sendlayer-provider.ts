@@ -132,7 +132,8 @@ export function createSendLayerProvider(
         answered = true;
 
         if (!response.ok) {
-          const errorBody = await response.text();
+          // A refusal stays a refusal when its body cannot be read.
+          const errorBody = await response.text().catch(() => "");
           // Classified by status alone: SendLayer's error body names a code,
           // not whether the request can succeed later.
           throw withEmailFailure(

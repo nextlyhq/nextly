@@ -194,14 +194,19 @@ const LOST_ANSWER_CODES = new Set([
  * cancellation at its deadline), else a provider that could not be reached.
  */
 export function fetchFailure(error: unknown): EmailFailure {
+  return answerLost(error) ? lostAnswerFailure() : networkFailure();
+}
+
+/**
+ * Whether `error` is a request stopped or cut off after it may have been
+ * sent: the call's own cancellation, a timeout, or a connection lost
+ * mid-request. Before an answer, or while its body is still arriving.
+ */
+function answerLost(error: unknown): boolean {
   const name = (error as { name?: unknown } | null)?.name;
-  if (name === "AbortError" || name === "TimeoutError") {
-    return lostAnswerFailure();
-  }
+  if (name === "AbortError" || name === "TimeoutError") return true;
   const code = (error as { cause?: { code?: unknown } } | null)?.cause?.code;
-  return typeof code === "string" && LOST_ANSWER_CODES.has(code)
-    ? lostAnswerFailure()
-    : networkFailure();
+  return typeof code === "string" && LOST_ANSWER_CODES.has(code);
 }
 
 /**
@@ -245,6 +250,10 @@ export function smtpFailure(code: number): EmailFailure {
  * message (`fallback` when what was thrown was not an error), carrying the
  * original's classification, or, when it had none, a network failure if the
  * provider never answered and an unclassified one if it did.
+ *
+ * A request cancelled or cut off while its answer's body was still arriving
+ * is unknown, as one cut off before the answer is: the provider may have
+ * accepted it, and a retry through a provider without keys would send it again.
  */
 export function providerFailure(
   text: { prefix: string; fallback: string },
@@ -255,6 +264,9 @@ export function providerFailure(
   const prefix = text.prefix;
   return withEmailFailure(
     new Error(`${prefix}: ${message}`),
-    failureOf(error) ?? (answered ? unclassifiedFailure() : fetchFailure(error))
+    failureOf(error) ??
+      (answered && !answerLost(error)
+        ? unclassifiedFailure()
+        : fetchFailure(error))
   );
 }

@@ -596,6 +596,7 @@ export async function settleClaimIn(
   const held = and(eq(table.id, claim.id), eq(table.holder, claim.holder));
   if (!options.keep) {
     await claims.delete(table).where(held);
+    await assertStillHeld(claims, table, claim, { deleted: true });
     return;
   }
   const accepted = options.acceptedRecipients ?? [];
@@ -618,4 +619,35 @@ export async function settleClaimIn(
           }
     )
     .where(held);
+  await assertStillHeld(claims, table, claim, { deleted: false });
+}
+
+/**
+ * Throws, so the caller's transaction rolls back, when the claim is no longer
+ * this send's: its lease lapsed and another send took it over, so that send
+ * now owns the outcome. The settling write above matched nothing then, and
+ * committing this send's delivery records or running its after-send actions
+ * would do the other send's work twice.
+ */
+async function assertStillHeld(
+  claims: ClaimDb,
+  table: EmailSendClaimsTable,
+  claim: HeldClaim,
+  options: { deleted: boolean }
+): Promise<void> {
+  const [row] = (await claims
+    .select({ holder: table.holder })
+    .from(table)
+    .where(eq(table.id, claim.id))
+    .limit(1)) as Array<{ holder: string }>;
+  // Deleted, the claim is gone unless another send holds it; kept, it is
+  // still under this send's holder.
+  const lost = options.deleted
+    ? row !== undefined
+    : row?.holder !== claim.holder;
+  if (lost) {
+    throw NextlyError.internal({
+      logContext: { reason: "send-claim-taken-over" },
+    });
+  }
 }

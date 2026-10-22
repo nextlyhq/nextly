@@ -369,9 +369,10 @@ send's claim stays held while the call is still unsettled, its lease renewed,
 for up to 10 minutes (the lease limit, five times the deadline): a repeat in
 that time is told the send is in progress, and if the call answers, the claim
 records what it answered. Past the lease limit the outcome is recorded as
-unknown and a later send may take the claim over. An adapter that ignores the
-signal can then deliver the email twice; one that honours it, or a provider that
-takes a key, does not.
+unknown and a later send may take the claim over. Through a provider that takes
+a key, the provider still sends the email once. Through one without keys, the
+email can then be delivered twice: stopping the call only stops Nextly waiting,
+and a request that reached the provider may still be delivered.
 
 If the process stops while sending, the key is held for 15 minutes from the
 claim's last renewal, after which a later send with it may send again. Through a
