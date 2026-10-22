@@ -1798,7 +1798,10 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(await workingDraftCount(id)).toBe(0);
   });
 
-  it("recursively merges nested single-component sub-field edits across draft saves", async () => {
+  // A component placed directly in another component is never stored (no column on the outer
+  // component's row, no table write of its own), so a draft save carrying a value for one is
+  // refused, as the live write is, rather than held in a draft its publish would lose.
+  it("refuses a draft save that carries a component placed directly in another, keeping no draft", async () => {
     handle = await createTestNextly({
       fieldGroups: [
         defineFieldGroup({
@@ -1837,28 +1840,17 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(created.success).toBe(true);
     const id = (created.data as { id: string }).id;
 
-    // Two saves each touching a DIFFERENT field of the DEEPLY NESTED component.
-    await entries.updateEntry(
+    const refused = await entries.updateEntry(
       { ...ctx, entryId: id },
       { seo: { social: { twitter: "draft-tw" } } }
     );
-    await entries.updateEntry(
-      { ...ctx, entryId: id },
-      { seo: { social: { facebook: "draft-fb" } } }
+    expect(refused.success).toBe(false);
+    expect(
+      (refused as { errors?: Array<{ path?: string; code?: string }> }).errors
+    ).toContainEqual(
+      expect.objectContaining({ path: "social", code: "NOT_STORED" })
     );
-
-    const draftRead = await entries.getEntry({
-      ...ctx,
-      entryId: id,
-      includeWorkingDraft: true,
-    });
-    const social = (
-      draftRead.data as {
-        seo?: { social?: { twitter?: string; facebook?: string } };
-      }
-    ).seo?.social;
-    expect(social?.twitter).toBe("draft-tw");
-    expect(social?.facebook).toBe("draft-fb");
+    expect(await workingDraftCount(id)).toBe(0);
   });
 
   it("merges a partial component publish patch into the promoted draft", async () => {
