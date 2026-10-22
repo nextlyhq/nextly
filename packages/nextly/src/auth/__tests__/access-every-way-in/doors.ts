@@ -12,7 +12,6 @@ import { isDeepStrictEqual } from "node:util";
 import { vi } from "vitest";
 
 import { GET as listCollectionsSchema } from "../../../api/collections-schema";
-import { requireRouteAuthentication } from "../../../api/route-auth";
 import { createMediaHandlers } from "../../../api/media-handlers";
 import { container } from "../../../di/container";
 import { CollectionAccessService } from "../../../domains/collections/services/collection-access-service";
@@ -23,17 +22,11 @@ import type {
   DocumentLockService,
   DocumentRef,
 } from "../../../domains/document-lock";
-import {
-  permissionVerdicts,
-  widgetAudience,
-} from "../../../domains/widgets/visibility";
+import { widgetAudience } from "../../../domains/widgets/visibility";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { resolveContent } from "../../../runtime/routing/resolve-content";
 import { consoleLogger } from "../../../services/shared";
 import { recordingDeviations, type Deviation } from "../../access/deviations";
-import { schemaListed } from "../../access/route-gate-adapters";
-import { getRBACService } from "../../code-access";
-import type { AuthContext } from "../../middleware";
 import { canReadEntity, readAccessCaller } from "../../entity-read-access";
 import { canReadSystemResource } from "../../resource-readable";
 
@@ -72,7 +65,9 @@ function fromError(error: unknown): Answer {
   return typeof status === "number" ? String(status) : "E";
 }
 
-async function settle(work: () => Promise<Answer>): Promise<Answer> {
+async function settle(
+  work: () => Promise<Answer | Attributed>
+): Promise<Answer | Attributed> {
   try {
     return await work();
   } catch (error) {
@@ -458,19 +453,42 @@ async function entity(_world: World, row: Row, who: CallerHandle) {
   return fromBoolean(await canReadEntity(targetSlug(row), caller));
 }
 
-/** What the schema builder lists for a caller, and who it authenticated. */
-type Listed = Answer | { slugs: string[]; auth: AuthContext };
+/**
+ * What a door's one call for a caller answered, with the deviations recorded
+ * in deciding each subject of it (a collection, a permission).
+ */
+interface Observed<T> {
+  readonly answer: T;
+  readonly bySubject: ReadonlyMap<string, Deviation[]>;
+}
 
-const schemaLists = new WeakMap<World, Map<string, Promise<Listed>>>();
+/** A row's answer and the deviations its door recorded in deciding it. */
+interface Attributed {
+  readonly answer: Answer;
+  readonly deviations: readonly Deviation[];
+}
+
+/** Runs one call for many subjects, keeping what deviated for each. */
+async function observing<T>(work: () => Promise<T>): Promise<Observed<T>> {
+  const { result, bySubject } = await recordingDeviations(work);
+  return { answer: result, bySubject };
+}
+
+const schemaLists = new WeakMap<
+  World,
+  Map<string, Promise<Observed<Answer | string[]>>>
+>();
 
 /**
  * Whether the schema builder lists the row's collection to the caller. The
- * list is asked once per caller; what deviated on the way is every
- * collection's at once, so it is set aside, and the row's own collection is
- * asked of the list's decision for what deviated in deciding it, which must
- * give the list's answer.
+ * list is asked once per caller, as the builder asks it, and the row's
+ * deviations are the ones that request recorded in deciding its collection.
  */
-async function schema(world: World, row: Row, who: CallerHandle) {
+async function schema(
+  world: World,
+  row: Row,
+  who: CallerHandle
+): Promise<Attributed | Answer> {
   let cache = schemaLists.get(world);
   if (!cache) {
     cache = new Map();
@@ -478,31 +496,25 @@ async function schema(world: World, row: Row, who: CallerHandle) {
   }
   let listed = cache.get(row.caller);
   if (!listed) {
-    listed = recordingDeviations(async (): Promise<Listed> => {
-      const request = () =>
+    listed = observing(async (): Promise<Answer | string[]> => {
+      const res = await listCollectionsSchema(
         new Request(`${ORIGIN}/api/collections/schema?limit=500`, {
           headers: who.headers,
-        });
-      const res = await listCollectionsSchema(request());
+        })
+      );
       if (res.status !== 200) return String(res.status);
       const body = (await res.json()) as { items: { slug: string }[] };
-      return {
-        slugs: body.items.map(item => item.slug),
-        auth: await requireRouteAuthentication(request()),
-      };
-    }).then(({ result }) => result);
+      return body.items.map(item => item.slug);
+    });
     cache.set(row.caller, listed);
   }
-  const answer = await listed;
+  const { answer, bySubject } = await listed;
   if (typeof answer === "string") return answer;
   const slug = collectionOf(row.rule);
-  const shown = answer.slugs.includes(slug);
-  const decided =
-    (await schemaListed(answer.auth, [{ slug }], getRBACService())).length > 0;
-  if (decided !== shown) {
-    throw new Error(`the schema list and its decision disagree on ${slug}`);
-  }
-  return shown ? "A" : "R";
+  return {
+    answer: answer.includes(slug) ? "A" : "R",
+    deviations: bySubject.get(slug) ?? [],
+  };
 }
 
 /**
@@ -558,7 +570,7 @@ async function system(_world: World, row: Row, who: CallerHandle) {
 
 const audiences = new WeakMap<
   World,
-  Map<string, Promise<ReadonlySet<string>>>
+  Map<string, Promise<Observed<ReadonlySet<string>>>>
 >();
 
 /**
@@ -566,7 +578,11 @@ const audiences = new WeakMap<
  * permission. What a caller is offered is worked out once per caller and
  * setup, as the layout endpoint works it out once per request.
  */
-async function widget(world: World, row: Row, who: CallerHandle) {
+async function widget(
+  world: World,
+  row: Row,
+  who: CallerHandle
+): Promise<Attributed> {
   if (!who.user) throw new Error(`${row.caller} has no user to ask about`);
   let cache = audiences.get(world);
   if (!cache) {
@@ -580,28 +596,21 @@ async function widget(world: World, row: Row, who: CallerHandle) {
   });
   let offered = cache.get(key);
   if (!offered) {
-    // Every widget is decided at once, so what deviated on the way is not
-    // any one row's: it is set aside, and each row asks its own widget's
-    // permission below.
-    offered = recordingDeviations(() => widgetAudience(caller)).then(
-      ({ result: { visible } }) => new Set(visible.map(card => card.id))
+    // Every widget is decided at once, as the dashboard decides them, and
+    // each permission's deviations are kept apart.
+    offered = observing(() =>
+      widgetAudience(caller).then(
+        ({ visible }) => new Set(visible.map(card => card.id))
+      )
     );
     cache.set(key, offered);
   }
   const slug = targetSlug(row);
-  const id = widgetFor(slug, row.action);
-  const shown = (await offered).has(id);
-  // The row's widget's permission, decided as the dashboard decides each
-  // one, for what deviated in deciding it; it must give the dashboard's
-  // answer.
-  const permission = `${row.action}-${slug}`;
-  const held = Boolean(
-    (await permissionVerdicts([permission], caller)).get(permission)
-  );
-  if (held !== shown) {
-    throw new Error(`the dashboard and its decision disagree on ${id}`);
-  }
-  return shown ? "A" : "R";
+  const { answer, bySubject } = await offered;
+  return {
+    answer: answer.has(widgetFor(slug, row.action)) ? "A" : "R",
+    deviations: bySubject.get(`${row.action}-${slug}`) ?? [],
+  };
 }
 
 /** The id of a Single's one document, made by the reads that came before. */
@@ -654,7 +663,7 @@ async function lock(world: World, row: Row, who: CallerHandle) {
 
 const ADAPTERS: Record<
   Door,
-  (world: World, row: Row, who: CallerHandle) => Promise<Answer>
+  (world: World, row: Row, who: CallerHandle) => Promise<Answer | Attributed>
 > = {
   rest,
   direct,
@@ -707,7 +716,11 @@ async function answer(
   const { result, deviations } = await recordingDeviations(() =>
     row.setup === "no-service" ? withoutService(asked) : asked()
   );
-  return { answer: result, deviations };
+  // A door that decides many subjects in one call hands back the deviations
+  // that call recorded for this row's subject.
+  return typeof result === "string"
+    ? { answer: result, deviations }
+    : { answer: result.answer, deviations: [...result.deviations] };
 }
 
 /**

@@ -43,7 +43,7 @@ import {
 } from "./actor";
 import { decide, decidePermission, type AccessTarget } from "./decide";
 import { declaredTarget } from "./declared-rules";
-import { deviate } from "./deviations";
+import { aboutSubject, deviate } from "./deviations";
 import {
   collectionGateVerdict,
   type CollectionQuestion,
@@ -378,7 +378,17 @@ export async function callerMayPerform(
  * holds it by the stored slug alone; a signed-in user is asked as
  * `ctx.caller.can` asks one.
  */
-export async function holdsPermissionAnswer(
+export function holdsPermissionAnswer(
+  slug: string,
+  caller: ReadAccessCaller,
+  rules: RouteRules
+): Promise<boolean> {
+  // The slug is the subject, so a dashboard deciding many widgets at once
+  // still says what deviated in deciding each.
+  return aboutSubject(slug, () => heldPermission(slug, caller, rules));
+}
+
+async function heldPermission(
   slug: string,
   caller: ReadAccessCaller,
   rules: RouteRules
@@ -518,7 +528,10 @@ async function keptWhere<T extends ListedCollection>(
 ): Promise<T[]> {
   const kept: T[] = [];
   for (const collection of collections) {
-    if (await shown(collection.slug)) kept.push(collection);
+    // Each collection's decision is its own subject, so what deviated in
+    // deciding it can be told apart from the rest of the list.
+    const slug = collection.slug;
+    if (await aboutSubject(slug, () => shown(slug))) kept.push(collection);
   }
   return kept;
 }
