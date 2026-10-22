@@ -34,6 +34,11 @@ import {
 } from "drizzle-orm";
 
 import { ERASED_RECIPIENT_HASH, recipientDigests } from "./delivery-record";
+import {
+  cancelQueuedEmailsOf,
+  cancelQueuedEmailsTo,
+  queueTablesBeside,
+} from "./queued-erasure";
 import { sendClaimsTableBeside } from "./send-claims";
 
 /**
@@ -54,6 +59,8 @@ export interface RecipientErasureCapableDb {
   update(table: unknown): {
     set(data: unknown): { where(condition: unknown): Promise<unknown> };
   };
+  /** For the digests of a queued email's recipients (`queued-erasure`). */
+  delete(table: unknown): { where(condition: unknown): Promise<unknown> };
 }
 
 /** The delivery table, as a dialect bundle exposes it. */
@@ -171,6 +178,20 @@ export async function eraseRecipientDeliveries(
     .update(deliveries)
     .set({ recipientHash: ERASED_RECIPIENT_HASH })
     .where(erased);
+  await cancelQueuedEmailsToAddress(db, deliveries, address);
+}
+
+/**
+ * Cancel and clear the queued email to `address` that names nobody, beside
+ * the delivery table its records are erased from (`queued-erasure`).
+ */
+async function cancelQueuedEmailsToAddress(
+  db: RecipientErasureCapableDb,
+  deliveries: unknown,
+  address: string
+): Promise<void> {
+  const tables = queueTablesBeside(deliveries);
+  if (tables) await cancelQueuedEmailsTo(db, tables, address);
 }
 
 /** The delivery table's columns a person's erasure reads and writes. */
@@ -201,6 +222,7 @@ export async function eraseUnnamedRecipientDeliveries(
     .update(deliveries)
     .set({ recipientHash: ERASED_RECIPIENT_HASH })
     .where(erased);
+  await cancelQueuedEmailsToAddress(db, deliveries, address);
 }
 
 /**
@@ -226,4 +248,8 @@ export async function erasePrincipalDeliveries(
     .update(deliveries)
     .set({ recipientHash: ERASED_RECIPIENT_HASH, principalId: digest })
     .where(erased);
+  // Their queued email too, in the same transaction, so a deletion leaves
+  // nothing queued to them either way or both.
+  const tables = queueTablesBeside(deliveries);
+  if (tables) await cancelQueuedEmailsOf(db, tables, person, digest);
 }

@@ -23,7 +23,7 @@ export const emailQueueMysql = mysqlTable(
     id: varchar("id", { length: 36 }).primaryKey(),
     scope: text("scope").notNull(),
     state: varchar("state", { length: 16 }).notNull(),
-    jobId: varchar("job_id", { length: 36 }).notNull(),
+    jobId: varchar("job_id", { length: 36 }),
     // `longtext`: a message carries its whole body, and `text` stops at 64 KB.
     message: longtext("message"),
     principalKind: varchar("principal_kind", { length: 191 }),
