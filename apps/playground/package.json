@@ -9,7 +9,7 @@
     "start": "next start",
     "nextly": "nextly",
     "ci": "nextly migrate && next build",
-    "check-types": "tsc --noEmit",
+    "check-types": "next typegen && tsc --noEmit --incremental false",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
     "env:copy": "cp .env.example .env",
