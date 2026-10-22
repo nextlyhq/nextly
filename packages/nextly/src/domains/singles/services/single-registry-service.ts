@@ -46,7 +46,6 @@ import {
   type BaseListOptions,
   type BaseListResult,
 } from "../../../shared/base-registry-service";
-import { dbTimestampToInstant } from "../../../shared/lib/date-formatting";
 import type { Logger } from "../../../shared/types";
 import type { SingleConfig } from "../../../singles/config/types";
 import { stopReleasesHolding } from "../../releases/early-stop";
@@ -309,45 +308,6 @@ export class SingleRegistryService extends BaseRegistryService<
     options?: ListSinglesOptions
   ): Promise<DynamicSingleRecord[]> {
     return this.getAllRecords(options);
-  }
-
-  /**
-   * When each of `slugs` was registered, as an instant, in ONE query.
-   *
-   * A slug deleted and registered again is a new Single, and this is the
-   * instant that tells the two apart: what was recorded about the slug before
-   * it belongs to the one that was deleted. Read as `slug` and `created_at`
-   * alone, as `getAllSlugs` reads the slug alone, because a layout read asks it.
-   *
-   * 🔴 Recovered through `dbTimestampToInstant`, never `normalizeDbTimestamp`:
-   * the record mapping's normalizer un-offsets every `Date`, which is wrong on
-   * SQLite (epoch-backed, already the right instant) on any server not on UTC.
-   * A slug with no row, or with a value that is not an instant, is left out.
-   */
-  async registeredInstants(
-    slugs: readonly string[]
-  ): Promise<Map<string, Date>> {
-    // An empty `IN ()` is a syntax error on some dialects: answered without a query.
-    if (slugs.length === 0) return new Map();
-    try {
-      const rows = await this.adapter.select<{
-        slug: string;
-        created_at: unknown;
-      }>(await this.resolveRegistryTableName(), {
-        columns: ["slug", "created_at"],
-        where: { and: [{ column: "slug", op: "IN", value: [...slugs] }] },
-      });
-      const instants = new Map<string, Date>();
-      for (const row of rows) {
-        if (!(row.created_at instanceof Date)) continue;
-        const instant = dbTimestampToInstant(row.created_at, this.dialect);
-        if (instant) instants.set(row.slug, instant);
-      }
-      return instants;
-    } catch (error) {
-      if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
-    }
   }
 
   async listSingles(options?: ListSinglesOptions): Promise<ListSinglesResult> {

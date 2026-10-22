@@ -213,21 +213,10 @@ async function singleSteps(probe: ConditionProbe): Promise<GetStartedStep[]> {
 
   let saved: ReadonlySet<string>;
   try {
-    // Each Single's saves counted from when it was registered, so a Single
-    // deleted and made again is not ticked by its predecessor's. Both instants
-    // are the server's clock, written as each row was. Were they ever apart,
-    // the cutoff landing late drops only the first saves of a Single, which
-    // the fallback then answers from its stored instants; landing early it
-    // could count the predecessor's saves only from those last moments before
-    // the slug was registered again. A Single the registry gives no instant
-    // for is left to the fallback.
-    const registered = await getService(
-      "singleRegistryService"
-    ).registeredInstants(offered);
+    // Counted from when each Single was registered, so a Single deleted and
+    // made again is not ticked by its predecessor's saves.
     saved =
-      await getService("activityLogService").singlesWithRecordedSaves(
-        registered
-      );
+      await getService("activityLogService").singlesWithRecordedSaves(offered);
   } catch {
     return offered.map(slug => step("single", "unknown", slug));
   }

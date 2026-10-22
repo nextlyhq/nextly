@@ -244,6 +244,23 @@ describe.each(getConfiguredTestDialects())(
         { and: [{ column: "slug", op: "=", value: HOME }] }
       );
       expect((await statusesFor(h.owner)).byKey[`single:${HOME}`]).toBe("done");
+
+      // And one made in the very instant the Single was registered counts too,
+      // which the second-precision columns of two dialects make an ordinary case.
+      const [save] = await h.t.adapter.select<{ createdAt: Date }>(
+        "activity_log",
+        {
+          columns: ["createdAt"],
+          where: { and: [{ column: "collection", op: "=", value: HOME }] },
+        }
+      );
+      expect(save?.createdAt).toBeInstanceOf(Date);
+      await h.t.adapter.update(
+        "dynamic_singles",
+        { created_at: save!.createdAt },
+        { and: [{ column: "slug", op: "=", value: HOME }] }
+      );
+      expect((await statusesFor(h.owner)).byKey[`single:${HOME}`]).toBe("done");
     });
 
     it("ticks the first entry from collection entries only, and inviting from a second account", async () => {

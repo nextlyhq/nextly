@@ -14,7 +14,7 @@ import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
-import { type Column, type Table } from "drizzle-orm";
+import { and, eq, gte, inArray, type Column, type Table } from "drizzle-orm";
 
 import { authorizationGroups } from "../../auth/entity-read-access";
 import type { RequestActorType } from "../../auth/request-actor";
@@ -521,6 +521,33 @@ interface ActivityWriteTables {
   users: Table & { id: Column; name: Column; email: Column };
 }
 
+/** The two tables the saved-Singles read joins, by their Drizzle properties. */
+interface SavedSinglesTables {
+  activityLog: Table & {
+    collection: Column;
+    subjectKind: Column;
+    createdAt: Column;
+  };
+  dynamicSingles: Table & { slug: Column; createdAt: Column };
+}
+
+/**
+ * The query surface the saved-Singles read uses, as each dialect's Drizzle
+ * builder has it: the builders differ per driver, the chain does not.
+ */
+interface DistinctJoinDb {
+  selectDistinct(fields: Record<string, unknown>): {
+    from(table: unknown): {
+      innerJoin(
+        table: unknown,
+        on: unknown
+      ): {
+        where(condition: unknown): Promise<Record<string, unknown>[]>;
+      };
+    };
+  };
+}
+
 /**
  * One query filter, in the single spelling its only consumer needs.
  *
@@ -925,8 +952,8 @@ export class ActivityLogService extends BaseService {
   }
 
   /**
-   * Which Singles the trail has recorded a save of since each was registered,
-   * in ONE query: `since` maps each Single to the instant it was registered.
+   * Which of `singles` the trail has recorded a save of since each was
+   * registered, in ONE query.
    *
    * A Single is saved by a named writer through `recordSingleActivity`, which
    * files a row naming it with `subjectKind: "single"`; one such row is enough.
@@ -936,36 +963,48 @@ export class ActivityLogService extends BaseService {
    * caller scope: whether a document was ever saved is not the document, and
    * the caller is already one who may update it.
    *
-   * 🔴 Only rows from `since` on. A Single deleted and created again under its
-   * slug keeps the trail's record of the one before, since the trail is a
-   * record and deletion does not rewrite it; counted, that record would tick a
-   * Single nobody has saved. Each instant is compared as a database instant,
-   * as the feed's own window is. A row within the same instant counts.
+   * 🔴 Only rows written since the Single's registry row was. A Single deleted
+   * and created again under its slug keeps the trail's record of the one
+   * before, since the trail is a record and deletion does not rewrite it;
+   * counted, that record would tick a Single nobody has saved. The registry is
+   * JOINED, read only, so the two instants are compared by the database, as
+   * stored, with no conversion in between. A row within the same instant
+   * counts.
+   *
+   * On MySQL the trail's instant is a TIMESTAMP, which the server converts
+   * through the session's time zone, and the registry's a DATETIME, which it
+   * does not; the adapter does not pin the session's zone
+   * (`adapter-mysql/src/index.ts`, where `timezone` sets only the driver's own
+   * conversion). The comparison is exact while that zone stays what it was
+   * when the rows were written. Should the server's zone later move west, the
+   * cutoff reads late and a Single's first saves are missed, which the setup
+   * steps then answer from the Single's stored instants. Should it move east,
+   * saves made shortly before a Single was created again read as after it,
+   * and every instant the trail shows is off by the same amount.
    */
   async singlesWithRecordedSaves(
-    since: ReadonlyMap<string, Date>
+    singles: readonly string[]
   ): Promise<Set<string>> {
-    // An empty disjunction matches nothing on some dialects and everything on
-    // others: answered without a query.
-    if (since.size === 0) return new Set();
-    const rows = await this.adapter.select<{ collection: string }>(TABLE, {
-      columns: ["collection"],
-      distinct: true,
-      where: {
-        and: [
-          { column: "subjectKind", op: "=", value: "single" },
-          {
-            or: [...since].map(([single, registered]) => ({
-              and: [
-                { column: "collection", op: "=", value: single },
-                { column: "createdAt", op: ">=", value: registered },
-              ],
-            })),
-          },
-        ],
-      },
-    });
-    return new Set(rows.map(row => row.collection));
+    // An empty `IN ()` is a syntax error on some dialects: answered without a query.
+    if (singles.length === 0) return new Set();
+    const { activityLog, dynamicSingles } = this.tables as SavedSinglesTables;
+    const rows = await (this.db as unknown as DistinctJoinDb)
+      .selectDistinct({ collection: activityLog.collection })
+      .from(activityLog)
+      .innerJoin(
+        dynamicSingles,
+        and(
+          eq(dynamicSingles.slug, activityLog.collection),
+          gte(activityLog.createdAt, dynamicSingles.createdAt)
+        )
+      )
+      .where(
+        and(
+          eq(activityLog.subjectKind, "single"),
+          inArray(activityLog.collection, [...singles])
+        )
+      );
+    return new Set(rows.map(row => String(row.collection)));
   }
 
   /**
