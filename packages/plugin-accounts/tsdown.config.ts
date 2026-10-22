@@ -1,4 +1,4 @@
-import { defineConfig } from "tsup";
+import { defineConfig } from "tsdown";
 
 export default defineConfig({
   // Four entries. The root carries the plugin, its settings, its schema and
@@ -17,9 +17,12 @@ export default defineConfig({
   // Next.js is the site's own, an optional peer dependency: bundling it would
   // load a second copy beside the site's, whose request context ours would
   // never see.
-  external: [/^next(\/|$)/],
+  deps: { neverBundle: [/^next(\/|$)/] },
   format: ["esm"],
-  dts: true,
+  // `.js` and `.d.ts`, the names the exports map already publishes.
+  fixedExtension: false,
+  // Declarations without a type check: `check-types` is the type check.
+  dts: { sourcemap: false, compilerOptions: { noCheck: true } },
   clean: true,
   sourcemap: true,
   minify: false,

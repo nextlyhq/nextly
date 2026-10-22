@@ -45,11 +45,12 @@
  *
  * @module type-surface.test
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 // Imported for two reasons, and the second is the load-bearing one.
@@ -272,17 +273,44 @@ function engineTypesIn(source: string): Set<string> {
  * in: a re-export may rename freely, and `BlockRenderArgs as EngineBlockRenderArgs`
  * still supplies the engine type a consumer needs.
  */
-function engineReExports(declaration: string): Set<string> {
+function engineReExports(declarationFile: string): Set<string> {
   const names = new Set<string>();
+  // Asked of the checker rather than of the text. The bundler is free to route
+  // a re-export through a chunk of its own — import the engine type there,
+  // export it under a generated letter, re-export that from the entry — and a
+  // pattern over `export { … } from "@nextlyhq/blocks-engine"` reads every one
+  // of those as missing. Following each export's alias chain to the file that
+  // declares it is the same answer whatever shape the bundler chose.
+  const engineRoot = `${realpathSync(
+    dirname(
+      manifestFor(
+        createRequire(import.meta.url).resolve("@nextlyhq/blocks-engine")
+      )
+    )
+  )}${sep}`;
+  const program = ts.createProgram([declarationFile], {
+    module: ts.ModuleKind.NodeNext,
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    noEmit: true,
+    skipLibCheck: true,
+  });
+  const checker = program.getTypeChecker();
+  const source = program.getSourceFile(declarationFile);
+  const entry =
+    source === undefined ? undefined : checker.getSymbolAtLocation(source);
+  if (entry === undefined) return names;
 
-  for (const block of declaration.matchAll(
-    /export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]@nextlyhq\/blocks-engine['"]/g
-  )) {
-    for (const clause of block[1]!.split(",")) {
-      const trimmed = clause.trim().replace(/^type\s+/, "");
-      if (trimmed === "") continue;
-      const original = trimmed.split(/\s+as\s+/)[0]?.trim();
-      if (original !== undefined && original !== "") names.add(original);
+  for (const exported of checker.getExportsOfModule(entry)) {
+    const original =
+      exported.flags & ts.SymbolFlags.Alias
+        ? checker.getAliasedSymbol(exported)
+        : exported;
+    const declaredIn = original.declarations?.[0]?.getSourceFile().fileName;
+    if (
+      declaredIn !== undefined &&
+      realpathSync(declaredIn).startsWith(engineRoot)
+    ) {
+      names.add(original.name);
     }
   }
 
@@ -563,10 +591,7 @@ describe("the published type surface", () => {
     // Satisfaction is judged on RE-EXPORTS of the engine, not on the entry's
     // whole export list: a local declaration sharing a name discharges nothing.
     const engineBySubpath = new Map<string, Set<string>>(
-      entries.map(entry => [
-        entry.subpath,
-        engineReExports(readFileSync(entry.declaration, "utf8")),
-      ])
+      entries.map(entry => [entry.subpath, engineReExports(entry.declaration)])
     );
 
     const rootExports = engineBySubpath.get(ROOT_SUBPATH) ?? new Set<string>();
@@ -603,11 +628,7 @@ describe("the published type surface", () => {
     expect(exported.has("BindingBase")).toBe(false);
 
     const rootExports = engineReExports(
-      readFileSync(
-        entryPoints().find(entry => entry.subpath === ROOT_SUBPATH)!
-          .declaration,
-        "utf8"
-      )
+      entryPoints().find(entry => entry.subpath === ROOT_SUBPATH)!.declaration
     );
     const reExported = [...rootExports].filter(name => declarations.has(name));
     expect(reExported.length).toBeGreaterThan(4);

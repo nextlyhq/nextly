@@ -2,7 +2,7 @@
 
 Internal telemetry client used by the Nextly CLIs.
 
-> Internal package. Not published to npm. Bundled into consumers by tsup.
+> Internal package. Not published to npm. Bundled into consumers by tsdown.
 
 ## What this is
 
