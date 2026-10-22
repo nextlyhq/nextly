@@ -350,6 +350,9 @@ export class MySqlAdapter extends DrizzleAdapter {
    */
   private pool: Pool | null = null;
 
+  /** The `withSession` calls running, each on a connection of its own, for `disconnect` to wait for. */
+  private readonly sessions = new Set<Promise<unknown>>();
+
   /**
    * Connection state flag.
    */
@@ -443,7 +446,8 @@ export class MySqlAdapter extends DrizzleAdapter {
    *
    * @remarks
    * This method is idempotent - calling it multiple times is safe.
-   * It waits for all connections to be released before shutting down.
+   * It waits for all connections to be released before shutting down,
+   * including each running `withSession`'s connection of its own.
    */
   async disconnect(): Promise<void> {
     // Detach the pool FIRST, then drop the memoized drizzle instances —
@@ -459,6 +463,8 @@ export class MySqlAdapter extends DrizzleAdapter {
     }
 
     try {
+      // With the pool detached no session starts; those running end first.
+      await Promise.allSettled([...this.sessions]);
       await pool.end();
 
       if (this.config.logger?.info) {
@@ -609,6 +615,21 @@ export class MySqlAdapter extends DrizzleAdapter {
     this.refuseSessionInTransaction();
     // Connected first, as every other call requires.
     this.ensurePool();
+    // Tracked before its connection opens: `disconnect` waits for it.
+    const running = this.runSession(work, options);
+    this.sessions.add(running);
+    try {
+      return await running;
+    } finally {
+      this.sessions.delete(running);
+    }
+  }
+
+  /** `withSession`'s work, on a connection it opens and closes. */
+  private async runSession<T>(
+    work: (session: StatementSession) => Promise<T>,
+    options?: SessionOptions
+  ): Promise<T> {
     let connection: OwnConnection;
     try {
       connection = (await mysql.createConnection(

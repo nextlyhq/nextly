@@ -858,6 +858,47 @@ describe("@nextly/adapter-mysql", () => {
       expect(mockSessionConnection.destroy).toHaveBeenCalledTimes(1);
     });
 
+    it("is waited for by disconnect, which closes the pool only once the session has ended", async () => {
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      let release: () => void = () => {};
+      const gate = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      const session = adapter.withSession(async s => {
+        await gate;
+        await s.execute("INSERT INTO t (v) VALUES (1)");
+      });
+
+      let closed = false;
+      const closing = adapter.disconnect().then(() => {
+        closed = true;
+      });
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(closed).toBe(false);
+      expect(mockPool.end).not.toHaveBeenCalled();
+
+      release();
+      await session;
+      await closing;
+      expect(mockSessionConnection.destroy).toHaveBeenCalledTimes(1);
+      expect(mockPool.end).toHaveBeenCalledTimes(1);
+    });
+
+    it("is refused once disconnect has begun", async () => {
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      const closing = adapter.disconnect();
+      await expect(adapter.withSession(async () => undefined)).rejects.toThrow(
+        /not connected/
+      );
+      await closing;
+    });
+
     it("closes the connection when its work throws", async () => {
       const adapter = createMySqlAdapter({
         url: "mysql://localhost:3306/test",
