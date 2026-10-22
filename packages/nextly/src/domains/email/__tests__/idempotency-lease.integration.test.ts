@@ -31,6 +31,7 @@ import {
   getFilterRegistry,
   resetFilterRegistry,
 } from "../../../filters";
+import type { EmailAfterSendValue } from "../../../filters/seams";
 import {
   definePlugin,
   type PluginContext,
@@ -253,7 +254,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const actions: unknown[] = [];
       getFilterRegistry().addAction(FilterSeams.EmailAfterSend, value => {
-        actions.push(value.to);
+        actions.push((value as EmailAfterSendValue).to);
       });
       const deliveries = container.get<EmailDeliveryService>(
         "emailDeliveryService"
@@ -276,7 +277,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const actions: unknown[] = [];
       getFilterRegistry().addAction(FilterSeams.EmailAfterSend, value => {
-        actions.push(value.to);
+        actions.push((value as EmailAfterSendValue).to);
       });
       holdCalls();
 
@@ -302,7 +303,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const actions: unknown[] = [];
       getFilterRegistry().addAction(FilterSeams.EmailAfterSend, value => {
-        actions.push(value.to);
+        actions.push((value as EmailAfterSendValue).to);
       });
       holdCalls();
       hold.only = B;
