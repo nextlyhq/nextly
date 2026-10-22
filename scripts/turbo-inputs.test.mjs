@@ -71,12 +71,20 @@ function dryRun() {
 
 /**
  * Whether a check-types command writes no build-info file: it runs `tsc` at
- * least once, and every run says `--incremental false`. One `tsc` without it
- * writes the file, so the command still races its own build.
+ * least once, and every run ends up with `--incremental false`. One `tsc`
+ * without it writes the file, so the command still races its own build. tsc
+ * keeps the LAST value of a repeated flag, and a bare `--incremental` means
+ * true, so only the last `--incremental` in each run decides.
  */
 function writesNoBuildInfo(command) {
   const runs = command.match(/\btsc\b[^&|;]*/g) ?? [];
-  return runs.length > 0 && runs.every(run => /--incremental false\b/.test(run));
+  return (
+    runs.length > 0 &&
+    runs.every(run => {
+      const flags = run.match(/--incremental(?:\s+(?:true|false)\b)?/g) ?? [];
+      return flags.at(-1)?.replace(/\s+/g, " ") === "--incremental false";
+    })
+  );
 }
 
 function resolvedTasks() {
@@ -424,6 +432,9 @@ describe("a package's hash covers the program it actually compiles", () => {
     expect(writesNoBuildInfo("tsc --noEmit")).toBe(false);
     expect(writesNoBuildInfo("tsc --noEmit --incremental false && tsc --noEmit -p tsconfig.tests.json")).toBe(false);
     expect(writesNoBuildInfo("next typegen")).toBe(false);
+    expect(writesNoBuildInfo("tsc --noEmit --incremental false --incremental")).toBe(false);
+    expect(writesNoBuildInfo("tsc --noEmit --incremental false --incremental true")).toBe(false);
+    expect(writesNoBuildInfo("tsc --incremental --noEmit --incremental false")).toBe(true);
   });
 });
 

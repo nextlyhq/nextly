@@ -66,22 +66,35 @@
   //   thing covering them — it remains because that edge is a property of the
   //   task graph rather than of the configs, and it does not reach tasks with
   //   no such edge or consumers that read these files by relative path.
-  // - `scripts/**`: root scripts sit in no package at all, so no edge of any
-  //   kind can reach them. `apps/playground` compiles `scripts/dev-doctor.mjs`
-  //   through a test, and before this entry, editing that file left
-  //   `playground#check-types` on the identical hash `62b43e8dbf627e65`.
+  // - The root scripts a package's build, type-check or tests read. Root
+  //   scripts sit in no package at all, so no edge of any kind can reach them.
+  //   `apps/playground` compiles `scripts/dev-doctor.mjs` through a test, and
+  //   before it was listed here, editing that file left `playground#check-types`
+  //   on the identical hash `62b43e8dbf627e65`.
   //
   // Both are deliberately coarse, invalidating every task rather than the
   // type-aware ones, because a compiler setting or a shared script reaches
   // builds and type-aware lint too. The cost of an unnecessary re-run is
   // minutes; the cost of a missed one is a green nobody can see through.
   //
-  // `scripts/**` is the wide answer to a narrow fact: exactly ONE tracked file
-  // needs it today. Listing that file instead would be the enumeration this
-  // task's `inputs` were changed to stop doing, and the guard in
+  // The scripts are listed by file, not as `scripts/**`. The whole tree made
+  // every one of the ~200 root scripts (CI checks, release tooling, gates, and
+  // their tests) a global input, so editing any of them re-ran every build,
+  // lint, type-check and test in the workspace, about seven minutes cold on a
+  // local machine, to protect five files. These five are every root script
+  // read from a package, an app or `e2e/`, followed through their own imports
+  // (none import another root script). The guard in
   // `scripts/turbo-inputs.test.mjs` reports any tracked program input that no
-  // hash covers — so a future one fails CI rather than passing quietly.
-  "globalDependencies": ["packages/tsconfig/*.json", "scripts/**"],
+  // hash covers, so a sixth read of a root script fails CI rather than passing
+  // quietly.
+  "globalDependencies": [
+    "packages/tsconfig/*.json",
+    "scripts/agent-skills.mjs",
+    "scripts/cli-entry.mjs",
+    "scripts/dev-doctor.mjs",
+    "scripts/pnpm-invocation.mjs",
+    "scripts/vitest-dom-setup.ts"
+  ],
 
   // Runtime env vars referenced from package source (not build-time inputs).
   // Listed here so eslint-plugin-turbo's no-undeclared-env-vars rule passes.
