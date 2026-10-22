@@ -29,9 +29,11 @@
 
 import type { WhereCondition } from "@nextlyhq/adapter-drizzle/types";
 
+import { EMAIL_QUEUE_TABLE } from "../../schemas/email-queue/table-name";
 import type { Logger } from "../../shared/types";
 import { warnQuietly } from "../retention/safe-log";
 
+import { QUEUED_EMAIL_HOLD_MS } from "./queued-email-job";
 import {
   EMAIL_RETENTION_CLASSES,
   windowForEmailClass,
@@ -43,6 +45,8 @@ import { CLAIM_TAKEOVER_MS } from "./send-claims";
 const DELIVERIES_TABLE = "email_deliveries";
 
 const CLAIMS_TABLE = "email_send_claims";
+/** As `CLAIMS_TABLE`: the queue's raw name, so a pass reads it as it reads the claims. */
+const QUEUE_TABLE = EMAIL_QUEUE_TABLE;
 
 /**
  * Rows removed per statement.
@@ -258,8 +262,40 @@ export async function pruneSendClaims(
 }
 
 /**
+ * Remove queued emails settled more than `QUEUED_EMAIL_HOLD_MS` ago, one
+ * bounded batch: sent, cancelled, or failed for good, each with whatever of
+ * its message is still held. An email still waiting or sending is never
+ * removed, however old.
+ */
+export async function pruneQueuedEmails(
+  adapter: EmailPruneAdapter,
+  now: Date
+): Promise<number> {
+  const conditions: WhereCondition[] = [
+    { column: "state", op: "IN", value: ["sent", "failed", "cancelled"] },
+    {
+      column: "settledAt",
+      op: "<",
+      value: now.getTime() - QUEUED_EMAIL_HOLD_MS,
+    },
+  ];
+  const rows = await adapter.select<{ id: string }>(QUEUE_TABLE, {
+    where: { and: conditions },
+    limit: EMAIL_PRUNE_BATCH_SIZE,
+    columns: ["id"],
+  });
+  if (rows.length === 0) return 0;
+  return adapter.delete(QUEUE_TABLE, {
+    and: [
+      { column: "id", op: "IN", value: rows.map(row => row.id) },
+      ...conditions,
+    ],
+  });
+}
+
+/**
  * {@link pruneEmailData}, with failure absorbed and reported, and then the
- * send claims, which the same window governs.
+ * send claims, which the same window governs, and the settled queued emails.
  *
  * A send must not fail because housekeeping did. The failure is logged with its
  * cause rather than swallowed, because a pass that silently stops leaves the
@@ -274,6 +310,7 @@ export async function pruneEmailDataSafely(
   try {
     const result = await pruneEmailData(deps, policy, maxBatches);
     await pruneClaimsAfter(deps, policy);
+    await pruneQueueAfter(deps);
     return result;
   } catch (error) {
     // `warnQuietly` rather than the logger directly: this is inside the catch
@@ -313,5 +350,22 @@ async function pruneClaimsAfter(
     warnQuietly(deps.logger, "Email send claims could not be pruned", {
       error,
     });
+  }
+}
+
+/**
+ * The queue's part of a pass, contained as the claims' part is, and left to
+ * the next pass inside a caller's transaction for the same reason.
+ */
+async function pruneQueueAfter(deps: EmailPruneDeps): Promise<void> {
+  const now = (deps.now ?? (() => new Date()))();
+  const inTransaction = deps.adapter.transactionOpenInFlow?.() === true;
+  if (inTransaction || (deps.deadline !== undefined && now >= deps.deadline)) {
+    return;
+  }
+  try {
+    await pruneQueuedEmails(deps.adapter, now);
+  } catch (error) {
+    warnQuietly(deps.logger, "Queued emails could not be pruned", { error });
   }
 }

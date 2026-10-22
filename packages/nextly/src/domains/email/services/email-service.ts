@@ -56,6 +56,7 @@ import { describeProviderFailure } from "../provider-definition";
 import { warnAboutLateQueuedEmail } from "../queued-email-warning";
 import {
   type QueuedEmail,
+  type QueuedEmailState,
   type QueuedMessage,
   queuedEmailState,
   storeQueuedEmail,
@@ -1360,10 +1361,25 @@ export class EmailService extends BaseService {
       ctx => storeQueuedEmail(ctx, input)
     );
     await this.firstAttempt(jobId);
-    return {
-      id,
-      state: (await queuedEmailState(this.adapter, id)) ?? "waiting",
-    };
+    return { id, state: await this.stateAfterFirstAttempt(id) };
+  }
+
+  /**
+   * Where a stored email stands after its first attempt, or `waiting` when
+   * that cannot be read. Never throws: the email is stored and may already be
+   * sent, and a caller told the queue failed would queue it again, under a
+   * new id and so a new key.
+   */
+  private async stateAfterFirstAttempt(id: string): Promise<QueuedEmailState> {
+    try {
+      return (await queuedEmailState(this.adapter, id)) ?? "waiting";
+    } catch (error) {
+      this.logger.warn(
+        "A queued email's state could not be read after its first attempt.",
+        { error: error instanceof Error ? error.message : String(error) }
+      );
+      return "waiting";
+    }
   }
 
   /**

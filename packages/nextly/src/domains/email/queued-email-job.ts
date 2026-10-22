@@ -18,3 +18,11 @@ export const QUEUED_EMAIL_JOB = "email:send";
  * (`CLAIM_TAKEOVER_MS`).
  */
 export const QUEUED_EMAIL_MAX_ATTEMPTS = 15;
+
+/**
+ * How long a settled queued email's row is kept: seven days, as the job
+ * queue keeps a finished job. A failed email's message is held for that
+ * long, so it can still be read after a provider is fixed, and is then
+ * removed with its row.
+ */
+export const QUEUED_EMAIL_HOLD_MS = 7 * 24 * 60 * 60_000;

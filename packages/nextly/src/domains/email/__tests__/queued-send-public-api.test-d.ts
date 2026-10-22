@@ -40,6 +40,7 @@ expectTypeOf<QueuedEmailState>().toEqualTypeOf<
 expectTypeOf<root.QueueEmailArgs>().toEqualTypeOf<QueueEmailArgs>();
 expectTypeOf<root.QueueTemplateEmailArgs>().toEqualTypeOf<QueueTemplateEmailArgs>();
 expectTypeOf<root.QueuedEmail>().toEqualTypeOf<QueuedEmail>();
+expectTypeOf<root.QueuedEmailState>().toEqualTypeOf<QueuedEmailState>();
 
 // The instance a site's code holds offers both, as `send` is offered.
 expectTypeOf<Nextly["email"]["queue"]>().toEqualTypeOf<

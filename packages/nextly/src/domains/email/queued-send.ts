@@ -526,10 +526,14 @@ export async function attemptQueuedEmail(
       .update(table)
       .set({ ...values, updatedAt: now })
       .where(and(eq(table.id, row.id), inArray(table.state, ATTEMPTABLE)));
+  // A sent email's message is cleared as it settles: nothing sends it again,
+  // and it is not held a moment longer than that. A failed one keeps its
+  // message until the row is pruned (`pruneQueuedEmails`).
   const settle = (state: QueuedEmailState, failure?: EmailFailure) =>
     record({
       state,
       ...(failure ? { failure: storedFailure(failure) } : {}),
+      ...(state === "sent" ? { message: null } : {}),
       settledAt: now,
     });
 

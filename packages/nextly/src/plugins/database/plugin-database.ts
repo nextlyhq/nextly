@@ -1626,10 +1626,16 @@ async function runCommitEffects(
     try {
       await effect();
     } catch (error) {
-      getNextlyLogger().error({
-        kind: "after-commit-effect-failed",
-        message: error instanceof Error ? error.message : String(error),
-      });
+      // Guarded too: a logger that throws must not replace the committed
+      // result, or stop the effects after this one.
+      try {
+        getNextlyLogger().error({
+          kind: "after-commit-effect-failed",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } catch {
+        // Nothing is left to report it to.
+      }
     }
   }
 }

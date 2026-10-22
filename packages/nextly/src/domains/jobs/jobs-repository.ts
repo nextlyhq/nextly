@@ -449,12 +449,17 @@ export class JobsRepository {
    * any other, which is what lets one job be run on demand without a second
    * definition of "due". `slug` narrows it the same way, to one job type, so
    * a caller asking whether that type's jobs are overdue reads this rule too.
+   * `createdBy` narrows it to jobs created at or before that instant: asked
+   * with an instant in the past, the answer is the jobs that have been due
+   * since then at least, since a job with neither a schedule nor a retry is
+   * due from the moment it was created.
    */
   async findDue(input: {
     now: Date;
     limit: number;
     ids?: readonly string[];
     slug?: string;
+    createdBy?: Date;
   }): Promise<JobRow[]> {
     return this.db.select<JobRow>(JOBS, {
       where: {
@@ -465,6 +470,15 @@ export class JobsRepository {
           ...(input.slug === undefined
             ? []
             : [{ column: "slug", op: "=" as const, value: input.slug }]),
+          ...(input.createdBy === undefined
+            ? []
+            : [
+                {
+                  column: "createdAt",
+                  op: "<=" as const,
+                  value: input.createdBy,
+                },
+              ]),
           { column: "state", op: "=", value: "pending" },
           // `runAt` is the schedule and `nextAttemptAt` is the retry. Either
           // being unset means "no constraint from that side", which is why each

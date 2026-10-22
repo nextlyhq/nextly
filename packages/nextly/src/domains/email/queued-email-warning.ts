@@ -11,7 +11,9 @@
  *
  * "Past due" is the job queue's own rule (`JobsRepository.findDue`), read as
  * of 15 minutes ago, so this and the runner never disagree on which jobs are
- * waiting for it.
+ * waiting for it. Only jobs created by then count: one never attempted has
+ * no due time of its own and is due from its creation, so a job queued a
+ * moment ago would otherwise read as due 15 minutes ago too.
  *
  * @module domains/email/queued-email-warning
  */
@@ -41,8 +43,10 @@ export async function lateQueuedEmails(
   adapter: DrizzleAdapter,
   now: Date = new Date()
 ): Promise<number> {
+  const since = new Date(now.getTime() - LATE_QUEUED_EMAIL_MS);
   const due = await new JobsRepository(adapter).findDue({
-    now: new Date(now.getTime() - LATE_QUEUED_EMAIL_MS),
+    now: since,
+    createdBy: since,
     limit: COUNTED,
     slug: QUEUED_EMAIL_JOB,
   });

@@ -237,6 +237,34 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
+    it("keeps the commit and runs the next effect when the logger itself throws", async () => {
+      const ctx = await boot();
+      const broken = () => {
+        throw new Error("the logger is broken");
+      };
+      setNextlyLogger({
+        error: broken,
+        warn: broken,
+        info: broken,
+        debug: broken,
+      });
+      let next = false;
+      const result = await ctx.db.transaction(async tx => {
+        await writeThrough(tx, "link-logger-broken");
+        const link = linkedTransaction(tx, "test.effect");
+        link.afterCommit(() => {
+          throw new Error("the effect failed");
+        });
+        link.afterCommit(() => {
+          next = true;
+        });
+        return "committed";
+      });
+      expect(result).toBe("committed");
+      expect(next).toBe(true);
+      expect(await stored("link-logger-broken")).toBe(true);
+    });
+
     it("refuses an effect once the transaction has finished", async () => {
       const ctx = await boot();
       let kept: PluginTransaction | undefined;

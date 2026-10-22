@@ -40,7 +40,12 @@ import { runJobsPass } from "../../jobs/jobs-runner";
 import { pluginSettingsSecrets } from "../../plugins/settings-service";
 import { withEmailFailure } from "../failure";
 import { defineEmailProvider } from "../provider-definition";
-import { LATE_QUEUED_EMAIL_MS } from "../queued-email-warning";
+import { resolveEmailRetentionConfig } from "../retention-config";
+import { pruneEmailDataSafely } from "../prune";
+import {
+  LATE_QUEUED_EMAIL_MS,
+  warnAboutLateQueuedEmail,
+} from "../queued-email-warning";
 import {
   QUEUED_EMAIL_JOB,
   QUEUED_EMAIL_MAX_ATTEMPTS,
@@ -224,7 +229,7 @@ function later(steps: number): Date {
 const message = { to: A, subject: SUBJECT, html: "<p>Shipped</p>" };
 
 describe.each(getConfiguredTestDialects())("a queued email (%s)", dialect => {
-  it("is sent at once with no jobs trigger, held sealed and kept out of the job", async () => {
+  it("is sent at once with no jobs trigger, its message cleared and kept out of the job", async () => {
     const t = await boot(dialect);
 
     const result = await t.nextly.email.queue(message);
@@ -235,15 +240,57 @@ describe.each(getConfiguredTestDialects())("a queued email (%s)", dialect => {
     const [row] = await queued(t);
     expect(row).toMatchObject({ id: result.id, scope: "site", state: "sent" });
     expect(row.settledAt).toEqual(expect.any(Number));
-    // Sealed: neither the address nor the subject is readable at rest.
-    expect(row.message).toMatch(/^sealed:v2:/);
-    expect(row.message).not.toContain(A);
-    expect(row.message).not.toContain(SUBJECT);
+    // Sent, so nothing of it is held any longer.
+    expect(row.message).toBeNull();
     // The job carries the email's id and nothing of its message.
     const [job] = await emailJobs(t);
     expect(job.id).toBe(row.jobId);
     expect(inputOf(job)).toEqual({ queuedId: result.id });
     expect(JSON.stringify(job)).not.toContain(A);
+  });
+
+  it("holds its message sealed while it waits, and clears it once sent", async () => {
+    const t = await boot(dialect);
+    behaviour.failures = 1;
+
+    const result = await t.nextly.email.queue(message);
+    expect(result.state).toBe("waiting");
+    const [waiting] = await queued(t);
+    // Sealed: neither the address nor the subject is readable at rest.
+    expect(waiting.message).toMatch(/^sealed:v2:/);
+    expect(waiting.message).not.toContain(A);
+    expect(waiting.message).not.toContain(SUBJECT);
+
+    await trigger(t, later(1));
+
+    const [sent] = await queued(t);
+    expect(sent.state).toBe("sent");
+    expect(sent.message).toBeNull();
+  });
+
+  it("is removed seven days after it settles, and never while it waits", async () => {
+    const t = await boot(dialect);
+    const sent = await t.nextly.email.queue(message);
+    behaviour.failures = Number.MAX_SAFE_INTEGER;
+    const waiting = await t.nextly.email.queue(message);
+    expect([sent.state, waiting.state]).toEqual(["sent", "waiting"]);
+    const day = 24 * 60 * 60_000;
+    const pass = (days: number) =>
+      pruneEmailDataSafely(
+        {
+          adapter: t.adapter as never,
+          now: () => new Date(Date.now() + days * day),
+        },
+        resolveEmailRetentionConfig()
+      );
+
+    await pass(6);
+    expect((await queued(t)).map(row => row.id).sort()).toEqual(
+      [sent.id, waiting.id].sort()
+    );
+
+    await pass(8);
+    expect((await queued(t)).map(row => row.id)).toEqual([waiting.id]);
   });
 
   it("stores and sends nothing when the plugin's transaction rolls back", async () => {
@@ -437,7 +484,11 @@ describe.each(getConfiguredTestDialects())("a queued email (%s)", dialect => {
     const [job] = await emailJobs(t);
     await t.adapter.update(
       "nextly_jobs",
-      { nextAttemptAt: new Date(Date.now() - LATE_QUEUED_EMAIL_MS - 60_000) },
+      {
+        // Created an hour ago, as a job retried this late was.
+        createdAt: new Date(Date.now() - 60 * 60_000),
+        nextAttemptAt: new Date(Date.now() - LATE_QUEUED_EMAIL_MS - 60_000),
+      },
       { and: [{ column: "id", op: "=", value: job.id }] }
     );
 
@@ -450,6 +501,31 @@ describe.each(getConfiguredTestDialects())("a queued email (%s)", dialect => {
     expect(late[0]).toContain("/api/jobs/run");
   }, 60_000);
 
+  it("does not warn about one just stored whose first attempt has not run", async () => {
+    // A job with no attempt yet has no due time of its own: it is late only
+    // once it was created long enough ago.
+    const t = await boot(dialect);
+    await t.adapter.transaction(ctx =>
+      storeQueuedEmail(ctx, {
+        scope: "site",
+        message: { kind: "message", send: message },
+        secrets: pluginSettingsSecrets(env),
+        dialect: t.adapter.getCapabilities().dialect,
+        now: new Date(),
+      })
+    );
+
+    await warnAboutLateQueuedEmail(t.adapter, logger);
+    expect(warnings.filter(w => /past due/.test(w))).toEqual([]);
+
+    await warnAboutLateQueuedEmail(
+      t.adapter,
+      logger,
+      new Date(Date.now() + LATE_QUEUED_EMAIL_MS + 60_000)
+    );
+    expect(warnings.filter(w => /past due/.test(w))).toHaveLength(1);
+  });
+
   it("does not warn about one less than 15 minutes past due", async () => {
     const t = await boot(dialect);
     behaviour.failures = Number.MAX_SAFE_INTEGER;
@@ -457,7 +533,11 @@ describe.each(getConfiguredTestDialects())("a queued email (%s)", dialect => {
     const [job] = await emailJobs(t);
     await t.adapter.update(
       "nextly_jobs",
-      { nextAttemptAt: new Date(Date.now() - LATE_QUEUED_EMAIL_MS + 60_000) },
+      {
+        // Created an hour ago, as a job retried this late was.
+        createdAt: new Date(Date.now() - 60 * 60_000),
+        nextAttemptAt: new Date(Date.now() - LATE_QUEUED_EMAIL_MS + 60_000),
+      },
       { and: [{ column: "id", op: "=", value: job.id }] }
     );
 
