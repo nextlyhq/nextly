@@ -6107,7 +6107,12 @@ export class CollectionMutationService extends BaseService {
           data: null,
         };
       }
-      committedWrite = true;
+      // Saved only once it is durable. Inside an enclosing SQLite transaction
+      // the publish is a savepoint that transaction can still roll back, so
+      // until it commits a failure below is not a saved change.
+      await this.afterCommit(() => {
+        committedWrite = true;
+      });
 
       // Once the publish is durable: inside an enclosing SQLite transaction,
       // once that commits, and never for a publish it rolls back.
@@ -6175,6 +6180,28 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
+      const intentFor = (localizedSlugs?: string[]) =>
+        buildEntryRevalidationIntent(
+          params.collectionName,
+          readRevalidateConfig(publishCollection),
+          {
+            id: params.entryId,
+            // Prefer the committed post-publish row's slug so a concurrent rename
+            // that landed after the pre-read still busts the actually-published
+            // URL; fall back to the pre-read only when no fresh row was
+            // reconstructed.
+            slug: readStringField(
+              (publishedParentRow ?? existingEntry) as Record<string, unknown>,
+              "slug"
+            ),
+            localizedSlugs,
+          }
+        );
+      // Set before the slug read below, which can fail after the commit. The
+      // failure result carries it, so a durable publish or unpublish still busts
+      // the entry's id and slug tags, though the caller is told not to retry.
+      revalidationIntent = intentFor();
+
       // Publishing all locales makes every locale's slug public at once, so bust
       // each localized slug's tag (read post-commit on the pool — publish only
       // flips status, so the committed companion slugs are stable here).
@@ -6183,22 +6210,7 @@ export class CollectionMutationService extends BaseService {
         params.collectionName,
         params.entryId
       );
-      revalidationIntent = buildEntryRevalidationIntent(
-        params.collectionName,
-        readRevalidateConfig(publishCollection),
-        {
-          id: params.entryId,
-          // Prefer the committed post-publish row's slug so a concurrent rename
-          // that landed after the pre-read still busts the actually-published
-          // URL; fall back to the pre-read only when no fresh row was
-          // reconstructed.
-          slug: readStringField(
-            (publishedParentRow ?? existingEntry) as Record<string, unknown>,
-            "slug"
-          ),
-          localizedSlugs: publishedLocalizedSlugs,
-        }
-      );
+      revalidationIntent = intentFor(publishedLocalizedSlugs);
 
       return {
         success: true,
@@ -6228,6 +6240,9 @@ export class CollectionMutationService extends BaseService {
         // nothing to rebuild it from.
         ...errorEnvelopeFields(thrown),
         committed: committedWrite,
+        // Set only once the publish has committed, so its tags flush whatever
+        // failed after it.
+        revalidationIntent,
       };
     }
   }
