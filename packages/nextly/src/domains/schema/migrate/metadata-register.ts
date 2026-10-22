@@ -36,6 +36,7 @@ import type { SingleAdminOptions } from "../../../config";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import { simplePluralize } from "../../../shared/lib/pluralization";
 import { consoleLogger } from "../../../shared/types";
+import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
 
 import {
   loadSnapshots,
@@ -421,13 +422,20 @@ export async function registerFromMigrations(
   const collections = mergeCollections(snapshots, logger);
   const singles = mergeSingles(snapshots, logger);
 
-  // Step 3: Register each entity, by kind.
-  const collectionsRegistered = await registerEach(
-    collections,
-    "collection",
-    entry => registerCollection(typedAdapter, dialect, entry),
-    logger
-  );
+  // Step 3: Register each entity, by kind. The rows are written directly, so
+  // the cached collection rows are cleared once the writes have run, landed or
+  // not (`collection-row-cache`).
+  let collectionsRegistered: number;
+  try {
+    collectionsRegistered = await registerEach(
+      collections,
+      "collection",
+      entry => registerCollection(typedAdapter, dialect, entry),
+      logger
+    );
+  } finally {
+    clearCollectionRowCache();
+  }
   const singlesRegistered = await registerEach(
     singles,
     "single",

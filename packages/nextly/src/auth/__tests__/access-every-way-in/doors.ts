@@ -262,9 +262,8 @@ async function restRead(
   return total > 0 ? "A" : "R";
 }
 
-/** The caller as a Direct API call names it. */
-function directCaller(who: CallerHandle) {
-  if (who.principal) return { principal: who.principal };
+/** The caller as a checked Direct API call names a person, a key or nobody. */
+function checkedCallerOf(who: CallerHandle) {
   return {
     overrideAccess: false as const,
     ...(who.user ? { user: who.user } : {}),
@@ -272,8 +271,15 @@ function directCaller(who: CallerHandle) {
   };
 }
 
+/** The caller as a Direct API call names it. */
+function directCaller(who: CallerHandle) {
+  if (who.principal) return { principal: who.principal };
+  return checkedCallerOf(who);
+}
+
 type Nextly = World["t"]["nextly"];
 type DirectCaller = ReturnType<typeof directCaller>;
+type CheckedCaller = ReturnType<typeof checkedCallerOf>;
 
 /** The Direct API call each collection action is, on `collection` and `id`. */
 const DIRECT_CALLS: Record<
@@ -304,9 +310,27 @@ const DIRECT_CALLS: Record<
     (await n.count({ collection, where: PROBE_WHERE, ...as })).total > 0,
 };
 
+/**
+ * The Direct API read of a target that is not an entry: a list of media, of
+ * users or of roles, as the REST door asks each.
+ */
+const DIRECT_SYSTEM_READS: Partial<
+  Record<Row["target"], (n: Nextly, as: CheckedCaller) => Promise<unknown>>
+> = {
+  media: (n, as) => n.media.find(as),
+  users: (n, as) => n.users.find(as),
+  roles: (n, as) => n.roles.find(as),
+};
+
 async function direct(world: World, row: Row, who: CallerHandle) {
   const nextly = world.t.nextly;
   const as = directCaller(who);
+  const systemRead = DIRECT_SYSTEM_READS[row.target];
+  if (systemRead) {
+    // Never a principal: the table asks these reads of the callers REST names.
+    await systemRead(nextly, checkedCallerOf(who));
+    return "A";
+  }
   const { slug, id } = addressOf(world, row, "direct");
   if (row.target === "single") {
     if (row.action === "read") await nextly.findSingle({ slug, ...as });

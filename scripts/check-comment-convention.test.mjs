@@ -268,7 +268,9 @@ describe("the allowlist", () => {
   // and `types.ts`, a comment naming a numbered change, no longer exists.
   // 487 -> 485: the one recorded offence each in `runtime/hmr-listener.ts` and
   // its test no longer exist, and both entries emptied (221 -> 219).
-  const EXPECTED_TOTAL = 485;
+  // 485 -> 484: one recorded offence in `collection-entry-service.ts` no longer
+  // exists; its entry remains, so the count above does not move.
+  const EXPECTED_TOTAL = 484;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);

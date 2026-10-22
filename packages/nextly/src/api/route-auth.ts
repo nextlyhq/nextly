@@ -22,6 +22,7 @@ import {
   requirePermission,
   type AuthContext,
   type ErrorResponse,
+  type RouteOperation,
 } from "../auth/middleware";
 import { NextlyError } from "../errors/nextly-error";
 
@@ -103,13 +104,22 @@ export async function requireRouteAnyPermission(
  * Require an authenticated caller with collection-level access for the
  * given action + slug. Mirrors the dispatcher's `requireCollectionAccess`
  * (super-admin bypass, code-defined access rules, RBAC slug permissions).
+ *
+ * `operation` names the route's operation and parameters where they decide
+ * the languages a rule is told; without it, the rule is told every language.
  */
 export async function requireRouteCollectionAccess(
   request: Request,
   action: string,
-  collectionSlug: string
+  collectionSlug: string,
+  operation?: RouteOperation
 ): Promise<AuthContext> {
-  const result = await requireCollectionAccess(request, action, collectionSlug);
+  const result = await requireCollectionAccess(
+    request,
+    action,
+    collectionSlug,
+    operation
+  );
   if (isErrorResponse(result)) throwAuthError(result);
   return result;
 }
