@@ -399,6 +399,23 @@ export function packageNameOf(specifier: string): string {
 }
 
 /**
+ * Whether a resolved file is where every widget declaration is made.
+ *
+ * 🔴 A declaration holds server code (a data function, a query written from
+ * settings, a Needs attention count), so a browser bundle that reaches one
+ * carries that code. Every declaration is made by calling `defineWidget`, and
+ * every route to it -- `nextly`'s root entry, or the module itself -- resolves
+ * to this one file, so reaching it by value is reaching a declaration: a
+ * boundary no import spelling can step around. A type-only import, which is
+ * how a component reads its widget's props, is erased before this is asked.
+ */
+export function isWidgetDeclarationModule(file: string): boolean {
+  return file.endsWith(
+    "/packages/nextly/src/domains/widgets/declaration/define-widget.ts"
+  );
+}
+
+/**
  * Walk everything a set of client entries pulls into a browser bundle.
  *
  * Returns the chain that reached each piece of server-only code, because "something in the admin reaches
@@ -442,6 +459,14 @@ export function walkClientClosure(
       } else {
         packages.add(`${next.name}@${installedVersion(next.name, file, io)}`);
       }
+      return null;
+    }
+    if (isWidgetDeclarationModule(next.file)) {
+      violations.push({
+        package: "nextly (defineWidget)",
+        kind: "widget declaration",
+        chain: chainTo(file),
+      });
       return null;
     }
     if (!parent.has(next.file)) parent.set(next.file, file);
@@ -582,6 +607,37 @@ describe("what a browser bundle can reach", () => {
 
   it("reaches no server-only code", () => {
     expect(describeViolations(result)).toEqual([]);
+  });
+});
+
+describe("what a plugin's widget components can reach", () => {
+  const workspace = readWorkspace(PACKAGES, realIo);
+  const resolveSpecifier = makeResolver(ALIASES, workspace, realIo);
+  const plugin = `${REPO_ROOT}/packages/nextly/src/domains/widgets/declaration/__tests__/plugin`;
+
+  it("reaches none of its widgets' declarations, reading their types only", () => {
+    // The plugin fixture the declaration tests use: its components read their widgets' props from
+    // the declarations by type, so none of the server code they hold is in a bundle.
+    const result = walkClientClosure(
+      [`${plugin}/admin.ts`],
+      resolveSpecifier,
+      realIo
+    );
+    expect(result.unresolved).toEqual([]);
+    expect(describeViolations(result)).toEqual([]);
+  });
+
+  it("would refuse the declarations themselves, so the pass above is the rule's, not its silence", () => {
+    // The positive control: walked as a browser entry, the declarations module is refused for
+    // the server code it holds.
+    const result = walkClientClosure(
+      [`${plugin}/widgets.ts`],
+      resolveSpecifier,
+      realIo
+    );
+    expect(result.violations.map(violation => violation.kind)).toContain(
+      "widget declaration"
+    );
   });
 });
 
@@ -730,6 +786,52 @@ describe("the rule can fail", () => {
       ),
     };
   };
+
+  it("fails on a component that reaches a widget's declaration, wherever it imports it from", () => {
+    // A declaration's data function is server code; a component that value-imports its
+    // declarations carries it into the bundle, however many files lie between.
+    const { io, resolve } = build({
+      "/repo/packages/admin/src/Card.tsx":
+        '"use client";\nimport { orders } from "./widgets";\nexport const Card = () => orders.id;',
+      "/repo/packages/admin/src/widgets.ts":
+        'import { defineWidget } from "@nextly/domains/widgets/declaration/define-widget";\nexport const orders = defineWidget({ id: "acme/orders" });',
+      "/repo/packages/nextly/src/domains/widgets/declaration/define-widget.ts":
+        "export const defineWidget = (d) => d;",
+    });
+    const { violations } = walkClientClosure(
+      ["/repo/packages/admin/src/Card.tsx"],
+      resolve,
+      io
+    );
+    expect(violations).toEqual([
+      {
+        package: "nextly (defineWidget)",
+        kind: "widget declaration",
+        chain: [
+          "/repo/packages/admin/src/widgets.ts",
+          "/repo/packages/admin/src/Card.tsx",
+        ],
+      },
+    ]);
+  });
+
+  it("passes a component that reads its widget's types only, as a component should", () => {
+    const { io, resolve } = build({
+      "/repo/packages/admin/src/Card.tsx":
+        '"use client";\nimport type { orders } from "./widgets";\nimport type { WidgetProps } from "@nextly/domains/widgets/declaration/define-widget";\nexport type P = WidgetProps<typeof orders>;',
+      "/repo/packages/admin/src/widgets.ts":
+        'import { defineWidget } from "@nextly/domains/widgets/declaration/define-widget";\nexport const orders = defineWidget({ id: "acme/orders" });',
+      "/repo/packages/nextly/src/domains/widgets/declaration/define-widget.ts":
+        "export const defineWidget = (d) => d;",
+    });
+    const { violations, visited } = walkClientClosure(
+      ["/repo/packages/admin/src/Card.tsx"],
+      resolve,
+      io
+    );
+    expect(violations).toEqual([]);
+    expect(visited.has("/repo/packages/admin/src/widgets.ts")).toBe(false);
+  });
 
   it("fails on a driver several hops past the directive", () => {
     // 🔴 The case this whole file exists for, and the one the first version of it missed.
