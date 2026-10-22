@@ -30,10 +30,11 @@ import { randomUUID } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull } from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
 import { NextlyError } from "../../errors";
+import { getNextlyLogger } from "../../observability/logger";
 import type { PrincipalRef } from "../../plugins/principals/types";
 import { emailQueueMysql } from "../../schemas/email-queue/mysql";
 import { emailQueuePg } from "../../schemas/email-queue/postgres";
@@ -755,4 +756,128 @@ export function createQueuedEmailPruneJob(
       await pruneQueuedEmails(adapter(), context.now);
     },
   });
+}
+
+// ============================================================
+// Re-sealing at rotation
+// ============================================================
+
+/** Held messages read per statement when re-sealing. */
+const RESEAL_BATCH = 200;
+
+/** The Drizzle surface re-sealing reads held messages through, in id order. */
+interface ResealDb {
+  select(fields: Record<string, unknown>): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        orderBy(column: unknown): {
+          limit(rows: number): PromiseLike<unknown[]>;
+        };
+      };
+    };
+  };
+  update(table: unknown): {
+    set(values: unknown): { where(condition: unknown): PromiseLike<unknown> };
+  };
+}
+
+/**
+ * A held message as it should be stored now, or undefined when it already
+ * is: one sealed under a retired secret, or stored unsealed while the install
+ * now has a secret, is sealed again under the current one. Undefined too for
+ * one no configured secret opens, which re-sealing cannot help.
+ */
+function resealedForm(
+  stored: string,
+  id: string,
+  secrets: readonly string[]
+): string | undefined {
+  const [current] = secrets;
+  if (current === undefined) return undefined;
+  if (stored.startsWith(UNSEALED)) {
+    return `${SEALED}${sealSetting(stored.slice(UNSEALED.length), current, SEAL_OWNER, sealPath(id))}`;
+  }
+  if (!stored.startsWith(SEALED)) return undefined;
+  const opened = openSetting(
+    stored.slice(SEALED.length),
+    secrets,
+    SEAL_OWNER,
+    sealPath(id)
+  );
+  if (!opened.readable || !opened.stale) return undefined;
+  return `${SEALED}${sealSetting(opened.plaintext, current, SEAL_OWNER, sealPath(id))}`;
+}
+
+/**
+ * Seal every held message again under the current secret, the first of
+ * `secrets`, where a retired one sealed it, so a message stays deliverable
+ * across any number of rotations: each rotation's first boot moves every
+ * held message to the new secret while the previous one can still open it.
+ *
+ * Each write is fenced on the message as read, so one an attempt or an
+ * erasure changed meanwhile is left as that left it.
+ *
+ * @returns How many were sealed again, and how many no configured secret
+ *   opens
+ */
+export async function resealQueuedMessages(
+  adapter: DrizzleAdapter,
+  secrets: readonly string[]
+): Promise<{ resealed: number; unreadable: number }> {
+  const result = { resealed: 0, unreadable: 0 };
+  if (secrets.length === 0) return result;
+  const db = adapter.getDrizzle<ResealDb>();
+  const table = emailQueueTableFor(adapter.getCapabilities().dialect);
+  let after = "";
+  for (;;) {
+    const rows = (await db
+      .select({ id: table.id, message: table.message })
+      .from(table)
+      .where(and(isNotNull(table.message), gt(table.id, after)))
+      .orderBy(table.id)
+      .limit(RESEAL_BATCH)) as Array<{ id: string; message: string }>;
+    if (rows.length === 0) return result;
+    for (const row of rows) {
+      const next = resealedForm(row.message, row.id, secrets);
+      if (next !== undefined) {
+        await db
+          .update(table)
+          .set({ message: next })
+          .where(and(eq(table.id, row.id), eq(table.message, row.message)));
+        result.resealed += 1;
+      } else if (
+        openQueuedMessage(row.message, row.id, secrets) === undefined
+      ) {
+        result.unreadable += 1;
+      }
+    }
+    after = rows[rows.length - 1].id;
+  }
+}
+
+/**
+ * {@link resealQueuedMessages} at boot, before plugins start. Never throws:
+ * a message that cannot be re-sealed is still opened by the previous secret
+ * until the next rotation, and the app starts either way. Says so when some
+ * held message no configured secret opens, naming what to configure, and
+ * nothing of the messages.
+ */
+export async function resealQueuedMessagesAtBoot(
+  adapter: DrizzleAdapter,
+  secrets: readonly string[]
+): Promise<void> {
+  try {
+    const { unreadable } = await resealQueuedMessages(adapter, secrets);
+    if (unreadable > 0) {
+      getNextlyLogger().warn({
+        kind: "queued-email-unreadable",
+        message: `${unreadable} queued email${unreadable === 1 ? "" : "s"} cannot be read with the configured secrets and will not be sent. Configure the secret they were sealed under in NEXTLY_SECRET_PREVIOUS.`,
+      });
+    }
+  } catch (error) {
+    getNextlyLogger().error({
+      kind: "queued-email-reseal-failed",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
