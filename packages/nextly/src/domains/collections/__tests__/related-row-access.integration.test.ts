@@ -32,8 +32,21 @@ import {
   text,
   upload,
 } from "../../../config";
+import * as resourceReadable from "../../../auth/resource-readable";
 import { getDialectTables } from "../../../database/index";
 import { container } from "../../../di/container";
+// Relationship expansion decides whether a reader may see a related `users` row through
+// `canReadSystemResource`. It is wrapped, not replaced, so the count below observes the
+// real call path while every answer stays the one the real function gives.
+vi.mock("../../../auth/resource-readable", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../../../auth/resource-readable")>();
+  return {
+    ...actual,
+    canReadSystemResource: vi.fn(actual.canReadSystemResource),
+  };
+});
+
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -487,36 +500,26 @@ describe.each(getConfiguredTestDialects())(
 
       it("asks once per expansion whether the caller may read users, however many fields relate to them", async () => {
         const fx = await boot(dialect);
-        const rbac = container.get<{
-          checkAccess: (query: {
-            operation: string;
-            resource: string;
-          }) => Promise<boolean>;
-        }>("rbacAccessControlService");
-        const checks = vi.spyOn(rbac, "checkAccess");
-        try {
-          // Depth 2: a component is a level of its own, so a relationship
-          // inside one is populated from the second level.
-          for (const read of [readRef, listRef]) {
-            checks.mockClear();
-            const data = await read(fx, as(fx.userReader), 2);
-            // Both fields relate to the same user, and both carry it, as do
-            // both component instances that relate to it.
-            expect(shows(data.author, TITLE.user)).toBe(true);
-            expect(shows(data.reviewer, TITLE.user)).toBe(true);
-            const bylines = data.bylines as unknown[];
-            expect(bylines).toHaveLength(2);
-            for (const byline of bylines) {
-              expect(shows(byline, TITLE.user)).toBe(true);
-            }
-            const usersReads = checks.mock.calls.filter(
-              ([query]) =>
-                query.operation === "read" && query.resource === "users"
-            );
-            expect(usersReads).toHaveLength(1);
+        const decisions = vi.mocked(resourceReadable.canReadSystemResource);
+        // Depth 2: a component is a level of its own, so a relationship
+        // inside one is populated from the second level.
+        for (const read of [readRef, listRef]) {
+          decisions.mockClear();
+          const data = await read(fx, as(fx.userReader), 2);
+          // Both fields relate to the same user, and both carry it, as do
+          // both component instances that relate to it.
+          expect(shows(data.author, TITLE.user)).toBe(true);
+          expect(shows(data.reviewer, TITLE.user)).toBe(true);
+          const bylines = data.bylines as unknown[];
+          expect(bylines).toHaveLength(2);
+          for (const byline of bylines) {
+            expect(shows(byline, TITLE.user)).toBe(true);
           }
-        } finally {
-          checks.mockRestore();
+          const usersReads = decisions.mock.calls.filter(
+            ([resource, userId]) =>
+              resource === "users" && userId === fx.userReader
+          );
+          expect(usersReads).toHaveLength(1);
         }
       });
 
