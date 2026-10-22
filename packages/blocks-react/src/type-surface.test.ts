@@ -273,6 +273,33 @@ function engineTypesIn(source: string): Set<string> {
  * in: a re-export may rename freely, and `BlockRenderArgs as EngineBlockRenderArgs`
  * still supplies the engine type a consumer needs.
  */
+let sharedProgram: ts.Program | undefined;
+
+/**
+ * One program over every entry's declaration file, built the first time it is
+ * asked for. Each entry's re-exports are read from it, so the compiler loads
+ * the shared chunks and the engine's declarations once rather than once per
+ * entry: on a Windows runner a program per entry took 7 s.
+ */
+function declarationProgram(): ts.Program {
+  sharedProgram ??= ts.createProgram(
+    entryPoints().map(entry => entry.declaration),
+    {
+      module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+      noEmit: true,
+      skipLibCheck: true,
+    }
+  );
+  return sharedProgram;
+}
+
+/**
+ * Long enough for the first case that builds the program, which takes seconds
+ * on a slow runner where Vitest's default allows five.
+ */
+const PROGRAM_TIMEOUT_MS = 60_000;
+
 function engineReExports(declarationFile: string): Set<string> {
   const names = new Set<string>();
   // Asked of the checker rather than of the text. The bundler is free to route
@@ -288,12 +315,7 @@ function engineReExports(declarationFile: string): Set<string> {
       )
     )
   )}${sep}`;
-  const program = ts.createProgram([declarationFile], {
-    module: ts.ModuleKind.NodeNext,
-    moduleResolution: ts.ModuleResolutionKind.NodeNext,
-    noEmit: true,
-    skipLibCheck: true,
-  });
+  const program = declarationProgram();
   const checker = program.getTypeChecker();
   const source = program.getSourceFile(declarationFile);
   const entry =
@@ -558,85 +580,100 @@ describe("the published type surface", () => {
     ).toEqual(Object.keys(SENTINELS).sort());
   });
 
-  it("exports every engine type its declarations name, per entry", () => {
-    const entries = entryPoints();
+  it(
+    "exports every engine type its declarations name, per entry",
+    () => {
+      const entries = entryPoints();
 
-    for (const entry of entries) {
-      expect(
-        existsSync(entry.declaration),
-        `${entry.declaration} is missing — run \`pnpm build --filter @nextlyhq/blocks-react\``
-      ).toBe(true);
-    }
+      for (const entry of entries) {
+        expect(
+          existsSync(entry.declaration),
+          `${entry.declaration} is missing — run \`pnpm build --filter @nextlyhq/blocks-react\``
+        ).toBe(true);
+      }
 
-    const exportsBySubpath = new Map<string, Set<string>>(
-      entries.map(entry => [
-        entry.subpath,
-        exportedNames(readFileSync(entry.declaration, "utf8")),
-      ])
-    );
+      const exportsBySubpath = new Map<string, Set<string>>(
+        entries.map(entry => [
+          entry.subpath,
+          exportedNames(readFileSync(entry.declaration, "utf8")),
+        ])
+      );
 
-    // The positive control, and it is load-bearing. A parser that found NOTHING
-    // would assert nothing at all and read as a clean pass.
-    for (const [subpath, sentinel] of Object.entries(SENTINELS)) {
-      expect(
-        exportsBySubpath.get(subpath)?.has(sentinel),
-        `parser found no \`${sentinel}\` in the "${subpath}" entry`
-      ).toBe(true);
-      expect(
-        ENTRY_MODULES[subpath]?.[sentinel],
-        `the "${subpath}" module does not export \`${sentinel}\` at runtime`
-      ).toBeDefined();
-    }
+      // The positive control, and it is load-bearing. A parser that found NOTHING
+      // would assert nothing at all and read as a clean pass.
+      for (const [subpath, sentinel] of Object.entries(SENTINELS)) {
+        expect(
+          exportsBySubpath.get(subpath)?.has(sentinel),
+          `parser found no \`${sentinel}\` in the "${subpath}" entry`
+        ).toBe(true);
+        expect(
+          ENTRY_MODULES[subpath]?.[sentinel],
+          `the "${subpath}" module does not export \`${sentinel}\` at runtime`
+        ).toBeDefined();
+      }
 
-    // Satisfaction is judged on RE-EXPORTS of the engine, not on the entry's
-    // whole export list: a local declaration sharing a name discharges nothing.
-    const engineBySubpath = new Map<string, Set<string>>(
-      entries.map(entry => [entry.subpath, engineReExports(entry.declaration)])
-    );
+      // Satisfaction is judged on RE-EXPORTS of the engine, not on the entry's
+      // whole export list: a local declaration sharing a name discharges nothing.
+      const engineBySubpath = new Map<string, Set<string>>(
+        entries.map(entry => [
+          entry.subpath,
+          engineReExports(entry.declaration),
+        ])
+      );
 
-    const rootExports = engineBySubpath.get(ROOT_SUBPATH) ?? new Set<string>();
-    const missing: Record<string, string[]> = {};
+      const rootExports =
+        engineBySubpath.get(ROOT_SUBPATH) ?? new Set<string>();
+      const missing: Record<string, string[]> = {};
 
-    for (const entry of entries) {
-      const required = engineTypesNamed(declarationGraph(entry.declaration));
-      // A graph walk that reached no chunk, or a scan that matched no import
-      // form, requires nothing and reads as a clean pass.
-      expect(
-        required.size,
-        `no engine types derived for the "${entry.subpath}" entry`
-      ).toBeGreaterThan(0);
+      for (const entry of entries) {
+        const required = engineTypesNamed(declarationGraph(entry.declaration));
+        // A graph walk that reached no chunk, or a scan that matched no import
+        // form, requires nothing and reads as a clean pass.
+        expect(
+          required.size,
+          `no engine types derived for the "${entry.subpath}" entry`
+        ).toBeGreaterThan(0);
 
-      const reachable = engineBySubpath.get(entry.subpath) ?? new Set<string>();
-      const unreachable = [...required]
-        .filter(name => !reachable.has(name) && !rootExports.has(name))
+        const reachable =
+          engineBySubpath.get(entry.subpath) ?? new Set<string>();
+        const unreachable = [...required]
+          .filter(name => !reachable.has(name) && !rootExports.has(name))
+          .sort();
+        if (unreachable.length > 0) missing[entry.subpath] = unreachable;
+      }
+
+      expect(missing).toEqual({});
+    },
+    PROGRAM_TIMEOUT_MS
+  );
+
+  it(
+    "exports every engine type reachable from the ones it re-exports",
+    () => {
+      const { declarations, exported } = engineSurface();
+      // A parse that produced nothing would make every closure empty and every
+      // obligation vacuous.
+      expect(declarations.size).toBeGreaterThan(50);
+      expect(declarations.get("BlockDefinition")?.kind).toBe("interface");
+      // Traversal must reach declarations the engine keeps private, or the
+      // exported types composed through them go unexamined.
+      expect(declarations.has("BindingBase")).toBe(true);
+      expect(exported.has("BindingBase")).toBe(false);
+
+      const rootExports = engineReExports(
+        entryPoints().find(entry => entry.subpath === ROOT_SUBPATH)!.declaration
+      );
+      const reExported = [...rootExports].filter(name =>
+        declarations.has(name)
+      );
+      expect(reExported.length).toBeGreaterThan(4);
+
+      const unwritable = [...reachableTypes(reExported, declarations)]
+        .filter(name => exported.has(name) && !rootExports.has(name))
         .sort();
-      if (unreachable.length > 0) missing[entry.subpath] = unreachable;
-    }
 
-    expect(missing).toEqual({});
-  });
-
-  it("exports every engine type reachable from the ones it re-exports", () => {
-    const { declarations, exported } = engineSurface();
-    // A parse that produced nothing would make every closure empty and every
-    // obligation vacuous.
-    expect(declarations.size).toBeGreaterThan(50);
-    expect(declarations.get("BlockDefinition")?.kind).toBe("interface");
-    // Traversal must reach declarations the engine keeps private, or the
-    // exported types composed through them go unexamined.
-    expect(declarations.has("BindingBase")).toBe(true);
-    expect(exported.has("BindingBase")).toBe(false);
-
-    const rootExports = engineReExports(
-      entryPoints().find(entry => entry.subpath === ROOT_SUBPATH)!.declaration
-    );
-    const reExported = [...rootExports].filter(name => declarations.has(name));
-    expect(reExported.length).toBeGreaterThan(4);
-
-    const unwritable = [...reachableTypes(reExported, declarations)]
-      .filter(name => exported.has(name) && !rootExports.has(name))
-      .sort();
-
-    expect(unwritable).toEqual([]);
-  });
+      expect(unwritable).toEqual([]);
+    },
+    PROGRAM_TIMEOUT_MS
+  );
 });
