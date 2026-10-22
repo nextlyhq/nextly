@@ -1,4 +1,6 @@
-import { defineConfig } from "tsup";
+import { defineConfig } from "tsdown";
+
+import { metafile } from "../../scripts/build/rolldown-metafile.mjs";
 
 import { serverSafeBuildEntries } from "./scripts/published-entries.js";
 
@@ -6,14 +8,7 @@ import { serverSafeBuildEntries } from "./scripts/published-entries.js";
 // state and portals in module-level stores, so a second copy inside this
 // bundle would not share that state with the host app's copy. lucide-react,
 // sonner and cmdk are declared dependencies the consumer resolves once.
-const external = [
-  "react",
-  "react-dom",
-  "lucide-react",
-  "sonner",
-  "cmdk",
-  /^@radix-ui\//,
-];
+const NEVER_BUNDLE = ["react", "react-dom", "lucide-react", "sonner", "cmdk"];
 
 /**
  * The exports that contain no React runtime: a Tailwind preset read by build
@@ -26,9 +21,9 @@ const external = [
  * front, which also keeps the two dev watchers from clobbering each other.
  */
 export default defineConfig({
-  // Named so the output stays flat: with plain paths tsup mirrors the source
-  // tree from the common root and emits `dist/lib/utils.*`, which would not
-  // match the exports map.
+  // Named so the output stays flat: with plain paths the bundler mirrors the
+  // source tree from the common root and emits `dist/lib/utils.*`, which would
+  // not match the exports map.
   // Read from the export-map derivation rather than declared here, so a subpath's source is
   // stated once. When this config owned it and the surface snapshot kept a copy, retargeting an
   // entry left the snapshot comparing the old barrel while the new one shipped unchecked.
@@ -37,13 +32,24 @@ export default defineConfig({
   // The build's own record of every file that went into each artifact. A specifier scan can only
   // see what SURVIVES, and a bundled dependency leaves none — `culori` is a devDependency, so it
   // would be inlined whole with nothing left to name. This makes the origins visible.
-  metafile: true,
-  dts: true,
+  plugins: [metafile()],
+  // Declarations without a type check: `check-types` is the type check.
+  dts: { sourcemap: false, compilerOptions: { noCheck: true } },
   clean: false,
   sourcemap: true,
   treeshake: true,
-  external,
-  outExtension({ format }) {
-    return { js: format === "cjs" ? ".cjs" : ".mjs" };
+  deps: {
+    neverBundle: id =>
+      NEVER_BUNDLE.some(name => id === name || id.startsWith(`${name}/`)) ||
+      id.startsWith("@radix-ui/"),
   },
+  // Keep the file names the exports map already publishes.
+  outExtensions({ format }) {
+    return format === "cjs"
+      ? { js: ".cjs", dts: ".d.cts" }
+      : { js: ".mjs", dts: ".d.ts" };
+  },
+  // CommonJS stays published beside ESM; tsdown's hint to drop it is noise here.
+  checks: { legacyCjs: false },
+  cjsDefault: false,
 });

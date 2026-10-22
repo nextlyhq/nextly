@@ -21,7 +21,7 @@
  *
  * Run alone: `node scripts/build-css-watch.mjs`
  * Run as part of admin dev: scripts/dev.mjs spawns this alongside
- * `tsup --watch`.
+ * `tsdown --watch`.
  */
 
 import path from "path";

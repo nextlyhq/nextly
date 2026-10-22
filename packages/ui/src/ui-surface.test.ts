@@ -76,7 +76,7 @@ function stripComments(source: string): string {
 
 function sourceOf(file: string): string {
   // Resolved from the PACKAGE ROOT, because these paths are the ones the build config consumes
-  // and tsup entry paths are package-relative. Reading them from `src` instead would need a
+  // and tsdown entry paths are package-relative. Reading them from `src` instead would need a
   // second spelling of the same path, which is what having one map is meant to prevent.
   return stripComments(readFileSync(path.join(PKG_ROOT, file), "utf8"));
 }
@@ -637,7 +637,7 @@ describe("what the freshness check watches", () => {
 
   it("watches the workspace lockfile, because the toolchain is an input", () => {
     /*
-     * A dependency-only upgrade changes the installed TypeScript or tsup
+     * A dependency-only upgrade changes the installed TypeScript or tsdown
      * without touching a byte in this package. The declarations it produced
      * are then the previous compiler's work, and every other path watched here
      * still looks current.
