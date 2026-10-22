@@ -71,20 +71,41 @@ export function companionUniqueIndexName(
   return indexNameForColumns(companionTable, [column, "_locale"], true);
 }
 
-/**
- * The statements that bring a companion's per-language unique indexes to `wanted`: each missing
- * one created, and the index of a translated column no longer wanted dropped. Asked against the
- * indexes the table has (`liveIndexNames`), so a statement is never written for an index already
- * there or already gone, which MySQL, having no `IF EXISTS` on either, would refuse.
- */
-export function companionUniqueIndexStatements(args: {
+/** What a companion's per-language unique indexes are brought to `wanted` by. */
+interface CompanionUniqueIndexArgs {
   dialect: SupportedDialect;
   companionTable: string;
   wanted: readonly UniqueTranslatedColumn[];
   /** Every translated column the companion has, so only this module's own indexes are dropped. */
   translatedColumns: readonly string[];
   liveIndexNames: ReadonlySet<string>;
-}): string[] {
+}
+
+/**
+ * The statements that bring a companion's per-language unique indexes to `wanted`, drops first
+ * (`companionUniqueIndexChanges`). For a caller that changes no column alongside them.
+ */
+export function companionUniqueIndexStatements(
+  args: CompanionUniqueIndexArgs
+): string[] {
+  const { drops, creates } = companionUniqueIndexChanges(args);
+  return [...drops, ...creates];
+}
+
+/**
+ * The index of each translated column no longer wanted, dropped, and each missing one wanted,
+ * created. Asked against the indexes the table has (`liveIndexNames`), so a statement is never
+ * written for an index already there or already gone, which MySQL, having no `IF EXISTS` on
+ * either, would refuse.
+ *
+ * Apart, because a change that also alters columns has to place them: the drops before any column
+ * goes, since SQLite will not drop a column an index uses and MySQL will not drop one a functional
+ * key part uses, and the creates after every column is in place.
+ */
+export function companionUniqueIndexChanges(args: CompanionUniqueIndexArgs): {
+  drops: string[];
+  creates: string[];
+} {
   const { dialect, companionTable, liveIndexNames } = args;
   const table = q(companionTable, dialect);
   const wanted = new Set(args.wanted.map(w => w.column));
@@ -118,5 +139,5 @@ export function companionUniqueIndexStatements(args: {
         ? `DROP INDEX ${q(name, dialect)} ON ${table}`
         : `DROP INDEX IF EXISTS ${q(name, dialect)}`
     );
-  return [...drops, ...creates];
+  return { drops, creates };
 }

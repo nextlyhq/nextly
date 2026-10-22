@@ -170,6 +170,39 @@ describeEachDialect("a translated unique field", dialect => {
     expect((await write("en", { handle: "about" })).success).toBe(true);
   });
 
+  it.each([
+    {
+      change: "leaves translation",
+      fields: [
+        { name: "handle", type: "text", localized: false },
+        { name: "note", type: "text" },
+      ],
+    },
+    { change: "is removed", fields: [{ name: "note", type: "text" }] },
+  ] as const)(
+    "lets a unique translated field that $change go, index and all",
+    async ({ fields }) => {
+      const created = await handler().createCollection({
+        name: "pages",
+        label: "Page",
+        localized: true,
+        fields: [
+          { name: "handle", type: "text", unique: true },
+          { name: "note", type: "text" },
+        ],
+      });
+      expect(created.success, JSON.stringify(created)).toBe(true);
+      await write("en", { handle: "about", note: "n" });
+
+      const changed = await handler().updateCollection(
+        { collectionName: "pages" },
+        { fields: [...fields] }
+      );
+
+      expect(changed.success, JSON.stringify(changed)).toBe(true);
+    }
+  );
+
   /** Runs a statement on the test database, for rows only an embedding entry's save would write. */
   async function query<T>(sql: string): Promise<T[]> {
     return (

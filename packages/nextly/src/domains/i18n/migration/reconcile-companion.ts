@@ -8,7 +8,7 @@ import { isFieldLocalized } from "../classify-fields";
 
 import {
   companionUniqueIndexName,
-  companionUniqueIndexStatements,
+  companionUniqueIndexChanges,
   translatedColumnNames,
   type UniqueFieldLike,
   uniqueTranslatedColumns,
@@ -769,7 +769,7 @@ export function buildCompanionTransitionStatements(
       statements: [
         ...buildLocalizationUpStatements(spec),
         // The companion is new, so every unique translated field's index is created.
-        ...uniqueIndexDelta({ ...args, liveCompanionIndexes: [] }),
+        ...uniqueIndexDelta({ ...args, liveCompanionIndexes: [] }).creates,
       ],
       needsArchive: false,
       companionDropped: false,
@@ -849,9 +849,12 @@ export function buildCompanionTransitionStatements(
           }),
         ]
       : [];
+    const indexes = uniqueIndexDelta(args);
     return {
       beforeMain,
       statements: [
+        // First, so no column an index uses is renamed or dropped under it.
+        ...indexes.drops,
         ...(archiveFirst ? [] : renaming),
         ...buildCompanionReconcileStatements({
           slug,
@@ -875,8 +878,8 @@ export function buildCompanionTransitionStatements(
           // As the companion will be once this change's own RENAME has run.
           liveCompanionColumns: rename?.live ?? args.liveCompanionColumns,
         }),
-        // Last, so every column it keys on has been added or renamed by then.
-        ...uniqueIndexDelta(args),
+        // Last, so every column they key on has been added or renamed by then.
+        ...indexes.creates,
       ],
       needsArchive: sharedAfter.length > 0,
       companionDropped: false,
@@ -1038,12 +1041,14 @@ export function buildCompanionTransitionPlans(
 
 /**
  * The per-language unique indexes a change adds and drops on the companion
- * (`companionUniqueIndexStatements`): wanted for the translated fields marked unique after it,
+ * (`companionUniqueIndexChanges`): wanted for the translated fields marked unique after it,
  * against the indexes the companion has, or, with none read, the ones the fields before the change
  * gave it. Those are read off the fields as they were, before any rename, since an index keeps the
  * name it was created under.
  */
-function uniqueIndexDelta(args: CompanionTransitionArgs): string[] {
+function uniqueIndexDelta(
+  args: CompanionTransitionArgs
+): ReturnType<typeof companionUniqueIndexChanges> {
   const { dialect, builtBy } = args;
   const companionTable = `${args.tableName}_locales`;
   const columnsOf = (fields: readonly UniqueFieldLike[], localized: boolean) =>
@@ -1062,7 +1067,7 @@ function uniqueIndexDelta(args: CompanionTransitionArgs): string[] {
     dialect,
     builtBy,
   });
-  return companionUniqueIndexStatements({
+  return companionUniqueIndexChanges({
     dialect,
     companionTable,
     wanted: columnsOf(args.newFields, args.isLocalized),
