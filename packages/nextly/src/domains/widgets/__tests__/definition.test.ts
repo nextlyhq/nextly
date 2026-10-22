@@ -710,3 +710,86 @@ describe("an archetype draws one kind of result", () => {
     ).not.toThrow();
   });
 });
+
+describe("a widget whose data core builds on the server", () => {
+  const { query: _query, ...noQuery } = valid;
+  const built = { ...noQuery, serverData: true as const };
+
+  it("carries no query, which its data archetype would otherwise require", () => {
+    expect(() => validateWidgetDefinition(built)).not.toThrow();
+    // The control: the same definition without the mark still needs its query.
+    expect(() => validateWidgetDefinition(noQuery)).toThrow(/requires a query/);
+  });
+
+  it("is refused beside a query, which would be a second answer to what the card shows", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...built, query: valid.query })
+    ).toThrow(/built on the server takes no query/);
+  });
+
+  it("is a mark, and only true marks it", () => {
+    for (const value of [false, "yes", 1]) {
+      expect(() =>
+        validateWidgetDefinition({ ...built, serverData: value })
+      ).toThrow(/serverData may only be true/);
+    }
+  });
+
+  it("may hold a content setting, which a widget with its own query may not", () => {
+    const collection = {
+      name: "collection",
+      label: "Collection",
+      type: "collection",
+    };
+    expect(() =>
+      validateWidgetDefinition({ ...built, settings: [collection] })
+    ).not.toThrow();
+    expect(() =>
+      validateWidgetDefinition({ ...valid, settings: [collection] })
+    ).toThrow(/WIDGET_CONTENT_SETTING_NOT_DRAWN/);
+  });
+});
+
+describe("a widget's width terms", () => {
+  it("states its widths in the arrangement's words, gaps allowed", () => {
+    expect(() =>
+      validateWidgetDefinition({
+        ...valid,
+        allowedWidths: ["quarter", "full"],
+        defaultWidth: "full",
+        allowsSeveral: true,
+      })
+    ).not.toThrow();
+  });
+
+  it("refuses a width the arrangement does not have, an empty list and a repeated width", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...valid, allowedWidths: ["1/4"] })
+    ).toThrow(/allowedWidths must hold only/);
+    expect(() =>
+      validateWidgetDefinition({ ...valid, allowedWidths: [] })
+    ).toThrow(/at least one width/);
+    expect(() =>
+      validateWidgetDefinition({ ...valid, allowedWidths: ["full", "full"] })
+    ).toThrow(/names a width twice/);
+  });
+
+  it("starts a card at one of its widths, never outside them", () => {
+    expect(() =>
+      validateWidgetDefinition({
+        ...valid,
+        allowedWidths: ["quarter", "half"],
+        defaultWidth: "full",
+      })
+    ).toThrow(/is not one of its allowedWidths/);
+    expect(() =>
+      validateWidgetDefinition({ ...valid, defaultWidth: "wide" })
+    ).toThrow(/defaultWidth must be one of/);
+  });
+
+  it("says whether a dashboard may hold several only as true or false", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...valid, allowsSeveral: "yes" })
+    ).toThrow(/allowsSeveral must be true or false/);
+  });
+});

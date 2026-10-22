@@ -78,13 +78,60 @@ function snapshot(def: WidgetDefinition): WidgetDefinition {
   });
 }
 
+/**
+ * The public doors' refusal of `serverData`.
+ *
+ * Only core may say a card's data is built on the server, because only core
+ * holds the declaration that builds it: a definition claiming it through a
+ * public door has no declaration behind it, so its card could never be
+ * answered. Checked on the value, not the type, since a JavaScript caller or a
+ * spread of a published definition can carry it.
+ */
+function refuseServerData(def: WidgetDefinition, door: string): void {
+  const stated: unknown = (def as { serverData?: unknown }).serverData;
+  if (stated === undefined) return;
+  throw NextlyError.invalidInput({
+    message:
+      `Widget "${def.id}" cannot be given to ${door}() with serverData: core sets it ` +
+      `when it publishes a declared widget. Declare the widget with defineWidget() instead.`,
+  });
+}
+
 /** Register a widget. Throws if the id is taken or the definition is malformed. */
 export function registerWidget(
   def: WidgetDefinition,
   opts: { source?: string } = {}
 ): void {
+  refuseServerData(def, "registerWidget");
+  addToStore(def, opts.source ?? "unknown");
+}
+
+/**
+ * Register a declared widget, as core publishes it: a definition whose data
+ * core builds on the server (`serverData: true`), from a declaration only core
+ * holds. The one door that admits `serverData`, and it admits nothing else.
+ */
+export function registerDeclaredDefinition(
+  def: WidgetDefinition,
+  owner: string
+): void {
+  // Core's own fault if it happens, never an author's, so it is an internal
+  // error: the detail is for the log, not for whoever is asking.
+  if (def.serverData !== true) {
+    throw NextlyError.internal({
+      logContext: {
+        widgetId: def.id,
+        owner,
+        reason: "a declared widget was published without serverData",
+      },
+    });
+  }
+  addToStore(def, owner);
+}
+
+/** Validates and stores a new widget, refusing an id already taken. */
+function addToStore(def: WidgetDefinition, source: string): void {
   validateWidgetDefinition(def);
-  const source = opts.source ?? "unknown";
   const existing = store().get(def.id);
   if (existing) {
     throw NextlyError.conflict({
@@ -115,6 +162,7 @@ export function overrideWidget(
   def: WidgetDefinition,
   opts: { source?: string } = {}
 ): void {
+  refuseServerData(def, "overrideWidget");
   validateWidgetDefinition(def);
   if (def.id !== id) {
     throw NextlyError.invalidInput({
@@ -123,9 +171,20 @@ export function overrideWidget(
         `"${def.id}". The replacement must carry the id it replaces.`,
     });
   }
-  if (!store().has(id)) {
+  const existing = store().get(id);
+  if (!existing) {
     throw NextlyError.notFound({
       message: `Cannot override widget "${id}": it is not registered.`,
+    });
+  }
+  // A declared widget's card is answered from its declaration. Replacing its
+  // definition here would leave that declaration answering a card nothing
+  // describes any more, so the declaration is where it changes.
+  if (existing.definition.serverData === true) {
+    throw NextlyError.invalidInput({
+      message:
+        `Cannot override widget "${id}": "${existing.source}" declares it, and a declared ` +
+        `widget is changed in its declaration.`,
     });
   }
   store().set(id, {

@@ -18,8 +18,9 @@ import {
   type WidgetLifecycle,
 } from "./lifecycle";
 import type { WidgetQuery, WidgetQuerySpec } from "./query";
-import { validateWidgetSettings, type WidgetSetting } from "./settings";
+import { validateWidgetSettings, type AnyWidgetSetting } from "./settings";
 import type { WidgetOp } from "./sources";
+import { WIDGET_WIDTHS, type WidgetWidth } from "./widths";
 
 /*
  * Re-exported from the contract's home so a caller reading a definition finds
@@ -295,9 +296,24 @@ export interface WidgetDefinition {
    * already has and a plugin author needs no new vocabulary. The stored values
    * live on the placement, not here: this is the offer, and the placement is
    * one reader's answer to it.
+   *
+   * Any of the eight setting types. A content setting (a collection, and the
+   * filter, sort and grouping over it) is admitted only where core builds the
+   * query from it, `serverData`; see `widgetSettingsProblem`.
    */
-  settings?: WidgetSetting[];
+  settings?: AnyWidgetSetting[];
   defaultSize: WidgetSize;
+  /**
+   * The widths a card of this widget may take, stated in the arrangement's
+   * own words. Gaps are allowed: `["quarter", "full"]` is two widths, not a
+   * range. When stated, it is the widget's widths, and `minSize`/`maxSize`
+   * no longer bound them (`widthFacts` reads one or the other, never both).
+   */
+  allowedWidths?: readonly WidgetWidth[];
+  /** The width a new card starts at. One of `allowedWidths` when both are stated. */
+  defaultWidth?: WidgetWidth;
+  /** Whether one dashboard may hold more than one card of this widget. */
+  allowsSeveral?: boolean;
   /**
    * Where this widget sits by default, ascending. Omitted means "after
    * everything that states one".
@@ -388,13 +404,26 @@ export interface WidgetDefinition {
    */
   requiredPermission?: string | readonly string[];
   /**
-   * Required for every data archetype; forbidden for `text` and `actions`.
+   * Required for every data archetype unless `serverData` is set; forbidden
+   * for `text` and `actions`.
    *
    * Typed as {@link WidgetQuerySpec} so a declaration pairing `groupBy` with an
    * op that ignores it, or a `groupBy` op carrying no key, fails to compile
    * rather than booting and failing on every request the card makes.
    */
   query?: WidgetQuerySpec;
+  /**
+   * The card's data is built on the server from the widget's declaration (a
+   * data function, or a query written from its settings), so the definition
+   * carries no query of its own and the browser never holds the code that
+   * builds one.
+   *
+   * 🔴 Set by core when it publishes a declared widget, never by hand: the
+   * public registration doors refuse it, because a definition claiming its
+   * data is built on the server, with no declaration to build it from, is a
+   * card that can never be answered.
+   */
+  serverData?: true;
   /** Required for `custom`; forbidden otherwise. */
   component?: string;
   /** Required for `actions`; forbidden otherwise. */
@@ -1333,9 +1362,66 @@ export function archetypeResultProblem(
   );
 }
 
+/**
+ * Confirms the width terms, when stated, name real widths and agree.
+ *
+ * Registry-only vocabulary, as the sizes are ({@link validateSizeValues}). A
+ * stated list must hold at least one width and none twice, since an empty
+ * list would be read as "unstated" and a repeated one says nothing more. A
+ * default must be one of the stated widths: a card that starts at a width the
+ * reader may not return it to is the size range's own failure, in other words.
+ */
+function validateWidths(d: Partial<WidgetDefinition>): void {
+  const allowed: readonly unknown[] | undefined = d.allowedWidths;
+  const known = (value: unknown) =>
+    (WIDGET_WIDTHS as readonly unknown[]).includes(value);
+  if (allowed !== undefined) {
+    if (!Array.isArray(allowed) || allowed.length === 0) {
+      fail(`${d.id}: allowedWidths must list at least one width`);
+    }
+    for (const width of allowed) {
+      if (!known(width)) {
+        fail(
+          `${d.id}: allowedWidths must hold only ${WIDGET_WIDTHS.join(", ")}`
+        );
+      }
+    }
+    if (new Set(allowed).size !== allowed.length) {
+      fail(`${d.id}: allowedWidths names a width twice`);
+    }
+  }
+  if (d.defaultWidth !== undefined) {
+    if (!known(d.defaultWidth)) {
+      fail(`${d.id}: defaultWidth must be one of ${WIDGET_WIDTHS.join(", ")}`);
+    }
+    if (allowed !== undefined && !allowed.includes(d.defaultWidth)) {
+      fail(
+        `${d.id}: defaultWidth "${d.defaultWidth}" is not one of its allowedWidths`
+      );
+    }
+  }
+  if (d.allowsSeveral !== undefined && typeof d.allowsSeveral !== "boolean") {
+    fail(`${d.id}: allowsSeveral must be true or false`);
+  }
+}
+
+/**
+ * Confirms `serverData`, when stated, is `true` and stands alone. A query
+ * beside it would leave two answers to what the card shows: the one the
+ * definition carries and the one core builds from the declaration.
+ */
+function validateServerData(d: Partial<WidgetDefinition>): void {
+  const stated: unknown = d.serverData;
+  if (stated === undefined) return;
+  if (stated !== true) fail(`${d.id}: serverData may only be true`);
+  if (d.query !== undefined) {
+    fail(`${d.id}: a widget whose data is built on the server takes no query`);
+  }
+}
+
 function validateQuery(d: Partial<WidgetDefinition>): void {
   const archetype = d.archetype as WidgetArchetype;
-  if (DATA_ARCHETYPE_SET.has(archetype) && !d.query) {
+  if (DATA_ARCHETYPE_SET.has(archetype) && !d.query && d.serverData !== true) {
     fail(`${d.id}: archetype "${d.archetype}" requires a query`);
   }
   // Refused with its OWN reason rather than the queryless one, which would say
@@ -1371,9 +1457,11 @@ export function validateWidgetDefinition(
   validateComponent(d);
   validateActions(d);
   validateText(d);
+  validateServerData(d);
   validateQuery(d);
+  validateWidths(d);
   validateCells(d);
   validateDefaultOrder(d);
   validateChrome(d);
-  validateWidgetSettings(d.settings, d.id ?? "widget");
+  validateWidgetSettings(d.settings, d.id ?? "widget", d.serverData === true);
 }
