@@ -236,7 +236,12 @@ export class SingleEntryService extends BaseService {
   async takeLiveSharedValues(
     params: Parameters<SingleMutationService["takeLiveSharedValues"]>[0]
   ): ReturnType<SingleMutationService["takeLiveSharedValues"]> {
-    return this.mutationService.takeLiveSharedValues(params);
+    // A write to one language's change: its rules see that language, as a
+    // save of it does.
+    return withRuleLanguage(
+      writeLanguagesFor(this.localization, params.locale ?? undefined),
+      () => this.mutationService.takeLiveSharedValues(params)
+    );
   }
 
   /**

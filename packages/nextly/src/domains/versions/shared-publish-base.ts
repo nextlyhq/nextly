@@ -507,6 +507,29 @@ function editTime(
 }
 
 /**
+ * Of these fields, those the caller may write whole. The write rules are run
+ * on a copy of their live values, and a field passes only when the rules left
+ * it as it was: one with a nested field the caller may not write is not
+ * taken, since taking it would write that nested value over the change's.
+ *
+ * @param applyWriteRules The caller's field write rules, which remove what
+ *   they refuse from the data they are handed, at any depth.
+ */
+export async function wholeWritableFields(
+  names: readonly string[],
+  live: Record<string, unknown>,
+  applyWriteRules: (data: Record<string, unknown>) => Promise<void>
+): Promise<string[]> {
+  const data = structuredClone(
+    Object.fromEntries(names.map(name => [name, live[name]]))
+  );
+  await applyWriteRules(data);
+  return names.filter(
+    name => name in data && sameSharedValue(data[name], live[name])
+  );
+}
+
+/**
  * Bring a pending change up to date: write the live value of each out-of-date
  * shared field the caller may write into it, saved as any other save of the
  * change is, so history shows it and a restore can undo it. The change's base

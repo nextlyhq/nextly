@@ -10,7 +10,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineSingle, number, text } from "../../../config";
+import { defineSingle, group, number, text } from "../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -51,6 +51,21 @@ async function boot(
           number({
             name: "internalScore",
             access: { read: () => false, update: () => false },
+          }),
+          // Shared, with a nested field only a trusted context may write.
+          group({
+            name: "details",
+            fields: [
+              text({ name: "label" }),
+              text({ name: "note", access: { update: () => false } }),
+            ],
+          }),
+          // Shared, and not writable by a request for Spanish.
+          number({
+            name: "ranking",
+            access: {
+              update: ({ locale }: { locale?: string }) => locale !== "es",
+            },
           }),
         ],
       }),
@@ -139,6 +154,31 @@ async function versionsHoldingCount(count: number): Promise<number> {
         : row.snapshot;
     return (snapshot as { articleCount?: unknown }).articleCount === count;
   }).length;
+}
+
+/** A language's pending change, as stored. */
+async function pendingSnapshot(
+  locale: string
+): Promise<Record<string, unknown>> {
+  const rows = await current!.adapter.select<{ snapshot: unknown }>(
+    "nextly_versions",
+    {
+      columns: ["snapshot"],
+      where: {
+        and: [
+          { column: "scopeKind", op: "=", value: "single" },
+          { column: "scopeSlug", op: "=", value: SLUG },
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "IS NULL" },
+          { column: "locale", op: "=", value: locale },
+        ],
+      },
+    }
+  );
+  const snapshot = rows[0]?.snapshot;
+  return (
+    typeof snapshot === "string" ? JSON.parse(snapshot) : (snapshot ?? {})
+  ) as Record<string, unknown>;
 }
 
 /** Live in both languages with a count of 10. */
@@ -347,6 +387,69 @@ describe.each(getConfiguredTestDialects())(
         reason: "shared-fields-out-of-date",
         fields: ["internalScore"],
       });
+    });
+
+    it("doesn't take a shared group holding a nested field the caller may not write, and keeps the change's value", async () => {
+      const singles = await boot(dialect);
+      await live(singles);
+      expect(
+        (
+          await save(singles, "en", {
+            details: { label: "L", note: "N" },
+            status: "published",
+          })
+        ).success
+      ).toBe(true);
+      // English's change holds a trusted edit of the protected note.
+      expect(
+        (
+          await save(singles, "en", {
+            siteName: "EN edited",
+            details: { label: "L", note: "admin edit" },
+          })
+        ).success
+      ).toBe(true);
+      expect(
+        (await save(singles, "es", { details: { label: "L2", note: "N" } }))
+          .success
+      ).toBe(true);
+      expect((await save(singles, "es", { status: "published" })).success).toBe(
+        true
+      );
+
+      const taken = await singles.takeLiveSharedValues({
+        slug: SLUG,
+        locale: "en",
+        overrideAccess: false,
+        user: { id: "u1" },
+      });
+
+      expect(taken.data).toEqual({ taken: [], outOfDate: ["details"] });
+      expect(
+        (await pendingSnapshot("en")).details as { note?: unknown }
+      ).toMatchObject({ note: "admin edit" });
+    });
+
+    it("judges taking the live values by the rules of the language asked for", async () => {
+      const singles = await boot(dialect);
+      await live(singles);
+      // Spanish begins a change; English then publishes a new ranking.
+      expect(
+        (await save(singles, "es", { siteName: "ES edited" })).success
+      ).toBe(true);
+      expect(
+        (await save(singles, "en", { ranking: 5, status: "published" })).success
+      ).toBe(true);
+
+      const taken = await singles.takeLiveSharedValues({
+        slug: SLUG,
+        locale: "es",
+        overrideAccess: false,
+        user: { id: "u1" },
+      });
+
+      // The ranking's rule refuses a write for Spanish, so it isn't taken.
+      expect(taken.data).toEqual({ taken: [], outOfDate: ["ranking"] });
     });
 
     // Every case publishes all three languages at once.

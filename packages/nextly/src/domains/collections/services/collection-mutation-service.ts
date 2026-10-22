@@ -193,6 +193,7 @@ import {
   takenLiveValues,
   type TakenLiveValues,
   takeLiveSharedValuesInto,
+  wholeWritableFields,
 } from "../../versions/shared-publish-base";
 import {
   containedComponentResolver,
@@ -3503,29 +3504,27 @@ export class CollectionMutationService extends BaseService {
       createdBy: params.user?.id ?? null,
       maxPerDoc: (collection as { versions?: ResolvedVersionsConfig | null })
         .versions?.maxPerDoc,
-      // Only what this caller may write: a field rule that refuses them a
-      // value refuses them taking its live one too.
+      // Only what this caller may write, whole: a field rule that refuses
+      // them a value, at any depth, refuses them taking its live one too.
       // Nor a translated component's shared sub-fields, which are left to the
       // editor to copy by hand.
-      mayTake: async stale => {
-        const data = Object.fromEntries(
-          stale
-            .filter(name => !byHand.has(name))
-            .map(name => [name, live[name]])
-        );
-        await applyFieldWriteAccess({
-          kind: "collection",
-          slug: params.collectionName,
-          data,
-          operation: "update",
-          user: params.user,
-          authenticatedScope: params.authenticatedScope,
-          overrideAccess: params.overrideAccess,
-          id: params.entryId,
-          grants,
-        });
-        return Object.keys(data);
-      },
+      mayTake: stale =>
+        wholeWritableFields(
+          stale.filter(name => !byHand.has(name)),
+          live,
+          data =>
+            applyFieldWriteAccess({
+              kind: "collection",
+              slug: params.collectionName,
+              data,
+              operation: "update",
+              user: params.user,
+              authenticatedScope: params.authenticatedScope,
+              overrideAccess: params.overrideAccess,
+              id: params.entryId,
+              grants,
+            })
+        ),
     });
     // A save of the pending change, in its history like any other.
     await this.recordSaveHistory(tx, params.collectionName, params.entryId, {
