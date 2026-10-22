@@ -41,18 +41,18 @@ const counts = (rows: Record<string, unknown>[]) =>
 
 describe("a run of saves", () => {
   it("joins saves 9:59 apart and splits them 10:01 apart", () => {
+    // Written out in minutes and seconds, not derived from the constant: the
+    // ten minutes are the rule, and a test computed from the code's own value
+    // would agree with any value it held.
+    const apart = (minutes: number, seconds: number) =>
+      new Date(T0 - (minutes * 60 + seconds) * 1_000);
     expect(
-      counts([
-        row({ createdAt: before(0) }),
-        row({ createdAt: new Date(T0 - (RUN_GAP_MS - 1_000)) }),
-      ])
+      counts([row({ createdAt: before(0) }), row({ createdAt: apart(9, 59) })])
     ).toEqual([2]);
     expect(
-      counts([
-        row({ createdAt: before(0) }),
-        row({ createdAt: new Date(T0 - (RUN_GAP_MS + 1_000)) }),
-      ])
+      counts([row({ createdAt: before(0) }), row({ createdAt: apart(10, 1) })])
     ).toEqual([1, 1]);
+    expect(RUN_GAP_MS).toBe(10 * 60 * 1_000);
   });
 
   it("is a chain: each save within ten minutes of the next, however long the whole", () => {

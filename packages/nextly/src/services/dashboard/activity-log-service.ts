@@ -680,6 +680,104 @@ function withCursor(
   return where ? { and: [where, olderThan(cursor)] } : olderThan(cursor);
 }
 
+/**
+ * Where the feed's first read starts: after the previous page's position, or a
+ * number of trail rows in. A position that cannot be read starts nowhere
+ * (`null`) rather than at the top, which would show the first page again as the
+ * second.
+ */
+function firstReadOf(
+  options: ActivityLogQueryOptions | undefined
+): ActivityCursor | number | null {
+  if (options?.before) return cursorOf(options.before) ?? null;
+  return options?.offset ?? 0;
+}
+
+/**
+ * The first round's anchor: a position the caller gave anchors it as a later
+ * round's anchor does; a number is a count of trail rows to skip, for the first
+ * round only.
+ */
+function firstRound(start: ActivityCursor | number): {
+  after: ActivityCursor | undefined;
+  offset: number;
+} {
+  return typeof start === "number"
+    ? { after: undefined, offset: start }
+    : { after: start, offset: 0 };
+}
+
+/**
+ * The feed's filter for these options and this scope, or `null` when the scope
+ * admits nothing, so no query is built.
+ *
+ * Named by Drizzle SCHEMA PROPERTY, which is what `adapter.select` resolves
+ * against the table. Naming the physical column here instead silently dropped
+ * the ordering and made a filtered query fail outright.
+ */
+function feedWhere(
+  options: ActivityLogQueryOptions | undefined,
+  scope: ReadableResources
+): WhereClause | undefined | null {
+  const filters: ActivityFilter[] = [];
+  if (options?.collection) {
+    filters.push({
+      property: "collection",
+      op: "=",
+      value: options.collection,
+    });
+  }
+  if (options?.userId) {
+    filters.push({ property: "userId", op: "=", value: options.userId });
+  }
+  const starting = feedConditions(scope, options?.singles);
+  if (starting === null) return null;
+  const conditions: NonNullable<WhereClause["and"]> = [
+    ...filters.map(f => ({ column: f.property, op: f.op, value: f.value })),
+    ...starting,
+  ];
+  return conditions.length > 0 ? { and: conditions } : undefined;
+}
+
+/** One page of the feed, from the runs the walk read. */
+interface FeedPage {
+  shown: ActivityRun[];
+  /** Whether the last run shown may go on past what was read, so its count is a floor. */
+  lastCutShort: boolean;
+  hasMore: boolean;
+  next?: ActivityPosition;
+}
+
+/**
+ * The page `limit` rows long that `runs` make, and what lies beyond it.
+ *
+ * 🔴 `end` as well as the count, because a page can come back short for two
+ * opposite reasons. The extra run is the ordinary signal; a walk that stopped
+ * at its round limit found fewer than that and has said nothing about what
+ * lies beyond it, so reporting no more there tells the reader the feed has
+ * ended when only the scan did. The same stop with the page not yet full means
+ * the last run may go on past what was read.
+ *
+ * The next page continues after the OLDEST save of the last run shown, so none
+ * of that run reappears at its top.
+ */
+function pageOf(
+  runs: readonly ActivityRun[],
+  end: boolean,
+  limit: number
+): FeedPage {
+  const shown = runs.slice(0, limit);
+  const hasMore = runs.length > limit || !end;
+  const last = shown[shown.length - 1];
+  const next = hasMore && last ? positionOf(last.oldest) : undefined;
+  return {
+    shown,
+    lastCutShort: !end && runs.length <= limit,
+    hasMore,
+    ...(next ? { next } : {}),
+  };
+}
+
 /** A stored instant as the feed publishes it: ISO text, or the driver's own text. */
 function instantText(value: unknown): string {
   return value instanceof Date ? value.toISOString() : String(value);
@@ -850,12 +948,7 @@ export class ActivityLogService extends BaseService {
     options?: ActivityLogQueryOptions
   ): Promise<ActivityLogResult> {
     const limit = Math.min(options?.limit ?? 10, 50);
-    // Where the first read starts: after the previous page, or a number of
-    // trail rows in. A position that cannot be read starts nowhere rather than
-    // at the top, which would show the first page again as the second.
-    const start: ActivityCursor | number | null = options?.before
-      ? (cursorOf(options.before) ?? null)
-      : (options?.offset ?? 0);
+    const start = firstReadOf(options);
     if (start === null) return { activities: [], hasMore: false };
 
     // Fail-closed default: an omitted scope must deny, not grant. This feed
@@ -865,38 +958,10 @@ export class ActivityLogService extends BaseService {
     const caller = options?.caller;
 
     try {
-      // Named by Drizzle SCHEMA PROPERTY, which is what `adapter.select`
-      // resolves against the table. Naming the physical column here instead
-      // silently dropped the ordering and made a filtered query fail outright.
-      const filters: ActivityFilter[] = [];
-
-      if (options?.collection) {
-        filters.push({
-          property: "collection",
-          op: "=",
-          value: options.collection,
-        });
-      }
-      if (options?.userId) {
-        filters.push({
-          property: "userId",
-          op: "=",
-          value: options.userId,
-        });
-      }
+      const where = feedWhere(options, scope);
       // A scope that admits nothing matches nothing, the intended answer for a caller who may
       // read nothing, and is answered before any query is built.
-      const starting = feedConditions(scope, options?.singles);
-      if (starting === null) return { activities: [], hasMore: false };
-      const conditions: NonNullable<WhereClause["and"]> = [
-        ...filters.map(f => ({
-          column: f.property,
-          op: f.op,
-          value: f.value,
-        })),
-        ...starting,
-      ];
-      const where = conditions.length > 0 ? { and: conditions } : undefined;
+      if (where === null) return { activities: [], hasMore: false };
 
       // Read until one row PAST the page exists, counted in rows the feed
       // shows: a run of saves only ends where a different row begins, so the
@@ -909,31 +974,17 @@ export class ActivityLogService extends BaseService {
         caller,
         rows => runsOf(rows).length > limit
       );
-      const runs = runsOf(visible.rows);
-      const shown = runs.slice(0, limit);
-      // The walk stopped at its bound with the page not yet full: the last run
-      // may go on past what was read, so its count is a floor.
-      const lastCutShort = !visible.end && runs.length <= limit;
-      // 🔴 `end` as well as the count, because a page can come back short for
-      // two opposite reasons. The extra row is the ordinary signal; a refill
-      // that stopped at its round limit found fewer than that and has said
-      // nothing about what lies beyond it, so reporting `false` there tells
-      // the reader the feed has ended when only the scan did.
-      const hasMore = runs.length > limit || !visible.end;
-      const last = shown[shown.length - 1];
-      // Continues after the OLDEST save of the last run shown, so none of that
-      // run reappears at the top of the next page.
-      const next = hasMore && last ? positionOf(last.oldest) : undefined;
+      const page = pageOf(runsOf(visible.rows), visible.end, limit);
       return {
-        activities: shown.map((run, index) =>
+        activities: page.shown.map((run, index) =>
           this.mapRun(
             run,
-            lastCutShort && index === shown.length - 1,
+            page.lastCutShort && index === page.shown.length - 1,
             options?.singles?.labels
           )
         ),
-        hasMore,
-        ...(next ? { next } : {}),
+        hasMore: page.hasMore,
+        ...(page.next ? { next: page.next } : {}),
       };
     } catch (error) {
       this.logger.error("Failed to query activity log", {
@@ -1064,12 +1115,9 @@ export class ActivityLogService extends BaseService {
     enough: (visible: readonly Record<string, unknown>[]) => boolean
   ): Promise<RefilledActivity> {
     const visible: Record<string, unknown>[] = [];
-    // A position the caller gave anchors the first round as a later round's
-    // anchor does; a number is a count of trail rows to skip, for the first
-    // round only.
-    let after: ActivityCursor | undefined =
-      typeof start === "number" ? undefined : start;
-    const offset = typeof start === "number" ? start : 0;
+    const first = firstRound(start);
+    let after = first.after;
+    const offset = first.offset;
 
     // Bounded so an install whose recent activity is almost entirely
     // unreadable cannot walk the whole table for one card. Reaching it returns
