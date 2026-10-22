@@ -274,9 +274,9 @@ export type AuthorizedPreviewScope =
  * readable check, so a grant that named only the Single would claim more than
  * was verified: an `en` grant would answer for `fr`, whose custom read rule may
  * deny it. `assertEntryPreviewable(collection, entryId, …)` takes no locale and
- * checks none, so an entry grant carries none and the comparison below does not
- * ask for one — requiring it there would refuse every entry preview for a
- * precondition nothing establishes.
+ * checks the read in every language, so an entry grant carries none and holds
+ * for each, and the comparison below does not ask for one — requiring it there
+ * would refuse every entry preview for a precondition nothing establishes.
  */
 
 /**

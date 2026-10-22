@@ -79,6 +79,7 @@ describe("a call made as a plugin-defined person", () => {
       operation: "read",
       target: { kind: "collection", slug: "orders" },
       collection: "orders",
+      locales: [],
     });
   });
 
