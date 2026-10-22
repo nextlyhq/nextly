@@ -163,8 +163,7 @@ export class CollectionEntryService extends BaseService {
     fieldGroupDataService?: FieldGroupDataService,
     rbacAccessControlService?: RBACAccessControlService,
     /**
-     * Normalized localization config (i18n M4), forwarded to the services
-     * below. Kept here too: every operation runs inside `withRuleLanguage`
+     * The normalized localization config, forwarded to the services below. Kept here too: every operation runs inside `withRuleLanguage`
      * with the languages it involves, so each rule it asks is told them. A
      * read is told its language and the ones it falls back to, a write the
      * language it writes (the default one when it takes no locale, as a bulk
