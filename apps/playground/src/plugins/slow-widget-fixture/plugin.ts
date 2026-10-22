@@ -41,7 +41,10 @@ export const slowWidgetFixturePlugin = definePlugin({
           supports: ["count"],
           fields: [{ name: "total", type: "number" }],
         },
-        resolve: async (_query, _caller, _ctx, opts) => {
+        // The widget's query, unread: this source answers one count. Named
+        // for what it is, since the shorter name is also the spelling of a
+        // retired database escape hatch, which the legacy check refuses.
+        resolve: async (_widgetQuery, _caller, _ctx, opts) => {
           await wait(slowWidgetDelayMs(), opts?.signal);
           return { op: "count" as const, total: 42 };
         },
