@@ -249,13 +249,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
-    key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_meta",
-    witness:
-      "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
     key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_one_time_secrets",
     witness:
       "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
@@ -456,13 +449,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   {
     dialect: "postgresql",
     key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select email_templates",
-    witness:
-      "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_meta",
     witness:
       "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
     reason: CALLER,
