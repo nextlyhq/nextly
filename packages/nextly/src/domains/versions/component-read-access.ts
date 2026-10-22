@@ -170,6 +170,9 @@ async function judgeField(
     return;
   }
   if (!isFieldGroupField(field) && !sub) return;
+  if (isFieldGroupField(field) && caller.declaredComponentDecides === true) {
+    withholdMalformed(entry, name);
+  }
   // A value held as JSON text (SQLite's shape, or what a hook returned) is
   // parsed, judged, and written back as text, as the entity's own pass does.
   const container = openNestedContainer(entry[name]);
@@ -206,6 +209,45 @@ async function judgeRows(
 }
 
 /**
+ * Withhold, from a live document, a field-group value that is not an instance:
+ * a primitive, text that does not parse, or a list entry that is not a
+ * record. No field group's rules can judge one, and a hook may have copied a
+ * denied value into it. A version keeps what was captured.
+ */
+function withholdMalformed(entry: Record<string, unknown>, name: string): void {
+  const value = entry[name];
+  if (value === null || value === undefined) return;
+  if (typeof value !== "string") {
+    if (instancesOnly(value) === undefined) delete entry[name];
+    return;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    delete entry[name];
+    return;
+  }
+  const kept = instancesOnly(parsed);
+  if (kept === undefined) delete entry[name];
+  else entry[name] = JSON.stringify(kept);
+}
+
+/**
+ * `value` with every entry that is not an instance removed, in place for a
+ * list, or `undefined` when it is not an instance or a list at all.
+ */
+function instancesOnly(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    for (let i = value.length - 1; i >= 0; i--) {
+      if (!isRecord(value[i])) value.splice(i, 1);
+    }
+    return value;
+  }
+  return isRecord(value) ? value : undefined;
+}
+
+/**
  * Remove every field of an instance no rules can judge, in place: judged by
  * several types in turn, one's removals would hide from the next the stored
  * value its rule reads.
@@ -237,6 +279,14 @@ async function judgeInstance(
   if (inner) {
     await applyComponentReadAccess(instance, inner, componentFields, caller);
   }
+}
+
+/**
+ * The rows a container value holds, through the same parse the redaction
+ * used, so a container held as JSON text reports what was withheld inside it.
+ */
+function containerRows(value: unknown): Record<string, unknown>[] {
+  return openNestedContainer(value)?.rows ?? [];
 }
 
 /**
@@ -279,8 +329,8 @@ export function nestedWithheldPaths(
         paths.add(path);
         continue;
       }
-      const beforeRows = rowsOf(beforeObj[name]);
-      const afterRows = rowsOf(afterObj[name]);
+      const beforeRows = containerRows(beforeObj[name]);
+      const afterRows = containerRows(afterObj[name]);
       beforeRows.forEach((row, index) => {
         const afterRow = afterRows[index];
         if (!afterRow) return;
