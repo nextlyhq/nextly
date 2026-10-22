@@ -53,7 +53,7 @@ export function localizationFromStoredLanguages(
 }
 
 /** A stored fallback list's codes; a list that is not a JSON list of strings reads as none. */
-function fallbackCodes(stored: string): string[] {
+export function fallbackCodes(stored: string): string[] {
   try {
     const parsed: unknown = JSON.parse(stored);
     return Array.isArray(parsed)
