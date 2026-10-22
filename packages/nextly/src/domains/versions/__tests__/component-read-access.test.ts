@@ -184,6 +184,55 @@ describe("applyComponentReadAccess", () => {
   });
 });
 
+describe("malformed and serialized values", () => {
+  const card = { name: "hero", type: "component", component: "card" };
+
+  it("withholds a live field-group value that is not an instance", async () => {
+    // A hook may replace a field-group value, or one instance of a list, with
+    // a value that is not an instance at all, such as a denied field copied
+    // out of it. No field group's rules can judge that, so it is withheld.
+    registerFieldFunctions("fieldGroup", "card", [
+      { name: "title", type: "text" },
+      { name: "secret", type: "text", access: denied },
+    ]);
+    const entry: Record<string, unknown> = {
+      hero: "S-1",
+      list: [{ title: "a", secret: "S-2" }, "S-3"],
+      text: JSON.stringify("S-4"),
+    };
+
+    await applyComponentReadAccess(
+      entry,
+      fields(
+        card,
+        { ...card, name: "list", repeatable: true },
+        { ...card, name: "text" }
+      ),
+      new Map(),
+      { ...caller, declaredComponentDecides: true }
+    );
+
+    expect(JSON.stringify(entry)).not.toMatch(/S-\d/);
+    expect(entry.list).toEqual([{ title: "a" }]);
+  });
+
+  it("reports a withheld path inside a container held as JSON text", () => {
+    const before = {
+      meta: JSON.stringify({ hero: { title: "a", secret: "S-1" } }),
+    };
+    const after = { meta: JSON.stringify({ hero: { title: "a" } }) };
+
+    const paths = nestedWithheldPaths(
+      before,
+      after,
+      fields({ name: "meta", type: "group", fields: [card] }),
+      new Map([["card", fields({ name: "title" }, { name: "secret" })]])
+    );
+
+    expect([...paths]).toEqual(["meta.hero.secret"]);
+  });
+});
+
 describe("fieldsCarryingReadRules", () => {
   it("finds a rule in a component nested in another component's group", () => {
     registerFieldFunctions("fieldGroup", "inner", [
