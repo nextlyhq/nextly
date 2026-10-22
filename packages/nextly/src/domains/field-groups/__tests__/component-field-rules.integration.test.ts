@@ -252,6 +252,25 @@ describe.each(getConfiguredTestDialects())(
             slug: "note",
             fields: [text({ name: "heading" }), ...guarded()],
           }),
+          // Holds a `note`, inside a group, and a field whose rule reads it.
+          defineFieldGroup({
+            slug: "card",
+            fields: [
+              text({ name: "caption" }),
+              text({
+                name: "peek",
+                access: {
+                  read: ({ data }: { data?: Doc }) =>
+                    ((data?.box as Doc | undefined)?.held as Doc | undefined)
+                      ?.secret === undefined,
+                },
+              }),
+              group({
+                name: "box",
+                fields: [fieldGroup({ name: "held", component: "note" })],
+              }),
+            ],
+          }),
           defineFieldGroup({
             slug: "quote",
             fields: [text({ name: "line" })],
@@ -295,6 +314,26 @@ describe.each(getConfiguredTestDialects())(
                 },
               }),
               fieldGroup({ name: "one", component: "note" }),
+            ],
+          }),
+          // A field group holding another, and a hook that sets the outer one's
+          // field: judged against the inner one as stored, on both passes.
+          defineCollection({
+            slug: "nested",
+            fields: [
+              text({
+                name: "title",
+                hooks: {
+                  afterRead: [
+                    ({ value, data }: { value: unknown; data: Doc }) => {
+                      const card = data.card as Doc | undefined;
+                      if (card) card.peek = "peek-from-hook";
+                      return value;
+                    },
+                  ],
+                },
+              }),
+              fieldGroup({ name: "card", component: "card" }),
             ],
           }),
           // A held edit: its response is the pending document.
@@ -374,6 +413,7 @@ describe.each(getConfiguredTestDialects())(
               "read-authors",
               "read-plain",
               "read-hinted",
+              "read-nested",
               "read-drafted",
               "update-drafted",
               "read-site",
@@ -561,6 +601,35 @@ describe.each(getConfiguredTestDialects())(
           } as never)) as Doc;
           expect(read.title).toBe("t");
           expect(read).not.toHaveProperty("hint");
+        }
+      });
+    });
+
+    describe("a field-group rule that reads a field group inside it", () => {
+      it("is judged against the inner field group as stored on both passes", async () => {
+        const { item } = await trusted.create({
+          collection: "nested",
+          data: {
+            title: "t",
+            card: {
+              caption: "c",
+              peek: "stored-peek",
+              box: { held: { heading: "h", ...guardedValues("held") } },
+            },
+          },
+        } as never);
+        const id = String(item.id);
+        // The stored inner instance holds `secret`, so `peek` is withheld
+        // from everyone, whatever a hook puts back.
+        for (const who of ["editor", "allowed"] as const) {
+          const read = (await checkedAs(who).findByID({
+            collection: "nested",
+            id,
+            depth: 1,
+          } as never)) as Doc;
+          const card = read.card as Doc;
+          expect(card.caption).toBe("c");
+          expect(card).not.toHaveProperty("peek");
         }
       });
     });
