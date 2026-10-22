@@ -633,7 +633,9 @@ describe.each(getConfiguredTestDialects())(
             id,
             data: { status: "published" },
           } as never)
-        ).rejects.toMatchObject({ statusCode: 403 });
+          // Refused, naming the field: the pending change edits it, and the
+          // publisher may not write it. The change is kept for someone who may.
+        ).rejects.toMatchObject({ statusCode: 400 });
         const after = await stored("drafted", id);
         expect((after.one as Doc).locked).toBe((live.one as Doc).locked);
       });
@@ -662,7 +664,9 @@ describe.each(getConfiguredTestDialects())(
             slug: "board",
             data: { status: "published" },
           } as never)
-        ).rejects.toMatchObject({ statusCode: 403 });
+          // Refused, naming the field: the pending change edits it, and the
+          // publisher may not write it. The change is kept for someone who may.
+        ).rejects.toMatchObject({ statusCode: 400 });
         const after = (await trusted.findSingle({
           slug: "board",
         } as never)) as Doc;

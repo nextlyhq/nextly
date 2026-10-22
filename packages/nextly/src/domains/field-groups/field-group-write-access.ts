@@ -124,6 +124,35 @@ export async function applyInlineFieldGroupWriteAccess(params: {
   });
 }
 
+/**
+ * Remove, in place, every field of EVERY field-group instance in `document`
+ * that the writer may not set, by that field group's own rules: the ones in
+ * their own tables as well as the inline ones.
+ *
+ * For a promotion, which folds a pending change into the live row and judges
+ * the whole document it is about to write before anything is saved, so a
+ * denied value can be refused or kept at its live value rather than reaching
+ * a save. The schemas are the ones the promotion already resolved; nothing is
+ * looked up.
+ */
+export async function applyFieldGroupWriteAccessToDocument(params: {
+  document: Record<string, unknown>;
+  fields: readonly FieldConfig[];
+  fieldGroupFields: FieldGroupFieldsBySlug;
+  access: FieldGroupWriteAccess;
+}): Promise<void> {
+  if (params.access.overrideAccess) return;
+  if (!anyFieldGroupHasAccessRule("update")) return;
+  await judgeFieldGroupInstances({
+    data: params.document,
+    fields: params.fields,
+    fieldGroupFields: params.fieldGroupFields,
+    operation: "update",
+    access: params.access,
+    inlineOnly: false,
+  });
+}
+
 /** The one judgment both passes make, over the instances the walk reaches. */
 async function judgeFieldGroupInstances(params: {
   data: Record<string, unknown>;

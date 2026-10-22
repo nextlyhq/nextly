@@ -49,7 +49,9 @@ import {
 } from "../../../shared/lib/field-level-registry";
 import { relationshipValidationView } from "../../../shared/lib/field-transform";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
+import { applyFieldGroupWriteAccessToDocument } from "../../field-groups/field-group-write-access";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
+import { fieldGroupWriteAccessOf } from "../../field-groups/services/field-group-mutation-service";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import {
   type ComponentFieldResolver,
@@ -441,8 +443,11 @@ async function resolveForLocale(
     // Refusing is what this path already did, and it is safe: with nothing
     // denied allowed to change, the snapshot's own copy of a denied field
     // already equals live, so writing it changes nothing.
-    applyRules: document =>
-      applyFieldWriteAccess({
+    // The Single's own rules, then every field group's on the instances the
+    // document holds, with the schemas this promotion already resolved: a
+    // pending change can carry a field-group edit, refused here like any other.
+    applyRules: async document => {
+      await applyFieldWriteAccess({
         kind: "single",
         slug: ctx.slug,
         data: document,
@@ -452,7 +457,14 @@ async function resolveForLocale(
         overrideAccess: ctx.overrideAccess,
         grants: ctx.grants,
         id: ctx.entryId,
-      }),
+      });
+      await applyFieldGroupWriteAccessToDocument({
+        document,
+        fields: ctx.fields,
+        fieldGroupFields: { get: slug => ctx.componentFields?.(slug) },
+        access: { ...fieldGroupWriteAccessOf(ctx), grants: ctx.grants },
+      });
+    },
     // What this Single declares, so a field named like one of the store's own
     // columns is judged as the content it is rather than skipped as metadata.
     authoredFieldNames: declaredFieldNames(ctx.fields),

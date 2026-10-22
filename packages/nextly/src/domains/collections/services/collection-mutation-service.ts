@@ -127,6 +127,7 @@ import {
 } from "../../content-events/write-event";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import {
+  applyFieldGroupWriteAccessToDocument,
   applyInlineFieldGroupWriteAccess,
   keepDeniedAtStoredOnUpdate,
 } from "../../field-groups/field-group-write-access";
@@ -3005,6 +3006,7 @@ export class CollectionMutationService extends BaseService {
         user: args.user,
         overrideAccess: false,
         grants: args.grants,
+        componentSchemas: shared.splitComponentSchemas,
         fields: shared.fields,
         locale: shared.draftLocaleKey ?? shared.locale ?? null,
       });
@@ -6988,13 +6990,18 @@ export class CollectionMutationService extends BaseService {
     grants?: () => Promise<CallerGrants>;
     fields: FieldDefinition[];
     locale: string | null;
+    /** The field groups' schemas the promotion resolved, by slug. */
+    componentSchemas: ComponentSchemas | null | undefined;
   }): Promise<Record<string, unknown>> {
     return resolvePromotedDocument({
       before: args.before,
       live: args.live,
       callerSupplied: args.callerSupplied,
-      applyRules: document =>
-        applyFieldWriteAccess({
+      // The entry's own rules, then every field group's on the instances the
+      // document holds: a pending change can carry a field-group edit too, and
+      // a denied one is refused or kept at its live value like any other.
+      applyRules: async document => {
+        await applyFieldWriteAccess({
           kind: "collection",
           slug: args.collectionName,
           data: document,
@@ -7004,7 +7011,16 @@ export class CollectionMutationService extends BaseService {
           overrideAccess: args.overrideAccess,
           grants: args.grants,
           id: args.entryId,
-        }),
+        });
+        await applyFieldGroupWriteAccessToDocument({
+          document,
+          fields: args.fields as unknown as FieldConfig[],
+          fieldGroupFields: {
+            get: slug => args.componentSchemas?.get(slug)?.fields,
+          },
+          access: { ...fieldGroupWriteAccessOf(args), grants: args.grants },
+        });
+      },
       // What the schema declares, so a field named like one of the store's
       // own columns is still judged as the content it is.
       authoredFieldNames: declaredFieldNames(args.fields),
@@ -9060,6 +9076,7 @@ export class CollectionMutationService extends BaseService {
                 grants: promoteGrants,
                 fields,
                 locale: draftLocaleKey ?? params.locale ?? null,
+                componentSchemas: splitComponentSchemas,
               });
               const draftParts = this.shapeWriteParts(
                 promotedDocument,
