@@ -11,11 +11,11 @@ import { executeWidgetQuery } from "../domains/widgets/execute";
 import type { WidgetQuery } from "../domains/widgets/query";
 
 import { prepareCards } from "./widget-cards";
-import { handedCards } from "./widget-layout";
+import { askableCards } from "./widget-layout";
 
 // What this module decides is observed; what it stands on is stood in: the caller's handed cards
 // (the layout read's own lookup), the declarations, and the query executor.
-vi.mock("./widget-layout", () => ({ handedCards: vi.fn() }));
+vi.mock("./widget-layout", () => ({ askableCards: vi.fn() }));
 vi.mock("../domains/widgets/declaration/declared-widgets", () => ({
   declaredWidget: vi.fn(),
 }));
@@ -37,6 +37,16 @@ const declarations: Record<string, unknown> = {
       data: ordersFunction,
       display: "metric",
       empty: { when: (data: { total: number }) => data.total === 0 },
+    },
+  },
+  // Declared, but not a widget this caller could place: what only the write's gate refuses.
+  "acme/secret": {
+    owner: "plugin @acme/shop",
+    declaration: {
+      id: "acme/secret",
+      widths: ["full"],
+      data: async () => ({ total: 1 }),
+      display: "metric",
     },
   },
   "acme/recent": {
@@ -62,8 +72,8 @@ const declarations: Record<string, unknown> = {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(declaredWidget).mockImplementation(id => declarations[id] as never);
-  vi.mocked(handedCards).mockResolvedValue(
-    new Map([
+  vi.mocked(askableCards).mockResolvedValue({
+    handed: new Map([
       [
         "c-orders",
         {
@@ -88,8 +98,10 @@ beforeEach(() => {
         "c-gone",
         { id: "c-gone", widgetId: "acme/gone", width: "full", removed: false },
       ],
-    ]) as never
-  );
+    ]) as never,
+    // The widgets this caller could place: the layout write's own gate.
+    placeable: new Set(["acme/orders", "acme/recent", "acme/gone"]),
+  });
   // Answers the op it is asked, as a source must.
   vi.mocked(executeWidgetQuery).mockImplementation(async query =>
     query.op === "count"
@@ -114,10 +126,14 @@ describe("a card asked for by widget and card id", () => {
         // A card handed for one declared widget, asked as another declared widget: refused for the
         // card it is, not for a widget that does not exist.
         { widget: "acme/recent", card: "c-orders" },
+        // A preview of a declared widget this caller could not place.
+        { widget: "acme/secret", settings: {} },
+        // A preview carrying anything beside its widget and settings.
+        { widget: "acme/orders", settings: {}, source: "collection:orders" },
       ],
       batch
     );
-    const bytes = [0, 1, 2, 3, 4].map(index =>
+    const bytes = [0, 1, 2, 3, 4, 5, 6].map(index =>
       JSON.stringify(prepared.get(index))
     );
     // An unknown card, a widget this caller was not handed it for, a widget no longer declared, a
@@ -210,9 +226,35 @@ describe("a card asked for by widget and card id", () => {
       ],
       batch
     );
-    expect(handedCards).toHaveBeenCalledTimes(1);
-    vi.mocked(handedCards).mockClear();
+    expect(askableCards).toHaveBeenCalledTimes(1);
+    vi.mocked(askableCards).mockClear();
     await prepareCards([{ source: "collection:posts", op: "count" }], batch);
-    expect(handedCards).not.toHaveBeenCalled();
+    expect(askableCards).not.toHaveBeenCalled();
+  });
+
+  it("previews a placed widget's card with settings of the reader's choosing, resolved as a stored card's", async () => {
+    // `acme/orders` is placed and takes one card, and the preview of a change to it must still
+    // answer: the gate is "could place", the layout write's own, not "may still add".
+    const prepared = await prepareCards(
+      [
+        {
+          widget: "acme/orders",
+          settings: { items: 9, notDeclared: "dropped" },
+        },
+      ],
+      batch
+    );
+    expect(prepared.get(0)).toMatchObject({
+      kind: "data",
+      widgetId: "acme/orders",
+    });
+    await (prepared.get(0) as { answer: Function }).answer({
+      signal: new AbortController().signal,
+      scope: createBatchScope().forOwner("plugin @acme/shop"),
+    });
+    const [input] = ordersFunction.mock.calls[0] as unknown as [
+      Record<string, unknown>,
+    ];
+    expect(input.settings).toEqual({ items: 9 });
   });
 });

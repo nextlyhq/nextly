@@ -277,7 +277,8 @@ async function visibleWidgets(auth: AuthContext) {
 
 /**
  * The cards this caller was handed, by card id: exactly what a by-card query
- * may ask for, and nothing else.
+ * may ask for, and nothing else; and the widgets they could place a card of,
+ * which a card not yet saved, or a settings preview, may be asked for.
  *
  * 🔴 Read by the same two passes and the same arrangement the layout read
  * takes ({@link visibleWidgets}, {@link visibleArrangement}), so a card the
@@ -285,17 +286,24 @@ async function visibleWidgets(auth: AuthContext) {
  * they removed -- is simply not here, and the query endpoint cannot answer it
  * differently from the dashboard that drew it.
  */
-export async function handedCards(
-  auth: AuthContext
-): Promise<ReadonlyMap<string, WidgetPlacement>> {
+export async function askableCards(auth: AuthContext): Promise<{
+  handed: ReadonlyMap<string, WidgetPlacement>;
+  placeable: ReadonlySet<string>;
+}> {
   const service = await getLayoutService();
   const view = await visibleWidgets(auth);
   const stored = await service.getLayout(SCOPE_KIND, view.caller.userId);
-  return new Map(
-    visibleArrangement(stored.layout, view.visibleIds)
-      .filter(placement => placement.removed !== true)
-      .map(placement => [placement.id, placement])
-  );
+  return {
+    handed: new Map(
+      visibleArrangement(stored.layout, view.visibleIds)
+        .filter(placement => placement.removed !== true)
+        .map(placement => [placement.id, placement])
+    ),
+    // 🔴 The layout write's own gate (`putWidgetLayout` refuses a placement of
+    // any widget outside it), so a widget whose card may be previewed with
+    // settings of the reader's choosing is exactly one they could place.
+    placeable: view.visibleIds,
+  };
 }
 
 /**

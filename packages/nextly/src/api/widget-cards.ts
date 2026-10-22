@@ -31,7 +31,7 @@ import type { WidgetResult, WidgetSlot } from "../domains/widgets/result";
 import { failUnavailableSourceOrOp } from "../domains/widgets/sources";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
-import { handedCards } from "./widget-layout";
+import { askableCards } from "./widget-layout";
 import { failedSlot, type ReadyCardData } from "./widget-slots";
 
 /**
@@ -47,6 +47,24 @@ const CARD_ENTRY = z.strictObject({
   widget: z.string().min(1),
   card: z.string().min(1),
 });
+
+/**
+ * A card that is not a stored one: a card of a widget the caller could place,
+ * asked with settings of their choosing -- one added while customising and not
+ * yet saved, or the settings sheet's preview of a change. As strict as a card.
+ *
+ * 🔴 Answered only for a widget the caller could place (the layout write's own
+ * gate), so running it with chosen settings is exactly what placing a card of
+ * it and choosing them would do. The settings are resolved as a stored card's
+ * are, so an undeclared key is dropped and a value that does not fit falls back.
+ */
+const PREVIEW_ENTRY = z.strictObject({
+  widget: z.string().min(1),
+  settings: z.record(z.string(), z.unknown()),
+});
+
+/** What a batch's cards may be looked up in: what the caller was handed, and could place. */
+type AskableCards = Awaited<ReturnType<typeof askableCards>>;
 
 /** Whether a batch entry asks for a card rather than carrying a query. */
 export function isCardEntry(raw: unknown): boolean {
@@ -94,34 +112,60 @@ export async function prepareCards(
     isCardEntry(raw) ? [{ raw, index }] : []
   );
   if (asked.length === 0) return prepared;
-  const cards = await handedCards(batch.auth);
+  const cards = await askableCards(batch.auth);
   for (const { raw, index } of asked) {
     prepared.set(index, cardEntryFor(raw, index, cards, batch));
   }
   return prepared;
 }
 
+/**
+ * The card an entry asks for, looked up in what the caller may ask, or why it
+ * cannot be (for the log only: every one answers the same).
+ */
+function askedPlacement(
+  raw: unknown,
+  cards: AskableCards
+): WidgetPlacement | string {
+  const stored = CARD_ENTRY.safeParse(raw);
+  if (stored.success) {
+    const { widget, card } = stored.data;
+    const placement = cards.handed.get(card);
+    return placement !== undefined && placement.widgetId === widget
+      ? placement
+      : `card "${card}" of widget "${widget}" is not one this caller was handed`;
+  }
+  const preview = PREVIEW_ENTRY.safeParse(raw);
+  if (preview.success) {
+    const { widget, settings } = preview.data;
+    // Not a stored card, so it has no id of its own; its config is the
+    // settings asked with, read exactly as a stored card's is.
+    return cards.placeable.has(widget)
+      ? {
+          id: "preview",
+          widgetId: widget,
+          width: "full",
+          removed: false,
+          config: settings,
+        }
+      : `widget "${widget}" is not one this caller could place`;
+  }
+  return "an entry not of the form { widget, card } or { widget, settings }";
+}
+
 /** One by-card entry, looked up in the caller's cards. */
 function cardEntryFor(
   raw: unknown,
   index: number,
-  cards: ReadonlyMap<string, WidgetPlacement>,
+  cards: AskableCards,
   batch: CardBatch
 ): ReadyCardData | WidgetSlot {
-  const entry = CARD_ENTRY.safeParse(raw);
-  if (!entry.success)
-    return unavailableCard("a by-card entry not of the form { widget, card }");
-  const { widget, card } = entry.data;
-  const placement = cards.get(card);
+  const placement = askedPlacement(raw, cards);
+  if (typeof placement === "string") return unavailableCard(placement);
+  const widget = placement.widgetId;
   const declared = declaredWidget(widget);
-  if (
-    placement === undefined ||
-    placement.widgetId !== widget ||
-    declared === undefined
-  ) {
-    return unavailableCard(
-      `card "${card}" of widget "${widget}" is not one this caller was handed`
-    );
+  if (declared === undefined) {
+    return unavailableCard(`widget "${widget}" is no longer declared`);
   }
   return {
     kind: "data",
