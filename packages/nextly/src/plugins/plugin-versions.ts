@@ -28,6 +28,11 @@ import {
   resolveVersionsPolicy,
   stripAutosavePasswords,
 } from "../api/versions-access";
+import {
+  everyLanguage,
+  registeredWriteAsNamedLanguagesFor,
+  withRuleLanguage,
+} from "../auth/access/rule-language";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { runWithCallerScope } from "../auth/caller-scope";
 import { canReadEntity, readAccessCaller } from "../auth/entity-read-access";
@@ -241,7 +246,9 @@ async function checkedWriter(
   ref: VersionRef,
   resolved: ResolvedOpts,
   write: "label" | "discard" | "autosave",
-  versionNo?: number
+  // The version a label names, and the language a discard or an autosave
+  // names, as the plugin passes it.
+  at: { versionNo?: number; locale?: string | null } = {}
 ): Promise<HistoryWriter | null> {
   const config: DirectAPIConfig = {
     overrideAccess: resolved.overrideAccess,
@@ -266,11 +273,21 @@ async function checkedWriter(
 
   // The route's half: both the collection and the Single history routes
   // earn `update-<slug>` through `requireCollectionAccess`, whose decision
-  // `authorizeChecked` asks.
-  await authorizeChecked(caller, {
-    action: "update",
-    resource: ref.scopeSlug,
-  });
+  // `authorizeChecked` asks, telling the rule the languages that route tells
+  // it: a discard or an autosave the language it names, kept as named, and a
+  // label every language. Set here rather than inherited, so a plugin calling
+  // from inside an operation in one language is judged as REST judges the
+  // route, not in that operation's language.
+  await withRuleLanguage(
+    write === "label"
+      ? everyLanguage()
+      : registeredWriteAsNamedLanguagesFor(at.locale || undefined),
+    () =>
+      authorizeChecked(caller, {
+        action: "update",
+        resource: ref.scopeSlug,
+      })
+  );
 
   // The handler's half, in the handler's order.
   const user = resolved.user as unknown as UserContext;
@@ -281,7 +298,7 @@ async function checkedWriter(
     resolved,
     write,
     logContext,
-    versionNo
+    at.versionNo
   );
   const authenticatedScope = resolved.authenticatedScope;
 
@@ -380,7 +397,9 @@ export function pluginVersionWrites(
   return {
     setLabel(ref, versionNo, label, by, opts) {
       return asCalled(opts, async resolved => {
-        const writer = await checkedWriter(ref, resolved, "label", versionNo);
+        const writer = await checkedWriter(ref, resolved, "label", {
+          versionNo,
+        });
         if (!writer) return service().setLabel(ref, versionNo, label, by);
         if (by && !namesWriter(by.actor, writer)) {
           refuseOtherAuthor(ref, "label");
@@ -412,7 +431,9 @@ export function pluginVersionWrites(
 
     deleteWorkingDraft(ref, locale, opts) {
       return asCalled(opts, async resolved => {
-        const writer = await checkedWriter(ref, resolved, "discard");
+        const writer = await checkedWriter(ref, resolved, "discard", {
+          locale,
+        });
         if (!writer) return service().deleteWorkingDraft(ref, locale);
         return discardAsWriter(ref, locale, writer);
       });
@@ -420,7 +441,9 @@ export function pluginVersionWrites(
 
     autosave(input, opts) {
       return asCalled(opts, async resolved => {
-        const writer = await checkedWriter(input.ref, resolved, "autosave");
+        const writer = await checkedWriter(input.ref, resolved, "autosave", {
+          locale: input.locale,
+        });
         if (writer) refuseUnnamedKey(input.ref, writer, "autosave");
         const named = input.createdBy ?? null;
         if (writer && named !== null && named !== writer.user.id) {
