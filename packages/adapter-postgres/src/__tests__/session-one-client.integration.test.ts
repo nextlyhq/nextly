@@ -84,7 +84,7 @@ describe("PostgreSQL withSession", async () => {
     expect(rows).toEqual([{ v: "kept" }]);
   });
 
-  it("hands the client back to the pool with nothing the session set left on it", async () => {
+  it("closes the session's client instead of pooling it, so nothing the session set reaches a later caller", async () => {
     const one = createPostgresAdapter({ url: TEST_DB_URL, pool: { max: 1 } });
     await one.connect();
     try {
@@ -97,12 +97,18 @@ describe("PostgreSQL withSession", async () => {
             "CREATE TEMP TABLE int_pg_session_leftover (v text)"
           );
           await session.execute("SET application_name = 'leftover'");
+          const [row] = await session.execute<{ pid: number }>(
+            "SELECT pg_backend_pid() AS pid"
+          );
+          return row.pid;
         });
-      await work();
-      // The pool's only client again: the temporary table and the setting are gone.
-      const [after] = await one.executeQuery<{ name: string }>(
-        "SELECT current_setting('application_name') AS name"
+      const sessionPid = await work();
+      // The pool's only slot holds a new client: the session's is gone, and with it the temporary
+      // table and the setting.
+      const [after] = await one.executeQuery<{ name: string; pid: number }>(
+        "SELECT current_setting('application_name') AS name, pg_backend_pid() AS pid"
       );
+      expect(after.pid).not.toBe(sessionPid);
       expect(after.name).toBe(before.name);
       await work();
     } finally {

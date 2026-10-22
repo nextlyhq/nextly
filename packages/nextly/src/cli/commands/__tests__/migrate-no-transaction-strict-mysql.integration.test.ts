@@ -7,11 +7,12 @@
  * length with only a warning, and a migration runs with nobody there to read
  * it. A file marked to run outside a transaction runs statement by statement,
  * each committing as it runs, so its statements share one connection whose
- * session is put in strict mode, and that mode is put back afterwards.
+ * session is put in strict mode, and that connection is closed afterwards
+ * rather than pooled, so strict mode reaches nothing else.
  *
  * One pooled connection, set to no strict mode, stands for a server
- * configured that way: the runner gets that connection, and the mode it is
- * handed back with is readable.
+ * configured that way: the runner gets that connection, and the pool's next
+ * connection is a different one.
  *
  * Self-skips when TEST_MYSQL_URL is unset.
  */
@@ -116,14 +117,15 @@ describeMysql(
       return { type: String(cols[0]?.type), length: Number(rows[0]?.n) };
     }
 
-    async function sessionMode(): Promise<string> {
-      const [row] = await lax.executeQuery<{ mode: string }>(
-        "SELECT @@SESSION.sql_mode AS mode"
+    async function connectionId(): Promise<number> {
+      const [row] = await lax.executeQuery<{ id: number }>(
+        "SELECT CONNECTION_ID() AS id"
       );
-      return row.mode;
+      return Number(row.id);
     }
 
-    it("refuses a narrowing that would cut a stored value, keeps the value, and restores the session's mode", async () => {
+    it("refuses a narrowing that would cut a stored value, keeps the value, and closes the strict connection", async () => {
+      const laxId = await connectionId();
       writeMarked(`20261021_000000_${RUN_ID}_narrow`, [
         `ALTER TABLE ${TABLE} MODIFY COLUMN v varchar(255)`,
       ]);
@@ -138,10 +140,10 @@ describeMysql(
       expect(error.code).toBe("NEXTLY_MIGRATION_PARTIALLY_APPLIED");
       expect(error.logMessage).toMatch(/Data too long/);
       expect(await stored()).toEqual({ type: "text", length: 300 });
-      expect(await sessionMode()).toBe("");
+      expect(await connectionId()).not.toBe(laxId);
     });
 
-    it("applies a narrowing every stored value fits, and restores the session's mode", async () => {
+    it("applies a narrowing every stored value fits", async () => {
       await root.query(`UPDATE ${TABLE} SET v = 'short' WHERE id = 1`);
       writeMarked(`20261021_000001_${RUN_ID}_narrow_fits`, [
         `ALTER TABLE ${TABLE} MODIFY COLUMN v varchar(255)`,
@@ -150,7 +152,6 @@ describeMysql(
       await migrate();
 
       expect(await stored()).toEqual({ type: "varchar", length: 5 });
-      expect(await sessionMode()).toBe("");
     });
   }
 );

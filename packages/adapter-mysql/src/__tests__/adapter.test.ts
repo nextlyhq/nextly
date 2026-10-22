@@ -744,7 +744,7 @@ describe("@nextly/adapter-mysql", () => {
   // ============================================================
 
   describe("withSession", () => {
-    it("puts the session's mode back when the strict SET fails after reaching the server", async () => {
+    it("puts a transaction's mode back when the strict SET fails after reaching the server", async () => {
       // A SET the server applied but whose reply was lost leaves the connection strict; the
       // mode read before it must still be put back, or the pool hands strict mode to later work.
       const answer = mockConnection.query.getMockImplementation();
@@ -769,7 +769,7 @@ describe("@nextly/adapter-mysql", () => {
       mockConnection.destroy.mockClear();
 
       await expect(
-        adapter.withSession(async () => undefined, { strictSqlMode: true })
+        adapter.transaction(async () => undefined, { strictSqlMode: true })
       ).rejects.toThrow();
 
       const restores = mockConnection.query.mock.calls.filter(
@@ -795,7 +795,7 @@ describe("@nextly/adapter-mysql", () => {
       expect(mockPool.getConnection).not.toHaveBeenCalled();
     });
 
-    it("commits each statement when the server starts sessions with autocommit off, and puts it back", async () => {
+    it("commits each statement when the server starts sessions with autocommit off, and closes the connection", async () => {
       // With autocommit off a statement waits for a COMMIT nobody sends, and the connection would
       // return to the pool with an open transaction for later work to commit or roll back.
       const answer = mockConnection.query.getMockImplementation();
@@ -809,6 +809,8 @@ describe("@nextly/adapter-mysql", () => {
       });
       await adapter.connect();
       mockConnection.query.mockClear();
+      mockConnection.release.mockClear();
+      mockConnection.destroy.mockClear();
 
       await adapter.withSession(async session => {
         await session.execute("INSERT INTO t (v) VALUES (1)");
@@ -819,10 +821,11 @@ describe("@nextly/adapter-mysql", () => {
       );
       const on = statements.indexOf("SET SESSION autocommit = 1");
       const insert = statements.indexOf("INSERT INTO t (v) VALUES (1)");
-      const back = statements.indexOf("SET SESSION autocommit = 0");
       expect(on).toBeGreaterThanOrEqual(0);
       expect(insert).toBeGreaterThan(on);
-      expect(back).toBeGreaterThan(insert);
+      // Closed rather than pooled: nothing the session set reaches a later caller.
+      expect(mockConnection.destroy).toHaveBeenCalledTimes(1);
+      expect(mockConnection.release).not.toHaveBeenCalled();
       mockConnection.query.mockImplementation(answer);
     });
   });

@@ -45,6 +45,32 @@ describe("SQLite withSession", () => {
     expect(await ids()).toEqual(["kept"]);
   });
 
+  it("waits for another flow's open transaction, so its statements are not undone with it", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    let began: () => void = () => {};
+    const open = new Promise<void>(resolve => {
+      began = resolve;
+    });
+    // Another flow's transaction, open and about to roll back.
+    const other = adapter.transaction(async tx => {
+      await tx.execute(`INSERT INTO ${TABLE} (id) VALUES ('rolled-back')`);
+      began();
+      await gate;
+      throw new Error("rolled back");
+    });
+    await open;
+    const session = adapter.withSession(async s => {
+      await s.execute(`INSERT INTO ${TABLE} (id) VALUES ('session')`);
+    });
+    release();
+    await expect(other).rejects.toThrow("rolled back");
+    await session;
+    expect(await ids()).toEqual(["session"]);
+  });
+
   it("is refused inside an open transaction, running nothing", async () => {
     await expect(
       adapter.transaction(async () => {

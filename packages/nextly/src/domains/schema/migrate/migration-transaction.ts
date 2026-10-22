@@ -290,7 +290,7 @@ export async function runMigrationStatements(
     // below a stored value's length, fails instead of applying with a
     // warning nobody reads. A session setting covers only its own
     // connection, so every statement runs on the one connection the session
-    // holds, and the session's own mode is put back afterwards.
+    // holds, which is closed afterwards rather than pooled.
     await adapter.withSession(
       session => runEach(statement => session.execute(statement)),
       { strictSqlMode: true }

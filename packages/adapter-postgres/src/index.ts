@@ -539,21 +539,14 @@ export class PostgresAdapter extends DrizzleAdapter {
   }
 
   /**
-   * Executes a raw SQL query.
-   *
-   * @param sql - SQL statement with $1, $2, ... placeholders
-   * @param params - Query parameters
-   * @returns Array of result rows
-   *
-   * @throws {DatabaseError} If query execution fails
-   */
-  /**
-   * Runs `work` on one pooled client outside a transaction, each statement
-   * committing as it runs, so connection-scoped state a statement sets — a
-   * temporary table, a session setting, an advisory lock — is still there
-   * for the next. The client goes back to the pool reset, once `work` has
-   * finished or thrown (`releaseSessionClient`). No `SessionOptions` field changes anything on PostgreSQL:
-   * strict mode is MySQL's, and PostgreSQL refuses an overlong value already.
+   * Runs `work` on one client taken from the pool, outside a transaction,
+   * each statement committing as it runs, so connection-scoped state a
+   * statement sets (a temporary table, a session setting, an advisory lock)
+   * is still there for the next. The client is closed afterwards, whether
+   * `work` finished or threw, never handed back to the pool: that state ends
+   * with it instead of reaching a later caller. No `SessionOptions` field
+   * changes anything on PostgreSQL: strict mode is MySQL's, and PostgreSQL
+   * refuses an overlong value already.
    */
   override async withSession<T>(
     work: (session: StatementSession) => Promise<T>,
@@ -593,26 +586,19 @@ export class PostgresAdapter extends DrizzleAdapter {
         },
       });
     } finally {
-      await this.releaseSessionClient(client);
+      client.release(true);
     }
   }
 
   /**
-   * Returns a session's client to the pool with nothing the session set left
-   * on it. `DISCARD ALL` drops its temporary tables, resets every session
-   * setting, releases its advisory locks and closes its prepared statements;
-   * a client it cannot be run on, such as one left inside a transaction the
-   * work opened, is closed instead, so no later caller inherits its state.
+   * Executes a raw SQL query.
+   *
+   * @param sql - SQL statement with $1, $2, ... placeholders
+   * @param params - Query parameters
+   * @returns Array of result rows
+   *
+   * @throws {DatabaseError} If query execution fails
    */
-  private async releaseSessionClient(client: PoolClient): Promise<void> {
-    try {
-      await client.query("DISCARD ALL");
-      client.release();
-    } catch (error) {
-      client.release(error instanceof Error ? error : true);
-    }
-  }
-
   async executeQuery<T = unknown>(
     sql: string,
     params: SqlParam[] = []

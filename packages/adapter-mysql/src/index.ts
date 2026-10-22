@@ -133,8 +133,7 @@ interface PoolConnection extends Queryable {
  * the connection returns to the pool; null when it changed nothing.
  *
  * MySQL has no transaction-scoped form of `innodb_lock_wait_timeout` or
- * `sql_mode`, and `autocommit` is a session setting too: a `SET SESSION`
- * outlives the transaction or session that set it, and the pooled
+ * `sql_mode`: a `SET SESSION` outlives the transaction, and the pooled
  * connection would carry one transaction's setting into every later query
  * handed it. Each field present is the session's value from before the
  * change, or null when it could not be read, and then the connection cannot
@@ -143,7 +142,6 @@ interface PoolConnection extends Queryable {
 type SessionRestore = {
   lockWaitTimeout?: number | null;
   sqlMode?: string | null;
-  autocommit?: number | null;
 } | null;
 
 /**
@@ -155,11 +153,7 @@ async function restoreSession(
   restore: SessionRestore
 ): Promise<boolean> {
   if (restore === null) return true;
-  if (
-    restore.lockWaitTimeout === null ||
-    restore.sqlMode === null ||
-    restore.autocommit === null
-  ) {
+  if (restore.lockWaitTimeout === null || restore.sqlMode === null) {
     return false;
   }
   try {
@@ -172,10 +166,6 @@ async function restoreSession(
     if (restore.sqlMode !== undefined) {
       // Read from the server, and bound as a value all the same.
       await connection.query("SET SESSION sql_mode = ?", [restore.sqlMode]);
-    }
-    if (restore.autocommit !== undefined) {
-      // 0 or 1, read from the server, never caller input.
-      await connection.query(`SET SESSION autocommit = ${restore.autocommit}`);
     }
     return true;
   } catch {
@@ -585,17 +575,17 @@ export class MySqlAdapter extends DrizzleAdapter {
   }
 
   /**
-   * Runs `work` on one pooled connection outside a transaction, each
-   * statement committing as it runs.
+   * Runs `work` on one connection taken from the pool, outside a
+   * transaction, each statement committing as it runs.
    *
    * @remarks
    * Each statement commits as it runs, whatever the server's own autocommit
    * default. With `strictSqlMode` the session runs in strict mode, as a
    * transaction given the same option does, so a statement that would cut a
-   * value short fails and changes nothing. What the session changed is put
-   * back before the connection returns to the pool, whether `work` finished
-   * or threw; a connection that could not be put back is closed instead, so
-   * no later query inherits it.
+   * value short fails and changes nothing. The connection is closed
+   * afterwards, whether `work` finished or threw, never handed back to the
+   * pool: whatever `work` set on its session (a temporary table, a session
+   * variable, a lock) ends with it instead of reaching a later query.
    */
   override async withSession<T>(
     work: (session: StatementSession) => Promise<T>,
@@ -612,12 +602,14 @@ export class MySqlAdapter extends DrizzleAdapter {
     } catch (error) {
       throw this.classifyError(error);
     }
-    const changed: NonNullable<SessionRestore> = {};
     try {
       try {
-        await this.enterAutocommit(connection, changed);
+        // A server whose sessions start with autocommit off would otherwise
+        // hold every statement in a transaction nobody commits.
+        await connection.query("SET SESSION autocommit = 1");
         if (options?.strictSqlMode) {
-          await this.enterStrictMode(connection, changed);
+          // Nothing to put back: the connection is closed afterwards.
+          await this.enterStrictMode(connection, {});
         }
       } catch (error) {
         throw this.classifyError(error);
@@ -647,12 +639,7 @@ export class MySqlAdapter extends DrizzleAdapter {
         },
       });
     } finally {
-      const restore = Object.keys(changed).length > 0 ? changed : null;
-      if (await restoreSession(connection, restore)) {
-        connection.release();
-      } else {
-        connection.destroy();
-      }
+      connection.destroy();
     }
   }
 
@@ -1025,27 +1012,6 @@ export class MySqlAdapter extends DrizzleAdapter {
     await connection.query(
       "SET SESSION sql_mode = TRIM(BOTH ',' FROM CONCAT(@@SESSION.sql_mode, ',STRICT_ALL_TABLES'))"
     );
-  }
-
-  /**
-   * Autocommit for the rest of this connection's session, so each statement
-   * commits as it runs. A server whose sessions start with autocommit off
-   * would otherwise hold every statement in a transaction nobody commits,
-   * and the connection would return to the pool with it open. The session's
-   * own value is recorded in `changed` for `restoreSession` to put back.
-   */
-  private async enterAutocommit(
-    connection: PoolConnection,
-    changed: NonNullable<SessionRestore>
-  ): Promise<void> {
-    const [rows] = await connection.query<RowDataPacket[]>(
-      "SELECT @@SESSION.autocommit AS autocommit"
-    );
-    const previous = Number(rows[0]?.autocommit);
-    if (previous === 1) return;
-    // Recorded before the SET, as `enterStrictMode` records its mode.
-    changed.autocommit = previous === 0 ? 0 : null;
-    await connection.query("SET SESSION autocommit = 1");
   }
 
   /**

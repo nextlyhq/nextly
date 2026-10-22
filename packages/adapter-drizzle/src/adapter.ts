@@ -501,10 +501,11 @@ export abstract class DrizzleAdapter {
    * statements: one connection is what lets a session setting, or a
    * temporary table, reach every statement. This base runs each statement
    * through `executeQuery`, which is one connection only on an adapter that
-   * has one (SQLite). A pooled adapter overrides it to hold one connection
-   * for the whole of `work`, and puts back whatever the session changed
-   * before the connection returns to the pool, whether `work` finished or
-   * threw.
+   * has one. A pooled adapter overrides it to hold one connection for the
+   * whole of `work` and close it afterwards, whether `work` finished or
+   * threw, so nothing the session set reaches a later caller; SQLite's
+   * override waits until no other flow's transaction is open on its one
+   * connection.
    *
    * Refused inside an open transaction (`refuseSessionInTransaction`).
    *

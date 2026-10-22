@@ -54,6 +54,13 @@ describe("MySQL transaction strictSqlMode", async () => {
     return row.mode;
   };
 
+  const connectionId = async (): Promise<number> => {
+    const [row] = await adapter.executeQuery<{ id: number }>(
+      "SELECT CONNECTION_ID() AS id"
+    );
+    return Number(row.id);
+  };
+
   const stored = async (): Promise<string[]> =>
     (
       await adapter.executeQuery<{ v: string }>(
@@ -129,20 +136,22 @@ describe("MySQL transaction strictSqlMode", async () => {
   // A migration file marked to run outside a transaction runs statement by statement, each
   // committing as it runs; `withSession` keeps them on one connection so its session's mode
   // can be set for all of them and put back afterwards.
-  it("runs a session outside a transaction in strict mode, refusing a narrowing that would cut a value, and restores the mode", async () => {
+  it("runs a session outside a transaction in strict mode, refusing a narrowing that would cut a value, and closes its connection", async () => {
     await adapter.executeQuery(`DELETE FROM ${TABLE}`);
     await adapter.executeQuery(`ALTER TABLE ${TABLE} MODIFY COLUMN v TEXT`);
     await adapter.executeQuery(`INSERT INTO ${TABLE} (v) VALUES ('abcdefgh')`);
     await adapter.executeQuery("SET SESSION sql_mode = ''");
 
     let inside = "";
+    let sessionId = 0;
     await expect(
       adapter.withSession(
         async session => {
-          const [row] = await session.execute<{ mode: string }>(
-            "SELECT @@SESSION.sql_mode AS mode"
+          const [row] = await session.execute<{ mode: string; id: number }>(
+            "SELECT @@SESSION.sql_mode AS mode, CONNECTION_ID() AS id"
           );
           inside = row.mode;
+          sessionId = Number(row.id);
           await session.execute(
             `ALTER TABLE ${TABLE} MODIFY COLUMN v varchar(5)`
           );
@@ -153,10 +162,11 @@ describe("MySQL transaction strictSqlMode", async () => {
 
     expect(inside).toBe("STRICT_ALL_TABLES");
     expect(await stored()).toEqual(["abcdefgh"]);
-    expect(await sessionMode()).toBe("");
+    // The pool's only slot holds a new connection: the strict session is gone.
+    expect(await connectionId()).not.toBe(sessionId);
   });
 
-  it("keeps every flag the session had in a session outside a transaction, and puts the mode back", async () => {
+  it("keeps every flag the session had in a session outside a transaction", async () => {
     await adapter.executeQuery("SET SESSION sql_mode = 'NO_ZERO_DATE'");
     let inside = "";
     await adapter.withSession(
@@ -171,10 +181,9 @@ describe("MySQL transaction strictSqlMode", async () => {
     expect(inside.split(",").sort()).toEqual(
       ["NO_ZERO_DATE", "STRICT_ALL_TABLES"].sort()
     );
-    expect(await sessionMode()).toBe("NO_ZERO_DATE");
   });
 
-  it("commits a session's statements on a server whose sessions start with autocommit off, and puts it back", async () => {
+  it("commits a session's statements on a server whose sessions start with autocommit off", async () => {
     await adapter.executeQuery(`DELETE FROM ${TABLE}`);
     await adapter.executeQuery("SET SESSION autocommit = 0");
     try {
@@ -192,10 +201,6 @@ describe("MySQL transaction strictSqlMode", async () => {
       } finally {
         await other.end();
       }
-      const [row] = await adapter.executeQuery<{ autocommit: number }>(
-        "SELECT @@SESSION.autocommit AS autocommit"
-      );
-      expect(Number(row.autocommit)).toBe(0);
     } finally {
       await adapter.executeQuery("ROLLBACK");
       await adapter.executeQuery("SET SESSION autocommit = 1");
