@@ -504,15 +504,29 @@ function checkWhole(problems: Problems, workflow: Workflow): void {
       `\`${workflow.firstStage}\` is where every part starts, so it cannot allow publishing; content would be publishable before any approval.`
     );
   }
-  const after = workflow.stages.find(
-    stage => stage.name === workflow.afterPublish
-  );
-  if (after?.allowsPublish === true) {
-    problems.add(
-      "afterPublish",
-      "workflow_after_publish_publishable",
-      `\`${after.name}\` allows publishing, so a new draft would start already approved; name a stage before review.`
-    );
+  // The system moves a part to these stages without a step of kind approve,
+  // so one that allowed publishing would hand out an approval nobody gave.
+  const unapproved = [
+    {
+      path: "afterPublish",
+      code: "workflow_after_publish_publishable",
+      why: "a new draft would start already approved",
+    },
+    {
+      path: "approvalsWithdrawnTo",
+      code: "workflow_approvals_withdrawn_to_publishable",
+      why: "a part whose approval was withdrawn would stay publishable",
+    },
+  ] as const;
+  for (const { path, code, why } of unapproved) {
+    const stage = workflow.stages.find(each => each.name === workflow[path]);
+    if (stage?.allowsPublish === true) {
+      problems.add(
+        path,
+        code,
+        `\`${stage.name}\` allows publishing, so ${why}; name a stage before review.`
+      );
+    }
   }
   checkDeadEnds(problems, workflow, startsOf(workflow));
 }

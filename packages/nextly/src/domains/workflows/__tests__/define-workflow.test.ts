@@ -354,6 +354,18 @@ describe("defineWorkflow", () => {
       );
     });
 
+    it("refuses withdrawing approvals into a stage that allows publishing", () => {
+      expect(
+        problemsOf({ ...base(), approvalsWithdrawnTo: "approved" })
+      ).toEqual([
+        "approvalsWithdrawnTo: `approved` allows publishing, so a part whose approval was withdrawn would stay publishable; name a stage before review.",
+      ]);
+      // A stage before review is accepted.
+      expect(
+        problemsOf({ ...base(), approvalsWithdrawnTo: "inReview" })
+      ).toEqual([]);
+    });
+
     it("refuses an edit-after-approval stage with no way out", () => {
       const input = base();
       input.stages = [...input.stages, { name: "frozen", label: "Frozen" }];
