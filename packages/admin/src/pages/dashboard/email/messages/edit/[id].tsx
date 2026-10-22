@@ -55,6 +55,10 @@ export default function EditEmailTemplatePage() {
 
   const { mutate: updateTemplate, isPending } = useUpdateEmailTemplate();
 
+  // Layouts and partials are listed under Design, so a save returns there. Read once here
+  // so the save handler depends on this value rather than on the whole template object.
+  const listedUnderDesign = Boolean(template) && template?.kind !== "template";
+
   const handleSubmit = useCallback(
     (values: TemplateFormValues) => {
       if (!templateId) return;
@@ -65,12 +69,7 @@ export default function EditEmailTemplatePage() {
             toast.success("Template updated", {
               description: `${values.name} has been saved.`,
             });
-            navigateTo(
-              // Layouts and partials are listed under Design.
-              template && template.kind !== "template"
-                ? ROUTES.EMAIL_DESIGN
-                : ROUTES.EMAIL
-            );
+            navigateTo(listedUnderDesign ? ROUTES.EMAIL_DESIGN : ROUTES.EMAIL);
           },
           onError: (error: Error) => {
             toast.error("Failed to update template", {
@@ -83,7 +82,7 @@ export default function EditEmailTemplatePage() {
         }
       );
     },
-    [templateId, updateTemplate, template?.kind]
+    [templateId, updateTemplate, listedUnderDesign]
   );
 
   if (!templateId) {
