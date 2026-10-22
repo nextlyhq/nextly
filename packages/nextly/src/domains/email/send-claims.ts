@@ -307,16 +307,25 @@ function acceptedOf(row: ClaimRow | undefined): {
   if (row?.state !== "partial" && row?.state !== "claimed") {
     return { recipients: new Set(), calls: new Set() };
   }
-  let stored: { accepted?: unknown; acceptedLegs?: unknown } | null = null;
-  try {
-    stored = JSON.parse(row.result ?? "null") as typeof stored;
-  } catch {
-    // Unreadable: nothing recorded as accepted.
-  }
+  const stored = storedResultOf(row.result);
   return {
     recipients: stringsOf(stored?.accepted),
     calls: stringsOf(stored?.acceptedLegs),
   };
+}
+
+/** A claim's stored result, or nothing when it cannot be read. */
+function storedResultOf(
+  result: string | null
+): { accepted?: unknown; acceptedLegs?: unknown } | null {
+  try {
+    return JSON.parse(result ?? "null") as {
+      accepted?: unknown;
+      acceptedLegs?: unknown;
+    } | null;
+  } catch {
+    return null;
+  }
 }
 
 function stringsOf(value: unknown): Set<string> {
