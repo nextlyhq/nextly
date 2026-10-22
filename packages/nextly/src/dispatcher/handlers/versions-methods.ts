@@ -815,22 +815,16 @@ export async function restoreVersionForDocument(
 }
 
 /**
- * The gate a write to one document's pending change owes, before it runs.
+ * The gate a read of one document's history owes, before it runs: the read
+ * gate first, so a caller who cannot read the document is refused as "not
+ * found" and the refusal does not confirm it exists; then the per-document
+ * read (404 when the row is gone or hidden by an owner-only rule).
  *
- * The read gate first: the route authorized the request as an update, not a
- * read, so a caller who cannot read the document is refused here, as "not
- * found" so the refusal does not confirm it exists. Then the per-document read
- * (404 when the row is gone or hidden by an owner-only rule) and the update
- * gate (403): the coarse update-<slug> permission ran at the route, but a
- * per-document rule can still refuse THIS document, and changing its pending
- * edits owes the same rules as any other update to it. Mirrors
- * restoreVersionForDocument.
- *
- * @returns The caller's API-key scope, for the write to judge field rules by.
+ * @returns The caller's API-key scope, for the work to judge field rules by.
  */
-async function assertPendingChangeWritable(
+async function assertDocumentReadAllowed(
   args: {
-    scopeKind: DiscardScopeKind;
+    scopeKind: VersionScopeKind;
     slug: string;
     entryId: string;
     user: UserContext;
@@ -857,6 +851,29 @@ async function assertPendingChangeWritable(
     args.user,
     authenticatedScope
   );
+  return authenticatedScope;
+}
+
+/**
+ * The gate a write to one document's pending change or history owes, before
+ * it runs (a discard, taking the live values, an autosave): the read gate
+ * above, then the update gate (403). The coarse update-<slug> permission ran
+ * at the route, but a per-document rule can still refuse THIS document, and
+ * changing its pending edits owes the same rules as any other update to it.
+ * Mirrors restoreVersionForDocument.
+ *
+ * @returns The caller's API-key scope, for the write to judge field rules by.
+ */
+async function assertDocumentWriteAllowed(
+  args: {
+    scopeKind: VersionScopeKind;
+    slug: string;
+    entryId: string;
+    user: UserContext;
+  },
+  reason: string
+): Promise<AuthenticatedScope | undefined> {
+  const authenticatedScope = await assertDocumentReadAllowed(args, reason);
   await assertDocumentUpdatable(
     args.scopeKind,
     args.slug,
@@ -883,7 +900,7 @@ export async function takeLiveSharedValuesForDocument(args: {
   /** The language whose pending change takes them; none means the default. */
   locale?: string | null;
 }): Promise<TakenLiveValues> {
-  const authenticatedScope = await assertPendingChangeWritable(
+  const authenticatedScope = await assertDocumentWriteAllowed(
     args,
     "take-live-shared-values-read-denied"
   );
@@ -949,7 +966,7 @@ export async function discardWorkingDraftForDocument(
     locale?: string | null;
   }
 ): Promise<unknown> {
-  const authenticatedScope = await assertPendingChangeWritable(
+  const authenticatedScope = await assertDocumentWriteAllowed(
     args,
     "discard-working-draft-read-denied"
   );
@@ -993,36 +1010,7 @@ export async function autosaveForDocument(
     locale?: string | null;
   }
 ): Promise<unknown> {
-  const caller = readAccessCallerForDispatch(args.user);
-
-  if (!(await canReadEntity(args.slug, caller))) {
-    throw NextlyError.notFound({
-      logContext: {
-        reason: "autosave-read-denied",
-        scopeKind: args.scopeKind,
-        scopeSlug: args.slug,
-        entryId: args.entryId,
-        userId: args.user.id,
-      },
-    });
-  }
-
-  const authenticatedScope = readAuthenticatedScope();
-
-  await assertVersionDocumentReadable(
-    args.scopeKind,
-    args.slug,
-    args.entryId,
-    args.user,
-    authenticatedScope
-  );
-  await assertDocumentUpdatable(
-    args.scopeKind,
-    args.slug,
-    args.entryId,
-    args.user,
-    authenticatedScope
-  );
+  await assertDocumentWriteAllowed(args, "autosave-read-denied");
 
   // The owner's setting is enforced HERE, not in whichever editor happens to
   // be calling. A REST or plugin client holding update access can reach this
@@ -1157,27 +1145,9 @@ export async function autosaveForDocument(
 export async function getAutosaveForDocument(
   args: Omit<VersionMethodArgs, "locale"> & { params: Params }
 ): Promise<unknown> {
-  const caller = readAccessCallerForDispatch(args.user);
-
-  if (!(await canReadEntity(args.slug, caller))) {
-    throw NextlyError.notFound({
-      logContext: {
-        reason: "autosave-read-denied",
-        scopeKind: args.scopeKind,
-        scopeSlug: args.slug,
-        entryId: args.entryId,
-        userId: args.user.id,
-      },
-    });
-  }
-
-  const authenticatedScope = readAuthenticatedScope();
-  await assertVersionDocumentReadable(
-    args.scopeKind,
-    args.slug,
-    args.entryId,
-    args.user,
-    authenticatedScope
+  const authenticatedScope = await assertDocumentReadAllowed(
+    args,
+    "autosave-read-denied"
   );
 
   const row = await getService("versionsService").getAutosave(
