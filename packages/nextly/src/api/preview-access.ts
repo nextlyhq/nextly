@@ -438,8 +438,16 @@ export async function authorizePreviewSharer(
 ): Promise<AuthorizedSharer> {
   const slug = "single" in document ? document.single : document.collection;
   // The gate is per COLLECTION or Single, so a caller who may edit posts
-  // cannot act on another collection's links by naming it here.
-  const auth = await requireRouteCollectionAccess(req, "update", slug);
+  // cannot act on another collection's links by naming it here. It is asked
+  // in the language the link is to, as the checks below are; a link naming
+  // none is asked in every language.
+  const auth =
+    document.locale === undefined
+      ? await requireRouteCollectionAccess(req, "update", slug)
+      : await requireRouteCollectionAccess(req, "update", slug, {
+          method: "sharePreviewLink",
+          params: { locale: document.locale },
+        });
   refuseApiKey(auth);
 
   // Booted first because the gates below resolve services from the container,

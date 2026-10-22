@@ -27,6 +27,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { assertEntryPreviewable } from "../../api/preview-access";
 import {
+  registeredWriteAsNamedLanguagesFor,
+  withRuleLanguage,
+} from "../access/rule-language";
+import {
   defineCollection,
   defineFieldGroup,
   defineSingle,
@@ -573,6 +577,32 @@ describe.each(getConfiguredTestDialects())(
           expect(await ask("en")).toBe(true);
           expect(await ask("fr")).toBe(false);
         }
+      });
+
+      it("asks a Single's stored-row check naming no language in the languages its caller set", async () => {
+        const t = await boot(dialect);
+        expect(
+          (
+            await singlesOf(t).update(
+              SETTINGS,
+              { tagline: "hello" },
+              { overrideAccess: true, locale: "en" }
+            )
+          ).success
+        ).toBe(true);
+        // As a REST autosave or discard calls it: the request's language set
+        // around the call, none named in it.
+        const ask = () =>
+          singleDocumentEditable(SETTINGS, {
+            user: sharer,
+            routeAuthorized: false,
+          });
+        expect(
+          await withRuleLanguage(registeredWriteAsNamedLanguagesFor("en"), ask)
+        ).toBe(true);
+        expect(
+          await withRuleLanguage(registeredWriteAsNamedLanguagesFor("fr"), ask)
+        ).toBe(false);
       });
 
       it("asks the read rule in the link's language: allowed in English, refused in French", async () => {

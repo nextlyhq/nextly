@@ -15,6 +15,10 @@
  *
  * @module runtime/preview/preview-single-draft-gate
  */
+import {
+  everyLanguage,
+  withRuleLanguage,
+} from "../../auth/access/rule-language";
 import type { UserContext } from "../../direct-api/types/shared";
 import {
   singleDocumentEditable,
@@ -86,12 +90,16 @@ export function previewSingleDraftGate(
       // The language the link is to, as at the mint.
       ...(render.locale === undefined ? {} : { locale: render.locale }),
     };
-    if (
-      !(await singleDocumentEditable(slug, sharer)) ||
-      !(await singleStoredDocumentReadable(slug, sharer))
-    ) {
-      return false;
-    }
+    // A link naming no language is to the Single in every language, so its
+    // checks are told every language rather than whatever the render set.
+    const asked = async () =>
+      (await singleDocumentEditable(slug, sharer)) &&
+      (await singleStoredDocumentReadable(slug, sharer));
+    const allowed =
+      render.locale === undefined
+        ? await withRuleLanguage(everyLanguage(), asked)
+        : await asked();
+    if (!allowed) return false;
 
     return { readAs };
   };

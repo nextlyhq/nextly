@@ -1140,6 +1140,21 @@ describe("mintPreviewLink", () => {
     expect(canUpdateEntry.mock.calls[0][0].authenticatedScope).toBeUndefined();
   });
 
+  it("asks the route gate in the language the link names, and in every language for one naming none", async () => {
+    await mintPreviewLink(post({ single: "homepage", locale: "fr" }));
+    expect(requireRouteCollectionAccess).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "update",
+      "homepage",
+      { method: "sharePreviewLink", params: { locale: "fr" } }
+    );
+
+    await mintPreviewLink(post({ single: "homepage" }));
+    expect(
+      (requireRouteCollectionAccess as ReturnType<typeof vi.fn>).mock.lastCall
+    ).toHaveLength(3);
+  });
+
   it("gates on update for the collection that was named", async () => {
     // Per collection, not a blanket permission: otherwise a caller who may
     // edit posts could mint a link into a collection they cannot read.

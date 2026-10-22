@@ -70,8 +70,10 @@ list filtered to one language among them), the default for a bulk write, and
 every language for any other. It reads them from the parameters the request
 is dispatched with, so a language named twice is judged as dispatched.
 
-A preview link asks its sharer's rules in the language it is to when it is
-minted and opened, and a link naming no language asks them in every language.
+A collection preview link names no language, so minting or opening one asks
+the read rule in every language: a collection whose read rule closes any
+language can't mint entry previews until the preview path binds the link's
+language.
 
 A rule that does not read `locale` or `locales` answers as before. Code that
 builds a rule's context by hand, such as a unit test of a rule, now gives

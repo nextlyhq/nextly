@@ -29,7 +29,6 @@
  */
 
 import {
-  everyLanguage,
   registeredReadLanguagesFor,
   registeredWriteAsNamedLanguagesFor,
   withRuleLanguage,
@@ -204,17 +203,10 @@ async function storedSingleDocumentAllows(
   );
   if (!document) return false;
 
-  // The gate reads no row, so it is told the languages it judges here: the
-  // one asked about, as a read or a write of it would be told, or every
-  // language where none is named. Set rather than inherited, so the answer
-  // does not depend on what the caller happened to set.
-  const languages =
-    locale === undefined
-      ? everyLanguage()
-      : operation === "read"
-        ? registeredReadLanguagesFor(locale)
-        : registeredWriteAsNamedLanguagesFor(locale);
-  const denied = await withRuleLanguage(languages, () =>
+  // The gate reads no row, so where a language is named it is told that one,
+  // as a read or a write of it would be. Where none is named it is told what
+  // the caller set: a REST autosave or discard has set the request's own.
+  const ask = () =>
     checkSingleAccess({
       slug,
       operation,
@@ -224,8 +216,16 @@ async function storedSingleDocumentAllows(
       rbacAccessControlService: getService("rbacAccessControlService"),
       ...(actor === undefined ? {} : { authenticatedScope: actor }),
       logger: getService("logger"),
-    })
-  );
+    });
+  const denied =
+    locale === undefined
+      ? await ask()
+      : await withRuleLanguage(
+          operation === "read"
+            ? registeredReadLanguagesFor(locale)
+            : registeredWriteAsNamedLanguagesFor(locale),
+          ask
+        );
   return denied === null;
 }
 
