@@ -28,6 +28,8 @@ import {
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
 import { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import type { FieldConfig } from "../../collections/fields/types";
+import { deriveCompanionSpec } from "../../domains/i18n/migration/derive-companion-spec";
+import { buildCompanionCreateOnlySql } from "../../domains/i18n/migration/generate-up";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
@@ -58,6 +60,12 @@ export interface SeedBuilderCollectionOptions {
   status?: boolean;
   /** Versioning, as the registry stores it once resolved. */
   versions?: ResolvedVersionsConfig | null;
+  /**
+   * Languages: translatable fields leave the main table for a
+   * `<table>_locales` companion, and every other field is shared by every
+   * language. Collections only.
+   */
+  localized?: boolean;
 }
 
 /**
@@ -112,14 +120,22 @@ export async function seedBuilderCollection(
     undefined,
     adapter.getCapabilities().dialect
   );
+  const localized = opts.localized === true;
   const migrationSQL = schemaService.generateMigrationSQL(
     tableName,
     userFields,
     {
       hasStatus: opts.status === true,
+      localized,
     }
   );
   await executeStatements(adapter, migrationSQL);
+  if (localized) {
+    await executeStatements(
+      adapter,
+      companionCreateSql(adapter, { slug, tableName, fields: userFields, opts })
+    );
+  }
 
   const metadata: CollectionMetadata = {
     id: `seed_${slug}`,
@@ -131,6 +147,7 @@ export async function seedBuilderCollection(
     source: "ui",
     locked: false,
     status: opts.status === true,
+    ...(localized ? { localized } : {}),
     ...(opts.versions === undefined ? {} : { versions: opts.versions }),
     schemaHash: `seed_${slug}`,
     schemaVersion: 1,
@@ -144,11 +161,40 @@ export async function seedBuilderCollection(
     tableName,
     userFields,
     adapter.getCapabilities().dialect,
-    { status: opts.status === true }
+    { status: opts.status === true, localized }
   );
   registerRuntimeTable(adapter, tableName, table);
 
   return { slug, tableName };
+}
+
+/**
+ * The CREATE of a localized Builder collection's `<table>_locales`
+ * companion, from the same spec builders the Builder's create uses. Empty
+ * when no field is translatable.
+ */
+function companionCreateSql(
+  adapter: DrizzleAdapter,
+  args: {
+    slug: string;
+    tableName: string;
+    fields: FieldDefinition[];
+    opts: SeedBuilderCollectionOptions;
+  }
+): string {
+  const spec = deriveCompanionSpec({
+    slug: args.slug,
+    kind: "collection",
+    dbName: args.tableName,
+    fields: args.fields,
+    dialect: adapter.getCapabilities().dialect,
+    builtBy: "collection",
+    // Read only to seed existing rows, and a seeded table has none.
+    defaultLocale: "en",
+    collectionLocalized: true,
+    status: args.opts.status === true,
+  });
+  return spec ? buildCompanionCreateOnlySql(spec) : "";
 }
 
 /**

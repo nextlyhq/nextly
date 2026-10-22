@@ -34,6 +34,7 @@ import type {
   BaseListResult,
 } from "../../../shared/base-registry-service";
 import { fieldDefaultsSignature } from "../../../shared/lib/field-defaults";
+import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   calculateSchemaHash,
@@ -202,14 +203,22 @@ export class CollectionRegistryService extends BaseRegistryService<
     status: MigrationStatus,
     migrationId?: string
   ): Promise<void> {
-    return this.updateRecordMigrationStatus(slug, status, migrationId);
+    await this.updateRecordMigrationStatus(slug, status, migrationId);
+    // Every write to a collection's registry row clears the cached rows, so
+    // this process never serves the row as it was (`collection-row-cache`).
+    clearCollectionRowCache();
   }
 
   async updateMigrationStatusWithVerification(
     slug: string,
     tableName: string
   ): Promise<{ verified: boolean; status: MigrationStatus }> {
-    return this.updateMigrationStatusWithTableVerification(slug, tableName);
+    const result = await this.updateMigrationStatusWithTableVerification(
+      slug,
+      tableName
+    );
+    clearCollectionRowCache();
+    return result;
   }
 
   async getPendingMigrations(): Promise<DynamicCollectionRecord[]> {
@@ -277,6 +286,7 @@ export class CollectionRegistryService extends BaseRegistryService<
         record,
         { returning: "*" }
       );
+      clearCollectionRowCache();
 
       // Publish the decision into the live policy as well as the column. The
       // boot-time read only runs at startup, so without this a Builder-created
@@ -459,6 +469,7 @@ export class CollectionRegistryService extends BaseRegistryService<
         this.whereEq("slug", slug),
         { returning: "*" }
       );
+      clearCollectionRowCache();
 
       if (results.length === 0) {
         // Generic "Not found." from the factory; slug moves to logContext.
@@ -548,6 +559,9 @@ export class CollectionRegistryService extends BaseRegistryService<
       const count = await this.adapter.transaction(async tx => {
         return deleteEntityRegistryRow(tx, "collection", slug);
       });
+      // Once the transaction has committed, so no read in between keeps the
+      // row it is deleting.
+      clearCollectionRowCache();
 
       if (count === 0) {
         throw NextlyError.notFound({ logContext: { slug } });
@@ -850,6 +864,9 @@ export class CollectionRegistryService extends BaseRegistryService<
       record,
       { returning: "*" }
     );
+    // A new row: until the caller commits, a read outside the transaction
+    // finds none, and a missing row is never cached.
+    clearCollectionRowCache();
 
     return this.deserializeRecord(result);
   }
