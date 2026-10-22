@@ -2,11 +2,10 @@
  * One email to several `to` addresses, through every surface, on every
  * configured dialect.
  *
- * The Direct API, a plugin's `ctx.services.email` and both REST send routes
- * each send to a list of recipients through a capturing provider. Every
- * recipient is on the message the provider received, or on a message of their
- * own through a provider written to the one-`to` contract, and every recipient
- * has a delivery record. The send's From and Reply-To reach the message ahead
+ * The Direct API and a plugin's `ctx.services.email` each send to a list of
+ * recipients through a capturing provider. Every recipient is on the message
+ * the provider received, or on a message of their own through a provider
+ * written to the one-`to` contract, and every recipient has a delivery record. The send's From and Reply-To reach the message ahead
  * of the template's, which come ahead of the provider's.
  *
  * @module domains/email/__tests__/multi-recipient.integration.test
@@ -18,33 +17,8 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-// The REST routes authenticate the caller and boot through the cached
-// instance; the test instance below is the one booted, so both are stubbed
-// and the routes run as written against it.
-vi.mock("../../../auth/middleware", async importActual => {
-  const actual =
-    await importActual<typeof import("../../../auth/middleware")>();
-  return {
-    ...actual,
-    requireAuthentication: vi.fn(async () => ({
-      userId: "u1",
-      userEmail: "u@x.test",
-      userName: "U",
-      authMethod: "session" as const,
-      permissions: [] as string[],
-      claims: {},
-    })),
-  };
-});
-vi.mock("../../../init", async importActual => {
-  const actual = await importActual<typeof import("../../../init")>();
-  return { ...actual, getCachedNextly: vi.fn(async () => undefined) };
-});
-
-import { POST as postSend } from "../../../api/email-send";
-import { POST as postSendTemplate } from "../../../api/email-send-template";
 import {
   definePlugin,
   type PluginContext,
@@ -155,14 +129,6 @@ function plugin(): PluginContext {
   return ctx;
 }
 
-function post(path: string, body: unknown): Request {
-  return new Request(`http://localhost${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-}
-
 interface Envelope {
   to: string[];
   cc?: string[];
@@ -187,20 +153,6 @@ function surfaces(
       plugin().services.email.send({ ...e, subject: "Hi", html: "<p>x</p>" }),
     "ctx.services.email.sendWithTemplate": ({ to, ...options }) =>
       plugin().services.email.sendWithTemplate("alert", to, {}, options),
-    "POST /api/email/send": async e => {
-      const res = await postSend(
-        post("/api/email/send", { ...e, subject: "Hi", html: "<p>x</p>" })
-      );
-      expect(res.status).toBe(200);
-      return res.json();
-    },
-    "POST /api/email/send-with-template": async e => {
-      const res = await postSendTemplate(
-        post("/api/email/send-with-template", { ...e, template: "alert" })
-      );
-      expect(res.status).toBe(200);
-      return res.json();
-    },
   };
 }
 

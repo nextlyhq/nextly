@@ -25,6 +25,7 @@ import type {
   DynamicTableLoadResult,
   loadDynamicTables,
 } from "../di/load-dynamic-tables";
+import { clearCollectionRowCache } from "../domains/dynamic-collections/services/collection-row-cache";
 import { consoleLogger } from "../shared/types";
 
 /**
@@ -109,6 +110,9 @@ interface ReloadDeps {
  * would leave that gate closed — hanging every consumer waiting on it.
  */
 async function runReload(label: string): Promise<void> {
+  // A reload follows a change to the registry made outside the registry
+  // services (a migration, a schema apply), so the cached rows go first.
+  clearCollectionRowCache();
   try {
     const deps = await resolveDeps(label);
     if (!deps) return;

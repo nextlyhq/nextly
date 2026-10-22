@@ -82,6 +82,7 @@ export function BodyEditor({
   editorWrapRef,
   htmlEditorViewRef,
   chips,
+  readOnly,
 }: {
   control: ReturnType<typeof useForm<TemplateFormValues>>["control"];
   editorTab: "html" | "text";
@@ -91,6 +92,8 @@ export function BodyEditor({
   htmlEditorViewRef: React.RefObject<EditorView | null>;
   /** The variable chips, rendered beside the tab toggle. */
   chips?: React.ReactNode;
+  /** The bodies are the owner's until the site overrides them. */
+  readOnly: boolean;
 }) {
   return (
     <>
@@ -117,7 +120,7 @@ export function BodyEditor({
         />
         <BodyRefusal control={control} editorTab={editorTab} />
       </div>
-      {chips ? (
+      {chips && !readOnly ? (
         <div
           data-testid="body-editor-chips"
           className="flex max-h-16 shrink-0 flex-wrap items-center gap-2 overflow-y-auto border-b border-border px-3 pb-2 pt-2"
@@ -157,7 +160,7 @@ export function BodyEditor({
                   }}
                   language="html"
                   disabled={isPending}
-                  readOnly={false}
+                  readOnly={readOnly}
                   minHeight={380}
                   editorOptions={{ tabSize: 2 }}
                   placeholder={
@@ -177,6 +180,7 @@ export function BodyEditor({
                 {...field}
                 value={field.value ?? ""}
                 disabled={isPending}
+                readOnly={readOnly}
                 placeholder="Plain-text fallback sent alongside the HTML…"
                 className="h-full w-full resize-none bg-background p-3.5 font-mono text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
               />

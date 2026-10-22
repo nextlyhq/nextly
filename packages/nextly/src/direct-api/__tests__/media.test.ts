@@ -61,7 +61,9 @@ describe("Direct API - Media Operations", () => {
           size: 1024,
           altText: "Test image",
         }),
-        expect.any(Object) // RequestContext
+        expect.any(Object), // RequestContext
+        // The actor: none, since this instance names nobody.
+        undefined
       );
     });
 
@@ -82,7 +84,9 @@ describe("Direct API - Media Operations", () => {
         expect.objectContaining({
           folderId: "folder-123",
         }),
-        expect.any(Object)
+        expect.any(Object),
+        // The actor: none, since this instance names nobody.
+        undefined
       );
     });
 
@@ -228,7 +232,9 @@ describe("Direct API - Media Operations", () => {
           altText: "Updated",
           caption: "A photo",
         }),
-        expect.any(Object)
+        expect.any(Object),
+        // The actor: none, since this instance names nobody.
+        undefined
       );
     });
 
@@ -261,7 +267,9 @@ describe("Direct API - Media Operations", () => {
           tags: ["a", "b"],
           folderId: "folder-1",
         },
-        expect.any(Object)
+        expect.any(Object),
+        // The actor: none, since this instance names nobody.
+        undefined
       );
     });
   });

@@ -165,6 +165,10 @@ import {
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import {
+  sharedComparison,
+  type SharedComparison,
+} from "../../singles/services/live-shared-single";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { mergeComponentPatches } from "../../versions/draft-components";
@@ -181,6 +185,17 @@ import {
 } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
+  outOfDateSharedFields,
+  recordSharedBase,
+  releaseSharedBase,
+  sharedValuesConflict,
+  snapshotRecord,
+  takenLiveValues,
+  type TakenLiveValues,
+  takeLiveSharedValuesInto,
+  wholeWritableFields,
+} from "../../versions/shared-publish-base";
+import {
   containedComponentResolver,
   rehydrateSnapshotDates,
   resolveComponentFieldMap,
@@ -191,6 +206,7 @@ import {
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import {
+  type VersionRef,
   VersionsRepository,
   type VersionRow,
 } from "../../versions/versions-repository";
@@ -385,6 +401,25 @@ class StatusTransitionDeniedError extends NextlyError {
       logMessage: "Publish transition denied against the row-locked status",
     });
     this.name = "StatusTransitionDeniedError";
+  }
+}
+
+/**
+ * Thrown inside the update transaction when a language's pending change holds
+ * a shared value someone else has published since it began, so the write rolls
+ * back. Like {@link StatusTransitionDeniedError} it is always caught inside the
+ * method: the fields travel out of band and the refusal is built after the
+ * transaction, where the caller's field read rules can be asked which of them
+ * may be named.
+ */
+class SharedValuesOutOfDateError extends NextlyError {
+  constructor() {
+    super({
+      code: "CONFLICT",
+      publicMessage: "Shared values have changed since this change began.",
+      logMessage: "Pending change holds out-of-date shared values",
+    });
+    this.name = "SharedValuesOutOfDateError";
   }
 }
 
@@ -2187,6 +2222,71 @@ export class CollectionMutationService extends BaseService {
    * already-parsed values pass through; a parse failure keeps the raw string.
    * Never mutates the input.
    */
+  /**
+   * A localized document as it stands live, in the shape a version snapshot
+   * holds, and the fields every language shares in it. The main row's shared
+   * columns, its shared components, and its many-to-many relations: a publish
+   * writes each from the pending change. A translated field, and a component
+   * whose values are kept per language, belong to their language.
+   *
+   * @param main The live main row, shaped as a snapshot's is.
+   */
+  private async liveSharedDocument(
+    tx: TransactionContext,
+    args: {
+      collectionName: string;
+      entryId: string;
+      tableName: string;
+      fields: FieldDefinition[];
+      main: Record<string, unknown>;
+      locale: string | null;
+    }
+  ): Promise<SharedComparison & { live: Record<string, unknown> }> {
+    const { collectionName, entryId, tableName, fields, main } = args;
+    const executor = tx.getDrizzle();
+    const junctions = fields.filter(
+      f => f.type === "relationship" && f.options?.relationType === "manyToMany"
+    );
+    const relations = await this.buildFullSnapshotRelations(
+      tx,
+      entryId,
+      collectionName,
+      tableName,
+      fields,
+      junctions,
+      args.locale ?? undefined
+    );
+    const live = assembleDocument(
+      await this.snapshotPartsFor({ parentRow: main, ...relations }, fields, tx)
+    );
+    const companion = await this.fileManager.loadCompanionSchema(
+      collectionName,
+      executor
+    );
+    const schema = fields as unknown as FieldConfig[];
+    const service = this.fieldGroupDataService;
+    return {
+      live,
+      ...(await sharedComparison({
+        fields: schema,
+        translated: new Set(
+          (companion?.localizedFields ?? []).map(f => f.name)
+        ),
+        document: live,
+        componentFields: service
+          ? await resolveComponentFieldMap(schema, slug =>
+              service.getComponentFields(slug, executor)
+            )
+          : new Map<string, FieldConfig[]>(),
+        isComponentLocalized: slug =>
+          service
+            ? service.isComponentLocalized(slug, executor)
+            : Promise.resolve(false),
+        unordered: junctions.map(f => f.name),
+      })),
+    };
+  }
+
   private deserializeJsonFieldsForSnapshot(
     row: Record<string, unknown>,
     fields: FieldDefinition[]
@@ -3201,12 +3301,13 @@ export class CollectionMutationService extends BaseService {
     /** Who discarded it, for the document's history. */
     actor?: RequestActor;
     user?: UserContext;
-  }): Promise<void> {
+  }): Promise<number> {
     const collection = await this.collectionService.getCollection(
       params.collectionName
     );
     const tableName = collectionTableName(collection, params.collectionName);
-    await this.adapter.transaction(async tx => {
+    // The drafts it removed, counted by the delete made under the lock.
+    return this.adapter.transaction(async tx => {
       // Serialize with concurrent draft-save upserts, which lock this same parent
       // row before writing the sidecar.
       await tx.lockRow(tableName, params.entryId);
@@ -3216,14 +3317,16 @@ export class CollectionMutationService extends BaseService {
         requestLocale: params.locale ?? null,
         defaultLocale: this.localization?.defaultLocale ?? null,
       });
+      const discardedRef = {
+        scopeKind: "collection" as const,
+        scopeSlug: params.collectionName,
+        entryId: params.entryId,
+      };
       const removed = await new VersionsRepository(tx).deleteWorkingDraft(
-        {
-          scopeKind: "collection",
-          scopeSlug: params.collectionName,
-          entryId: params.entryId,
-        },
+        discardedRef,
         draftLocale
       );
+      await releaseSharedBase(tx, discardedRef, draftLocale);
       // In the document's history only when there was a draft to discard.
       if (removed > 0) {
         await this.recordHistoryEvent(
@@ -3238,7 +3341,202 @@ export class CollectionMutationService extends BaseService {
           }
         );
       }
+      return removed;
     });
+  }
+
+  /**
+   * Bring a language's pending change up to date with the shared values
+   * someone else published after it began: each out-of-date shared field the
+   * caller may write takes its live value, saved as a save of the change. Its
+   * base moves to the live version only when every out-of-date field was
+   * taken; a protected field left behind stays out of date for someone who may
+   * write it. A shared value the change edited that nobody else published
+   * keeps the change's value.
+   *
+   * Applies the document's update rules and its field rules: this writes the
+   * pending change. The fields it names are those the caller may read.
+   *
+   * @experimental
+   */
+  async takeLiveSharedValues(params: {
+    collectionName: string;
+    entryId: string;
+    /** Which language's pending change; the default when none is named. */
+    locale?: string | null;
+    /** Who took them, for the change's history. */
+    actor?: RequestActor;
+    user?: UserContext;
+    overrideAccess?: boolean;
+    routeAuthorized?: boolean;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<CollectionServiceResult<TakenLiveValues>> {
+    try {
+      const accessDenied =
+        await this.accessService.checkCollectionAccess<TakenLiveValues>({
+          collectionName: params.collectionName,
+          operation: "update",
+          user: params.overrideAccess ? undefined : params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+          authenticatedScope: params.authenticatedScope,
+        });
+      if (accessDenied) return accessDenied;
+      const collection = await this.collectionService.getCollection(
+        params.collectionName
+      );
+      // Without languages every field is the document's own: nothing comes
+      // from another language to take, and a take would only overwrite the
+      // editor's pending edits.
+      if ((collection as { localized?: boolean }).localized !== true) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "This collection has no languages, so there are no shared values from another language to take.",
+          logContext: {
+            reason: "take-live-unlocalized",
+            collection: params.collectionName,
+          },
+        });
+      }
+      // Resolved before the transaction: they take a pooled connection.
+      const grants = await resolvedCallerGrants(
+        params.user,
+        params.authenticatedScope
+      );
+      const took = await this.adapter.transaction(tx =>
+        this.takeLiveInTx(tx, collection, params, grants)
+      );
+      if (!took) {
+        throw NextlyError.notFound({
+          message: "This language has no pending change.",
+          logContext: {
+            reason: "take-live-no-pending-change",
+            collection: params.collectionName,
+            entryId: params.entryId,
+          },
+        });
+      }
+      const reader = {
+        kind: "collection" as const,
+        slug: params.collectionName,
+        user: params.user,
+        overrideAccess: params.overrideAccess && !params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+        grants,
+      };
+      return {
+        success: true,
+        statusCode: 200,
+        message: "The pending change now holds the live shared values.",
+        data: await takenLiveValues(reader, took),
+      };
+    } catch (error: unknown) {
+      return errorToServiceResult(
+        error,
+        { defaultMessage: "Failed to take the live values" },
+        this.dialect
+      );
+    }
+  }
+
+  /**
+   * The body of {@link takeLiveSharedValues}, in its transaction: null when
+   * the language has no pending change.
+   */
+  private async takeLiveInTx(
+    tx: TransactionContext,
+    collection: Awaited<ReturnType<DynamicCollectionService["getCollection"]>>,
+    params: Parameters<CollectionMutationService["takeLiveSharedValues"]>[0],
+    grants: () => Promise<CallerGrants>
+  ): Promise<{
+    taken: string[];
+    remaining: string[];
+    live: Record<string, unknown>;
+    byHand: ReadonlySet<string>;
+  } | null> {
+    const fields = collectionFields(collection);
+    const tableName = collectionTableName(collection, params.collectionName);
+    const schema = await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    );
+    const ref = {
+      scopeKind: "collection" as const,
+      scopeSlug: params.collectionName,
+      entryId: params.entryId,
+    };
+    const draftLocale = workingDraftLocale({
+      documentLocalized:
+        (collection as { localized?: boolean }).localized === true,
+      requestLocale: params.locale ?? null,
+      defaultLocale: this.localization?.defaultLocale ?? null,
+    });
+    // The lock every save and publish of this document takes, so the live
+    // values read here are the ones the next publish compares with.
+    await tx.lockRow(tableName, params.entryId);
+    const pending = await new VersionsRepository(tx).findWorkingDraft(
+      ref,
+      draftLocale
+    );
+    const [row] = await tx
+      .getDrizzle<typeof this.db>()
+      .select()
+      .from(schema)
+      .where(eq(schema.id, params.entryId))
+      .limit(1);
+    if (!pending || !row) return null;
+    const { live, shared, views, byHand } = await this.liveSharedDocument(tx, {
+      collectionName: params.collectionName,
+      entryId: params.entryId,
+      tableName,
+      fields,
+      main: this.deserializeJsonFieldsForSnapshot(
+        convertTimestampsToCamelCase({ ...(row as Record<string, unknown>) }),
+        fields
+      ),
+      locale: draftLocale,
+    });
+    const took = await takeLiveSharedValuesInto(tx, this.versionCapture, {
+      ref,
+      locale: draftLocale,
+      shared,
+      live,
+      views,
+      pending: snapshotRecord(pending.snapshot),
+      createdBy: params.user?.id ?? null,
+      maxPerDoc: (collection as { versions?: ResolvedVersionsConfig | null })
+        .versions?.maxPerDoc,
+      // Only what this caller may write, whole: a field rule that refuses
+      // them a value, at any depth, refuses them taking its live one too.
+      // Nor a translated component's shared sub-fields, which are left to the
+      // editor to copy by hand.
+      mayTake: stale =>
+        wholeWritableFields(
+          stale.filter(name => !byHand.has(name)),
+          live,
+          data =>
+            applyFieldWriteAccess({
+              kind: "collection",
+              slug: params.collectionName,
+              data,
+              operation: "update",
+              user: params.user,
+              authenticatedScope: params.authenticatedScope,
+              overrideAccess: params.overrideAccess,
+              id: params.entryId,
+              grants,
+            })
+        ),
+    });
+    // A save of the pending change, in its history like any other.
+    await this.recordSaveHistory(tx, params.collectionName, params.entryId, {
+      actor: actorForWrite(params.actor, params.user),
+      personName: params.user?.name ?? null,
+      locale: draftLocale,
+      toState: "draft",
+      versionNo: took.versionNo,
+    });
+    return { taken: took.taken, remaining: took.remaining, live, byHand };
   }
 
   private async readCompanionSlugsAllLocales(
@@ -6107,7 +6405,12 @@ export class CollectionMutationService extends BaseService {
           data: null,
         };
       }
-      committedWrite = true;
+      // Saved only once it is durable. Inside an enclosing SQLite transaction
+      // the publish is a savepoint that transaction can still roll back, so
+      // until it commits a failure below is not a saved change.
+      await this.afterCommit(() => {
+        committedWrite = true;
+      });
 
       // Once the publish is durable: inside an enclosing SQLite transaction,
       // once that commits, and never for a publish it rolls back.
@@ -6175,6 +6478,28 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
+      const intentFor = (localizedSlugs?: string[]) =>
+        buildEntryRevalidationIntent(
+          params.collectionName,
+          readRevalidateConfig(publishCollection),
+          {
+            id: params.entryId,
+            // Prefer the committed post-publish row's slug so a concurrent rename
+            // that landed after the pre-read still busts the actually-published
+            // URL; fall back to the pre-read only when no fresh row was
+            // reconstructed.
+            slug: readStringField(
+              (publishedParentRow ?? existingEntry) as Record<string, unknown>,
+              "slug"
+            ),
+            localizedSlugs,
+          }
+        );
+      // Set before the slug read below, which can fail after the commit. The
+      // failure result carries it, so a durable publish or unpublish still busts
+      // the entry's id and slug tags, though the caller is told not to retry.
+      revalidationIntent = intentFor();
+
       // Publishing all locales makes every locale's slug public at once, so bust
       // each localized slug's tag (read post-commit on the pool — publish only
       // flips status, so the committed companion slugs are stable here).
@@ -6183,22 +6508,7 @@ export class CollectionMutationService extends BaseService {
         params.collectionName,
         params.entryId
       );
-      revalidationIntent = buildEntryRevalidationIntent(
-        params.collectionName,
-        readRevalidateConfig(publishCollection),
-        {
-          id: params.entryId,
-          // Prefer the committed post-publish row's slug so a concurrent rename
-          // that landed after the pre-read still busts the actually-published
-          // URL; fall back to the pre-read only when no fresh row was
-          // reconstructed.
-          slug: readStringField(
-            (publishedParentRow ?? existingEntry) as Record<string, unknown>,
-            "slug"
-          ),
-          localizedSlugs: publishedLocalizedSlugs,
-        }
-      );
+      revalidationIntent = intentFor(publishedLocalizedSlugs);
 
       return {
         success: true,
@@ -6228,6 +6538,9 @@ export class CollectionMutationService extends BaseService {
         // nothing to rebuild it from.
         ...errorEnvelopeFields(thrown),
         committed: committedWrite,
+        // Set only once the publish has committed, so its tags flush whatever
+        // failed after it.
+        revalidationIntent,
       };
     }
   }
@@ -7077,6 +7390,53 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * A language's change records its base when it begins: the version whose
+   * shared values are the live ones it began from. A later save keeps it, so
+   * saving again never makes an old shared value current. Only a collection
+   * with languages has values another language shares.
+   *
+   * @param begins Whether this save begins the change: no working draft held
+   *   for its language yet.
+   */
+  private async recordBaseOfNewChange(
+    tx: TransactionContext,
+    args: {
+      begins: boolean;
+      collection: unknown;
+      collectionName: string;
+      entryId: string;
+      fields: FieldDefinition[];
+      main: Record<string, unknown>;
+      ref: VersionRef;
+      locale: string | null;
+    }
+  ): Promise<void> {
+    if (
+      !args.begins ||
+      (args.collection as { localized?: boolean }).localized !== true
+    ) {
+      return;
+    }
+    // A held save has written nothing live, so the live document read here
+    // is the one the change began from.
+    const { live, shared, views } = await this.liveSharedDocument(tx, {
+      collectionName: args.collectionName,
+      entryId: args.entryId,
+      tableName: collectionTableName(args.collection, args.collectionName),
+      fields: args.fields,
+      main: args.main,
+      locale: args.locale,
+    });
+    await recordSharedBase(tx, {
+      ref: args.ref,
+      locale: args.locale,
+      shared,
+      live,
+      views,
+    });
+  }
+
+  /**
    * Store the pending edit as this document's working draft, on the caller's
    * transaction.
    *
@@ -7178,6 +7538,18 @@ export class CollectionMutationService extends BaseService {
         draftIsPluginCollection
       );
     }
+    // Recorded before the save's own capture, whose retention pass then keeps
+    // it.
+    await this.recordBaseOfNewChange(tx, {
+      begins: !existingDraft,
+      collection,
+      collectionName: params.collectionName,
+      entryId: params.entryId,
+      fields,
+      main: ctx.liveParentRow,
+      ref: draftRef,
+      locale: draftLocale,
+    });
     // The draft, and the save as a version of its own, in this transaction.
     // A save that changes nothing against what it replaces records no version.
     const versionsConfig = (collection as Record<string, unknown>).versions as
@@ -7352,6 +7724,11 @@ export class CollectionMutationService extends BaseService {
     // no longer identifies the sentinel after the throw, but this result stays
     // correct regardless of how the error is wrapped.
     let transitionDeniedResult: CollectionServiceResult | undefined;
+    // The shared fields a pending change may not publish, and the live
+    // document they were judged against; see `SharedValuesOutOfDateError`.
+    let outOfDateShared:
+      | { fields: string[]; live: Record<string, unknown> }
+      | undefined;
     // Which languages a wildcard sweep actually moved, and what each moved FROM.
     // Captured at the write because it is unrecoverable afterwards, and read at
     // the event step so each real transition is reported once.
@@ -8378,6 +8755,43 @@ export class CollectionMutationService extends BaseService {
                 // No per-row rule to enforce here; the permission above is the
                 // only gate a promotion has to pass.
               }
+              // A language's pending change carries every shared value; one
+              // someone else published since the change began would be put
+              // back by this write, so the publish is refused, naming it.
+              if (documentLocalized) {
+                const { live, shared, views } = await this.liveSharedDocument(
+                  tx,
+                  {
+                    collectionName: params.collectionName,
+                    entryId: params.entryId,
+                    tableName,
+                    fields,
+                    main: this.deserializeJsonFieldsForSnapshot(
+                      convertTimestampsToCamelCase({
+                        ...(preUpdateRow as Record<string, unknown>),
+                      }),
+                      fields
+                    ),
+                    locale: draftLocaleKey,
+                  }
+                );
+                const stale = await outOfDateSharedFields(tx, {
+                  ref: {
+                    scopeKind: "collection",
+                    scopeSlug: params.collectionName,
+                    entryId: params.entryId,
+                  },
+                  locale: draftLocaleKey,
+                  shared,
+                  live,
+                  pending: snapshotRecord(workingDraft.snapshot),
+                  views,
+                });
+                if (stale.length > 0) {
+                  outOfDateShared = { fields: stale, live };
+                  throw new SharedValuesOutOfDateError();
+                }
+              }
               // The snapshot is stored read-shaped, so buildRestorePayload turns
               // it into a safe update input (immutable ids stripped, removed
               // columns and password fields dropped, component subtrees whose
@@ -9050,15 +9464,18 @@ export class CollectionMutationService extends BaseService {
               // trusted read. Uses the locale key the fetch used, so it removes
               // exactly the row that was promoted.
               if (promotedDraft) {
+                const promotedRef = {
+                  scopeKind: "collection" as const,
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                };
                 await new VersionsRepository(tx).deleteWorkingDraft(
-                  {
-                    scopeKind: "collection",
-                    scopeSlug: params.collectionName,
-                    entryId: params.entryId,
-                  },
+                  promotedRef,
                   // Same unlocalized key the fetch and store use.
                   draftLocaleKey
                 );
+                // Its base goes with it, so retention may let that version go.
+                await releaseSharedBase(tx, promotedRef, draftLocaleKey);
               }
 
               // Invalidate a stale working draft on any live write the split no
@@ -9072,14 +9489,17 @@ export class CollectionMutationService extends BaseService {
               // delete is a cheap indexed no-op when none exists, and it never hits
               // a just-stored draft: that path keeps `splitEnabled` true.
               if (!splitEnabled) {
+                const staleRef = {
+                  scopeKind: "collection" as const,
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                };
                 await new VersionsRepository(tx).deleteWorkingDraft(
-                  {
-                    scopeKind: "collection",
-                    scopeSlug: params.collectionName,
-                    entryId: params.entryId,
-                  },
+                  staleRef,
                   draftLocaleKey
                 );
+                // Its base goes with it, so retention may let that version go.
+                await releaseSharedBase(tx, staleRef, draftLocaleKey);
               }
 
               // A restore that lands a non-published status turns the live row
@@ -9097,14 +9517,16 @@ export class CollectionMutationService extends BaseService {
                 transitionNextStatus !== undefined &&
                 transitionNextStatus !== "published"
               ) {
+                const restoredRef = {
+                  scopeKind: "collection" as const,
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                };
                 await new VersionsRepository(tx).deleteWorkingDraft(
-                  {
-                    scopeKind: "collection",
-                    scopeSlug: params.collectionName,
-                    entryId: params.entryId,
-                  },
+                  restoredRef,
                   draftLocaleKey
                 );
+                await releaseSharedBase(tx, restoredRef, draftLocaleKey);
               }
 
               // Append the outbox event in the same transaction, so it commits
@@ -9727,6 +10149,24 @@ export class CollectionMutationService extends BaseService {
       // wraps the thrown sentinel in a DatabaseError before it reaches here.
       if (transitionDeniedResult) {
         return transitionDeniedResult;
+      }
+      if (outOfDateShared) {
+        return errorToServiceResult(
+          // After the transaction: the caller's field rules resolve grants
+          // on a pooled connection.
+          await sharedValuesConflict({
+            kind: "collection",
+            slug: params.collectionName,
+            entryId: params.entryId,
+            fields: outOfDateShared.fields,
+            live: outOfDateShared.live,
+            user: params.user,
+            overrideAccess: params.overrideAccess && !params.routeAuthorized,
+            authenticatedScope: params.authenticatedScope,
+          }),
+          { defaultMessage: "Failed to update entry" },
+          this.dialect
+        );
       }
       // See createEntry's catch — legacy override messages are dropped in
       // favour of fromDatabaseError's spec-compliant generic strings.

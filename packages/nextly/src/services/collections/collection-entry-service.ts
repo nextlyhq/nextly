@@ -699,6 +699,23 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
+   * Bring a language's pending change up to date with the shared values
+   * someone else published since it began. See the mutation service.
+   *
+   * @experimental
+   */
+  async takeLiveSharedValues(
+    params: Parameters<CollectionMutationService["takeLiveSharedValues"]>[0]
+  ): ReturnType<CollectionMutationService["takeLiveSharedValues"]> {
+    // A write to one language's change: its rules see that language, as a
+    // save of it does.
+    return withRuleLanguage(
+      writeLanguagesFor(this.localization, params.locale ?? undefined),
+      () => this.mutationService.takeLiveSharedValues(params)
+    );
+  }
+
+  /**
    * Each of these entries as a release would put it live, read as stored. See
    * the mutation service.
    *
@@ -874,6 +891,17 @@ export class CollectionEntryService extends BaseService {
   async discardWorkingDraft(
     params: Parameters<CollectionMutationService["discardWorkingDraft"]>[0]
   ): Promise<void> {
+    await this.discardWorkingDraftCounted(params);
+  }
+
+  /**
+   * {@link discardWorkingDraft}, answering how many drafts it removed, counted
+   * by the delete made under the document's lock. A separate method so the
+   * published `discardWorkingDraft` keeps its contract.
+   */
+  async discardWorkingDraftCounted(
+    params: Parameters<CollectionMutationService["discardWorkingDraft"]>[0]
+  ): Promise<number> {
     // The draft is deleted under the language as named, so one the site no
     // longer configures is told every language, not the default.
     return withRuleLanguage(

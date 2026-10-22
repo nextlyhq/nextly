@@ -38,7 +38,8 @@ export interface ServiceOpts {
    * Who this operation runs as.
    *
    * `user` is a signed-in caller and requires one. `system` is the plugin
-   * acting on its own behalf, and bypasses the access check.
+   * acting on its own behalf, and bypasses the access check; a `user` named
+   * beside it is not judged, and is who the write is attributed to.
    *
    * `public` is a caller with no session AT ALL, with the collection's access
    * rules still enforced. A plugin serving a `public: true` route needs it and
@@ -277,54 +278,82 @@ export async function resolveServiceOpts(
         logContext: { reason: "service-opts-user-missing" },
       });
     }
-    // 🔴 The verified CLAIMS travel with the identity, and dropping them is a
-    // security defect rather than a tidiness one. `readCaller` spreads
-    // `auth.claims` onto the user it builds, so a caller handed to a plugin
-    // carries whatever the token proved -- a tenant, a plan, an entitlement --
-    // and a collection's code-defined `access` rule may read exactly those.
-    // Rebuilt from id/name/email/roles alone, the rule received a DIFFERENT
-    // caller than the endpoint authenticated: a positive check on a claim
-    // denies wrongly, and an absence-tolerant one like
-    // `user.plan !== "suspended"` GRANTS wrongly.
-    //
-    // Taken as "whatever else the supplied identity carried", so a caller
-    // passing a plain `AuthUser` contributes nothing and is unaffected.
-    const {
-      id: _id,
-      name: _name,
-      email: _email,
-      roles: _roles,
-      role: _role,
-      ...claims
-    } = user as typeof user & {
-      roles?: string[];
-      role?: string;
-    };
-    const identity = buildUserContext({
-      claims,
-      id: user.id,
-      name: user.name ?? undefined,
-      email: user.email,
-      // Copied: the scope's arrays are frozen, and the caller object is the
-      // mutable shape every consumer of it is typed against.
-      roles: authenticatedScope?.roles
-        ? [...authenticatedScope.roles]
-        : await deps.listRoleSlugs(user.id),
-    });
     return {
       overrideAccess: false,
-      user: {
-        ...identity,
-        id: user.id,
-        email: user.email,
-        role: identity.role ?? "",
-        permissions: [],
-      },
+      user: callerFor(
+        user,
+        // Copied: the scope's arrays are frozen, and the caller object is the
+        // mutable shape every consumer of it is typed against.
+        authenticatedScope?.roles
+          ? [...authenticatedScope.roles]
+          : await deps.listRoleSlugs(user.id)
+      ),
       ...carried,
       ...(authenticatedScope ? { authenticatedScope } : {}),
     };
   }
+  // The plugin acting as itself, beside a person it names: still trusted, and
+  // the person is the one the write is attributed to, so a folder records its
+  // creator and a hook sees who the change was made for. Nothing is asked
+  // about them, so no role lookup runs: a trusted call never needed one, and
+  // a lookup that failed would refuse a call that does not depend on it. No
+  // scope travels either: a scope narrows an access check, and a trusted call
+  // runs none.
+  if (user !== undefined) {
+    return {
+      overrideAccess: true,
+      user: callerFor(user, []),
+      ...carried,
+    };
+  }
   return { overrideAccess: true, ...carried };
+}
+
+/**
+ * The caller a plugin's `ServiceOpts.user` is, as every service receives one:
+ * built by `buildUserContext`, carrying `roles`.
+ */
+function callerFor(
+  user: AuthUser,
+  roles: string[]
+): NonNullable<RequestContext["user"]> {
+  // 🔴 The verified CLAIMS travel with the identity, and dropping them is a
+  // security defect rather than a tidiness one. `readCaller` spreads
+  // `auth.claims` onto the user it builds, so a caller handed to a plugin
+  // carries whatever the token proved -- a tenant, a plan, an entitlement --
+  // and a collection's code-defined `access` rule may read exactly those.
+  // Rebuilt from id/name/email/roles alone, the rule received a DIFFERENT
+  // caller than the endpoint authenticated: a positive check on a claim
+  // denies wrongly, and an absence-tolerant one like
+  // `user.plan !== "suspended"` GRANTS wrongly.
+  //
+  // Taken as "whatever else the supplied identity carried", so a caller
+  // passing a plain `AuthUser` contributes nothing and is unaffected.
+  const {
+    id: _id,
+    name: _name,
+    email: _email,
+    roles: _roles,
+    role: _role,
+    ...claims
+  } = user as typeof user & {
+    roles?: string[];
+    role?: string;
+  };
+  const identity = buildUserContext({
+    claims,
+    id: user.id,
+    name: user.name ?? undefined,
+    email: user.email,
+    roles,
+  });
+  return {
+    ...identity,
+    id: user.id,
+    email: user.email,
+    role: identity.role ?? "",
+    permissions: [],
+  };
 }
 
 /**

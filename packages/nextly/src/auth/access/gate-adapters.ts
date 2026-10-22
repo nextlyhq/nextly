@@ -18,6 +18,7 @@ import type { AccessOperation } from "../../services/access/types";
 import {
   apiKeyWriteAllowed,
   scopeRowsAgree,
+  slugGrants,
   type AuthenticatedScope,
 } from "../authenticated-scope";
 import { effectiveCallerScope } from "../caller-scope";
@@ -39,7 +40,7 @@ import {
   type Decision,
   type RuleOutcome,
 } from "./decide";
-import { declaredTarget } from "./declared-rules";
+import { targetAsDeclared } from "./declared-rules";
 import { deviate } from "./deviations";
 import {
   actorForKey,
@@ -52,7 +53,7 @@ import {
 } from "./resolve-actor";
 
 /** Allowed, or refused with the kind of refusal the gate words. */
-export type GateVerdict =
+export type GateVerdict = (
   | { readonly allowed: true }
   | {
       readonly allowed: false;
@@ -63,7 +64,15 @@ export type GateVerdict =
        */
       readonly refusal: "insufficient" | "unauthenticated" | "failed";
       readonly error?: unknown;
-    };
+    }
+) & {
+  /**
+   * A signed-in user's rule answer when it was not a yes or no (`null`, a
+   * string): the gate judges it truthy, and `ctx.caller.can` hands it back as
+   * it came.
+   */
+  readonly ruleAnswer?: unknown;
+};
 
 const ALLOWED: GateVerdict = Object.freeze({ allowed: true });
 const INSUFFICIENT: GateVerdict = Object.freeze({
@@ -126,8 +135,7 @@ const decided = async (
   action: AccessOperation,
   target: AccessTarget
 ): Promise<boolean> =>
-  (await decide(await actor, action, declaredTarget(target.slug) ?? target))
-    .allowed;
+  (await decide(await actor, action, targetAsDeclared(target))).allowed;
 
 export function collectionGateVerdict(
   q: CollectionQuestion
@@ -296,7 +304,7 @@ function keyActorOf(
     : actorForKey({
         keyId: "",
         userId: user.id,
-        grants: scope.grants ?? [],
+        grants: slugGrants(scope.permissions),
         roles: scope.roles ?? user.roles ?? [],
       });
 }
@@ -491,9 +499,14 @@ async function ruleVerdict({
   const outcome = await askRule(actor, q.action, target);
   const today =
     outcome.declared && !("threw" in outcome) && Boolean(outcome.value);
-  return verdictOf(
+  const verdict = verdictOf(
     await deviate("rule-alone-for-people", today, () =>
       decidedFrom(actor, q.action, target, outcome)
     )
   );
+  return outcome.declared &&
+    !("threw" in outcome) &&
+    typeof outcome.value !== "boolean"
+    ? { ...verdict, ruleAnswer: outcome.value }
+    : verdict;
 }

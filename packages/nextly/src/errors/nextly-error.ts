@@ -13,6 +13,7 @@ import type {
   PublicData,
   ReleaseNotDeletablePublicData,
   ReleaseProblemsPublicData,
+  SharedFieldsConflictPublicData,
   ValidationPublicData,
 } from "./public-data";
 import { DATABASE_BUSY_RETRY_AFTER_SECONDS } from "./retry-after";
@@ -407,9 +408,13 @@ export class NextlyError extends Error {
     /**
      * What a caller needs to act on the conflict: for a release refused over
      * its documents, the problems by code and member; for a release that
-     * cannot be deleted, the reason.
+     * cannot be deleted, the reason; for a pending change refused over the
+     * fields every language shares, why and which fields.
      */
-    data?: ReleaseProblemsPublicData | ReleaseNotDeletablePublicData;
+    data?:
+      | ReleaseProblemsPublicData
+      | ReleaseNotDeletablePublicData
+      | SharedFieldsConflictPublicData;
     cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
