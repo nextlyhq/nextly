@@ -51,6 +51,7 @@ import {
 import {
   actorForKey,
   actorForUser,
+  actorForUserFailingClosed,
   userHoldsPermission,
   userIsSuperAdmin,
 } from "./resolve-actor";
@@ -493,14 +494,10 @@ export async function schemaListed<T extends ListedCollection>(
     );
   }
   if (await userIsSuperAdmin(caller.userId)) return [...collections];
-  let actor: Actor;
-  try {
-    actor = await actorForUser(caller.userId);
-  } catch {
-    // A caller whose access cannot be read is shown nothing, as when each
-    // collection's permission check failed closed.
-    return [];
-  }
+  // A lookup that fails counts as holding nothing of its kind, so a failed
+  // role read keeps the grants that were read, as each collection's own
+  // permission check did when it failed closed.
+  const actor = await actorForUserFailingClosed(caller.userId);
   return keptWhere(collections, slug =>
     readByPermission(actor, slug, rules, holdsPermission(actor, "read", slug))
   );

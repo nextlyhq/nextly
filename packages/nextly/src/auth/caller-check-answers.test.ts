@@ -30,7 +30,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import type { CollectionAccessControl } from "../shared/types/access";
 
-import { callerMayPerform } from "./access/route-gate-adapters";
+import { callerMayPerform, schemaListed } from "./access/route-gate-adapters";
 import { authorizeCaller, type AuthContext } from "./middleware";
 import {
   apiKeyScopeFrom,
@@ -79,6 +79,8 @@ const STORED: Record<string, { roles: string[]; grants: GrantedPermission[] }> =
     admin: { roles: ["super-admin"], grants: [] },
     "admin-inherited": { roles: ["chief", "super-admin"], grants: [] },
     owner: { roles: ["editor"], grants: [...POST_GRANTS, ...SYSTEM_GRANTS] },
+    // Holds read on posts, but their roles cannot be read.
+    "roles-unreadable": { roles: ["editor"], grants: [grant("read", POSTS)] },
   };
 
 const stored = (userId: string) => STORED[userId] ?? { roles: [], grants: [] };
@@ -101,9 +103,10 @@ vi.mock("../services/lib/permissions", async importOriginal => {
     hasPermission: vi.fn(async (userId: string, action: string, r: string) =>
       r === "" ? false : holds(userId, action, r)
     ),
-    listRoleSlugsForUser: vi.fn(async (userId: string) => [
-      ...stored(userId).roles,
-    ]),
+    listRoleSlugsForUser: vi.fn(async (userId: string) => {
+      if (userId === "roles-unreadable") throw new Error("roles unreadable");
+      return [...stored(userId).roles];
+    }),
     listRoleSlugsForUserStrict: vi.fn(async (userId: string) => [
       ...stored(userId).roles,
     ]),
@@ -352,5 +355,26 @@ describe("an entity that registered a rule under a system resource's name", () =
     );
     const gate = await authorizeCaller(auth, "read", "settings");
     expect("statusCode" in gate && gate.statusCode).toBe(403);
+  });
+});
+
+describe("the schema list for a session whose roles cannot be read", () => {
+  it("still shows the collections the grants it read allow", async () => {
+    registered.rbac = new RBACAccessControlService();
+    // A failed lookup is reported as it happens.
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const auth: AuthContext = {
+      userId: "roles-unreadable",
+      permissions: [],
+      roles: [],
+      authMethod: "session",
+    };
+    const listed = await schemaListed(
+      auth,
+      [{ slug: POSTS }, { slug: "pages" }],
+      registered.rbac
+    );
+    // The grant to read posts was read; nothing grants pages.
+    expect(listed.map(c => c.slug)).toEqual([POSTS]);
   });
 });
