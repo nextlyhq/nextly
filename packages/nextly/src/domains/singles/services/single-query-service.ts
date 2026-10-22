@@ -95,7 +95,10 @@ import {
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { Logger } from "../../../shared/types";
 import { recordWriteEvent } from "../../content-events/write-event";
-import { liveFieldGroupReadPass } from "../../field-groups/live-read-access";
+import {
+  liveFieldGroupReadPass,
+  withFieldGroupEvidence,
+} from "../../field-groups/live-read-access";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
@@ -900,7 +903,7 @@ export class SingleQueryService extends BaseService {
       grants: callerAccessGrants(fieldAccessUser, options.authenticatedScope),
     };
     // The rules on fields inside field groups, which the Single's own pass
-    // does not reach, judged with the same grants resolver and store. Before
+    // does not reach, judged with the same grants resolver. Before
     // the hooks and after them, as the collection read runs it: a hook cannot
     // copy a denied value onto an allowed field, one it puts back is caught,
     // and the second run restores what the first removed as evidence.
@@ -908,11 +911,14 @@ export class SingleQueryService extends BaseService {
       ? undefined
       : await liveFieldGroupReadPass(fields, this.fieldGroupDataService);
     const sourceRedactions: ReadAccessRedactions = new WeakMap();
+    // The field groups' own store, so the Single's second pass can be shown
+    // what their first pass removed; see `withFieldGroupEvidence`.
+    const fieldGroupRedactions: ReadAccessRedactions = new WeakMap();
     const fieldGroupCaller = {
       user: fieldAccessUser,
       authenticatedScope: options.authenticatedScope,
       grants: fieldAccess.grants,
-      redactions: sourceRedactions,
+      redactions: fieldGroupRedactions,
     };
     await applyFieldReadAccess(fieldAccess, sourceRedactions);
     await fieldGroupPass?.(doc, fieldGroupCaller);
@@ -926,7 +932,9 @@ export class SingleQueryService extends BaseService {
       user: options.user,
     });
 
-    await applyFieldReadAccess(fieldAccess, sourceRedactions);
+    await withFieldGroupEvidence(doc, fieldGroupRedactions, () =>
+      applyFieldReadAccess(fieldAccess, sourceRedactions)
+    );
     await fieldGroupPass?.(doc, fieldGroupCaller);
   }
 

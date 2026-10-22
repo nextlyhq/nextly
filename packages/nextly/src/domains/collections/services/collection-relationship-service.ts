@@ -62,6 +62,7 @@ import type { RBACAccessControlService } from "../../auth/services/rbac-access-c
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import {
   liveFieldGroupReadPass,
+  withFieldGroupEvidence,
   type LiveFieldGroupReadPass,
 } from "../../field-groups/live-read-access";
 import {
@@ -99,6 +100,12 @@ const SYSTEM_ENTITY_SECRET_COLUMNS = ["passwordHash", "password_hash"] as const;
 interface RelatedFieldGroupState {
   passes: Map<string, Promise<LiveFieldGroupReadPass | undefined>>;
   grants: () => Promise<CallerGrants>;
+  /**
+   * The field groups' own evidence, across every pass the walk makes: a later
+   * one restores what an earlier removed, and the entity's own pass is shown
+   * it too (`withFieldGroupEvidence`), since its store cannot hold it.
+   */
+  redactions: ReadAccessRedactions;
 }
 const relatedFieldGroupState = new WeakMap<object, RelatedFieldGroupState>();
 
@@ -3916,40 +3923,41 @@ export class CollectionRelationshipService extends BaseService {
     // one restores what an earlier removed as evidence and re-judges the current
     // content, so a denied field a hook reintroduced or a row it changed is
     // caught while an unchanged verdict stays put.
+    // What an earlier field-group pass on these rows removed, which the
+    // target's own rules are judged against as the row stores it.
+    const fieldGroupEvidence = relatedFieldGroupState.get(access)?.redactions;
     for (const row of rows) {
-      await applyFieldReadAccess(
-        {
-          kind: "collection",
-          slug: targetCollection,
-          entry: row,
-          // The field-access identity, never the hook one: a preview judges a
-          // related row's fields as the sharer while every hook goes on seeing
-          // the anonymous bearer who is actually asking.
-          user: access.fieldAccessUser ?? access.user,
-          overrideAccess: false,
-        },
-        redactions
-      );
+      const judge = () =>
+        applyFieldReadAccess(
+          {
+            kind: "collection",
+            slug: targetCollection,
+            entry: row,
+            // The field-access identity, never the hook one: a preview judges a
+            // related row's fields as the sharer while every hook goes on
+            // seeing the anonymous bearer who is actually asking.
+            user: access.fieldAccessUser ?? access.user,
+            overrideAccess: false,
+          },
+          redactions
+        );
+      await (fieldGroupEvidence
+        ? withFieldGroupEvidence(row, fieldGroupEvidence, judge)
+        : judge());
     }
-    await this.applyRelatedFieldGroupReadAccess(
-      targetCollection,
-      rows,
-      access,
-      redactions
-    );
+    await this.applyRelatedFieldGroupReadAccess(targetCollection, rows, access);
   }
 
   /**
    * Evaluate the rules on fields inside the field groups a related row holds,
    * by the TARGET collection's schema, so a populated row withholds what a
-   * direct read of it would. Shares the row's store with the pass above, so
-   * a later pass restores what an earlier one removed as evidence.
+   * direct read of it would. Its store, kept for the read, lets a later pass
+   * restore what an earlier one removed as evidence.
    */
   private async applyRelatedFieldGroupReadAccess(
     targetCollection: string,
     rows: Record<string, unknown>[],
-    access: RelatedRowAccess,
-    redactions?: ReadAccessRedactions
+    access: RelatedRowAccess
   ): Promise<void> {
     if (!anyFieldGroupHasAccessRule("read")) return;
     const user = access.fieldAccessUser ?? access.user;
@@ -3959,6 +3967,7 @@ export class CollectionRelationshipService extends BaseService {
       state = {
         passes: new Map(),
         grants: callerAccessGrants(user, access.authenticatedScope),
+        redactions: new WeakMap(),
       };
       relatedFieldGroupState.set(access, state);
     }
@@ -3973,7 +3982,7 @@ export class CollectionRelationshipService extends BaseService {
       user,
       authenticatedScope: access.authenticatedScope,
       grants: state.grants,
-      redactions,
+      redactions: state.redactions,
     };
     for (const row of rows) await pass(row, caller);
   }

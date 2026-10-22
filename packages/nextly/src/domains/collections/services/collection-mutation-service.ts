@@ -126,7 +126,10 @@ import {
   type WriteEventInput,
 } from "../../content-events/write-event";
 import type { DynamicCollectionService } from "../../dynamic-collections";
-import { withholdFieldGroupFields } from "../../field-groups/live-read-access";
+import {
+  liveFieldGroupReadPass,
+  sharedPerTransaction,
+} from "../../field-groups/live-read-access";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
@@ -3892,12 +3895,16 @@ export class CollectionMutationService extends BaseService {
     // access reads it from SQL, never from the returned row.
     stripServerOnlyColumns(entry, tableName);
     const trusted = params.overrideAccess && !params.routeAuthorized;
-    // One resolver for both passes: one authority, and one lookup.
-    const grants = callerAccessGrants(
-      params.user,
-      params.authenticatedScope,
-      executor
-    );
+    // One resolver for both passes: one authority, and one lookup, shared by
+    // every item a bulk write redacts inside its transaction. A key's grants
+    // travel on its scope and are read from nowhere, so they are not shared.
+    const userId = typeof params.user?.id === "string" ? params.user.id : "";
+    const makeGrants = () =>
+      callerAccessGrants(params.user, params.authenticatedScope, executor);
+    const grants =
+      params.authenticatedScope?.actorType === "apiKey"
+        ? makeGrants()
+        : sharedPerTransaction(executor, `grants:${userId}`, makeGrants);
     await applyFieldReadAccess({
       kind: "collection",
       slug,
@@ -3909,21 +3916,26 @@ export class CollectionMutationService extends BaseService {
     // The fields inside the field groups the entry holds, by their own rules,
     // as a read of the document would judge them: a response never echoes a
     // field-group value the writer may not read.
+    // The schemas are resolved once per transaction for each collection.
     const service = this.fieldGroupDataService;
     if (!trusted) {
-      await withholdFieldGroupFields(
-        [entry],
-        fields as FieldConfig[],
-        service && {
-          getComponentFields: componentSlug =>
-            service.getComponentFields(componentSlug, executor),
-        },
-        {
-          user: params.user,
-          authenticatedScope: params.authenticatedScope,
-          grants,
-        }
+      const fieldGroupPass = await sharedPerTransaction(
+        executor,
+        `fieldGroupReadPass:${slug}`,
+        () =>
+          liveFieldGroupReadPass(
+            fields as FieldConfig[],
+            service && {
+              getComponentFields: componentSlug =>
+                service.getComponentFields(componentSlug, executor),
+            }
+          )
       );
+      await fieldGroupPass?.(entry, {
+        user: params.user,
+        authenticatedScope: params.authenticatedScope,
+        grants,
+      });
     }
   }
 
