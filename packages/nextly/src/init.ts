@@ -105,6 +105,7 @@ const globalForInit = globalThis as unknown as {
   __nextly_cachedInstance?: Nextly | null;
   __nextly_drizzleVersionChecked?: boolean;
   __nextly_initPromise?: Promise<Nextly> | null;
+  __nextly_serverStartRegisterObserved?: boolean;
 };
 
 // ============================================================
@@ -547,19 +548,21 @@ export async function getCachedNextly(): Promise<Nextly> {
 }
 
 /**
- * Whether a start begun elsewhere — what an `instrumentation.ts` `register()`
- * runs, or any `getNextly({ config })` call — is still under way in this
- * process.
+ * Whether a start the project's instrumentation began — a `register()` that
+ * `createRegister()` built — has run in this process, be it still under way
+ * or already finished.
  *
- * A synchronous observation of the in-flight promise, for a caller that must
- * say what it saw at one instant rather than wait for the answer: a start
- * that has not called `getNextly` at all yet is NOT in flight, and this
- * returns `false` for it, because nothing in this process can distinguish
- * that window from no start existing. `getCachedNextly()` is the waiting
- * form; this is the observing one.
+ * The server-start origin is what this records, because the in-flight
+ * promise alone cannot say it: `getNextly({ config })` is also the documented
+ * request-time API, and one request calling it while another reaches the
+ * request-path boot is not a server-start boot, whatever the timing. The
+ * flag is set as `register()`'s first statement, before its dynamic imports,
+ * so a request arriving in the window before the start has called Nextly at
+ * all still finds it — the earlier of the two windows a first request can
+ * race. On `globalThis` for the reason the rest of the boot state is.
  */
-export function isNextlyStartInFlight(): boolean {
-  return globalForInit.__nextly_initPromise != null;
+export function hasServerStartRegisterRun(): boolean {
+  return globalForInit.__nextly_serverStartRegisterObserved === true;
 }
 
 /**
@@ -590,6 +593,10 @@ export function createRegister(
   config: SanitizedNextlyConfig
 ): () => Promise<void> {
   return async function register() {
+    // Before the first await, so the whole of register() — its dynamic
+    // imports included — reads as a server-start start to anything that
+    // asks while it runs (`hasServerStartRegisterRun`).
+    globalForInit.__nextly_serverStartRegisterObserved = true;
     await getNextly({ config });
   };
 }

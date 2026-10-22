@@ -1,4 +1,4 @@
-import { isNextlyStartInFlight } from "../init";
+import { hasServerStartRegisterRun } from "../init";
 import { consoleLogger } from "../shared/types";
 
 /**
@@ -7,10 +7,12 @@ import { consoleLogger } from "../shared/types";
  * Two situations reach the request-path boot with nothing registered, and
  * only one of them is the reader's problem. A project with no start at its
  * server's start pays per-worker introspection and seeding on first traffic,
- * and the file advice is for it. A project whose start is already under way —
- * the instrumentation `register()` has called Nextly and has not finished —
- * pays nothing extra: its start folds that work into one warmup, and the
- * request simply arrived inside it, the same race the health route waits out.
+ * and the file advice is for it — including when the in-flight boot another
+ * request began is request-time `getNextly({ config })`, which folds nothing:
+ * only a start whose origin is the project's instrumentation
+ * (`createRegister`) counts as a server-start boot. A project whose
+ * instrumentation start has begun pays nothing extra: the request simply
+ * arrived inside it, the same race the health route waits out.
  *
  * The notice therefore reports what this process observed, never an absence
  * it inferred: no filesystem check says whether `instrumentation.ts` exists,
@@ -18,7 +20,8 @@ import { consoleLogger } from "../shared/types";
  * worker that has not reached it — and a start can be loading, not yet
  * visible, when the request arrives. The add-the-file advice stays
  * conditional guidance for a project with no such start, and the wording
- * never claims the file was missing.
+ * never claims the file was missing — nor, in the other direction, that
+ * nothing is: a start observed says only that it was observed.
  */
 export function warnColdBootNotice(): void {
   // Gate on `=== "development"` (not `!== "production"`) to match
@@ -32,13 +35,11 @@ export function warnColdBootNotice(): void {
     return;
   }
 
-  if (isNextlyStartInFlight()) {
+  if (hasServerStartRegisterRun()) {
     consoleLogger.warn(
       "[nextly] Cold-boot triggered by an incoming request that arrived " +
-        "before Nextly finished starting — a start was already under way in " +
-        "this process, and this request continues once it has. Nothing is " +
-        "missing: that start folds schema introspection and permission " +
-        "seeding into a single worker warmup."
+        "before Nextly finished starting — a start was observed under way " +
+        "in this process, and this request continues once it has."
     );
     return;
   }
