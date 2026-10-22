@@ -19,7 +19,7 @@ import { callerMayPerform } from "../../auth/authenticated-scope";
 import { authorizationGroups } from "../../auth/entity-read-access";
 import { getService } from "../../di";
 
-import type { ConditionProbe } from "./condition-probe";
+import type { ConditionProbe, RegistryAnswer } from "./condition-probe";
 import type {
   GetStartedAnswer,
   GetStartedStep,
@@ -70,8 +70,10 @@ async function entryStep(
 ): Promise<GetStartedStep | undefined> {
   const content = await probe.hasContent();
   if (content === true) return step("entry", "done");
-  if (content === "unknown") return step("entry", "unknown");
-  return (await probe.mayCreateEntry()) ? step("entry", "open") : undefined;
+  // Waiting or not known, the step is still an offer to add an entry, so only
+  // a reader who could add one is given it.
+  if (!(await probe.mayCreateEntry())) return undefined;
+  return step("entry", content === "unknown" ? "unknown" : "open");
 }
 
 /**
@@ -211,8 +213,21 @@ async function singleSteps(probe: ConditionProbe): Promise<GetStartedStep[]> {
 
   let saved: ReadonlySet<string>;
   try {
+    // Each Single's saves counted from when it was registered, so a Single
+    // deleted and made again is not ticked by its predecessor's. Both instants
+    // are the server's clock, written as each row was. Were they ever apart,
+    // the cutoff landing late drops only the first saves of a Single, which
+    // the fallback then answers from its stored instants; landing early it
+    // could count the predecessor's saves only from those last moments before
+    // the slug was registered again. A Single the registry gives no instant
+    // for is left to the fallback.
+    const registered = await getService(
+      "singleRegistryService"
+    ).registeredInstants(offered);
     saved =
-      await getService("activityLogService").singlesWithRecordedSaves(offered);
+      await getService("activityLogService").singlesWithRecordedSaves(
+        registered
+      );
   } catch {
     return offered.map(slug => step("single", "unknown", slug));
   }
@@ -263,34 +278,69 @@ function notKnown(kind: GetStartedStepKind) {
   return (): GetStartedStep => step(kind, "unknown");
 }
 
+/** The registry read a deadline left unanswered: not listed. */
+function unlisted(): RegistryAnswer {
+  return { slugs: [], reachable: false };
+}
+
 /**
  * Every step this reader is offered, with what each says, before any of the
  * reader's skips.
  *
  * The four kinds are asked together, so the slowest bounds the answer rather
- * than their sum: each is held to the content check's bound and budget.
+ * than their sum, and the whole answer is held to one deadline: the layout
+ * read waits on it, so a stalled permission check, trail query or users read
+ * must not stall the dashboard. What has not answered by `budgetMs` is not
+ * known, as a check that failed is: a registry is not listed, a step is
+ * "unknown", and the Singles make the whole answer not known. A query already
+ * running then cannot be cancelled: it finishes, and its answer is ignored.
  */
 export async function getStartedSteps(
-  probe: ConditionProbe
+  probe: ConditionProbe,
+  budgetMs: number = CONTENT_CHECK_BUDGET_MS
 ): Promise<GetStartedAnswer> {
-  const [collections, singles, collection, entry, perSingle, invite] =
-    await Promise.all([
-      probe.collectionsRead(),
-      probe.singlesRead(),
-      collectionStep(probe).catch(notKnown("collection")),
-      entryStep(probe).catch(notKnown("entry")),
-      // `undefined` when the Singles' steps could not be worked out at all: the
-      // answer as a whole is then not known, rather than missing those steps.
-      singleSteps(probe).catch(() => undefined),
-      inviteStep(probe).catch(notKnown("invite")),
-    ]);
-  const steps = [collection, entry, ...(perSingle ?? []), invite].filter(
-    (offered): offered is GetStartedStep => offered !== undefined
-  );
-  return tallied(
-    !collections.reachable || !singles.reachable || perSingle === undefined,
-    steps
-  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>(resolve => {
+    timer = setTimeout(resolve, budgetMs);
+    // An answer reached in a millisecond must not hold the process open for the rest of the budget.
+    timer.unref?.();
+  });
+  const byDeadline = <T>(work: Promise<T>, late: () => T): Promise<T> =>
+    Promise.race([work, deadline.then(late)]);
+  try {
+    const [collections, singles, collection, entry, perSingle, invite] =
+      await Promise.all([
+        byDeadline(probe.collectionsRead(), unlisted),
+        byDeadline(probe.singlesRead(), unlisted),
+        byDeadline(
+          collectionStep(probe).catch(notKnown("collection")),
+          notKnown("collection")
+        ),
+        byDeadline(
+          entryStep(probe).catch(notKnown("entry")),
+          notKnown("entry")
+        ),
+        // `undefined` when the Singles' steps could not be worked out at all:
+        // the answer as a whole is then not known, rather than missing those steps.
+        byDeadline(
+          singleSteps(probe).catch(() => undefined),
+          () => undefined
+        ),
+        byDeadline(
+          inviteStep(probe).catch(notKnown("invite")),
+          notKnown("invite")
+        ),
+      ]);
+    const steps = [collection, entry, ...(perSingle ?? []), invite].filter(
+      (offered): offered is GetStartedStep => offered !== undefined
+    );
+    return tallied(
+      !collections.reachable || !singles.reachable || perSingle === undefined,
+      steps
+    );
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function tallied(unknown: boolean, steps: GetStartedStep[]): GetStartedAnswer {

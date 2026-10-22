@@ -925,28 +925,43 @@ export class ActivityLogService extends BaseService {
   }
 
   /**
-   * Which of `singles` the trail has recorded a save of, in ONE query.
+   * Which Singles the trail has recorded a save of since each was registered,
+   * in ONE query: `since` maps each Single to the instant it was registered.
    *
    * A Single is saved by a named writer through `recordSingleActivity`, which
    * files a row naming it with `subjectKind: "single"`; one such row is enough.
-   * Asked for every Single at once, with `IN` and `DISTINCT`, because the
-   * setup steps ask it on every layout read and one query per Single would make
-   * a site with many Singles pay for each of them, every time the dashboard
-   * opens. No caller scope: whether a document was ever saved is not the
-   * document, and the caller is already one who may update it.
+   * Asked for every Single at once, with `DISTINCT`, because the setup steps
+   * ask it on every layout read and one query per Single would make a site with
+   * many Singles pay for each of them, every time the dashboard opens. No
+   * caller scope: whether a document was ever saved is not the document, and
+   * the caller is already one who may update it.
+   *
+   * 🔴 Only rows from `since` on. A Single deleted and created again under its
+   * slug keeps the trail's record of the one before, since the trail is a
+   * record and deletion does not rewrite it; counted, that record would tick a
+   * Single nobody has saved. Each instant is compared as a database instant,
+   * as the feed's own window is. A row within the same instant counts.
    */
   async singlesWithRecordedSaves(
-    singles: readonly string[]
+    since: ReadonlyMap<string, Date>
   ): Promise<Set<string>> {
-    // An empty `IN ()` is a syntax error on some dialects: answered without a query.
-    if (singles.length === 0) return new Set();
+    // An empty disjunction matches nothing on some dialects and everything on
+    // others: answered without a query.
+    if (since.size === 0) return new Set();
     const rows = await this.adapter.select<{ collection: string }>(TABLE, {
       columns: ["collection"],
       distinct: true,
       where: {
         and: [
           { column: "subjectKind", op: "=", value: "single" },
-          { column: "collection", op: "IN", value: [...singles] },
+          {
+            or: [...since].map(([single, registered]) => ({
+              and: [
+                { column: "collection", op: "=", value: single },
+                { column: "createdAt", op: ">=", value: registered },
+              ],
+            })),
+          },
         ],
       },
     });

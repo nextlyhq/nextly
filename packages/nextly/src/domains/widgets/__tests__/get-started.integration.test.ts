@@ -3,7 +3,8 @@
  *
  * What only a booted instance can show: that "fill in a Single" is answered by
  * the trail's record of a save, even one made in the second the Single was
- * created; that a Single saved before the trail recorded saves still counts
+ * created, and never by a save of an earlier Single under its slug; that a
+ * Single saved before the trail recorded saves still counts
  * from its stored instants, and one never saved stays waiting; that each step
  * is offered only to a reader who could finish it; and that registries which
  * cannot be listed make setup "not known", which holds the setup condition.
@@ -217,6 +218,32 @@ describe.each(getConfiguredTestDialects())(
       // The must-differ half: the same Single, its instants equal, is waiting.
       await setWrittenAfterCreated(h, false);
       expect((await statusesFor(h.owner)).byKey[`single:${HOME}`]).toBe("open");
+    });
+
+    it("does not tick a Single from the saves of the one its slug named before", async () => {
+      const h = await boot(dialect);
+      await saveHome(h);
+      await setWrittenAfterCreated(h, false);
+      // As a Single deleted and made again under its slug: the registry's row
+      // is newer than the save the trail kept. Written through the registry's
+      // own column, as registering writes it, so the instant and the trail's
+      // are compared as the server stored them; run off UTC, a skew between the
+      // two would show here or in the same-second case above.
+      await h.t.adapter.update(
+        "dynamic_singles",
+        { created_at: new Date(Date.now() + 60_000) },
+        { and: [{ column: "slug", op: "=", value: HOME }] }
+      );
+
+      expect((await statusesFor(h.owner)).byKey[`single:${HOME}`]).toBe("open");
+
+      // The must-differ half: a save of the Single as it is now counts.
+      await h.t.adapter.update(
+        "dynamic_singles",
+        { created_at: new Date(Date.now() - 60_000) },
+        { and: [{ column: "slug", op: "=", value: HOME }] }
+      );
+      expect((await statusesFor(h.owner)).byKey[`single:${HOME}`]).toBe("done");
     });
 
     it("ticks the first entry from collection entries only, and inviting from a second account", async () => {

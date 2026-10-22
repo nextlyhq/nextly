@@ -8,7 +8,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { mayPerform, services } = vi.hoisted(() => ({
   mayPerform: vi.fn(),
   services: {
-    singleRegistryService: { getSingleBySlug: vi.fn() },
+    singleRegistryService: {
+      getSingleBySlug: vi.fn(),
+      registeredInstants: vi.fn(),
+    },
     adapter: { selectOne: vi.fn(), select: vi.fn() },
     activityLogService: { singlesWithRecordedSaves: vi.fn() },
   },
@@ -72,6 +75,9 @@ function probeOf(world: World): ConditionProbe {
 
 const at = (iso: string) => new Date(iso);
 
+/** When every Single in the fixtures was registered. */
+const REGISTERED = at("2025-12-31T00:00:00Z");
+
 beforeEach(() => {
   vi.clearAllMocks();
   published.clear();
@@ -80,6 +86,10 @@ beforeEach(() => {
     new Set()
   );
   services.adapter.select.mockResolvedValue([{ id: "u1" }]);
+  services.singleRegistryService.registeredInstants.mockImplementation(
+    async (slugs: readonly string[]) =>
+      new Map(slugs.map(slug => [slug, REGISTERED]))
+  );
 });
 
 /** The statuses by step key, for one reader. */
@@ -137,6 +147,14 @@ describe("adding a first entry", () => {
       (await statusesFor({ content: "unknown", createEntry: true })).byKey.entry
     ).toBe("unknown");
   });
+
+  it("is not offered as not known to a reader who could not add an entry", async () => {
+    // Not known is still an offer to add an entry, and one this reader's
+    // write would refuse.
+    expect(
+      (await statusesFor({ content: "unknown", createEntry: false })).byKey
+    ).not.toHaveProperty("entry");
+  });
 });
 
 describe("filling in each Single", () => {
@@ -177,9 +195,18 @@ describe("filling in each Single", () => {
     expect(
       services.activityLogService.singlesWithRecordedSaves
     ).toHaveBeenCalledTimes(1);
+    // Each offered Single's saves are counted from when it was registered.
+    expect(
+      services.singleRegistryService.registeredInstants
+    ).toHaveBeenCalledWith(["home", "about"]);
     expect(
       services.activityLogService.singlesWithRecordedSaves
-    ).toHaveBeenCalledWith(["home", "about"]);
+    ).toHaveBeenCalledWith(
+      new Map([
+        ["home", REGISTERED],
+        ["about", REGISTERED],
+      ])
+    );
     // The fallback read only the Single the trail had no record of.
     expect(services.adapter.selectOne).toHaveBeenCalledTimes(1);
     expect(services.adapter.selectOne).toHaveBeenCalledWith(
@@ -208,6 +235,43 @@ describe("filling in each Single", () => {
   it("is not known for a Single whose table is not known to match, or whose read failed", async () => {
     published.delete("home");
     services.adapter.selectOne.mockRejectedValue(new Error("no such table"));
+    const { byKey } = await statusesFor({ singles });
+    expect(byKey["single:home"]).toBe("unknown");
+    expect(byKey["single:about"]).toBe("unknown");
+  });
+
+  it("asks the trail only for Singles the registry gave an instant for, and the fallback for the rest", async () => {
+    // A trail row about a slug cannot be told apart from one about an earlier
+    // Single of that slug without the instant, so none is counted for it.
+    services.singleRegistryService.registeredInstants.mockResolvedValue(
+      new Map([["home", REGISTERED]])
+    );
+    services.activityLogService.singlesWithRecordedSaves.mockResolvedValue(
+      new Set(["home"])
+    );
+    services.adapter.selectOne.mockResolvedValue({
+      created_at: at("2026-01-01T00:00:00Z"),
+      updated_at: at("2026-01-02T00:00:00Z"),
+    });
+
+    const { byKey } = await statusesFor({ singles });
+
+    expect(
+      services.activityLogService.singlesWithRecordedSaves
+    ).toHaveBeenCalledWith(new Map([["home", REGISTERED]]));
+    expect(byKey["single:home"]).toBe("done");
+    // Answered from its own stored instants.
+    expect(byKey["single:about"]).toBe("done");
+    expect(services.adapter.selectOne).toHaveBeenCalledWith(
+      "single_about",
+      expect.anything()
+    );
+  });
+
+  it("is not known when the registry's instants could not be read", async () => {
+    services.singleRegistryService.registeredInstants.mockRejectedValue(
+      new Error("down")
+    );
     const { byKey } = await statusesFor({ singles });
     expect(byKey["single:home"]).toBe("unknown");
     expect(byKey["single:about"]).toBe("unknown");
@@ -378,6 +442,45 @@ describe("answering each Single within a bound and a budget", () => {
           ["slow", "unknown"],
         ])
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("the whole answer's deadline", () => {
+  it("reads every branch not answered by the deadline as not known, never complete", async () => {
+    vi.useFakeTimers();
+    try {
+      const never = <T>() => new Promise<T>(() => {});
+      // Each branch stalls on a read the earlier bounds never covered: a
+      // permission check, the content check, the Singles' registry, the users read.
+      mayPerform.mockImplementation(() => never());
+      const probe: ConditionProbe = {
+        ...probeOf({}),
+        mayCreateCollection: () => never(),
+        hasContent: () => never(),
+        singlesRead: () => never(),
+      };
+      const pending = getStartedSteps(probe, 100);
+      await vi.advanceTimersByTimeAsync(100);
+      const answer = await pending;
+
+      expect(answer.unknown).toBe(true);
+      expect(
+        Object.fromEntries(answer.steps.map(step => [step.key, step.status]))
+      ).toEqual({ collection: "unknown", entry: "unknown", invite: "unknown" });
+      expect(answer.done).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves no timer behind once the answer is in", async () => {
+    vi.useFakeTimers();
+    try {
+      await getStartedSteps(probeOf({ content: true }), 100);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }

@@ -47,6 +47,18 @@
 import type { ConditionProbe } from "./condition-probe";
 import type { OnboardingStep } from "./onboarding-steps";
 
+/** The checklist's steps, and whether setup could be checked at all. */
+export interface OnboardingProgress {
+  steps: OnboardingStep[];
+  /**
+   * Whether the install's collections or Singles could not be listed, as the
+   * Get started answer says. The rows cannot say "not known", so the card has
+   * to be told: with it unsaid, every row a reader finished reads as a
+   * finished setup while the condition goes on offering the card.
+   */
+  unknown: boolean;
+}
+
 /**
  * Every step this checklist draws, with the reader's progress through it.
  *
@@ -58,12 +70,12 @@ import type { OnboardingStep } from "./onboarding-steps";
  * told the first-entry step is outstanding.
  *
  * Only the steps this list names. A step whose state is not known is not
- * complete here: this list has no way to say "not known", and drawing it done
- * would be the worse error.
+ * complete here: this list has no way to say "not known" per row, and drawing
+ * it done would be the worse error.
  */
-export async function onboardingSteps(
+export async function onboardingProgress(
   probe: ConditionProbe
-): Promise<OnboardingStep[]> {
+): Promise<OnboardingProgress> {
   const answer = await probe.getStarted();
   // True by construction: an unauthenticated caller never reaches this, and
   // no permission gates having made the account one is already using.
@@ -72,20 +84,21 @@ export async function onboardingSteps(
     const offered = answer.steps.find(candidate => candidate.kind === id);
     if (offered) steps.push({ id, complete: offered.status === "done" });
   }
-  return steps;
+  return { steps, unknown: answer.unknown };
 }
 
 /**
  * Whether this reader still has onboarding left to do.
  *
- * DERIVED from the steps rather than computed beside them, so the condition
- * cannot drop the card while a row on it is still unticked, or keep a card
- * whose every row is done.
+ * DERIVED from the progress the card draws rather than computed beside it, so
+ * the condition cannot drop the card while a row on it is still unticked, or
+ * keep a card that has nothing to say.
  *
  * 🔴 True when setup is NOT KNOWN. The install's collections or Singles could
  * not be listed, so whether anything is left cannot be said, and a card that
  * vanished on that basis would hide the one place that tells the reader so.
- * "Not known" must never read as "finished".
+ * "Not known" must never read as "finished", which is why the progress carries
+ * it to the card as well.
  *
  * Reader-scoped through the steps themselves: a step this reader cannot
  * perform is not in the list, so it cannot hold the condition true.
@@ -93,8 +106,6 @@ export async function onboardingSteps(
 export async function onboardingIsIncomplete(
   probe: ConditionProbe
 ): Promise<boolean> {
-  const answer = await probe.getStarted();
-  if (answer.unknown) return true;
-  const steps = await onboardingSteps(probe);
-  return steps.some(step => !step.complete);
+  const progress = await onboardingProgress(probe);
+  return progress.unknown || progress.steps.some(step => !step.complete);
 }

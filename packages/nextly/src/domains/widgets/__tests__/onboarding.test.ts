@@ -1,12 +1,12 @@
 /**
  * The checklist's steps are DERIVED from the Get started answer, and a setup
- * that is not known holds `onboarding:incomplete`.
+ * that is not known holds `onboarding:incomplete` and is carried to the card.
  */
 import { describe, expect, it } from "vitest";
 
 import type { ConditionProbe } from "../condition-probe";
 import type { GetStartedAnswer } from "../get-started-steps";
-import { onboardingIsIncomplete, onboardingSteps } from "../onboarding";
+import { onboardingIsIncomplete, onboardingProgress } from "../onboarding";
 
 function probeAnswering(answer: GetStartedAnswer): ConditionProbe {
   const unused = () => Promise.reject(new Error("not under test"));
@@ -33,7 +33,7 @@ const known = (statuses: Array<["collection" | "entry" | "invite", string]>) =>
 
 describe("the checklist's steps", () => {
   it("are the answer's collection and entry steps, after the account", async () => {
-    const steps = await onboardingSteps(
+    const { steps } = await onboardingProgress(
       probeAnswering(
         known([
           ["collection", "done"],
@@ -52,11 +52,34 @@ describe("the checklist's steps", () => {
 
   it("leave out a step the answer did not offer", async () => {
     expect(
-      await onboardingSteps(probeAnswering(known([["collection", "done"]])))
+      (
+        await onboardingProgress(
+          probeAnswering(known([["collection", "done"]]))
+        )
+      ).steps
     ).toEqual([
       { id: "account", complete: true },
       { id: "collection", complete: true },
     ]);
+  });
+
+  it("carry a setup that is not known to the card, though every row reads done", async () => {
+    // 🔴 The condition holds the card while setup is not known. Were the card
+    // handed the rows alone, it would draw them all ticked and ask for a
+    // layout that offers it again.
+    const progress = await onboardingProgress(
+      probeAnswering({ ...known([["collection", "done"]]), unknown: true })
+    );
+    expect(progress.steps.every(step => step.complete)).toBe(true);
+    expect(progress.unknown).toBe(true);
+    // The must-differ half: a setup that was checked says so.
+    expect(
+      (
+        await onboardingProgress(
+          probeAnswering(known([["collection", "done"]]))
+        )
+      ).unknown
+    ).toBe(false);
   });
 });
 
