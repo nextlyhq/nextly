@@ -30,6 +30,7 @@ import {
   buildCompanionTransitionStatements,
   type FieldRename,
 } from "../../i18n/migration/reconcile-companion";
+import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
 import {
   companionHasStatusColumn,
   liveCompanionShape,
@@ -95,6 +96,16 @@ export async function reconcileSingleCompanion(
   // The seed (enable) and restore (disable) copy the default-locale value to/from the companion;
   // read the configured default locale (falls back to "en" when localization isn't configured).
   const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
+
+  // A translated field made unique is refused before any DDL on a server that cannot key its index.
+  refuseUnindexableTranslatedUnique(adapter, {
+    entity: slug,
+    builtBy: "collection",
+    oldFields,
+    newFields,
+    wasLocalized,
+    isLocalized: localized,
+  });
 
   const plan = buildCompanionTransitionStatements({
     // The companion mirrors the main table, and a single's table comes from the same builder as a collection's.

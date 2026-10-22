@@ -15,7 +15,14 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
-import type { UniqueTranslatedColumn } from "./companion-unique-indexes";
+import { NextlyError } from "../../../errors/nextly-error";
+import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
+
+import {
+  uniqueTranslatedColumns,
+  type UniqueFieldLike,
+  type UniqueTranslatedColumn,
+} from "./companion-unique-indexes";
 
 /** The documents in one language that share a value of a field, by id. */
 export interface TranslatedDuplicate {
@@ -58,6 +65,58 @@ export function refusalsForUnindexableTranslatedUnique(
       `This database server cannot create one (it needs MySQL 8.0.13 or later). Remove Unique, ` +
       `or make the field shared.`,
   }));
+}
+
+/** A change to an entity's fields, as the unique-within-each-language preconditions read it. */
+export interface TranslatedUniqueChange {
+  /** The collection, Single or field group, named in a refusal's log. */
+  entity: string;
+  builtBy: ColumnOrigin;
+  oldFields: readonly UniqueFieldLike[];
+  newFields: readonly UniqueFieldLike[];
+  wasLocalized: boolean;
+  isLocalized: boolean;
+}
+
+/**
+ * Refuses a change that makes a translated field unique within each language on a server that
+ * cannot key the index (`refusalsForUnindexableTranslatedUnique`), before anything runs. Every
+ * path that creates or changes a companion asks it, so none reaches the server's own error
+ * part-way through. A field already translated and unique was checked when it became so.
+ *
+ * Judged by the flags first, so a change that marks nothing unique asks the adapter nothing.
+ *
+ * @returns the fields the change makes unique, for a caller that checks more
+ * @throws NextlyError `VALIDATION_ERROR` naming each field the server cannot index
+ */
+export function refuseUnindexableTranslatedUnique(
+  adapter: DrizzleAdapter,
+  change: TranslatedUniqueChange
+): UniqueTranslatedColumn[] {
+  if (!change.isLocalized || !change.newFields.some(f => f.unique === true))
+    return [];
+  const dialect = adapter.getCapabilities().dialect;
+  const columnsOf = (fields: readonly UniqueFieldLike[], localized: boolean) =>
+    uniqueTranslatedColumns({
+      fields,
+      entityLocalized: localized,
+      dialect,
+      builtBy: change.builtBy,
+    });
+  const already = new Set(
+    columnsOf(change.oldFields, change.wasLocalized).map(c => c.field)
+  );
+  const becoming = columnsOf(change.newFields, true).filter(
+    c => !already.has(c.field)
+  );
+  const refusals = refusalsForUnindexableTranslatedUnique(adapter, becoming);
+  if (refusals.length > 0) {
+    throw NextlyError.validation({
+      errors: refusals,
+      logContext: { entity: change.entity, fields: refusals.map(r => r.path) },
+    });
+  }
+  return becoming;
 }
 
 /** The documents in each language that already share a value of one of `columns`. */

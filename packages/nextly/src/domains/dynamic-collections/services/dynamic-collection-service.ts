@@ -23,10 +23,7 @@ import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
-import {
-  companionUniqueIndexStatements,
-  uniqueTranslatedColumns,
-} from "../../i18n/migration/companion-unique-indexes";
+import { companionUniqueIndexStatements } from "../../i18n/migration/companion-unique-indexes";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import {
   buildFieldsJoiningTranslationStatements,
@@ -38,7 +35,7 @@ import {
   type FieldRename,
   fieldsLeavingTranslation,
 } from "../../i18n/migration/reconcile-companion";
-import { refusalsForUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
+import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
 import {
   companionColumnNames,
   companionHasColumn,
@@ -792,22 +789,14 @@ export class DynamicCollectionService extends BaseService {
     if (!spec) return migrationSQL;
     // A translated field marked unique is unique within each language: its index is created with
     // the companion, which is new, so none exists yet. Refused first on a server that cannot key it.
-    const unique = uniqueTranslatedColumns({
-      fields: opts.fields,
-      entityLocalized: true,
-      dialect: this.adapter.dialect,
+    const unique = refuseUnindexableTranslatedUnique(this.adapter, {
+      entity: slug,
       builtBy: "collection",
+      oldFields: [],
+      newFields: opts.fields,
+      wasLocalized: false,
+      isLocalized: true,
     });
-    const refusals = refusalsForUnindexableTranslatedUnique(
-      this.adapter,
-      unique
-    );
-    if (refusals.length > 0) {
-      throw NextlyError.validation({
-        errors: refusals,
-        logContext: { collection: slug, fields: refusals.map(r => r.path) },
-      });
-    }
     // Separate each statement with the breakpoint marker so the runner executes it as its own
     // statement (a multi-statement chunk is rejected by drivers with multi-statements disabled,
     // e.g. MySQL).

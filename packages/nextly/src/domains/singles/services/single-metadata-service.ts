@@ -58,6 +58,7 @@ import type { Logger } from "../../../shared/types";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
+import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
 import {
   applyMigrationStatements,
   applyMigrationWhole,
@@ -345,6 +346,19 @@ export class SingleMetadataService {
     // renderer, so a request it refuses leaves nothing behind at all — no row, no table — and the
     // corrected retry is a fresh create rather than a collision with its own wreckage.
     const plan = await this.planCreate(input);
+    // A translated field marked unique needs an index this server may not be able to key. Refused
+    // here, before the main table: the companion is provisioned after it, and a failure there is
+    // recorded rather than raised. With no adapter, nothing is applied at all.
+    if (this.adapter) {
+      refuseUnindexableTranslatedUnique(this.adapter, {
+        entity: input.slug,
+        builtBy: "collection",
+        oldFields: [],
+        newFields: plan.fields,
+        wasLocalized: false,
+        isLocalized: plan.isLocalized,
+      });
+    }
 
     // 2. CLEAR THE GROUND. A table already standing where this create is about to build is never
     // adopted: empty, it is dropped so the apply renders every column from THIS request's fields;

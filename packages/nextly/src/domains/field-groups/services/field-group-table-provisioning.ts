@@ -20,6 +20,7 @@ import {
   buildCompanionTransitionStatements,
   type FieldRename,
 } from "../../i18n/migration/reconcile-companion";
+import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
 import { liveCompanionShape } from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 
@@ -170,6 +171,16 @@ export async function reconcileComponentCompanion(args: {
 
   const dialect = adapter.dialect;
   const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
+
+  // A translated field made unique is refused before any DDL on a server that cannot key its index.
+  refuseUnindexableTranslatedUnique(adapter, {
+    entity: slug,
+    builtBy: "fieldGroup",
+    oldFields,
+    newFields,
+    wasLocalized,
+    isLocalized: localized,
+  });
 
   const companionExists = await adapter.tableExists(`${tableName}_locales`);
   const plan = buildCompanionTransitionStatements({

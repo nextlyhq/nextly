@@ -5,6 +5,8 @@
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
+import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -167,4 +169,108 @@ describeEachDialect("a translated unique field", dialect => {
     expect(unmade.success, JSON.stringify(unmade)).toBe(true);
     expect((await write("en", { handle: "about" })).success).toBe(true);
   });
+
+  /** Runs a statement on the test database, for rows only an embedding entry's save would write. */
+  async function query<T>(sql: string): Promise<T[]> {
+    return (
+      current.adapter as unknown as {
+        executeQuery<R>(statement: string): Promise<R[]>;
+      }
+    ).executeQuery<T>(sql);
+  }
+
+  const quoted = (name: string) =>
+    dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+
+  /** A row of the field group, and its text in one language. */
+  async function writeBanner(id: string, locale: string, heading: string) {
+    const columns = (names: string[]) => names.map(quoted).join(", ");
+    await query(
+      `INSERT INTO ${quoted("comp_banner")} (${columns(["id", "_parent_id", "_parent_table", "_parent_field"])}) ` +
+        `VALUES ('${id}', 'entry-${id}', 'dc_pages', 'banner')`
+    );
+    await query(
+      `INSERT INTO ${quoted("comp_banner_locales")} (${columns(["_parent", "_locale", "heading"])}) ` +
+        `VALUES ('${id}', '${locale}', '${heading}')`
+    );
+  }
+
+  it("holds a field group's translated unique field within each language", async () => {
+    await dispatchComponents(
+      "createComponent",
+      {},
+      {
+        slug: "banner",
+        label: "Banner",
+        localized: true,
+        fields: [{ name: "heading", type: "text", unique: true }],
+      }
+    );
+    await writeBanner("b1", "en", "Sale");
+    await writeBanner("b2", "fr", "Sale");
+
+    // Refused by the companion's index, on every dialect's own wording for it.
+    await expect(writeBanner("b3", "en", "Sale")).rejects.toThrow(
+      /unique|duplicate/i
+    );
+  });
+
+  const UNIQUE_HEADING = [
+    { name: "heading", type: "text", unique: true },
+  ] as const;
+
+  /** Each Builder entity whose create provisions its companion after its main table. */
+  const CREATES = [
+    {
+      entity: "field group",
+      table: "comp_banner",
+      create: () =>
+        dispatchComponents(
+          "createComponent",
+          {},
+          {
+            slug: "banner",
+            label: "Banner",
+            localized: true,
+            fields: [...UNIQUE_HEADING],
+          }
+        ),
+    },
+    {
+      entity: "Single",
+      table: "single_hero",
+      create: () =>
+        dispatchSingles(
+          "createSingle",
+          {},
+          {
+            slug: "hero",
+            label: "Hero",
+            localized: true,
+            fields: [...UNIQUE_HEADING],
+          }
+        ),
+    },
+  ];
+
+  it.skipIf(dialect !== "mysql").each(CREATES)(
+    "refuses a $entity's translated unique field where the server cannot key its index, before any table",
+    async ({ table, create }) => {
+      // MariaDB answers as MySQL and has no functional key parts.
+      const capabilities = current.adapter.getCapabilities();
+      vi.spyOn(current.adapter, "getCapabilities").mockReturnValue({
+        ...capabilities,
+        functionalIndexes: false,
+      });
+
+      const said = await create().then(
+        result => JSON.stringify(result),
+        (error: { publicData?: unknown }) => JSON.stringify(error.publicData)
+      );
+
+      expect(said).toMatch(/UNIQUE_NOT_ENFORCEABLE_ON_DIALECT/);
+      expect(await current.adapter.tableExists(table)).toBe(false);
+      expect(await current.adapter.tableExists(`${table}_locales`)).toBe(false);
+    }
+  );
 });
