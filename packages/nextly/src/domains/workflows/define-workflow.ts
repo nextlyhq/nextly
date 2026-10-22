@@ -510,16 +510,24 @@ function checkWhole(problems: Problems, workflow: Workflow): void {
     {
       path: "afterPublish",
       code: "workflow_after_publish_publishable",
+      stage: workflow.afterPublish,
       why: "a new draft would start already approved",
     },
     {
       path: "approvalsWithdrawnTo",
       code: "workflow_approvals_withdrawn_to_publishable",
+      stage: workflow.approvalsWithdrawnTo,
       why: "a part whose approval was withdrawn would stay publishable",
     },
-  ] as const;
-  for (const { path, code, why } of unapproved) {
-    const stage = workflow.stages.find(each => each.name === workflow[path]);
+    {
+      path: "onEdit.to",
+      code: "workflow_on_edit_to_publishable",
+      stage: workflow.onEdit.to,
+      why: "an edited part would stay publishable without review (fields an edit may change freely go in `onEdit.exemptFields`)",
+    },
+  ];
+  for (const { path, code, stage: name, why } of unapproved) {
+    const stage = workflow.stages.find(each => each.name === name);
     if (stage?.allowsPublish === true) {
       problems.add(
         path,

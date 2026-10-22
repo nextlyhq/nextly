@@ -313,8 +313,11 @@ export async function publishConfiguredWorkflows(
         configResult.config,
         configResult.configPath ?? null,
         // A command reads no database: the components the configuration
-        // defines are judged from their definitions.
-        { componentsFrom: configResult.config.fieldGroups ?? [] }
+        // defines are judged from their definitions, and any other at boot.
+        {
+          components: configResult.config.fieldGroups ?? [],
+          readRegistry: false,
+        }
       )
     );
   } catch (error) {

@@ -4,7 +4,18 @@
  * why, and the registry carries each workflow's hash, configuration path and
  * attachments.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// The component registry, for the components a configuration does not define.
+const { getComponentBySlug } = vi.hoisted(() => ({
+  getComponentBySlug: vi.fn(),
+}));
+
+vi.mock("../../../di", () => ({
+  getService: vi.fn((name: string) =>
+    name === "fieldGroupRegistryService" ? { getComponentBySlug } : {}
+  ),
+}));
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { workflowAttachmentsOf, type WorkflowTarget } from "../attachments";
@@ -65,6 +76,7 @@ async function asyncRefusalOf(run: () => Promise<unknown>): Promise<string[]> {
 
 afterEach(() => {
   publishWorkflows(new Map());
+  getComponentBySlug.mockReset();
 });
 
 describe("workflowAttachmentsOf", () => {
@@ -86,27 +98,19 @@ describe("workflowAttachmentsOf", () => {
     expect(attached[0]?.workflow).toBe(review);
   });
 
-  it("refuses a collection with no Draft/Published lifecycle, saying why", () => {
+  it("leaves whether a target can keep drafts to the registry, which asks the draft split", async () => {
+    // One place decides it: the configuration's own check holds no copy of
+    // the rule, and the registry refuses the same attachment.
+    const config = {
+      collections: [target("posts", reviewWorkflow(), { status: false })],
+    };
+    expect(workflowAttachmentsOf(config)).toHaveLength(1);
     expect(
-      refusalOf(() =>
-        workflowAttachmentsOf({
-          collections: [target("posts", reviewWorkflow(), { status: false })],
-        })
+      await asyncRefusalOf(() =>
+        buildWorkflowRegistry(config, null, { readRegistry: false })
       )
     ).toEqual([
       "collections.posts.workflow: `review` cannot be attached to `posts`: it has no Draft/Published lifecycle: set `status: true`.",
-    ]);
-  });
-
-  it("refuses a Single that does not keep drafts, saying why", () => {
-    expect(
-      refusalOf(() =>
-        workflowAttachmentsOf({
-          singles: [target("home", reviewWorkflow(), { versions: false })],
-        })
-      )
-    ).toEqual([
-      "singles.home.workflow: `review` cannot be attached to `home`: it does not keep drafts: set `versions: { drafts: true }`.",
     ]);
   });
 
@@ -182,6 +186,20 @@ describe("workflowAttachmentsOf", () => {
 });
 
 describe("the workflow registry", () => {
+  it("refuses a Single that does not keep drafts, saying why", async () => {
+    expect(
+      await asyncRefusalOf(() =>
+        buildWorkflowRegistry(
+          { singles: [target("home", reviewWorkflow(), { versions: false })] },
+          null,
+          { readRegistry: false }
+        )
+      )
+    ).toEqual([
+      "singles.home.workflow: `review` cannot be attached to `home`: it does not keep drafts: set `status: true` and `versions: { drafts: true }`.",
+    ]);
+  });
+
   it("carries each workflow's definition hash, configuration path and attachments", async () => {
     const review = reviewWorkflow();
     const registry = await buildWorkflowRegistry(
@@ -213,7 +231,7 @@ describe("the workflow registry", () => {
             ],
           },
           null,
-          { componentsFrom: [] }
+          { readRegistry: false }
         )
       )
     ).toEqual([
@@ -240,7 +258,7 @@ describe("the workflow registry", () => {
             ],
           },
           null,
-          { componentsFrom: [credentials] }
+          { components: [credentials], readRegistry: false }
         )
       )
     ).toEqual([
@@ -255,9 +273,43 @@ describe("the workflow registry", () => {
           ],
         },
         null,
-        { componentsFrom: [{ slug: "credentials", fields: [TITLE] }] }
+        {
+          components: [{ slug: "credentials", fields: [TITLE] }],
+          readRegistry: false,
+        }
       )
     ).resolves.toHaveProperty("size", 1);
+    expect(getComponentBySlug).not.toHaveBeenCalled();
+  });
+
+  it("reads a component the configuration does not define from the registry, and the configuration's own over the registry's", async () => {
+    const fields = [
+      TITLE,
+      { name: "login", type: "component", component: "credentials" },
+      { name: "hero", type: "component", component: "hero" },
+    ] as unknown as FieldConfig[];
+    // Every component the registry holds has a password field. `credentials`
+    // was made in the admin, so only the registry knows it.
+    getComponentBySlug.mockResolvedValue({
+      fields: [{ name: "secret", type: "password" }],
+    });
+    const config = {
+      collections: [target("accounts", reviewWorkflow(), { fields })],
+    };
+    expect(
+      await asyncRefusalOf(() =>
+        buildWorkflowRegistry(config, null, {
+          // `hero` is being changed in this configuration: the registry's older
+          // definition, with its password field, is not the one judged.
+          components: [{ slug: "hero", fields: [TITLE] }],
+        })
+      )
+    ).toEqual([
+      "collections.accounts.workflow: `review` cannot be attached to `accounts`: its component `credentials` has a password field, so it cannot keep a draft beside the live version.",
+    ]);
+    expect(getComponentBySlug.mock.calls.map(([slug]) => slug)).toEqual([
+      "credentials",
+    ]);
   });
 
   it("answers the workflow a collection or Single is attached to once published", async () => {

@@ -348,6 +348,14 @@ describe("defineWorkflow", () => {
       );
     });
 
+    it("refuses an edit-after-approval stage that allows publishing", () => {
+      expect(problemsOf({ ...base(), onEdit: { to: "approved" } })).toEqual([
+        "onEdit.to: `approved` allows publishing, so an edited part would stay publishable without review (fields an edit may change freely go in `onEdit.exemptFields`); name a stage before review.",
+      ]);
+      // A stage before review is accepted.
+      expect(problemsOf({ ...base(), onEdit: { to: "inReview" } })).toEqual([]);
+    });
+
     it("refuses an after-publish stage that itself allows publishing", () => {
       expect(problemsOf({ ...base(), afterPublish: "approved" })).toContain(
         "afterPublish: `approved` allows publishing, so a new draft would start already approved; name a stage before review."

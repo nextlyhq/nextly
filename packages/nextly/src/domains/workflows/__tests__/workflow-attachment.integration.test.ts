@@ -1,11 +1,19 @@
 /**
  * One workflow attached to a collection and a Single, registered at boot on
  * every dialect, and an attachment to a collection that cannot keep drafts
- * refused at boot, saying why.
+ * refused at boot, saying why, before the boot writes anything.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { defineCollection, defineSingle, text } from "../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  defineSingle,
+  fieldGroup,
+  password,
+  text,
+} from "../../../config";
+import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -18,6 +26,7 @@ import { registeredWorkflows, workflowAttachedTo } from "../registry";
 let current: TestNextly | undefined;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await current?.destroy();
   current = undefined;
 });
@@ -89,11 +98,53 @@ describe.each(getConfiguredTestDialects())(
             {
               path: "collections.notes.workflow",
               message:
-                "`review` cannot be attached to `notes`: it does not keep drafts: set `versions: { drafts: true }`.",
+                "`review` cannot be attached to `notes`: it does not keep drafts: set `status: true` and `versions: { drafts: true }`.",
             },
           ],
         },
       });
+    });
+
+    it("refuses a component's password field before it syncs any component", async () => {
+      // The boot's component sync is its first write of a component; a boot
+      // refused for one must not have reached it.
+      const sync = vi.spyOn(
+        FieldGroupRegistryService.prototype,
+        "syncCodeFirstComponents"
+      );
+      const boot = createTestNextly({
+        dialect,
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "credentials",
+            fields: [password({ name: "secret" })],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "members",
+            status: true,
+            versions: { drafts: true },
+            workflow: reviewWorkflow(),
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "login", component: "credentials" }),
+            ],
+          }),
+        ],
+      });
+      await expect(boot).rejects.toMatchObject({
+        publicData: {
+          errors: [
+            {
+              path: "collections.members.workflow",
+              message:
+                "`review` cannot be attached to `members`: its component `credentials` has a password field, so it cannot keep a draft beside the live version.",
+            },
+          ],
+        },
+      });
+      expect(sync).not.toHaveBeenCalled();
     });
   }
 );

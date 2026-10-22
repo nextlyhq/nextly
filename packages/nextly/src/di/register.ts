@@ -131,6 +131,7 @@ import { registerResolvedSource } from "../domains/widgets/resolved-sources";
 import {
   buildWorkflowRegistry,
   publishWorkflows,
+  type RegisteredWorkflow,
 } from "../domains/workflows/registry";
 import { NextlyError } from "../errors/nextly-error";
 import { getEventBus } from "../events/event-bus";
@@ -2076,6 +2077,13 @@ async function syncCodeFirstEntities(
   transformedConfig: NextlyServiceConfig
 ): Promise<{ databaseNotSetUp: boolean }> {
   // ----------------------------------------
+  // Layer 3.9: Judge the workflows
+  // ----------------------------------------
+  // Before anything below writes: a configuration whose workflows are refused
+  // must leave the registries and tables as it found them.
+  const workflows = await judgeWorkflows(transformedConfig);
+
+  // ----------------------------------------
   // Layer 4: Sync Code-First Collections
   // ----------------------------------------
   const bootTableWork = emptyBootTableWork();
@@ -2118,12 +2126,9 @@ async function syncCodeFirstEntities(
   await createMissingCodeFirstTables(adapter, logger, bootTableWork);
 
   // ----------------------------------------
-  // Layer 6.2: Register the workflows
+  // Layer 6.2: Register the workflows judged above, once the syncs landed
   // ----------------------------------------
-  await registerWorkflows(
-    transformedConfig,
-    collectionsNotSetUp || singlesNotSetUp
-  );
+  publishWorkflows(workflows);
 
   // Whether either sync found the registries not yet created: a fresh
   // database, before migrations and `/setup` have run. Reported so a check
@@ -3153,26 +3158,17 @@ function registerCodeDefinedAccess(
 }
 
 /**
- * Register each attached workflow, with its definition hash and the
- * configuration file that registers it, refusing the boot when an attachment
- * cannot keep drafts. After the components sync, so a component an attached
- * collection reaches is judged too; on a database not set up yet the
- * component registry cannot be read, and the configuration's own rules are
- * the ones judged.
+ * Each attached workflow, with its definition hash and the configuration file
+ * that registers it, refusing the boot when an attachment cannot keep drafts.
+ * Reads only: a component the configuration defines is judged as written,
+ * before the sync stores it, and any other from the registry.
  */
-async function registerWorkflows(
-  transformedConfig: NextlyServiceConfig,
-  databaseNotSetUp: boolean
-): Promise<void> {
-  publishWorkflows(
-    await buildWorkflowRegistry(transformedConfig, await bootConfigPath(), {
-      // The registry once it can be read; until then, the components the
-      // configuration defines.
-      componentsFrom: databaseNotSetUp
-        ? (transformedConfig.fieldGroups ?? [])
-        : "registry",
-    })
-  );
+async function judgeWorkflows(
+  transformedConfig: NextlyServiceConfig
+): Promise<ReadonlyMap<string, RegisteredWorkflow>> {
+  return buildWorkflowRegistry(transformedConfig, await bootConfigPath(), {
+    components: transformedConfig.fieldGroups ?? [],
+  });
 }
 
 /**

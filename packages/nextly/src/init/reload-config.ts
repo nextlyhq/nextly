@@ -1560,12 +1560,13 @@ async function applyReloadHolding(
     // refusal is another save of one of these same files.
     const { watchLoadedConfig } = await import("../runtime/hmr-listener");
     watchLoadedConfig(result);
-    // Judged against the components this reload defines, not the registry,
-    // which still holds the ones in force before it.
+    // Judged against the components this reload defines, which the registry
+    // does not hold yet, and the registry's for any other, such as one made
+    // in the admin.
     stagedWorkflows = await buildWorkflowRegistry(
       result.config,
       result.configPath ?? null,
-      { componentsFrom: result.config.fieldGroups ?? [] }
+      { components: result.config.fieldGroups ?? [] }
     );
     newConfig = (
       result as {

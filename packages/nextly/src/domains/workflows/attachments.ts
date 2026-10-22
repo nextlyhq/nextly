@@ -1,14 +1,12 @@
 /**
  * Which collections and Singles a workflow is attached to, and whether each
- * may have one.
+ * attachment is a sound workflow from `defineWorkflow`.
  *
- * A workflow decides when pending content may be published, so it needs the
- * content kept as a draft beside the live version. A collection or Single
- * without that is refused when the configuration is assembled, saying which
- * condition it misses. Pure, and reaching no server module, because
- * `defineConfig` runs it and `nextly/config` is a client entry: the parts of
- * the rule that need the server (a password field, a component) are judged
- * at boot and in `nextly build` (`attachment-eligibility`).
+ * Pure, and reaching no server module, because `defineConfig` runs it and
+ * `nextly/config` is a client entry. Whether a collection or Single can keep
+ * the drafts a workflow needs is not judged here: it is the draft split's own
+ * question, asked once, by the registry at boot, on hot reload and in
+ * `nextly build` (`registry.ts`).
  *
  * @module domains/workflows/attachments
  * @experimental
@@ -18,7 +16,6 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { NextlyError } from "../../errors";
 import type { VersionsConfig } from "../../schemas/versions/types";
 import { canonicalJson } from "../../shared/lib/canonical-json";
-import { resolveVersionsConfig } from "../versions/resolve-config";
 
 import { workflowProblems } from "./define-workflow";
 import type { Workflow } from "./types";
@@ -58,24 +55,8 @@ interface AttachmentProblem {
 }
 
 /**
- * Why `target`'s configuration cannot keep drafts beside its live version,
- * or `null` when it asks for them: the lifecycle off, or drafts off.
- */
-function draftsProblem(target: WorkflowTarget): string | null {
-  if (target.status !== true) {
-    return "it has no Draft/Published lifecycle: set `status: true`.";
-  }
-  const versions = resolveVersionsConfig(target.versions, target.status);
-  if (versions?.drafts.enabled !== true) {
-    return "it does not keep drafts: set `versions: { drafts: true }`.";
-  }
-  return null;
-}
-
-/**
  * The problems with one attachment, at `path`: a value not from
- * `defineWorkflow`, a definition that does not pass its checks, or a target
- * that cannot keep drafts.
+ * `defineWorkflow`, or a definition that does not pass its checks.
  */
 function attachmentProblems(
   target: WorkflowTarget & { workflow: Workflow },
@@ -92,22 +73,10 @@ function attachmentProblems(
   }
   // Checked again here, whatever its marker says: a value built by hand
   // carries the same marker without having been through `defineWorkflow`.
-  const unsound = workflowProblems(target.workflow);
-  if (unsound.length > 0) {
-    return unsound.map(problem => ({
-      ...problem,
-      path: problem.path === "" ? path : `${path}.${problem.path}`,
-    }));
-  }
-  const why = draftsProblem(target);
-  if (why === null) return [];
-  return [
-    {
-      path,
-      code: "workflow_needs_drafts",
-      message: `\`${target.workflow.slug}\` cannot be attached to \`${target.slug}\`: ${why}`,
-    },
-  ];
+  return workflowProblems(target.workflow).map(problem => ({
+    ...problem,
+    path: problem.path === "" ? path : `${path}.${problem.path}`,
+  }));
 }
 
 /** The problems with each attachment of one kind of target. */
@@ -164,10 +133,9 @@ function collect(
 }
 
 /**
- * The configuration's workflows and their attachments, refusing any
- * attachment to a collection or Single that cannot keep drafts beside the
- * live version, and two definitions sharing a slug. Each error names its
- * place (`collections.posts.workflow`) and what is missing.
+ * The configuration's workflows and their attachments, refusing a value that
+ * is not a sound workflow and two definitions sharing a slug. Each error
+ * names its place (`collections.posts.workflow`).
  *
  * @experimental
  */

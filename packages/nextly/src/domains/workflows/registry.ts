@@ -4,9 +4,10 @@
  * the collections and Singles it is attached to.
  *
  * Built at boot and on every hot reload from the configuration as loaded,
- * plugins' contributions included, and checked in full there: what the
- * configuration alone cannot show (a password field, a component that cannot
- * keep a draft) is judged here, once the component registry is read.
+ * plugins' contributions included, and checked in full there, before any of
+ * it is written: whether each attachment can keep drafts is asked of the
+ * draft split's own predicate, with the configuration's components and the
+ * registry's.
  *
  * @module domains/workflows/registry
  * @experimental
@@ -14,15 +15,13 @@
 
 import type { FieldConfig } from "../../collections/fields/types";
 import { NextlyError } from "../../errors";
-import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
 import {
   evaluateDraftSplitEligibility,
-  schemaDraftSplit,
   type DraftSplitDisabledReason,
   type DraftSplitEligibility,
 } from "../versions/draft-split-eligibility";
 import { resolveVersionsConfig } from "../versions/resolve-config";
-import type { ComponentSchemas } from "../versions/restore-snapshot";
+import { resolveComponentSchemas } from "../versions/restore-version";
 
 import { workflowAttachmentsOf, type WorkflowTarget } from "./attachments";
 import { workflowDefinitionHash } from "./hash";
@@ -45,9 +44,11 @@ export interface RegisteredWorkflow {
 
 /** What each draft-split refusal means for an attachment. */
 const NOT_ELIGIBLE: Record<
-  DraftSplitDisabledReason,
+  DraftSplitDisabledReason | "drafts-off",
   (component: string | null) => string
 > = {
+  "drafts-off": () =>
+    "it does not keep drafts: set `status: true` and `versions: { drafts: true }`.",
   "lifecycle-disabled": () =>
     "it has no Draft/Published lifecycle: set `status: true`.",
   "password-field": component =>
@@ -62,7 +63,7 @@ const NOT_ELIGIBLE: Record<
 
 /**
  * A component as the configuration defines it: what the draft split reads of
- * one when the registry is not the source.
+ * one before, or instead of, the registry.
  *
  * @experimental
  */
@@ -73,58 +74,28 @@ export interface ConfiguredComponent {
 }
 
 /**
- * Where an attachment's components are read from: the live component
- * registry, or the components the configuration itself defines.
+ * Where an attachment's components are read from.
  *
  * @experimental
  */
-export type WorkflowComponentSource =
-  | "registry"
-  | readonly ConfiguredComponent[];
-
-/**
- * The components `fields` reach, read from the configuration's own
- * definitions, nested ones included. A component the configuration does not
- * define is left out rather than marked unresolved: it may have been made in
- * the admin, and boot judges it from the registry.
- */
-function configuredComponentSchemas(
-  fields: readonly FieldConfig[],
-  components: readonly ConfiguredComponent[]
-): ComponentSchemas {
-  const bySlug = new Map(
-    components.map(component => [component.slug, component])
-  );
-  const schemas: ComponentSchemas = new Map();
-  const visit = (list: readonly FieldConfig[]): void => {
-    for (const field of list) {
-      const { single, many } = extractFieldGroupReferences(field);
-      for (const slug of [
-        ...(single === undefined ? [] : [single]),
-        ...(many ?? []),
-      ]) {
-        const component = bySlug.get(slug);
-        if (component === undefined || schemas.has(slug)) continue;
-        schemas.set(slug, {
-          fields: [...component.fields],
-          localized: component.localized === true,
-          resolved: true,
-        });
-        visit(component.fields);
-      }
-      const nested = (field as { fields?: unknown }).fields;
-      if (Array.isArray(nested)) visit(nested as FieldConfig[]);
-    }
-  };
-  visit(fields);
-  return schemas;
+export interface WorkflowComponentSource {
+  /**
+   * The components the configuration defines, judged as written: they may not
+   * be synced to the registry yet, or may be changing in this very reload.
+   */
+  components?: readonly ConfiguredComponent[];
+  /**
+   * Whether a component the configuration does not define, such as one made
+   * in the admin, is read from the registry. Off where no database is read (a
+   * build); such a component is then judged at boot.
+   */
+  readRegistry?: boolean;
 }
 
 /**
- * Whether `target` can keep drafts, by the draft split's own rules, with its
- * components read from `source`: the live registry at boot, and the
- * configuration's own definitions where the registry is not the answer (a
- * build, a hot reload of a changed component, a database not set up yet).
+ * Whether `target` can keep drafts, by the draft split's own predicate, with
+ * its components read from `source`. The one place an attachment's
+ * eligibility is decided.
  */
 async function draftSplitOf(
   target: WorkflowTarget,
@@ -132,23 +103,33 @@ async function draftSplitOf(
   source: WorkflowComponentSource
 ): Promise<DraftSplitEligibility> {
   const versions = resolveVersionsConfig(target.versions, target.status);
-  if (source !== "registry") {
-    return evaluateDraftSplitEligibility({
-      collectionHasStatus: target.status === true,
-      draftsVersioningEnabled: versions?.drafts.enabled === true,
-      fields: [...target.fields],
-      componentSchemas: configuredComponentSchemas(target.fields, source),
-      entityKind: kind,
-      documentLocalized: target.localized === true,
-    });
-  }
-  return schemaDraftSplit({
-    status: target.status,
-    versions,
+  const input = {
+    collectionHasStatus: target.status === true,
+    draftsVersioningEnabled: versions?.drafts.enabled === true,
     fields: [...target.fields],
-    slug: target.slug,
-    localized: target.localized === true,
     entityKind: kind,
+    documentLocalized: target.localized === true,
+  };
+  // The predicate stops at those first, so a target they already refuse
+  // reads no components.
+  const asks = input.collectionHasStatus && input.draftsVersioningEnabled;
+  return evaluateDraftSplitEligibility({
+    ...input,
+    componentSchemas: asks
+      ? await resolveComponentSchemas(input.fields, {
+          known: new Map(
+            (source.components ?? []).map(component => [
+              component.slug,
+              {
+                fields: [...component.fields],
+                localized: component.localized === true,
+                resolved: true,
+              },
+            ])
+          ),
+          readRegistry: source.readRegistry !== false,
+        })
+      : null,
   });
 }
 
@@ -159,8 +140,8 @@ async function eligibilityProblem(
   source: WorkflowComponentSource
 ): Promise<string | null> {
   const result = await draftSplitOf(target, kind, source);
-  if (result.eligible || result.reason === null) return null;
-  return NOT_ELIGIBLE[result.reason](result.componentSlug);
+  if (result.eligible) return null;
+  return NOT_ELIGIBLE[result.reason ?? "drafts-off"](result.componentSlug);
 }
 
 /** Every attachment the server refuses, each at its place. */
@@ -195,7 +176,9 @@ async function serverProblems(
 /**
  * The registry for `config`: each attached workflow with its hash, path and
  * attachments. Refuses the configuration, every problem listed, when an
- * attachment cannot keep drafts or two definitions share a slug.
+ * attachment cannot keep drafts or two definitions share a slug. Reads
+ * nothing but the registry, so a caller can judge a configuration before it
+ * writes any of it.
  *
  * @experimental
  */
@@ -205,15 +188,12 @@ export async function buildWorkflowRegistry(
     singles?: readonly WorkflowTarget[];
   },
   configPath: string | null,
-  options: { componentsFrom?: WorkflowComponentSource } = {}
+  source: WorkflowComponentSource = {}
 ): Promise<ReadonlyMap<string, RegisteredWorkflow>> {
   // The configuration's own checks first: plugins' collections never passed
   // through `defineConfig`.
   const attached = workflowAttachmentsOf(config);
-  const problems = await serverProblems(
-    config,
-    options.componentsFrom ?? "registry"
-  );
+  const problems = await serverProblems(config, source);
   if (problems.length > 0) {
     throw NextlyError.validation({ errors: problems });
   }
