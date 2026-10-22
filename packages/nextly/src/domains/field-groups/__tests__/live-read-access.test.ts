@@ -56,6 +56,28 @@ describe("withFieldGroupEvidence", () => {
     expect(instance.heading).toBe("h");
   });
 
+  it("keeps a value recorded as evidence when the pass finds it allowed and clears the record", async () => {
+    const instance: Record<string, unknown> = { heading: "h" };
+    const row: Record<string, unknown> = { one: instance };
+    const redactions: ReadAccessRedactions = new WeakMap();
+    redactions.set(instance, { secret: "S" });
+
+    // A pass that judges the value allowed treats it as the row's own and
+    // drops its record, as `applyFieldReadAccess` does.
+    await withFieldGroupEvidence(row, redactions, async () => {
+      redactions.delete(instance);
+    });
+
+    // Out of the row, but still evidence for the next pass over it.
+    expect(instance).not.toHaveProperty("secret");
+    expect(redactions.get(instance)).toEqual({ secret: "S" });
+    let seen: unknown;
+    await withFieldGroupEvidence(row, redactions, async () => {
+      seen = instance.secret;
+    });
+    expect(seen).toBe("S");
+  });
+
   it("leaves a value the pass replaced as the pass left it", async () => {
     const instance: Record<string, unknown> = {};
     const redactions: ReadAccessRedactions = new WeakMap();
