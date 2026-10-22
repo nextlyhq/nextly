@@ -73,6 +73,7 @@ import {
   passwordFieldNames,
   type EntryFormIntent,
 } from "@admin/components/features/entries/EntryForm/useEntryForm";
+import { useRefusedForm } from "@admin/components/features/entries/EntryForm/useRefusedForm";
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
 import { LanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
@@ -101,6 +102,7 @@ import {
   useDocumentAutosave,
 } from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
@@ -185,9 +187,14 @@ export interface SingleFormProps {
   schema: SingleSchema;
   /** Current document data */
   document: SingleDocumentData;
-  /** Callback when form is successfully submitted */
+  /**
+   * Writes a submission. With the values, the form itself: a publish refused
+   * over out-of-date shared fields is resolved on the form as it is when the
+   * author acts on the refusal, not as it was submitted.
+   */
   onSubmit: (
-    data: Record<string, unknown>
+    data: Record<string, unknown>,
+    form: RefusedForm
   ) => Promise<SingleDocumentData | void>;
   /** Whether the form is currently submitting */
   isSubmitting?: boolean;
@@ -534,10 +541,26 @@ export function SingleForm({
   const ownSave = useRef<{ inFlight: boolean; storedKey?: string }>({
     inFlight: false,
   });
+
+  // The form as a refused publish's way out reaches it: saved as the pending
+  // change the way a status-less save sends it, and given the live values it
+  // takes when the Single carrying them arrives.
+  const { refusedForm, adoptArrived } = useRefusedForm(form, values =>
+    withoutPlaceholders(
+      schema.fields,
+      mapIntentToPayload(values, "save-working-draft", blankPasswordFields)
+    )
+  );
+
   useEffect(() => {
     if (!document) return;
     const resetKey = singleResetKey(document, locale);
-    if (lastResetKeyRef.current === resetKey) return;
+    if (lastResetKeyRef.current === resetKey) {
+      // Taking the live values keeps the Single's key, so there is no reset
+      // to follow; the fields taken still have to show what arrived.
+      adoptArrived(defaultValuesRef.current);
+      return;
+    }
     const place = JSON.stringify([document.id, locale ?? null]);
     const sameDocument = lastResetPlaceRef.current === place;
     lastResetKeyRef.current = resetKey;
@@ -546,7 +569,8 @@ export function SingleForm({
       sameDocument &&
       (ownSave.current.inFlight || resetKey === ownSave.current.storedKey);
     form.reset(defaultValuesRef.current, { keepDirtyValues: echoOfOwnSave });
-  }, [document, locale, form]);
+    adoptArrived(defaultValuesRef.current);
+  }, [document, locale, form, adoptArrived]);
 
   // submitCount gates the top-level "Please fix" toast so the user
   // doesn't see it until they actually click Save Draft / Publish.
@@ -675,7 +699,8 @@ export function SingleForm({
             // placeholder and written as the reference it stands for.
             ownSave.current.inFlight = true;
             const stored = await onSubmit(
-              withoutPlaceholders(schema.fields, data)
+              withoutPlaceholders(schema.fields, data),
+              refusedForm
             ).finally(() => {
               ownSave.current.inFlight = false;
             });
@@ -709,6 +734,7 @@ export function SingleForm({
     [
       form,
       onSubmit,
+      refusedForm,
       blankPasswordFields,
       busy,
       writesHeld,

@@ -77,7 +77,9 @@ describe("SingleForm — links the editor cannot see", () => {
         headline: "Hello again",
         featured: [{ id: "p1", title: "Page one" }, "p2"],
         brand: { logo: "m1" },
-      })
+      }),
+      // The form comes with the values, for a refused publish's way out.
+      expect.anything()
     );
     expect(
       screen.getByRole("group", { name: "Restricted or missing item p2" })
@@ -197,7 +199,9 @@ describe("SingleForm — links the editor cannot see", () => {
         blocks: [
           expect.objectContaining({ _componentType: "card", pages: ["p3"] }),
         ],
-      })
+      }),
+      // The form comes with the values, for a refused publish's way out.
+      expect.anything()
     );
     expect(
       screen.getByRole("group", { name: "Restricted or missing item p2" })

@@ -10,16 +10,23 @@
  * holds the value it replaced, and the editor reloads to show the result.
  *
  * The refused request saved nothing, so what the author typed may exist only
- * in the form. Before taking, the refused values are saved as the pending
- * change (without publishing); the reload would otherwise replace them.
+ * in the form. Before taking, the form is saved as the pending change (without
+ * publishing), as it is when the action is taken rather than as it was
+ * refused: the author may have kept editing, and the reload would otherwise
+ * replace those edits. Once taken, the form shows the live values of the
+ * fields taken: the reloaded document has the same identity as the one on
+ * screen, so the editor would otherwise keep the stale value it held, and the
+ * next Publish would put it back live.
  *
  * The toast stays until it is acted on or closed: an action in a toast that
- * vanishes on a timer can be missed.
+ * vanishes on a timer can be missed. There is one per document and language,
+ * a newer refusal replacing an older one, and it closes when the editor leaves
+ * that document or language, whose form its action would no longer reach.
  *
  * @module hooks/useSharedFieldsRecovery
  */
 
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 
 import { toast } from "@admin/components/ui";
 import { useLocalization } from "@admin/hooks/useLocalization";
@@ -75,11 +82,37 @@ interface LabelledFieldConfig {
 }
 
 /**
+ * The editor's form, as the recovery reaches it when its action is taken.
+ */
+export interface RefusedForm {
+  /**
+   * The form's values now, as a save of the pending change sends them (no
+   * status, so nothing is published). Rejects when the form's own checks
+   * refuse them, which the form then shows.
+   */
+  pendingChangeNow: () => Promise<Record<string, unknown>>;
+  /**
+   * Show the live values of these fields once the reloaded document arrives,
+   * keeping every other edit.
+   */
+  adoptTaken: (fields: readonly string[]) => void;
+}
+
+/** The refusal toast of one document in one language. */
+function refusalToastId(scope: VersionScope, locale?: string): string {
+  const document =
+    scope.kind === "collection"
+      ? [scope.kind, scope.slug, scope.entryId]
+      : [scope.kind, scope.slug, scope.documentId];
+  return JSON.stringify(["shared-fields-out-of-date", ...document, locale]);
+}
+
+/**
  * A handler for a failed save or publish: when the failure is the
  * out-of-date refusal, it shows the refusal with "Take the live values" and
  * answers true; otherwise it answers false and the caller reports the error
- * as before. `saveRefused` saves the refused request's values as the pending
- * change, without publishing, before the live values are taken.
+ * as before. The action saves the form's values, read when it is taken, as
+ * the pending change, takes the live values, and has the form show them.
  */
 export function useSharedFieldsRecovery(args: {
   /** The document; null while it has no id yet. */
@@ -88,14 +121,28 @@ export function useSharedFieldsRecovery(args: {
   locale?: string;
   /** The document's fields, for their labels. */
   fields: readonly LabelledFieldConfig[];
+  /** Save values as the pending change, without publishing. */
+  save: (values: Record<string, unknown>) => Promise<unknown>;
   /** Reload the editor once the live values are taken. */
   onTaken: () => void;
-}): (error: unknown, saveRefused: () => Promise<unknown>) => boolean {
-  const { scope, locale, fields, onTaken } = args;
+}): (error: unknown, form: RefusedForm) => boolean {
+  const { scope, locale, fields, save, onTaken } = args;
   const { getLocale, defaultLocale } = useLocalization();
+  // A string, so the effect below follows the document's address rather than
+  // the scope object, which callers build afresh on every render.
+  const toastId = scope ? refusalToastId(scope, locale) : null;
+
+  // The toast's action saves this editor's form; once the editor shows
+  // another document or language, or none, that form is not the refused one.
+  useEffect(
+    () => () => {
+      if (toastId) toast.dismiss(toastId);
+    },
+    [toastId]
+  );
 
   return useCallback(
-    (error: unknown, saveRefused: () => Promise<unknown>) => {
+    (error: unknown, form: RefusedForm) => {
       const stale = outOfDateSharedFields(error);
       if (!stale || !scope) return false;
       const labelOf = (name: string) => {
@@ -111,8 +158,12 @@ export function useSharedFieldsRecovery(args: {
 
       const take = async () => {
         try {
-          await saveRefused();
+          // Read now, not when refused: edits made since are part of it.
+          await save(await form.pendingChangeNow());
           const { item } = await versionApi.takeLiveSharedValues(scope, locale);
+          // Before the reload, so the document it brings is the one the form
+          // takes the live values from.
+          form.adoptTaken(item.taken);
           toast.success(takenMessage(item, language, labelOf));
           onTaken();
         } catch (failure) {
@@ -125,6 +176,7 @@ export function useSharedFieldsRecovery(args: {
       toast.error(
         `${named} ${one ? "was" : "were"} published by someone else after this change began.`,
         {
+          id: refusalToastId(scope, locale),
           description: `Nothing was published. Take the live values into ${language}, then publish again.`,
           duration: Number.POSITIVE_INFINITY,
           closeButton: true,
@@ -138,7 +190,7 @@ export function useSharedFieldsRecovery(args: {
       );
       return true;
     },
-    [scope, locale, fields, onTaken, getLocale, defaultLocale]
+    [scope, locale, fields, save, onTaken, getLocale, defaultLocale]
   );
 }
 

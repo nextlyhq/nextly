@@ -1,14 +1,18 @@
 /**
  * A publish refused over shared values someone else published since offers
  * its way out on the refusal itself: the toast names the fields, stays until
- * acted on or closed, and its action saves the refused values as the pending
- * change before taking the live values, then reloads. Any other error is left
- * to the caller to report.
+ * acted on or closed, and its action saves what the form holds when it is
+ * taken as the pending change, takes the live values, has the form show them,
+ * then reloads. Any other error is left to the caller to report.
  */
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+const toast = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  dismiss: vi.fn(),
+}));
 vi.mock("@admin/components/ui", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/components/ui")>()),
   toast,
@@ -29,6 +33,7 @@ vi.mock("@admin/hooks/useLocalization", () => ({
 }));
 
 import {
+  type RefusedForm,
   takenMessage,
   useSharedFieldsRecovery,
 } from "../useSharedFieldsRecovery";
@@ -43,16 +48,35 @@ function refusal(data: Record<string, unknown>) {
   });
 }
 
-function renderRecovery(onTaken = vi.fn()) {
-  const { result } = renderHook(() =>
+function renderRecovery(
+  args: { onTaken?: () => void; save?: (values: unknown) => unknown } = {}
+) {
+  const rendered = renderHook(() =>
     useSharedFieldsRecovery({
       scope: { kind: "collection", slug: "authors", entryId: "e1" },
       locale: "es",
       fields: [{ name: "articleCount", label: "Article Count" }],
-      onTaken,
+      save: async values => args.save?.(values),
+      onTaken: args.onTaken ?? vi.fn(),
     })
   );
-  return result.current;
+  return { recover: rendered.result.current, unmount: rendered.unmount };
+}
+
+/** A form the recovery reads and updates, recording what it was asked. */
+function formHolding(
+  values: Record<string, unknown>,
+  order: string[] = []
+): RefusedForm {
+  return {
+    pendingChangeNow: vi.fn(async () => {
+      order.push("read");
+      return values;
+    }),
+    adoptTaken: vi.fn((fields: readonly string[]) => {
+      order.push(`adopt ${fields.join(",")}`);
+    }),
+  };
 }
 
 /** The toast's action, as sonner would call it. */
@@ -66,14 +90,14 @@ describe("useSharedFieldsRecovery", () => {
   });
 
   it("names the out-of-date fields in a toast that stays, with the action", () => {
-    const recover = renderRecovery();
+    const { recover } = renderRecovery();
     const handled = recover(
       refusal({
         reason: "shared-fields-out-of-date",
         fields: ["articleCount"],
         hiddenCount: 1,
       }),
-      vi.fn()
+      formHolding({})
     );
 
     expect(handled).toBe(true);
@@ -92,10 +116,11 @@ describe("useSharedFieldsRecovery", () => {
     });
   });
 
-  it("saves the refused values first, then takes the live values, then reloads", async () => {
+  it("saves what the form holds when the action is taken, then takes the live values, shows them, and reloads", async () => {
     const order: string[] = [];
-    const saveRefused = vi.fn(async () => {
+    const save = vi.fn((values: unknown) => {
       order.push("save");
+      return values;
     });
     take.mockImplementation(async () => {
       order.push("take");
@@ -105,19 +130,31 @@ describe("useSharedFieldsRecovery", () => {
       };
     });
     const onTaken = vi.fn(() => order.push("reload"));
-    const recover = renderRecovery(onTaken);
+    const { recover } = renderRecovery({ onTaken, save });
     recover(
       refusal({
         reason: "shared-fields-out-of-date",
         fields: ["articleCount"],
       }),
-      saveRefused
+      formHolding({ articleCount: 3, bio: "Typed after the refusal" }, order)
     );
 
+    // Nothing is read until the action is taken: the form may change first.
+    expect(order).toEqual([]);
     actionOf(toast.error.mock.calls[0])();
     await vi.waitFor(() => expect(onTaken).toHaveBeenCalled());
 
-    expect(order).toEqual(["save", "take", "reload"]);
+    expect(order).toEqual([
+      "read",
+      "save",
+      "take",
+      "adopt articleCount",
+      "reload",
+    ]);
+    expect(save).toHaveBeenCalledWith({
+      articleCount: 3,
+      bio: "Typed after the refusal",
+    });
     expect(take).toHaveBeenCalledWith(
       { kind: "collection", slug: "authors", entryId: "e1" },
       "es"
@@ -127,16 +164,16 @@ describe("useSharedFieldsRecovery", () => {
     );
   });
 
-  it("doesn't take the live values when saving the refused values fails", async () => {
-    const recover = renderRecovery();
+  it("doesn't take the live values when the form's values can't be saved", async () => {
+    const { recover } = renderRecovery({
+      save: () => Promise.reject(new Error("offline")),
+    });
     recover(
       refusal({
         reason: "shared-fields-out-of-date",
         fields: ["articleCount"],
       }),
-      vi.fn(async () => {
-        throw new Error("offline");
-      })
+      formHolding({ articleCount: 3 })
     );
 
     actionOf(toast.error.mock.calls[0])();
@@ -145,15 +182,56 @@ describe("useSharedFieldsRecovery", () => {
     expect(take).not.toHaveBeenCalled();
   });
 
+  it("doesn't save or take when the form fails its own checks", async () => {
+    const save = vi.fn();
+    const { recover } = renderRecovery({ save });
+    const form = formHolding({});
+    vi.mocked(form.pendingChangeNow).mockRejectedValue(
+      new Error("Some fields need attention before this can be saved.")
+    );
+    recover(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      form
+    );
+
+    actionOf(toast.error.mock.calls[0])();
+    await vi.waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2));
+
+    expect(save).not.toHaveBeenCalled();
+    expect(take).not.toHaveBeenCalled();
+  });
+
+  it("keeps one refusal toast per document and language, and closes it when the editor leaves", () => {
+    const { recover, unmount } = renderRecovery();
+    const stale = refusal({
+      reason: "shared-fields-out-of-date",
+      fields: ["articleCount"],
+    });
+    recover(stale, formHolding({}));
+    recover(stale, formHolding({}));
+
+    const ids = toast.error.mock.calls.map(
+      call => (call[1] as { id?: unknown }).id
+    );
+    expect(ids[0]).toEqual(expect.any(String));
+    expect(ids[1]).toBe(ids[0]);
+
+    unmount();
+    expect(toast.dismiss).toHaveBeenCalledWith(ids[0]);
+  });
+
   it("leaves any other error to the caller", () => {
-    const recover = renderRecovery();
+    const { recover } = renderRecovery();
     expect(
       recover(
         refusal({ reason: "shared-edits-unordered", fields: ["articleCount"] }),
-        vi.fn()
+        formHolding({})
       )
     ).toBe(false);
-    expect(recover(new Error("network"), vi.fn())).toBe(false);
+    expect(recover(new Error("network"), formHolding({}))).toBe(false);
     expect(toast.error).not.toHaveBeenCalled();
   });
 });

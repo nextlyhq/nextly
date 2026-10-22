@@ -147,7 +147,9 @@ describe("SingleForm with a document view", () => {
     );
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({ heroTitle: "Welcome!" })
+      expect.objectContaining({ heroTitle: "Welcome!" }),
+      // The form comes with the values, for a refused publish's way out.
+      expect.anything()
     );
   });
 
@@ -178,7 +180,9 @@ describe("SingleForm with a document view", () => {
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({ heroTitle: "Welcome!", status: "draft" })
+      expect.objectContaining({ heroTitle: "Welcome!", status: "draft" }),
+      // The form comes with the values, for a refused publish's way out.
+      expect.anything()
     );
   });
 

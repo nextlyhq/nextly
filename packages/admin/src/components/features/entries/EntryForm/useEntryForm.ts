@@ -37,6 +37,7 @@ import {
   type DeleteOutcome,
   type SubmitOutcome,
 } from "./submit-outcome";
+import { useRefusedForm } from "./useRefusedForm";
 
 // ============================================================================
 // Types
@@ -529,6 +530,24 @@ export function useEntryForm({
   const ownSave = useRef<{ inFlight: boolean; storedVersion?: string }>({
     inFlight: false,
   });
+
+  // Password fields submit "" to mean "keep the stored hash", so they are
+  // exempt from the blank-to-null normalization applied on submit.
+  const blankPasswordFields = useMemo(
+    () => passwordFieldNames(fields),
+    [fields]
+  );
+
+  // The form as a refused publish's way out reaches it: saved as the pending
+  // change the way a status-less save sends it, and given the live values it
+  // takes when the entry carrying them arrives.
+  const { refusedForm, adoptArrived } = useRefusedForm(form, values =>
+    withoutPlaceholders(
+      fields,
+      mapIntentToPayload(values, "save-working-draft", blankPasswordFields)
+    )
+  );
+
   useEffect(() => {
     if (!entry || mode !== "edit") return;
     const next = entryIdentity(entry, locale, readDraft);
@@ -538,8 +557,10 @@ export function useEntryForm({
       defaultValues,
       decision === "keep-unsaved" ? KEEP_UNSAVED : undefined
     );
+    // A reset keeping unsaved values keeps a taken field's stale one.
+    adoptArrived(defaultValues);
     setAwaitingEntry(false);
-  }, [entry, mode, defaultValues, form, locale, readDraft]);
+  }, [entry, mode, defaultValues, form, locale, readDraft, adoptArrived]);
 
   // Mutations - pass setError to enable server error mapping to form fields
   const createMutation = useCreateEntry({
@@ -562,14 +583,8 @@ export function useEntryForm({
     // caller passes how it read the entry; absent that, assume the full-page
     // editor's mode (the working-draft overlay for a drafts collection).
     draft: readDraft ?? collection.draftsEnabled === true,
+    refusedForm,
   });
-
-  // Password fields submit "" to mean "keep the stored hash", so they are
-  // exempt from the blank-to-null normalization applied on submit.
-  const blankPasswordFields = useMemo(
-    () => passwordFieldNames(fields),
-    [fields]
-  );
 
   const deleteMutation = useDeleteEntry({
     collectionSlug: collection.name,
