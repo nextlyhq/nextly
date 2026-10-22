@@ -87,6 +87,13 @@ export interface CanonicalWidget {
   category?: string;
   /** The declaration's archetype, which picks the add panel's sketch. */
   archetype?: string;
+  /** The sketch the declaration names in place of its archetype's, when it names one. */
+  sketch?: string;
+  /**
+   * Set when core builds this widget's data on the server from its declaration,
+   * so the admin asks for its cards by card rather than by query.
+   */
+  serverData?: true;
   requiredPermission?: string | readonly string[];
   defaultSize?: string;
   /**
@@ -171,6 +178,8 @@ const REGISTRATION_FIELDS = [
   "allowedWidths",
   "defaultWidth",
   "allowsSeveral",
+  "sketch",
+  "serverData",
   "lifecycle",
   "visibleWhen",
   "dismissible",

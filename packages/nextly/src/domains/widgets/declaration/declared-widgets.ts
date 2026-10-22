@@ -7,10 +7,12 @@
  * reported at once. Each declaration is then kept here whole, its server code
  * included, for the server's own use.
  *
- * 🔴 None is published to the widget registry the admin reads yet. A declared
- * widget's data is built on the server, and nothing runs it for a card until
- * the dashboard's data path does; offered before then, it would be placed on
- * dashboards and draw only an error. It is published when it can be drawn.
+ * 🔴 Each is published to the widget registry the admin reads as DATA ONLY,
+ * through core's own door: its data function, query function and empty test
+ * stay here, and the published definition says only that core builds its
+ * card's data (`serverData`). The dashboard asks for such a card by its id and
+ * core answers it from the declaration kept here, so a declared widget is
+ * published in the same change that answers its cards, never before.
  *
  * Widgets declared in today's shape (`contributes.admin.widgets`) are drawn as
  * today, through their own path. They take part here only in the id rules: two
@@ -22,8 +24,11 @@
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { getNextlyLogger } from "../../../observability/logger";
+import type { WidgetDefinition } from "../definition";
 import type { WidgetQuery } from "../query";
-import type { WidgetWidth } from "../widths";
+import { registerDeclaredDefinition } from "../registry";
+import type { AnyWidgetSetting } from "../settings";
+import { sizeFromWidth, WIDGET_WIDTHS, type WidgetWidth } from "../widths";
 
 import { buildCardQuery } from "./card-query";
 import { declaredQueryProblem } from "./displays";
@@ -63,6 +68,58 @@ interface DeclaredWidgetShape {
   readonly settings?: Readonly<Record<string, Record<string, unknown>>>;
   readonly data: unknown;
   readonly display?: unknown;
+  /** What publishing reads: the card's words, its starting width, and its gates. */
+  readonly title: string;
+  readonly description: string;
+  readonly category: string;
+  readonly width: WidgetWidth;
+  readonly several?: boolean;
+  readonly permission?: string;
+  readonly sketch?: WidgetDefinition["sketch"];
+}
+
+/**
+ * A declaration as the registry publishes it: data only.
+ *
+ * 🔴 A fresh object of named fields, never a spread of the declaration: the
+ * data function, the query function and the empty test stay on the server,
+ * and a field a declaration gains later reaches the browser only once it is
+ * named here. `serverData` says core builds the card's data, so there is no
+ * query. The widths are carried as declared, gaps included, in the
+ * arrangement's own words; the size is only the span of the starting width,
+ * for what still reads sizes.
+ */
+function toDefinition(declaration: DeclaredWidgetShape): WidgetDefinition {
+  const display = declaration.display;
+  const settings = Object.entries(declaration.settings ?? {}).map(
+    // Each was checked at startup by the rules a definition's settings are
+    // held to (`widgetSettingsProblems`), so it is one, named.
+    ([name, setting]) => ({ ...setting, name }) as AnyWidgetSetting
+  );
+  return {
+    id: declaration.id,
+    title: declaration.title,
+    description: declaration.description,
+    category: declaration.category,
+    ...(typeof display === "string"
+      ? { archetype: display as WidgetDefinition["archetype"] }
+      : {
+          archetype: "custom" as const,
+          component: (display as { component: string }).component,
+        }),
+    ...(settings.length > 0 ? { settings } : {}),
+    defaultSize: sizeFromWidth(declaration.width),
+    allowedWidths: WIDGET_WIDTHS.filter(width =>
+      declaration.widths.includes(width)
+    ),
+    defaultWidth: declaration.width,
+    ...(declaration.several === true ? { allowsSeveral: true } : {}),
+    ...(declaration.permission === undefined
+      ? {}
+      : { requiredPermission: declaration.permission }),
+    ...(declaration.sketch === undefined ? {} : { sketch: declaration.sketch }),
+    serverData: true,
+  };
 }
 
 /** The ids one owner declares in today's shape. */
@@ -202,6 +259,10 @@ export function registerWidgetDeclarations(
         declaration,
         ...(collections === undefined ? {} : { collections }),
       });
+      // Published as it is kept, so the registry and this store hold the same
+      // declared widgets: every one the admin is offered has a declaration here
+      // to answer its cards from.
+      registerDeclaredDefinition(toDefinition(declaration), owner);
     }
   }
 }

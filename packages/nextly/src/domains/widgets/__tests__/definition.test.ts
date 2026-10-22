@@ -787,6 +787,15 @@ describe("a widget's width terms", () => {
     ).toThrow(/defaultWidth must be one of/);
   });
 
+  it("sketches its row with one of core's displays, or not at all", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...valid, sketch: "bars" })
+    ).not.toThrow();
+    expect(() => validateWidgetDefinition({ ...valid, sketch: "pie" })).toThrow(
+      /sketch must be one of/
+    );
+  });
+
   it("says whether a dashboard may hold several only as true or false", () => {
     expect(() =>
       validateWidgetDefinition({ ...valid, allowsSeveral: "yes" })

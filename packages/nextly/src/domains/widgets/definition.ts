@@ -315,6 +315,12 @@ export interface WidgetDefinition {
   /** Whether one dashboard may hold more than one card of this widget. */
   allowsSeveral?: boolean;
   /**
+   * Which of core's displays the add panel sketches this widget's row with,
+   * when it is not its archetype: a widget drawn by its own component says
+   * what it most looks like.
+   */
+  sketch?: DataWidgetArchetype;
+  /**
    * Where this widget sits by default, ascending. Omitted means "after
    * everything that states one".
    *
@@ -1402,6 +1408,9 @@ function validateWidths(d: Partial<WidgetDefinition>): void {
   }
   if (d.allowsSeveral !== undefined && typeof d.allowsSeveral !== "boolean") {
     fail(`${d.id}: allowsSeveral must be true or false`);
+  }
+  if (d.sketch !== undefined && !DATA_ARCHETYPE_SET.has(d.sketch)) {
+    fail(`${d.id}: sketch must be one of ${DATA_ARCHETYPES.join(", ")}`);
   }
 }
 

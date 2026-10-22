@@ -41,16 +41,38 @@ afterEach(() => {
 });
 
 describe("registering declared widgets", () => {
-  it("offers none to the admin yet: nothing runs a declared widget's data for a card", () => {
+  it("publishes each to the registry the admin reads as data only, its cards answered on the server", () => {
     registerWidgetDeclarations([
-      { owner: SHOP, declarations: [ordersByState, revenue] },
+      { owner: SHOP, declarations: [ordersByState, recentOrders] },
     ]);
-    // Kept for the server, and absent from the registry the admin reads, so
-    // no dashboard places a card that could draw only an error.
-    expect(declaredWidget("acme/orders-by-state")).toBeDefined();
-    expect(declaredWidget("acme/revenue")).toBeDefined();
-    expect(getWidget("acme/orders-by-state")).toBeUndefined();
-    expect(getWidget("acme/revenue")).toBeUndefined();
+    const published = getWidget("acme/orders-by-state");
+    expect(published).toMatchObject({
+      id: "acme/orders-by-state",
+      title: "Orders by state",
+      description: "How many orders sit in each state",
+      category: "Shop",
+      archetype: "bars",
+      sketch: "bars",
+      requiredPermission: "read-orders",
+      allowedWidths: ["third", "half", "twoThirds"],
+      defaultWidth: "half",
+      serverData: true,
+    });
+    // Data only: no query, no data function and no empty test reach what the admin is sent,
+    // and what is published survives JSON exactly, so nothing in it is code.
+    expect(published?.query).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(published))).toEqual(published);
+    expect(Object.keys(published ?? {})).not.toContain("data");
+    // The widths as declared, a gap included: `recent-orders` takes half and full, not two thirds.
+    expect(getWidget("acme/recent-orders")?.allowedWidths).toEqual([
+      "half",
+      "full",
+    ]);
+    // And the declaration itself is still kept whole, for the server to answer its cards from.
+    expect(declaredWidget("acme/orders-by-state")).toMatchObject({
+      owner: SHOP,
+      declaration: ordersByState,
+    });
   });
 
   it("keeps each declaration, with its server code, for the server's own use", () => {
