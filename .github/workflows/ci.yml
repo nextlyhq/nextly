@@ -1298,6 +1298,13 @@ jobs:
     # hung run go on indefinitely.
     timeout-minutes: 30
 
+    # Job-wide, so every turbo here reads the cache the Restore step put in
+    # `.turbo`, including the one `pnpm dev:app` runs inside the webServer.
+    # Set on the build step alone, that second turbo looked in its default
+    # folder, missed every task and rebuilt every package (~100 s).
+    env:
+      TURBO_CACHE_DIR: .turbo
+
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1427,8 +1434,6 @@ jobs:
       # not their source, so a stale dist is a stale test.
       - name: Build packages
         run: pnpm turbo build --filter='./packages/*'
-        env:
-          TURBO_CACHE_DIR: .turbo
 
       - name: Run browser tests
         run: pnpm --filter @nextlyhq/e2e test:e2e
@@ -1486,6 +1491,13 @@ jobs:
     # Higher than `Browser tests` because the build is inside the budget rather
     # than done for it. The suite itself is two specs.
     timeout-minutes: 30
+
+    # Job-wide, so every turbo here reads the cache the Restore step put in
+    # `.turbo`, including the one `pnpm dev:app` runs inside the webServer.
+    # Set on the build step alone, that second turbo looked in its default
+    # folder, missed every task and rebuilt every package (~100 s).
+    env:
+      TURBO_CACHE_DIR: .turbo
 
     steps:
       - name: Checkout
@@ -1546,8 +1558,6 @@ jobs:
       # the one thing this job exists to check.
       - name: Build packages
         run: pnpm turbo build --filter='./packages/*'
-        env:
-          TURBO_CACHE_DIR: .turbo
 
       # The config runs `next build` then `next start` itself, on its own port
       # and its own database, so nothing here has to arrange that.
