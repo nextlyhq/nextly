@@ -11,4 +11,5 @@ export type {
   SingleAbsentPublicData,
   ReleaseProblemsPublicData,
   SharedFieldsConflictPublicData,
+  SharedFieldsConflictReason,
 } from "./public-data";

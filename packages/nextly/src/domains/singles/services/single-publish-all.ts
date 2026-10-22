@@ -54,6 +54,7 @@ import { captureInTx } from "../../versions/capture-in-tx";
 import { draftComponentValues } from "../../versions/draft-components";
 import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
 import {
+  differingFields,
   editedSharedFields,
   outOfDateSharedFields,
   releaseAllSharedBases,
@@ -1027,9 +1028,15 @@ export class SinglePublishAllService extends BaseService {
       { live, shared, views },
       caller
     );
-    // A translated component's shared sub-fields are judged above but not
-    // merged: each language's component also holds its own translated values,
-    // so it goes live as that language saved it.
+    await this.assertTranslatedComponentsUnedited(
+      plan,
+      pending,
+      { live, views, byHand },
+      caller
+    );
+    // A translated component's shared parts are judged above but not merged:
+    // each language's component also holds its own translated values, so it
+    // goes live as that language saved it.
     const merged = shared.filter(name => !byHand.has(name));
     const state = await this.mergedSharedState(
       tx,
@@ -1039,6 +1046,44 @@ export class SinglePublishAllService extends BaseService {
       caller
     );
     return pending.map(draft => withSharedState(draft, merged, state));
+  }
+
+  /**
+   * Refuse, naming each, a component kept per language whose shared parts
+   * (its instances, and the sub-fields it marks shared) a change edited, when
+   * more than one language publishes. Each language's promotion writes its
+   * own copy of the component, so whichever went last would undo the others'
+   * edit, and the edit can't be merged into another language's instances
+   * safely. Published one language at a time, the later one is out of date
+   * and its editor copies the shared parts by hand.
+   */
+  private async assertTranslatedComponentsUnedited(
+    plan: PublishPlan,
+    pending: readonly PendingChange[],
+    document: {
+      live: Record<string, unknown>;
+      views: SharedViews;
+      byHand: ReadonlySet<string>;
+    },
+    caller: SharedFieldsCaller
+  ): Promise<void> {
+    if (pending.length < 2) return;
+    const { live, views } = document;
+    const edited = [...document.byHand].filter(name =>
+      pending.some(draft => {
+        const values = snapshotRecord(draft.snapshot);
+        return (
+          name in values &&
+          differingFields([name], values, live, views).length > 0
+        );
+      })
+    );
+    if (edited.length === 0) return;
+    throw await this.sharedConflict(plan, caller, {
+      fields: edited,
+      live,
+      reason: "shared-edits-unmergeable",
+    });
   }
 
   /** Refuse, naming every field, when any change is behind live. */

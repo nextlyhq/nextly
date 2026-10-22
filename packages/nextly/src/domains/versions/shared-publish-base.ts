@@ -254,6 +254,8 @@ const CONFLICT_MESSAGES: Record<
     "Shared values were published by someone else after this change began. Take the live values for them, then publish.",
   "shared-edits-unordered":
     "Two languages changed these shared fields and the order can't be confirmed. Publish one language at a time.",
+  "shared-edits-unmergeable":
+    "More than one language is publishing these components, and their shared values can't be combined safely. Publish one language at a time.",
 };
 
 /**

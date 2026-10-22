@@ -1,7 +1,7 @@
 /**
  * Which of a localized document's fields every language shares, and how each
- * is compared: a junction as a set of ids, a translated component through the
- * sub-fields it marks shared, and a component with none of those not at all.
+ * is compared: a junction as a set of ids, and a translated component through
+ * its instances and the sub-fields it marks shared.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -42,6 +42,7 @@ function compare(
       { name: "footer", type: "component", component: "banner" },
       { name: "note", type: "component", component: "note" },
       { name: "hero", type: "component", component: "hero" },
+      { name: "blocks", type: "component", components: ["hero", "banner"] },
       { name: "tags", type: "relationship" }
     ),
     translated: new Set(["title"]),
@@ -58,15 +59,66 @@ const document = {
   footer: { words: "w", code: "c", _componentType: "banner" },
   note: { body: "b", _componentType: "note" },
   hero: { heading: "h", _componentType: "hero" },
+  // A dynamic zone; its second row's type is stored under the migrated
+  // spelling.
+  blocks: [
+    { heading: "h", _componentType: "hero" },
+    { words: "w", code: "c", _fieldGroupType: "banner" },
+  ],
   tags: ["a", "b"],
 };
 
 describe("sharedComparison", () => {
-  it("shares the components and relations every language holds, but not a wholly translated component", async () => {
+  it("shares the components and relations every language holds, translated components included", async () => {
     const { shared, byHand } = await compare(document);
-    expect(shared.sort()).toEqual(["banner", "footer", "hero", "tags"]);
-    // The translated component's shared sub-fields are left to the editor.
-    expect([...byHand].sort()).toEqual(["banner", "footer"]);
+    expect(shared.sort()).toEqual([
+      "banner",
+      "blocks",
+      "footer",
+      "hero",
+      "note",
+      "tags",
+    ]);
+    // The translated components' shared parts are left to the editor.
+    expect([...byHand].sort()).toEqual(["banner", "blocks", "footer", "note"]);
+  });
+
+  it("compares a translated component with nothing shared by its instances", async () => {
+    const { shared, views } = await compare(document);
+    const otherWords = { ...document, note: { body: "otro" } };
+    const anotherInstance = {
+      ...document,
+      note: [
+        { body: "b", _componentType: "note" },
+        { body: "b2", _componentType: "note" },
+      ],
+    };
+    expect(differingFields(shared, document, otherWords, views)).toEqual([]);
+    expect(differingFields(shared, document, anotherInstance, views)).toEqual([
+      "note",
+    ]);
+  });
+
+  it("reads a dynamic-zone row's type under either spelling", async () => {
+    const { shared, views } = await compare(document);
+    const newerCode = {
+      ...document,
+      blocks: [
+        { heading: "h", _componentType: "hero" },
+        { words: "w", code: "c2", _fieldGroupType: "banner" },
+      ],
+    };
+    const otherWords = {
+      ...document,
+      blocks: [
+        { heading: "h", _componentType: "hero" },
+        { words: "otra", code: "c", _componentType: "banner" },
+      ],
+    };
+    expect(differingFields(shared, document, newerCode, views)).toEqual([
+      "blocks",
+    ]);
+    expect(differingFields(shared, document, otherWords, views)).toEqual([]);
   });
 
   it("compares a translated component by its shared sub-fields alone", async () => {

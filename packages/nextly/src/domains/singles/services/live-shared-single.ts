@@ -20,6 +20,7 @@ import type { FieldGroupDataService } from "../../../services/field-groups/field
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
+import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import {
   sharedFieldNames,
@@ -112,11 +113,11 @@ export interface SharedComparison {
  * is compared.
  *
  * - A translated field belongs to its language.
- * - A component kept per language belongs to its language too, except for the
- *   sub-fields it marks shared, which live on the shared component row: the
- *   field is compared through those alone, and left for the editor to copy by
- *   hand, since a take cannot match its instances to the change's safely. One
- *   with no shared sub-fields is not compared at all.
+ * - A component kept per language belongs to its language too, except for its
+ *   instances (how many, of which type, in which order) and the sub-fields it
+ *   marks shared, which every language shares: the field is compared through
+ *   those alone, and left for the editor to copy by hand, since a take cannot
+ *   match its instances to the change's safely.
  * - A junction's ids are compared as a set: a junction keeps no order.
  *
  * Whether a component is translated is asked once per distinct component the
@@ -158,10 +159,8 @@ export async function sharedComparison(args: {
       args.componentFields,
       isLocalized
     );
-    if (kept.size === 0) {
-      excluded.add(field.name);
-      continue;
-    }
+    // Compared even with no shared sub-fields: its instances are shared, and
+    // a publish writes the change's set of them over everyone's.
     views.set(field.name, componentView(kept, fieldGroupSlugList(field)[0]));
     byHand.add(field.name);
   }
@@ -197,7 +196,11 @@ async function sharedSubFields(
   return kept;
 }
 
-/** A component value as its shared sub-fields, instance by instance. */
+/**
+ * A component value as its shared parts, instance by instance: each
+ * instance's type, in order, and its shared sub-fields. Not its row id, which
+ * a publish rewrites.
+ */
 function componentView(
   kept: ReadonlyMap<string, ReadonlySet<string>>,
   onlySlug: string | undefined
@@ -205,8 +208,8 @@ function componentView(
   const instance = (value: unknown): unknown => {
     if (!value || typeof value !== "object") return value ?? null;
     const row = value as Record<string, unknown>;
-    const type =
-      typeof row._componentType === "string" ? row._componentType : onlySlug;
+    // Whichever spelling the row stores its type under.
+    const type = readFieldGroupType(row) ?? onlySlug;
     const names = type ? kept.get(type) : undefined;
     return {
       type: type ?? null,
