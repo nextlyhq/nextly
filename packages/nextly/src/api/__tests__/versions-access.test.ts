@@ -37,6 +37,9 @@ vi.mock("../../di", () => ({
         return { getCollection: vi.fn().mockResolvedValue({ fields: [] }) };
       case "versionsService":
         return { list: vi.fn().mockResolvedValue([]), get: vi.fn() };
+      // No registered entity is localized, so history asks no language.
+      case "collectionRegistryService":
+        return { getCollectionBySlug: vi.fn().mockResolvedValue(null) };
       default:
         return {};
     }
@@ -58,6 +61,18 @@ import {
 } from "../versions-access";
 import { GET as listVersions } from "../versions";
 
+/** A read that succeeds and reports loading the entry it was asked for. */
+function readsTheAskedForEntry(): void {
+  getEntrySpy.mockImplementation(({ entryId }: { entryId: string }) =>
+    Promise.resolve({
+      success: true,
+      statusCode: 200,
+      data: { id: entryId },
+      resolvedEntryId: entryId,
+    })
+  );
+}
+
 describe("requireRouteVersionReadAccess", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -72,7 +87,7 @@ describe("requireRouteVersionReadAccess", () => {
   });
 
   it("reads a collection entry with status:all so drafts still have history", async () => {
-    getEntrySpy.mockResolvedValue({ success: true, statusCode: 200 });
+    readsTheAskedForEntry();
 
     await requireRouteVersionReadAccess(
       new Request("http://localhost/x"),
@@ -106,7 +121,7 @@ describe("requireRouteVersionReadAccess", () => {
       roles: ["editor"],
       authMethod: "api-key",
     });
-    getEntrySpy.mockResolvedValue({ success: true, statusCode: 200 });
+    readsTheAskedForEntry();
 
     await requireRouteVersionReadAccess(
       new Request("http://localhost/x"),
@@ -133,7 +148,7 @@ describe("requireRouteVersionReadAccess", () => {
   it("carries no scope for a session version read", async () => {
     // A session caller has no stamped scope, so the read gate falls back to the
     // owner/session RBAC path (undefined scope), not an empty api-key scope.
-    getEntrySpy.mockResolvedValue({ success: true, statusCode: 200 });
+    readsTheAskedForEntry();
 
     await requireRouteVersionReadAccess(
       new Request("http://localhost/x"),
@@ -244,7 +259,7 @@ describe("version list pagination meta", () => {
       roles: ["editor"],
       authMethod: "session",
     });
-    getEntrySpy.mockResolvedValue({ success: true, statusCode: 200 });
+    readsTheAskedForEntry();
     const di = await import("../../di");
     vi.mocked(di.getService).mockImplementation(((name: string) =>
       name === "versionsService"
@@ -254,7 +269,10 @@ describe("version list pagination meta", () => {
           : name === "adapter"
             ? // The caller has no "last looked at" markers.
               { select: vi.fn().mockResolvedValue([]) }
-            : {}) as typeof di.getService);
+            : name === "collectionRegistryService"
+              ? // Not localized, so the listing asks no language.
+                { getCollectionBySlug: vi.fn().mockResolvedValue(null) }
+              : {}) as typeof di.getService);
   });
 
   function ctx() {
@@ -315,7 +333,7 @@ describe("assertVersionDocumentReadable", () => {
   });
 
   it("resolves when the caller may read the live document", async () => {
-    getEntrySpy.mockResolvedValue({ success: true, statusCode: 200 });
+    readsTheAskedForEntry();
 
     await expect(
       assertVersionDocumentReadable("collection", "posts", "e1", {
@@ -340,8 +358,27 @@ describe("assertVersionDocumentReadable", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
+  it("rejects with not-found when the read returned another document", async () => {
+    // A hook can rewrite the id a read resolves; a read of another document
+    // says nothing about this one.
+    // The output still names the document asked about: only the read's own
+    // report of the row it loaded is trusted.
+    getEntrySpy.mockResolvedValue({
+      success: true,
+      statusCode: 200,
+      data: { id: "e1" },
+      resolvedEntryId: "e2",
+    });
+
+    await expect(
+      assertVersionDocumentReadable("collection", "posts", "e1", {
+        id: "user-1",
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
   it("does not authenticate — the dispatcher already did", async () => {
-    getEntrySpy.mockResolvedValue({ success: true, statusCode: 200 });
+    readsTheAskedForEntry();
 
     await assertVersionDocumentReadable("collection", "posts", "e1", {
       id: "user-1",

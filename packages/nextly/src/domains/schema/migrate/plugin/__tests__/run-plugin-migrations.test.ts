@@ -15,6 +15,7 @@ import type { SchemaEventRow } from "../../../events/schema-events-repository";
 import type { OwnerRecord } from "../../../ownership/owner-registry";
 import type { ReconcileRepo } from "../../drift-reconcile";
 
+import { buildPluginMigration } from "../../../migrate-create/generate-plugin";
 import { migrationChecksum, type PluginMigration } from "../plugin-migration";
 import {
   previewPluginMigrations,
@@ -175,6 +176,32 @@ function deps(
       ...overrides,
     } as Parameters<typeof runPluginMigrations>[1],
     live,
+  };
+}
+
+/** A `file_apply` ledger row, as the repository reads it back. */
+function ledgerRow(
+  filename: string,
+  status: SchemaEventRow["status"],
+  at: number,
+  sha256: string | null
+): SchemaEventRow {
+  return {
+    id: `${filename}@${at}`,
+    eventType: "file_apply",
+    status,
+    source: "cli-migrate",
+    filename,
+    sha256,
+    scopeKind: null,
+    scopeSlug: null,
+    startedAt: new Date(at),
+    endedAt: null,
+    durationMs: null,
+    note: null,
+    statementsExecuted: null,
+    supersededEventIds: null,
+    supersededBy: null,
   };
 }
 
@@ -1070,6 +1097,29 @@ describe("a database already past some of a plugin's modules", () => {
   const set = (migrations: PluginMigration[]) => [
     { pluginName: "@acme/p", pluginVersion: "1.0.0", migrations },
   ];
+  /**
+   * `create` as `migrate:create --plugin` writes it, under `create`'s name:
+   * its statements are exactly what its sides render to, which a module
+   * recorded after an attempt that did not finish must be.
+   */
+  const generatedCreate = (): PluginMigration => {
+    const built = buildPluginMigration({
+      pluginName: "@acme/p",
+      schemaVersion: 1,
+      name: "create",
+      now: new Date(0),
+      tablesByDialect: {
+        postgresql: [tableSpec(T, false)],
+        mysql: [tableSpec(T, false)],
+        sqlite: [tableSpec(T, false)],
+      },
+      existing: [],
+    });
+    if (built === null) throw new Error("no module generated");
+    const { checksum: _built, ...content } = built.module;
+    const named = { ...content, name: create.name };
+    return { ...named, checksum: migrationChecksum(named) };
+  };
 
   it("adopts every module when the database stands at the last one's result", async () => {
     const d = deps();
@@ -1256,10 +1306,12 @@ describe("a database already past some of a plugin's modules", () => {
     expect(d.failed).toEqual(["id-plugin:@acme/p/20260115_000000_seed"]);
   });
 
-  it("refuses to adopt a module run outside a transaction whose last attempt never finished", async () => {
-    // A process killed part-way through it left its row `in_progress`: the
-    // tables may stand at its result while a statement after them never ran.
-    const { checksum: _sealed, ...content } = create;
+  it("records a schema-only module run outside a transaction whose last attempt never finished, once the database stands past it", async () => {
+    // A process killed after the module's statements committed left its row
+    // `in_progress`. The module changes only the schema, and the database
+    // stands past its result, so the snapshot shows its whole effect: it is
+    // recorded, never run again.
+    const { checksum: _sealed, ...content } = generatedCreate();
     const outside = { ...content, transaction: false };
     const unsealed = { ...outside, checksum: migrationChecksum(outside) };
     const d = deps();
@@ -1277,8 +1329,41 @@ describe("a database already past some of a plugin's modules", () => {
 
     await expect(
       runPluginMigrations(set([unsealed, addScore]), d.deps)
+    ).resolves.toEqual({ applied: 0, adopted: 2, skipped: 0 });
+    expect(d.executed).toEqual([]);
+  });
+
+  it("refuses to adopt a module run outside a transaction that also changes rows, whose last attempt never finished", async () => {
+    // The tables may stand at its result while its INSERT never ran.
+    const seededOutside = module({
+      name: "20260101_000000_create",
+      schemaVersion: 1,
+      before: [],
+      target: [tableSpec(T, false)],
+      up: [
+        "CREATE TABLE p__things (id text PRIMARY KEY, label text NOT NULL)",
+        "INSERT INTO p__things (id, label) VALUES ('a', 'A')",
+      ],
+      transaction: false,
+    });
+    const d = deps();
+    d.live.set(T, [tableSpec(T, true)]);
+    d.deps.repo.findFileApplies = async (filename: string) =>
+      filename === "plugin:@acme/p/20260101_000000_create"
+        ? [
+            {
+              status: "in_progress" as const,
+              startedAt: new Date(1),
+              supersededEventIds: null,
+            },
+          ]
+        : [];
+
+    await expect(
+      runPluginMigrations(set([seededOutside, addScore]), d.deps)
     ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED" });
     expect(d.started).toEqual([]);
+    expect(d.executed).toEqual([]);
   });
 
   it("refuses an only module whose result the database holds, when it changes schema and data both", async () => {
@@ -1533,8 +1618,9 @@ describe("a database already past some of a plugin's modules", () => {
   });
 
   it("does not adopt over a module the ledger already records", async () => {
-    // The ledger says the later module ran while the earlier one did not;
-    // that disagreement is the reconcile's to report, not to paper over.
+    // The ledger says the later module ran while the earlier one did not: a
+    // pending module ordered before an applied one, which the history check
+    // refuses before any module is judged, rather than papering over it.
     const d = deps({
       appliedShas: new Map([
         ["plugin:@acme/p/20260201_000000_add_score", addScore.checksum],
@@ -1544,8 +1630,12 @@ describe("a database already past some of a plugin's modules", () => {
 
     await expect(
       runPluginMigrations(set([create, addScore]), d.deps)
-    ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+    ).rejects.toMatchObject({
+      code: "PLUGIN_MIGRATION_HISTORY_CHANGED",
+      logContext: { migration: "20260101_000000_create" },
+    });
     expect(d.started).toEqual([]);
+    expect(d.executed).toEqual([]);
   });
 
   it("refuses the whole adoption when a later module was edited", async () => {
@@ -1567,10 +1657,10 @@ describe("a database already past some of a plugin's modules", () => {
     expect(d.started).toEqual([]);
   });
 
-  it("refuses the whole adoption when a module in it ran outside a transaction and its last attempt failed", async () => {
-    // The failed attempt may have run its schema statements and stopped
-    // before a data statement; adopting it would skip that statement.
-    const { checksum: _sealed, ...content } = create;
+  it("adopts a schema-only module in the range that ran outside a transaction and whose last attempt failed", async () => {
+    // The database stands past it, and its statements change only the
+    // schema, so nothing of it can be missing.
+    const { checksum: _sealed, ...content } = generatedCreate();
     const outside = { ...content, transaction: false };
     const createOutside = {
       ...outside,
@@ -1591,14 +1681,7 @@ describe("a database already past some of a plugin's modules", () => {
 
     await expect(
       runPluginMigrations(set([createOutside, addScore]), d.deps)
-    ).rejects.toMatchObject({
-      code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
-      logContext: {
-        source: "plugin:@acme/p/20260101_000000_create",
-        reason: "partially-applied",
-      },
-    });
-    expect(d.started).toEqual([]);
+    ).resolves.toEqual({ applied: 0, adopted: 2, skipped: 0 });
     expect(d.executed).toEqual([]);
   });
 });
@@ -1741,28 +1824,30 @@ describe("a limit on how many modules one run records", () => {
     expect(second.executed).toEqual([]);
   });
 
-  it("records no ownership for a module a stopped run never reached", async () => {
-    // `addScore` is recorded out of order: the run applies `create`, skips
-    // `addScore` and stops at `addExtras`. Ownership repair reads the LAST
-    // module as applied, which it is not, and must not run.
+  it("records no ownership for a history recorded out of order", async () => {
+    // `addScore` is recorded while `create`, before it, is not. Such a
+    // history is refused before any module runs, so the ownership repair,
+    // which reads the LAST module as applied, is never reached.
     const d = following(1);
     d.deps.appliedShas = new Map([
       ["plugin:@acme/p/20260201_000000_add_score", addScore.checksum],
     ]);
 
-    await runPluginMigrations(
-      [
-        {
-          pluginName: "@acme/p",
-          pluginVersion: "1.0.0",
-          migrations: [create, addScore, addExtras],
-        },
-      ],
-      d.deps
-    );
+    await expect(
+      runPluginMigrations(
+        [
+          {
+            pluginName: "@acme/p",
+            pluginVersion: "1.0.0",
+            migrations: [create, addScore, addExtras],
+          },
+        ],
+        d.deps
+      )
+    ).rejects.toMatchObject({ code: "PLUGIN_MIGRATION_HISTORY_CHANGED" });
 
-    expect(d.started).toEqual(["plugin:@acme/p/20260101_000000_create"]);
-    expect(d.owners.map(owner => owner.schemaVersion)).toEqual([1]);
+    expect(d.started).toEqual([]);
+    expect(d.owners).toEqual([]);
   });
 
   it.each([undefined, 0, Number.NaN])(
@@ -1786,37 +1871,13 @@ describe("a limit on how many modules one run records", () => {
     }
   );
 
-  /** A `file_apply` ledger row, as the repository reads it back. */
-  function ledgerRow(
-    filename: string,
-    status: SchemaEventRow["status"],
-    at: number,
-    sha256: string | null
-  ): SchemaEventRow {
-    return {
-      id: `${filename}@${at}`,
-      eventType: "file_apply",
-      status,
-      source: "cli-migrate",
-      filename,
-      sha256,
-      scopeKind: null,
-      scopeSlug: null,
-      startedAt: new Date(at),
-      endedAt: null,
-      durationMs: null,
-      note: null,
-      statementsExecuted: null,
-      supersededEventIds: null,
-      supersededBy: null,
-    };
-  }
-
+  // Listed in name order, as a plugin must list them
+  // (`assertModulesInNameOrder`).
   const sets = [
     {
       pluginName: "@acme/p",
       pluginVersion: "1.0.0",
-      migrations: [addExtras, create, addScore],
+      migrations: [create, addScore, addExtras],
     },
     { pluginName: "q", pluginVersion: "1.0.0", migrations: [other] },
   ];
@@ -1856,26 +1917,23 @@ describe("a limit on how many modules one run records", () => {
     ]);
   });
 
-  it("lists an applied module a run would refuse as changed since it ran", async () => {
-    const preview = await previewPluginMigrations(sets, {
-      dialect: "postgresql",
-      rows: [
-        ledgerRow("plugin:@acme/p/20260101_000000_create", "applied", 1, "f".repeat(64)), // prettier-ignore
-      ],
-      limit: 1,
+  it("refuses, as a run does, an applied module changed since it ran", async () => {
+    // A run refuses it before any module runs (`assertPluginHistories`), so
+    // the preview refuses it the same way rather than listing what a run
+    // would never reach. That an applied module spends none of the budget is
+    // covered by "leaves out an applied module" above.
+    await expect(
+      previewPluginMigrations(sets, {
+        dialect: "postgresql",
+        rows: [
+          ledgerRow("plugin:@acme/p/20260101_000000_create", "applied", 1, "f".repeat(64)), // prettier-ignore
+        ],
+        limit: 1,
+      })
+    ).rejects.toMatchObject({
+      code: "MIGRATION_CHECKSUM_MISMATCH",
+      logContext: { plugin: "@acme/p", migration: "20260101_000000_create" },
     });
-
-    expect(preview[0]).toMatchObject({
-      filename: "plugin:@acme/p/20260101_000000_create",
-      recorded: true,
-    });
-    expect(preview[0].refusals.join(" ")).toContain(
-      "MIGRATION_CHECKSUM_MISMATCH"
-    );
-    // The applied module spends none of the budget.
-    expect(preview.slice(1).map(entry => entry.filename)).toEqual([
-      "plugin:@acme/p/20260201_000000_add_score",
-    ]);
   });
 
   it("reports an unfinished attempt a run would refuse to repeat", async () => {
@@ -1920,7 +1978,7 @@ describe("ownership of a plugin whose modules are all recorded", () => {
     ["plugin:a/002", second.checksum],
   ]);
   const set = [
-    { pluginName: "a", pluginVersion: "1.0.0", migrations: [second, first] },
+    { pluginName: "a", pluginVersion: "1.0.0", migrations: [first, second] },
   ];
 
   function row(
@@ -2018,5 +2076,431 @@ describe("ownership of a plugin whose modules are all recorded", () => {
     expect(h.owners).toEqual([
       expect.objectContaining({ schemaVersion: 3, tables: [] }),
     ]);
+  });
+});
+
+/**
+ * A plugin's migration history, checked whole before any module of any
+ * plugin runs. Each refusal is asserted with nothing executed and no ledger
+ * row started: a check that ran when the walk reached the module would pass
+ * the code assertion and fail these.
+ */
+describe("a plugin's history, checked before anything runs", () => {
+  const first = module({
+    name: "001_create",
+    schemaVersion: 1,
+    before: [],
+    target: [tableSpec("fx__a", false)],
+    up: ["CREATE TABLE fx__a (id varchar(36))"],
+  });
+  const second = module({
+    name: "002_add_score",
+    schemaVersion: 2,
+    before: [tableSpec("fx__a", false)],
+    target: [tableSpec("fx__a", true)],
+    up: ["ALTER TABLE fx__a ADD score int"],
+  });
+  /** A pending module of an earlier plugin, which must not run. */
+  const earlier = {
+    pluginName: "a",
+    pluginVersion: "1.0.0",
+    migrations: [
+      module({
+        name: "001_create",
+        schemaVersion: 1,
+        before: [],
+        target: [tableSpec("fx__early", false)],
+        up: ["CREATE TABLE fx__early (id varchar(36))"],
+      }),
+    ],
+  };
+  /** Rebuild a module under another name, sealed again as a hand-written one is. */
+  const renamed = (m: PluginMigration, name: string): PluginMigration => {
+    const { checksum: _sealed, ...content } = m;
+    const moved = { ...content, name };
+    return { ...moved, checksum: migrationChecksum(moved) };
+  };
+
+  it("refuses a list out of name order, naming the first module out of place", async () => {
+    const h = deps();
+    await expect(
+      runPluginMigrations(
+        [
+          earlier,
+          {
+            pluginName: "b",
+            pluginVersion: "1.0.0",
+            migrations: [second, first],
+          },
+        ],
+        h.deps
+      )
+    ).rejects.toMatchObject({
+      code: "PLUGIN_MIGRATIONS_OUT_OF_ORDER",
+      logContext: { plugin: "b", migration: "001_create" },
+    });
+    expect(h.executed).toEqual([]);
+    expect(h.started).toEqual([]);
+  });
+
+  it("refuses a changed applied module of a later plugin before an earlier plugin's pending module runs", async () => {
+    const h = deps({
+      appliedShas: new Map([["plugin:b/001_create", "0".repeat(64)]]),
+    });
+    await expect(
+      runPluginMigrations(
+        [
+          earlier,
+          { pluginName: "b", pluginVersion: "1.0.0", migrations: [first] },
+        ],
+        h.deps
+      )
+    ).rejects.toMatchObject({
+      code: "MIGRATION_CHECKSUM_MISMATCH",
+      logContext: { plugin: "b", migration: "001_create" },
+    });
+    expect(h.executed).toEqual([]);
+    expect(h.started).toEqual([]);
+  });
+
+  it("refuses an applied module removed from the list, naming it", async () => {
+    const h = deps({
+      appliedShas: new Map([
+        ["plugin:b/001_create", first.checksum],
+        ["plugin:b/002_add_score", second.checksum],
+      ]),
+    });
+    await expect(
+      runPluginMigrations(
+        [
+          earlier,
+          { pluginName: "b", pluginVersion: "1.0.0", migrations: [first] },
+        ],
+        h.deps
+      )
+    ).rejects.toMatchObject({
+      code: "PLUGIN_MIGRATION_HISTORY_CHANGED",
+      logContext: { plugin: "b", migration: "002_add_score" },
+    });
+    expect(h.executed).toEqual([]);
+    expect(h.started).toEqual([]);
+  });
+
+  it("refuses a hand-sealed applied module renamed, naming the name it was applied under", async () => {
+    // Sealed again under its new name, it passes its own checksum; only the
+    // ledger shows that the module it replaced was applied.
+    const h = deps({
+      appliedShas: new Map([["plugin:b/001_create", first.checksum]]),
+    });
+    await expect(
+      runPluginMigrations(
+        [
+          earlier,
+          {
+            pluginName: "b",
+            pluginVersion: "1.0.0",
+            migrations: [renamed(first, "001_create_things")],
+          },
+        ],
+        h.deps
+      )
+    ).rejects.toMatchObject({
+      code: "PLUGIN_MIGRATION_HISTORY_CHANGED",
+      logContext: { plugin: "b", migration: "001_create" },
+    });
+    expect(h.executed).toEqual([]);
+    expect(h.started).toEqual([]);
+  });
+
+  it("refuses a pending module ordered before an applied one, naming it", async () => {
+    const inserted = renamed(second, "000_add_score");
+    const h = deps({
+      appliedShas: new Map([["plugin:b/001_create", first.checksum]]),
+    });
+    await expect(
+      runPluginMigrations(
+        [
+          earlier,
+          {
+            pluginName: "b",
+            pluginVersion: "1.0.0",
+            migrations: [inserted, first],
+          },
+        ],
+        h.deps
+      )
+    ).rejects.toMatchObject({
+      code: "PLUGIN_MIGRATION_HISTORY_CHANGED",
+      logContext: { plugin: "b", migration: "000_add_score" },
+    });
+    expect(h.executed).toEqual([]);
+    expect(h.started).toEqual([]);
+  });
+
+  it("refuses a declared plugin that lists no modules while the ledger records some applied", async () => {
+    const h = deps({
+      appliedShas: new Map([["plugin:b/001_create", first.checksum]]),
+      declaredPlugins: new Set(["a", "b"]),
+    });
+    await expect(runPluginMigrations([earlier], h.deps)).rejects.toMatchObject({
+      code: "PLUGIN_MIGRATION_HISTORY_CHANGED",
+      logContext: { plugin: "b", migration: "001_create" },
+    });
+    expect(h.executed).toEqual([]);
+    expect(h.started).toEqual([]);
+  });
+
+  it("leaves another plugin's applied modules, and a plugin no longer configured, to themselves", async () => {
+    // The control: rows the check must not read as this plugin's.
+    const h = deps({
+      appliedShas: new Map([
+        ["plugin:b/001_create", first.checksum],
+        ["plugin:gone/001_create", "f".repeat(64)],
+        ["plugin:b-extra/009_late", "e".repeat(64)],
+      ]),
+    });
+    h.live.set("fx__a", [tableSpec("fx__a", false)]);
+    const result = await runPluginMigrations(
+      [
+        {
+          pluginName: "b",
+          pluginVersion: "1.0.0",
+          migrations: [first, second],
+        },
+      ],
+      h.deps
+    );
+    expect(result).toMatchObject({ applied: 1, skipped: 1 });
+  });
+
+  it("refuses in the preview what a run would refuse", async () => {
+    await expect(
+      previewPluginMigrations(
+        [{ pluginName: "b", pluginVersion: "1.0.0", migrations: [first] }],
+        {
+          dialect: "postgresql",
+          rows: [
+            ledgerRow("plugin:b/001_create", "applied", 1, first.checksum),
+            ledgerRow("plugin:b/002_add_score", "applied", 2, second.checksum),
+          ],
+        }
+      )
+    ).rejects.toMatchObject({ code: "PLUGIN_MIGRATION_HISTORY_CHANGED" });
+  });
+});
+
+/**
+ * A run stopped after a module's statements committed and before it was
+ * recorded. MySQL commits schema statements as they run, so a module run in a
+ * transaction there is left as one run outside it is: its row `in_progress`,
+ * and the database wherever its statements reached.
+ */
+describe("a module whose last attempt did not finish, on MySQL", () => {
+  const T = "p__things";
+  const stopped = (filename: string) => async (asked: string) =>
+    asked === filename
+      ? [
+          {
+            status: "in_progress" as const,
+            startedAt: new Date(1),
+            supersededEventIds: null,
+          },
+        ]
+      : [];
+  const one = (m: PluginMigration) => [
+    { pluginName: "@acme/p", pluginVersion: "1.0.0", migrations: [m] },
+  ];
+  const KEY = "plugin:@acme/p/001_create";
+  /** `base` with other statements on every dialect, sealed again. */
+  const resealed = (
+    base: PluginMigration,
+    over: { up?: (up: string[]) => string[]; outside?: boolean }
+  ): PluginMigration => {
+    const { checksum: _sealed, ...content } = base;
+    const next = {
+      ...content,
+      ...(over.outside === true ? { transaction: false } : {}),
+      dialects: Object.fromEntries(
+        (["postgresql", "mysql", "sqlite"] as const).map(dialect => [
+          dialect,
+          {
+            up:
+              over.up?.(base.dialects[dialect].up) ?? base.dialects[dialect].up,
+            down: base.dialects[dialect].down,
+          },
+        ])
+      ) as PluginMigration["dialects"],
+    };
+    return { ...next, checksum: migrationChecksum(next) };
+  };
+  // Generated, as `migrate:create --plugin` writes it: its statements are
+  // exactly what its two sides render to. Renamed to a fixed key.
+  const generated = buildPluginMigration({
+    pluginName: "@acme/p",
+    schemaVersion: 1,
+    name: "create",
+    now: new Date(0),
+    tablesByDialect: {
+      postgresql: [tableSpec(T, false)],
+      mysql: [tableSpec(T, false)],
+      sqlite: [tableSpec(T, false)],
+    },
+    existing: [],
+  });
+  if (generated === null) throw new Error("no module generated");
+  const { checksum: _generated, ...generatedContent } = generated.module;
+  const createContent = { ...generatedContent, name: "001_create" };
+  const create: PluginMigration = {
+    ...createContent,
+    checksum: migrationChecksum(createContent),
+  };
+
+  it("records a schema-only module once the database stands at its result", async () => {
+    const d = deps({ dialect: "mysql" });
+    d.deps.repo.findFileApplies = stopped(KEY);
+    d.live.set(T, [tableSpec(T, false)]);
+
+    await expect(runPluginMigrations(one(create), d.deps)).resolves.toEqual({
+      applied: 0,
+      adopted: 1,
+      skipped: 0,
+    });
+    expect(d.executed).toEqual([]);
+    expect(d.started).toEqual([KEY]);
+    expect(d.owners).toMatchObject([{ tables: [T], adopted: true }]);
+  });
+
+  it("refuses a module whose statements do more than its schema change renders, though the database stands at its result", async () => {
+    // Row-level security is an ALTER TABLE no snapshot records: stopped
+    // after its first statement, the database matches the module's result
+    // while the policy was never enabled.
+    const guarded = resealed(create, {
+      outside: true,
+      up: up => [...up, "ALTER TABLE p__things ENABLE ROW LEVEL SECURITY"],
+    });
+    // The plugin owns its table, as an installed plugin does, so the drop
+    // guard lets the ALTER through and the decision is the attempt's.
+    const d = deps({
+      dialect: "postgresql",
+      owners: new Map([
+        [
+          T,
+          {
+            tableName: T,
+            ownerKind: "plugin" as const,
+            ownerId: "@acme/p",
+            migratedBy: "plugin:@acme/p",
+            ownerVersion: "1.0.0",
+            schemaVersion: 1,
+            state: "active" as const,
+          },
+        ],
+      ]) as never,
+    });
+    d.deps.repo.findFileApplies = stopped(KEY);
+    d.live.set(T, [tableSpec(T, false)]);
+
+    await expect(
+      runPluginMigrations(one(guarded), d.deps)
+    ).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+      logContext: { source: KEY },
+    });
+    expect(d.executed).toEqual([]);
+    expect(d.started).toEqual([]);
+  });
+
+  it("refuses a module that also changes rows, though the database stands at its result", async () => {
+    const seeded = module({
+      name: "001_create",
+      schemaVersion: 1,
+      before: [],
+      target: [tableSpec(T, false)],
+      up: [
+        "CREATE TABLE p__things (id text PRIMARY KEY, label text NOT NULL)",
+        "INSERT INTO p__things (id, label) VALUES ('a', 'A')",
+      ],
+    });
+    const d = deps({ dialect: "mysql" });
+    d.deps.repo.findFileApplies = stopped(KEY);
+    d.live.set(T, [tableSpec(T, false)]);
+
+    await expect(
+      runPluginMigrations(one(seeded), d.deps)
+    ).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+      logContext: { source: KEY },
+    });
+    expect(d.executed).toEqual([]);
+    expect(d.started).toEqual([]);
+  });
+
+  it("refuses a schema-only module the database still stands at the start of", async () => {
+    const d = deps({ dialect: "mysql" });
+    d.deps.repo.findFileApplies = stopped(KEY);
+
+    await expect(
+      runPluginMigrations(one(create), d.deps)
+    ).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+      logContext: { source: KEY },
+    });
+    expect(d.executed).toEqual([]);
+    expect(d.started).toEqual([]);
+  });
+
+  it("refuses a module whose result is its start, which the schema cannot show ran", async () => {
+    // Changes the table's comment, which no snapshot records: the database
+    // stands at both sides whether or not the attempt finished.
+    const rebuilt = module({
+      name: "001_create",
+      schemaVersion: 1,
+      before: [tableSpec(T, false)],
+      target: [tableSpec(T, false)],
+      up: ["ALTER TABLE p__things COMMENT = 'things'"],
+    });
+    // The plugin owns its table, as an installed plugin does, so the drop
+    // guard lets its ALTER through and the refusal is the attempt's.
+    const d = deps({
+      dialect: "mysql",
+      owners: new Map([
+        [
+          T,
+          {
+            tableName: T,
+            ownerKind: "plugin" as const,
+            ownerId: "@acme/p",
+            migratedBy: "plugin:@acme/p",
+            ownerVersion: "1.0.0",
+            schemaVersion: 1,
+            state: "active" as const,
+          },
+        ],
+      ]) as never,
+    });
+    d.deps.repo.findFileApplies = stopped(KEY);
+    d.live.set(T, [tableSpec(T, false)]);
+
+    await expect(
+      runPluginMigrations(one(rebuilt), d.deps)
+    ).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+      logContext: { source: KEY },
+    });
+    expect(d.executed).toEqual([]);
+    expect(d.started).toEqual([]);
+  });
+
+  it("runs a module on PostgreSQL whose stopped attempt in a transaction left nothing", async () => {
+    // The control: there the attempt was undone whole, so it runs again.
+    const d = deps({ dialect: "postgresql" });
+    d.deps.repo.findFileApplies = stopped(KEY);
+
+    await expect(runPluginMigrations(one(create), d.deps)).resolves.toEqual({
+      applied: 1,
+      adopted: 0,
+      skipped: 0,
+    });
+    expect(d.executed).toHaveLength(1);
   });
 });

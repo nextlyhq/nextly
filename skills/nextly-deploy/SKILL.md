@@ -151,34 +151,36 @@ refuses request bodies over 4.5 MB (`413 FUNCTION_PAYLOAD_TOO_LARGE`). With
 this setup, files above that size cannot be uploaded through the admin; a
 Node.js server has no such limit.
 
-## 6. Create the first admin before the site is public
+## 6. Plan how the first admin is created
 
-A new production database has no admin. Until it has one, whoever opens
-`/admin/setup` first becomes Super Admin, so create that account before anyone
-else can reach the site. Setup then closes for good: a later attempt is
-refused with `SETUP_COMPLETE`.
+A new production database has no admin. In production, `/admin/setup` does
+not hand the site to whoever opens it first: it asks for a one-time setup
+token. Pick one of these; both refuse once an admin exists.
 
-The simplest way is a production build on your own machine, pointed at the
-production database:
+- **The setup token, after deploying.** Either set your own token before the
+  deploy, as `NEXTLY_SETUP_TOKEN` (at least 43 characters with at least 16
+  distinct ones; `npx nextly setup-token --generate` prints one), or let
+  Nextly generate one: the first production start prints a line beginning
+  `[nextly] SETUP TOKEN` to the server's output (on Vercel, the runtime logs).
+  Then open `/admin/setup` on the live site and enter it. A generated token
+  lasts 24 hours and one setup; `npx nextly setup-token`, run with the
+  production environment, replaces a lost one.
+- **The CLI, before or after deploying.** With the production environment
+  (`DATABASE_URL`, and every other variable the config reads):
 
-```bash
-export DATABASE_URL="<the production database>"
-npm run build         # runs nextly migrate against it, then next build
-npm start             # next start, on http://localhost:3000
-```
+  ```bash
+  NEXTLY_ADMIN_PASSWORD='<your password>' \
+    npx nextly users:create-admin --email admin@example.com --name "Site Admin"
+  ```
 
-Export every other variable the config reads as well. With Vercel Blob,
-`BLOB_READ_WRITE_TOKEN` is needed to load `nextly.config.ts` at all, and the
-build stops without it. With S3, the bucket and region are needed to load
-it; the keys can come from the AWS credential chain instead (an IAM role, a
-profile), so a build that succeeds says nothing about them. Where a value
-exists only in the host's settings and cannot be brought to your machine, use
-the protected-host path below instead.
+  Without `NEXTLY_ADMIN_PASSWORD` it prompts for the password at a terminal. The password must be 8 to 128 characters with a lowercase letter, an uppercase letter, a number and a symbol.
+  It needs no token, and it creates nothing if an account already uses that
+  email.
 
-Open `http://localhost:3000/admin/setup`, create the account, stop the
-server, then deploy. If you cannot reach the production database from your
-machine, keep the deployment private until setup is done, behind your host's
-access protection.
+Both need the release after 0.0.2-alpha.68. On an earlier version there is no
+setup token: whoever opens `/admin/setup` first becomes Super Admin, so keep
+the deployment private, behind your host's access protection, until you have
+created the admin there.
 
 Never run `next dev` against the production database. Development mode
 applies schema changes directly to whatever database it points at.
@@ -223,7 +225,7 @@ could then pick their own address.
 - `npx nextly migrate:status`, run against the production `DATABASE_URL`,
   shows nothing pending.
 - `/admin/setup` says setup is already complete, and `/admin` signs in with
-  the account created before the deploy.
+  the admin created in step 6.
 - Publish an entry and open a page that lists it: it appears.
 - Upload an image in the admin, redeploy, and check it still loads.
 - Do not use `/api/health` as an uptime probe on serverless hosts. It reports

@@ -8,9 +8,16 @@
 // would double-apply.
 
 import { NextlyError } from "../../../../errors/nextly-error";
-import type { IndexSpec, Operation, TableSpec } from "../diff/types";
+import { isPreResolutionOp } from "../diff/types";
+import type {
+  ChangeColumnTypeOp,
+  IndexSpec,
+  Operation,
+  TableSpec,
+} from "../diff/types";
 import { createIndexSql } from "../sql-templates/create-index";
 import { columnDefinition } from "../sql-templates/create-table-body";
+import { postgresAlterTypeUsing } from "../sql-templates/postgres-alter-type-using";
 
 import { createTableStatement, tableIndexStatements } from "./create-table";
 import { quoteIdent } from "./identifiers";
@@ -35,7 +42,8 @@ function createIndexStatement(tableName: string, index: IndexSpec): string {
  * the rext-site-v2 / `dc_case_studies` incident: 10 `*_section`
  * columns stuck on `text` despite repeated "successful" applies).
  *
- * Strategy: emit `USING "<col>"::<targetType>` for every change. The
+ * Strategy: emit `USING "<col>"::<targetType>` for every change but a string
+ * narrowing (`postgresAlterTypeUsing`, which says why that one differs). The
  * `::` cast operator dispatches to whichever cast Postgres has
  * registered for the (source → target) pair. When no cast exists
  * (e.g. arbitrary `bytea` → `int4`) the statement fails loudly at
@@ -45,8 +53,12 @@ function createIndexStatement(tableName: string, index: IndexSpec): string {
  * success is the bug we are fixing here; explicit failure is the
  * contract.
  */
-function renderAlterTypeUsing(columnName: string, toType: string): string {
-  return `USING ${quoteIdent(columnName)}::${toType}`;
+function renderAlterTypeUsing(op: ChangeColumnTypeOp): string {
+  return postgresAlterTypeUsing(
+    quoteIdent(op.columnName),
+    op.fromType,
+    op.toType
+  );
 }
 
 // Emit Nextly's canonical secondary indexes for a managed collection
@@ -73,6 +85,22 @@ function createTableCanonicalIndexes(spec: TableSpec): string[] {
     );
   }
   return stmts;
+}
+
+/**
+ * A column type change, as this route spells it.
+ *
+ * Nothing for a reference-list conversion: that is a pre-resolution op, which the executor ran
+ * before this route, as it runs a rename or a drop.
+ */
+function changeColumnTypeStatements(op: ChangeColumnTypeOp): string[] {
+  if (isPreResolutionOp(op)) return [];
+  return [
+    `ALTER TABLE ${quoteIdent(op.tableName)} ` +
+      `ALTER COLUMN ${quoteIdent(op.columnName)} ` +
+      `SET DATA TYPE ${op.toType} ` +
+      renderAlterTypeUsing(op),
+  ];
 }
 
 export function emitPostgresDdl(op: Operation): string[] {
@@ -115,12 +143,7 @@ export function emitPostgresDdl(op: Operation): string[] {
       return [createIndexStatement(op.tableName, op.index)];
 
     case "change_column_type":
-      return [
-        `ALTER TABLE ${quoteIdent(op.tableName)} ` +
-          `ALTER COLUMN ${quoteIdent(op.columnName)} ` +
-          `SET DATA TYPE ${op.toType} ` +
-          renderAlterTypeUsing(op.columnName, op.toType),
-      ];
+      return changeColumnTypeStatements(op);
 
     case "change_column_nullable": {
       // Postgres requires the verb (SET / DROP) on its own statement;

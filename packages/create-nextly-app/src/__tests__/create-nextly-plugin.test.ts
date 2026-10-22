@@ -148,8 +148,7 @@ describe("createNextly for the plugin template", () => {
 
     expect(copyTemplate).toHaveBeenCalledWith(
       expect.objectContaining({
-        releaseVersion: manifest.version,
-        pinToRelease: true,
+        nextlySource: { kind: "release", cliVersion: manifest.version },
       })
     );
   });

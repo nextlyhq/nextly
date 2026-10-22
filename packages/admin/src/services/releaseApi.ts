@@ -15,32 +15,54 @@ import { fetcher } from "../lib/api/fetcher";
 import type {
   AddReleaseMemberPayload,
   CreateReleasePayload,
+  HiddenReleaseMembers,
   Release,
   ReleaseBlocker,
+  ReleaseCalendarParams,
+  ReleaseCalendarRead,
   ReleaseListParams,
   ReleaseMember,
+  ReleaseReadinessEntry,
   ScheduleReleasePayload,
 } from "../types/releases";
 
-/** The canonical list envelope this API returns. */
+/**
+ * The canonical list envelope this API returns.
+ *
+ * `total` is every release the query matches, not the rows on this page, so a
+ * pager built on it reaches every page. The paging fields are optional because
+ * a `containing` read is answered by the same envelope and a caller of that one
+ * reads only `total` and `hasNext`.
+ */
 export interface ReleaseListResponse {
   items: Release[];
-  meta: { total: number; hasNext: boolean };
+  meta: {
+    total: number;
+    hasNext: boolean;
+    page?: number;
+    limit?: number;
+    totalPages?: number;
+    hasPrev?: boolean;
+  };
 }
 
 export interface MemberListResponse {
   items: ReleaseMember[];
-  meta: { total: number; hasNext: boolean };
+  /** `hidden`: the documents the reader may not read, counted by collection. */
+  meta: { total: number; hasNext: boolean; hidden?: HiddenReleaseMembers[] };
 }
 
 /** The blockers standing between one release and its instant. */
 export interface BlockerListResponse {
   items: ReleaseBlocker[];
-  meta: { total: number; hasNext: boolean };
+  /** `hidden`: blocked documents the reader may not read, by collection. */
+  meta: { total: number; hasNext: boolean; hidden?: HiddenReleaseMembers[] };
 }
 
 /** The canonical mutation envelope. */
 export interface ReleaseMutationResponse {
+  /** The server's sentence for what happened, where it says more than "done". */
+  message?: string;
   item: Release;
 }
 
@@ -48,27 +70,48 @@ export interface MemberMutationResponse {
   item: ReleaseMember;
 }
 
+/**
+ * The list parameters that travel as they are, under their own names.
+ *
+ * Only what was asked for is sent. An empty value would reach the route as a
+ * filter it must then refuse — the state parser rejects an unrecognised state
+ * rather than widening the query, which is the behaviour we want and not one
+ * to trigger by accident.
+ */
+const PLAIN_LIST_PARAMS = [
+  "state",
+  "scheduledAfter",
+  "scheduledBefore",
+  "limit",
+  "page",
+  "tab",
+  "reason",
+  "kind",
+] as const satisfies ReadonlyArray<keyof ReleaseListParams>;
+
 function query(params: ReleaseListParams): string {
   const search = new URLSearchParams();
-  // Only what was asked for. An empty value would reach the route as a filter
-  // it must then refuse — the state parser rejects an unrecognised state rather
-  // than widening the query, which is the behaviour we want and not one to
-  // trigger by accident.
-  if (params.state) search.set("state", params.state);
-  if (params.scheduledAfter)
-    search.set("scheduledAfter", params.scheduledAfter);
-  if (params.scheduledBefore) {
-    search.set("scheduledBefore", params.scheduledBefore);
+  for (const key of PLAIN_LIST_PARAMS) {
+    const value = params[key];
+    if (value !== undefined && value !== "") search.set(key, String(value));
   }
-  if (params.limit !== undefined) search.set("limit", String(params.limit));
+  // Trimmed here only to decide whether to send it: an all-space search is no
+  // search, and sending it would match every title that has a space in it.
+  // The server trims and bounds what it is sent, so the text goes as typed.
+  if (params.search?.trim()) search.set("search", params.search);
   // All three or none. The route refuses a partial reference, so sending one
   // part would turn a document question into a 400 rather than into an answer
-  // about every release — which is the behaviour we want, and not one to
-  // trigger by accident.
+  // about every release.
   if (params.containing) {
     search.set("containingScopeKind", params.containing.scopeKind);
     search.set("containingScopeSlug", params.containing.scopeSlug);
     search.set("containingEntryId", params.containing.entryId);
+  }
+  // Both or neither, for the same reason: the route refuses half a day, since
+  // a date with no zone names no instants.
+  if (params.day) {
+    search.set("day", params.day.date);
+    search.set("timezone", params.day.timezone);
   }
   const q = search.toString();
   return q ? `?${q}` : "";
@@ -78,6 +121,29 @@ export const fetchReleases = (
   params: ReleaseListParams = {}
 ): Promise<ReleaseListResponse> =>
   fetcher<ReleaseListResponse>(`/releases${query(params)}`, {}, true);
+
+/**
+ * The calendar of a window of days in a zone: every day, with its complete
+ * count by state and its first releases.
+ *
+ * The server places each release on its day, so the browser never buckets
+ * releases itself and never reads a capped page of them: a busy month is
+ * counted in full, and a release published late is on the day it went out.
+ */
+export const fetchReleaseCalendar = (
+  params: ReleaseCalendarParams
+): Promise<ReleaseCalendarRead> => {
+  const search = new URLSearchParams({
+    from: params.from,
+    to: params.to,
+    timezone: params.timezone,
+  });
+  return fetcher<ReleaseCalendarRead>(
+    `/releases/calendar?${search.toString()}`,
+    {},
+    true
+  );
+};
 
 export const fetchRelease = (id: string): Promise<Release> =>
   fetcher<Release>(`/releases/${id}`, {}, true);
@@ -98,6 +164,27 @@ export const fetchReleaseBlockers = (
   releaseId: string
 ): Promise<BlockerListResponse> =>
   fetcher<BlockerListResponse>(`/releases/${releaseId}/blockers`, {}, true);
+
+/** The batch readiness read's envelope. */
+export interface ReleaseReadinessListResponse {
+  items: ReleaseReadinessEntry[];
+  meta: { total: number };
+}
+
+/**
+ * What the checks say about each of a page of releases, in one request.
+ *
+ * The server checks every document of each release named, so this is asked
+ * only for the releases a screen is showing, and never for more than a page.
+ */
+export const fetchReleasesReadiness = (
+  releaseIds: readonly string[]
+): Promise<ReleaseReadinessListResponse> =>
+  fetcher<ReleaseReadinessListResponse>(
+    `/releases/readiness?ids=${releaseIds.map(encodeURIComponent).join(",")}`,
+    {},
+    true
+  );
 
 export const createRelease = (
   payload: CreateReleasePayload
@@ -149,5 +236,33 @@ export const cancelRelease = (id: string): Promise<{ message: string }> =>
   fetcher<{ message: string }>(
     `/releases/${id}/cancel`,
     { method: "POST", body: JSON.stringify({}) },
+    true
+  );
+
+/**
+ * Run a release now, rather than at its instant.
+ *
+ * Its own operation on the server, not a schedule for a past instant: the
+ * answer says how the run went, which a schedule cannot.
+ */
+export const publishReleaseNow = (
+  id: string
+): Promise<ReleaseMutationResponse> =>
+  fetcher<ReleaseMutationResponse>(
+    `/releases/${id}/publish`,
+    { method: "POST", body: JSON.stringify({}) },
+    true
+  );
+
+/**
+ * Delete a draft, or a cancelled release that was never scheduled.
+ *
+ * The server decides which releases may go, and answers with the release as it
+ * was, so the screen can name what it removed.
+ */
+export const deleteRelease = (id: string): Promise<ReleaseMutationResponse> =>
+  fetcher<ReleaseMutationResponse>(
+    `/releases/${id}`,
+    { method: "DELETE" },
     true
   );

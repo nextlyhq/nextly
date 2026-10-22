@@ -23,9 +23,8 @@
  * @module components/features/widgets/WidgetGrid
  */
 
-import { DndContext, closestCenter } from "@dnd-kit/core";
 import type { SizeTier } from "@nextlyhq/ui/format";
-import { useMemo, useRef, type ComponentProps } from "react";
+import { useMemo, useRef, type ComponentProps, type ReactNode } from "react";
 
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import {
@@ -34,18 +33,17 @@ import {
 } from "@admin/context/providers/BrandingProvider";
 import { useDashboardLayout } from "@admin/hooks/queries/useDashboardLayout";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
-import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { registerCoreWidgetComponents } from "./core-components";
-import {
-  AddWidgetPicker,
-  type RemovedCardOption,
-} from "./edit/AddWidgetPicker";
 import { ArrangedGrid } from "./edit/ArrangedGrid";
+import { DashboardAddPanel, useAddPanelState } from "./edit/DashboardAddPanel";
 import { DashboardEditChrome } from "./edit/DashboardEditChrome";
+import { CardDragContext } from "./edit/drag/CardDragContext";
+import { useCardDrag } from "./edit/drag/useCardDrag";
 import { RemovalNotice } from "./edit/RemovalNotice";
 import { useAnnouncerRelay } from "./edit/useArrangementAnnouncer";
 import { useCardRemoval } from "./edit/useCardRemoval";
+import { useCardSettingsWrite } from "./edit/useCardSettingsWrite";
 import {
   useDashboardArrangement,
   type ArrangedWidget,
@@ -55,7 +53,7 @@ import type { LayoutEditor } from "./edit/useLayoutEditor";
 import { useSaveRequest } from "./edit/useSaveRequest";
 import { predictedTier } from "./frame/tier";
 import { resolveDashboardWidgets } from "./resolve-widgets";
-import { drawnWidth } from "./sizes";
+import { bandForWidth, drawnWidth } from "./sizes";
 import { useDashboardWidth } from "./useDashboardWidth";
 import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
@@ -155,7 +153,11 @@ function askedWith(
     );
     const sized = tier ? { ...row, tier } : row;
     const widget = widgetAsAsked(row.widget, row.config);
-    return widget === row.widget ? sized : { ...sized, widget };
+    // The declared query travels with the asked one, so the batch keys the card by what it
+    // declares and a change of its settings asks this card again alone.
+    return widget === row.widget
+      ? sized
+      : { ...sized, widget, declaredQuery: row.widget.query };
   });
 }
 
@@ -163,11 +165,21 @@ function askedWith(
 const NO_CARDS: [] = [];
 
 /**
- * The element the dashboard's width is measured from, and the cards to ask, each sized for the
- * tier it will be drawn at. The width is measured before the first paint, and no card is asked
- * before it is known, so every first query is sized for its card's tier.
+ * The element the dashboard's width is measured from, the one batch of the cards' queries, and
+ * dragging the cards.
+ *
+ * Each query is sized for the tier it will be drawn at. The width is measured before the first
+ * paint, and no card is asked before it is known, so every first query is sized for its card's
+ * tier. Dragging is decided from the same width's band: on wherever more than one column is
+ * drawn.
  */
-function useCardsAtDashboardWidth(visible: ArrangedWidget[]) {
+function useCardsAtDashboardWidth(
+  visible: ArrangedWidget[],
+  carry: Pick<
+    Parameters<typeof useCardDrag>[0],
+    "gridRef" | "say" | "drop" | "requestFocus"
+  >
+) {
   const dashboardRef = useRef<HTMLDivElement>(null);
   const dashboardWidth = useDashboardWidth(dashboardRef);
   const cards = useMemo(
@@ -177,42 +189,13 @@ function useCardsAtDashboardWidth(visible: ArrangedWidget[]) {
         : askedWith(visible, dashboardWidth),
     [visible, dashboardWidth]
   );
-  return { dashboardRef, cards };
-}
-
-/**
- * The widgets the picker offers, each under the name a reader will recognise.
- *
- * The declaration's own title where the admin can resolve it. The id is a poor
- * label and it is TRUE, which an invented one would not be — a widget whose
- * client bundle is absent still has to be addable by name.
- */
-function offerable(
-  available: readonly string[],
-  byId: ReadonlyMap<string, DashboardWidget>
-): Array<{ widgetId: string; title: string }> {
-  return available.map(widgetId => ({
-    widgetId,
-    title: byId.get(widgetId)?.title ?? widgetId,
-  }));
-}
-
-/**
- * The cards the reader removed in this draft, each under its widget's title.
- *
- * Only ones this admin can draw: putting back a card whose widget has no
- * declaration here would restore a card the grid then skips.
- */
-function removedCards(
-  editor: LayoutEditor,
-  byId: ReadonlyMap<string, DashboardWidget>
-): RemovedCardOption[] {
-  return editor.placements.flatMap(placement => {
-    const widget = byId.get(placement.widgetId);
-    return placement.removed && widget
-      ? [{ placementId: placement.id, title: widget.title }]
-      : [];
-  });
+  const band =
+    dashboardWidth === undefined ? undefined : bandForWidth(dashboardWidth);
+  return {
+    dashboardRef,
+    drag: useCardDrag({ rows: visible, band, width: dashboardWidth, ...carry }),
+    ...useWidgetBatch(cards),
+  };
 }
 
 /** Why a single-card write is unavailable while the stored layout is unreadable. */
@@ -237,35 +220,116 @@ function cardActions(
   return {
     move: arrangement.moveCard,
     setWidth: arrangement.setCardWidth,
-    remove: removal.remove,
+    // A removal is the next change, so the card ringed for the last one is no longer news.
+    remove: placementId => {
+      arrangement.ring.highlight(null);
+      removal.remove(placementId);
+    },
     ...(removal.dismiss ? { dismiss: removal.dismiss } : {}),
     saveSettings: editor.setConfig,
   };
 }
 
-/** The add picker, which exists only in customise mode. */
-function CustomizePicker({
-  editor,
-  byId,
-  onRestore,
-  sectionRef,
-}: {
-  editor: LayoutEditor;
-  byId: ReadonlyMap<string, DashboardWidget>;
-  onRestore: ComponentProps<typeof AddWidgetPicker>["onRestore"];
-  sectionRef: ComponentProps<typeof AddWidgetPicker>["sectionRef"];
-}) {
-  if (!editor.isEditing) return null;
-  return (
-    <AddWidgetPicker
-      options={offerable(editor.available, byId)}
-      onAdd={editor.add}
-      removed={removedCards(editor, byId)}
-      onRestore={onRestore}
-      sectionRef={sectionRef}
-      atCapacity={editor.atCapacity}
-    />
+/**
+ * The writes a reader makes to one card from the card itself: removing it, and its settings.
+ * One hook so the grid reads both from one place.
+ */
+function useStandingCardWrites(
+  layout: ReturnType<typeof useDashboardLayout>,
+  editor: LayoutEditor,
+  visible: ReturnType<typeof useDashboardArrangement>["visible"],
+  announce: ReturnType<typeof useAnnouncerRelay>["announce"],
+  focus: ReturnType<typeof useDashboardFocus>,
+  /** Rings the card a gesture just placed, as a put-back card is. */
+  highlight: (placementId: string | null) => void
+) {
+  // Removing a card, while customising or from the card itself, and the one notice that offers
+  // it back.
+  const removal = useCardRemoval(
+    layout,
+    editor,
+    visible,
+    announce,
+    focus,
+    highlight
   );
+  const settingsWrite = useSettingsWriteAtRest(layout, editor, announce);
+  return { removal, settingsWrite };
+}
+
+/**
+ * A card's settings saved at once, outside customise mode: its quick setting and its sheet.
+ * Offered only at rest, where there is no draft to hold a change, and once an arrangement has
+ * been read, for the reason the standing dismiss waits for one.
+ */
+function useSettingsWriteAtRest(
+  layout: ReturnType<typeof useDashboardLayout>,
+  editor: LayoutEditor,
+  announce: ReturnType<typeof useAnnouncerRelay>["announce"]
+): ComponentProps<typeof ArrangedGrid>["writes"]["settings"] {
+  const cardSettingsWrite = useCardSettingsWrite(layout);
+  if (!layout.layout || editor.isEditing) return undefined;
+  return {
+    write: (placementId, title, config, callbacks) =>
+      cardSettingsWrite.write({ placementId, title, config }, callbacks),
+    isWriting: editor.isWriting,
+    ...(cardSettingsWrite.unavailable === undefined
+      ? {}
+      : { unavailable: cardSettingsWrite.unavailable }),
+    announce: announce.settingChanged,
+  };
+}
+
+/**
+ * What the grid's place holds while the first arrangement read is in flight.
+ *
+ * A line of text, not card-shaped placeholders: which cards there will be,
+ * and how wide, is exactly what is not known yet, and a guessed block that
+ * the real dashboard then differs from is itself the jump this avoids.
+ */
+function ArrangementLoading() {
+  return (
+    <p
+      role="status"
+      aria-label="Loading your dashboard"
+      className="text-sm text-muted-foreground"
+      data-testid="widget-grid-loading"
+    >
+      Loading your dashboard…
+    </p>
+  );
+}
+
+/**
+ * What the dashboard's container holds while there are no cards to draw, or `null` once there
+ * are. Drawn inside the measured container either way, by the one return that draws it.
+ *
+ * - **Nothing declared:** the empty grid says so in place, and the recovery chrome outlives
+ *   the rows, so an arrangement can never reach a state it cannot leave.
+ * - **The arrangement still on its way:** no card, no card's data, and one status where the grid
+ *   will be. Nothing sits below the grid, so the cards arriving in its place move nothing that
+ *   was already drawn. Inside the measured container all the same: the dashboard's width is
+ *   observed from the element mounted first, and a card's first query waits for that width, so
+ *   a container drawn only once the arrangement lands would never be measured and no card would
+ *   ever be asked for.
+ */
+function holdingBody({
+  declared,
+  awaitingArrangement,
+  isPending,
+  isUnavailable,
+}: {
+  declared: number;
+  awaitingArrangement: boolean;
+  isPending: boolean;
+  isUnavailable: boolean;
+}): ReactNode | null {
+  if (declared === 0) {
+    return (
+      <NothingToDraw isPending={isPending} isUnavailable={isUnavailable} />
+    );
+  }
+  return awaitingArrangement ? <ArrangementLoading /> : null;
 }
 
 export function WidgetGrid() {
@@ -302,19 +366,30 @@ export function WidgetGrid() {
   );
   const { visible, editor, hasArrangement } = arrangement;
 
-  // Removing a card, while customising or from the card itself, and the one
-  // notice that offers it back.
-  const removal = useCardRemoval(layout, editor, visible, announce, focus);
+  // What a reader changes on one card from the card itself: removing it, and
+  // its settings outside customise mode.
+  const { removal, settingsWrite } = useStandingCardWrites(
+    layout,
+    editor,
+    visible,
+    announce,
+    focus,
+    arrangement.ring.highlight
+  );
 
   const byId = useMemo(
     () => new Map(declared.map(widget => [widget.id, widget])),
     [declared]
   );
 
-  // The dashboard's own width, and the cards asked at it.
-  const { dashboardRef, cards } = useCardsAtDashboardWidth(visible);
+  // The add panel, open or not; the card it places is ringed by the arrangement's `ring`.
+  const addPanel = useAddPanelState(editor.isEditing);
+  const { ring } = arrangement;
 
+  // The dashboard's own width, the cards asked at it, and dragging them by their handles.
   const {
+    dashboardRef,
+    drag,
     slots,
     cellSlots,
     fetchingPlacementIds,
@@ -325,7 +400,12 @@ export function WidgetGrid() {
     failed,
     settling,
     retry,
-  } = useWidgetBatch(cards);
+  } = useCardsAtDashboardWidth(visible, {
+    gridRef: focus.gridRef,
+    say: announce.drag,
+    drop: arrangement.dropCard,
+    requestFocus: focus.request,
+  });
 
   const gridAnnouncer = useGridAnnouncer(settling, counted, failed);
   const { announcement } = gridAnnouncer;
@@ -346,7 +426,7 @@ export function WidgetGrid() {
   // 🔴 Asked of the DECLARATIONS, not of the arranged rows. `visible` is empty
   // in a fourth case that is none of these three: a reader who has put every
   // card away, or removed every card and saved. Returning here for that unmounted
-  // the edit bar, the Reset control and the add picker along with the grid --
+  // the edit bar, the Reset control and Add widget along with the grid --
   // the whole page blank, with no way back to the one control that could undo
   // it. An arrangement must never be able to reach a state it cannot leave, so
   // the recovery chrome outlives the rows and the empty grid says so in place.
@@ -354,14 +434,20 @@ export function WidgetGrid() {
   // Both returns draw the dashboard's container as their root, ONE element of one type, so
   // React keeps the same node across them and the width observed on it stays attached when
   // the first declarations arrive.
-  if (declared.length === 0) {
+  const holding = holdingBody({
+    declared: declared.length,
+    awaitingArrangement: arrangement.awaitingArrangement,
+    isPending,
+    isUnavailable,
+  });
+  if (holding !== null) {
     return (
       <div
         ref={dashboardRef}
         data-testid="dashboard-container"
         className="@container/dashboard"
       >
-        <NothingToDraw isPending={isPending} isUnavailable={isUnavailable} />
+        {holding}
       </div>
     );
   }
@@ -398,29 +484,25 @@ export function WidgetGrid() {
             on={{
               begin: arrangement.begin,
               cancel: arrangement.cancel,
-              addWidget: () => focus.request({ kind: "add" }),
+              addWidget: () => addPanel.setOpen(true),
             }}
             saveRequest={saveRequest}
             focus={focus}
           />
 
-          <DndContext
-            sensors={arrangement.sensors}
-            // `closestCenter`: the cards are one list laid out as a grid, so the
-            // nearest card centre is the card the pointer is aiming at.
-            collisionDetection={closestCenter}
-            onDragEnd={arrangement.handleDragEnd}
-            accessibility={{ announcements: arrangement.announcements }}
-          >
+          <CardDragContext drag={drag}>
             <ArrangedGrid
               rows={visible}
               placements={editor.placements}
               isDrawn={arrangement.isDrawn}
               isEditing={editor.isEditing}
-              isWriting={editor.isWriting}
-              singleCardWriteBlocked={singleCardWriteBlocked(
-                layout.isUnreadable
-              )}
+              writes={{
+                isWriting: editor.isWriting,
+                singleCardWriteBlocked: singleCardWriteBlocked(
+                  layout.isUnreadable
+                ),
+                settings: settingsWrite,
+              }}
               slots={slots}
               cellSlots={cellSlots}
               requested={requested}
@@ -431,15 +513,22 @@ export function WidgetGrid() {
               announcement={announcement}
               focus={focus}
               gridRef={focus.gridRef}
+              highlightedId={ring.highlightedId}
+              drag={drag}
               on={cardActions(arrangement, removal, editor)}
             />
-          </DndContext>
+          </CardDragContext>
 
-          <CustomizePicker
+          <DashboardAddPanel
+            open={addPanel.open}
+            onOpenChange={addPanel.setOpen}
             editor={editor}
+            layout={layout}
             byId={byId}
-            onRestore={removal.restore}
-            sectionRef={focus.addRef}
+            isDrawn={arrangement.isDrawn}
+            restore={removal.restore}
+            highlight={ring.highlight}
+            focus={focus}
           />
 
           <RemovalNotice

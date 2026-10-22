@@ -10,8 +10,9 @@
  * The document and its second version are written through the API, so what
  * the test watches is history, not the editor's create flow.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 const ENTRIES = "/admin/api/collections/history-notes/entries";
@@ -42,7 +43,7 @@ async function noteWithTwoVersions(page: Page): Promise<string> {
 /** Open History and choose the newest version, the one with changes. */
 async function showNewestVersion(page: Page, id: string): Promise<void> {
   await gotoAdmin(page, `/collections/history-notes/${id}?history=1`);
-  const rows = page.getByRole("button", { name: /^Version \d+/ });
+  const rows = page.getByRole("button", { name: /Version \d+/ });
   await expect(rows.first()).toBeVisible({ timeout: 30_000 });
   await rows.first().click();
   await expect(page.getByRole("region", { name: "Comparison" })).toBeVisible({
@@ -100,6 +101,39 @@ test.describe("a past version in the editor", () => {
     await expect(
       page.getByRole("textbox", { name: "Summary", exact: true })
     ).toHaveValue("as it stands now");
+  });
+
+  test("on a wide screen: side by side puts a change's two sides in columns", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const id = await noteWithTwoVersions(page);
+    await showNewestVersion(page, id);
+    const summary = page.getByRole("region", { name: "Summary, changed" });
+    await expect(summary).toBeVisible();
+
+    const toggle = page.getByRole("button", { name: "Side by side" });
+    if ((await toggle.getAttribute("aria-pressed")) !== "true") {
+      await toggle.click();
+    }
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+
+    // Each side is the cell its caption heads. In columns they share a row,
+    // After to the right of Before; stacked, After would sit below.
+    const side = (caption: string) =>
+      summary.getByText(caption, { exact: true }).locator("..").boundingBox();
+    await expect
+      .poll(async () => {
+        const [before, after] = await Promise.all([
+          side("Before"),
+          side("After"),
+        ]);
+        if (!before || !after) return "unmeasured";
+        return Math.abs(after.y - before.y) < 4 && after.x > before.x + 100
+          ? "columns"
+          : "stacked";
+      })
+      .toBe("columns");
   });
 
   test("on a phone: the version's actions in a bar at the bottom", async ({

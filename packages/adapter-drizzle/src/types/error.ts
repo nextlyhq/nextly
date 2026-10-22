@@ -194,3 +194,37 @@ export function createDatabaseError(
 
   return error;
 }
+
+/**
+ * The code an adapter gives the error it raises when a request has waited
+ * longer than `pool.connectionTimeoutMs` for a database connection.
+ *
+ * A code of the adapters' own rather than the driver's wording, because the
+ * drivers disagree: pg-pool raises a plain `Error` with no code, mysql2 has no
+ * such wait to time out, and better-sqlite3 has no pool. Core reads this one
+ * code to answer with its retryable "database busy" error.
+ *
+ * @public
+ */
+export const POOL_WAIT_TIMEOUT_CODE = "NEXTLY_POOL_WAIT_TIMEOUT";
+
+/**
+ * The error for a request that waited `boundMs` for a database connection and
+ * was given none.
+ *
+ * @param boundMs - The bound it waited, `pool.connectionTimeoutMs`
+ * @param cause - The driver's own error, when the driver raised one
+ *
+ * @public
+ */
+export function poolWaitTimeoutError(
+  boundMs: number,
+  cause?: Error
+): DatabaseError {
+  return createDatabaseError({
+    kind: "timeout",
+    code: POOL_WAIT_TIMEOUT_CODE,
+    message: `Waited ${boundMs} ms for a database connection, and none was free`,
+    cause,
+  });
+}

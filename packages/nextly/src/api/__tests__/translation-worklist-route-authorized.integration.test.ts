@@ -191,3 +191,37 @@ describe("the worklist endpoint itself", () => {
     });
   });
 });
+
+describe("the languages the worklist's read decision is told", () => {
+  it("are the language worked on, and those its titles are read in: the default and each it falls back to", async () => {
+    // English, the default, falls back to French; the worklist is for German.
+    const seen: { locale?: string; locales: string[] }[] = [];
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "pages",
+          localized: true,
+          access: {
+            read: ({ locale, locales }) => {
+              seen.push({ locale, locales: [...locales] });
+              return true;
+            },
+          },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+      localization: {
+        locales: [{ code: "en", fallbackLocale: "fr" }, "fr", "de"],
+        defaultLocale: "en",
+      },
+    });
+    const { getTranslationWorklist } = await import("../translations");
+
+    const res = await getTranslationWorklist(
+      new Request("http://t/api/translations?locale=de&state=missing")
+    );
+
+    expect(res.status).toBe(200);
+    expect(seen[0]).toEqual({ locale: "de", locales: ["en", "fr", "de"] });
+  });
+});

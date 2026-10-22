@@ -31,13 +31,11 @@ declare const settingValue: unique symbol;
  * One setting, as a widget declares it: core's own setting definition
  * (`WidgetSetting` in `../settings.ts`), with its value type carried along.
  *
- * 🔴 The SAME vocabulary as the definitions registration validates and
- * `FieldRenderer` draws: `type` and `defaultValue`, and the existing types
- * (`text`, `number`, `checkbox`, `select`) wherever one fits. The record key
- * becomes the definition's `name`. So a declaration is not a second schema to
- * convert and keep in step; only the controls core has no type for yet
- * (`collection`, `filter`, `sort`, `groupBy`), and a dependency (`of`), are
- * added to that one union.
+ * 🔴 The SAME vocabulary as the definitions registration validates: `type`,
+ * `defaultValue` and `of`, and core's eight setting types (`AnyWidgetSetting`
+ * in `../settings.ts`), judged by its rules and read by its reader. The record
+ * key becomes the definition's `name`. So a declaration is not a second
+ * schema to convert and keep in step.
  *
  * - `Value` is the type of what a person can choose, and what readers get.
  * - `Kind` is the definition's `type`, so a dependency can require a sibling
@@ -59,6 +57,8 @@ export interface SettingDeclaration<
   readonly defaultValue?: Value;
   /** The setting this one depends on, and is reset with. */
   readonly of?: On;
+  /** Whether it sits on the card's header (at most one per widget). */
+  readonly quick?: boolean;
   readonly [settingValue]?: Value;
 }
 
@@ -151,6 +151,16 @@ function declare<Value, Kind extends string, On extends string = never>(
     : { type, defaultValue, ...rest };
 }
 
+/**
+ * Marks a setting as the card's quick one, or leaves it unmarked.
+ *
+ * Offered only by builders whose control fits a card's header (a choice or an
+ * on/off), and written only when true, so an unmarked setting's declaration is
+ * exactly what it was before quick settings existed.
+ */
+const quickFlag = (quick: boolean | undefined) =>
+  quick === true ? { quick: true } : {};
+
 /** A fixed set of values, as a select definition lists its options. */
 function choices<Option extends string>(values: readonly Option[]) {
   return values.map(value => ({ label: value, value }));
@@ -185,20 +195,34 @@ export const settings = {
       max: MAX_WIDGET_ROWS,
     }),
   /** Date range: a select of the four ranges, the last 30 days by default. */
-  dateRange: ({ default: start = "30d" }: { default?: DateRange } = {}) =>
+  dateRange: ({
+    default: start = "30d",
+    quick,
+  }: { default?: DateRange; quick?: boolean } = {}) =>
     declare<DateRange, "select">("select", {
       default: start,
       options: choices(DATE_RANGES),
+      ...quickFlag(quick),
     }),
   /** Chart style: a select of line or bars, a line by default. */
-  chartStyle: ({ default: start = "line" }: { default?: ChartStyle } = {}) =>
+  chartStyle: ({
+    default: start = "line",
+    quick,
+  }: { default?: ChartStyle; quick?: boolean } = {}) =>
     declare<ChartStyle, "select">("select", {
       default: start,
       options: choices(CHART_STYLES),
+      ...quickFlag(quick),
     }),
   /** Only mine: a checkbox, off by default. */
-  onlyMine: ({ default: start = false }: { default?: boolean } = {}) =>
-    declare<boolean, "checkbox">("checkbox", { default: start }),
+  onlyMine: ({
+    default: start = false,
+    quick,
+  }: { default?: boolean; quick?: boolean } = {}) =>
+    declare<boolean, "checkbox">("checkbox", {
+      default: start,
+      ...quickFlag(quick),
+    }),
 
   /** A setting of the widget's own: a line of text. */
   text: (options: { default: string }) =>
@@ -207,8 +231,11 @@ export const settings = {
   number: (options: { default: number; min?: number; max?: number }) =>
     declare<number, "number">("number", options),
   /** A setting of the widget's own: on or off, a checkbox. */
-  toggle: (options: { default: boolean }) =>
-    declare<boolean, "checkbox">("checkbox", options),
+  toggle: ({ quick, ...options }: { default: boolean; quick?: boolean }) =>
+    declare<boolean, "checkbox">("checkbox", {
+      ...options,
+      ...quickFlag(quick),
+    }),
   /**
    * A setting of the widget's own: one of a fixed set.
    *
@@ -219,42 +246,11 @@ export const settings = {
   select: <const Option extends string>(options: {
     options: readonly Option[];
     default: NoInfer<Option>;
+    quick?: boolean;
   }) =>
     declare<Option, "select">("select", {
       default: options.default,
       options: choices(options.options),
+      ...quickFlag(options.quick),
     }),
 };
-
-/**
- * The setting types of the controls core has no definition type for yet, and
- * the ones among them that depend on a Collection setting.
- *
- * Every other built setting is one of core's own definitions (`text`,
- * `number`, `checkbox`, `select`), judged by registration's reader. These four
- * are judged by `fitsNewSetting`, the one rule startup and a card's reading of
- * its stored values both ask.
- */
-export const NEW_SETTING_TYPES: ReadonlySet<string> = new Set([
-  "collection",
-  "filter",
-  "sort",
-  "groupBy",
-]);
-export const DEPENDENT_SETTING_TYPES: ReadonlySet<string> = new Set([
-  "filter",
-  "sort",
-  "groupBy",
-]);
-
-/**
- * Whether a value is one a control of this type can hold: a filter is a plain
- * object of conditions; a collection, a sort and a grouping each name a
- * non-empty string.
- */
-export function fitsNewSetting(type: string, value: unknown): boolean {
-  if (type === "filter") {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
-  }
-  return typeof value === "string" && value.trim() !== "";
-}

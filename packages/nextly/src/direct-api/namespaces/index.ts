@@ -47,6 +47,10 @@ export {
 export { createJobsNamespace, type JobsNamespace } from "./jobs";
 export { createNoticesNamespace, type NoticesNamespace } from "./notices";
 export {
+  createContentEventsNamespace,
+  type ContentEventsNamespace,
+} from "./content-events";
+export {
   createReleasesNamespace,
   type ReleaseCallerArgs,
   type ReleasesNamespace,

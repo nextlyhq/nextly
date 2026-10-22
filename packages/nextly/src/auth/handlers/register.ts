@@ -17,6 +17,7 @@ import { z } from "zod";
 
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { respondAction } from "../../api/response-shapes";
+import { afterCommittedWrite } from "../../errors/committed-write";
 import { NextlyError } from "../../errors/nextly-error";
 import { getNextlyLogger } from "../../observability/logger";
 import type { PluginContext } from "../../plugins/plugin-context";
@@ -180,10 +181,26 @@ export async function handleRegister(
       // afterRegister hook (D71) — observe-only side effects after a successful
       // create (welcome email, provisioning, CRM sync). No-op without hooks.
       if (deps.authHooks && deps.pluginCtx) {
-        await deps.authHooks.runAfterRegister(
-          { id: user.id as AuthUser["id"], email: user.email, name: user.name },
-          deps.pluginCtx
-        );
+        await deps.authHooks
+          .runAfterRegister(
+            {
+              id: user.id as AuthUser["id"],
+              email: user.email,
+              name: user.name,
+            },
+            deps.pluginCtx
+          )
+          .catch((hookError: unknown) => {
+            // The account exists by now, so a failure here must not ask for a
+            // retry, as a busy database would: sent again, the request finds
+            // the email taken, and the hook never runs for this account.
+            throw afterCommittedWrite(
+              NextlyError.is(hookError)
+                ? hookError
+                : NextlyError.fromUnexpected(hookError),
+              { reason: "after-register-hook-failed" }
+            );
+          });
       }
 
       // Spec §13.2: even on real success, the public response is a generic
@@ -253,7 +270,8 @@ export async function handleRegister(
       return buildAuthErrorResponse(err, requestId);
     }
     return buildAuthErrorResponse(
-      NextlyError.internal({ cause: err as Error }),
+      // Internal, unless the database was only busy.
+      NextlyError.fromUnexpected(err),
       requestId
     );
   }

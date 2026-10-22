@@ -32,10 +32,13 @@ const ACTOR = { userId: "u1" };
  * @param members what each release holds, by release id. Read through the
  *   batched `memberCountsOf` only; every other repository method is absent, so a
  *   path that reached one would fail rather than pass by accident.
+ * @param histories each release's run history, by release id, as the batched
+ *   `runHistoriesOf` answers it; a release absent here has none recorded.
  */
 function service(
   holds: ReleaseAuthority[],
-  members: Record<string, number> = {}
+  members: Record<string, number> = {},
+  histories: Record<string, { recorded: boolean; ran: boolean }> = {}
 ) {
   const held = new Set(holds);
   const canManageReleases = vi.fn(
@@ -49,14 +52,28 @@ function service(
           .map(id => [id, members[id] ?? 0] as const)
       )
   );
+  const runHistoriesOf = vi.fn(
+    async (ids: readonly string[]) =>
+      new Map(
+        ids.flatMap(id => {
+          const history = histories[id];
+          return history === undefined ? [] : [[id, history] as const];
+        })
+      )
+  );
   const deps = {
     repository: {
       memberCountsOf,
+      runHistoriesOf,
     } as unknown as ReleasesServiceDeps["repository"],
     canManageReleases,
     canActOnDocument: vi.fn(async () => true),
     // Running a release is not what these cases are about.
     runDrainNow: vi.fn(async () => undefined),
+    // Every reader may read every member: these tests are not about which
+    // documents a reader sees.
+    readableMembers: async (members: readonly { id: string }[]) =>
+      new Set(members.map(member => member.id)),
     checks: READY_CHECKS,
     // Every target is there and has a lifecycle; the checks have their own tests.
     targets: {
@@ -66,7 +83,12 @@ function service(
       declaresLifecycle: async () => true,
     },
   };
-  return { svc: new ReleasesService(deps), canManageReleases, memberCountsOf };
+  return {
+    svc: new ReleasesService(deps),
+    canManageReleases,
+    memberCountsOf,
+    runHistoriesOf,
+  };
 }
 
 /** A row carrying only what `capabilities` reads, so nothing else can decide it. */
@@ -433,19 +455,36 @@ describe("capabilities to rename and to delete", () => {
     }
   });
 
-  it("does not offer deleting a cancelled release that was ever scheduled", async () => {
-    const { svc } = service(["read", "delete"]);
+  it("offers deleting a scheduled-then-cancelled release only when its recorded history shows no run", async () => {
+    const scheduledAt = new Date("2026-09-01T09:00:00Z");
+    const { svc, runHistoriesOf } = service(
+      ["read", "delete"],
+      {},
+      {
+        ran: { recorded: true, ran: true },
+        calledOff: { recorded: true, ran: false },
+      }
+    );
     const can = await svc.capabilities(
       [
-        {
-          ...release("cancelled", "was"),
-          scheduledAt: new Date("2026-09-01T09:00:00Z"),
-        },
+        { ...release("cancelled", "ran"), scheduledAt },
+        { ...release("cancelled", "calledOff"), scheduledAt },
+        // Scheduled before its history was recorded: nothing says it did not run.
+        { ...release("cancelled", "unrecorded"), scheduledAt },
         { ...release("cancelled", "never"), scheduledAt: null },
       ],
       ACTOR
     );
-    expect(can.get("was")?.delete).toBe(false);
+    expect(can.get("ran")?.delete).toBe(false);
+    expect(can.get("calledOff")?.delete).toBe(true);
+    expect(can.get("unrecorded")?.delete).toBe(false);
     expect(can.get("never")?.delete).toBe(true);
+    // One read, for the releases whose answer turns on their history.
+    expect(runHistoriesOf).toHaveBeenCalledTimes(1);
+    expect(runHistoriesOf).toHaveBeenCalledWith([
+      "ran",
+      "calledOff",
+      "unrecorded",
+    ]);
   });
 });

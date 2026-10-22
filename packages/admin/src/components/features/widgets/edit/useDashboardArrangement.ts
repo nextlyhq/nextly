@@ -12,7 +12,6 @@
  * @module components/features/widgets/edit/useDashboardArrangement
  */
 
-import type { Announcements, DragEndEvent } from "@dnd-kit/core";
 import { useCallback, useMemo } from "react";
 
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
@@ -23,21 +22,16 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import {
-  positionInList,
-  sortableAnnouncements,
-  useSortableSensors,
-  type AnnouncedItem,
-} from "../../entries/fields/structured/field-array-helpers";
-import {
   drawnPosition,
   movePlacement,
-  movePlacementTo,
+  movePlacementToPosition,
   type IsDrawn,
   type MoveDirection,
 } from "../layout-editor";
 import { WIDTH_NAMES, widthFromDeclaredSize } from "../sizes";
 
 import type { ArrangementAnnouncer } from "./useArrangementAnnouncer";
+import { useCardHighlight, type CardHighlight } from "./useCardHighlight";
 import type { DashboardFocus } from "./useDashboardFocus";
 import { useLayoutEditor, type LayoutEditor } from "./useLayoutEditor";
 import type { SaveOptions, SaveOutcome } from "./useLayoutLifecycle";
@@ -80,16 +74,29 @@ export interface DashboardArrangement {
    * and the whole of any outage.
    */
   hasArrangement: boolean;
-  sensors: ReturnType<typeof useSortableSensors>;
-  handleDragEnd: (event: DragEndEvent) => void;
   /**
-   * What a screen reader hears while a card is being dragged: pick-up, hover
-   * and cancel, by title and position. The LANDING is spoken by the grid's own
-   * region, in the same sentence a menu move uses, so it is not read twice.
+   * Whether the arrangement is still on its way, with nothing to draw yet.
+   *
+   * 🔴 Distinct from a FAILED read, which draws the declared default and says
+   * so. Until the first read answers, the page cannot know which cards this
+   * person has, so it draws none and asks for no card's data: the declared
+   * set drawn in the meantime was a dashboard they may not have, redrawn when
+   * theirs arrived. A return visit in the same session never waits here,
+   * because the cached arrangement is drawn while it is read again.
    */
-  announcements: Announcements;
+  awaitingArrangement: boolean;
+  /**
+   * The one card ringed for having just been placed: moved, resized, added or put back. Each
+   * of those gestures moves the ring to its card.
+   */
+  ring: CardHighlight;
   /** Move one card from its menu, saying where it went. */
   moveCard: (placementId: string, direction: MoveDirection) => void;
+  /**
+   * Put a dragged card down at `final` among the drawn cards, saying where it went, with focus
+   * back on its handle. The menu's sentence, so a drag and a menu move are heard alike.
+   */
+  dropCard: (placementId: string, final: number) => void;
   /** Set one card's width from its menu, saying so. */
   setCardWidth: (placementId: string, width: WidgetWidth) => void;
   /** Put the default dashboard in the draft, saying nothing is saved yet. */
@@ -107,7 +114,7 @@ export interface DashboardArrangement {
 }
 
 /**
- * The cards drawn before any arrangement has been read: the declarations, in
+ * The cards drawn when the arrangement could not be read: the declarations, in
  * their declared order, each at the width of its declared size.
  */
 function declaredRows(declared: readonly DashboardWidget[]): ArrangedWidget[] {
@@ -130,7 +137,7 @@ function arrangedRows(
     // A placement whose declaration this admin cannot resolve is SKIPPED rather
     // than drawn as an empty cell: a plugin's client bundle can be absent, and
     // a titled card with nothing under it reads as a product bug. A removed
-    // card is not drawn either; the add picker lists it to put back.
+    // card is not drawn either; the add panel lists it to put back.
     if (!widget || placement.removed) continue;
     const allowed = factsFor(placement.widgetId)?.allowedWidths;
     rows.push({
@@ -214,15 +221,23 @@ export function useDashboardArrangement(
   );
 
   const editor = useLayoutEditor(layout, isDrawn);
+  const ring = useCardHighlight(editor.isEditing);
   const hasArrangement = layout.layout !== undefined;
+  const awaitingArrangement = !hasArrangement && !layout.isUnavailable;
 
-  const visible = useMemo(
-    () =>
-      hasArrangement
-        ? arrangedRows(editor.placements, byId, editor.factsFor)
-        : declaredRows(declared),
-    [hasArrangement, declared, editor.placements, editor.factsFor, byId]
-  );
+  const visible = useMemo(() => {
+    if (hasArrangement) {
+      return arrangedRows(editor.placements, byId, editor.factsFor);
+    }
+    return awaitingArrangement ? [] : declaredRows(declared);
+  }, [
+    hasArrangement,
+    awaitingArrangement,
+    declared,
+    editor.placements,
+    editor.factsFor,
+    byId,
+  ]);
 
   const titleOf = useCallback(
     (placementId: string) =>
@@ -257,26 +272,46 @@ export function useDashboardArrangement(
         movePlacement(editor.placements, placementId, direction, isDrawn)
       );
       editor.move(placementId, direction);
+      ring.highlight(placementId);
       // Back to THIS card's menu, which is now somewhere else on the page: the
       // reader who moved it can move it again without hunting for it.
       focus.request({ kind: "menu", placementId });
     },
-    [announceMove, editor, isDrawn, focus]
+    [announceMove, editor, isDrawn, focus, ring]
+  );
+
+  const dropCard = useCallback(
+    (placementId: string, final: number) => {
+      announceMove(
+        placementId,
+        movePlacementToPosition(editor.placements, placementId, final, isDrawn)
+      );
+      editor.moveTo(placementId, final);
+      ring.highlight(placementId);
+      // Back to the handle it was dragged by: the card moved in the page, and React moving a
+      // focused element takes the focus with nowhere to go.
+      focus.request({ kind: "handle", placementId });
+    },
+    [announceMove, editor, isDrawn, focus, ring]
   );
 
   const setCardWidth = useCallback(
     (placementId: string, width: WidgetWidth) => {
       const title = titleOf(placementId);
       editor.setWidth(placementId, width);
+      ring.highlight(placementId);
       if (title !== undefined) announce.width(title, WIDTH_NAMES[width].name);
     },
-    [titleOf, editor, announce]
+    [titleOf, editor, announce, ring]
   );
 
   const stageReset = useCallback(() => {
     editor.stageReset();
     announce.reset();
-  }, [editor, announce]);
+    // The reset is the latest change, so no card is ringed for an earlier one: the default may
+    // reuse a ringed card's placement, and it would read as just placed.
+    ring.highlight(null);
+  }, [editor, announce, ring]);
 
   const { begin, cancel, save } = useCustomiseLifecycle(
     editor,
@@ -284,50 +319,15 @@ export function useDashboardArrangement(
     focus
   );
 
-  // The sensors alone are shared with every other sortable surface.
-  const sensors = useSortableSensors();
-
-  const rowIds = useMemo(() => visible.map(row => row.placementId), [visible]);
-
-  const announcements = useMemo<Announcements>(
-    () => ({
-      ...sortableAnnouncements({
-        describe: (item: AnnouncedItem) => titleOf(String(item.id)),
-        place: (item: AnnouncedItem) => positionInList(rowIds, String(item.id)),
-      }),
-      // The landing is spoken by `handleDragEnd` below, through the grid's own
-      // live region and in the menu's sentence. Spoken here as well, a
-      // keyboard drop would be read twice in two wordings.
-      onDragEnd: () => undefined,
-    }),
-    [titleOf, rowIds]
-  );
-
-  const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const activeId = String(event.active.id);
-      if (!event.over) return;
-      const overId = String(event.over.id);
-      // Released where it was picked up: nothing moved, and nothing is said.
-      if (overId === activeId) return;
-      announceMove(
-        activeId,
-        movePlacementTo(editor.placements, activeId, overId)
-      );
-      editor.moveTo(activeId, overId);
-    },
-    [announceMove, editor]
-  );
-
   return {
     visible,
     editor,
     isDrawn,
     hasArrangement,
-    sensors,
-    announcements,
-    handleDragEnd,
+    awaitingArrangement,
+    ring,
     moveCard,
+    dropCard,
     setCardWidth,
     stageReset,
     begin,

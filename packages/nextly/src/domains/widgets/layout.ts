@@ -789,38 +789,52 @@ function placementsOfVersion(
  *
  * 🔴 The invariant that keeps this safe: ANY write that can drop a placement
  * from the array must be an arranged one. An unarranged row is then only ever
- * the default plus removed flags, so following the default cannot bring back a
- * card the reader deliberately took away.
+ * the default plus the reader's choices about its cards (removed flags and
+ * per-card settings), so following the default cannot bring back a card the
+ * reader deliberately took away.
  */
 export function layoutIsArranged(stored: StoredLayout): boolean {
   return stored.unarranged !== true;
 }
 
 /**
- * The default arrangement with a reader's removals applied.
+ * The default arrangement with a reader's choices about its cards applied.
  *
  * For a row that still follows the default: positions, widths and the set of
- * cards all come from `defaults`, and the stored row contributes only which
- * widgets its reader removed.
+ * cards all come from `defaults`, and the stored row contributes only what its
+ * reader chose about each card -- that they removed it, and the settings they
+ * gave it. A setting changed outside customise mode is written to such a row,
+ * and reading only the removals back dropped it on every read. The default
+ * carries no settings of its own, so a stored one is always the reader's.
  *
  * Keyed by WIDGET, across the whole stored row and whatever its visibility, so
- * a removal of a card the reader has since lost access to is still honoured
- * the day access returns. `undefined` is a reader with no row.
+ * a removal or a setting on a card the reader has since lost access to is
+ * still honoured the day access returns, and a removed card keeps its settings
+ * for when it is put back. `undefined` is a reader with no row.
  */
 export function dismissalsApplied(
   defaults: readonly WidgetPlacement[],
   stored: StoredLayout | undefined
 ): WidgetPlacement[] {
-  const dismissed = new Set(
-    (stored?.placements ?? [])
-      .filter(placement => placement.removed)
-      .map(placement => placement.widgetId)
-  );
-  return defaults.map(placement =>
-    dismissed.has(placement.widgetId)
-      ? { ...placement, removed: true }
-      : placement
-  );
+  const chosen = new Map<
+    string,
+    { removed: boolean; config?: Record<string, unknown> }
+  >();
+  for (const placement of stored?.placements ?? []) {
+    chosen.set(placement.widgetId, {
+      removed: placement.removed,
+      ...(placement.config === undefined ? {} : { config: placement.config }),
+    });
+  }
+  return defaults.map(placement => {
+    const choice = chosen.get(placement.widgetId);
+    if (choice === undefined) return placement;
+    return {
+      ...placement,
+      removed: choice.removed,
+      ...(choice.config === undefined ? {} : { config: choice.config }),
+    };
+  });
 }
 
 /**

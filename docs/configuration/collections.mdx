@@ -52,9 +52,9 @@ export default defineCollection({
   },
   access: {
     read: true,
-    create: ({ permissions }) => permissions.includes("posts:create"),
-    update: ({ permissions }) => permissions.includes("posts:update"),
-    delete: ({ permissions }) => permissions.includes("posts:delete"),
+    create: ({ permissions }) => permissions.includes("create-posts"),
+    update: ({ permissions }) => permissions.includes("update-posts"),
+    delete: ({ permissions }) => permissions.includes("delete-posts"),
   },
   hooks: {
     beforeChange: [
@@ -349,22 +349,30 @@ A declared rule is the whole answer for a signed-in user: the role's permission 
 
 ```typescript
 access: {
-  create: ({ permissions }) => permissions.includes("posts:create"),
+  create: ({ permissions }) => permissions.includes("create-posts"),
   read: true,
-  update: ({ permissions }) => permissions.includes("posts:update"),
-  delete: ({ permissions }) => permissions.includes("posts:delete"),
+  update: ({ permissions }) => permissions.includes("update-posts"),
+  delete: ({ permissions }) => permissions.includes("delete-posts"),
 }
 ```
 
-The `AccessControlContext` passed to functions has the following shape:
+Every access rule — a collection's, a Single's and a field's — is handed one context, `AccessRuleContext` (`AccessControlContext` is the same type):
 
 | Property | Type | Description |
 |---|---|---|
-| `user` | `MinimalUser \| null` | The authenticated user (or `null` for unauthenticated requests). |
+| `user` | `MinimalUser \| null` | The authenticated user (or `null` for unauthenticated requests). For an API key, the user who made it. |
+| `req` | `RequestContext` | The request. For a field rule, `req.user` is the user object the request carries; for any other rule, the caller's `id`, `email` where known, and `roles`. |
 | `roles` | `string[]` | The user's role slugs (resolved from DB, includes inherited roles). Don't decide by these: check `permissions`. |
-| `permissions` | `string[]` | Effective permissions in `"resource:action"` format. |
-| `operation` | `"create" \| "read" \| "update" \| "delete"` | The operation being checked. |
-| `collection` | `string` | The collection slug. |
+| `permissions` | `string[]` | Effective permissions, spelled as the Roles screen spells them: `update-posts`. |
+| `principal` | `Principal \| null` | A plugin-defined signed-in person, or `null`. |
+| `operation` | `"create" \| "read" \| "update" \| "delete" \| "publish" \| "unpublish"` | The operation being checked. |
+| `target` | `{ kind, slug }` | What is being checked: a `"collection"`, a `"single"`, or, for a field rule, the `"component"` the field belongs to. |
+| `collection` | `string` | The target's slug, the same as `target.slug`. |
+| `id`, `data` | optional | The entry, where the rule judges a known one. A collection's rule is asked before any entry is read, so it has none. |
+| `locale` | `string \| undefined` | The one language the operation is in, where it is in one. See [Localization](/docs/localization#access-rules-and-languages). |
+| `locales` | `string[]` | Every language the operation involves; every configured language for an operation on the whole entry, such as a delete. |
+
+Rules were once handed permissions as `posts:update`. For one release that spelling is still in the list, after the Roles screen's, so an existing rule keeps working; Nextly warns once per rule that checks it. It stops being accepted in a later release.
 
 **Rules:**
 

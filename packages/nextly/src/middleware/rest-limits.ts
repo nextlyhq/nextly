@@ -22,6 +22,13 @@
  *
  * @module middleware/rest-limits
  */
+import { container } from "../di/container";
+import { LIMIT_STORE_CALL_TIMEOUT_MS } from "../domains/limits/call-deadline";
+import { openWhileStoreIsDown } from "../domains/limits/core-limit-outage";
+import { guardedAppRateLimitStore } from "../domains/limits/core-limit-store";
+import type { LimitStoreSelection } from "../domains/limits/limit-store-setting";
+import { NextlyError } from "../errors/nextly-error";
+import { consoleLogger } from "../shared/types";
 import { getTrustedClientIp } from "../utils/get-trusted-client-ip";
 
 import {
@@ -465,14 +472,144 @@ export function createRestLimits(
 ): RestLimitDecider {
   if (!config.enabled) return UNLIMITED;
   const settings = settingsFrom(config);
-  console.log(
+  consoleLogger.info(
     `[Nextly] Rate limiting enabled: ${settings.perAddress.read} reads / ${settings.perAddress.write} writes per ${settings.windowMs / 1000}s window per address`
   );
   return new RestLimits(
     settings,
-    config.store ?? new InMemoryRateLimitStore(),
+    // Let through while the store is away: the general API limit refusing
+    // would take the site down with its store (see `core-limit-outage`).
+    openWhileStoreIsDown(config.store ?? new InMemoryRateLimitStore()),
     readers
   );
+}
+
+/**
+ * The store the REST limit counts in, from the sanitized `rateLimit` config:
+ * an app's store of the older contract when it configured one, else where
+ * the services count core's own limits, read per call.
+ *
+ * @param startServices - Registers the services, asked only when a shared
+ *   store is selected.
+ */
+export function restLimitCounts(
+  config:
+    | { store?: RateLimitStore; limitStore?: LimitStoreSelection }
+    | undefined,
+  startServices: () => Promise<unknown>
+): RateLimitStore {
+  const own = config?.store;
+  if (own !== undefined) {
+    return coreCountsOr(guardedAppRateLimitStore(own), {
+      consume: own.consume !== undefined,
+    });
+  }
+  const shared =
+    config?.limitStore !== undefined && config.limitStore !== "memory";
+  return coreCountsOr(new InMemoryRateLimitStore(), {
+    consume: true,
+    ...(shared ? { startServices } : {}),
+  });
+}
+
+/**
+ * Whether `start` settled as started within `timeoutMs`: false when it
+ * failed, or was still under way when the time passed.
+ */
+async function startedWithin(
+  start: () => Promise<unknown>,
+  timeoutMs: number
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<false>(resolve => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+    // A pending wait never keeps the process alive on its own.
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([
+      Promise.resolve()
+        .then(start)
+        .then(
+          () => true,
+          () => false
+        ),
+      late,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Where core's own limits count, read on every call, or `fallback` while the
+ * services are not registered yet.
+ *
+ * Read per call because the REST limit is built when the route handler is,
+ * which can be before the services are: one store chosen then would be this
+ * process's memory for good, and on the database store each instance would
+ * count a budget of its own.
+ *
+ * @param options.startServices - Registers the services, for a site whose
+ *   limits count in a shared store: a cold worker serving only requests that
+ *   never start them would otherwise count in its own memory for good. A
+ *   start is waited for no longer than a store call
+ *   ({@link LIMIT_STORE_CALL_TIMEOUT_MS}).
+ * @param options.consume - Whether the store offers `consume`. An app's store
+ *   of the older contract may not, and the REST limit picks its counting path
+ *   by whether `consume` exists, so it is offered only where the store has it.
+ */
+export function coreCountsOr(
+  fallback: RateLimitStore,
+  options: { startServices?: () => Promise<unknown>; consume: boolean }
+): RateLimitStore {
+  const registered = (): RateLimitStore | undefined => {
+    try {
+      if (container.has("coreRateLimitStore")) {
+        return container.get<RateLimitStore>("coreRateLimitStore");
+      }
+    } catch {
+      // The container is not initialized yet.
+    }
+    return undefined;
+  };
+  const current = async (): Promise<RateLimitStore> => {
+    const store = registered();
+    if (store !== undefined) return store;
+    if (options.startServices === undefined) return fallback;
+    // The REST limit needs the services only to find its store. A route that
+    // never starts them must not fail, nor wait, because they could not start
+    // (a failure) or have not yet (a start held up behind a database that does
+    // not answer): this request counts in this process's memory instead, as
+    // the general limit lets requests through while its store is away. The
+    // start itself carries on, and a later request finds its store.
+    const started = await startedWithin(
+      options.startServices,
+      LIMIT_STORE_CALL_TIMEOUT_MS
+    );
+    return started ? (registered() ?? fallback) : fallback;
+  };
+  const counts: RateLimitStore = {
+    increment: async (key, windowMs) =>
+      (await current()).increment(key, windowMs),
+    reset: async key => (await current()).reset(key),
+  };
+  if (!options.consume) return counts;
+  return {
+    ...counts,
+    consume: async (key, limit, windowMs) => {
+      const store = await current();
+      // Offered only where the store has it; refused rather than emulated
+      // otherwise, since a peek emulated by `increment` would record the
+      // very request it was asked not to.
+      if (!store.consume) {
+        throw NextlyError.internal({
+          logContext: { reason: "rest-limit-store-without-consume" },
+        });
+      }
+      return store.consume(key, limit, windowMs);
+    },
+  };
 }
 
 /**

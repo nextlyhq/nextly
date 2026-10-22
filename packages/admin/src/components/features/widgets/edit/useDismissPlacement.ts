@@ -35,13 +35,10 @@ import { useCallback } from "react";
 
 import { toast } from "@admin/components/ui";
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
-import type {
-  DashboardLayoutResponse,
-  WidgetPlacement,
-} from "@admin/types/dashboard/widgets";
 
 import { removePlacement, restorePlacement } from "../layout-editor";
 
+import { landed, singleCardWrite } from "./single-card-write";
 import type { ArrangementAnnouncer } from "./useArrangementAnnouncer";
 import type { DashboardFocus } from "./useDashboardFocus";
 
@@ -58,37 +55,6 @@ export interface DismissPlacement {
   dismiss: (placementId: string, title: string) => void;
   /** Put the noticed card back, now. */
   undo: (notice: RemovalNotice) => void;
-}
-
-/** The single-card write: the whole list with one card changed, not arranged. */
-function singleCardWrite(
-  stored: DashboardLayoutResponse,
-  placements: WidgetPlacement[]
-) {
-  return {
-    placements,
-    version: stored.version,
-    scope: stored.scope,
-    arranged: false,
-  };
-}
-
-/**
- * Whether the arrangement the client now HOLDS shows the card as intended.
- *
- * 🔴 The write's own success says the SERVER accepted it; the grid draws the
- * cache, and the re-read that fills it can fail on its own --
- * `invalidateQueries` swallows that and resolves anyway. Read synchronously,
- * and safely: the write's `onSuccess` returns the invalidation, and TanStack
- * awaits it before a `mutate` callback runs.
- */
-function landed(
-  layout: UseDashboardLayoutResult,
-  placementId: string,
-  removed: boolean
-): boolean {
-  const settled = layout.cached()?.placements.find(p => p.id === placementId);
-  return settled?.removed === removed;
 }
 
 const REFRESH_FAILED = (title: string) =>
@@ -123,7 +89,7 @@ export function useDismissPlacement(
         ),
         {
           onSuccess: () => {
-            if (!landed(layout, placementId, true)) {
+            if (!landed(layout, placementId, p => p.removed)) {
               toast.error(REFRESH_FAILED(title));
               return;
             }
@@ -159,7 +125,7 @@ export function useDismissPlacement(
         ),
         {
           onSuccess: () => {
-            if (!landed(layout, placementId, false)) {
+            if (!landed(layout, placementId, p => !p.removed)) {
               toast.error(REFRESH_FAILED(title));
               return;
             }

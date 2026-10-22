@@ -58,6 +58,22 @@ export interface WidgetSettingBase {
    * where the renderer reads, not only where the compiler agrees.
    */
   admin?: { description?: string };
+  /**
+   * Whether the setting sits on the card itself, changeable without opening
+   * the settings sheet, as Over time's date range does. At most one per widget.
+   *
+   * A top-level key the field configs do not have, deliberately: it is read by
+   * the card's header, never by `FieldRenderer`, which ignores it.
+   *
+   * Drawn by the card's header at the medium and large tiers, and offered in
+   * the card's menu at every size, when the setting is a `select` or a
+   * `checkbox`; a change there is saved at once for the reader. A quick
+   * setting of any other type stays in the settings sheet.
+   *
+   * @experimental The shape may still change while the quick setting's
+   * controls settle.
+   */
+  quick?: boolean;
 }
 
 /**
@@ -94,6 +110,90 @@ export type WidgetSetting =
     });
 
 /**
+ * A setting over the site's content: the collection a card reads, and the
+ * filter, sort and grouping over that collection.
+ *
+ * The same vocabulary as `WidgetSetting`, judged by the same table, the same
+ * declaration rules and the same reader below. A dependent setting (`filter`,
+ * `sort`, `groupBy`) names in `of` the Collection setting it works over.
+ *
+ * 🔴 Not a member of `WidgetSetting`, and that is about drawing, not about
+ * rules. `WidgetSetting` is what the settings sheet hands to `FieldRenderer`
+ * with no cast, and no field config draws a collection picker or a filter
+ * builder: the sheet draws these with controls of its own, from the choices
+ * the server offers the reader.
+ *
+ * Registration still refuses them by name (`CONTENT_SETTING_NOT_DRAWN`), for
+ * a reason about the QUERY rather than the sheet: a registered widget's
+ * settings reach its query through `applyWidgetSettings`, whose knobs are
+ * `limit` alone, so a content setting declared there would be drawn and saved
+ * and change nothing the card shows. Only a declared widget, whose card query
+ * is built from these settings, may hold one until those knobs carry them.
+ *
+ * @experimental The shape may still change while the settings sheet's
+ * content controls are built.
+ */
+export type ContentSetting =
+  | (WidgetSettingBase & { type: "collection"; defaultValue?: string })
+  | (WidgetSettingBase & {
+      type: "filter";
+      of: string;
+      defaultValue?: Record<string, unknown>;
+    })
+  | (WidgetSettingBase & { type: "sort"; of: string; defaultValue?: string })
+  | (WidgetSettingBase & {
+      type: "groupBy";
+      of: string;
+      defaultValue?: string;
+    });
+
+/**
+ * Every setting core's rules judge and its reader reads.
+ *
+ * @experimental As {@link ContentSetting}, which it includes.
+ */
+export type AnyWidgetSetting = WidgetSetting | ContentSetting;
+
+/**
+ * The types of setting that work over a Collection setting, named in `of`: a
+ * filter, a sort or a grouping only means something over a known collection.
+ */
+const DEPENDENT_TYPES: ReadonlySet<AnyWidgetSetting["type"]> = new Set([
+  "filter",
+  "sort",
+  "groupBy",
+]);
+
+/** A setting that works over one of its widget's Collection settings. */
+type DependentSetting = Extract<AnyWidgetSetting, { of: string }>;
+
+/** Whether a setting names, in `of`, the Collection setting it works over. */
+function isDependent(setting: AnyWidgetSetting): setting is DependentSetting {
+  return DEPENDENT_TYPES.has(setting.type);
+}
+
+/**
+ * The stable mark of registration's refusal of a content setting, which a
+ * test or a caller can match whatever the sentence around it says.
+ */
+export const CONTENT_SETTING_NOT_DRAWN = "WIDGET_CONTENT_SETTING_NOT_DRAWN";
+
+/** The setting types `FieldRenderer` draws, as registration admits them. */
+const FIELD_DRAWN: Record<WidgetSetting["type"], true> = {
+  text: true,
+  number: true,
+  checkbox: true,
+  select: true,
+};
+
+/** Whether a setting is one a registered widget's query cannot apply yet. */
+function isContentSetting(
+  setting: AnyWidgetSetting
+): setting is ContentSetting {
+  return !Object.hasOwn(FIELD_DRAWN, setting.type);
+}
+
+/**
  * Whether a value is usable as a setting of each type.
  *
  * 🔴 ONE table, read in both directions this module judges a value in: a
@@ -127,7 +227,7 @@ interface SettingLimits {
 }
 
 const USABLE_AS: Record<
-  WidgetSetting["type"],
+  AnyWidgetSetting["type"],
   (value: unknown, limits: SettingLimits) => boolean
 > = {
   text: value => typeof value === "string",
@@ -140,7 +240,20 @@ const USABLE_AS: Record<
     typeof value === "string" &&
     limits.options !== undefined &&
     limits.options.some(option => option.value === value),
+  // A collection, a sort and a grouping each name something: a blank name
+  // names nothing, so it is no more usable than an absent one.
+  collection: value => isName(value),
+  sort: value => isName(value),
+  groupBy: value => isName(value),
+  // The list view's conditions: a plain object of them.
+  filter: value =>
+    typeof value === "object" && value !== null && !Array.isArray(value),
 };
+
+/** Whether a value names something: a string with more than blanks in it. */
+function isName(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
 
 /** Whether a finite number sits inside the range its setting declares. */
 function withinBounds(value: number, limits: SettingLimits): boolean {
@@ -153,14 +266,14 @@ function withinBounds(value: number, limits: SettingLimits): boolean {
 }
 
 /** What this setting's declaration narrows its values to. */
-function limitsOf(setting: WidgetSetting): SettingLimits {
+function limitsOf(setting: AnyWidgetSetting): SettingLimits {
   if (setting.type === "select") return { options: setting.options };
   if (setting.type === "number") return { min: setting.min, max: setting.max };
   return {};
 }
 
 /** Whether this is a type a setting may declare. */
-function isSettingType(value: unknown): value is WidgetSetting["type"] {
+function isSettingType(value: unknown): value is AnyWidgetSetting["type"] {
   // `Object.hasOwn` rather than `in`, because the type name comes from a
   // plugin's declaration: `"toString"` is `in` every object literal.
   return typeof value === "string" && Object.hasOwn(USABLE_AS, value);
@@ -255,19 +368,114 @@ function fail(message: string): never {
  * `plugins/__tests__/channel-divergence` exists to protect.
  */
 export function widgetSettingsProblem(settings: unknown): string | undefined {
-  if (settings === undefined) return undefined;
-  if (!Array.isArray(settings)) return '"settings" must be an array';
+  const [problem] = widgetSettingsProblems(settings);
+  if (problem !== undefined) return problem;
+  // Every setting is now known to be well formed, so each has a type.
+  const content = (settings as readonly AnyWidgetSetting[] | undefined)?.find(
+    isContentSetting
+  );
+  return content === undefined ? undefined : contentSettingRefusal(content);
+}
+
+/**
+ * Registration's refusal of a setting a registered widget's query cannot apply
+ * yet, saying what to use instead. It carries `CONTENT_SETTING_NOT_DRAWN`, so it
+ * can be told apart from every other settings fault by more than its words.
+ */
+function contentSettingRefusal({ name, type }: ContentSetting): string {
+  return (
+    `setting "${name}" is a "${type}" setting, which a registered widget's query cannot apply yet ` +
+    `(${CONTENT_SETTING_NOT_DRAWN}): use a text, number, checkbox or select ` +
+    `setting until those settings reach a registered widget's query`
+  );
+}
+
+/**
+ * Every problem with a set of settings, of any of the eight types, in the
+ * order they were declared; empty when there is none.
+ *
+ * The declaration's channel reads all of them, naming every fault at once; the
+ * registry's two channels read the first (`widgetSettingsProblem`). One rule
+ * set for both, so a declared setting and a registered one cannot be judged
+ * two ways.
+ */
+export function widgetSettingsProblems(settings: unknown): string[] {
+  if (settings === undefined) return [];
+  if (!Array.isArray(settings)) return ['"settings" must be an array'];
   if (settings.length > MAX_WIDGET_SETTINGS) {
-    return `at most ${MAX_WIDGET_SETTINGS} settings, got ${settings.length}`;
+    return [`at most ${MAX_WIDGET_SETTINGS} settings, got ${settings.length}`];
   }
 
   const seen = new Set<string>();
+  const problems: string[] = [];
+  const wellFormed: AnyWidgetSetting[] = [];
   for (const setting of settings) {
     const problem = settingProblem(setting, seen);
-    if (problem !== undefined) return problem;
+    if (problem === undefined) wellFormed.push(setting as AnyWidgetSetting);
+    else problems.push(problem);
   }
-  return undefined;
+  // Every kind in one answer, so one restart names every fault.
+  return [
+    ...problems,
+    ...dependencyProblems(wellFormed, settings),
+    ...quickProblems(wellFormed),
+  ];
 }
+
+/**
+ * Why a widget's settings mark too many as quick, or nothing when they do not.
+ *
+ * A card's header holds one quick setting: two would each take the
+ * header's one place, and which one a person saw would depend on the order
+ * they were declared in.
+ */
+function quickProblems(settings: readonly AnyWidgetSetting[]): string[] {
+  const quick = settings.filter(setting => setting.quick === true);
+  if (quick.length <= 1) return [];
+  return [
+    `settings ${quick.map(setting => `"${setting.name}"`).join(", ")} are all marked quick; a widget may mark at most one`,
+  ];
+}
+
+/**
+ * Every well-formed dependent setting whose `of` names no Collection setting
+ * of the same widget.
+ *
+ * A property of the SET: the name a dependency gives is only right or wrong
+ * against its siblings. A Collection setting counts by its name even when it
+ * has a fault of its own, which is reported once, as itself, rather than
+ * again through every setting that depends on it.
+ */
+function dependencyProblems(
+  dependents: readonly AnyWidgetSetting[],
+  all: readonly unknown[]
+): string[] {
+  const collections = new Set(
+    all
+      .filter(
+        (setting): setting is { type: "collection"; name: string } =>
+          typeof setting === "object" &&
+          setting !== null &&
+          (setting as { type?: unknown }).type === "collection" &&
+          typeof (setting as { name?: unknown }).name === "string"
+      )
+      .map(setting => setting.name)
+  );
+  return dependents
+    .filter(isDependent)
+    .filter(setting => !collections.has(setting.of))
+    .map(
+      setting =>
+        `setting "${setting.name}" depends on ${describeValue(setting.of)}, which is not a Collection setting of this widget`
+    );
+}
+
+/**
+ * The fault for a setting that is not an object at all. Named so a caller that
+ * can say which setting it was, as a declaration keyed by name can, puts its
+ * own words in place of this one.
+ */
+export const SETTING_NOT_AN_OBJECT = "every setting must be an object";
 
 /**
  * Why one setting cannot be used, or `undefined` when it can.
@@ -285,12 +493,13 @@ function settingProblem(
   seen: Set<string>
 ): string | undefined {
   if (typeof setting !== "object" || setting === null) {
-    return "every setting must be an object";
+    return SETTING_NOT_AN_OBJECT;
   }
-  const { name, type, defaultValue, ...rest } = setting as {
+  const { name, type, defaultValue, quick, ...rest } = setting as {
     name?: unknown;
     type?: unknown;
     defaultValue?: unknown;
+    quick?: unknown;
     options?: unknown;
     min?: unknown;
     max?: unknown;
@@ -309,6 +518,9 @@ function settingProblem(
   if (!isSettingType(type)) {
     return `setting "${name}" has type ${describeValue(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
   }
+  if (quick !== undefined && typeof quick !== "boolean") {
+    return `setting "${name}" has quick ${describeValue(quick)}; expected true or false`;
+  }
 
   return problemForType(type, rest, defaultValue, name);
 }
@@ -323,7 +535,7 @@ function settingProblem(
  * are ordered: a default can only be judged against options already known good.
  */
 function problemForType(
-  type: WidgetSetting["type"],
+  type: AnyWidgetSetting["type"],
   setting: { options?: unknown; min?: unknown; max?: unknown },
   defaultValue: unknown,
   name: string
@@ -342,7 +554,7 @@ function problemForType(
  * comparing against a value it had never confirmed was a number.
  */
 function declaredLimits(
-  type: WidgetSetting["type"],
+  type: AnyWidgetSetting["type"],
   setting: { options?: unknown; min?: unknown; max?: unknown }
 ): SettingLimits | string {
   if (type === "select") {
@@ -374,7 +586,7 @@ function isOptionalFiniteNumber(value: unknown): value is number | undefined {
 
 /** Why this setting's declared default is unusable, or `undefined`. */
 function defaultProblem(
-  type: WidgetSetting["type"],
+  type: AnyWidgetSetting["type"],
   limits: SettingLimits,
   defaultValue: unknown,
   name: string
@@ -431,12 +643,12 @@ export function validateWidgetSettings(
 }
 
 /** Whether a stored value is usable as this setting's type. */
-function matchesType(setting: WidgetSetting, value: unknown): boolean {
+function matchesType(setting: AnyWidgetSetting, value: unknown): boolean {
   return USABLE_AS[setting.type](value, limitsOf(setting));
 }
 
 /** The default a setting declares, or `undefined` when it declares none. */
-function declaredDefault(setting: WidgetSetting): unknown {
+function declaredDefault(setting: AnyWidgetSetting): unknown {
   const { defaultValue } = setting as { defaultValue?: unknown };
   return defaultValue;
 }
@@ -449,7 +661,7 @@ function declaredDefault(setting: WidgetSetting): unknown {
  * its unknown keys; this is a reading of it, not a rewrite.
  */
 export function resolveWidgetSettings(
-  settings: readonly WidgetSetting[] | undefined,
+  settings: readonly AnyWidgetSetting[] | undefined,
   stored: Record<string, unknown> | undefined
 ): Record<string, unknown> {
   if (!settings || settings.length === 0) return {};
@@ -466,9 +678,18 @@ export function resolveWidgetSettings(
    * `constructor` and `toString` misbehave the same way without the confusion.
    */
   const resolved: Record<string, unknown> = Object.create(null);
-  for (const setting of settings) {
+  // The settings a dependent one works over first, since it reads them.
+  const ordered = [
+    ...settings.filter(setting => !isDependent(setting)),
+    ...settings.filter(isDependent),
+  ];
+  for (const setting of ordered) {
     const value = stored?.[setting.name];
-    if (value !== undefined && matchesType(setting, value)) {
+    // A dependent setting whose Collection setting has no value is hidden by
+    // it: there is nothing to filter, sort or group, so its stored value is
+    // not handed on, and its starting value is.
+    const hidden = isDependent(setting) && resolved[setting.of] === undefined;
+    if (!hidden && value !== undefined && matchesType(setting, value)) {
       resolved[setting.name] = value;
       continue;
     }
@@ -516,7 +737,7 @@ const QUERY_KNOBS: Record<string, WidgetSetting["type"]> = {
  */
 export function applyWidgetSettings<T extends { limit?: number }>(
   query: T,
-  settings: readonly WidgetSetting[] | undefined,
+  settings: readonly AnyWidgetSetting[] | undefined,
   stored: Record<string, unknown> | undefined
 ): T {
   if (!settings || settings.length === 0) return query;

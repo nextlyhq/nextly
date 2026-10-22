@@ -9,7 +9,20 @@
  * @experimental
  */
 
-import { and, desc, eq, inArray, isNull, lt, type SQL } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  exists,
+  inArray,
+  isNull,
+  lt,
+  notExists,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 
 import { toDbError } from "../../database/errors";
 import { NextlyError } from "../../errors";
@@ -65,13 +78,37 @@ export interface ContentEventQuery {
   parts?: readonly string[];
   /** Only events of these kinds. */
   kinds?: readonly string[];
+  /**
+   * The parts the reader may be shown. An event that involved none of them is
+   * left out, unless it involved no part at all, and each event's parts are
+   * narrowed to them. Absent shows every part.
+   */
+  visibleParts?: readonly string[];
   /** At most this many events. */
   limit: number;
   /** Only events older than this event (its id), for the next page. */
   before?: string;
+  /**
+   * Which life of the subject to read. A document id can live more than once
+   * (deleted, then made again under the same id), and each life's events are
+   * its own: `current` is the life not yet ended, and `{ endedBy }` the life a
+   * given deletion ended. Absent reads every life, as a storage read.
+   */
+  life?: "current" | { endedBy: string };
 }
 
 const MAX_PAGE = 100;
+
+/** The kinds of event that capture a version, and so name who wrote it. */
+const PRODUCING_KINDS = ["created", "saved", "restored", "published"] as const;
+
+/** Who recorded an event, as the record keeps them. */
+export interface ContentEventProducer {
+  actorKind: ContentEventActorKind;
+  actorId: string | null;
+  actorPrincipalKind: string | null;
+  actorName: string | null;
+}
 
 /**
  * The record of content events, read.
@@ -113,22 +150,99 @@ export class ContentEventsRepository extends BaseService {
         ...row,
         occurredAt: new Date(row.occurredAt),
         payload: parsedPayload(row.payload),
-        parts: partsByEvent.get(row.id) ?? [],
+        parts: visibleOf(partsByEvent.get(row.id) ?? [], query.visibleParts),
       })),
       nextBefore:
         rows.length > query.limit ? (page[page.length - 1]?.id ?? null) : null,
     };
   }
 
-  /** What narrows the read: the subject, then any kinds, cursor and parts. */
-  private conditions(subject: ContentEventSubject, query: ContentEventQuery) {
-    const conditions: SQL[] = [
+  /**
+   * The id of the subject's latest deletion, the event that ended its most
+   * recent life, or null when it has never been deleted.
+   */
+  async latestEnd(subject: ContentEventSubject): Promise<string | null> {
+    const rows = await withDbErrors(
+      this.dialect,
+      async () =>
+        (await this.db
+          .select({ id: this.events.id })
+          .from(this.events)
+          .where(
+            and(
+              this.subjectConditions(subject),
+              eq(this.events.endsSubject, true)
+            )
+          )
+          .orderBy(desc(this.events.id))
+          .limit(1)) as { id: string }[]
+    );
+    return rows[0]?.id ?? null;
+  }
+
+  /**
+   * Who produced each of these versions of a subject: the actor of the event
+   * that recorded the version, keyed by its number.
+   *
+   * One read for the whole page of versions. The producing events are a
+   * create, a save, a restore and a publish that captured a version; a naming
+   * is never one, since whoever names a version did not write it. Where a
+   * version has more than one (a create straight to published records both),
+   * the first recorded wins. A version number is never reused within a
+   * document, so no life of the document needs choosing.
+   */
+  async producersOf(
+    subject: ContentEventSubject,
+    versionNos: readonly number[]
+  ): Promise<Map<number, ContentEventProducer>> {
+    const producers = new Map<number, ContentEventProducer>();
+    if (versionNos.length === 0) return producers;
+    const e = this.events;
+    const rows = await withDbErrors(
+      this.dialect,
+      async () =>
+        (await this.db
+          .select({
+            versionNo: e.versionNo,
+            actorKind: e.actorKind,
+            actorId: e.actorId,
+            actorPrincipalKind: e.actorPrincipalKind,
+            actorName: e.actorName,
+          })
+          .from(e)
+          .where(
+            and(
+              this.subjectConditions(subject),
+              inArray(e.versionNo, [...versionNos]),
+              inArray(e.kind, [...PRODUCING_KINDS])
+            )
+          )
+          .orderBy(asc(e.id))) as (ContentEventProducer & {
+          versionNo: number | null;
+        })[]
+    );
+    for (const { versionNo, ...producer } of rows) {
+      if (versionNo !== null && !producers.has(versionNo)) {
+        producers.set(versionNo, producer);
+      }
+    }
+    return producers;
+  }
+
+  /** The subject an event is about. */
+  private subjectConditions(subject: ContentEventSubject): SQL {
+    return and(
       eq(this.events.subjectKind, subject.kind),
       subject.kind === "release"
         ? isNull(this.events.subjectSlug)
         : eq(this.events.subjectSlug, subject.slug),
-      eq(this.events.subjectId, subject.id),
-    ];
+      eq(this.events.subjectId, subject.id)
+    )!;
+  }
+
+  /** What narrows the read: the subject, then any kinds, cursor and parts. */
+  private conditions(subject: ContentEventSubject, query: ContentEventQuery) {
+    const conditions: SQL[] = [this.subjectConditions(subject)];
     if (query.kinds?.length) {
       conditions.push(inArray(this.events.kind, [...query.kinds]));
     }
@@ -138,7 +252,41 @@ export class ContentEventsRepository extends BaseService {
     if (query.parts?.length) {
       conditions.push(inArray(this.parts.part, [...query.parts]));
     }
+    if (query.visibleParts !== undefined) {
+      conditions.push(this.involvesVisiblePart(query.visibleParts));
+    }
+    if (query.life !== undefined) {
+      conditions.push(
+        query.life === "current"
+          ? isNull(this.events.endedBy)
+          : eq(this.events.endedBy, query.life.endedBy)
+      );
+    }
     return and(...conditions);
+  }
+
+  /**
+   * An event that involved one of these parts, or no part at all: one about
+   * the whole document rather than any part of it.
+   */
+  private involvesVisiblePart(visible: readonly string[]): SQL {
+    const partsOfEvent = eq(this.parts.eventId, this.events.id);
+    const noPart = notExists(
+      this.db
+        .select({ one: sql`1` })
+        .from(this.parts)
+        .where(partsOfEvent)
+    );
+    if (visible.length === 0) return noPart;
+    return or(
+      noPart,
+      exists(
+        this.db
+          .select({ one: sql`1` })
+          .from(this.parts)
+          .where(and(partsOfEvent, inArray(this.parts.part, [...visible])))
+      )
+    )!;
   }
 
   /** One row more than the page, which says whether another page exists. */
@@ -214,8 +362,20 @@ export class ContentEventsRepository extends BaseService {
   }
 }
 
-/** Refuse a page size outside what one read may return. */
-function assertPageSize(limit: number): void {
+/** An event's parts, narrowed to those the reader may be shown. */
+function visibleOf(
+  parts: string[],
+  visible: readonly string[] | undefined
+): string[] {
+  if (visible === undefined) return parts;
+  return parts.filter(part => visible.includes(part));
+}
+
+/**
+ * Refuse a page size outside what one read may return. Exported so a caller
+ * can refuse it before its access check, by the same bounds.
+ */
+export function assertPageSize(limit: number): void {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_PAGE) {
     throw NextlyError.invalidInput({
       message: `A page of content events holds between 1 and ${MAX_PAGE} events.`,

@@ -13,14 +13,16 @@
  * @packageDocumentation
  */
 
-import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq } from "drizzle-orm";
-
-import { container } from "../../di/container";
-import type {
-  ApiKeyMeta,
-  ApiKeyService,
+import type { AuthContext } from "../../auth/middleware";
+import {
+  apiKeyPermissionsFor,
+  type ApiKeyOperation,
+} from "../../domains/auth/api-key-policy";
+import {
+  apiKeyViewer,
+  type ApiKeyMeta,
 } from "../../domains/auth/services/api-key-service";
+import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
   CheckAccessArgs,
@@ -49,7 +51,14 @@ import type {
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
-import { mapPermission, mapRole } from "./helpers";
+import {
+  authorizeChecked,
+  checkedCaller,
+  checkedRoleChange,
+  checkWrite,
+  mapPermission,
+  mapRole,
+} from "./helpers";
 
 /**
  * `nextly.roles.*` namespace — role CRUD and permission assignment.
@@ -119,6 +128,7 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
     },
 
     async create(args: CreateRoleArgs): Promise<MutationResult<Role>> {
+      // Checked as the REST route checks it, before anything is written.
       // Pass through caller-provided permissionIds and childRoleIds.
       // Previously these were hardcoded to empty arrays, which made
       // every create call fail against the service's validation
@@ -128,14 +138,23 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
       // ordinary Direct API callers always need to pass at least one.
       //
       // PR 4: createRole returns the created role directly.
-      const role = await ctx.rbacRoleService.createRole({
-        name: args.data.name,
-        slug: args.data.slug,
-        description: args.data.description,
-        level: args.data.level ?? 0,
-        permissionIds: args.data.permissionIds ?? [],
-        childRoleIds: args.data.childRoleIds ?? [],
-      });
+      // Checked as the REST route checks it, before anything is written,
+      // then run as its caller: a role made to inherit super-admin is a grant
+      // of it, decided by the rule on granting super-admin.
+      const role = await checkedRoleChange(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.roles.create,
+        () =>
+          ctx.rbacRoleService.createRole({
+            name: args.data.name,
+            slug: args.data.slug,
+            description: args.data.description,
+            level: args.data.level ?? 0,
+            permissionIds: args.data.permissionIds ?? [],
+            childRoleIds: args.data.childRoleIds ?? [],
+          })
+      );
       return {
         message: "Role created.",
         item: mapRole(role),
@@ -145,12 +164,18 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
     async update(args: UpdateRoleArgs): Promise<MutationResult<Role>> {
       // PR 4: updateRole returns void; getRoleById returns the role
       // directly. Both throw on failure.
-      await ctx.rbacRoleService.updateRole(args.id, {
-        name: args.data.name,
-        slug: args.data.slug,
-        description: args.data.description ?? undefined,
-        level: args.data.level,
-      });
+      await checkedRoleChange(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.roles.update,
+        () =>
+          ctx.rbacRoleService.updateRole(args.id, {
+            name: args.data.name,
+            slug: args.data.slug,
+            description: args.data.description ?? undefined,
+            level: args.data.level,
+          })
+      );
       const updated = await ctx.rbacRoleService.getRoleById(args.id);
       return {
         message: "Role updated.",
@@ -162,7 +187,12 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
       args: DeleteRoleArgs
     ): Promise<MutationResult<{ id: string }>> {
       // PR 4: deleteRole returns void; throws on failure.
-      await ctx.rbacRoleService.deleteRole(args.id);
+      await checkedRoleChange(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.roles.delete,
+        () => ctx.rbacRoleService.deleteRole(args.id)
+      );
       return {
         message: "Role deleted.",
         item: { id: args.id },
@@ -195,6 +225,11 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
     },
 
     async setPermissions(args: SetRolePermissionsArgs): Promise<Permission[]> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.roles.setPermissions
+      );
       const updatedPerms =
         await ctx.rbacRolePermissionService.setRolePermissions(
           args.roleId,
@@ -229,9 +264,7 @@ export interface PermissionsNamespace {
   find(args?: FindPermissionsArgs): Promise<ListResult<Permission>>;
   findByID(args: FindPermissionByIDArgs): Promise<Permission | null>;
   create(args: CreatePermissionArgs): Promise<MutationResult<Permission>>;
-  delete(
-    args: DeletePermissionArgs
-  ): Promise<MutationResult<{ id: string }>>;
+  delete(args: DeletePermissionArgs): Promise<MutationResult<{ id: string }>>;
 }
 
 /**
@@ -295,6 +328,11 @@ export function createPermissionsNamespace(
     async create(
       args: CreatePermissionArgs
     ): Promise<MutationResult<Permission>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.permissions.create
+      );
       const { name, slug, action, resource, description } = args.data;
 
       // PR 4: ensurePermission returns `{ id, created }` directly and
@@ -320,6 +358,11 @@ export function createPermissionsNamespace(
     async delete(
       args: DeletePermissionArgs
     ): Promise<MutationResult<{ id: string }>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.permissions.delete
+      );
       // PR 4: deletePermissionById returns void; throws on failure.
       await ctx.rbacPermissionService.deletePermissionById(args.id);
       // envelope so callers can surface a server-authored toast.
@@ -390,61 +433,6 @@ export function createAccessNamespace(ctx: NextlyContext): AccessNamespace {
 }
 
 /**
- * Narrow structural view of the private `apiKeysTable` field on
- * `ApiKeyService`. The service does not expose a public method to look up a
- * key's owner by ID, so we reach into the table via this cast exclusively for
- * the trusted server-side ownership-resolution path used by
- * `apiKeys.update()` and `apiKeys.revoke()`.
- */
-interface ApiKeyServicePrivateTable {
-  readonly apiKeysTable: {
-    readonly id: unknown;
-    readonly userId: unknown;
-  };
-}
-
-/**
- * Resolve the owner userId of an API key. Required because
- * `ApiKeyService.updateApiKey()` / `revokeApiKey()` expect a `userId`
- * argument for their internal ownership check, even though the Direct API
- * operates in a trusted context and bypasses ownership.
- */
-async function resolveApiKeyOwner(
-  apiKeyService: ApiKeyService,
-  id: string
-): Promise<string> {
-  const adapter = container.get<DrizzleAdapter>("adapter");
-  const privateTable = (apiKeyService as unknown as ApiKeyServicePrivateTable)
-    .apiKeysTable;
-
-  // Drizzle's builder chain is generic over dialect and the adapter
-  // returns `unknown` to keep the interface dialect-neutral. Use the
-  // adapter's generic parameter to narrow to just the chain we need -
-  // avoids an `as` cast that ESLint's "unnecessary type assertion"
-  // autofix would strip.
-  const db = adapter.getDrizzle<{
-    select: (columns: Record<string, unknown>) => {
-      from: (table: unknown) => {
-        where: (cond: unknown) => {
-          limit: (n: number) => Promise<unknown[]>;
-        };
-      };
-    };
-  }>();
-
-  const rows = (await db
-    .select({ userId: privateTable.userId })
-    .from(privateTable)
-    .where(eq(privateTable.id as never, id))
-    .limit(1)) as Array<{ userId: string }>;
-
-  if (rows.length === 0) {
-    throw NextlyError.notFound({ logContext: { entity: "apiKey", apiKeyId: id } });
-  }
-  return rows[0].userId;
-}
-
-/**
  * `nextly.apiKeys.*` namespace — API key lifecycle management.
  */
 export interface ApiKeysNamespace {
@@ -456,26 +444,70 @@ export interface ApiKeysNamespace {
 }
 
 /**
+ * Whether `caller` may do `operation` to keys, asked of the decision the REST
+ * routes ask, so one caller gets one answer through either door. Making and
+ * changing keys is for a signed-in person only, as over REST: a key that could
+ * mint keys could outlive its own revocation.
+ */
+async function authorizeKeyOperation(
+  caller: AuthContext,
+  operation: ApiKeyOperation
+): Promise<void> {
+  await authorizeChecked(caller, { anyOf: apiKeyPermissionsFor(operation) });
+  if (operation !== "read" && caller.authMethod !== "session") {
+    throw NextlyError.forbidden({
+      logContext: { reason: "session-only", action: operation },
+    });
+  }
+}
+
+/**
  * Build the `apiKeys` namespace for a `Nextly` instance.
+ *
+ * A trusted call (the default) does what server code asks, for any person's
+ * keys. A checked call is judged as the REST routes judge its caller: the same
+ * permission for each operation, which then reaches every key (reading,
+ * updating and revoking anyone's), a key made only for the caller, and an
+ * owner's name shown only to a caller who may read users. Each check runs
+ * before anything is written.
  */
 export function createApiKeysNamespace(ctx: NextlyContext): ApiKeysNamespace {
   return {
     async list(args: ListApiKeysArgs = {}): Promise<ApiKeyMeta[]> {
-      const allUsers = !args.userId;
-      return await ctx.apiKeyService.listApiKeys(args.userId ?? "", {
-        allUsers,
+      const caller = checkedCaller(ctx.defaultConfig, args);
+      if (caller) await authorizeKeyOperation(caller, "read");
+      const keys = await ctx.apiKeyService.listApiKeys(args.userId ?? "", {
+        allUsers: !args.userId,
       });
+      if (!caller) return keys;
+      return keys.map(await apiKeyViewer(caller));
     },
 
     async findByID(args: FindApiKeyByIDArgs): Promise<ApiKeyMeta | null> {
-      return await ctx.apiKeyService.getApiKeyById(args.id, "", {
+      const caller = checkedCaller(ctx.defaultConfig, args);
+      if (caller) await authorizeKeyOperation(caller, "read");
+      const key = await ctx.apiKeyService.getApiKeyById(args.id, "", {
         allUsers: true,
       });
+      if (!caller || !key) return key;
+      return (await apiKeyViewer(caller))(key);
     },
 
     async create(
       args: CreateApiKeyArgs
     ): Promise<{ doc: ApiKeyMeta; key: string }> {
+      const caller = checkedCaller(ctx.defaultConfig, args);
+      if (caller) {
+        await authorizeKeyOperation(caller, "create");
+        // A key acts as its owner, so a checked call makes one only for its
+        // caller, as the admin does; the role ceiling then judges them.
+        if (args.userId !== caller.userId) {
+          throw NextlyError.forbidden({
+            logContext: { reason: "other-owner", entity: "apiKey" },
+          });
+        }
+      }
+
       const { meta, key } = await ctx.apiKeyService.createApiKey(args.userId, {
         name: args.name,
         description: args.description ?? undefined,
@@ -487,16 +519,27 @@ export function createApiKeysNamespace(ctx: NextlyContext): ApiKeysNamespace {
     },
 
     async update(args: UpdateApiKeyArgs): Promise<ApiKeyMeta> {
-      const userId = await resolveApiKeyOwner(ctx.apiKeyService, args.id);
-      return await ctx.apiKeyService.updateApiKey(args.id, userId, {
-        name: args.name,
-        description: args.description ?? undefined,
-      });
+      const caller = checkedCaller(ctx.defaultConfig, args);
+      if (caller) await authorizeKeyOperation(caller, "update");
+      // Any key: the permission to update keys reaches every key, and a
+      // trusted call is server code acting for any owner.
+      const updated = await ctx.apiKeyService.updateApiKey(
+        args.id,
+        caller?.userId ?? "",
+        { name: args.name, description: args.description ?? undefined },
+        { allUsers: true }
+      );
+      if (!caller) return updated;
+      return (await apiKeyViewer(caller))(updated);
     },
 
     async revoke(args: RevokeApiKeyArgs): Promise<{ success: true }> {
-      const userId = await resolveApiKeyOwner(ctx.apiKeyService, args.id);
-      await ctx.apiKeyService.revokeApiKey(args.id, userId);
+      const caller = checkedCaller(ctx.defaultConfig, args);
+      if (caller) await authorizeKeyOperation(caller, "delete");
+      // As `update`: the permission to revoke keys reaches every key.
+      await ctx.apiKeyService.revokeApiKey(args.id, caller?.userId ?? "", {
+        allUsers: true,
+      });
       return { success: true };
     },
   };

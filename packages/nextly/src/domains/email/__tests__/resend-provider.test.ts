@@ -225,6 +225,28 @@ describe("createResendProvider", () => {
     expect(r2.messageId).toBe("id2");
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledTimes(2);
   });
+
+  it("declares that it takes an idempotency key, and sends it as Resend's header", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(okResponse());
+
+    const adapter = createResendProvider({ apiKey: "re_test_key" });
+    await adapter.send({ ...BASE_OPTIONS, idempotencyKey: "nextly-abc" });
+
+    expect(adapter.acceptsIdempotencyKey).toBe(true);
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0];
+    expect(init?.headers).toMatchObject({ "Idempotency-Key": "nextly-abc" });
+    expect(sentBody()).not.toHaveProperty("idempotencyKey");
+  });
+
+  it("sends no Idempotency-Key header for a send without a key", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(okResponse());
+
+    const adapter = createResendProvider({ apiKey: "re_test_key" });
+    await adapter.send(BASE_OPTIONS);
+
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0];
+    expect(init?.headers).not.toHaveProperty("Idempotency-Key");
+  });
 });
 
 describe("Resend adapter — endpoint resolution", () => {
@@ -294,5 +316,79 @@ describe("Resend adapter — endpoint resolution", () => {
     process.env.RESEND_USER_AGENT = "acme-mailer/2.1";
     const [, init] = await sendOnce();
     expect(init?.headers).toMatchObject({ "User-Agent": "acme-mailer/2.1" });
+  });
+});
+
+describe("Resend failures say whether a retry can help", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function answering(
+    status: number,
+    body?: { name?: string; message?: string }
+  ) {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+      ok: false,
+      status,
+      statusText: "Error",
+      json: async () => body ?? {},
+    } as unknown as Response);
+  }
+
+  async function failureFor(): Promise<unknown> {
+    const thrown = await createResendProvider({ apiKey: "re_test" })
+      .send(BASE_OPTIONS)
+      .then(
+        () => undefined,
+        (error: unknown) => error
+      );
+    expect(thrown).toBeInstanceOf(Error);
+    return (thrown as { emailFailure?: unknown }).emailFailure;
+  }
+
+  it.each([400, 401, 403, 404, 422])(
+    "is not retryable on a %i, which refuses the message itself",
+    async status => {
+      answering(status, { message: "bad" });
+      expect(await failureFor()).toMatchObject({ retryable: false, status });
+    }
+  );
+
+  it.each([408, 429, 500, 502, 503])(
+    "is retryable on a %i: a timeout, a rate limit or a server error",
+    async status => {
+      answering(status, { message: "later" });
+      expect(await failureFor()).toMatchObject({ retryable: true, status });
+    }
+  );
+
+  it("lets Resend's named reason decide a 409", async () => {
+    answering(409, { name: "concurrent_idempotent_requests" });
+    expect(await failureFor()).toMatchObject({ retryable: true, status: 409 });
+
+    answering(409, { name: "invalid_idempotent_request" });
+    expect(await failureFor()).toMatchObject({ retryable: false, status: 409 });
+  });
+
+  it("is retryable when Resend cannot be reached", async () => {
+    vi.mocked(globalThis.fetch).mockRejectedValueOnce(
+      new TypeError("fetch failed")
+    );
+    expect(await failureFor()).toEqual({
+      retryable: true,
+      reason: "The email provider could not be reached.",
+    });
+  });
+
+  it("keeps the error's message as it was", async () => {
+    answering(422, { message: "Invalid `to` field." });
+    await expect(
+      createResendProvider({ apiKey: "re_test" }).send(BASE_OPTIONS)
+    ).rejects.toThrow("Resend provider error: HTTP 422: Invalid `to` field.");
   });
 });

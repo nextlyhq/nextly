@@ -68,6 +68,7 @@ import {
   AnswerTierContext,
   CardTierContext,
   rowsDrawn,
+  rowsLayout,
   useCardTier,
   useMeasuredTier,
 } from "./frame/tier";
@@ -118,6 +119,13 @@ export interface WidgetCardProps {
    * jump; absent, a skeleton draws its default rows.
    */
   skeletonItems?: unknown;
+  /**
+   * How many columns a list or table card selects. Its loading skeleton then lays its rows out
+   * as the card will at its tier (`rowsLayout`): a table, or rows with or without a detail line.
+   */
+  skeletonFields?: number;
+  /** A stats card's cell labels, which its loading skeleton draws under each held value. */
+  skeletonCells?: readonly string[];
   /** What an empty card says. Required for `state="empty"` to say anything specific. */
   empty?: CardEmptyContent;
   /** Retry for this card only, offered in the error state. */
@@ -128,6 +136,12 @@ export interface WidgetCardProps {
   error?: string | null;
   /** When this widget's data landed, for the footer's freshness line. */
   updatedAt?: Date | null;
+  /**
+   * The card asked for data, so a freshness line will come once its answer has a time. Until it
+   * does, the footer holds the line's place: a card can settle before its time is known (its
+   * request in a batch that landed before the others), and the line arriving then would grow it.
+   */
+  awaitsFreshness?: boolean;
   /** At most ONE. A footer is not a row of buttons. */
   link?: { label: string; href: string };
   /**
@@ -175,8 +189,10 @@ function frameRules(state: CardState, error: string | null) {
  * an empty or unavailable card's has nothing more to show. It claims no freshness: the timestamp
  * is when the BATCH landed, which is true of the request and not of this card -- "Updated just
  * now" printed under "This card couldn't load" tells the reader the opposite of what happened.
- * And it offers no quick setting, which would change a question the card is not answering, nor
- * one in customise mode, where the card's menu stands in that place. Here rather than at each
+ * It offers the quick setting only once the card has an answer, content or "nothing yet" -- an
+ * empty card is answering, and changing its range may well fill it -- and never while it is
+ * loading, failed or unavailable, where it would change a question the card is not answering,
+ * nor in customise mode, where the card's menu stands in that place. Here rather than at each
  * caller, so an archetype added later inherits all of it rather than having to remember it.
  */
 function frameExtras(
@@ -185,7 +201,7 @@ function frameExtras(
   customizing: boolean
 ) {
   return {
-    quick: rules.showsContent && !customizing ? props.quick : undefined,
+    quick: rules.settled && !customizing ? props.quick : undefined,
     freshness: rules.settled ? (props.updatedAt ?? null) : null,
     link: rules.showsContent ? props.link : undefined,
   };
@@ -275,6 +291,8 @@ export function WidgetCard(props: WidgetCardProps) {
               onRetry={props.onRetry}
               skeleton={props.skeleton}
               skeletonItems={props.skeletonItems}
+              skeletonFields={props.skeletonFields}
+              skeletonCells={props.skeletonCells}
               empty={props.empty}
             >
               {props.children}
@@ -285,6 +303,14 @@ export function WidgetCard(props: WidgetCardProps) {
             freshness={view.freshness}
             link={view.link}
             inert={view.customizing}
+            // A loading card holds its freshness line's place: the line arrives with the
+            // answer, and a footer that appeared then would push everything below the card down.
+            holdFreshness={
+              view.shown === "loading" ||
+              (props.awaitsFreshness === true &&
+                view.freshness === null &&
+                (view.shown === "ready" || view.shown === "empty"))
+            }
           />
         </Card>
       </AnswerTierContext.Provider>
@@ -306,6 +332,8 @@ function WidgetCardBody({
   onRetry,
   skeleton,
   skeletonItems,
+  skeletonFields,
+  skeletonCells,
   empty,
   children,
 }: {
@@ -315,6 +343,8 @@ function WidgetCardBody({
   onRetry?: () => void;
   skeleton?: SkeletonShape;
   skeletonItems?: unknown;
+  skeletonFields?: number;
+  skeletonCells?: readonly string[];
   empty?: CardEmptyContent;
   children: ReactNode;
 }) {
@@ -328,7 +358,18 @@ function WidgetCardBody({
   }
   switch (state) {
     case "loading":
-      return <CardSkeleton shape={skeleton} rows={rows} />;
+      return (
+        <CardSkeleton
+          shape={skeleton}
+          rows={rows}
+          layout={
+            skeletonFields === undefined
+              ? undefined
+              : rowsLayout(tier, skeletonFields)
+          }
+          cells={skeletonCells}
+        />
+      );
     case "unavailable":
       return <CardUnavailable />;
     case "empty":
@@ -414,17 +455,20 @@ function WidgetCardFooter({
   freshness,
   link,
   inert = false,
+  holdFreshness = false,
 }: {
   freshness: Date | null;
   link?: { label: string; href: string };
   /** Customise mode: the footer's link is out of reach, like the body's. */
   inert?: boolean;
+  /** Draw the freshness line's place, unseen, until there is a freshness to show. */
+  holdFreshness?: boolean;
 }) {
   // Before the early return, so the hook runs on every render of this
   // component whichever branch it takes.
   const relative = useRelativeTime(freshness);
 
-  if (freshness === null && link === undefined) return null;
+  if (freshness === null && link === undefined && !holdFreshness) return null;
 
   return (
     <CardFooter
@@ -454,6 +498,16 @@ function WidgetCardFooter({
         >
           Updated {relative}
         </time>
+      ) : holdFreshness ? (
+        // The freshness line's own type, unseen and unheard: as tall as the
+        // line that will replace it, so its arrival moves nothing.
+        <span
+          aria-hidden="true"
+          data-testid="widget-card-freshness-held"
+          className="invisible text-xs"
+        >
+          Updated just now
+        </span>
       ) : (
         // Holds the footer's left column so a link-only footer still sits
         // right, without a second layout branch.

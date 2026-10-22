@@ -126,7 +126,7 @@ function BlockRow({ block }: { block: RichTextBlockDiff }) {
 
 export function RichTextDiff({ node }: { node: RichTextFieldDiff }) {
   return (
-    <FieldRow label={node.label} status={node.status}>
+    <FieldRow node={node} status={node.status}>
       {node.blocks.length === 0 ? (
         <p className="text-xs text-muted-foreground">This field is empty.</p>
       ) : (

@@ -1,11 +1,11 @@
 /**
  * The query a card asks at its tier, and when a change of tier asks again.
  *
- * Sized by the query's op, which is what decides what its limit counts. A card asks for no
- * more than its tier draws: a list one row more than it draws, which is how
- * it learns that more exist (a list answer carries no total), and a breakdown exactly the
- * groups it draws, since a grouped answer says itself when groups were left out. An answer
- * fetched at one tier still serves a smaller one; only a tier that draws more asks again.
+ * Sized by the query's op, which is what decides what its limit counts. A list asks one row
+ * more than its tier draws, which is how it learns that more exist (a list answer carries no
+ * total). A breakdown asks for the groups its query declares at every tier, and the chart cuts
+ * them to its tier in its own order. An answer fetched at one tier still serves a smaller one;
+ * only a tier that draws more asks again.
  */
 import { MAX_WIDGET_ROWS } from "nextly/config";
 import { describe, expect, it } from "vitest";
@@ -43,15 +43,13 @@ describe("the query a card asks at its tier", () => {
     );
   });
 
-  it("asks a breakdown exactly the groups its tier draws, no extra one", () => {
+  it("asks a breakdown the groups it declares, at every tier", () => {
+    // 🔴 Not cut to the tier on the server. The server breaks a tie at its cap by stored value,
+    // and the chart orders ties by label; cut there, a small card could keep a group its own
+    // order puts after one the server dropped. Cut in the chart, every tier cut follows one order.
     expect(GROUPS_DRAWN).toEqual({ small: 3, medium: 5, large: 8 });
-    expect(queryForTier(grouped, "small").limit).toBe(3);
-    expect(queryForTier(grouped, "medium").limit).toBe(5);
-    expect(queryForTier(grouped, "large").limit).toBe(8);
-  });
-
-  it("asks a breakdown fewer groups when its own query asks fewer", () => {
-    expect(queryForTier({ ...grouped, limit: 4 }, "large").limit).toBe(4);
+    expect(queryForTier(grouped, "small")).toBe(grouped);
+    expect(queryForTier(grouped, "large")).toBe(grouped);
   });
 
   it("leaves a query whose limit is not rows or groups as it was", () => {
@@ -74,12 +72,10 @@ describe("the query a card asks at its tier", () => {
 describe("whether a change of tier asks again", () => {
   it("asks again when the new tier draws more than was fetched", () => {
     expect(asksAgainAt(list, "small", "medium")).toBe(true);
-    expect(asksAgainAt(grouped, "medium", "large")).toBe(true);
   });
 
   it("asks nothing when the tier shrinks, or grows without drawing more", () => {
     expect(asksAgainAt(list, "medium", "small")).toBe(false);
-    expect(asksAgainAt(grouped, "large", "small")).toBe(false);
     // A list draws its setting at medium and large alike, so the rise between them is free.
     expect(asksAgainAt(list, "medium", "large")).toBe(false);
     // A setting of two rows draws two at every tier.
@@ -88,5 +84,8 @@ describe("whether a change of tier asks again", () => {
 
   it("asks nothing for a query the tier does not size", () => {
     expect(asksAgainAt(overTime, "small", "large")).toBe(false);
+    // A breakdown holds every group it declares from the first answer, so growing draws more of
+    // them without asking.
+    expect(asksAgainAt(grouped, "small", "large")).toBe(false);
   });
 });

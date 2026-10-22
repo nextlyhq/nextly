@@ -1,12 +1,11 @@
 /**
- * The dispatcher's caller is read from the scope the route handler pinned,
- * and only from the params when nothing was pinned.
+ * The dispatcher's caller is read from the scope the route handler pinned for
+ * an API key, never rebuilt from a copy of it.
  *
- * The params are a lossy copy of an API key: stored permission slugs, no
- * rows, and roles only for the methods the route handler chose to serialise
- * them for. A caller rebuilt from them answered a code rule that decides on
- * `roles`, or checks the documented `resource:action` spelling, with an empty
- * list and the wrong spelling — a refusal the detail route did not give.
+ * A rebuilt copy is lossy: stored permission slugs, no rows, and roles only
+ * for the methods that resolve them. A caller rebuilt that way answered a code
+ * rule that decides on `roles`, or on a permission whose row it could not
+ * give, with an empty list — a refusal the detail route did not give.
  *
  * @module dispatcher/handlers/__tests__/read-access-caller.test
  */
@@ -14,7 +13,11 @@
 import { describe, expect, it } from "vitest";
 
 import { apiKeyScope } from "../../../auth/authenticated-scope";
-import { runWithCallerScope } from "../../../auth/caller-scope";
+import {
+  asCaller,
+  keyCaller,
+  sessionCaller,
+} from "../../__tests__/request-caller";
 import { readAccessCallerForDispatch } from "../read-access-caller";
 
 const GRANTS = [
@@ -22,52 +25,51 @@ const GRANTS = [
   { slug: "update-posts", resource: "posts", action: "update" },
 ];
 const user = { id: "key-owner", roles: ["admin"] };
+const key = keyCaller("key-1", { userId: "key-owner" });
 
 describe("the dispatcher's read-access caller", () => {
-  it("carries the key's OWN roles from the pinned scope, whatever the params say", () => {
+  it("carries the key's OWN roles from the pinned scope, whatever its owner's are", () => {
     // 🔴 `listCollections` and `listSingles` are not role-aware reads, so the
-    // params never carry the key's roles and `user.roles` names its OWNER's.
+    // caller carries no roles for them and `user.roles` names the key's OWNER's.
     // A rule `read: ({ roles }) => roles.includes("editor")` refused the key on
     // the list and admitted it on the detail route.
-    const caller = runWithCallerScope(apiKeyScope(GRANTS, ["editor"]), () =>
-      readAccessCallerForDispatch({}, user)
+    const caller = asCaller(
+      key,
+      () => readAccessCallerForDispatch(user),
+      apiKeyScope(GRANTS, ["editor"])
     );
     expect(caller.authMethod).toBe("api-key");
     expect(caller.roles).toEqual(["editor"]);
   });
 
-  it("hands a rule the resource:action spelling, and the coarse check the stored one", () => {
-    // 🔴 Two spellings of one list. `AccessControlContext.permissions`
-    // promises `posts:read`; the coarse `read-{slug}` check compares against
-    // `read-posts`. Forwarding the stored slugs to the rule refused every key
-    // whose rule was written to the documented promise.
-    const caller = runWithCallerScope(apiKeyScope(GRANTS), () =>
-      readAccessCallerForDispatch({}, user)
+  it("carries the stored slugs for the coarse check, with the rows a rule's list is built from", () => {
+    // The coarse `read-{slug}` check compares the stored slugs; a rule is
+    // handed them too, and, for one release, each row's earlier spelling,
+    // which only the rows can give.
+    const caller = asCaller(
+      key,
+      () => readAccessCallerForDispatch(user),
+      apiKeyScope(GRANTS)
     );
     expect(caller.permissions).toEqual(["read-posts", "update-posts"]);
-    expect(caller.rulePermissions).toEqual(["posts:read", "posts:update"]);
+    expect(caller.grants).toEqual(GRANTS);
   });
 
-  it("falls back to the params when nothing is pinned, and says so by carrying no rule spelling", () => {
-    // A direct dispatch outside the route handler. The stored slugs are all
-    // the params hold, and the caller is honest about it: no rule-facing
-    // spelling rather than one invented by splitting a slug on its hyphen.
-    const caller = readAccessCallerForDispatch(
-      {
-        _authenticatedActorType: "apiKey",
-        _authenticatedPermissions: JSON.stringify(["read-posts"]),
-      },
-      { id: "key-owner", roles: [] }
+  it("judges a key with nothing pinned as a key with no grants, and carries no rows", () => {
+    // A dispatch that reached a key caller without its scope. It is still a
+    // key, so its owner's grants do not stand in; it holds none, and the
+    // caller invents no rows for them.
+    const caller = asCaller(key, () =>
+      readAccessCallerForDispatch({ id: "key-owner", roles: [] })
     );
     expect(caller.authMethod).toBe("api-key");
-    expect(caller.permissions).toEqual(["read-posts"]);
-    expect(caller.rulePermissions).toBeUndefined();
+    expect(caller.permissions).toEqual([]);
+    expect(caller.grants).toBeUndefined();
   });
 
   it("builds a session caller with no grants of its own", () => {
-    const caller = readAccessCallerForDispatch(
-      {},
-      { id: "u1", roles: ["editor"] }
+    const caller = asCaller(sessionCaller({ userId: "u1" }), () =>
+      readAccessCallerForDispatch({ id: "u1", roles: ["editor"] })
     );
     expect(caller).toEqual({
       userId: "u1",

@@ -61,6 +61,13 @@ const createTemplateSchema = z.object({
   useLayout: z.boolean().optional(),
   isActive: z.boolean().optional(),
   providerId: z.string().uuid().optional().nullable(),
+  // When the template is sent, in the site's words; stored as given and
+  // returned on every read, as the dispatcher routes and Direct API do.
+  description: z.string().optional().nullable(),
+  // Fixed addresses copied on every send; the service checks each is one
+  // address and refuses them on a template that carries a secret.
+  cc: z.array(z.string()).optional().nullable(),
+  bcc: z.array(z.string()).optional().nullable(),
 });
 
 /**

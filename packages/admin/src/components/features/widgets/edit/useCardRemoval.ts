@@ -29,8 +29,13 @@ export interface CardRemoval {
   notice: RemovalNotice | null;
   /** Remove one card from the draft, while customising. */
   remove: (placementId: string) => void;
-  /** Put a removed card back from the add picker, while customising. */
-  restore: (placementId: string, title: string) => void;
+  /**
+   * Put a removed card back from the add panel, while customising.
+   *
+   * Says nothing and moves no focus: the panel is a modal sheet, which announces the card coming
+   * back itself, and focus belongs inside it until it closes.
+   */
+  restore: (placementId: string) => void;
   /**
    * Remove one card from the card itself, outside customise mode.
    *
@@ -56,7 +61,9 @@ export function useCardRemoval(
   editor: LayoutEditor,
   rows: readonly TitledRow[],
   announce: ArrangementAnnouncer,
-  focus: Pick<DashboardFocus, "request">
+  focus: Pick<DashboardFocus, "request">,
+  /** Rings the card a gesture just placed: the one ring every placing gesture moves. */
+  highlight: (placementId: string | null) => void
 ): CardRemoval {
   const [notice, setNotice] = useState<RemovalNotice | null>(null);
 
@@ -79,7 +86,7 @@ export function useCardRemoval(
       if (index === -1) return;
       const title = rows[index].widget.title;
       // Where focus goes, decided BEFORE the card leaves: the next card's menu,
-      // else the previous card's, else the add picker when it was the last.
+      // else the previous card's, else Add widget when it was the last.
       const neighbour = rows[index + 1] ?? rows[index - 1];
       editor.remove(placementId);
       announce.removed(title);
@@ -97,18 +104,21 @@ export function useCardRemoval(
     (placementId: string, title: string) => {
       editor.restore(placementId);
       announce.restored(title);
+      // Put back is a placing gesture like any other, so the card is ringed as the add panel's
+      // put-back rings it.
+      highlight(placementId);
       focus.request({ kind: "menu", placementId });
     },
-    [editor, announce, focus]
+    [editor, announce, focus, highlight]
   );
 
   const restore = useCallback(
-    (placementId: string, title: string) => {
+    (placementId: string) => {
       // Putting back the very card the notice offers to undo answers it.
       if (notice?.placementId === placementId) setNotice(null);
-      restoreDraft(placementId, title);
+      editor.restore(placementId);
     },
-    [notice, restoreDraft]
+    [notice, editor]
   );
 
   const undo = useCallback(() => {

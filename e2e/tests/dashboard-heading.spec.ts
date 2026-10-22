@@ -29,31 +29,17 @@
  *
  * @module tests/dashboard-heading.spec
  */
-import AxeBuilder from "@axe-core/playwright";
-import {
-  expect,
-  test,
-  type Page,
-  type Request,
-  type Route,
-} from "@playwright/test";
+import { expect, type Page, type Request, type Route } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
+import { expectNoAxeViolations } from "./support/axe";
 
 /** The sample-content card's widget id, as core registers it. */
 const SEED_WIDGET_ID = "core/seed-demo-content";
 
 /** The offer's own action: present only when sample content is offered. */
 const OFFER_ACTION = { name: "Seed demo content" } as const;
-
-/** WCAG 2.2 AA and every level below it, as `builder-a11y.spec.ts` states. */
-const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
-
-/**
- * The host app's `<title>`, which the playground's client root layout cannot
- * declare. The reason is given in full in `builder-a11y.spec.ts`.
- */
-const HOST_OWNED_RULES = ["document-title"];
 
 /**
  * Answer the sample-content probe with `status`, as the route would for this
@@ -137,32 +123,6 @@ async function expectOneMainHeading(page: Page): Promise<void> {
   await expect(mains).toHaveCount(1);
   await expect(mains).toBeVisible();
   await expect(mains).toHaveAccessibleName(/^Welcome/);
-}
-
-/** axe's AA violations on the whole page, named so a failure says what to fix. */
-async function expectNoAxeViolations(page: Page): Promise<void> {
-  const results = await new AxeBuilder({ page })
-    .withTags(AA_TAGS)
-    .disableRules(HOST_OWNED_RULES)
-    .analyze();
-  // A scan of nothing reports no violations too; enough passing rules shows
-  // it looked at a drawn page.
-  expect(
-    results.passes.length,
-    "axe reported no passing rules, so it scanned nothing"
-  ).toBeGreaterThan(10);
-  // Every violation and every target is kept: nothing is set aside by rule
-  // or place, so the scan judges the sidebar rail like any other region of
-  // the page.
-  const findings = results.violations.map(v => ({
-    id: v.id,
-    impact: v.impact ?? "unknown",
-    targets: v.nodes.map(node => node.target.map(String).join(" ")),
-  }));
-  expect(
-    findings,
-    `axe reported ${findings.length} violation(s):\n${JSON.stringify(findings, null, 2)}`
-  ).toEqual([]);
 }
 
 test.describe("the dashboard's main heading", () => {

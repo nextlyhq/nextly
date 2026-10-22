@@ -53,7 +53,7 @@ function drawAt(tier: SizeTier, result: WidgetResult) {
 
 /** The groups the chart draws, read inside the picture: the frame's table repeats them. */
 const drawnGroups = () =>
-  within(screen.getByRole("img"))
+  within(screen.getByRole("group", { name: /Use the arrow keys/ }))
     .getAllByText(/^Author \d+$/)
     .map(node => node.textContent);
 
@@ -79,7 +79,9 @@ describe("a breakdown card's groups at each tier", () => {
 
   it("says more groups exist when the server left some out", () => {
     drawAt("large", groups(8, true));
-    expect(screen.getByText(/more groups exist/i)).toBeInTheDocument();
+    expect(
+      screen.getByText("More groups exist than are shown.")
+    ).toBeInTheDocument();
   });
 
   it("says nothing more when every group is drawn", () => {
@@ -87,10 +89,32 @@ describe("a breakdown card's groups at each tier", () => {
     expect(screen.queryByText(/more group/i)).not.toBeInTheDocument();
   });
 
-  it("describes the groups it draws, not the ones it left out", () => {
+  it("counts every group the answer holds in its words, and the ones left out under the bars", () => {
     drawAt("small", groups(6));
     expect(
-      within(screen.getByRole("img")).getByText(/^3 categories\./)
+      within(
+        screen.getByRole("group", { name: /Use the arrow keys/ })
+      ).getByText(/^Entries by author: 6 groups,/)
     ).toBeInTheDocument();
+    expect(screen.getByText("3 more groups")).toBeInTheDocument();
+  });
+});
+
+describe("which groups a tier cuts", () => {
+  it("cuts after ordering, so a tie at the edge keeps the first label", () => {
+    // Authors 3 and 4 tie for the last place a small card draws, and the server lists 4 first.
+    // Ordered by count and then label BEFORE the cut, the card draws Author 3, and its table
+    // and its "1 more group" agree on which group was left out.
+    drawAt("small", {
+      op: "groupBy",
+      buckets: [
+        { value: "Author 1", count: 100 },
+        { value: "Author 2", count: 90 },
+        { value: "Author 4", count: 50 },
+        { value: "Author 3", count: 50 },
+      ],
+    });
+    expect(drawnGroups()).toEqual(["Author 1", "Author 2", "Author 3"]);
+    expect(screen.getByText("1 more group")).toBeInTheDocument();
   });
 });

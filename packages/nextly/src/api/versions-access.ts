@@ -19,10 +19,12 @@ import { z } from "zod";
 
 import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
+import { authorizationGroups } from "../auth/entity-read-access";
 import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
 import { container } from "../di/container";
 import type { FieldGroupDataService } from "../domains/field-groups/services/field-group-data-service";
+import { configuredLocales } from "../domains/i18n/configured-locales";
 import {
   resolveSingleDocumentId,
   singleDocumentEditable,
@@ -40,6 +42,7 @@ import type { VersionDiff } from "../domains/versions/diff";
 import { hydrateDiffReferences } from "../domains/versions/diff-references";
 import { HistoryDividers } from "../domains/versions/history-dividers";
 import { readPartIsLive } from "../domains/versions/part-liveness";
+import { hasLifecycle } from "../domains/versions/recorded-status";
 import { hydrateSnapshotReferences } from "../domains/versions/snapshot-references";
 import {
   resolveComponentFieldMap,
@@ -50,6 +53,7 @@ import {
   markLastViewed,
 } from "../domains/versions/version-views";
 import type { VersionRef } from "../domains/versions/versions-repository";
+import type { VersionListOptions } from "../domains/versions/versions-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type {
@@ -118,6 +122,17 @@ export async function requireRouteVersionReadAccess(
 }
 
 /**
+ * What the document's read hooks are handed besides the caller: the request
+ * behind the read and the context its caller passed. A hook that narrows reads
+ * by either must see the same values here as on the caller's own document read,
+ * or the probe answers a different caller than the one asking.
+ */
+export interface DocumentReadHookInputs {
+  request?: Request;
+  context?: Record<string, unknown>;
+}
+
+/**
  * Confirm a caller may see this document's history, assuming they are already
  * authenticated and coarsely authorized.
  *
@@ -138,14 +153,19 @@ export async function assertVersionDocumentReadable(
   // document, so a scoped API key is judged on its OWN read grant here — a
   // super-admin-owned key does not skip the document's own read gate before
   // its snapshots are exposed.
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  hookInputs: DocumentReadHookInputs = {},
+  // The languages the read names or returns, each asked about in its own
+  // right; null is a part with no language, which the read above covers.
+  locales: readonly (string | null)[] = []
 ): Promise<void> {
   const readable = await canReadLiveDocument(
     scopeKind,
     slug,
     entryId,
     user,
-    authenticatedScope
+    authenticatedScope,
+    hookInputs
   );
   if (!readable) {
     // Deliberately "not found" rather than "forbidden": a distinct 403 would
@@ -160,6 +180,218 @@ export async function assertVersionDocumentReadable(
       },
     });
   }
+  await assertHistoryLocalesReadable(
+    scopeKind,
+    slug,
+    entryId,
+    user,
+    authenticatedScope,
+    hookInputs,
+    locales
+  );
+}
+
+/**
+ * What a history listing reads, by language: the one it names, once its caller
+ * may read the document in it, or else every language they may read it in.
+ * Spread into the listing's options, so every listing narrows alike.
+ *
+ * @throws NextlyError.notFound when the named language is not readable.
+ */
+export async function historyListLanguages(
+  scopeKind: VersionScopeKind,
+  slug: string,
+  entryId: string,
+  user: UserContext,
+  authenticatedScope: AuthenticatedScope | undefined,
+  locale: string | undefined
+): Promise<Pick<VersionListOptions, "locale" | "locales">> {
+  if (locale !== undefined && locale !== "") {
+    await assertHistoryLocalesReadable(
+      scopeKind,
+      slug,
+      entryId,
+      user,
+      authenticatedScope,
+      {},
+      [locale]
+    );
+    return { locale };
+  }
+  const readable = await readableHistoryLocales(
+    scopeKind,
+    slug,
+    entryId,
+    user,
+    authenticatedScope
+  );
+  return { locales: [...readable] };
+}
+
+/**
+ * Refuse a read of a document's history in a language its caller may not read
+ * the document in. The language half of {@link assertVersionDocumentReadable},
+ * for a read that learns the language only once it has loaded a version: the
+ * document half has run by then and is not asked twice.
+ *
+ * @throws NextlyError.notFound when any named language is not readable.
+ */
+export async function assertHistoryLocalesReadable(
+  scopeKind: VersionScopeKind,
+  slug: string,
+  entryId: string,
+  user: UserContext,
+  authenticatedScope: AuthenticatedScope | undefined,
+  hookInputs: DocumentReadHookInputs,
+  // Null is a part with no language: the whole document, already read.
+  locales: readonly (string | null)[]
+): Promise<void> {
+  const named = [
+    ...new Set(locales.filter((l): l is string => l !== null && l !== "")),
+  ];
+  if (named.length === 0) return;
+  const allowed = await readableHistoryLocales(
+    scopeKind,
+    slug,
+    entryId,
+    user,
+    authenticatedScope,
+    hookInputs,
+    named
+  );
+  if (named.some(locale => !allowed.has(locale))) {
+    // Not found, as the document half answers, so a refused language does
+    // not confirm that the document has history in it.
+    throw NextlyError.notFound({
+      logContext: {
+        reason: "version-language-not-readable",
+        scopeKind,
+        scopeSlug: slug,
+        entryId,
+        userId: user.id,
+      },
+    });
+  }
+}
+
+/**
+ * The languages a document's history can be asked about: the configured ones
+ * for a localized collection or Single, and for one that is not, the default
+ * language alone. An unlocalized document reads the same in every language, so
+ * no other language can be asked about it, and history it holds from when it
+ * was localized stays withheld. The default language stays, because a save of
+ * an unlocalized document can be recorded under it.
+ */
+export async function historyLanguagesOf(
+  scopeKind: VersionScopeKind,
+  slug: string
+): Promise<ReadonlySet<string>> {
+  const configured = configuredLocales() ?? new Set<string>();
+  const entity = await registryEntityOf(scopeKind, slug);
+  if ((entity as { localized?: boolean } | null)?.localized === true) {
+    return configured;
+  }
+  const defaultLocale =
+    getService("config").localization?.defaultLocale ?? null;
+  return new Set(
+    defaultLocale !== null && configured.has(defaultLocale)
+      ? [defaultLocale]
+      : []
+  );
+}
+
+/**
+ * Refuse a caller the language of one version, before anything is written or
+ * returned about it. Returns the version's part, or undefined when there is no
+ * such version, which the read or write that follows refuses in its own way.
+ * Shared by REST's version routes and the plugin service's checked label.
+ */
+export async function assertVersionLanguageReadable(
+  document: {
+    scopeKind: VersionScopeKind;
+    slug: string;
+    entryId: string;
+    user: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  },
+  versionNo: number,
+  // What the caller's own read carries, for the language's read hooks.
+  hookInputs: DocumentReadHookInputs = {}
+): Promise<string | null | undefined> {
+  const part = await getService("versionsService").partOfVersion(
+    {
+      scopeKind: document.scopeKind,
+      scopeSlug: document.slug,
+      entryId: document.entryId,
+    },
+    versionNo
+  );
+  if (part === undefined) return undefined;
+  await assertHistoryLocalesReadable(
+    document.scopeKind,
+    document.slug,
+    document.entryId,
+    document.user,
+    document.authenticatedScope,
+    hookInputs,
+    [part]
+  );
+  return part;
+}
+
+/**
+ * The languages of a document the caller may read its history in.
+ *
+ * Asked of the document's read in each language, because a read rule or hook
+ * may answer differently per language: it is handed that language's values.
+ * A language no longer configured is never readable here. A read in it would
+ * resolve to the default language and answer for that instead, which is not
+ * an answer about the entries written in it. That includes every language
+ * once an install configures none: history recorded in a language before
+ * localization was removed stays, and nothing can be asked about it.
+ *
+ * Asked in bounded groups: each question is a full document read, and an
+ * install may configure any number of languages.
+ *
+ * `among` narrows the question to the languages a read names, so a read of
+ * one language asks once rather than once per configured language.
+ *
+ * The caller has already passed {@link assertVersionDocumentReadable}; this
+ * answers which of the document's languages, not whether the document.
+ */
+export async function readableHistoryLocales(
+  scopeKind: VersionScopeKind,
+  slug: string,
+  entryId: string,
+  user: UserContext,
+  authenticatedScope: AuthenticatedScope | undefined,
+  hookInputs: DocumentReadHookInputs = {},
+  among?: readonly string[]
+): Promise<ReadonlySet<string>> {
+  const languages = await historyLanguagesOf(scopeKind, slug);
+  const asked = (among ?? [...languages]).filter(locale =>
+    languages.has(locale)
+  );
+  const readable = new Set<string>();
+  for (const group of authorizationGroups(asked)) {
+    const verdicts = await Promise.all(
+      group.map(locale =>
+        canReadLiveDocument(
+          scopeKind,
+          slug,
+          entryId,
+          user,
+          authenticatedScope,
+          hookInputs,
+          locale
+        )
+      )
+    );
+    group.forEach((locale, index) => {
+      if (verdicts[index]) readable.add(locale);
+    });
+  }
+  return readable;
 }
 
 /**
@@ -262,10 +494,20 @@ async function canReadLiveDocument(
   slug: string,
   entryId: string,
   user: UserContext,
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope: AuthenticatedScope | undefined,
+  hookInputs: DocumentReadHookInputs,
+  // The language to read the document in; absent reads the default one.
+  locale?: string
 ): Promise<boolean> {
   if (scopeKind === "single") {
-    return canReadLiveSingle(slug, entryId, user, authenticatedScope);
+    return canReadLiveSingle(
+      slug,
+      entryId,
+      user,
+      authenticatedScope,
+      hookInputs,
+      locale
+    );
   }
 
   const collections = getService("collectionsHandler");
@@ -285,8 +527,19 @@ async function canReadLiveDocument(
     // collection filters to published only, and a draft would report no
     // history — exactly when an author needs it most.
     status: "all",
+    // The request and context the caller's own read would carry, for hooks
+    // that narrow reads by them.
+    ...hookInputs,
+    // The read rules and hooks are handed this language's values.
+    ...(locale === undefined ? {} : { locale }),
   });
-  return interpretReadResult(result.success, result.statusCode);
+  if (!interpretReadResult(result.success, result.statusCode)) return false;
+  // The read must be of the document asked about. A `beforeOperation` hook may
+  // rewrite the id a read resolves, and a read that passed on another document
+  // would authorize this one's history by that document's rules. The id is the
+  // read's own report of the row it loaded, not `data.id`: an `afterRead` hook
+  // may project the output without it.
+  return result.resolvedEntryId === entryId;
 }
 
 /**
@@ -304,7 +557,9 @@ async function canReadLiveSingle(
   slug: string,
   entryId: string,
   user: UserContext,
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope: AuthenticatedScope | undefined,
+  hookInputs: DocumentReadHookInputs,
+  locale: string | undefined
 ): Promise<boolean> {
   const registry = getService("singleRegistryService");
   const record = await registry.getSingleBySlug(slug);
@@ -323,6 +578,8 @@ async function canReadLiveSingle(
     // resolving its creator's roles.
     routeAuthorized: true,
     ...(authenticatedScope === undefined ? {} : { actor: authenticatedScope }),
+    ...hookInputs,
+    ...(locale === undefined ? {} : { locale }),
   });
 }
 
@@ -539,20 +796,164 @@ export async function tryResolveCurrentFields(
   slug: string
 ): Promise<FieldConfig[] | null> {
   try {
+    // An entity that is not there is a lookup that found nothing, not one
+    // with no fields: answered as `null`, so a caller that must fail closed
+    // does, rather than treating a missing schema as nothing to look for.
     if (scopeKind === "single") {
       const registry = getService("singleRegistryService");
       const record = await registry.getSingleBySlug(slug);
-      return record?.fields ?? [];
+      return record ? (record.fields ?? []) : null;
     }
     const collections = getService("collectionService");
     // Metadata lookup only; the context carries no user because the access
     // decision was already made above and this is just a field-shape read.
     const collection = await collections.getCollection(slug, {});
-    return ((collection as { fields?: unknown[] } | null)?.fields ??
+    if (!collection) return null;
+    return ((collection as { fields?: unknown[] }).fields ??
       []) as FieldConfig[];
   } catch {
     return null;
   }
+}
+
+/**
+ * Leave a recovery point's password-field values out of `snapshot`, in place.
+ *
+ * The snapshot of an autosave arrives from whoever is editing, so it carries
+ * whatever they have typed, a new password included, which no write has hashed
+ * yet. Durable capture never faces this: it snapshots the stored row, where the
+ * value is already hashed or absent. One function for every door that records
+ * an autosave, REST and the plugin service alike, with the same schema-driven
+ * recursive helper the version reads use, so no door stores a value another
+ * would have left out.
+ */
+export async function stripAutosavePasswords(
+  scopeKind: VersionScopeKind,
+  slug: string,
+  snapshot: unknown
+): Promise<void> {
+  // `page` scopes hold block documents rather than user-defined fields, and
+  // field resolution has no answer for them.
+  if (scopeKind !== "collection" && scopeKind !== "single") return;
+  // An object or a list of rows: the stripper walks both. REST's autosave
+  // takes only an object; a plugin's may be any value the store takes.
+  if (!snapshot || typeof snapshot !== "object") return;
+  const fields = await autosaveFieldsOrRefuse(scopeKind, slug);
+  if (fields.length === 0) return;
+
+  // Walks the SNAPSHOT rather than an expanded schema. A component may
+  // reference itself, so a schema-side expansion has to stop at some
+  // depth, and everything below that cut-off would keep its passwords.
+  // The data is finite, so this terminates on its own and strips every
+  // level that actually exists.
+  stripPasswordsThroughComponents(
+    snapshot,
+    fields,
+    await autosaveComponentFields(fields, scopeKind, slug),
+    stripPasswordFieldValues
+  );
+}
+
+/**
+ * The entity's fields, or a refusal when they cannot be read.
+ *
+ * Fail CLOSED on a failed LOOKUP, which is what `null` means here. An empty
+ * list is a different answer: a valid entity can have no user-defined fields
+ * at all (a freshly created Single, whose identity columns alone form a
+ * document), and there is genuinely nothing to strip from one. Treating those
+ * alike would refuse every autosave for such an entity, while treating a
+ * failed lookup as "nothing to strip" would write whatever the editor sent,
+ * credentials included, exactly when the lookup meant to find them had broken.
+ */
+async function autosaveFieldsOrRefuse(
+  scopeKind: "collection" | "single",
+  slug: string
+): Promise<FieldConfig[]> {
+  const fields = await tryResolveCurrentFields(scopeKind, slug);
+  if (fields === null) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "autosave-field-resolution-failed",
+        scopeKind,
+        scopeSlug: slug,
+      },
+    });
+  }
+  return fields;
+}
+
+/**
+ * The schemas of the components `fields` reference, by slug.
+ *
+ * A `component` field is a REFERENCE: its schema lives under another slug, so
+ * the stripper sees `{ type: "component" }` and has nothing to descend into. A
+ * password declared inside a referenced component would survive in the
+ * snapshot. Resolved here so the stripper can rewrite the references into the
+ * container shapes it already walks, and strip once.
+ */
+async function autosaveComponentFields(
+  fields: FieldConfig[],
+  scopeKind: "collection" | "single",
+  slug: string
+): Promise<Map<string, FieldConfig[]>> {
+  const dataService = container.has("fieldGroupDataService")
+    ? container.get<FieldGroupDataService>("fieldGroupDataService")
+    : null;
+  // Fail CLOSED where a reference cannot be resolved. `resolveComponentFieldMap`
+  // propagates a lookup error rather than reporting the component absent, so
+  // an unresolvable schema arrives here as a thrown error and refuses the
+  // write; what this guards is the other case, a registry that is not wired at
+  // all while the schema still declares references.
+  if (!dataService) {
+    if (declaresComponentReference(fields)) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "autosave-component-schema-unavailable",
+          scopeKind,
+          scopeSlug: slug,
+        },
+      });
+    }
+    return new Map();
+  }
+  // No executor: autosave runs outside any transaction by design, and the
+  // parameter exists so an in-transaction caller can read on its own
+  // connection rather than take a second one.
+  return resolveComponentFieldMap(fields, component =>
+    dataService.getComponentFields(component)
+  );
+}
+
+/**
+ * Whether any field in this schema references a component by slug, at any
+ * depth. Used to decide whether an unavailable component registry is a problem
+ * for THIS entity: a schema with no references has nothing unresolvable in it.
+ */
+function declaresComponentReference(fields: FieldConfig[]): boolean {
+  for (const field of fields) {
+    // Either spelling declares a reference: a migrated definition whose keys
+    // went unread would skip the registry-unavailable guard entirely.
+    if (typeof (field as { component?: unknown }).component === "string") {
+      return true;
+    }
+    if (typeof (field as { fieldGroup?: unknown }).fieldGroup === "string") {
+      return true;
+    }
+    if (Array.isArray((field as { components?: unknown }).components)) {
+      return true;
+    }
+    if (Array.isArray((field as { fieldGroups?: unknown }).fieldGroups)) {
+      return true;
+    }
+    const children = (field as { fields?: unknown }).fields;
+    if (
+      Array.isArray(children) &&
+      declaresComponentReference(children as FieldConfig[])
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -809,6 +1210,20 @@ export async function compareDocumentVersions(args: {
   query: ComparisonQuery;
 }): Promise<VersionDiff> {
   const { query } = args;
+  // The language whose history finds the pair is asked about before anything
+  // of it is read, or a refusal said: the target's own when one is named,
+  // since the baseline is found in its part, and otherwise the `locale` the
+  // server pairs in. An explicit pair names no language here; its two rows are
+  // asked about below.
+  await assertHistoryLocalesReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    args.authenticatedScope,
+    {},
+    [await pairingPart(args, query)]
+  );
   let pair: { from: number; to: number };
   let baseline: VersionDiff["baseline"];
   if (query.from !== undefined && query.to !== undefined) {
@@ -821,9 +1236,10 @@ export async function compareDocumentVersions(args: {
       entryId: args.entryId,
     };
 
-    const [partVersions, workingDraftParts] = await Promise.all([
+    const [partVersions, workingDraftParts, entity] = await Promise.all([
       versions.listPartVersions(ref),
       versions.listWorkingDraftParts(ref),
+      registryEntityOf(args.scopeKind, args.slug),
     ]);
     const resolved = await resolveComparisonPair(
       {
@@ -834,7 +1250,10 @@ export async function compareDocumentVersions(args: {
         userId: readingPersonId(args.user, args.authenticatedScope),
         workingDraftParts,
         partIsLive: part =>
-          partIsLiveNow(args.scopeKind, args.slug, args.entryId, part),
+          partIsLiveNow(entity, args.scopeKind, args.entryId, part),
+        // Whether a `status` is the lifecycle's or the document's own word:
+        // without the lifecycle every version was served, whatever it says.
+        lifecycle: hasLifecycle(entity),
       },
       partVersions
     );
@@ -857,19 +1276,66 @@ export async function compareDocumentVersions(args: {
 }
 
 /**
+ * The part a comparison's pair is found in, before it is resolved: the
+ * target's, when the comparison names one and not a pair, else the `locale`
+ * it names. Null when it names neither, or names a pair.
+ */
+async function pairingPart(
+  document: { scopeKind: VersionScopeKind; slug: string; entryId: string },
+  query: ComparisonQuery
+): Promise<string | null> {
+  if (query.from !== undefined) return null;
+  if (query.to === undefined) return query.locale ?? null;
+  const part = await getService("versionsService").partOfVersion(
+    {
+      scopeKind: document.scopeKind,
+      scopeSlug: document.slug,
+      entryId: document.entryId,
+    },
+    query.to
+  );
+  return part ?? null;
+}
+
+/**
+ * Whether two versions' language tags name one part of the document. A
+ * document without languages has a single part, and its versions may be
+ * tagged with the default language (a component read in it) or with none:
+ * both name that part. A localized document's parts are its languages.
+ */
+async function onePart(
+  scopeKind: VersionScopeKind,
+  slug: string,
+  a: string | null,
+  b: string | null
+): Promise<boolean> {
+  if (a === b) return true;
+  const entity = await registryEntityOf(scopeKind, slug);
+  if ((entity as { localized?: boolean } | null)?.localized === true) {
+    return false;
+  }
+  const defaultLocale =
+    getService("config").localization?.defaultLocale ?? null;
+  return [a, b].every(tag => tag === null || tag === defaultLocale);
+}
+
+/** The collection's or Single's registry record, or null when it is gone. */
+async function registryEntityOf(scopeKind: VersionScopeKind, slug: string) {
+  return scopeKind === "single"
+    ? getService("singleRegistryService").getSingleBySlug(slug)
+    : getService("collectionRegistryService").getCollectionBySlug(slug);
+}
+
+/**
  * Whether a part of the document is served now, read from the document's own
  * rows. A document whose entity is gone is not served at all.
  */
 async function partIsLiveNow(
+  entity: Awaited<ReturnType<typeof registryEntityOf>>,
   scopeKind: VersionScopeKind,
-  slug: string,
   entryId: string,
   part: string | null
 ): Promise<boolean> {
-  const entity =
-    scopeKind === "single"
-      ? await getService("singleRegistryService").getSingleBySlug(slug)
-      : await getService("collectionRegistryService").getCollectionBySlug(slug);
   if (!entity) return false;
   return readPartIsLive({
     adapter: getService("adapter"),
@@ -913,8 +1379,21 @@ export async function diffDocumentVersions(args: {
     versions.get(ref, args.from),
     versions.get(ref, args.to),
   ]);
+  // Each version is of the language it records, asked about before either is
+  // compared, or a mismatch reported.
+  await assertHistoryLocalesReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    args.authenticatedScope,
+    {},
+    [fromRow.locale, toRow.locale]
+  );
 
-  if (fromRow.locale !== toRow.locale) {
+  if (
+    !(await onePart(args.scopeKind, args.slug, fromRow.locale, toRow.locale))
+  ) {
     throw NextlyError.validation({
       errors: [
         {
@@ -932,6 +1411,9 @@ export async function diffDocumentVersions(args: {
       },
     });
   }
+
+  // The pair's language: either's tag, since they name one part.
+  const pairLocale = fromRow.locale ?? toRow.locale;
 
   // Redact each snapshot for the caller BEFORE diffing, so the diff can never
   // surface a field the caller may not read. What either side withheld is
@@ -979,13 +1461,13 @@ export async function diffDocumentVersions(args: {
     body.fields,
     args.user,
     args.authenticatedScope,
-    fromRow.locale
+    pairLocale
   );
 
   return {
     from: args.from,
     to: args.to,
-    locale: fromRow.locale,
+    locale: pairLocale,
     hasChanges: body.hasChanges,
     incomplete: body.incomplete,
     fields: body.fields,

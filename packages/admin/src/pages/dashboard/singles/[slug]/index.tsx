@@ -17,6 +17,7 @@
  */
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
+import type { FieldConfig } from "nextly/config";
 import type React from "react";
 
 import type { DocumentViewMount } from "@admin/components/features/entries/EntryForm";
@@ -158,6 +159,17 @@ function SingleEditPageSkeleton() {
 // ============================================================================
 
 /**
+ * The Single's fields, once its schema has loaded. Loosely typed as the schema
+ * API serves them; the same runtime fields the form renders (see the cast at
+ * `SingleForm` below).
+ */
+function formFieldsOf(
+  schema: { fields?: unknown } | undefined
+): FieldConfig[] | undefined {
+  return schema?.fields as FieldConfig[] | undefined;
+}
+
+/**
  * Single Edit Page
  *
  * Displays a form for editing a Single document.
@@ -212,6 +224,7 @@ export default function SingleEditPage({
     // it on an actual update-capability probe regardless.
     draftsEnabled: schema?.draftsEnabled === true,
     translateFrom,
+    fields: formFieldsOf(schema),
   });
 
   /*
@@ -329,10 +342,13 @@ export default function SingleEditPage({
   const singleLabel = schema.label || slug;
 
   // Handle form submission
+  // Answers with the stored document, so the form starts from what the server
+  // kept rather than from what it sent.
   const handleSubmit = async (data: Record<string, unknown>) => {
     try {
-      await updateDocument(data);
+      const stored = await updateDocument(data);
       toast.success(`${singleLabel} has been updated successfully.`);
+      return stored;
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Failed to save changes"

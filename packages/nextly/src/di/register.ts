@@ -39,6 +39,8 @@ import {
   edgeProxyWarning,
   unkeyedStrategyWarnings,
 } from "../auth/handlers/proxy-posture";
+import { resetPasswordPolicy } from "../auth/password/policy";
+import { issueSetupTokenAtBoot } from "../auth/setup-token/setup-gate";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
   SanitizedApiKeysConfig,
@@ -72,7 +74,9 @@ import {
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { AnyJobDefinition } from "../domains/jobs/job-registry";
+import { coreRateLimitStoreFor } from "../domains/limits/core-limit-store";
 import type { LimitStore } from "../domains/limits/limit-store";
+import { limitsInMemoryWarning } from "../domains/limits/limits-in-memory-warning";
 import { selectLimitStore } from "../domains/limits/select-limit-store";
 import type { MetaService } from "../domains/meta";
 import type { NoticesService } from "../domains/notices/notices-service";
@@ -144,6 +148,7 @@ import { assertBootMigrationsNotRefused } from "../init/boot-migrations-gate";
 import type { RunProdMigrationsArgs } from "../init/prod-migrations";
 import { unwrittenSlugs } from "../init/sync-outcome";
 import { env } from "../lib/env";
+import type { RateLimitStore } from "../middleware/rate-limit";
 import { maskingServiceLogger } from "../observability/mask-emails";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
@@ -243,7 +248,10 @@ import { consoleLogger } from "../services/shared";
 import type { Logger } from "../services/shared";
 import type { UserExtSchemaService } from "../services/users/user-ext-schema-service";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
-import type { UserService } from "../services/users/user-service";
+import type {
+  PasswordHasher,
+  UserService,
+} from "../services/users/user-service";
 import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { assertPluginFieldDeclarations } from "../shared/lib/assert-plugin-field-declarations";
 import { replaceFieldFunctions } from "../shared/lib/field-level-registry";
@@ -322,11 +330,13 @@ export interface NextlyServiceConfig {
   /** Optional hook registry. When absent, hooks are disabled. */
   hookRegistry?: HookRegistry;
 
-  /** Optional password hasher for user authentication. */
-  passwordHasher?: {
-    hash(password: string): Promise<string>;
-    verify(password: string, hash: string): Promise<boolean>;
-  };
+  /**
+   * Optional password hasher for user authentication. The full digester
+   * contract: an app supplying its own must declare its reach (`reach` or
+   * `validate`) — the boot refuses one that does not, since a digester's
+   * reach decides what passwords the policy may accept for it.
+   */
+  passwordHasher?: PasswordHasher;
 
   /** Optional base path for collection file operations. */
   basePath?: string;
@@ -549,6 +559,12 @@ export interface ServiceMap {
    * selects it. @experimental
    */
   limitStore: LimitStore;
+  /**
+   * Where core's own limits count (sign-in, plugin routes, the REST API, API
+   * keys): an app's store of the older contract when it configured one, and
+   * otherwise the selected limit store, its keys stored as keyed hashes.
+   */
+  coreRateLimitStore: RateLimitStore;
 }
 
 // ============================================================
@@ -833,6 +849,14 @@ async function registerServicesOnce(
   // without client addresses and nothing else would tell its operator.
   const edgeWarning = edgeProxyWarning(transformedConfig);
   if (edgeWarning) resolvedLogger.warn?.(edgeWarning);
+  // Likewise a production start whose limits count in one process's memory:
+  // each instance would count a budget of its own, and nothing at the limit
+  // can tell whether the site runs one.
+  const memoryWarning = limitsInMemoryWarning(
+    transformedConfig,
+    process.env.NODE_ENV === "production"
+  );
+  if (memoryWarning) resolvedLogger.warn?.(memoryWarning);
   // Likewise each configured auth strategy the sign-in limiter cannot ask
   // which account a request names: its sign-ins are limited by email instead.
   for (const warning of unkeyedStrategyWarnings(transformedConfig)) {
@@ -963,6 +987,17 @@ async function registerServicesOnce(
     globalForReg.__nextly_closeLimitStore = selected.close;
     return selected.store;
   });
+  // Where core's own limits count. An app's store of the older contract keeps
+  // serving them, as it did before the limit store existed; without one they
+  // count in the selected store, so on the database store every instance
+  // counts one budget.
+  container.registerSingleton<RateLimitStore>("coreRateLimitStore", () =>
+    coreRateLimitStoreFor(
+      transformedConfig.rateLimit?.store,
+      () => container.get<LimitStore>("limitStore"),
+      env.NEXTLY_SECRET
+    )
+  );
   // Beside the config rather than in it: what the boot granted, decided once
   // when the plugin list was resolved. The auth router builds its plugin
   // contexts from this entry, as `initializePlugins` does from the same value.
@@ -1036,6 +1071,21 @@ async function registerServicesOnce(
   // sealed again under the current one, so the retired secret can go once
   // the app has started with both.
   await resealPrincipalDigestKeyAtBoot(adapter, pluginSettingsSecrets(env));
+
+  // In production, until the install has an administrator, setup needs a
+  // token: an install with none gets one here, printed once to this output.
+  if (env.NODE_ENV === "production") {
+    const { superAdminRoleHeld } = await import(
+      "../domains/users/services/last-super-admin"
+    );
+    const { getDialectTables } = await import("../database/index");
+    await issueSetupTokenAtBoot({
+      meta: getService("metaService"),
+      hasAdministrator: () =>
+        superAdminRoleHeld(adapter.getDrizzle(), getDialectTables()),
+      logger: resolvedLogger,
+    });
+  }
 
   // ----------------------------------------
   // Layer 7: Initialize Plugins
@@ -2676,15 +2726,15 @@ async function initializeSchemaRegistry(
         adapter,
         extensionSchema,
         logger: {
-          debug: msg => console.debug(msg),
-          info: msg => console.log(msg),
-          warn: msg => console.warn(msg),
-          error: msg => console.error(msg),
+          debug: msg => consoleLogger.debug(msg),
+          info: msg => consoleLogger.info(msg),
+          warn: msg => consoleLogger.warn(msg),
+          error: msg => consoleLogger.error(msg),
         },
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(
+      consoleLogger.warn(
         `[registerServices] First-run setup helper crashed: ${msg}. Continuing.`
       );
     }
@@ -2813,7 +2863,7 @@ async function initializeSchemaRegistry(
         // unknown table, which says what actually happened. The same policy
         // `loadDynamicTables` already applies to a row it cannot turn into a
         // schema.
-        console.warn(
+        consoleLogger.warn(
           `[Nextly schema] Could not read the discriminator column of ` +
             `'${tableName}'; leaving it unregistered rather than addressing ` +
             `it by a name that was not verified. Field-group reads and writes ` +
@@ -4361,8 +4411,24 @@ async function initializePlugins(
       // The source goes through AS DECLARED. The fold has already refused any
       // kind but `plugin`, so rewriting it here would only be able to hide a
       // contribution the fold would have caught.
-      registerResolvedSource(contributed.source, (query, caller, opts) =>
-        contributed.resolve(query, caller, pluginContext, opts)
+      // `resolveMany` is bound to the same context, when the plugin wrote one.
+      // Read once, and called on its entry as `resolve` is, so one written
+      // with method syntax that reaches `this.resolve` keeps its receiver.
+      const { resolveMany } = contributed;
+      registerResolvedSource(
+        contributed.source,
+        (query, caller, opts) =>
+          contributed.resolve(query, caller, pluginContext, opts),
+        resolveMany === undefined
+          ? undefined
+          : (queries, caller, opts) =>
+              resolveMany.call(
+                contributed,
+                queries,
+                caller,
+                pluginContext,
+                opts
+              )
       );
     }
 
@@ -4601,7 +4667,7 @@ export async function destroyRegisteredPlugins(): Promise<void> {
       await plugin.destroy(context);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Plugin "${plugin.name}" destroy failed: ${message}`);
+      consoleLogger.error(`Plugin "${plugin.name}" destroy failed: ${message}`);
     }
   }
   if (globalForReg.__nextly_pluginServiceContainer === services) {
@@ -4647,7 +4713,7 @@ async function releaseServices(opts: {
       await adapter.disconnect();
     }
   } catch (error) {
-    console.error("Error during service shutdown:", error);
+    consoleLogger.error("Error during service shutdown", { error: error });
   } finally {
     container.clear();
     // The recording policy is a process-global registry, so it must be cleared
@@ -4663,6 +4729,10 @@ async function releaseServices(opts: {
     // Collection db options are process-global too; a later registration must
     // start from its own config's, not inherit this one's `allowIdOnCreate`.
     publishCollectionDbOptions([]);
+    // The password policy's configured minimum is process-global too; the next
+    // registration sets its own, and until then the default stands rather than
+    // this instance's.
+    resetPasswordPolicy();
     // Hooks live in a registry that outlives the container. Registration runs
     // from config on every init, so leaving it populated means a second
     // instance in the same process appends a fresh copy of every handler and
@@ -4719,6 +4789,9 @@ export function clearServices(): void {
   publishRetentionPolicies(undefined);
   // Cleared for the same reason as in `releaseServices`.
   publishCollectionDbOptions([]);
+  // Cleared for the same reason as in `releaseServices`: the configured
+  // minimum belongs to this registration, and the next one sets its own.
+  resetPasswordPolicy();
   // Cleared with the container for the same reason: re-initializing would
   // otherwise register every configured hook a second time.
   clearActiveHookRegistry();

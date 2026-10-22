@@ -6,10 +6,21 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { getEntrySpy, checkAccessSpy, findByIdSpy } = vi.hoisted(() => ({
-  getEntrySpy: vi.fn(),
-  checkAccessSpy: vi.fn(),
-  findByIdSpy: vi.fn(),
+const { getEntrySpy, checkAccessSpy, findByIdSpy, actorForUserSpy } =
+  vi.hoisted(() => ({
+    actorForUserSpy: vi.fn(),
+    getEntrySpy: vi.fn(),
+    checkAccessSpy: vi.fn(),
+    findByIdSpy: vi.fn(),
+  }));
+
+// A signed-in user's actor: the roles and grants the read decision judges,
+// as one lookup resolves them. Mocked so each case names the grants.
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../auth/access/resolve-actor")
+  >()),
+  actorForUserFailingClosed: actorForUserSpy,
 }));
 
 vi.mock("../../../di", () => ({
@@ -36,9 +47,13 @@ vi.mock("../../../di/container", () => ({
   },
 }));
 
+import { userActor } from "../../../auth/access/actor";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { UserContext } from "../../singles/types";
-import { hydrateSnapshotReferences } from "../snapshot-references";
+import {
+  hydrateSnapshotReferences,
+  walkReferenceFields,
+} from "../snapshot-references";
 
 const user = { id: "u1", roles: ["editor"] } as unknown as UserContext;
 
@@ -46,12 +61,25 @@ function fields(...defs: unknown[]): FieldConfig[] {
   return defs as FieldConfig[];
 }
 
+/** The session user's actor, holding `read` on each of `resources`. */
+const readerOf = (...resources: string[]) =>
+  userActor({
+    userId: "u1",
+    roles: ["editor"],
+    permissions: resources.map(resource => ({
+      slug: `read-${resource}`,
+      action: "read",
+      resource,
+    })),
+  });
+
 beforeEach(() => {
   vi.clearAllMocks();
   getEntrySpy.mockImplementation(({ entryId }: { entryId: string }) =>
     Promise.resolve({ success: true, data: { title: `T-${entryId}` } })
   );
   checkAccessSpy.mockResolvedValue(true);
+  actorForUserSpy.mockResolvedValue(readerOf("media"));
   findByIdSpy.mockResolvedValue({
     originalFilename: "pic.png",
     filename: "abc.png",
@@ -103,7 +131,7 @@ describe("hydrateSnapshotReferences", () => {
       user
     );
 
-    expect(checkAccessSpy).toHaveBeenCalled();
+    expect(actorForUserSpy).toHaveBeenCalledWith("u1");
     expect(snapshot.cover).toEqual({
       id: "m1",
       originalFilename: "pic.png",
@@ -111,6 +139,8 @@ describe("hydrateSnapshotReferences", () => {
       url: "/u",
       thumbnailUrl: "/t",
       mimeType: "image/png",
+      // The media fixture carries no alt text.
+      alt: null,
     });
   });
 
@@ -299,5 +329,50 @@ describe("hydrateSnapshotReferences", () => {
     );
 
     expect(snapshot.owner).toEqual({ id: "o1", label: "T-o1" });
+  });
+});
+
+describe("walkReferenceFields", () => {
+  // A component holding a protected relationship beside an open one. The two
+  // preview cases above pin that hydration leaves the protected one bare; these
+  // pin the walk's option directly, so the preview's default cannot drift.
+  const component = fields({
+    name: "blocks",
+    type: "component",
+    componentSchemas: {
+      quote: {
+        fields: [
+          { name: "cite", type: "relationship", relationTo: "authors" },
+          {
+            name: "secret",
+            type: "relationship",
+            relationTo: "authors",
+            access: { read: () => false },
+          },
+        ],
+      },
+    },
+  });
+  const visited = (options?: { includeReadRuleFields?: boolean }): string[] => {
+    const names: string[] = [];
+    walkReferenceFields(
+      { blocks: [{ _componentType: "quote", cite: "a1", secret: "a2" }] },
+      component,
+      (_field, _holder, name) => names.push(name),
+      false,
+      options
+    );
+    return names;
+  };
+
+  it("skips a protected field inside a component by default, as the preview needs", () => {
+    expect(visited()).toEqual(["cite"]);
+  });
+
+  it("visits it when the caller judges read rules itself", () => {
+    expect(visited({ includeReadRuleFields: true })).toEqual([
+      "cite",
+      "secret",
+    ]);
   });
 });

@@ -891,7 +891,9 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
         hints: [],
       });
 
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    // The pipeline reports through consoleLogger, whose info level writes to
+    // console.info.
+    const consoleSpy = vi.spyOn(console, "info").mockImplementation(() => {});
     // Phase 4 (Task 8): force the drizzle-kit fallback path. With
     // add_table now in FAST_PATH_OP_TYPES, the real diff against an
     // empty live snapshot would produce an add_table op that routes
@@ -2278,5 +2280,96 @@ describe("PushSchemaPipeline - a refused pre-cleanup", () => {
     // Nothing reached the database: no pre-resolution drop, no statement.
     expect(mocks.executePreRes).not.toHaveBeenCalled();
     expect(mocks.executor.executeStatements).not.toHaveBeenCalled();
+  });
+});
+
+describe("PushSchemaPipeline - a MySQL apply that fails after lifting a foreign key", () => {
+  // MySQL commits each schema statement as it runs, so a foreign key dropped to retype its column
+  // stays dropped when a later statement of the apply fails — and the batch that would have added
+  // it back never runs. The apply puts it back before reporting the failure.
+  const shelfKey = {
+    name: "fk_cx__items_shelf_id",
+    columns: ["shelf_id"],
+    referencesTable: "cx__shelves",
+    referencesColumns: ["id"],
+    onDelete: "no action" as const,
+    onUpdate: "no action" as const,
+  };
+  const live: NextlySchemaSnapshot = {
+    tables: [
+      {
+        name: "cx__items",
+        columns: [
+          {
+            name: "id",
+            type: "varchar(36)",
+            nullable: false,
+            primaryKey: true,
+          },
+          { name: "shelf_id", type: "varchar(255)", nullable: false },
+        ],
+        foreignKeys: [shelfKey],
+      },
+      {
+        name: "cx__shelves",
+        columns: [
+          {
+            name: "id",
+            type: "varchar(255)",
+            nullable: false,
+            primaryKey: true,
+          },
+        ],
+      },
+    ],
+  };
+
+  it("adds the lifted key back when the retype fails", async () => {
+    const { pipeline, mocks } = makePipeline({
+      introspectImpl: vi
+        .fn<
+          (
+            db: unknown,
+            dialect: SupportedDialect,
+            tableNames: string[]
+          ) => Promise<NextlySchemaSnapshot>
+        >()
+        .mockResolvedValue(live),
+      resolvedOpsOverride: [
+        {
+          type: "change_column_type",
+          tableName: "cx__items",
+          columnName: "shelf_id",
+          fromType: "varchar(255)",
+          toType: "varchar(64)",
+        },
+      ],
+      executePreResImpl: vi
+        .fn<
+          (
+            txOrDb: unknown,
+            ops: Operation[],
+            dialect: SupportedDialect
+          ) => Promise<number>
+        >()
+        .mockRejectedValue(new Error("Data too long for column 'shelf_id'")),
+    });
+
+    const result = await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "mysql",
+      source: "code",
+      promptChannel: "terminal",
+      databaseName: "nextly_test",
+    });
+
+    expect(result.success).toBe(false);
+    const ran = mocks.executor.executeStatements.mock.calls.flatMap(
+      call => call[1]
+    );
+    expect(ran).toEqual([
+      expect.stringContaining("ADD CONSTRAINT `fk_cx__items_shelf_id`"),
+    ]);
   });
 });

@@ -21,7 +21,10 @@
  * ```
  */
 
-import { RESERVED_SLUGS } from "../../collections/config/validate-config";
+import {
+  RESERVED_SLUGS,
+  statusOptionError,
+} from "../../collections/config/validate-config";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import {
   fieldProducesColumn,
@@ -43,7 +46,6 @@ import {
   DEFAULT_SQL_KEYWORDS_SET,
   validateComponentFieldRefShared,
   validateContainerFieldsShared,
-  validateFieldNameShared,
   validateFieldTypeShared,
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
@@ -51,6 +53,8 @@ import {
   validateSelectOptionsShared,
   validateSlugShared,
   validateAccessShared,
+  SINGLE_ACCESS_KEYS,
+  validateFieldBasicsShared,
 } from "../../shared/base-validator";
 
 import type { SingleConfig } from "./types";
@@ -93,6 +97,8 @@ export type SingleValidationErrorCode =
   | "FIELD_NAME_SYSTEM_ALIAS"
   // A name that reaches a column the Draft/Published lifecycle owns, while it is enabled.
   | "FIELD_NAME_LIFECYCLE_RESERVED"
+  // A `status` choice longer than a version's status can record.
+  | "FIELD_STATUS_OPTION_TOO_LONG"
   | "FIELD_TYPE_REQUIRED"
   | "FIELD_TYPE_INVALID"
   // A declared default the field's own rules reject.
@@ -120,7 +126,8 @@ export type SingleValidationErrorCode =
   | "COMPONENT_REF_EMPTY"
   // Access errors (Single-specific: only read/update)
   | "ACCESS_INVALID_TYPE"
-  | "ACCESS_FUNCTION_INVALID";
+  | "ACCESS_FUNCTION_INVALID"
+  | "ACCESS_KEY_UNKNOWN";
 
 /**
  * A single validation error with path and context.
@@ -205,13 +212,7 @@ function validateField(
   // the deferral returns before this, and the boot gate asks only whether the
   // token was claimed. A duplicate or SQL-reserved name reached schema
   // generation as a colliding column.
-  validateFieldNameShared(
-    f.name,
-    path,
-    errsBase,
-    seenNames,
-    DEFAULT_SQL_KEYWORDS_SET
-  );
+  validateFieldBasicsShared(f, path, errsBase, seenNames);
 
   if (
     !validateFieldTypeShared(f.type, path, errsBase, type =>
@@ -387,6 +388,17 @@ function validateFields(
       });
       return;
     }
+    // Without the lifecycle a `status` field is what each version records as its status, which
+    // holds 32 characters: the collection validator's rule, shared.
+    const statusError = statusOptionError(
+      column,
+      candidate,
+      `${path}[${index}].options`
+    );
+    if (statusError !== null) {
+      errors.push(statusError);
+      return;
+    }
     // Two names that reach one column cannot both be emitted, so the table could never be
     // created. Checked here rather than in the shared field-name rule because only this level has
     // columns at all: a repeater or group keeps its children inside a single JSON column, where
@@ -423,7 +435,7 @@ function validateAccess(
   access: unknown,
   errors: SingleValidationError[]
 ): void {
-  validateAccessShared(access, ["read", "update"], errors);
+  validateAccessShared(access, SINGLE_ACCESS_KEYS, errors);
 }
 
 // ============================================================

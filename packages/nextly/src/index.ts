@@ -286,6 +286,18 @@ export type {
   UpdateEmailTemplateArgs,
   DeleteEmailTemplateArgs,
   PreviewEmailTemplateArgs,
+  // @experimental Template ownership: what `override`, `reset`, `compare`,
+  // `applyUpdate` and `undoUpdate` take and return.
+  OverrideEmailTemplateArgs,
+  ResetEmailTemplateArgs,
+  CompareEmailTemplateArgs,
+  ApplyEmailTemplateUpdateArgs,
+  UndoEmailTemplateUpdateArgs,
+  EmailTemplateComparison,
+  EmailTemplateVersion,
+  OwnerChange,
+  OwnerChangeChoice,
+  OwnerUpdateUndo,
   // User Field types
   FindUserFieldsArgs,
   FindUserFieldByIDArgs,
@@ -298,6 +310,14 @@ export type {
   SendTemplateEmailArgs,
   SendEmailResult,
 } from "./direct-api/types";
+
+// Email templates (experimental). Template data takes lists and objects;
+// a template escapes every value it writes, except pre-rendered HTML that
+// code marks with `markHtml`. Only code marks HTML, and only markup it built
+// itself: never a value from a request, a form, a stored row or another
+// plugin.
+export { markHtml, TrustedHtml } from "./domains/email/services/liquid-engine";
+export type { EmailTemplateData } from "./direct-api/types/email";
 
 // TypeGenerator types - for advanced type generation use cases
 export type {
@@ -632,6 +652,12 @@ export {
   type WidgetRenderSize,
   type WidgetWidth,
 } from "./domains/widgets/declaration/public";
+// @experimental The check a site's generated admin component map applies, and what it reads:
+// the widgets a config declares, kept as types from `definePlugin` through `defineConfig`.
+export type {
+  DeclaredComponentMap,
+  WidgetsOf,
+} from "./plugins/declared-widgets";
 
 // The widget domain's public surface: the registry every core and
 // plugin-contributed widget shares, the source registry a query names, and
@@ -693,7 +719,9 @@ export {
   callerReadOptions,
   type WidgetSourceResolver,
   type PluginSourceResolver,
+  type PluginManySourceResolver,
   type ResolverOptions,
+  type WidgetScope,
   type PluginWidgetSource,
   type ReadCaller,
 } from "./domains/widgets";
@@ -1039,9 +1067,14 @@ export {
   type CollectionHooks,
   type CustomEndpoint,
   type HttpMethod,
-  // Access control types (shared by collections, singles, and Direct API)
+  // Access control types (shared by collections, singles, and Direct API).
+  // `AccessRuleContext` is the one context every rule is handed, collection,
+  // Single and field alike; `AccessControlContext` is the same type.
   type AccessControlContext,
   type AccessControlFunction,
+  type AccessRuleContext,
+  type AccessRuleOperation,
+  type AccessRuleTarget,
   type MinimalUser,
 } from "./collections/config";
 

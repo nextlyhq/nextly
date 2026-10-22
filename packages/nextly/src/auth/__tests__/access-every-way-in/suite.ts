@@ -36,6 +36,13 @@
  *   kept apart from the answers on purpose: accepting a new answer with `-u`
  *   never makes a new disagreement acceptable, and a cell that starts agreeing
  *   fails the run until it is taken off the list. Nothing is skipped.
+ * - **Asking the decision.** A door listed in {@link ASKS_THE_DECISION} asks
+ *   the one decision, and keeps today's answer where it still differs through
+ *   a named deviation (`auth/access/deviations`). Each of its listed cells
+ *   names, after a `#`, the deviations that changed it, and must disagree with
+ *   the one answer having recorded exactly those; every other cell must give
+ *   the one answer. So no disagreement at such a door goes unexplained, and
+ *   one whose deviation is removed fails until it is taken off the list.
  *
  * **Which rows.** The callers, rules, actions and targets are crossed in full,
  * and each row is sent to every door that can ask it (`table.ts`, `asks`). A
@@ -61,12 +68,16 @@
  *
  * **What a cell says.** `A` allowed, `R` refused, an HTTP status for a refusal
  * or failure that carried one, `E` a failure that carried none, `=<value>` a
- * check that answered something other than a boolean, and `.` not asked.
+ * check that answered something other than a boolean, `S` a media row
+ * populated with its internal columns taken off, which presents a refusal,
+ * and `.` not asked.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { DEVIATIONS, type Deviation } from "../../access/deviations";
 
 import {
   getConfiguredTestDialects,
@@ -96,14 +107,25 @@ import { boot, type World } from "./world";
  */
 const NOT_YET_ONE_ANSWER: ReadonlySet<Door> = new Set<Door>([
   "rest",
-  "direct",
-  "website",
-  "route",
   "can",
-  "service",
   "entity",
   "schema",
   "population",
+  "widget",
+]);
+
+/**
+ * The ways in that ask the one decision, keeping today's answer through named
+ * deviations where it still differs. A door moves here from
+ * {@link NOT_YET_ONE_ANSWER} when it starts asking the decision, and leaves
+ * when no listed cell remains at it.
+ */
+const ASKS_THE_DECISION: ReadonlySet<Door> = new Set<Door>([
+  "direct",
+  "service",
+  "website",
+  "route",
+  "lock",
   "system",
 ]);
 
@@ -114,17 +136,28 @@ const DISAGREEMENTS_FILE = join(__dirname, "known-disagreements.txt");
 const cellKey = (row: Row, door: Door) => `${rowKey(row)} at ${door}`;
 
 /**
- * The cells allowed to disagree with the one answer for now, as listed by hand.
- * Blank lines and lines starting with `#` are ignored.
+ * The cells allowed to disagree with the one answer for now, as listed by hand,
+ * each with the deviations named after its `#`, if any. Blank lines and lines
+ * starting with `#` are ignored.
  */
-function knownDisagreements(): Set<string> {
-  return new Set(
+function knownDisagreements(): Map<string, string[]> {
+  return new Map(
     readFileSync(DISAGREEMENTS_FILE, "utf8")
       .split("\n")
       .map(line => line.trim())
       .filter(line => line !== "" && !line.startsWith("#"))
+      .map(line => {
+        const [cell = "", named = ""] = line.split("#");
+        const deviations = named
+          .split(",")
+          .map(name => name.trim())
+          .filter(name => name !== "");
+        return [cell.trim(), deviations];
+      })
   );
 }
+
+const doorOf = (cell: string) => cell.slice(cell.lastIndexOf(" ") + 1) as Door;
 
 /** The whole suite for one dialect, skipped when that dialect is not set up. */
 export function describeEveryWayIn(dialect: TestDialect): void {
@@ -134,9 +167,16 @@ export function describeEveryWayIn(dialect: TestDialect): void {
     const known = knownDisagreements();
     let world: World | undefined;
     const answers = new Map<string, Map<Door, Answer>>();
+    // The deviations that changed each cell's answer, by cell.
+    const deviated = new Map<string, Deviation[]>();
     // For each write a door was asked to make: the cell, its answer, and
     // whether the write reached the database.
-    const writes: { cell: string; answer: Answer; landed: boolean }[] = [];
+    const writes: {
+      cell: string;
+      answer: Answer;
+      landed: boolean;
+      done: boolean;
+    }[] = [];
 
     beforeAll(async () => {
       // A rule that throws is reported by the doors that catch it.
@@ -145,10 +185,15 @@ export function describeEveryWayIn(dialect: TestDialect): void {
       for (const row of rows()) {
         const byDoor = new Map<Door, Answer>();
         for (const door of doorsAsking(row)) {
-          const { answer, landed } = await ask(world, row, door);
+          const { answer, deviations, landed, done } = await ask(
+            world,
+            row,
+            door
+          );
           byDoor.set(door, answer);
-          if (landed !== undefined) {
-            writes.push({ cell: cellKey(row, door), answer, landed });
+          deviated.set(cellKey(row, door), deviations);
+          if (landed !== undefined && done !== undefined) {
+            writes.push({ cell: cellKey(row, door), answer, landed, done });
           }
         }
         answers.set(rowKey(row), byDoor);
@@ -183,7 +228,7 @@ export function describeEveryWayIn(dialect: TestDialect): void {
         // The control for the check above: a write that lands is seen, so
         // the comparison can tell a written table from an untouched one.
         expect(allowed().length).toBeGreaterThan(0);
-        expect(allowed().filter(w => !w.landed)).toEqual([]);
+        expect(allowed().filter(w => !w.done)).toEqual([]);
       });
     });
 
@@ -194,27 +239,54 @@ export function describeEveryWayIn(dialect: TestDialect): void {
             doorsAsking(row).map(door => cellKey(row, door))
           )
         );
-        const stale = [...known].filter(
+        const stale = [...known.keys()].filter(
           cell =>
             !asked.has(cell) ||
-            !NOT_YET_ONE_ANSWER.has(
-              cell.slice(cell.lastIndexOf(" ") + 1) as Door
+            !(
+              NOT_YET_ONE_ANSWER.has(doorOf(cell)) ||
+              ASKS_THE_DECISION.has(doorOf(cell))
             )
         );
         expect(stale).toEqual([]);
       });
 
+      it("names deviations on every listed cell at a door asking the decision, and only there", () => {
+        const misnamed = [...known].filter(([cell, named]) =>
+          ASKS_THE_DECISION.has(doorOf(cell))
+            ? named.length === 0 ||
+              named.some(name => !DEVIATIONS.includes(name as Deviation))
+            : named.length > 0
+        );
+        expect(misnamed).toEqual([]);
+      });
+
       for (const row of rows()) {
         const expected = oneAnswer(row);
         for (const door of doorsAsking(row)) {
-          const name = `${cellKey(row, door)} is ${expected}`;
-          const disagrees = known.has(cellKey(row, door));
+          const cell = cellKey(row, door);
+          const name = `${cell} is ${expected}`;
+          const named = known.get(cell);
           const check = () => {
             const answer = answers.get(rowKey(row))?.get(door);
             expect(answer, "the door was asked").toBeDefined();
             expect(verdictOf(answer ?? ".")).toBe(expected);
           };
-          if (NOT_YET_ONE_ANSWER.has(door) && disagrees) {
+          if (ASKS_THE_DECISION.has(door) && named) {
+            it(`DEVIATES (${named.join(", ")}): ${name}`, () => {
+              // A listed cell names the deviation that explains it, or it
+              // would pass here having recorded none.
+              expect(
+                named.length,
+                "a disagreement here names its deviation"
+              ).toBeGreaterThan(0);
+              const answer = answers.get(rowKey(row))?.get(door);
+              expect(answer, "the door was asked").toBeDefined();
+              expect(verdictOf(answer ?? ".")).not.toBe(expected);
+              expect(deviated.get(cell)).toEqual(
+                DEVIATIONS.filter(deviation => named.includes(deviation))
+              );
+            });
+          } else if (NOT_YET_ONE_ANSWER.has(door) && named) {
             it.fails(`NOT YET ONE ANSWER: ${name}`, check);
           } else {
             it(name, check);

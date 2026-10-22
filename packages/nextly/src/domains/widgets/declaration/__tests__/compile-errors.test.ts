@@ -60,7 +60,7 @@ export const w = defineWidget({
   title: "W",
   description: "A widget under test",
   category: "Test",
-  widths: ["1/2", "full"],
+  widths: ["half", "full"],
   width: "full",
 ${fields}
 });
@@ -88,8 +88,9 @@ const SHAPES: Record<(typeof CORE_DISPLAYS)[number], string> = {
 /** The query each core display draws, as a widget writes it. */
 const QUERIES: Record<(typeof CORE_DISPLAYS)[number], string> = {
   metric: `op: "count"`,
-  list: `op: "list"`,
-  table: `op: "list"`,
+  // A row display's query names the fields its rows are drawn from.
+  list: `op: "list", select: ["title"]`,
+  table: `op: "list", select: ["title"]`,
   bars: `op: "groupBy", groupBy: "state"`,
   timeseries: `op: "timeseries", dateField: "createdAt", interval: "day"`,
 };
@@ -121,6 +122,22 @@ const WRONG_QUERY: Record<(typeof CORE_DISPLAYS)[number], string> = {
   bars: `op: "count"`,
   timeseries: `op: "list"`,
 };
+
+/** A site whose one typed plugin contributes the example widgets. */
+const SITE = `import { defineConfig } from "../../../../collections/config/define-config";
+import type { DeclaredComponentMap, WidgetsOf } from "../../../../plugins/declared-widgets";
+import { definePlugin, type PluginDefinition } from "../../../../plugins/plugin-context";
+import type { AnyWidget } from "../define-widget";
+import { RevenueCard, UnpaidCard } from "./plugin/admin";
+import { widgets } from "./plugin/widgets";
+
+const shop = definePlugin({
+  name: "shop",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: { dashboard: { widgets } },
+});
+`;
 
 const CASES: Case[] = [
   // ---- A setting read as the wrong type, in each of the three places.
@@ -247,6 +264,7 @@ export function Card({ data }: WidgetProps<typeof revenue>) {
     { kind: "a map", value: `new Map([["paid", 3]])` },
     { kind: "a set", value: `new Set(["paid"])` },
     { kind: "a bigint", value: `BigInt(3)` },
+    { kind: "a symbol", value: `Symbol("paid")` },
   ].map(
     ({ kind, value }): Case => ({
       name: `a data function's answer may not hold ${kind}`,
@@ -448,6 +466,92 @@ export const w = defineWidget({
     message: "display must be exactly one display, not a choice of several",
   },
   {
+    name: "a component display's path is a literal, not read from a string",
+    ...pair(
+      display => `${imports}import type { ComponentDisplay } from "../displays";
+
+const card: ComponentDisplay = { component: "@test/w/admin#Card" };
+
+export const w = defineWidget({
+  id: "test/w",
+  title: "W",
+  description: "A widget under test",
+  category: "Test",
+  widths: ["full"],
+  width: "full",
+  data: async () => ({ total: 3 }),
+  display: ${display}, ${MARK}
+});
+`,
+      "card",
+      `{ component: "@test/w/admin#Card" }`
+    ),
+    code: 2322,
+    message: "a component display's path must be written as a literal string",
+  },
+  {
+    // Narrower than `string`, but still a pattern: a map keyed by it is an
+    // index signature that an empty map satisfies, as one keyed by `string`.
+    name: "a component display's path is a literal, not a template pattern",
+    ...pair(
+      display => `${imports}declare const pattern: \`@test/\${string}/admin#Card\`;
+
+export const w = defineWidget({
+  id: "test/w",
+  title: "W",
+  description: "A widget under test",
+  category: "Test",
+  widths: ["full"],
+  width: "full",
+  data: async () => ({ total: 3 }),
+  display: ${display}, ${MARK}
+});
+`,
+      "{ component: pattern }",
+      `{ component: "@test/w/admin#Card" }`
+    ),
+    code: 2322,
+    message: "a component display's path must be written as a literal string",
+  },
+  ...(["list", "table"] as const).map(
+    (display): Case => ({
+      name: `the ${display} display refuses a query that selects no fields`,
+      ...pair(
+        select =>
+          widget(`  settings: { collection: settings.collection() },
+  data: { query: ({ settings }) => ({ collection: settings.collection, op: "list"${select} }) }, ${MARK}
+  display: "${display}",`),
+        "",
+        `, select: ["title"]`
+      ),
+      code: 2322,
+      message: "Property 'select' is missing",
+    })
+  ),
+  {
+    name: "a data function's answer may not hold a symbol-keyed property",
+    ...pair(
+      property => `${imports}
+const tag = Symbol("tag");
+
+export const w = defineWidget({
+  id: "test/w",
+  title: "W",
+  description: "A widget under test",
+  category: "Test",
+  widths: ["full"],
+  width: "full",
+  data: async () => ({ ${property} }), ${MARK}
+  display: { component: "@test/w/admin#Card" },
+});
+`,
+      `[tag]: "paid"`,
+      `paid: tag.description ?? ""`
+    ),
+    code: 2322,
+    message: "is not assignable to type 'never'",
+  },
+  {
     name: "a hand-written object is not a widget a plugin can contribute",
     ...pair(
       entry => `import type { DashboardContribution } from "../dashboard";
@@ -531,17 +635,17 @@ export const w = defineWidget({
   title: "W",
   description: "A widget under test",
   category: "Test",
-  widths: ["1/3", "1/2"],
+  widths: ["third", "half"],
   width: "${width}", ${MARK}
   data: async () => ({ total: 3 }),
   display: "metric",
 });
 `,
       "full",
-      "1/2"
+      "half"
     ),
     code: 2322,
-    message: `Type '"full"' is not assignable to type '"1/3" | "1/2"'`,
+    message: `Type '"full"' is not assignable to type '"third" | "half"'`,
   },
   {
     name: "a plugin offers an alternative to a built-in widget that does not exist",
@@ -599,11 +703,237 @@ export const dashboard: DashboardContribution<
     code: 2353,
     message: "'\"acme/revenue\"' does not exist in type",
   },
+
+  // A site's generated admin component map, checked against the widgets its config declares,
+  // kept from `definePlugin` through `defineConfig`. No plugin or site annotates anything here.
+  {
+    name: "a site's generated map registers a plugin's component under another widget's path",
+    ...pair(
+      card => `${SITE}
+const config = defineConfig({ plugins: [shop] });
+
+export const registered = {
+  "@acme/nextly-plugin-shop/admin#RevenueCard": ${card}, ${MARK}
+  "@acme/nextly-plugin-shop/admin#UnpaidCard": UnpaidCard,
+  "@nextlyhq/plugin-page-builder/admin#BlocksField": (): null => null,
+} satisfies DeclaredComponentMap<typeof config>;
+`,
+      "UnpaidCard",
+      "RevenueCard"
+    ),
+    code: 2322,
+    message: "is not assignable to type '(props: WidgetProps<",
+  },
+  {
+    // 🔴 A widget whose component path is a plain string turns a map over every widget into an
+    // index signature, which absorbs the typed paths and takes any component. Its plugin first,
+    // in case inference would let it stand for the plugins after it.
+    name: "an untyped plugin beside a typed one does not switch the map's check off",
+    ...pair(
+      card => `${SITE}
+// A widget whose component path the compiler cannot know: declared from a string variable.
+declare const someWidgets: readonly (AnyWidget & {
+  readonly display: { component: string };
+})[];
+const legacy = definePlugin({
+  name: "legacy",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: { dashboard: { widgets: someWidgets } },
+});
+const config = defineConfig({ plugins: [legacy, shop] });
+
+export const registered = {
+  "legacy/admin#Card": (): null => null,
+  "@acme/nextly-plugin-shop/admin#RevenueCard": ${card}, ${MARK}
+  "@acme/nextly-plugin-shop/admin#UnpaidCard": UnpaidCard,
+} satisfies DeclaredComponentMap<typeof config>;
+`,
+      "UnpaidCard",
+      "RevenueCard"
+    ),
+    code: 2322,
+    message: "is not assignable to type '(props: WidgetProps<",
+  },
+  {
+    // A plugin typed `any` (a JavaScript plugin with no declarations) must not collapse the list's
+    // element type to `any`, which would erase the typed plugins beside it.
+    name: "a plugin typed any beside a typed one does not switch the map's check off",
+    ...pair(
+      card => `${SITE}
+declare const fromJavaScript: any;
+const config = defineConfig({ plugins: [fromJavaScript, shop] });
+
+export const registered = {
+  "@acme/nextly-plugin-shop/admin#RevenueCard": ${card}, ${MARK}
+  "@acme/nextly-plugin-shop/admin#UnpaidCard": UnpaidCard,
+} satisfies DeclaredComponentMap<typeof config>;
+`,
+      "UnpaidCard",
+      "RevenueCard"
+    ),
+    code: 2322,
+    message: "is not assignable to type '(props: WidgetProps<",
+  },
+  {
+    name: "a site's config keeps a plugin's widget, and its props, through definePlugin and defineConfig",
+    ...pair(
+      kept => `${SITE}
+const config = defineConfig({ plugins: [shop] });
+type Revenue = Extract<WidgetsOf<typeof config>, { readonly id: "acme/revenue" }>;
+type Kept = [Revenue] extends [never] ? "lost" : "kept";
+
+export const revenueKept: Kept = ${kept}; ${MARK}
+`,
+      `"lost"`,
+      `"kept"`
+    ),
+    code: 2322,
+    message: `Type '"lost"' is not assignable to type '"kept"'`,
+  },
+  {
+    name: "a plugin suggests a widget id it does not declare",
+    ...pair(
+      id => `import { definePlugin } from "../../../../plugins/plugin-context";
+import { widgets } from "./plugin/widgets";
+
+export const shop = definePlugin({
+  name: "shop",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: {
+    dashboard: {
+      widgets,
+      suggest: ["${id}"], ${MARK}
+    },
+  },
+});
+`,
+      "acme/orders-by-stat",
+      "acme/orders-by-state"
+    ),
+    // 2820: the "did you mean" form, since the misspelt id is one letter from a declared one.
+    code: 2820,
+    message: `Type '"acme/orders-by-stat"' is not assignable to type`,
+  },
+];
+
+/**
+ * What must keep compiling as it did before the widgets' types were kept: plugins and configs
+ * written without them. Each is a whole file that must compile with no error at all.
+ */
+const COMPILES: ReadonlyArray<{ name: string; source: string }> = [
+  {
+    name: "a plugin with no dashboard is today's PluginDefinition, and its config's map checks nothing",
+    source: `import { defineConfig } from "../../../../collections/config/define-config";
+import type { DeclaredComponentMap } from "../../../../plugins/declared-widgets";
+import { definePlugin, type PluginDefinition } from "../../../../plugins/plugin-context";
+
+const plain = definePlugin({ name: "plain", version: "1.0.0", nextly: "*" });
+export const asBefore: PluginDefinition = plain;
+const config = defineConfig({ plugins: [plain] });
+export const registered = {
+  "plain/admin#Page": (): null => null,
+} satisfies DeclaredComponentMap<typeof config>;
+`,
+  },
+  {
+    name: "a typed plugin still goes where a PluginDefinition does",
+    source: `import { definePlugin, type PluginDefinition } from "../../../../plugins/plugin-context";
+import { widgets } from "./plugin/widgets";
+
+const shop = definePlugin({ name: "shop", version: "1.0.0", nextly: "*", contributes: { dashboard: { widgets } } });
+export const annotated: PluginDefinition = shop;
+export const list: PluginDefinition[] = [shop, definePlugin({ name: "plain", version: "1.0.0", nextly: "*" })];
+`,
+  },
+  {
+    name: "a renamed plugin keeps its widgets' types",
+    source: `import { definePlugin, type PluginDefinition } from "../../../../plugins/plugin-context";
+import { widgets } from "./plugin/widgets";
+
+const renamed = definePlugin({
+  name: "shop",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: { dashboard: { widgets } },
+}).rename?.({ orders: "shop-orders" });
+type Ids = NonNullable<typeof renamed> extends PluginDefinition<infer W> ? W["id"] : never;
+type Kept = string extends Ids ? "lost" : "kept";
+export const kept: Kept = "kept";
+`,
+  },
+  {
+    name: "a plugin written as a plain object, and a pre-typed config, compile as before",
+    source: `import { defineConfig, type NextlyConfig } from "../../../../collections/config/define-config";
+import type { DeclaredComponentMap } from "../../../../plugins/declared-widgets";
+
+export const fromObject = defineConfig({ plugins: [{ name: "object", version: "1.0.0", nextly: "*" }] });
+declare const written: NextlyConfig;
+const fromVariable = defineConfig(written);
+export const registered = {
+  "any/admin#Card": (): null => null,
+} satisfies DeclaredComponentMap<typeof fromVariable>;
+`,
+  },
+  {
+    // 🔴 The config's type includes every branch, so a plugin added only when a setting is on is
+    // declared there, while the map generated without that setting has no component for it.
+    // Requiring one refused the site's own build; the admin's check at run time is what refuses
+    // a missing component, when the plugin is actually on.
+    name: "a plugin the config adds only when a setting is on needs no component in the map",
+    source: `import { defineConfig } from "../../../../collections/config/define-config";
+import type { DeclaredComponentMap } from "../../../../plugins/declared-widgets";
+import { definePlugin } from "../../../../plugins/plugin-context";
+import { widgets } from "./plugin/widgets";
+
+declare const turnedOn: boolean;
+const shop = definePlugin({
+  name: "shop",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: { dashboard: { widgets } },
+});
+const config = defineConfig({ plugins: [...(turnedOn ? [shop] : [])] });
+export const registered = {
+  "@nextlyhq/plugin-page-builder/admin#BlocksField": (): null => null,
+} satisfies DeclaredComponentMap<typeof config>;
+`,
+  },
+  {
+    name: "a JavaScript config, typed any, leaves the map unchecked rather than failing",
+    source: `import type { DeclaredComponentMap } from "../../../../plugins/declared-widgets";
+
+export const registered = {
+  "any/admin#Card": (): null => null,
+} satisfies DeclaredComponentMap<any>;
+`,
+  },
+  {
+    name: "a plugin with untyped widgets keeps today's string ids for suggest",
+    source: `import { definePlugin } from "../../../../plugins/plugin-context";
+import type { AnyWidget } from "../define-widget";
+
+declare const someWidgets: readonly AnyWidget[];
+declare const ids: string[];
+export const legacy = definePlugin({
+  name: "legacy",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: { dashboard: { widgets: someWidgets, suggest: ids } },
+});
+`,
+  },
 ];
 
 /** Where each case's two forms are compiled, as if they sat in this folder. */
 function casePath(index: number, form: "faulty" | "corrected"): string {
   return join(here, `case-${index}-${form}.ts`);
+}
+
+/** Where each file that must compile cleanly is compiled. */
+function compilesPath(index: number): string {
+  return join(here, `compiles-${index}.ts`);
 }
 
 /** The diagnostics of every case file, compiled together in one program. */
@@ -614,6 +944,9 @@ beforeAll(() => {
   CASES.forEach((c, index) => {
     virtual.set(casePath(index, "faulty"), c.faulty);
     virtual.set(casePath(index, "corrected"), c.corrected);
+  });
+  COMPILES.forEach((c, index) => {
+    virtual.set(compilesPath(index), c.source);
   });
 
   // The package's own compiler options, so a case compiles exactly as a file
@@ -669,7 +1002,7 @@ function describeDiagnostic(diagnostic: ts.Diagnostic) {
 
 describe("a widget declaration refuses to compile", () => {
   it("compiles every case, so none is skipped for want of a file", () => {
-    expect(diagnosticsByFile.size).toBe(CASES.length * 2);
+    expect(diagnosticsByFile.size).toBe(CASES.length * 2 + COMPILES.length);
   });
 
   CASES.forEach((c, index) => {
@@ -693,6 +1026,17 @@ describe("a widget declaration refuses to compile", () => {
         ).map(describeDiagnostic);
         expect(found).toEqual([]);
       });
+    });
+  });
+});
+
+describe("plugins and configs written without their widgets' types compile as before", () => {
+  COMPILES.forEach((c, index) => {
+    it(c.name, () => {
+      const found = (diagnosticsByFile.get(compilesPath(index)) ?? []).map(
+        describeDiagnostic
+      );
+      expect(found).toEqual([]);
     });
   });
 });

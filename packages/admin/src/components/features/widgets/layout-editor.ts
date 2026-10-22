@@ -83,7 +83,20 @@ export function movePlacement(
     drawn.findIndex(placement => placement.id === placementId),
     direction
   );
-  if (anchor === undefined) return [...placements];
+  return anchor === undefined
+    ? [...placements]
+    : placeBeside(placements, placementId, anchor);
+}
+
+/**
+ * The list with one card taken out and put back beside `anchor`, every other card in its
+ * order. The one way a move reorders, so a menu move and a drag land a card alike.
+ */
+function placeBeside(
+  placements: readonly WidgetPlacement[],
+  placementId: string,
+  anchor: { anchorId: string; side: "before" | "after" }
+): WidgetPlacement[] {
   const moving = placements.find(placement => placement.id === placementId);
   if (moving === undefined) return [...placements];
   const rest = placements.filter(placement => placement.id !== placementId);
@@ -170,26 +183,37 @@ export function drawnPosition(
 }
 
 /**
- * Moves the card `fromId` to the position `toId` holds, and returns a NEW
- * array. What a drag does when it is dropped onto another card.
+ * Moves one card to `final` among the DRAWN cards, and returns a NEW array. What a drag does
+ * when it is released over a drop line.
  *
- * By IDENTITY: dnd-kit reports both ends of a drag as ids, and ids survive the
- * filtering between the list and the grid where indices do not.
+ * `final` is the card's position once moved, counted among the drawn cards without it, so
+ * `final` equal to where it is now changes nothing. It lands right beside the last drawn card
+ * it passes, as the menu's moves land: after it moving later, before it moving earlier. So a
+ * removed card, or one this admin cannot draw, stays on the far side of the moved card whichever
+ * way it was moved, and a drag and the menu put a card in the same place. An unknown card
+ * returns the list unchanged: a drag released over a stale row is an ordinary outcome, not an
+ * error.
  */
-export function movePlacementTo(
+export function movePlacementToPosition(
   placements: readonly WidgetPlacement[],
-  fromId: string,
-  toId: string
+  placementId: string,
+  final: number,
+  isDrawn: IsDrawn = notRemoved
 ): WidgetPlacement[] {
-  const from = placements.findIndex(placement => placement.id === fromId);
-  const to = placements.findIndex(placement => placement.id === toId);
-  // An id the list does not know is an ordinary outcome — a drag released over
-  // nothing, a stale row — rather than an error worth throwing over.
-  if (from === -1 || to === -1 || from === to) return [...placements];
-  const next = [...placements];
-  const [moved] = next.splice(from, 1);
-  next.splice(to, 0, moved);
-  return next;
+  const drawn = placements.filter(isDrawn);
+  const from = drawn.findIndex(placement => placement.id === placementId);
+  const others = drawn.filter(placement => placement.id !== placementId);
+  const to = Math.max(0, Math.min(others.length, final));
+  if (from === -1 || to === from || others.length === 0) {
+    return [...placements];
+  }
+  return placeBeside(
+    placements,
+    placementId,
+    to > from
+      ? { anchorId: others[to - 1].id, side: "after" }
+      : { anchorId: others[to].id, side: "before" }
+  );
 }
 
 /**
@@ -298,7 +322,7 @@ export function newPlacementId(): string {
  * same widget, or one whose natural id is taken, gets a fresh id, because ids
  * are unique within a layout and the server refuses a repeat.
  */
-function addedPlacementId(
+export function addedPlacementId(
   placements: readonly WidgetPlacement[],
   widgetId: string
 ): string {
@@ -319,17 +343,25 @@ function addedPlacementId(
 export function addPlacement(
   placements: readonly WidgetPlacement[],
   widgetId: string,
-  defaultWidth: WidgetWidth
+  defaultWidth: WidgetWidth,
+  /**
+   * The new card's id, when the caller has to know it before the list changes (to highlight
+   * the card, or to move focus to it). Decided by {@link addedPlacementId} otherwise.
+   */
+  id: string = addedPlacementId(placements, widgetId)
 ): WidgetPlacement[] {
   // 🔴 REFUSED at capacity, and refused HERE rather than only at the control.
   // `MAX_PLACEMENTS` is what the layout endpoint accepts in one submission --
   // removed cards included, since they travel with the list -- so an unguarded
   // add built a draft the server was always going to reject.
   if (placements.length >= MAX_PLACEMENTS) return [...placements];
+  // A decided id that is already taken is an add made twice before the list moved on (a
+  // double click): adding it again would give two cards one id, so the second adds nothing.
+  if (placements.some(placement => placement.id === id)) return [...placements];
   return [
     ...placements,
     {
-      id: addedPlacementId(placements, widgetId),
+      id,
       widgetId,
       width: defaultWidth,
       removed: false,

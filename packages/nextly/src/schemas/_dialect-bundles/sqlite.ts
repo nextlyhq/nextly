@@ -61,6 +61,7 @@ export { siteSettingsSqlite as siteSettings } from "../site-settings/sqlite";
 export { userFieldDefinitionsSqlite as userFieldDefinitions } from "../user-field-definitions/sqlite";
 export { emailProvidersSqlite as emailProviders } from "../email-providers/sqlite";
 export { emailDeliveriesSqlite as emailDeliveries } from "../email-deliveries/sqlite";
+export { emailSendClaimsSqlite as emailSendClaims } from "../email-send-claims/sqlite";
 export { emailTemplatesSqlite as emailTemplates } from "../email-templates/sqlite";
 
 export { nextlySchemaEventsSqlite as nextlySchemaEvents } from "../schema-events/sqlite";
@@ -103,6 +104,10 @@ export { nextlyJobsSqlite as nextlyJobs } from "../jobs/sqlite";
 // above gives — this map is what the push creates.
 export { nextlyNoticesSqlite as nextlyNotices } from "../notices/sqlite";
 
+// The site's email brand settings; in the bundle for the reason the releases
+// note above gives — this map is what the push creates.
+export { nextlyEmailBrandSqlite as nextlyEmailBrand } from "../email-brand/sqlite";
+
 // Version view markers; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.
 export { nextlyVersionViewsSqlite as nextlyVersionViews } from "../version-views/sqlite";
@@ -112,3 +117,6 @@ export {
   nextlyContentEventsSqlite as nextlyContentEvents,
   nextlyContentEventPartsSqlite as nextlyContentEventParts,
 } from "../content-events/sqlite";
+// Recorded preview links; in the bundle so freshPushSchema creates the table on
+// a fresh database, for the reason the release tables above give.
+export { nextlyPreviewLinksSqlite as nextlyPreviewLinks } from "../preview-links/sqlite";

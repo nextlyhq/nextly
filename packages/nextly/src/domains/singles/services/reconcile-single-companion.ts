@@ -24,12 +24,15 @@ import {
   getSchemaRegistryFromDI,
 } from "../../../dispatcher/helpers/di";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { consoleLogger } from "../../../shared/types";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
-import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
+import {
+  buildCompanionTransitionStatements,
+  type FieldRename,
+} from "../../i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
-  localizedColumnsOnMain,
-  translatedColumnsOnCompanion,
+  liveCompanionShape,
 } from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 
@@ -58,6 +61,8 @@ export interface ReconcileSingleCompanionArgs {
    * table changed (`moveValuesOfFieldsJoiningTranslation`). Their ADD is not repeated.
    */
   joinedBefore?: readonly string[];
+  /** A translated field this change renames, by field name; its companion column is renamed. */
+  renamed?: FieldRename;
 }
 
 export async function reconcileSingleCompanion(
@@ -108,23 +113,15 @@ export async function reconcileSingleCompanion(
     companionHasStatus,
     wasStatus,
     joinedBefore: args.joinedBefore,
-    // Taken as they are: an earlier apply that moved a value and stopped before the registry
-    // recorded it left its companion column in place.
-    presentOnCompanion: companionExists
-      ? await translatedColumnsOnCompanion(adapter, {
-          tableName,
-          fields: newFields,
-          builtBy: "collection",
-        })
-      : undefined,
-    // Which translatable columns the main table still carries. A disable must not re-add one that
-    // is already there, and must still restore it: presence says the column exists, never that its
-    // value is current, because every localized write went to the companion alone.
-    existingMainColumns: await localizedColumnsOnMain(
-      adapter,
+    renamed: args.renamed,
+    // What this database holds now, so a re-save after a part-applied one finishes it.
+    ...(await liveCompanionShape(adapter, {
       tableName,
-      oldFields
-    ).then(cols => cols.map(c => c.name)),
+      oldFields,
+      newFields,
+      builtBy: "collection",
+      companionExists,
+    })),
   });
 
   // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first
@@ -190,7 +187,7 @@ export async function reconcileSingleCompanion(
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(
+      consoleLogger.warn(
         `[reconcileSingleCompanion] Companion runtime registration failed for '${slug}': ${msg}.`
       );
     }

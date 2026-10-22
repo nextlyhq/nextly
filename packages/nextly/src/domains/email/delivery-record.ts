@@ -494,4 +494,9 @@ export interface EmailDeliveryInput {
    * no address digest, naming them by the keyed digest of kind and id.
    */
   person?: PrincipalRef | null;
+  /**
+   * The keyed digest of the idempotency key the send carried, the same on
+   * every record of the send, when it carried one.
+   */
+  keyDigest?: string | null;
 }

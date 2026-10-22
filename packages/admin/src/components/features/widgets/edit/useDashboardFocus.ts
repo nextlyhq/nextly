@@ -35,11 +35,13 @@ import { DASHBOARD_HEADING_ID } from "../../dashboard/WelcomeHeader";
 export type FocusTarget =
   /** A card's actions menu button, while customising. */
   | { kind: "menu"; placementId: string }
+  /** A card's drag handle, while customising with more than one column. */
+  | { kind: "handle"; placementId: string }
   /** A card's own dismiss control, outside customising. */
   | { kind: "dismiss"; placementId: string }
   /** The Undo button on the removal notice. */
   | { kind: "undo" }
-  /** The add-a-card picker. */
+  /** The bar's Add widget button. */
   | { kind: "add" }
   /** The region that holds the cards. */
   | { kind: "grid" }
@@ -56,6 +58,8 @@ type Register = (element: HTMLElement | null) => void;
 export interface DashboardFocus {
   /** Registers a card's menu button. */
   menuRef: (placementId: string) => Register;
+  /** Registers a card's drag handle. */
+  handleRef: (placementId: string) => Register;
   /** Registers a card's dismiss control. */
   dismissRef: (placementId: string) => Register;
   /** Registers the notice's Undo button. */
@@ -64,8 +68,10 @@ export interface DashboardFocus {
   barRef: Register;
   /** Registers the Customize button. */
   customizeRef: Register;
-  /** The add picker. */
+  /** The bar's Add widget button. */
   addRef: RefObject<HTMLElement | null>;
+  /** Registers the bar's Add widget button as the `add` target. */
+  addWidgetRef: Register;
   /** The region holding the cards. */
   gridRef: RefObject<HTMLElement | null>;
   /** Send focus to `target` as soon as it is on the page. */
@@ -86,6 +92,11 @@ export function useDashboardFocus(): DashboardFocus {
   const callbacks = useRef(new Map<string, Register>());
   const pending = useRef<FocusTarget | null>(null);
   const addRef = useRef<HTMLElement | null>(null);
+  // The bar's Add widget button: where focus goes when no card is nearer, and where it returns
+  // when the add panel closes without having added anything.
+  const addWidgetRef = useCallback<Register>(element => {
+    addRef.current = element;
+  }, []);
   const gridRef = useRef<HTMLElement | null>(null);
   // Bumped by a request so the effect below runs even when the gesture that
   // asked caused no render of its own (a re-read that has already landed).
@@ -136,14 +147,16 @@ export function useDashboardFocus(): DashboardFocus {
   return useMemo(
     () => ({
       menuRef: (placementId: string) => register(`menu:${placementId}`),
+      handleRef: (placementId: string) => register(`handle:${placementId}`),
       dismissRef: (placementId: string) => register(`dismiss:${placementId}`),
       undoRef: register("undo"),
       barRef: register("bar"),
       customizeRef: register("customize"),
       addRef,
+      addWidgetRef,
       gridRef,
       request,
     }),
-    [register, request]
+    [register, request, addWidgetRef]
   );
 }

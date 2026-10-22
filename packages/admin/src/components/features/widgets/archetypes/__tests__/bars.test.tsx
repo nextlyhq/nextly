@@ -151,7 +151,7 @@ describe("the bars archetype", () => {
     );
   });
 
-  it("carries a text alternative naming the largest bucket", () => {
+  it("carries a text alternative naming the group with the most", () => {
     // What a screen reader is given INSTEAD of the shapes. Without it the card
     // announces a title and then a run of unlabelled elements.
     draw(
@@ -160,9 +160,9 @@ describe("the bars archetype", () => {
         { value: "Draft", count: 57 },
       ])
     );
-    const graphic = screen.getByRole("img");
+    const graphic = screen.getByRole("group", { name: /Use the arrow keys/ });
     expect(graphic).toHaveAccessibleName(/Entries by status/);
-    expect(graphic).toHaveAccessibleDescription(/Largest: Published, 128/);
+    expect(graphic).toHaveAccessibleDescription(/Most: Published, 128/);
   });
 
   it("puts every bucket in a real table, with the count beside it", () => {
@@ -182,7 +182,20 @@ describe("the bars archetype", () => {
 
   it("discloses a cap rather than quietly showing a partial picture", () => {
     draw(grouped([{ value: "Published", count: 9 }], true));
-    expect(screen.getByText(/more groups exist/i)).toBeInTheDocument();
+    // The visible note under the bars; the description says it too, for a screen reader.
+    expect(
+      screen.getByText("More groups exist than are shown.")
+    ).toBeInTheDocument();
+  });
+
+  it("says only part was checked when an empty answer is a floor, not that nothing matched", () => {
+    // A source that stops at a work bound can find no group in what it read
+    // while the rest still holds some: an empty floor is not an empty answer.
+    draw({ op: "groupBy", buckets: [], atLeast: true });
+    const empty = screen.getByTestId("card-empty");
+    expect(empty).toHaveTextContent(/None found in what was checked/);
+    expect(empty).toHaveTextContent(/only part of the content/);
+    expect(empty).not.toHaveTextContent(/Nothing to compare yet/);
   });
 
   it("says nothing was matched rather than drawing an empty frame", () => {

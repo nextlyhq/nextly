@@ -82,6 +82,8 @@ import type {
   ResultSetHeader,
 } from "mysql2/promise";
 
+import { boundPoolWait, type QueueingPool } from "./pool-wait";
+
 // mysql2 type definitions use mixin patterns that TypeScript struggles with.
 // We define explicit interfaces for the methods we need.
 
@@ -128,13 +130,17 @@ interface PoolConnection extends Queryable {
  * What a transaction changed on its connection's session, to put back before
  * the connection returns to the pool; null when it changed nothing.
  *
- * MySQL has no transaction-scoped form of `innodb_lock_wait_timeout`: a
- * `SET SESSION` outlives the transaction, and the pooled connection would
- * carry one transaction's timeout into every later query handed it.
- * `lockWaitTimeout` is the session's value from before the change, or null
- * when it could not be read, and then the connection cannot be put back.
+ * MySQL has no transaction-scoped form of `innodb_lock_wait_timeout` or
+ * `sql_mode`: a `SET SESSION` outlives the transaction, and the pooled
+ * connection would carry one transaction's setting into every later query
+ * handed it. Each field present is the session's value from before the
+ * change, or null when it could not be read, and then the connection cannot
+ * be put back.
  */
-type SessionRestore = { lockWaitTimeout: number | null } | null;
+type SessionRestore = {
+  lockWaitTimeout?: number | null;
+  sqlMode?: string | null;
+} | null;
 
 /**
  * Puts back what a transaction changed on its connection's session. False
@@ -145,12 +151,20 @@ async function restoreSession(
   restore: SessionRestore
 ): Promise<boolean> {
   if (restore === null) return true;
-  if (restore.lockWaitTimeout === null) return false;
+  if (restore.lockWaitTimeout === null || restore.sqlMode === null) {
+    return false;
+  }
   try {
-    // An integer read from the server, never caller input.
-    await connection.query(
-      `SET SESSION innodb_lock_wait_timeout = ${restore.lockWaitTimeout}`
-    );
+    if (restore.lockWaitTimeout !== undefined) {
+      // An integer read from the server, never caller input.
+      await connection.query(
+        `SET SESSION innodb_lock_wait_timeout = ${restore.lockWaitTimeout}`
+      );
+    }
+    if (restore.sqlMode !== undefined) {
+      // Read from the server, and bound as a value all the same.
+      await connection.query("SET SESSION sql_mode = ?", [restore.sqlMode]);
+    }
     return true;
   } catch {
     return false;
@@ -214,7 +228,9 @@ const DEFAULT_POOL_CONFIG = {
   min: 2,
   max: 10,
   idleTimeoutMs: 30000,
-  connectionTimeoutMs: 10000,
+  // How long a request waits for a connection, in the queue or opening one:
+  // the same bound, and the same default, as the PostgreSQL adapter's.
+  connectionTimeoutMs: 15000,
 };
 
 /**
@@ -362,8 +378,15 @@ export class MySqlAdapter extends DrizzleAdapter {
 
     try {
       const poolConfig = this.buildPoolConfig();
+      const pool = mysql.createPool(poolConfig);
+      // mysql2 queues a request for a connection without limit; it fails as
+      // busy past the same bound a new connection gets to open.
+      boundPoolWait(
+        pool.pool as unknown as QueueingPool,
+        poolConfig.connectTimeout ?? 0
+      );
       // Cast to our Pool interface - mysql2's mixin types don't resolve properly
-      this.pool = mysql.createPool(poolConfig) as unknown as Pool;
+      this.pool = pool as unknown as Pool;
 
       // Verify connection with smoke test, then check dialect version.
       // Why: F17 hard-fails at connect on real MySQL <8.0 (no variant
@@ -505,6 +528,8 @@ export class MySqlAdapter extends DrizzleAdapter {
     const startTime = Date.now();
 
     try {
+      // Outside the calling flow's transaction, if it has one (`notePoolAccess`).
+      this.notePoolAccess(sql);
       const [rows] = await pool.query<RowDataPacket[]>(
         sql,
         params as unknown[]
@@ -559,17 +584,20 @@ export class MySqlAdapter extends DrizzleAdapter {
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const connection = await pool.getConnection();
+      const connection = await this.connectFlowTransaction(() =>
+        pool.getConnection()
+      );
       const startTime = Date.now();
       // Set when the ROLLBACK failed (`returnTransactionConnection`).
       let rollbackFailed = false;
       // What `beginTransaction` changed on the session, to put back once the
-      // transaction has ended.
-      let restore: SessionRestore = null;
+      // transaction has ended. Filled in as each change lands, so a setup
+      // that fails part way still puts back what it had already changed.
+      const restore: NonNullable<SessionRestore> = {};
 
       try {
         // Begin transaction with options
-        restore = await this.beginTransaction(connection, options);
+        await this.beginTransaction(connection, options, restore);
 
         // Create transaction context
         const ctx = this.createTransactionContext(connection);
@@ -751,10 +779,17 @@ export class MySqlAdapter extends DrizzleAdapter {
     // (setting 'supportBigNumbers')"). The pre-v1 `mode` option is gone.
     const onClient = (client: CallbackPool | CallbackConnection) =>
       relations ? drizzle({ client, relations }) : drizzle({ client });
-    const callbackPool = (pool as unknown as { pool: CallbackPool }).pool;
+    // The handle's own queries go to the pool, so it is handed a view of the
+    // pool that reports them (`observedPool`).
+    const callbackPool = this.observedPool(
+      (pool as unknown as { pool: CallbackPool }).pool,
+      ["query", "execute", "getConnection"]
+    );
     return this.trackFlowTransactions(
       this.pinDrizzleTransactions(onClient(callbackPool), async () => {
-        const connection = await pool.getConnection();
+        const connection = await this.connectFlowTransaction(() =>
+          pool.getConnection()
+        );
         return {
           drizzle: onClient(
             (connection as unknown as { connection: CallbackConnection })
@@ -795,9 +830,10 @@ export class MySqlAdapter extends DrizzleAdapter {
       this.config.pool?.connectionTimeoutMs ??
       DEFAULT_POOL_CONFIG.connectionTimeoutMs;
 
-    // Enable waiting for connections when pool is full
+    // A request waits for a connection when the pool is full. The queue has
+    // no length limit; each wait in it is bounded instead (`boundPoolWait`).
     config.waitForConnections = true;
-    config.queueLimit = 0; // Unlimited queue
+    config.queueLimit = 0;
 
     // SSL configuration
     if (this.config.ssl) {
@@ -832,13 +868,15 @@ export class MySqlAdapter extends DrizzleAdapter {
   }
 
   /**
-   * Begins a transaction with the specified options, and returns what it
-   * changed on the session for `restoreSession` to put back.
+   * Begins a transaction with the specified options, recording in `changed`
+   * each session setting it changes, as it changes it, for `restoreSession`
+   * to put back.
    */
   private async beginTransaction(
     connection: PoolConnection,
-    options?: TransactionOptions
-  ): Promise<SessionRestore> {
+    options: TransactionOptions | undefined,
+    changed: NonNullable<SessionRestore>
+  ): Promise<void> {
     // Set isolation level if specified (must be done before BEGIN)
     if (options?.isolationLevel) {
       const isolationMap: Record<string, string> = {
@@ -874,9 +912,23 @@ export class MySqlAdapter extends DrizzleAdapter {
       await connection.query(
         `SET SESSION innodb_lock_wait_timeout = ${timeoutSeconds}`
       );
-      return { lockWaitTimeout: Number.isInteger(previous) ? previous : null };
+      changed.lockWaitTimeout = Number.isInteger(previous) ? previous : null;
     }
-    return null;
+
+    // Strict mode for this transaction: an INSERT, UPDATE or ALTER that would
+    // cut a string to its column's length, or clamp a number to its range,
+    // fails instead of applying with a warning. Added to the session's own
+    // mode, so every other flag it had still holds, and put back afterwards.
+    if (options?.strictSqlMode) {
+      const [rows] = await connection.query<RowDataPacket[]>(
+        "SELECT @@SESSION.sql_mode AS mode"
+      );
+      const previous: unknown = rows[0]?.mode;
+      await connection.query(
+        "SET SESSION sql_mode = TRIM(BOTH ',' FROM CONCAT(@@SESSION.sql_mode, ',STRICT_ALL_TABLES'))"
+      );
+      changed.sqlMode = typeof previous === "string" ? previous : null;
+    }
   }
 
   /**

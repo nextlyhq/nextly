@@ -31,6 +31,12 @@ export interface ResolvedMedia {
   url: string | null;
   thumbnailUrl: string | null;
   mimeType: string | null;
+  /**
+   * The image's alternative text, so a history view describes it as the
+   * library does. Read with the rest of the file detail, under the same access,
+   * so a caller who may not read the file is given none of it.
+   */
+  alt: string | null;
 }
 
 /**
@@ -301,6 +307,7 @@ const EMPTY_MEDIA: ResolvedMedia = {
   url: null,
   thumbnailUrl: null,
   mimeType: null,
+  alt: null,
 };
 
 /**
@@ -326,6 +333,7 @@ function toResolvedMedia(
       url: text(source.url),
       thumbnailUrl: text(source.thumbnailUrl),
       mimeType: text(source.mimeType),
+      alt: text(source.altText),
     },
   };
 }
@@ -394,6 +402,7 @@ async function resolveUpload(
         url: file.url ?? null,
         thumbnailUrl: file.thumbnailUrl ?? null,
         mimeType: file.mimeType ?? null,
+        alt: file.altText ?? null,
       },
     };
   } catch {

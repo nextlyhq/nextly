@@ -19,9 +19,13 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@admin/__tests__/utils";
 
 import { NARROW_ONLY, WIDE_ONLY } from "../DocumentActionBar";
-import { EntrySystemHeader } from "../EntrySystemHeader";
+import { HeaderUnderTest as EntrySystemHeader } from "./header-under-test";
 
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
+// The share popover reads the document's live links when it opens.
+vi.mock("@admin/services/previewLinkApi", () => ({
+  previewLinkApi: { list: vi.fn().mockResolvedValue({ items: [], total: 0 }) },
+}));
 
 interface State {
   name: string;
@@ -78,13 +82,12 @@ const STATES: State[] = [
 function Harness({
   state,
   backLink,
-  onCopyLink,
-  isCopyingLink = false,
+  share = false,
 }: {
   state: State;
   backLink?: { href: string; label: string };
-  onCopyLink?: () => void;
-  isCopyingLink?: boolean;
+  /** Whether this document may be shared, which offers the share row. */
+  share?: boolean;
 }) {
   const methods = useForm({
     defaultValues: { title: state.entry?.title ?? "" },
@@ -100,12 +103,13 @@ function Harness({
         collectionSlug="posts"
         historyFields={[]}
         autosaveEnabled
-        autosaveStatus="idle"
         {...(backLink === undefined ? {} : { backLink })}
-        {...(onCopyLink === undefined
-          ? {}
-          : { onCopyLink, isLinkAvailable: true })}
-        isCopyingLink={isCopyingLink}
+        {...(share
+          ? {
+              shareDocument: { collection: "posts", entryId: "e1" },
+              isLinkAvailable: true,
+            }
+          : {})}
         onSaveDraft={vi.fn()}
         onPublish={vi.fn()}
         onSaveChanges={vi.fn()}
@@ -193,9 +197,7 @@ describe("the editor header", () => {
   });
 
   it("gives every icon-only button a name and a tooltip", () => {
-    const { container } = render(
-      <Harness state={STATES[1]!} onCopyLink={vi.fn()} />
-    );
+    const { container } = render(<Harness state={STATES[1]!} share />);
     const iconOnly = [...container.querySelectorAll("button")].filter(
       button =>
         button.querySelector("svg") &&
@@ -213,8 +215,7 @@ describe("the editor header", () => {
 
   it("folds History and the preview into the menu on a narrow screen, and hides the panel toggle there", async () => {
     const user = userEvent.setup();
-    const onCopyLink = vi.fn();
-    render(<Harness state={STATES[1]!} onCopyLink={onCopyLink} />);
+    render(<Harness state={STATES[1]!} share />);
     // On a narrow screen these controls go...
     const narrowHidden = WIDE_ONLY;
     expect(screen.getByRole("button", { name: "History" }).className).toContain(
@@ -222,7 +223,7 @@ describe("the editor header", () => {
     );
     expect(
       screen
-        .getByRole("button", { name: "Copy shareable link" })
+        .getByRole("button", { name: "Share preview link…" })
         .closest("div.contents")?.className
     ).toContain(narrowHidden);
     expect(
@@ -236,10 +237,14 @@ describe("the editor header", () => {
       name: "History",
     });
     expect(history.className).toContain(shownNarrow);
-    const copy = screen.getByRole("menuitem", { name: "Copy shareable link" });
-    expect(copy.className).toContain(shownNarrow);
-    await user.click(copy);
-    expect(onCopyLink).toHaveBeenCalledTimes(1);
+    const share = screen.getByRole("menuitem", { name: "Share preview link…" });
+    expect(share.className).toContain(shownNarrow);
+    await user.click(share);
+    // The same popover the wide control opens, hung from the row that stays
+    // on screen.
+    expect(
+      await screen.findByRole("heading", { name: "Share a preview" })
+    ).toBeInTheDocument();
   });
 
   it("draws no panel toggle while history is open, since history takes the panel's place", () => {
@@ -266,17 +271,6 @@ describe("the editor header", () => {
     expect(
       screen.getByRole("button", { name: /^(show|hide) rail$/i })
     ).toBeInTheDocument();
-  });
-
-  it("shows a folded copy still running on the menu's trigger, which stays", () => {
-    render(<Harness state={STATES[1]!} onCopyLink={vi.fn()} isCopyingLink />);
-    const trigger = screen.getByRole("button", { name: "More actions" });
-    expect(trigger).toHaveAttribute("aria-busy", "true");
-    // The spinner shows on a narrow screen only; a wider one shows it on the
-    // copy control itself.
-    expect(
-      trigger.querySelector("svg.animate-spin")?.getAttribute("class")
-    ).toContain("max-sm:block");
   });
 
   it("lets the actions wrap within the row rather than run past it", () => {

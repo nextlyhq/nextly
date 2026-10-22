@@ -845,14 +845,16 @@ Field-level access control — granular permissions per CRUD operation.
 text({
   name: "internalNotes",
   access: {
-    create: ({ permissions }) => permissions.includes("users:update"),
-    read: ({ permissions }) => permissions.includes("users:update"),
-    update: ({ permissions }) => permissions.includes("users:update"),
+    create: ({ permissions }) => permissions.includes("update-users"),
+    read: ({ permissions }) => permissions.includes("update-users"),
+    update: ({ permissions }) => permissions.includes("update-users"),
   },
 });
 ```
 
-Each function receives `{ req, id?, data?, permissions, roles, principal }` and returns `boolean | Promise<boolean>`. `permissions` is the caller's, as `resource:action`; decide by it rather than by a role's name. Field-level access is checked **in addition to** collection/single access.
+Each function receives the same context a collection's rule does — the caller (`user`, `roles`, `principal`), its `permissions`, the `operation` and the `target` the field belongs to — together with `req`, and the entry's `id` and `data` where they are known. It returns `boolean | Promise<boolean>`. `permissions` is the caller's, spelled as the Roles screen spells them (`update-users`); decide by it rather than by a role's name. Field-level access is checked **in addition to** collection/single access.
+
+A rule can also be `true` or `false`, for a field always allowed or always refused. Like a function rule, it decides reads and writes that are checked (REST, and the Direct API with `overrideAccess: false`); a trusted Direct API call, the default, skips field rules. So `read: false` keeps a field out of every checked response. The keys are `create`, `read` and `update`. Any other key, such as a misspelt `reed`, is refused when the collection is defined, naming the key.
 
 ### `hooks`
 

@@ -18,8 +18,9 @@
  * and a spec pointed at a collection without it fails for a configuration
  * reason that looks like a broken feature.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 /**
@@ -89,7 +90,7 @@ async function postWithHistory(
 /** Open the history panel and select the oldest version it lists. */
 async function openOldestVersion(page: Page): Promise<void> {
   await page.getByRole("button", { name: "History", exact: true }).click();
-  const rows = page.getByRole("button", { name: /^Version \d+/ });
+  const rows = page.getByRole("button", { name: /Version \d+/ });
   await expect(rows.first()).toBeVisible({ timeout: 30_000 });
 
   // The list is newest first, so the last row is the earliest version — the one

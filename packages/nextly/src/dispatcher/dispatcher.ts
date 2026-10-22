@@ -251,11 +251,10 @@ export class ServiceDispatcher {
       // Propagate the original NextlyError (not a stringified message) so
       // the route wrapper rebuilds the response with the correct status,
       // code, publicData, and headers.
+      // Anything else is internal, unless the database was only busy.
       const nextlyErr = NextlyError.is(error)
         ? error
-        : NextlyError.internal({
-            cause: error instanceof Error ? error : undefined,
-          });
+        : NextlyError.fromUnexpected(error);
       return {
         success: false,
         error: nextlyErr,

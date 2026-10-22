@@ -12,9 +12,9 @@ import { fileURLToPath } from "node:url";
  * handed) and fails for a bare `console.*` call, which writes whatever it is given. So source
  * writes through a logger, and the console is reached only from the writers below.
  *
- * Enforced with ESLint's own `no-console` rather than a bespoke rule: the exceptions are whole
- * files, which `files` and `ignores` express, and AGENTS.md rules out a per-line
- * `eslint-disable`.
+ * Enforced with ESLint's own `no-console`, with `no-restricted-globals` beside it for `console`
+ * passed as a value, rather than a bespoke rule: the exceptions are whole files, which `files`
+ * and `ignores` express, and AGENTS.md rules out a per-line `eslint-disable`.
  */
 
 /**
@@ -22,11 +22,8 @@ import { fileURLToPath } from "node:url";
  * `.js` file here would be linted as typed source. `src/observability/__tests__/console-allowlist.test.ts`
  * reads the same file.
  *
- * - `terminal`: globs that may write to the console for good, each with its reason. They are the
- *   writers the masked loggers end in, and output meant for a person at a terminal.
- * - `pending`: files not yet routed through a logger, each with the number of console calls it
- *   holds. The test pins those numbers, so a call added to a pending file fails, and a file
- *   leaves the list once it is converted. It only shrinks.
+ * Its `terminal` section names the globs that may write to the console, each with its reason:
+ * the writers the masked loggers end in, and output meant for a person at a terminal.
  */
 const CONSOLE_ALLOWLIST = JSON.parse(
   readFileSync(
@@ -38,11 +35,8 @@ const CONSOLE_ALLOWLIST = JSON.parse(
   )
 );
 
-/** The paths `no-console` does not apply to, terminal and pending alike. */
-const CONSOLE_ALLOWLIST_PATHS = [
-  ...Object.keys(CONSOLE_ALLOWLIST.terminal),
-  ...Object.keys(CONSOLE_ALLOWLIST.pending),
-];
+/** The paths `no-console` does not apply to. */
+const CONSOLE_ALLOWLIST_PATHS = Object.keys(CONSOLE_ALLOWLIST.terminal);
 
 /**
  * Build the config block.
@@ -65,7 +59,20 @@ export function consoleConfig(prefix = "") {
         ...CONSOLE_ALLOWLIST_PATHS.map(entry => `${prefix}${entry}`),
         ...tests,
       ],
-      rules: { "no-console": "error" },
+      rules: {
+        "no-console": "error",
+        // `no-console` sees `console.log(...)` but not `console` itself handed
+        // over as a logger (`new Service(adapter, console)`), which writes
+        // just as directly. Same files, same exemptions.
+        "no-restricted-globals": [
+          "error",
+          {
+            name: "console",
+            message:
+              "Write through a masked logger (a service's logger or consoleLogger), not the console.",
+          },
+        ],
+      },
     },
   ];
 }

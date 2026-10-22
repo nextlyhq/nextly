@@ -54,6 +54,12 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
     delete: vi.fn(),
   },
 }));
+// The batch answered as the `protectedApi.post` mock above describes it; see `batch-over-post`.
+vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
+  (
+    await import("@admin/hooks/queries/__tests__/batch-over-post")
+  ).streamOverPost()
+);
 
 const api = vi.mocked(protectedApi);
 
@@ -126,11 +132,13 @@ function branding(): AdminBranding {
   } as unknown as AdminBranding;
 }
 
+/** Every width, one card, listed in the add panel's Overview group as core lists it. */
 function facts(): WidgetWidthFacts {
   return {
     allowedWidths: ["quarter", "third", "half", "twoThirds", "full"],
     defaultWidth: "full",
     allowsSeveral: false,
+    group: "overview",
   };
 }
 
@@ -295,7 +303,15 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
   ["a removal", user => choose(user, "Posts", "Remove")],
   [
     "an addition",
-    user => user.click(screen.getByRole("button", { name: "Add Team" })),
+    async user => {
+      // From the add panel, then closed, as a reader leaves it before Save or Cancel.
+      await user.click(
+        within(bar()).getByRole("button", { name: "Add widget" })
+      );
+      await user.click(await screen.findByRole("button", { name: "Add Team" }));
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    },
   ],
   ["a reset", user => confirmReset(user)],
   [
@@ -353,11 +369,17 @@ describe("the bar", () => {
     await beginEditing();
 
     expect(bar()).toHaveTextContent("Customizing your dashboard");
+    const status = within(bar()).getByTestId("dashboard-edit-status");
+    expect(status).toHaveTextContent("Only you see this layout.");
+    // The handle is named only where it is drawn: from the dashboard's one-column width up.
     expect(
-      within(bar()).getByTestId("dashboard-edit-status")
-    ).toHaveTextContent(
-      "Drag a card by its handle, or use its menu. Only you see this layout."
-    );
+      within(status).getByText("Drag a card by its handle, or use its menu.")
+    ).toHaveClass("hidden", "@min-[640px]/dashboard:inline");
+    expect(
+      within(status).getByText(
+        "Use a card's menu to move, resize or remove it."
+      )
+    ).toHaveClass("@min-[640px]/dashboard:hidden");
     expect(
       within(bar())
         .getAllByRole("button")
@@ -395,12 +417,17 @@ describe("the bar", () => {
     expect(within(bar()).queryByText("Unsaved changes")).toBeNull();
   });
 
-  it("Add widget sends focus to the add picker", async () => {
+  it("Add widget opens the add panel, with focus in its search", async () => {
     renderDashboard();
     const user = await beginEditing();
-    await user.click(within(bar()).getByRole("button", { name: "Add widget" }));
+    const add = within(bar()).getByRole("button", { name: "Add widget" });
+    expect(add).toHaveAttribute("aria-haspopup", "dialog");
+    await user.click(add);
+    expect(
+      await screen.findByRole("dialog", { name: "Add widget" })
+    ).toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByTestId("add-widget-picker")).toHaveFocus()
+      expect(screen.getByTestId("add-panel-search")).toHaveFocus()
     );
   });
 
@@ -510,9 +537,7 @@ describe("the cards' own content while customising", () => {
           .closest("[inert]")
       ).toBeNull();
       expect(
-        screen
-          .getByRole("button", { name: `Drag to reorder ${title}` })
-          .closest("[inert]")
+        screen.getByRole("button", { name: `Move ${title}` }).closest("[inert]")
       ).toBeNull();
     });
 

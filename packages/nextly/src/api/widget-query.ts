@@ -18,38 +18,50 @@ import { authorizationGroups, canReadEntity } from "../auth/entity-read-access";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { MAX_QUERIES_PER_REQUEST } from "../domains/widgets/batch-limit";
+import { createBatchScope } from "../domains/widgets/batch-scope";
 import { refreshContentSources } from "../domains/widgets/collection-widgets";
 import {
   entityRead,
   resolveExecutableSource,
   type ExecutableSource,
 } from "../domains/widgets/executable-source";
-import { executeWidgetQuery } from "../domains/widgets/execute";
 import {
   readWidgetQuery,
   resolveWidgetSource,
   validateReadWidgetQuery,
 } from "../domains/widgets/query";
-import type { WidgetResult, WidgetSlot } from "../domains/widgets/result";
+import type { WidgetSlot } from "../domains/widgets/result";
 import {
   failUnavailableSourceOrOp,
-  isUnavailableSourceRefusal,
   sourceTarget,
-  UNAVAILABLE_SOURCE_MESSAGE,
 } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { getNextlyLogger } from "../observability/logger";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
+import {
+  configuredTimezone,
+  normalizeTimestampsInPayload,
+} from "../shared/lib/date-formatting";
 
 import { readAccessCaller, readCaller } from "./authenticated-read";
 import { readJsonBody } from "./read-json-body";
 import { respondData } from "./response-shapes";
+import {
+  answerReadyQueries,
+  failedSlot,
+  type AnswerOptions,
+  type ReadyQuery,
+  type SettledSlot,
+} from "./widget-slots";
 import { withErrorHandler } from "./with-error-handler";
 
+// `Accept` as well as `Cookie`: the same request answers as JSON or as a stream
+// of lines depending on what the client asked for, so a cache that kept one
+// must not hand it to a client asking for the other.
 const PRIVATE_NO_STORE_HEADERS = {
   "Cache-Control": "private, no-store",
-  Vary: "Cookie",
+  Vary: "Cookie, Accept",
 } as const;
 
 /*
@@ -109,15 +121,6 @@ function parseQueriesBody(body: unknown): unknown[] {
   }
   return queries;
 }
-
-/**
- * What a slot says when the failure is not a `NextlyError`.
- *
- * The same sentence `NextlyError.internal` carries, deliberately: a driver or
- * `DbError` message names columns, tables and SQL fragments, and this endpoint
- * is reachable by any authenticated session or API key.
- */
-const GENERIC_SLOT_ERROR = "An unexpected error occurred.";
 
 /**
  * Refuses, indistinguishably, unless this caller may read what the source
@@ -261,60 +264,6 @@ function decoyRead(source: unknown): string | undefined {
 }
 
 /**
- * What a failure becomes: logged where an operator can read it, redacted where
- * the caller can.
- *
- * Two things this must do that the original catch did neither of.
- *
- * It must not put `error.message` on the wire. Every other boundary in this
- * package maps a non-`NextlyError` to `NextlyError.internal`, whose
- * `publicMessage` is generic, and only `toResponseJSON` reaches a caller. Here
- * a `DbError` or a raw driver error was serialized verbatim under HTTP 200 --
- * reproducible with
- * `{"source":"collection:posts","op":"list","where":{"createdAt":{"greater_than":"not-a-date"}}}`.
- * A `NextlyError`'s `publicMessage` IS public by construction, so it passes
- * through; anything else is replaced.
- *
- * And it must not swallow the failure. Isolating a widget's error into its own
- * slot is the point of the batch shape, but the batch still answers 200, so
- * `withErrorHandler` never sees it and neither did the logger. A dashboard
- * whose widgets all fail left no trace anywhere.
- */
-// Narrowed to the failure arm so a caller can read the slot's `code` without a guard.
-function failedSlot(error: unknown): Extract<QuerySlot, { ok: false }> {
-  // Guarded the way `withErrorHandler` guards its own logging call: a
-  // thrower's `logContext` is arbitrary, and a cycle or a BigInt in it would
-  // throw from inside this catch and fail the whole batch over one slot.
-  try {
-    getNextlyLogger().error({
-      kind: "widget-query-failed",
-      ...(NextlyError.is(error)
-        ? error.toLogJSON("widget-query")
-        : { err: error instanceof Error ? error.stack : String(error) }),
-    });
-  } catch {
-    // Deliberately swallowed; see above.
-  }
-
-  // The shared refusal, from any of its call sites -- unknown, not executable, not readable by
-  // this caller, or unable to answer the op -- answers with the typed code, so the card shows
-  // "not available" without matching the sentence. A FORBIDDEN raised while the query ran is not
-  // one of them: the gate above has already refused a source the caller may not read, so that
-  // one comes from a field-level rule on a source they can, and names the guard that refused.
-  if (isUnavailableSourceRefusal(error)) {
-    return {
-      ok: false,
-      error: UNAVAILABLE_SOURCE_MESSAGE,
-      code: "unavailable",
-    };
-  }
-  return {
-    ok: false,
-    error: NextlyError.is(error) ? error.publicMessage : GENERIC_SLOT_ERROR,
-  };
-}
-
-/**
  * Reads one caller-supplied query and resolves the source it names, WITHOUT
  * authorizing anything.
  *
@@ -405,165 +354,60 @@ async function warmReadDecisions(
   }
 }
 
-/** Authorizes, validates and runs one already-prepared query. */
-/**
- * How long one slot may take before the batch stops waiting for it.
- *
- * 🔴 The batch aggregates with `Promise.all`, so it is only as fast as its
- * SLOWEST slot: one query that never settles holds every other card on the
- * dashboard behind it, and the reader sees nothing at all rather than the
- * seven cards that answered. That is the failure this bound exists for, and it
- * is not hypothetical for a source answered by a resolver -- a resolver may
- * make a network call, and a dead outbound connection does not reject, it
- * hangs for whatever the socket's own timeout is.
- *
- * Thirty seconds, following Grafana's `[dataproxy] timeout` default for the
- * same kind of call. Generous on purpose: the bound is here to stop a hang
- * becoming an outage, not to police a slow-but-working query, and cutting off
- * a large but legitimate aggregate would be a worse card than a slow one.
- */
-const SLOT_TIMEOUT_MS = 30_000;
-
-/**
- * Starts `work` with a cancellation signal and gives up on it after
- * {@link SLOT_TIMEOUT_MS}.
- *
- * 🔴 A race ABANDONS rather than cancels, and it cannot do otherwise: a
- * promise has no cancellation, so giving up on the race does not stop the work.
- * Abandoned work keeps its connection, its memory and its database handle, and
- * the endpoint's cap is on the queries ONE request may ask for -- so a resolver
- * that hangs stays running while the next request starts up to thirty more.
- *
- * The signal is how that is bounded. It is handed to `work` when it starts and
- * aborted the moment the budget expires, so a resolver that passes it on --
- * `fetch` takes one directly -- stops rather than merely stops being awaited.
- * Cooperative, necessarily: a resolver that ignores it is uninterruptible, as
- * every resolver was before, and this bounds what the host can offer rather
- * than what it can guarantee.
- *
- * `start` is a FUNCTION rather than a promise so the signal exists before the
- * work does. Handed an already-running promise, there is nothing to give a
- * signal to.
- *
- * Two further consequences are handled here rather than left to surprise
- * someone. The abandoned promise may reject later with nobody awaiting it -- an
- * unhandled rejection, which crashes the process under Node's default policy --
- * so a no-op handler is attached to the ORIGINAL promise, which marks it
- * handled without changing what the race sees. And the timer must not hold the
- * event loop open: a slot that answered in a millisecond would otherwise keep
- * the process alive for the remaining thirty seconds, which in a test run means
- * a suite that will not exit.
- */
-async function withinSlotBudget<T>(
-  start: (signal: AbortSignal) => Promise<T>,
-  onTimeout: () => never
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timedOut = Symbol("widget-slot-timeout");
-  const controller = new AbortController();
-  const work = start(controller.signal);
-  try {
-    // Attached to `work` itself, not to the race's result: the race settles on
-    // whichever arm wins, so on a timeout nothing would ever observe `work`.
-    void work.catch(() => undefined);
-
-    const deadline = new Promise<typeof timedOut>(resolve => {
-      timer = setTimeout(() => resolve(timedOut), SLOT_TIMEOUT_MS);
-      timer.unref?.();
-    });
-
-    const outcome = await Promise.race([work, deadline]);
-    // `onTimeout` returns `never`, so the compiler narrows `outcome` to `T`
-    // past this line without an assertion.
-    if (outcome === timedOut) {
-      // Before the throw, because `onTimeout` never returns -- and the point of
-      // the signal is that the abandoned work is told, not merely dropped.
-      controller.abort();
-      onTimeout();
-    }
-    return outcome;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-/**
- * The result, proven to survive the response encoder, inside the slot's own
- * boundary.
- *
- * 🔴 `respondData` calls `JSON.stringify` over the WHOLE results array, after
- * `Promise.all` has assembled it and outside every slot's `catch`. So a value
- * the encoder refuses does not fail its own slot -- it throws at the response,
- * and the endpoint answers 500 with every sibling's rows discarded. One
- * plugin's bad row blanks the dashboard, which is the precise outcome the
- * per-slot shape exists to prevent.
- *
- * `WidgetResult`'s rows are `Record<string, unknown>`, so a `bigint`, a cycle
- * or a throwing `toJSON` all satisfy the type. A resolver is third-party code;
- * it is not the host's business to trust that it returned something encodable,
- * and the type system cannot say so.
- *
- * Encoded HERE, where a failure is caught and becomes this slot's error. The
- * cost is one serialization of a payload that is about to be serialized
- * anyway, and the parse back is what keeps the encoder from doing it twice on
- * a value it has already refused once.
- */
-function serialisable(result: WidgetResult, source: string): WidgetResult {
-  try {
-    return JSON.parse(JSON.stringify(result)) as WidgetResult;
-  } catch (error) {
-    throw new NextlyError({
-      code: "INTERNAL_ERROR",
-      publicMessage: "This widget returned something that could not be sent",
-      logMessage: `widget source "${source}" returned an unserialisable result`,
-      logContext: {
-        reason: "widget-result-unserialisable",
-        source,
-        err: error instanceof Error ? error.message : String(error),
-      },
-    });
-  }
-}
-
-async function runPrepared(
+/** Runs one prepared query's preconditions: the caller may read its source, and it is valid. */
+async function checkPrepared(
   entry: Extract<PreparedQuery, { ok: true }>,
-  caller: ReadCaller,
+  index: number,
   mayRead: (slug: string) => Promise<boolean>
-): Promise<QuerySlot> {
+): Promise<ReadyQuery | QuerySlot> {
   try {
     await assertSourceReadable(entry.executable, mayRead);
-
     const query = validateReadWidgetQuery(
       entry.parsed,
       entry.executable.source
     );
-    const result = await withinSlotBudget(
-      signal => executeWidgetQuery(query, caller, { signal }),
-      () => {
-        // A `NextlyError`, so `failedSlot` puts THIS sentence on the wire
-        // rather than the generic one: a card that timed out is worth telling
-        // its reader about, and the source id is already known to them --
-        // they placed the card. The slug travels in `logContext` for the
-        // operator, who needs to know WHICH source is hanging.
-        throw new NextlyError({
-          code: "INTERNAL_ERROR",
-          publicMessage: "This widget took too long to answer",
-          logMessage: `widget source "${query.source}" exceeded ${SLOT_TIMEOUT_MS}ms`,
-          logContext: {
-            reason: "widget-slot-timeout",
-            source: query.source,
-            timeoutMs: SLOT_TIMEOUT_MS,
-          },
-        });
-      }
-    );
-    return { ok: true, result: serialisable(result, query.source) };
+    return { index, query, executable: entry.executable };
   } catch (error) {
     return failedSlot(error);
   }
 }
 
-export const postWidgetQuery = withErrorHandler(async (req: Request) => {
+function isReady(entry: ReadyQuery | QuerySlot): entry is ReadyQuery {
+  return "query" in entry;
+}
+
+/**
+ * A ready query the runner returned no slot for. The runner answers every query
+ * it is handed, so this is a guard over a value already in hand that costs nothing
+ * while it never runs, and turns a lost slot into a failed one rather than a hole
+ * in the response.
+ */
+function unanswered(): QuerySlot {
+  return failedSlot(
+    NextlyError.internal({
+      logContext: { reason: "widget-slot-unanswered" },
+    })
+  );
+}
+
+/** A batch every whole-batch check has passed: each query either ready to run, or already refused. */
+interface PreparedBatch {
+  checked: Array<ReadyQuery | QuerySlot>;
+  caller: ReadCaller;
+}
+
+/**
+ * Everything that can fail the WHOLE batch, done before any answer is written:
+ * authentication, the body, the source refresh, the caller, the read-decision
+ * warm-up, and each query's own preconditions.
+ *
+ * 🔴 All of it before the first byte, because a streamed answer has committed
+ * to a 200 the moment it starts: a refusal raised after that could no longer be
+ * the canonical error envelope, and a client would read a failed batch as a
+ * dashboard of cards that never arrive. Everything here throws into
+ * `withErrorHandler` exactly as it did when the answer was only ever JSON.
+ */
+async function prepareBatch(req: Request): Promise<PreparedBatch> {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
@@ -611,16 +455,167 @@ export const postWidgetQuery = withErrorHandler(async (req: Request) => {
   const prepared = queries.map(prepareOne);
   await warmReadDecisions(batchSlugs(prepared), mayRead);
 
-  // An already-failed entry is wrapped rather than handed over bare: a mixed
-  // array of values and promises is legal for `Promise.all` and reads as a
-  // mistake, so the aggregator is given one kind.
-  const results: QuerySlot[] = await Promise.all(
-    prepared.map(entry =>
+  // Every query's own checks first -- the caller may read its source, and the
+  // query is valid for it -- since these are preconditions. Only the queries that
+  // pass are run, and they run through ONE path: grouped by source, with work
+  // shared within this batch for this caller and nowhere else.
+  const checked = await Promise.all(
+    prepared.map((entry, index) =>
       entry.ok
-        ? runPrepared(entry, caller, mayRead)
+        ? checkPrepared(entry, index, mayRead)
         : Promise.resolve(entry.slot)
     )
   );
+  return { checked, caller };
+}
 
+/**
+ * Every slot of a prepared batch, each settled ONCE and handed to `onSettled`
+ * as it settles: the refused ones first, then each answer as it arrives, then
+ * any the runner lost.
+ *
+ * ONE implementation of which slot is which, read by both encodings. The JSON
+ * answer is what this returns; the stream is what it hands `onSettled`, line by
+ * line. Two assemblies of one batch would agree on the day they were written and
+ * drift after -- a stream that put a slot at another index, or carried a detail
+ * the JSON answer withholds, would look correct in isolation.
+ */
+async function answerBatch(
+  batch: PreparedBatch,
+  options: AnswerOptions = {}
+): Promise<QuerySlot[]> {
+  const { checked, caller } = batch;
+  const refused: SettledSlot[] = [];
+  checked.forEach((entry, index) => {
+    if (!isReady(entry)) refused.push({ index, slot: entry });
+  });
+  if (refused.length > 0) options.onSettled?.(refused);
+
+  const answered = await answerReadyQueries(
+    checked.filter(isReady),
+    caller,
+    createBatchScope(),
+    options
+  );
+  // A batch given up has no reader left to answer: the slots it never settled
+  // are not lost, and nothing more is written or logged for them.
+  if (options.signal?.aborted === true) return [];
+  const lost: SettledSlot[] = [];
+  const results: QuerySlot[] = checked.map((entry, index) => {
+    if (!isReady(entry)) return entry;
+    const slot = answered.get(index);
+    if (slot) return slot;
+    const missing = unanswered();
+    lost.push({ index, slot: missing });
+    return missing;
+  });
+  if (lost.length > 0) options.onSettled?.(lost);
+  return results;
+}
+
+/** The media type a client asks for to have each slot written as it settles. */
+const NDJSON = "application/x-ndjson";
+
+/** Whether the request asked for the streamed answer, by its `Accept` header. */
+function wantsStream(req: Request): boolean {
+  return (req.headers.get("accept") ?? "").toLowerCase().includes(NDJSON);
+}
+
+/**
+ * The batch as a stream of one `{index, slot}` line per settled slot, written
+ * as each settles, so a slow card holds no other.
+ *
+ * Each line is a slot exactly as the JSON answer holds it: settled by
+ * {@link answerBatch}, so the same redaction reaches it, and its timestamps
+ * formatted with the timezone the JSON pass uses -- that pass reads only JSON
+ * bodies, so a streamed answer formats each line itself rather than reach the
+ * reader unformatted.
+ *
+ * A reader that goes away cancels the stream, and that gives the batch up:
+ * every slot still running is told through its own signal, and none not yet
+ * started is started. `X-Accel-Buffering` and `no-transform` ask proxies not to
+ * hold the lines back; one that buffers anyway degrades to today's behaviour,
+ * late but never wrong.
+ */
+function streamBatch(batch: PreparedBatch): Response {
+  const giveUp = new AbortController();
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      // Not awaited: `start` returns at once, and the lines are written as the
+      // slots settle rather than once the batch has.
+      void (async () => {
+        const timezone = await configuredTimezone();
+        // Each settle is ONE write, so slots one many-query call answered reach
+        // the reader together, as they were settled.
+        const write = (settled: readonly SettledSlot[]) => {
+          if (giveUp.signal.aborted) return;
+          const lines = settled.map(({ index, slot }) =>
+            JSON.stringify({
+              index,
+              slot: normalizeTimestampsInPayload(slot, timezone),
+            })
+          );
+          controller.enqueue(encoder.encode(`${lines.join("\n")}\n`));
+        };
+        try {
+          await answerBatch(batch, {
+            signal: giveUp.signal,
+            onSettled: write,
+          });
+        } catch (error) {
+          // Past the 200 there is no envelope left to answer with. Ending the
+          // stream is the answer: the client files every slot it did not
+          // receive as missing, which is what they are.
+          logStreamFailure(error);
+        } finally {
+          endStream(controller, giveUp.signal);
+        }
+      })();
+    },
+    cancel() {
+      giveUp.abort();
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: {
+      ...PRIVATE_NO_STORE_HEADERS,
+      "Cache-Control": "private, no-store, no-transform",
+      "Content-Type": NDJSON,
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
+
+/** Closes a stream the reader has not cancelled; one already ended is left as it is. */
+function endStream(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  givenUp: AbortSignal
+): void {
+  if (givenUp.aborted) return;
+  try {
+    controller.close();
+  } catch {
+    // Already closed or errored: there is nothing left to end.
+  }
+}
+
+/** A streamed batch that failed after its 200, logged as `failedSlot` logs, guarded likewise. */
+function logStreamFailure(error: unknown): void {
+  try {
+    getNextlyLogger().error({
+      kind: "widget-query-stream-failed",
+      err: error instanceof Error ? error.stack : String(error),
+    });
+  } catch {
+    // Deliberately swallowed: a log line never fails the stream.
+  }
+}
+
+export const postWidgetQuery = withErrorHandler(async (req: Request) => {
+  const batch = await prepareBatch(req);
+  if (wantsStream(req)) return streamBatch(batch);
+  const results = await answerBatch(batch);
   return respondData({ results }, { headers: PRIVATE_NO_STORE_HEADERS });
 });

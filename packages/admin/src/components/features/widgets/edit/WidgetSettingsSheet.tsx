@@ -20,18 +20,29 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@nextlyhq/ui";
-import type { WidgetSetting } from "nextly/config";
-import { useCallback, useMemo } from "react";
+import type { AnyWidgetSetting, PublishedContentSource } from "nextly/config";
+import { useCallback, useEffect, useMemo } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
+
+import {
+  dependentsOf,
+  isContentSetting,
+  isDependentSetting,
+  sameSettingValue,
+  staleContentValues,
+  startingValue,
+} from "./content-settings";
+import { ContentSettingControl } from "./ContentSettingControl";
 
 export interface WidgetSettingsSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** The card being configured, for the heading a reader reads. */
   title: string;
-  settings: WidgetSetting[];
+  settings: AnyWidgetSetting[];
   /** What this placement has stored, if anything. */
   config: Record<string, unknown> | undefined;
   onSave: (config: Record<string, unknown>) => void;
@@ -47,7 +58,7 @@ export interface WidgetSettingsSheetProps {
  * shows is what the card is actually using.
  */
 export function initialValues(
-  settings: readonly WidgetSetting[],
+  settings: readonly AnyWidgetSetting[],
   config: Record<string, unknown> | undefined
 ): Record<string, unknown> {
   /*
@@ -75,7 +86,7 @@ export function initialValues(
  * to open the panel.
  */
 export function toStoredConfig(
-  settings: readonly WidgetSetting[],
+  settings: readonly AnyWidgetSetting[],
   values: Record<string, unknown>,
   existing: Record<string, unknown> | undefined
 ): Record<string, unknown> {
@@ -107,10 +118,49 @@ export function toStoredConfig(
     if (!Object.hasOwn(values, setting.name)) continue;
     const value = values[setting.name];
     if (value === undefined || value === "") continue;
-    if (value === setting.defaultValue) continue;
+    if (sameSettingValue(value, setting.defaultValue)) continue;
     stored[setting.name] = value;
   }
   return stored;
+}
+
+/**
+ * What the form holds after "Reset to defaults".
+ *
+ * Every setting goes back to its declared default, its dependents with it,
+ * except a Collection setting that declares no default, which Reset leaves as
+ * it is. Such a setting names the card's collection: it is the card's identity
+ * rather than a preference, chosen when the card was placed and changed with
+ * the Collection control itself, so Reset does not undo it, and does not
+ * empty it into a card of no collection at all. A Collection setting that
+ * declares a default (Recently edited's "All collections") resets like any
+ * other.
+ *
+ * A dependent goes back to its default only where the default names a field
+ * it may use over the collection kept; otherwise to none, so Reset never
+ * draws a choice the collection does not have.
+ */
+export function resetToDefaults(
+  settings: readonly AnyWidgetSetting[],
+  values: Record<string, unknown>,
+  sources?: readonly PublishedContentSource[]
+): Record<string, unknown> {
+  const reset: Record<string, unknown> = Object.create(null);
+  for (const setting of settings) {
+    const kept =
+      setting.type === "collection" &&
+      setting.defaultValue === undefined &&
+      Object.hasOwn(values, setting.name);
+    reset[setting.name] = kept
+      ? values[setting.name]
+      : (setting.defaultValue ?? "");
+  }
+  for (const setting of settings) {
+    if (isDependentSetting(setting)) {
+      reset[setting.name] = startingValue(setting, reset[setting.of], sources);
+    }
+  }
+  return reset;
 }
 
 export function WidgetSettingsSheet({
@@ -121,12 +171,59 @@ export function WidgetSettingsSheet({
   config,
   onSave,
 }: WidgetSettingsSheetProps) {
-  const defaultValues = useMemo(
-    () => initialValues(settings, config),
-    [settings, config]
+  // The collections and fields this reader may be offered, decided on the
+  // server; absent until the session-gated half of the payload arrives.
+  const sources = useBranding().widgetSources;
+
+  // A stored value naming a field the reader is no longer offered opens at
+  // its default, and the sheet says so in one line, rather than drawing a
+  // choice the reader cannot make again.
+  const stale = useMemo(
+    () =>
+      staleContentValues(settings, initialValues(settings, config), sources),
+    [settings, config, sources]
   );
+  const defaultValues = useMemo(() => {
+    const values = initialValues(settings, config);
+    for (const { name, replacement } of stale) {
+      values[name] = replacement;
+      // A collection reset takes the settings over it along: their values
+      // name fields of the collection that is gone.
+      for (const dependent of dependentsOf(settings, name)) {
+        values[dependent.name] = startingValue(dependent, replacement, sources);
+      }
+    }
+    return values;
+  }, [settings, config, stale, sources]);
 
   const form = useForm({ defaultValues });
+
+  // The form keeps the values it was mounted with, and `defaultValues` changing
+  // later does not replace them. So while the sheet is closed it is rebuilt
+  // from the latest baseline: sources that arrive or change after mounting are
+  // what it opens with, and a value a notice says was reset is the value Save
+  // writes. Never while it is open, where it would discard the reader's edits.
+  useEffect(() => {
+    if (!open) form.reset(defaultValues);
+  }, [open, defaultValues, form]);
+
+  // A filter, sort or grouping names fields of ONE collection: when a person
+  // picks another collection, the settings over it go back to where they
+  // start over the new one -- the default where it fits, none where it names
+  // a field the new collection lacks. Only a person's change does this; a
+  // reset or the form opening names no field.
+  useEffect(() => {
+    const subscription = form.watch((values, { name }) => {
+      if (name === undefined) return;
+      for (const dependent of dependentsOf(settings, name)) {
+        form.setValue(
+          dependent.name,
+          startingValue(dependent, values[name], sources)
+        );
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [form, settings, sources]);
 
   const submit = useCallback(
     (values: Record<string, unknown>) => {
@@ -157,13 +254,42 @@ export function WidgetSettingsSheet({
             }}
             className="flex flex-1 flex-col gap-4 overflow-y-auto px-4"
           >
-            {settings.map(setting => (
-              // No cast: `WidgetSetting` is assignable to `FieldConfig`, and
-              // `settings.compat.test-d.ts` is what keeps that true.
-              <FieldRenderer key={setting.name} field={setting} mode="edit" />
+            {stale.map(({ name, notice }) => (
+              <p
+                key={name}
+                role="status"
+                className="text-sm text-muted-foreground"
+              >
+                {notice}
+              </p>
             ))}
+            {settings.map(setting =>
+              isContentSetting(setting) ? (
+                <ContentSettingControl
+                  key={setting.name}
+                  setting={setting}
+                  sources={sources ?? []}
+                />
+              ) : (
+                // No cast: `WidgetSetting` is assignable to `FieldConfig`,
+                // and `settings.compat.test-d.ts` is what keeps that true.
+                <FieldRenderer key={setting.name} field={setting} mode="edit" />
+              )
+            )}
 
             <SheetFooter className="mt-auto flex-row justify-end gap-2 px-0">
+              <Button
+                type="button"
+                variant="ghost"
+                className="mr-auto"
+                onClick={() =>
+                  form.reset(
+                    resetToDefaults(settings, form.getValues(), sources)
+                  )
+                }
+              >
+                Reset to defaults
+              </Button>
               <Button
                 type="button"
                 variant="outline"

@@ -3,6 +3,9 @@ import { fileURLToPath } from "node:url";
 
 import { defineConfig, devices } from "@playwright/test";
 
+import { E2E_NEXTLY_SECRET } from "./tests/support/preview-links";
+import { STORAGE_STATE } from "./tests/support/session";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const NEXTLY_ROOT = path.resolve(HERE, "..");
 
@@ -94,8 +97,9 @@ export default defineConfig({
       name: "chromium",
       use: {
         ...devices["Desktop Chrome"],
-        // Signed in before the first test, by global-setup.
-        storageState: "./.playwright/session.json",
+        // Signed in before the first test, by global-setup, and renewed as
+        // the suite runs by `tests/support/test`.
+        storageState: STORAGE_STATE,
       },
     },
   ],
@@ -120,6 +124,9 @@ export default defineConfig({
     stderr: "pipe",
     env: {
       PORT: String(PORT),
+      // A known signing secret, so share-preview-links.spec.ts can sign a link
+      // as an earlier version minted it. It wins over the playground's `.env`.
+      NEXTLY_SECRET: E2E_NEXTLY_SECRET,
       DB_DIALECT: "sqlite",
       DATABASE_URL: E2E_DB_RELATIVE,
       // Its own build directory. A separate port is not enough on its own:
@@ -136,6 +143,10 @@ export default defineConfig({
       // double does not appear in a contributor's plugins list or inject a
       // showcase section into the Posts collection.
       NEXTLY_E2E_STYLE_FIXTURE: "1",
+      // Registers the slow-card fixture, which dashboard-slow-card.spec.ts
+      // delays. Its card answers at once until that spec asks otherwise, so the
+      // other dashboard specs see an ordinary card.
+      NEXTLY_E2E_SLOW_WIDGET: "1",
       // The builder-shell harness route, gated the same way and for the same
       // reason: a dev-only route under `src/app/` is otherwise reachable in
       // `pnpm dev:app` and indistinguishable from product.
@@ -144,6 +155,11 @@ export default defineConfig({
       // harnesses are deliberately different: the shell's slots are inert
       // markers, and this one mounts the real canvas so a pointer can drive it.
       NEXTLY_E2E_CANVAS_HARNESS: "1",
+      // A session REST budget for the suite's one signed-in session, which
+      // loads pages far faster than a person can: at the default 500 reads a
+      // minute it is refused mid-run. Only the session budget is raised; see
+      // the playground's nextly.config.ts.
+      NEXTLY_E2E_SESSION_BUDGET: "1",
       // The running app never rewrites generated files. The fixtures above add
       // components the committed component map was not generated with, and
       // `next dev` would otherwise write the map again, leaving the checkout

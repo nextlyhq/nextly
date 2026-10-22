@@ -39,6 +39,7 @@ const SAMPLES: { [D in CoreDisplay]: Canonical<D> } = {
       type: "string",
       choices: [{ value: "paid", label: "Paid" }],
     },
+    atLeast: false,
   },
   timeseries: { points: [{ start: "2026-10-01", count: 1 }], interval: "day" },
 };

@@ -35,6 +35,7 @@ import {
 import { buildNotificationEvent } from "../../../runtime/notifications/build-event";
 import type { MigrationScope } from "../../../runtime/notifications/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { consoleLogger } from "../../../shared/types";
 import { FieldGroupSchemaService } from "../../field-groups/services/field-group-schema-service";
 import { resolveRegistryNameFromCatalog } from "../../field-groups/storage/resolve-storage-names";
 import { getActiveExtensionSchema } from "../extension/build-extension-schema";
@@ -51,6 +52,7 @@ import { activePostgresSchema } from "../services/postgres-schema";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 
 import {
+  countLongerThan as countLongerThanHelper,
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
@@ -355,7 +357,7 @@ function preCleanupFailure(err: unknown): Error {
 function logApplyRoute(useFastPath: boolean, ops: Operation[]): void {
   if (process.env.DEBUG_SCHEMA !== "1") return;
   if (useFastPath) {
-    console.debug(
+    consoleLogger.debug(
       `[nextly] schema apply: fast-path DDL emitter (${ops.length} op(s))`
     );
     return;
@@ -363,7 +365,7 @@ function logApplyRoute(useFastPath: boolean, ops: Operation[]): void {
   const nonAdditive = ops
     .filter(o => o.type !== "add_column" && o.type !== "add_table")
     .map(o => o.type);
-  console.debug(
+  consoleLogger.debug(
     `[nextly] schema apply: drizzle-kit fallback (${ops.length} op(s); ` +
       `non-additive: ${nonAdditive.length === 0 ? "<none>" : nonAdditive.join(",")})`
   );
@@ -588,7 +590,7 @@ export function logSkippedLockedOps(skipped: Operation[]): void {
   const tables = [
     ...new Set(skipped.map(op => operationTargetTable(op) ?? "<unknown>")),
   ];
-  console.debug(
+  consoleLogger.debug(
     `[nextly] schema apply: skipped ${skipped.length} op(s) on code-first ` +
       `table(s) not owned by this UI save: ${tables.join(", ")}`
   );
@@ -596,7 +598,7 @@ export function logSkippedLockedOps(skipped: Operation[]): void {
 
 function logSkippedLockedStatements(skipped: string[]): void {
   if (skipped.length === 0 || process.env.DEBUG_SCHEMA !== "1") return;
-  console.debug(
+  consoleLogger.debug(
     `[nextly] schema apply: dropped ${skipped.length} emitted statement(s) ` +
       `targeting code-first table(s) not owned by this UI save: ` +
       skipped.join("; ")
@@ -707,7 +709,7 @@ export class PushSchemaPipeline {
     };
     const cachedSnapshot = getCachedSnapshot();
     if (cachedSnapshot !== undefined && dequal(cacheKey, cachedSnapshot)) {
-      console.log(
+      consoleLogger.info(
         "[Nextly schema] No changes detected since last apply; skipping push (dequal cache hit)."
       );
       return {
@@ -830,6 +832,8 @@ export class PushSchemaPipeline {
         countNulls: (table, column) =>
           countNullsHelper(db, dialect, table, column),
         countRows: table => countRowsHelper(db, dialect, table),
+        countLongerThan: (table, column, length) =>
+          countLongerThanHelper(db, dialect, table, column, length),
         dialect,
       });
 
@@ -1021,6 +1025,8 @@ export class PushSchemaPipeline {
 
       const isSqlite = dialect === "sqlite";
 
+      // The lifted foreign keys a failed MySQL apply has to add back (`kitRouteConstraintStatements`).
+      let liftedKeysOwed: string[] = [];
       const runApply = async (tx: unknown): Promise<number> => {
         // Route: fast in-memory DDL emission for the common Builder op set
         // on PostgreSQL (skips drizzle-kit's ~10s catalog re-introspection),
@@ -1033,7 +1039,7 @@ export class PushSchemaPipeline {
         // applies on PostgreSQL and MySQL. The fast path plans none — its op
         // set excludes them, and a new table's own come from the emitter.
         const constraints = useFastPath
-          ? { before: [], after: [] }
+          ? { before: [], after: [], liftRestores: [] }
           : kitRouteConstraintStatements(
               resolvedOps,
               liveSnapshot.tables,
@@ -1108,6 +1114,9 @@ export class PushSchemaPipeline {
         const preResExecutor =
           this.testHooks._executePreResolutionOverride ??
           executePreResolutionOps;
+        // From here until the batch that adds them back, the keys lifted for a MySQL type change may
+        // be dropped, and MySQL commits the drop as it runs.
+        liftedKeysOwed = constraints.liftRestores;
         try {
           await preResExecutor(
             tx,
@@ -1268,7 +1277,7 @@ export class PushSchemaPipeline {
                   desiredTableNames
                 ),
               process.env.DEBUG_SCHEMA === "1"
-                ? { debug: (msg: string) => console.debug(msg) }
+                ? { debug: (msg: string) => consoleLogger.debug(msg) }
                 : undefined
             );
           } catch (err) {
@@ -1307,7 +1316,7 @@ export class PushSchemaPipeline {
           );
           emittedStatements = keptUniques.kept;
           if (keptUniques.strippedCount > 0) {
-            console.debug(
+            consoleLogger.debug(
               `[Nextly schema] Kept ${keptUniques.strippedCount} live unique ` +
                 `constraint(s) drizzle-kit emitted a drop for (only a ` +
                 `drop_index operation removes one).`
@@ -1316,14 +1325,14 @@ export class PushSchemaPipeline {
           if (stripped.strippedCount > 0) {
             // Once per apply, not per statement: enough to see the guard
             // acted without turning a routine emission into log noise.
-            console.debug(
+            consoleLogger.debug(
               `[Nextly schema] Kept ${stripped.strippedCount} tracked index(es) ` +
                 `drizzle-kit emitted a DROP INDEX for (they are declared in the ` +
                 `desired schema; only a drop_index operation removes one).`
             );
           }
           if (keptConstraints.strippedCount > 0) {
-            console.debug(
+            consoleLogger.debug(
               `[Nextly schema] Kept ${keptConstraints.strippedCount} declared ` +
                 `check or foreign-key element(s) drizzle-kit emitted a drop for ` +
                 `(only a drop_check or drop_foreign_key operation removes one).`
@@ -1473,6 +1482,7 @@ export class PushSchemaPipeline {
             ...restore,
             ...constraints.after,
           ]);
+          liftedKeysOwed = [];
         } catch (err) {
           throw new DdlExecutionError(
             err instanceof Error ? err.message : String(err),
@@ -1538,7 +1548,12 @@ export class PushSchemaPipeline {
         const txFn: DbTransactionRunner = this.testHooks._txOverride
           ? this.testHooks._txOverride
           : this.makeTransactionRunner(db);
-        statementsExecuted = await txFn(runApply);
+        try {
+          statementsExecuted = await txFn(runApply);
+        } catch (err) {
+          await this.restoreLiftedKeys(db, liftedKeysOwed);
+          throw err;
+        }
       }
 
       // F10 PR 2: derive the per-change-kind summary from the
@@ -1831,6 +1846,28 @@ export class PushSchemaPipeline {
       default: {
         const exhaustive: never = dialect;
         throw new Error(`Unsupported dialect: ${String(exhaustive)}`);
+      }
+    }
+  }
+
+  /**
+   * Adds back each foreign key a failed MySQL apply lifted, on the outer connection once its
+   * transaction has ended. A statement here can find its key still in place, where the apply failed
+   * before the drop ran, and refuse it; each runs alone, and a failure is logged with the statement
+   * to run by hand, leaving the apply's own error the one reported.
+   */
+  private async restoreLiftedKeys(
+    db: unknown,
+    statements: readonly string[]
+  ): Promise<void> {
+    for (const statement of statements) {
+      try {
+        await this.deps.executor.executeStatements(db, [statement]);
+      } catch (err) {
+        consoleLogger.warn(
+          `[schema] A failed apply could not add back a foreign key it had lifted. If the key is ` +
+            `missing, add it back with: ${statement} (${err instanceof Error ? err.message : String(err)})`
+        );
       }
     }
   }

@@ -8,6 +8,7 @@ import { isFieldLocalized } from "../classify-fields";
 
 import { ddlType, lit, q } from "./ddl-types";
 import { deriveCompanionSpec } from "./derive-companion-spec";
+import { storageDiffers } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import {
   archiveOwnerOf,
@@ -23,6 +24,12 @@ import {
 } from "./generate-up";
 import type { I18nTransitionKind } from "./transition-state";
 
+/** One field renamed in a change: its name before and after. */
+export interface FieldRename {
+  from: string;
+  to: string;
+}
+
 /** Minimal field shape the companion reconciler needs. Structurally compatible with FieldDefinition. */
 export interface CompanionFieldLike {
   name: string;
@@ -33,6 +40,12 @@ export interface CompanionFieldLike {
 export interface ReconcileCompanionArgs {
   /** Collection slug (used for the companion spec / index names). */
   slug: string;
+  /**
+   * Every column this database's companion has, when the caller read it. A field leaving
+   * translation whose column is no longer there was moved by an earlier apply that stopped before
+   * the registry recorded it, so there is nothing to copy or drop. Unknown when left out.
+   */
+  liveCompanionColumns?: readonly string[];
   /**
    * Which kind of entity `slug` names, recorded with the archive rows this change writes. Needed
    * only with `sharedAfter`, the one case that archives here; refused without it there.
@@ -349,11 +362,17 @@ function companionColumnDrops(
   const { dialect, builtBy } = args;
   const kept = new Set(args.newLocalized.map(f => f.name));
   const sharedAfter = new Set(args.sharedAfter ?? []);
+  const live =
+    args.liveCompanionColumns === undefined
+      ? undefined
+      : new Set(args.liveCompanionColumns);
   return args.oldLocalized
     .filter(f => !kept.has(f.name))
     .flatMap(f => {
       const col = fieldToLocalizedColumnSpec(f, dialect, builtBy);
       if (!col) return [];
+      // Already gone: an earlier apply dropped the column, or moved its values and dropped it.
+      if (live?.has(col.name) === false) return [];
       return [
         ...(sharedAfter.has(f.name)
           ? keepLeavingFieldValues(args, companionTable, f.name, col.name)
@@ -563,6 +582,21 @@ export interface CompanionTransitionArgs {
    * (`buildFieldsJoiningTranslationStatements`). Their ADD is not repeated here.
    */
   joinedBefore?: readonly string[];
+  /**
+   * A field renamed in this change, by field name. When it was translated before, its companion
+   * column is renamed first, and the rest of the transition sees the old field under its new name:
+   * still translated, every language moves with the column; made shared, it leaves translation as
+   * a field that kept its name does, the other languages archived under the new name.
+   */
+  renamed?: FieldRename;
+  /**
+   * Every column THIS database's companion has, when `renamed` is set. An apply that renamed the
+   * companion column and then stopped (MySQL commits each schema statement, and the registry write
+   * comes last on every dialect) leaves the column under its new name while the registry still
+   * records the old field, so the retry must not rename it again. Describes one database only: a
+   * migration file is planned without it (`buildCompanionTransitionPlans`).
+   */
+  liveCompanionColumns?: readonly string[];
 }
 
 /** The plan produced by {@link buildCompanionTransitionStatements}. */
@@ -595,6 +629,11 @@ export function buildLeavingFieldsArchiveStatements(args: {
   defaultLocale: string;
   oldFields: readonly CompanionFieldLike[];
   newFields: readonly CompanionFieldLike[];
+  /**
+   * For a field renamed in the same change, given in `oldFields` under its new name: its column
+   * under the new name, mapped to the companion column it has now, which the rows are read from.
+   */
+  renamedFrom?: ReadonlyMap<string, string>;
 }): string[] {
   const leaving = new Set(
     fieldsLeavingTranslation(args.oldFields, args.newFields)
@@ -613,6 +652,7 @@ export function buildLeavingFieldsArchiveStatements(args: {
                 defaultLocale: args.defaultLocale,
               },
               { slug: args.slug, kind: args.kind },
+              args.renamedFrom?.get(col.name) ?? col.name,
               col.name
             ),
           ]
@@ -765,50 +805,169 @@ export function buildCompanionTransitionStatements(
   // FIELD CHANGE while staying localized — ADD/DROP the changed localized columns + reconcile
   // `_status`.
   if (wasLocalized && isLocalized) {
-    const oldLocalized = oldFields.filter(f => isFieldLocalized(f, true));
+    // A translated field renamed in this change keeps its column, renamed first; from there the
+    // old field is seen under its new name, so the rest of the change is decided as for a field
+    // that kept it.
+    const rename = companionColumnRename(args);
+    const before = rename?.oldFields ?? oldFields;
+    const oldLocalized = before.filter(f => isFieldLocalized(f, true));
     const newLocalized = newFields.filter(f => isFieldLocalized(f, true));
-    const sharedAfter = fieldsLeavingTranslation(oldFields, newFields);
+    const sharedAfter = fieldsLeavingTranslation(before, newFields);
     const archiveFirst = args.archiveBeforeMain === true;
+    // The rename runs before whatever reads the column under its new name: the archive writes,
+    // when they go before the main table, else the companion's own statements.
+    const renaming = rename?.statements ?? [];
     const beforeMain = archiveFirst
-      ? buildLeavingFieldsArchiveStatements({
-          slug,
-          kind,
-          tableName,
-          dialect,
-          builtBy,
-          defaultLocale,
-          oldFields,
-          newFields,
-        })
+      ? [
+          ...renaming,
+          ...buildLeavingFieldsArchiveStatements({
+            slug,
+            kind,
+            tableName,
+            dialect,
+            builtBy,
+            defaultLocale,
+            oldFields: before,
+            newFields,
+          }),
+        ]
       : [];
     return {
       beforeMain,
-      statements: buildCompanionReconcileStatements({
-        slug,
-        kind,
-        tableName,
-        builtBy,
-        oldLocalized,
-        newLocalized,
-        dialect,
-        status,
-        companionExists,
-        companionHasStatus: args.companionHasStatus,
-        // Carry the default locale so a newly-added `_status` back-fills the
-        // default-locale companion row from the main row's status, and a field leaving
-        // translation keeps its default language's value.
-        defaultLocale,
-        sharedAfter,
-        sharedAfterArchived: archiveFirst,
-        joinedBefore: args.joinedBefore,
-        presentOnCompanion: args.presentOnCompanion,
-      }),
+      statements: [
+        ...(archiveFirst ? [] : renaming),
+        ...buildCompanionReconcileStatements({
+          slug,
+          kind,
+          tableName,
+          builtBy,
+          oldLocalized,
+          newLocalized,
+          dialect,
+          status,
+          companionExists,
+          companionHasStatus: args.companionHasStatus,
+          // Carry the default locale so a newly-added `_status` back-fills the
+          // default-locale companion row from the main row's status, and a field leaving
+          // translation keeps its default language's value.
+          defaultLocale,
+          sharedAfter,
+          sharedAfterArchived: archiveFirst,
+          joinedBefore: args.joinedBefore,
+          presentOnCompanion: args.presentOnCompanion,
+          // As the companion will be once this change's own RENAME has run.
+          liveCompanionColumns: rename?.live ?? args.liveCompanionColumns,
+        }),
+      ],
       needsArchive: sharedAfter.length > 0,
       companionDropped: false,
     };
   }
 
   return none;
+}
+
+/**
+ * The rename of a field translated before the change (`args.renamed`): its companion column's
+ * RENAME (`companionRenameStatements`), and the old fields with it under its new name. Undefined
+ * when there is no such rename, or when the field's storage changes too, which a rename cannot
+ * carry since it keeps the type.
+ */
+/** What a translated field's companion RENAME is decided from. */
+type CompanionRenameArgs = Pick<
+  CompanionTransitionArgs,
+  | "tableName"
+  | "dialect"
+  | "builtBy"
+  | "oldFields"
+  | "newFields"
+  | "isLocalized"
+  | "renamed"
+  | "liveCompanionColumns"
+>;
+
+/**
+ * The companion's RENAME for a translated field renamed in this change, on its own, for a caller
+ * that runs it before the main table changes, so a RENAME the database refuses fails the save
+ * while the registry still records the old field. Empty when there is no such rename, it moves
+ * nothing, or this database already made it (`liveCompanionColumns`); the transition run later
+ * then finds it made and does not repeat it.
+ */
+export function buildCompanionRenameStatements(
+  args: CompanionRenameArgs
+): string[] {
+  return companionColumnRename(args)?.statements ?? [];
+}
+
+function companionColumnRename(args: CompanionRenameArgs):
+  | {
+      statements: string[];
+      oldFields: CompanionFieldLike[];
+      /** The companion's live columns once the RENAME has run, when they are known. */
+      live?: string[];
+    }
+  | undefined {
+  const { renamed, dialect, builtBy } = args;
+  if (!renamed) return undefined;
+  const from = args.oldFields.find(f => f.name === renamed.from);
+  const to = args.newFields.find(f => f.name === renamed.to);
+  if (!from || !to || !isFieldLocalized(from, true)) return undefined;
+  const fromColumn = fieldToLocalizedColumnSpec(from, dialect, builtBy);
+  const toColumn = fieldToLocalizedColumnSpec(to, dialect, builtBy);
+  if (!fromColumn || !toColumn || storageDiffers(fromColumn, toColumn)) {
+    return undefined;
+  }
+  const statements = companionRenameStatements(
+    args,
+    fromColumn.name,
+    toColumn.name,
+    { leaves: !isFieldLocalized(to, args.isLocalized) }
+  );
+  return {
+    statements,
+    oldFields: args.oldFields.map(f =>
+      f === from ? { ...f, name: to.name } : f
+    ),
+    live: liveAfterRename(args.liveCompanionColumns, statements, {
+      from: fromColumn.name,
+      to: toColumn.name,
+    }),
+  };
+}
+
+/** The companion's live columns once `statements`, a RENAME or nothing, have run. */
+function liveAfterRename(
+  live: readonly string[] | undefined,
+  statements: readonly string[],
+  columns: { from: string; to: string }
+): string[] | undefined {
+  if (live === undefined || statements.length === 0) return live?.slice();
+  return [...live.filter(c => c !== columns.from), columns.to];
+}
+
+/**
+ * The companion's RENAME of `from` to `to`: none when the column keeps its name, and none when a
+ * companion has the new column and not the old one, which an earlier apply renamed and then
+ * stopped before the registry recorded it; renaming again would fail on the missing column. None
+ * either when the field leaves translation and neither column is left: an earlier apply finished
+ * moving its values and stopped before the registry recorded it. Any other state keeps the
+ * RENAME, which fails loudly rather than leave the translations in a column no field owns.
+ */
+function companionRenameStatements(
+  args: CompanionRenameArgs,
+  from: string,
+  to: string,
+  { leaves }: { leaves: boolean }
+): string[] {
+  const known = args.liveCompanionColumns !== undefined;
+  const live = new Set(args.liveCompanionColumns ?? []);
+  const renamedBefore = live.has(to) && !live.has(from);
+  const movedBefore = leaves && known && !live.has(to) && !live.has(from);
+  if (from === to || renamedBefore || movedBefore) return [];
+  const { dialect } = args;
+  return [
+    `ALTER TABLE ${q(`${args.tableName}_locales`, dialect)} RENAME COLUMN ${q(from, dialect)} TO ${q(to, dialect)}`,
+  ];
 }
 
 /**
@@ -837,8 +996,13 @@ export function buildCompanionTransitionPlans(
     ...args,
     existingMainColumns: undefined,
     presentOnCompanion: undefined,
+    liveCompanionColumns: undefined,
   });
-  if (!args.existingMainColumns?.length && !args.presentOnCompanion?.length) {
+  if (
+    !args.existingMainColumns?.length &&
+    !args.presentOnCompanion?.length &&
+    !args.liveCompanionColumns?.length
+  ) {
     return { artefact };
   }
 

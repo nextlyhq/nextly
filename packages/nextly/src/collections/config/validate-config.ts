@@ -54,7 +54,6 @@ import {
   DEFAULT_SQL_KEYWORDS_SET,
   validateComponentFieldRefShared,
   validateContainerFieldsShared,
-  validateFieldNameShared,
   validateFieldTypeShared,
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
@@ -62,6 +61,8 @@ import {
   validateSelectOptionsShared,
   validateSlugShared,
   validateAccessShared,
+  COLLECTION_ACCESS_KEYS,
+  validateFieldBasicsShared,
 } from "../../shared/base-validator";
 import { isPlainObject } from "../../shared/lib/plain-copy";
 // RESERVED_SLUGS and SQL_RESERVED_KEYWORDS used to live in this file. They
@@ -111,6 +112,8 @@ export type ValidationErrorCode =
   | "FIELD_NAME_SYSTEM_ALIAS"
   // A name that reaches a column the Draft/Published lifecycle owns, while it is enabled.
   | "FIELD_NAME_LIFECYCLE_RESERVED"
+  // A `status` choice longer than a version's status can record.
+  | "FIELD_STATUS_OPTION_TOO_LONG"
   | "FIELD_TYPE_REQUIRED"
   | "FIELD_TYPE_INVALID"
   // A declared default the field's own rules reject.
@@ -140,6 +143,7 @@ export type ValidationErrorCode =
   // Access errors
   | "ACCESS_INVALID_TYPE"
   | "ACCESS_FUNCTION_INVALID"
+  | "ACCESS_KEY_UNKNOWN"
   // Index errors
   | "INDEX_INVALID_TYPE"
   | "INDEX_FIELDS_REQUIRED"
@@ -230,6 +234,51 @@ const INDEX_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 /**
  * Validates the indexes configuration.
  */
+/** The longest status a version can record (the versions table's `status` column). */
+const STATUS_OPTION_MAX_LENGTH = 32;
+
+/**
+ * The refusal for a `status` choice field with an option longer than a version's status can
+ * record, or null. Shared by the collection and Single validators, so both refuse it in one
+ * sentence.
+ */
+export function statusOptionError(
+  column: string,
+  field: Record<string, unknown>,
+  path: string
+): {
+  path: string;
+  message: string;
+  code: "FIELD_STATUS_OPTION_TOO_LONG";
+} | null {
+  if (column !== "status") return null;
+  const tooLong = statusOptionTooLong(field);
+  if (tooLong === null) return null;
+  return {
+    path,
+    message: `The status option '${tooLong}' is ${tooLong.length} characters; a status holds at most ${STATUS_OPTION_MAX_LENGTH}. Shorten its value (its label can stay as long as you like)`,
+    code: "FIELD_STATUS_OPTION_TOO_LONG",
+  };
+}
+
+/**
+ * The first option value of a select or radio field that is longer than a status can be, or null.
+ * Other field types declare no values, and a free-text status is shortened where it is recorded.
+ */
+function statusOptionTooLong(field: Record<string, unknown>): string | null {
+  if (field.type !== "select" && field.type !== "radio") return null;
+  if (!Array.isArray(field.options)) return null;
+  const values = (field.options as unknown[]).map(optionValue);
+  return values.find(value => value.length > STATUS_OPTION_MAX_LENGTH) ?? null;
+}
+
+/** An option's stored value: the option itself when a string, else its `value`. */
+function optionValue(option: unknown): string {
+  if (typeof option === "string") return option;
+  const value = (option as { value?: unknown } | null)?.value;
+  return typeof value === "string" ? value : "";
+}
+
 function validateIndexes(
   indexes: unknown,
   fields: unknown[],
@@ -399,13 +448,7 @@ function validateField(
   // the deferral returns before this, and the boot gate asks only whether the
   // token was claimed. A duplicate or SQL-reserved name reached schema
   // generation as a colliding column.
-  validateFieldNameShared(
-    f.name,
-    path,
-    errsBase,
-    seenNames,
-    DEFAULT_SQL_KEYWORDS_SET
-  );
+  validateFieldBasicsShared(f, path, errsBase, seenNames);
 
   if (
     !validateFieldTypeShared(f.type, path, errsBase, type =>
@@ -606,6 +649,19 @@ function validateFields(
       });
       return;
     }
+    // Without the lifecycle, a field named `status` is what each version records as its status
+    // (see `domains/versions/recorded-status`), and a version's status holds 32 characters. A
+    // choice field declares every value it can hold, so a longer option is refused here, where it
+    // is written, rather than shortened in history on every save that picks it.
+    const statusError = statusOptionError(
+      column,
+      candidate,
+      `${path}[${index}].options`
+    );
+    if (statusError !== null) {
+      errors.push(statusError);
+      return;
+    }
     // Two names that reach one column cannot both be emitted, so the table could never be
     // created. Checked here rather than in the shared field-name rule because only this level has
     // columns at all: a repeater or group keeps its children inside a single JSON column, where
@@ -634,7 +690,7 @@ function validateFields(
  * this entity supports.
  */
 function validateAccess(access: unknown, errors: ValidationError[]): void {
-  validateAccessShared(access, ["create", "read", "update", "delete"], errors);
+  validateAccessShared(access, COLLECTION_ACCESS_KEYS, errors);
 }
 
 /**

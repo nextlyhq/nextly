@@ -22,6 +22,7 @@
  * against accidental re-introduction of a `{ data: ... }` envelope.
  */
 import { jwtVerify } from "jose";
+import { poolWaitTimeoutError } from "@nextlyhq/adapter-drizzle/types";
 import { describe, expect, it, vi } from "vitest";
 
 // These tests read a session with no database behind it. Whether the account
@@ -155,6 +156,15 @@ function makeRequest(
 }
 
 const ALLOWED_ORIGINS = ["http://localhost:3000"];
+
+/** Setup as development has it: no token asked for, one setup at a time. */
+const OPEN_SETUP = {
+  required: false,
+  verify: async () => "valid" as const,
+  confirm: async () => "valid" as const,
+  spend: async () => {},
+  claim: async () => ({ release: async () => {} }),
+};
 
 describe("login handler: respondAction shape", () => {
   it("returns { message, user, accessToken, refreshToken, expiresAt }", async () => {
@@ -832,36 +842,51 @@ describe("register handler: respondAction shape", () => {
 });
 
 describe("setup-status handler: respondData shape", () => {
-  it("when no administrator exists, returns { isSetup: false, requiresInitialUser: true }", async () => {
-    const deps = { hasAdministrator: vi.fn().mockResolvedValue(false) };
+  it("with no administrator yet, returns { isSetup: false, requiresInitialUser: true }", async () => {
+    const deps = {
+      hasAdministrator: vi.fn().mockResolvedValue(false),
+      setupToken: OPEN_SETUP,
+    };
     const req = new Request(
       "http://localhost:3000/admin/api/auth/setup-status"
     );
     const res = await handleSetupStatus(req, deps);
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body).toEqual({ isSetup: false, requiresInitialUser: true });
+    expect(body).toEqual({
+      isSetup: false,
+      requiresInitialUser: true,
+      requiresSetupToken: false,
+    });
     expect(body).not.toHaveProperty("data");
     expect(body).not.toHaveProperty("isSetupComplete");
   });
 
-  it("when an administrator exists, returns { isSetup: true, requiresInitialUser: false }", async () => {
-    const deps = { hasAdministrator: vi.fn().mockResolvedValue(true) };
+  it("once an administrator exists, returns { isSetup: true, requiresInitialUser: false }", async () => {
+    const deps = {
+      hasAdministrator: vi.fn().mockResolvedValue(true),
+      setupToken: OPEN_SETUP,
+    };
     const req = new Request(
       "http://localhost:3000/admin/api/auth/setup-status"
     );
     const res = await handleSetupStatus(req, deps);
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body).toEqual({ isSetup: true, requiresInitialUser: false });
+    expect(body).toEqual({
+      isSetup: true,
+      requiresInitialUser: false,
+      requiresSetupToken: false,
+    });
   });
 
-  // A transient DB failure during hasAdministrator must surface as 503, not
+  // A transient DB failure during the administrator check must surface as 503, not
   // collapse to `{ isSetup: false }` -- the bootstrap-gate must never
   // synthesise a default on incomplete data.
-  it("when hasAdministrator throws, returns 503 SERVICE_UNAVAILABLE envelope (not isSetup:false)", async () => {
+  it("when the administrator check throws, returns 503 SERVICE_UNAVAILABLE envelope (not isSetup:false)", async () => {
     const deps = {
       hasAdministrator: vi.fn().mockRejectedValue(new Error("connection lost")),
+      setupToken: OPEN_SETUP,
     };
     const req = new Request(
       "http://localhost:3000/admin/api/auth/setup-status"
@@ -887,6 +912,7 @@ describe("setup handler: respondAction shape", () => {
       trustProxy: false,
       trustedProxyIps: [],
       hasAdministrator: vi.fn().mockResolvedValue(false),
+      setupToken: OPEN_SETUP,
       createSuperAdmin: vi.fn().mockResolvedValue({
         id: "u1",
         email: "a@example.com",
@@ -946,6 +972,7 @@ describe("setup handler: respondAction shape", () => {
       trustProxy: false,
       trustedProxyIps: [],
       hasAdministrator: vi.fn().mockResolvedValue(false),
+      setupToken: OPEN_SETUP,
       createSuperAdmin,
       fetchSessionRoles: vi.fn(),
       seedPermissions: vi.fn(),
@@ -954,7 +981,12 @@ describe("setup handler: respondAction shape", () => {
     };
     const req = makeRequest("POST", {
       email: "a@example.com",
-      password: "weak",
+      // 130 characters breaks two rules at once — the 128-character ceiling
+      // and the digester's 72-byte reach — so a single-reason envelope would
+      // still be hiding half the answer. Nothing shorter can multi-offend:
+      // a below-minimum password trips only the length rule, and the common
+      // list holds nothing under 8 characters.
+      password: "a".repeat(130),
       name: "A",
     });
     const res = await handleSetup(req, deps);
@@ -969,13 +1001,14 @@ describe("setup handler: respondAction shape", () => {
       };
     };
     const errors = body.error.data?.errors ?? [];
-    // "weak" breaks four rules at once, so a single-reason envelope would
-    // still be hiding most of the answer.
     expect(errors.length).toBeGreaterThan(1);
     expect(errors.every(e => e.path === "password")).toBe(true);
     expect(errors.every(e => e.code === "WEAK_PASSWORD")).toBe(true);
     expect(errors.map(e => e.message)).toContain(
-      "Password must contain at least one uppercase letter"
+      "Password must be at most 128 characters"
+    );
+    expect(errors.map(e => e.message)).toContain(
+      "Password exceeds the 72-byte limit of the password digester."
     );
     // The old shape put them here, where no client would ever find them.
     expect(body.error).not.toHaveProperty("details");
@@ -984,7 +1017,7 @@ describe("setup handler: respondAction shape", () => {
 
   // Security: an unknown user count must never be treated as 0 -- a second
   // super-admin must not be creatable on the assumption that setup is open.
-  it("when hasAdministrator throws, returns 503 envelope and does NOT create a user", async () => {
+  it("when the administrator check throws, returns 503 envelope and does NOT create a user", async () => {
     const createSuperAdmin = vi.fn();
     const deps = {
       secret: SECRET,
@@ -995,6 +1028,7 @@ describe("setup handler: respondAction shape", () => {
       trustProxy: false,
       trustedProxyIps: [],
       hasAdministrator: vi.fn().mockRejectedValue(new Error("connection lost")),
+      setupToken: OPEN_SETUP,
       createSuperAdmin,
       fetchSessionRoles: vi.fn(),
       seedPermissions: vi.fn(),
@@ -1431,5 +1465,75 @@ describe("the account-state gate before continuations", () => {
     // The hook never ran: the refusal arrived before anything was done on
     // the account's behalf.
     expect(seen).toEqual([]);
+  });
+});
+
+// Each handler's service failing the way the adapters fail a request that
+// waited out its bound for a connection, reaching the handler unconverted.
+describe.each([
+  {
+    name: "reset-password",
+    run: (failure: Error) =>
+      handleResetPassword(
+        makeRequest("POST", { token: "t", newPassword: "Pass1234!" }),
+        {
+          allowedOrigins: ALLOWED_ORIGINS,
+          resetPasswordWithToken: vi.fn().mockRejectedValue(failure),
+        }
+      ),
+  },
+  {
+    name: "accept-invite",
+    run: (failure: Error) =>
+      handleAcceptInvite(
+        makeRequest("POST", { token: "t", newPassword: "Pass1234!" }),
+        {
+          allowedOrigins: ALLOWED_ORIGINS,
+          acceptInvite: vi.fn().mockRejectedValue(failure),
+        }
+      ),
+  },
+  {
+    name: "forgot-password",
+    run: (failure: Error) =>
+      handleForgotPassword(makeRequest("POST", { email: "a@example.com" }), {
+        allowedOrigins: ALLOWED_ORIGINS,
+        loginStallTimeMs: 0,
+        generatePasswordResetToken: vi.fn().mockRejectedValue(failure),
+      }),
+  },
+  {
+    name: "register",
+    run: (failure: Error) =>
+      handleRegister(
+        makeRequest("POST", {
+          email: "a@example.com",
+          password: "Pass1234!",
+          name: "A",
+        }),
+        {
+          allowedOrigins: ALLOWED_ORIGINS,
+          allowRegistration: true,
+          revealRegistrationConflict: false,
+          loginStallTimeMs: 0,
+          registerUser: vi.fn().mockRejectedValue(failure),
+        }
+      ),
+  },
+])("$name handler, when its database fails", ({ run }) => {
+  it("answers a busy database as DATABASE_BUSY with Retry-After", async () => {
+    const res = await run(poolWaitTimeoutError(15000));
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get("retry-after")).toBe("5");
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("DATABASE_BUSY");
+  });
+
+  it("still answers any other failure as an internal error, with no retry hint", async () => {
+    const res = await run(new Error("socket hang up"));
+
+    expect(res.status).toBe(500);
+    expect(res.headers.get("retry-after")).toBeNull();
   });
 });

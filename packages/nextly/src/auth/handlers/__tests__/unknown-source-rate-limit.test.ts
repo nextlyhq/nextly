@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NULL_AUDIT_LOG_WRITER } from "../../../domains/audit/audit-log-writer";
+import { limitStoreUnavailable } from "../../../domains/limits/limit-store";
 import { RateLimiter } from "../../middleware/rate-limiter";
 import { SlidingWindowMemoryStore } from "../../middleware/sliding-window-store";
 import {
@@ -510,12 +511,17 @@ describe("bodies held open", () => {
     const h = harness({ budget: 1 }); // ceiling 100
     await holdOpen(h, 100);
 
+    // Before the extra request: what the counter tracks while every place is
+    // held, which the refusal must leave exactly as it is.
+    const trackedBefore = h.counter.trackedKeys;
     const extra = heldLogin(h, "extra@example.com");
     const refused = await extra.response;
     expect(refused?.status).toBe(429);
     expect(Number(refused?.headers.get("retry-after"))).toBeGreaterThan(0);
-    // Refused before its body was read.
+    // Refused before its body was read, and without a bucket: an empty one
+    // spends no budget, so only the count of tracked keys would show it.
     expect(await readStarts(extra)).toBe(false);
+    expect(h.counter.trackedKeys).toBe(trackedBefore);
 
     // The refusal spent nothing: once the held bodies arrive (one admitted,
     // the rest refused by their shared address's budget), the one admission
@@ -631,6 +637,47 @@ describe("bodies held open", () => {
       expect((await after.response)?.status).toBe(429);
     }
   );
+
+  it("leaves exactly the ceiling's places after setup counts wrong tokens, whatever their size", async () => {
+    const h = harness({ budget: 1 }); // ceiling 100
+    h.deps.hasAdministrator = async () => false;
+    h.deps.setupToken = {
+      required: true,
+      verify: async () => "invalid",
+      confirm: async () => "invalid",
+      spend: async () => {},
+      claim: async () => ({ release: async () => {} }),
+    };
+    const wrongSetup = (padding: number) =>
+      post(
+        h,
+        "setup",
+        {
+          email: "owner@example.com",
+          name: "Owner",
+          password: "Str0ng-P@ssw0rd!",
+          setupToken: "wrong",
+          csrfToken: "csrf-token",
+          padding: "x".repeat(padding),
+        },
+        { cookie: "nextly_csrf=csrf-token" }
+      );
+    // Larger than both setup's bound and the limiter's: admitted by the
+    // limit, then failing as too large. Then small, naming its account: the
+    // first is admitted and refused for its token, and the second is refused
+    // by the budget the first spent, so setup's requests reach the limit.
+    await expect(wrongSetup(40 * 1024)).rejects.toThrow("too large");
+    expect((await wrongSetup(0)).status).toBe(403);
+    expect((await wrongSetup(0)).status).toBe(429);
+
+    // Every place is free, and no more than every place: a place kept would
+    // refuse the last of these, and one given back twice would read the next.
+    const held = Array.from({ length: 100 }, () =>
+      heldLogin(h, "held@example.com")
+    );
+    expect((await Promise.all(held.map(readStarts))).every(Boolean)).toBe(true);
+    expect(await readStarts(heldLogin(h, "one-more@example.com"))).toBe(false);
+  });
 });
 
 describe("the account-less budget", () => {
@@ -972,4 +1019,120 @@ describe("strategies that name the account a sign-in targets", () => {
       expect(asked).toEqual([]);
     }
   );
+});
+
+describe("while the store core's limits count in is away", () => {
+  /** A store that answers every call as unavailable. */
+  const away: RateLimitStore = {
+    increment: () => Promise.reject(limitStoreUnavailable("unreachable")),
+    reset: () => Promise.reject(limitStoreUnavailable("unreachable")),
+    consume: () => Promise.reject(limitStoreUnavailable("unreachable")),
+  };
+
+  it.each([
+    ["a resolved address", { "x-forwarded-for": "203.0.113.7" }],
+    ["an unresolved address", {}],
+  ])(
+    "refuses sign-in from %s with an answer to try again shortly",
+    async (_case, headers: Record<string, string>) => {
+      const h = harness({ trustProxy: true });
+      h.deps.authRateLimit = {
+        requestsPerHour: 3,
+        windowMs: W,
+        counts: away,
+      };
+      const res = await post(h, "login", { email: "a@example.com" }, headers);
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { error: { message: string } };
+      expect(body.error.message).toBe("Please try again shortly.");
+    }
+  );
+});
+
+describe("setup with its token", () => {
+  // Setup checks its CSRF token before the setup token, so these requests
+  // carry both: what is under test is the limit, not the CSRF check.
+  const csrf = { cookie: "nextly_csrf=csrf-token" };
+  const VALID = "the-valid-setup-token";
+
+  function withSetup(options: Parameters<typeof harness>[0]): Harness {
+    const h = harness(options);
+    let administrator = false;
+    h.deps.hasAdministrator = async () => administrator;
+    h.deps.setupToken = {
+      required: true,
+      verify: async presented => (presented === VALID ? "valid" : "invalid"),
+      confirm: async presented => (presented === VALID ? "valid" : "invalid"),
+      spend: async () => {},
+      claim: async () => ({ release: async () => {} }),
+    };
+    h.deps.createSuperAdmin = async data => {
+      administrator = true;
+      return { id: "admin-1", email: data.email, name: data.name };
+    };
+    h.deps.fetchSessionRoles = async () => ({
+      roleIds: [],
+      validUntil: undefined,
+    });
+    h.deps.storeRefreshToken = async () => {};
+    return h;
+  }
+
+  const setup = (
+    h: Harness,
+    setupToken: string,
+    email: string,
+    headers: Record<string, string> = {}
+  ) =>
+    post(
+      h,
+      "setup",
+      {
+        email,
+        name: "Owner",
+        password: "Str0ng-P@ssw0rd!",
+        setupToken,
+        csrfToken: "csrf-token",
+      },
+      { ...csrf, ...headers }
+    );
+
+  it("completes with the valid token from an unresolved source once wrong ones spent the ceiling", async () => {
+    const h = withSetup({ budget: 1 }); // a ceiling of 100
+    for (let i = 0; i < 100; i++)
+      await setup(h, `wrong-${i}`, `guess-${i}@example.com`);
+    expect((await setup(h, "wrong-again", "late@example.com")).status).toBe(
+      429
+    );
+    expect((await setup(h, VALID, "owner@example.com")).status).toBe(201);
+  });
+
+  it("keeps setup closed in production for dependencies built without a token store", async () => {
+    const h = withSetup({ budget: 100 });
+    delete (h.deps as { setupToken?: unknown }).setupToken;
+    h.deps.isProduction = true;
+    const res = await setup(h, VALID, "owner@example.com");
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+      "SETUP_TOKEN_REQUIRED"
+    );
+  });
+
+  it("leaves a tokenless setup outside production out of the limit, as before", async () => {
+    const h = withSetup({ budget: 1 }); // a ceiling of 100
+    h.deps.setupToken = { ...h.deps.setupToken!, required: false };
+    // The auth limit spent by sign-ins first.
+    for (let i = 0; i < 100; i++)
+      await post(h, "login", { email: `u${i}@example.com`, password: "pw" });
+    expect((await setup(h, "", "owner@example.com")).status).toBe(201);
+  });
+
+  it("completes with the valid token from a resolved address whose own budget is spent", async () => {
+    const from = { "x-forwarded-for": "203.0.113.7" };
+    const h = withSetup({ budget: 2, trustProxy: true });
+    await setup(h, "wrong-1", "a@example.com", from);
+    await setup(h, "wrong-2", "b@example.com", from);
+    expect((await setup(h, "wrong-3", "c@example.com", from)).status).toBe(429);
+    expect((await setup(h, VALID, "owner@example.com", from)).status).toBe(201);
+  });
 });

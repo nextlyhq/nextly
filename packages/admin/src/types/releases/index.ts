@@ -12,6 +12,7 @@
 import type {
   ReleaseBlockerReason,
   ReleaseCapabilities,
+  ReleaseKind,
   ReleaseMemberAction,
   ReleaseState,
 } from "nextly/schemas";
@@ -30,7 +31,12 @@ import type {
  * answer to is a UI that eventually lies. Deriving from the engine is what makes
  * inventing one impossible rather than merely discouraged.
  */
-export type { ReleaseBlockerReason, ReleaseMemberAction, ReleaseState };
+export type {
+  ReleaseBlockerReason,
+  ReleaseKind,
+  ReleaseMemberAction,
+  ReleaseState,
+};
 
 /**
  * What the server says THIS reader may do to a release.
@@ -78,6 +84,30 @@ export interface Release {
    */
   timezone: string | null;
   state: ReleaseState;
+  /**
+   * `single` for a document scheduled on its own, a release that holds that
+   * one document and nothing else.
+   *
+   * Optional because a release read from somewhere other than the list or
+   * detail route may not carry it; a screen marks only an explicit `single`,
+   * so an absent kind reads as an ordinary release rather than guessing from
+   * the member count, which can change.
+   */
+  kind?: ReleaseKind;
+  /**
+   * How many documents it holds, and how many it puts live and takes down.
+   *
+   * Sent on the release list only, read for the whole page at once. Optional
+   * because a release read anywhere else does not carry it, and a screen has
+   * to say "unknown" rather than read an absent count as none.
+   */
+  memberCounts?: ReleaseMemberCounts;
+  /**
+   * Who owns it, by name only, as the release list names it. `null` for an
+   * owner who cannot be named (deleted, or a lookup that failed), while
+   * `createdBy` still says one was recorded. Absent off the list.
+   */
+  owner?: { id: string; name: string | null } | null;
   publishedAt: string | null;
   createdBy: string | null;
   createdAt: string;
@@ -108,6 +138,35 @@ export interface Release {
    * has already fixed, instead of telling an operator their repair did nothing.
    */
   blockedBy?: ReleaseBlocker[];
+  /**
+   * Blocked documents the reader may not read, counted by collection. Sent
+   * beside `blockedBy` only when there are any.
+   */
+  hiddenBlockers?: HiddenReleaseMembers[];
+}
+
+/**
+ * Documents in a release the reader may not read, counted by the collection
+ * or Single they are in. All the server says about them: how many, and where.
+ */
+export interface HiddenReleaseMembers {
+  scopeKind: "collection" | "single" | "page";
+  scopeSlug: string;
+  count: number;
+  /**
+   * The collection's display names, sent because a reader who may not read
+   * it cannot look them up. Absent for one no longer registered.
+   */
+  labels?: { singular: string; plural: string };
+}
+
+/**
+ * The problems of documents the reader may not read, counted by collection:
+ * how many documents, and how many of them have a hard or a soft problem.
+ */
+export interface HiddenReleaseProblems extends HiddenReleaseMembers {
+  hard: number;
+  soft: number;
 }
 
 /**
@@ -166,12 +225,46 @@ export interface ReleaseDocumentRef {
   entryId: string;
 }
 
+/**
+ * The four views of the release list, in the order the list shows them.
+ *
+ * The server's `?tab=` vocabulary. Spelled here because the server keeps it in
+ * its releases domain rather than in `nextly/schemas`, so there is no type to
+ * import; a tab the server stopped knowing is refused there with a 400 rather
+ * than answered with an empty list, so a drift here surfaces as an error on the
+ * screen and never as a tab that silently shows nothing.
+ */
+export const RELEASE_LIST_TABS = [
+  "upcoming",
+  "attention",
+  "drafts",
+  "done",
+] as const;
+
+export type ReleaseListTab = (typeof RELEASE_LIST_TABS)[number];
+
+/** Why a release is in Needs attention: it stopped, or it is overdue. */
+export type ReleaseAttentionReason = "stopped" | "overdue";
+
 /** The window a release list may be narrowed to. */
 export interface ReleaseListParams {
   state?: ReleaseState;
   scheduledAfter?: string;
   scheduledBefore?: string;
   limit?: number;
+  /** 1-based, as the route counts pages. */
+  page?: number;
+  /** One of the list's tabs, ordered as that tab is. */
+  tab?: ReleaseListTab;
+  /** Narrows Needs attention to one of its two parts. */
+  reason?: ReleaseAttentionReason;
+  /** Matched against title and description, on the server, before paging. */
+  search?: string;
+  /**
+   * Only releases of this kind. `release` is how the list hides
+   * single-document releases.
+   */
+  kind?: ReleaseKind;
   /**
    * Only the SCHEDULED releases holding this document.
    *
@@ -181,4 +274,109 @@ export interface ReleaseListParams {
    * eleven launches.
    */
   containing?: ReleaseDocumentRef;
+  /**
+   * Only the releases a calendar in `timezone` shows on `date`, in every
+   * state, soonest first: the day's complete list, paged like the rest. The
+   * server places a published release on the day it went out and any other
+   * on the day it is scheduled for, the same rule its calendar read uses, so
+   * a day's list holds exactly what the day's count counted.
+   */
+  day?: ReleaseDayFilter;
 }
+
+/** One day in a named zone: `date` is `YYYY-MM-DD`, `timezone` an IANA zone. */
+export interface ReleaseDayFilter {
+  date: string;
+  timezone: string;
+}
+
+/** How many releases a day holds in each state, every state present. */
+export type ReleaseStateCounts = Record<ReleaseState, number>;
+
+/**
+ * One day of the server's calendar read.
+ *
+ * `total` and `counts` cover every release on the day; `releases` holds the
+ * first few in time order (the server sends at most three), so "+N more" is
+ * worked out from `total` and is complete however busy the day is.
+ */
+export interface ReleaseCalendarDay {
+  date: string;
+  total: number;
+  counts: ReleaseStateCounts;
+  releases: Release[];
+}
+
+/** The server's calendar read: every day of the window asked for, in order. */
+export interface ReleaseCalendarRead {
+  timezone: string;
+  from: string;
+  to: string;
+  days: ReleaseCalendarDay[];
+}
+
+/** What a calendar read asks for: a window of at most six weeks, in a zone. */
+export interface ReleaseCalendarParams {
+  /** The first day, `YYYY-MM-DD`. */
+  from: string;
+  /** The last day, included. */
+  to: string;
+  /** The IANA zone the days are read in. */
+  timezone: string;
+}
+
+/** How many documents a release holds, and what it does with them. */
+export interface ReleaseMemberCounts {
+  total: number;
+  /** Documents the release puts live. */
+  goLive: number;
+  /** Documents the release takes down. */
+  comeDown: number;
+}
+
+/**
+ * One problem the checks found with one document of a release.
+ *
+ * `memberId` is what the list counts by: a document can carry several
+ * findings, and it is one document that needs fixing, not several.
+ */
+export interface ReleaseReadinessFinding {
+  memberId: string;
+  code: string;
+  source: string;
+  action: ReleaseMemberAction;
+  scopeKind: "collection" | "single" | "page";
+  scopeSlug: string;
+  entryId: string;
+  detail?: Readonly<Record<string, string | null | readonly string[]>>;
+}
+
+/**
+ * What the checks say about a release's documents right now.
+ *
+ * `hard` problems stop it from being scheduled or published now; `soft` ones
+ * are notes. Worked out by the server on each read, so a problem somebody
+ * fixed reads as fixed on the next one.
+ */
+export interface ReleaseReadiness {
+  releaseId: string;
+  hard: ReleaseReadinessFinding[];
+  soft: ReleaseReadinessFinding[];
+  /**
+   * The documents the reader may not read, with their problems counted by
+   * collection rather than named. Absent from a server that does not narrow
+   * by reader.
+   */
+  hidden?: HiddenReleaseProblems[];
+}
+
+/**
+ * One release's readiness, as the batch read answers it for a page.
+ *
+ * `checked: false` for a release holding more documents than a release may
+ * now hold: the batch leaves those to the release's own page, which checks
+ * them in full.
+ */
+export type ReleaseReadinessEntry =
+  | (ReleaseReadiness & { checked: true })
+  | { releaseId: string; checked: false; reason: "over-member-limit" };

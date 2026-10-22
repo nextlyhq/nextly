@@ -22,7 +22,7 @@
  */
 
 import type {
-  WidgetSetting,
+  AnyWidgetSetting,
   WidgetAction,
   WidgetArchetype,
   WidgetHeight,
@@ -88,9 +88,9 @@ export interface DashboardWidget {
    * The OFFER, not one reader's answer: the stored values live on the
    * placement, and `applyWidgetSettings` reads one against the other. Carried
    * here because the declaration is what says whether a stored key means
-   * anything at all.
+   * anything at all. Field settings and the four content settings alike.
    */
-  settings?: WidgetSetting[];
+  settings?: AnyWidgetSetting[];
   /**
    * Present for `stats`: one entry per number the card draws.
    *
@@ -158,7 +158,32 @@ export interface WidgetWidthFacts {
   defaultWidth: WidgetWidth;
   /** Whether the widget may be placed more than once. */
   allowsSeveral: boolean;
+  /**
+   * Where the add panel lists the widget, as core assigns it. Absent for a
+   * widget the panel does not offer: one already placed is still drawn.
+   */
+  group?: AddPanelGroup;
+  /** The collection a Content widget reads, or the plugin a Plugins one comes from. */
+  subgroup?: string;
+  /** The declaration's one line, for its row. */
+  description?: string;
+  /** The declaration's category: searched, and shown as a label, never a group. */
+  category?: string;
+  /** Which sketch draws its row: the widget's archetype. */
+  sketch?: string;
+  /**
+   * The widget's place in the add panel's order, as core ranks it. Present for every widget the
+   * panel lists, a placed one too, so the panel orders its rows without deciding an order itself.
+   */
+  rank?: number;
 }
+
+/**
+ * The add panel's groups as core sends them, in the panel's order. "Removed
+ * from your dashboard" is not one: it is the reader's own removed cards, read
+ * from the arrangement.
+ */
+export type AddPanelGroup = "overview" | "content" | "team" | "plugins";
 
 /**
  * One card in a reader's arrangement. Its position is its index in the list.

@@ -30,6 +30,14 @@ export interface DraftSaveInput {
   ref: VersionRef;
   /** The working draft's language key: null for a document with no languages. */
   locale: string | null;
+  /**
+   * The language the save's version is recorded under, when it is not the
+   * draft's key. A document without languages keys its draft under none, yet
+   * a snapshot carrying a component was read in the default language, and
+   * every other save of it is recorded under that; its draft's version is
+   * recorded the same way, so a comparison pairs them. Absent: the draft's key.
+   */
+  versionLocale?: string | null;
   /** The working draft after this save, as it is stored. */
   snapshot: Record<string, unknown>;
   /**
@@ -51,6 +59,11 @@ export interface DraftSaveInput {
 /** The version a held save recorded, or null when it changed nothing. */
 export interface DraftSaveResult {
   versionNo: number | null;
+}
+
+/** The language a held save's version is recorded under. */
+function versionLocaleOf(input: DraftSaveInput): string | null {
+  return input.versionLocale === undefined ? input.locale : input.versionLocale;
 }
 
 /**
@@ -89,8 +102,10 @@ export async function storeDraftSave(
       status: "draft",
       snapshot: withoutStatus(input.replaces),
       createdBy: input.createdBy,
-      locale: input.locale,
+      locale: versionLocaleOf(input),
       label: "Before restore",
+      // A held draft exists only under the Draft/Published lifecycle.
+      lifecycle: true,
     });
   }
 
@@ -99,9 +114,10 @@ export async function storeDraftSave(
     status: "draft",
     snapshot: withoutStatus(input.snapshot),
     createdBy: input.createdBy,
-    locale: input.locale,
+    locale: versionLocaleOf(input),
     sourceVersionNo: input.sourceVersionNo ?? null,
     maxPerDoc: input.maxPerDoc,
+    lifecycle: true,
   });
   return { versionNo };
 }

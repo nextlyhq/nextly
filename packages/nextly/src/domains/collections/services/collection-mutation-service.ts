@@ -111,6 +111,7 @@ import {
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
+import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import {
   isWriteIntegrityFailure,
   markWriteIntegrityFailure,
@@ -163,6 +164,7 @@ import {
   isCompanionReady,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { stopReleasesHolding } from "../../releases/early-stop";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { mergeComponentPatches } from "../../versions/draft-components";
@@ -171,6 +173,7 @@ import { storeDraftSave } from "../../versions/draft-save";
 import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
 import { sweepDeletedDocument } from "../../versions/entity-teardown";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
+import { hasLifecycle } from "../../versions/recorded-status";
 import {
   buildRestorePayload,
   type ComponentSchemas,
@@ -178,8 +181,10 @@ import {
 } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
+  containedComponentResolver,
   rehydrateSnapshotDates,
   resolveComponentFieldMap,
+  stripSingleComponentTags,
   tagComponentTypes,
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
@@ -701,6 +706,8 @@ interface WorkingDraftWriteContext {
   params: {
     collectionName: string;
     entryId: string;
+    /** The language the write named, which its components were read in. */
+    locale?: string;
     user?: UserContext;
     /** Who made the write, for the save's history event. */
     actor?: RequestActor;
@@ -1196,6 +1203,8 @@ export class CollectionMutationService extends BaseService {
       localeTag?: string;
       /** An update, whose save may change nothing; a create always records. */
       onlyIfChanged?: boolean;
+      /** Whether the collection has the Draft/Published lifecycle. */
+      lifecycle: boolean;
     }
   ): Promise<number | null> {
     // The version recorded, or null when versioning is off or the save
@@ -1206,6 +1215,7 @@ export class CollectionMutationService extends BaseService {
     try {
       const { versionNo } = await captureInTx(tx, this.versionCapture, {
         onlyIfChanged: args.onlyIfChanged === true,
+        lifecycle: args.lifecycle,
         ref: {
           scopeKind: "collection",
           scopeSlug: args.collectionName,
@@ -1339,6 +1349,7 @@ export class CollectionMutationService extends BaseService {
         needsRelations,
       });
     const createdVersionNo = await this.captureTxVersion(tx, {
+      lifecycle: hasLifecycle(args.collection),
       collectionName: args.collectionName,
       entryId,
       contentStatus: args.entry.status,
@@ -1618,6 +1629,16 @@ export class CollectionMutationService extends BaseService {
         mode: args.mode,
         req: args.user ? { user: args.user } : {},
         ...args.localeCtx,
+        // A component inside a group or repeater is judged here, since no
+        // component write reaches it; read on the write's own connection.
+        componentFields: await containedComponentResolver(
+          args.fields as unknown as FieldConfig[],
+          async componentSlug =>
+            (await this.fieldGroupDataService?.getComponentFields(
+              componentSlug,
+              args.tx?.getDrizzle()
+            )) ?? null
+        ),
         write: this.validationWrite(
           args.collectionName,
           args.id ??
@@ -2254,14 +2275,11 @@ export class CollectionMutationService extends BaseService {
       params.collectionName,
       params.entryIds
     );
-    const drafts =
-      shared.promoteRestoreCtx === null
-        ? new Map<string, VersionRow>()
-        : await new VersionsRepository(this.adapter).findWorkingDraftsOf(
-            { scopeKind: "collection", scopeSlug: params.collectionName },
-            [...rows.keys()],
-            shared.draftLocaleKey
-          );
+    const drafts = await this.releaseWorkingDrafts(
+      shared,
+      params.collectionName,
+      [...rows.keys()]
+    );
     // The author's grants, once for the batch, where a field rule could ask:
     // as the write resolves them, and only where it would.
     const grants = hasFieldAccessRule(
@@ -2339,6 +2357,87 @@ export class CollectionMutationService extends BaseService {
       issues.set(entryId, found);
     }
     return issues;
+  }
+
+  /**
+   * The working drafts a release's write would fold in, keyed by entry id:
+   * none where the collection keeps no draft apart from its live row.
+   * Shared by every release read of what goes live, so they all mean the same
+   * draft.
+   */
+  private async releaseWorkingDrafts(
+    shared: ReleaseWriteContext,
+    collectionName: string,
+    entryIds: readonly string[]
+  ): Promise<Map<string, VersionRow>> {
+    if (shared.promoteRestoreCtx === null) return new Map();
+    return new VersionsRepository(this.adapter).findWorkingDraftsOf(
+      { scopeKind: "collection", scopeSlug: collectionName },
+      entryIds,
+      shared.draftLocaleKey
+    );
+  }
+
+  /**
+   * Each of these entries as a release would put it live, keyed by id: its
+   * working draft where the write would fold one in, otherwise the document as
+   * stored. Read as storage holds it, with no read hooks and no reader's
+   * access, so a hook that reshapes a value for readers does not hide what is
+   * stored. Batched: the rows, their drafts, components and many-to-many ids
+   * are read once for all the entries. An entry that is not there, or a
+   * collection with no draft/published lifecycle, is absent from the answer;
+   * so is a collection whose translations lack their status, which cannot be
+   * read (`releaseCompanionLacksStatus` reports it).
+   *
+   * @experimental
+   */
+  async releaseGoingLiveDocuments(params: {
+    collectionName: string;
+    entryIds: readonly string[];
+  }): Promise<Map<string, Record<string, unknown>>> {
+    const documents = new Map<string, Record<string, unknown>>();
+    if (params.entryIds.length === 0) return documents;
+    const collection = await this.releaseCollection(params.collectionName);
+    if ((collection as { status?: boolean } | null)?.status !== true) {
+      return documents;
+    }
+    if (await this.companionLacksStatus(params.collectionName)) {
+      return documents;
+    }
+    const shared = await this.releaseWriteContext(
+      collection,
+      params.collectionName,
+      "published"
+    );
+    const rows = await this.storedEntries(
+      params.collectionName,
+      params.entryIds
+    );
+    const drafts = await this.releaseWorkingDrafts(
+      shared,
+      params.collectionName,
+      [...rows.keys()]
+    );
+    const stored = await this.storedDocumentsOf({
+      collectionName: params.collectionName,
+      rows: new Map([...rows].filter(([id]) => !drafts.has(id))),
+      tableName: collectionTableName(collection, params.collectionName),
+      fields: shared.fields,
+      manyToManyFields: shared.manyToManyFields,
+      locale: shared.localizedUpdate?.writeLocale,
+      reads: await this.goingLiveReadsOf(params.collectionName, [
+        ...rows.keys(),
+      ]),
+    });
+    for (const id of rows.keys()) {
+      const snapshot = drafts.get(id)?.snapshot;
+      const document =
+        typeof snapshot === "object" && snapshot !== null
+          ? (snapshot as Record<string, unknown>)
+          : stored.get(id);
+      if (document !== undefined) documents.set(id, document);
+    }
+    return documents;
   }
 
   /**
@@ -3102,12 +3201,13 @@ export class CollectionMutationService extends BaseService {
     /** Who discarded it, for the document's history. */
     actor?: RequestActor;
     user?: UserContext;
-  }): Promise<void> {
+  }): Promise<number> {
     const collection = await this.collectionService.getCollection(
       params.collectionName
     );
     const tableName = collectionTableName(collection, params.collectionName);
-    await this.adapter.transaction(async tx => {
+    // The drafts it removed, counted by the delete made under the lock.
+    return this.adapter.transaction(async tx => {
       // Serialize with concurrent draft-save upserts, which lock this same parent
       // row before writing the sidecar.
       await tx.lockRow(tableName, params.entryId);
@@ -3139,6 +3239,7 @@ export class CollectionMutationService extends BaseService {
           }
         );
       }
+      return removed;
     });
   }
 
@@ -4749,6 +4850,7 @@ export class CollectionMutationService extends BaseService {
         let createdVersionNo: number | null = null;
         if (versionsConfig?.enabled) {
           const captured = await captureInTx(tx, this.versionCapture, {
+            lifecycle: hasLifecycle(collection),
             ref: {
               scopeKind: "collection",
               scopeSlug: params.collectionName,
@@ -5045,9 +5147,9 @@ export class CollectionMutationService extends BaseService {
           );
         } catch (expansionError) {
           // If expansion fails, return the entry without expanded relationships
-          console.warn(
-            "Failed to expand relationships in createEntry response:",
-            expansionError
+          this.logger.warn(
+            "Failed to expand relationships in createEntry response",
+            { error: expansionError }
           );
         }
       }
@@ -5329,6 +5431,10 @@ export class CollectionMutationService extends BaseService {
     // publish busts the entry's cached reads. Publishing every locale, so no
     // single locale tag — the locale-less id tag covers them all.
     let revalidationIntent: RevalidationIntent | undefined;
+    // Set once the publish's transaction has committed, so a failure after it
+    // (the read of the published slugs, say) is reported as a change that was
+    // saved rather than one the caller should send again.
+    let committedWrite = false;
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
       const schema = await this.fileManager.loadDynamicSchema(
@@ -5732,6 +5838,7 @@ export class CollectionMutationService extends BaseService {
               // language's status, which this snapshot does not hold, so it
               // would compare equal with the version before.
               const capture = await captureInTx(tx, this.versionCapture, {
+                lifecycle: hasLifecycle(publishCollection),
                 ref: {
                   scopeKind: "collection",
                   scopeSlug: params.collectionName,
@@ -6002,6 +6109,12 @@ export class CollectionMutationService extends BaseService {
           data: null,
         };
       }
+      // Saved only once it is durable. Inside an enclosing SQLite transaction
+      // the publish is a savepoint that transaction can still roll back, so
+      // until it commits a failure below is not a saved change.
+      await this.afterCommit(() => {
+        committedWrite = true;
+      });
 
       // Once the publish is durable: inside an enclosing SQLite transaction,
       // once that commits, and never for a publish it rolls back.
@@ -6069,6 +6182,28 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
+      const intentFor = (localizedSlugs?: string[]) =>
+        buildEntryRevalidationIntent(
+          params.collectionName,
+          readRevalidateConfig(publishCollection),
+          {
+            id: params.entryId,
+            // Prefer the committed post-publish row's slug so a concurrent rename
+            // that landed after the pre-read still busts the actually-published
+            // URL; fall back to the pre-read only when no fresh row was
+            // reconstructed.
+            slug: readStringField(
+              (publishedParentRow ?? existingEntry) as Record<string, unknown>,
+              "slug"
+            ),
+            localizedSlugs,
+          }
+        );
+      // Set before the slug read below, which can fail after the commit. The
+      // failure result carries it, so a durable publish or unpublish still busts
+      // the entry's id and slug tags, though the caller is told not to retry.
+      revalidationIntent = intentFor();
+
       // Publishing all locales makes every locale's slug public at once, so bust
       // each localized slug's tag (read post-commit on the pool — publish only
       // flips status, so the committed companion slugs are stable here).
@@ -6077,22 +6212,7 @@ export class CollectionMutationService extends BaseService {
         params.collectionName,
         params.entryId
       );
-      revalidationIntent = buildEntryRevalidationIntent(
-        params.collectionName,
-        readRevalidateConfig(publishCollection),
-        {
-          id: params.entryId,
-          // Prefer the committed post-publish row's slug so a concurrent rename
-          // that landed after the pre-read still busts the actually-published
-          // URL; fall back to the pre-read only when no fresh row was
-          // reconstructed.
-          slug: readStringField(
-            (publishedParentRow ?? existingEntry) as Record<string, unknown>,
-            "slug"
-          ),
-          localizedSlugs: publishedLocalizedSlugs,
-        }
-      );
+      revalidationIntent = intentFor(publishedLocalizedSlugs);
 
       return {
         success: true,
@@ -6121,6 +6241,10 @@ export class CollectionMutationService extends BaseService {
         // a hook's refusal or rate limit as a server fault, and left a boundary
         // nothing to rebuild it from.
         ...errorEnvelopeFields(thrown),
+        committed: committedWrite,
+        // Set only once the publish has committed, so its tags flush whatever
+        // failed after it.
+        revalidationIntent,
       };
     }
   }
@@ -7017,6 +7141,31 @@ export class CollectionMutationService extends BaseService {
       ctx,
       existingDraft
     );
+    // The held component values are judged as the publish would judge them:
+    // merged into the draft, since a save carries only the sub-fields it
+    // changed, and without the type tags the draft holds, which no ordinary
+    // write shows a validator. Judged by the pass the component write runs, so
+    // a value the publish would refuse is refused now, with the same issues,
+    // before any draft or version is recorded.
+    const heldComponentNames = Object.keys(ctx.componentFieldData ?? {});
+    if (this.fieldGroupDataService && heldComponentNames.length > 0) {
+      await this.fieldGroupDataService.validateComponentDataInTransaction(tx, {
+        parentId: params.entryId,
+        parentTable: collectionTableName(collection, params.collectionName),
+        fields: fields as unknown as FieldConfig[],
+        data: stripSingleComponentTags(
+          Object.fromEntries(
+            heldComponentNames.map(name => [name, draftDocument[name]])
+          ),
+          fields as unknown as FieldConfig[],
+          componentSlug => splitComponentSchemas?.get(componentSlug)?.fields
+        ),
+        // The language this held write is keyed under: the request's, or the
+        // companion's write locale when the patch touched localized columns.
+        locale: draftLocale ?? undefined,
+        req: params.user ? { user: params.user } : {},
+      });
+    }
     // The response and hooks see the draft as an ordinary read, so
     // shape the accumulated snapshot through the current schema the
     // same way the read overlay does. The persisted `draftDocument`
@@ -7055,8 +7204,19 @@ export class CollectionMutationService extends BaseService {
     const { versionNo } = await storeDraftSave(tx, this.versionCapture, {
       ref: draftRef,
       // The key the read overlay, the promote and the discard look under,
-      // from `workingDraftLocale`; the version is keyed the same way.
+      // from `workingDraftLocale`.
       locale: draftLocale,
+      // The version is keyed the same way, except where the document has no
+      // languages and the snapshot carries a component: that was read in the
+      // language the write named, and is recorded under it as every other
+      // save is.
+      versionLocale:
+        draftLocale ??
+        ((fields as unknown as FieldConfig[]).some(
+          field => isFieldGroupField(field) && draftDocument[field.name] != null
+        )
+          ? this.componentSnapshotLocale(params.locale)
+          : null),
       snapshot: draftDocument,
       replaces,
       createdBy: params.user?.id ?? null,
@@ -7565,16 +7725,15 @@ export class CollectionMutationService extends BaseService {
                     : typeof v,
           ])
         );
-        console.log(
-          "[updateEntry debug]",
-          JSON.stringify({
+        this.logger.info("[updateEntry debug]", {
+          detail: JSON.stringify({
             collectionName: params.collectionName,
             entryId: params.entryId,
             finalDataKeys: Object.keys(finalData),
             finalDataKeyTypes: keyTypes,
             schemaColumns: Object.keys(schema as unknown as object),
-          })
-        );
+          }),
+        });
       }
 
       // i18n M5/M6: pull translatable values out of the main update (finalData uses camelCase field
@@ -8046,6 +8205,7 @@ export class CollectionMutationService extends BaseService {
                 await captureInTx(tx, this.versionCapture, {
                   // An update: a save that changes nothing records nothing.
                   onlyIfChanged: true,
+                  lifecycle: hasLifecycle(collection),
                   ref: {
                     scopeKind: "collection",
                     scopeSlug: params.collectionName,
@@ -8593,7 +8753,9 @@ export class CollectionMutationService extends BaseService {
           // this same post-save copy (ids populated) rather than the raw input.
           const attemptComponentData = structuredClone(componentFieldData);
 
-          // Save component field data to separate comp_{slug} tables
+          // Save component field data to separate comp_{slug} tables. A held
+          // edit writes no component rows; its values are judged with the
+          // working draft they are merged into (see storeWorkingDraftInTx).
           if (
             !storeAsWorkingDraft &&
             this.fieldGroupDataService &&
@@ -8784,6 +8946,8 @@ export class CollectionMutationService extends BaseService {
                 // locale-specific too — the singles path counts it the same way.
                 Object.keys(snapshotComponents ?? {}).length > 0;
 
+              // The version this update produced, which its status moves name below.
+              let producedVersionNo: number | null = null;
               if (versionsConfig?.enabled && !storeAsWorkingDraft) {
                 const savedStatus =
                   (updatePayload as { status?: unknown }).status ??
@@ -8799,6 +8963,7 @@ export class CollectionMutationService extends BaseService {
                   {
                     // An update: a save that changes nothing records nothing.
                     onlyIfChanged: true,
+                    lifecycle: hasLifecycle(collection),
                     ref: {
                       scopeKind: "collection",
                       scopeSlug: params.collectionName,
@@ -8836,6 +9001,7 @@ export class CollectionMutationService extends BaseService {
                     maxPerDoc: versionsConfig.maxPerDoc,
                   }
                 );
+                producedVersionNo = versionNo;
                 await this.recordSaveHistory(
                   tx,
                   params.collectionName,
@@ -9147,16 +9313,35 @@ export class CollectionMutationService extends BaseService {
                   tx,
                   params.collectionName,
                   params.entryId,
-                  { actor, personName: params.user?.name ?? null },
+                  {
+                    actor,
+                    personName: params.user?.name ?? null,
+                    versionNo: producedVersionNo,
+                  },
+                  // Publishing a held draft is a publish though the live row
+                  // was published before and after: the move history records
+                  // is the draft's, from draft to published, so it names the
+                  // publish and who made it.
                   [
                     ...(companionEncodesMainTransition
                       ? []
-                      : [{ from: mainFrom, to: mainTo }]),
+                      : [
+                          {
+                            from:
+                              promotedDraft && mainTo === "published"
+                                ? "draft"
+                                : mainFrom,
+                            to: mainTo,
+                          },
+                        ]),
                     ...(companionStatusWritten
                       ? [
                           {
                             locale: localizedUpdate?.writeLocale,
-                            from: localizedPreviousStatus,
+                            from:
+                              promotedDraft && companionNext === "published"
+                                ? "draft"
+                                : localizedPreviousStatus,
                             to: companionNext,
                           },
                         ]
@@ -9174,6 +9359,23 @@ export class CollectionMutationService extends BaseService {
                 mainStatusRecorded ||
                 localizedStatusRecorded ||
                 sweptRecorded;
+
+              // A receipt a caller pinned for this document is kept here, in
+              // the write's own transaction, so it commits exactly when the
+              // write does. Only a write to the live row: a held working draft
+              // left the live document as it was. `mainTo` is the status this
+              // transaction stored, read back from the row, not a hook's view.
+              if (!storeAsWorkingDraft) {
+                await recordWriteReceipt(
+                  tx,
+                  {
+                    scopeKind: "collection",
+                    scopeSlug: params.collectionName,
+                    entryId: params.entryId,
+                  },
+                  { status: typeof mainTo === "string" ? mainTo : undefined }
+                );
+              }
 
               // Capture the pre-write slug inside the transaction so the
               // post-commit intent can bust the old slug tag after a rename.
@@ -9249,6 +9451,9 @@ export class CollectionMutationService extends BaseService {
       // is a durable write — flagged for the retention pass independent of the
       // recording/revalidation opt-outs below.
       committedWrite = true;
+      await this.recheckReleasesHolding(params.collectionName, [
+        params.entryId,
+      ]);
 
       // A pure draft edit leaves the live row untouched, so the re-fetched
       // `updated` is the OLD published content. Everything that reports what this
@@ -9490,9 +9695,9 @@ export class CollectionMutationService extends BaseService {
           );
         } catch (expansionError) {
           // If expansion fails, return the entry without expanded relationships
-          console.warn(
-            "Failed to expand relationships in updateEntry response:",
-            expansionError
+          this.logger.warn(
+            "Failed to expand relationships in updateEntry response",
+            { error: expansionError }
           );
         }
       }
@@ -9891,6 +10096,9 @@ export class CollectionMutationService extends BaseService {
       }
 
       const deleted = entry;
+      await this.recheckReleasesHolding(params.collectionName, [
+        params.entryId,
+      ]);
 
       // The tags this delete invalidates: the collection tag and the removed
       // entry's id/slug tags (in its locale), so lists and any cached read of
@@ -10524,6 +10732,30 @@ export class CollectionMutationService extends BaseService {
         revalidationIntent,
       };
     }
+  }
+
+  /**
+   * Hand documents just saved or deleted to the early stop, once the write is
+   * durable: a scheduled release holding one may now have a hard problem (a
+   * pending change its author may not publish, the document gone), and is
+   * stopped then rather than at its instant. Inside an enclosing SQLite
+   * transaction this waits for its commit, and never runs for a write it
+   * rolls back. One call for a whole batch, after its transaction.
+   */
+  recheckReleasesHolding(
+    collectionName: string,
+    entryIds: readonly string[]
+  ): Promise<void> {
+    if (entryIds.length === 0) return Promise.resolve();
+    return this.afterCommit(() =>
+      stopReleasesHolding({
+        documents: entryIds.map(entryId => ({
+          scopeKind: "collection",
+          scopeSlug: collectionName,
+          entryId,
+        })),
+      })
+    );
   }
 
   /**
@@ -11360,6 +11592,8 @@ export class CollectionMutationService extends BaseService {
           manyToManyFields,
           needsRelations,
         });
+      // The version this update produced, which its status moves name below.
+      let producedVersionNo: number | null = null;
       // A held edit records no durable version: nothing was published.
       if (!storeAsWorkingDraft) {
         const localeTag = capturedLocaleState
@@ -11368,6 +11602,7 @@ export class CollectionMutationService extends BaseService {
         const savedStatus = (updated as { status?: unknown }).status;
         const versionNo = await this.captureTxVersion(tx, {
           onlyIfChanged: true,
+          lifecycle: hasLifecycle(collection),
           collectionName: params.collectionName,
           entryId,
           contentStatus: savedStatus,
@@ -11381,6 +11616,7 @@ export class CollectionMutationService extends BaseService {
           // on a collection where they all are.
           localeTag,
         });
+        producedVersionNo = versionNo;
         await this.recordSaveHistory(tx, params.collectionName, entryId, {
           actor: actorForWrite(params.actor, params.user),
           personName: params.user?.name ?? null,
@@ -11483,7 +11719,11 @@ export class CollectionMutationService extends BaseService {
           tx,
           params.collectionName,
           entryId,
-          { actor: eventActor, personName: params.user?.name ?? null },
+          {
+            actor: eventActor,
+            personName: params.user?.name ?? null,
+            versionNo: producedVersionNo,
+          },
           [
             ...(companionEncodesMainTransition
               ? []

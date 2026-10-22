@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ServiceContainer } from "../../../services";
 import { readableSlugAllowlist } from "../../../services/lib/readable-slug-allowlist";
+import { asCaller, sessionCaller } from "../../__tests__/request-caller";
 import { dispatchCollections } from "../collection-dispatcher";
 
 // Mocked at the SHARED resolver, which is the seam the handler calls. Mocking
@@ -52,11 +53,13 @@ describe("listCollections resolves its allowlist before querying", () => {
     allowlistFor.mockResolvedValue(["pages", "posts"]);
     const listCollections = vi.fn().mockResolvedValue(serviceResult(["posts"]));
 
-    await dispatchCollections(
-      containerReturning(listCollections),
-      "listCollections",
-      { page: "1", limit: "10", _authenticatedUserId: "u1" },
-      undefined
+    await asCaller(sessionCaller({ userId: "u1" }), () =>
+      dispatchCollections(
+        containerReturning(listCollections),
+        "listCollections",
+        { page: "1", limit: "10" },
+        undefined
+      )
     );
 
     const passed = listCollections.mock.calls[0][0];
@@ -79,11 +82,13 @@ describe("listCollections resolves its allowlist before querying", () => {
     allowlistFor.mockResolvedValue(undefined);
     const listCollections = vi.fn().mockResolvedValue(serviceResult(["posts"]));
 
-    await dispatchCollections(
-      containerReturning(listCollections),
-      "listCollections",
-      { page: "1", limit: "10", _authenticatedUserId: "admin" },
-      undefined
+    await asCaller(sessionCaller({ userId: "admin" }), () =>
+      dispatchCollections(
+        containerReturning(listCollections),
+        "listCollections",
+        { page: "1", limit: "10" },
+        undefined
+      )
     );
 
     expect(listCollections.mock.calls[0][0].slugAllowlist).toBeUndefined();
@@ -97,11 +102,13 @@ describe("listCollections resolves its allowlist before querying", () => {
     allowlistFor.mockResolvedValue([]);
     const listCollections = vi.fn().mockResolvedValue(serviceResult([], 0));
 
-    await dispatchCollections(
-      containerReturning(listCollections),
-      "listCollections",
-      { page: "1", limit: "10", _authenticatedUserId: "u2" },
-      undefined
+    await asCaller(sessionCaller({ userId: "u2" }), () =>
+      dispatchCollections(
+        containerReturning(listCollections),
+        "listCollections",
+        { page: "1", limit: "10" },
+        undefined
+      )
     );
 
     expect(listCollections.mock.calls[0][0].slugAllowlist).toEqual([]);
@@ -121,11 +128,13 @@ describe("listCollections resolves its allowlist before querying", () => {
       meta: { total: 42, page: 1, limit: 1, totalPages: 42 },
     });
 
-    const result = (await dispatchCollections(
-      containerReturning(listCollections),
-      "listCollections",
-      { page: "1", limit: "1", _authenticatedUserId: "u1" },
-      undefined
+    const result = (await asCaller(sessionCaller({ userId: "u1" }), () =>
+      dispatchCollections(
+        containerReturning(listCollections),
+        "listCollections",
+        { page: "1", limit: "1" },
+        undefined
+      )
     )) as Response;
 
     const body = (await result.json()) as {

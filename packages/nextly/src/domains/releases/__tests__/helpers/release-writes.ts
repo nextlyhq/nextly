@@ -16,6 +16,8 @@ import {
   RELEASE_SCHEDULABLE_FROM,
   type ReleaseState,
 } from "../../../../schemas/releases/types";
+import type { RowLockServer } from "../../../../shared/lib/row-lock";
+import { rowLockServer } from "../../../audit/audit-log-writer";
 import type { ReleasesRepository } from "../../releases-repository";
 
 /** Every state a membership change can land on, for a caller who may publish. */
@@ -44,4 +46,36 @@ export async function scheduleAsItStands(
     RELEASE_SCHEDULABLE_FROM,
     row.revision
   );
+}
+
+/**
+ * Mark a release published, fenced on the revision and instant it has now,
+ * as a drain that planned against it this moment would. Throws when the
+ * release is not there or has no instant, for the reason the helper above
+ * does.
+ */
+export async function publishAsItStands(
+  repo: ReleasesRepository,
+  id: string,
+  at: Date
+): Promise<boolean> {
+  const [row] = await repo.findReleases({ ids: [id] });
+  if (row?.scheduledAt == null) {
+    throw new Error(`no scheduled release ${id} to publish`);
+  }
+  const settled = await repo.markReleasesPublished(
+    [{ id, revision: row.revision, scheduledAt: row.scheduledAt }],
+    at
+  );
+  return settled.length === 1;
+}
+
+/**
+ * A test install's row-lock facts, for `createReleaseMutations`, read from its
+ * own adapter as the drain job reads them from its database.
+ */
+export function lockServerOf(t: {
+  adapter: { getCapabilities(): { dialect: RowLockServer["dialect"] } };
+}): RowLockServer {
+  return rowLockServer(t.adapter, t.adapter.getCapabilities().dialect);
 }

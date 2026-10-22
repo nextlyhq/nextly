@@ -25,6 +25,9 @@ import { z } from "zod";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
+import { restKeyScope, scopedSender } from "../domains/email/send-claims";
+import { sendOutcomeMessage } from "../domains/email/send-outcome";
+import { sendRequestSchema } from "../domains/email/send-request";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { EmailService } from "../services/email/email-service";
@@ -38,38 +41,34 @@ async function getEmailService(): Promise<EmailService> {
   return container.get<EmailService>("emailService");
 }
 
-const attachmentInputSchema = z.object({
-  mediaId: z.string().min(1, "mediaId is required"),
-  filename: z.string().min(1).optional(),
-});
-
-const sendEmailSchema = z.object({
-  to: z.string().email("A valid recipient email is required"),
+const sendEmailSchema = sendRequestSchema({
   subject: z.string().min(1, "subject is required"),
   html: z.string().min(1, "html is required"),
   plainText: z.string().optional(),
-  cc: z.array(z.string().email()).optional(),
-  bcc: z.array(z.string().email()).optional(),
-  providerId: z.string().optional(),
-  attachments: z.array(attachmentInputSchema).optional(),
 });
 
 /**
  * POST handler for sending a raw email.
  *
  * Request body:
- * - `to` (string, required): Recipient email address
+ * - `to` (string or string[], required): Recipient email address, or several
+ * - `from` / `replyTo` (string, optional): the send's sender and Reply-To
  * - `subject` (string, required)
  * - `html` (string, required)
  * - `plainText` (string, optional)
  * - `cc` / `bcc` (string[], optional)
  * - `providerId` (string, optional): use a specific email provider
  * - `attachments` (array, optional): `[{ mediaId, filename? }]`
+ * - `idempotencyKey` (string, optional): send this message once for the key;
+ *   a repeat answers `repeat: true` and sends nothing. The key is the
+ *   caller's own (its API key, or the signed-in person), so it never meets
+ *   the site's keys or another caller's.
  *
  * Response codes:
  * - 200 OK: `{ message, success, messageId? }` via `respondAction`.
  * - 400 Bad Request: invalid body / attachment count or size exceeded / mediaId not found.
  * - 401 Unauthorized.
+ * - 409 Conflict: the idempotency key was used for a different message.
  * - 500 Internal Server Error: storage read failed or provider error.
  */
 export const POST = withErrorHandler(
@@ -109,12 +108,18 @@ export const POST = withErrorHandler(
     }
 
     const service = await getEmailService();
-    const result = await service.send(args);
+    // A key sent here is this caller's own: it never meets a key the site's
+    // code sends with, nor another caller's.
+    const result = await scopedSender(service, restKeyScope(authResult)).send(
+      args
+    );
     // The service constructs its public result explicitly, so this spread
     // carries only `{ success, messageId? }` — never a provider's own extra
     // fields. Spread onto the action
     // body so consumers that read `messageId` and `success` keep working
     // alongside the server-authored toast string.
-    return respondAction("Email queued.", { ...result });
+    // Says what happened: the send is synchronous, so by now the provider has
+    // accepted the message or it has failed. Nothing is queued.
+    return respondAction(sendOutcomeMessage(result.success), { ...result });
   }
 );

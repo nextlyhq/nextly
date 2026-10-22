@@ -51,7 +51,7 @@ const BLOCKER = {
 
 function answer(over: Record<string, unknown> = {}) {
   return {
-    data: { items: [] },
+    data: { items: [], meta: { total: 0, hasNext: false } },
     isPending: false,
     isFetching: false,
     isError: false,
@@ -100,13 +100,45 @@ describe("the schedule preflight", () => {
   it("NAMES the documents that would stop the release", async () => {
     // A count is not actionable. The whole reason this asks before scheduling
     // is that the server's refusal cannot say which documents.
-    blockersMock.mockReturnValue(answer({ data: { items: [BLOCKER] } }));
+    blockersMock.mockReturnValue(
+      answer({
+        data: { items: [BLOCKER], meta: { total: 1, hasNext: false } },
+      })
+    );
     render(
       <ScheduleReleaseDialog release={RELEASE} open onOpenChange={() => {}} />
     );
     withAnInstant();
     expect(screen.getByText(/one document would stop/i)).toBeTruthy();
     expect(screen.getByText("posts / e1")).toBeTruthy();
+    expect(submit().disabled).toBe(true);
+  });
+
+  it("refuses a release blocked only by documents the reader cannot view, and says why", async () => {
+    // The server names none of them, so the list is empty; a dialog that
+    // judged by the list alone would offer a schedule the server refuses.
+    blockersMock.mockReturnValue(
+      answer({
+        data: {
+          items: [],
+          meta: {
+            total: 0,
+            hasNext: false,
+            hidden: [
+              { scopeKind: "collection", scopeSlug: "secrets", count: 1 },
+            ],
+          },
+        },
+      })
+    );
+    render(
+      <ScheduleReleaseDialog release={RELEASE} open onOpenChange={() => {}} />
+    );
+    withAnInstant();
+    expect(screen.getByText(/one document would stop/i)).toBeTruthy();
+    expect(
+      screen.getByText("1 document you can't view needs a fix.")
+    ).toBeTruthy();
     expect(submit().disabled).toBe(true);
   });
 
@@ -128,7 +160,10 @@ describe("the schedule preflight", () => {
     // the new request runs. Reading only `isPending` calls that clean, and a
     // release whose author disappeared in between becomes submittable.
     blockersMock.mockReturnValue(
-      answer({ isFetching: true, data: { items: [] } })
+      answer({
+        isFetching: true,
+        data: { items: [], meta: { total: 0, hasNext: false } },
+      })
     );
     render(
       <ScheduleReleaseDialog release={RELEASE} open onOpenChange={() => {}} />

@@ -29,6 +29,7 @@ import { conditionProbe } from "../domains/widgets/condition-probe";
 import { onboardingSteps } from "../domains/widgets/onboarding";
 import { getCachedNextly } from "../init";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
+import { readActivitySingles } from "../services/dashboard/activity-singles";
 import {
   apiKeyCountScope,
   readableAdminCounts,
@@ -276,7 +277,13 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
   // caller cannot open.
   const caller = await readCaller(auth);
   const scope = await resolveReadableResources(caller);
-  const result = await service.getRecentActivity({ limit, scope, caller });
+  const singles = await readActivitySingles();
+  const result = await service.getRecentActivity({
+    limit,
+    scope,
+    caller,
+    singles,
+  });
 
   // Cursor-shaped read: `hasMore` sits beside `activities`, with no `total` --
   // see `ActivityLogResult` for why a count is not published here.

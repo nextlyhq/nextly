@@ -65,8 +65,16 @@ vi.mock("../utils/template", async importOriginal => ({
   ...(await importOriginal<typeof import("../utils/template")>()),
   copyTemplate,
 }));
-vi.mock("../installers/dependencies", () => ({
+vi.mock("../installers/dependencies", async importOriginal => ({
+  ...(await importOriginal<typeof import("../installers/dependencies")>()),
   installDependencies: vi.fn(async () => []),
+}));
+// An existing app here is on the skills' release, apart from this CLI's on
+// purpose, so the check that its Nextly is this CLI's release would stop the
+// run first; that check has its own tests (create-nextly-existing-version).
+vi.mock("../lib/nextly-release", async importOriginal => ({
+  ...(await importOriginal<typeof import("../lib/nextly-release")>()),
+  nextlyVersionConflicts: vi.fn(async () => []),
 }));
 vi.mock("../utils/detect", async importOriginal => ({
   ...(await importOriginal<typeof import("../utils/detect")>()),

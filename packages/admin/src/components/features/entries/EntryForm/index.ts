@@ -60,9 +60,11 @@ export {
 } from "./FormErrorSummary";
 
 export {
-  AutoSaveIndicator,
-  type AutoSaveIndicatorProps,
-} from "./AutoSaveIndicator";
+  SaveStateIndicator,
+  saveIndicatorView,
+  type SaveStateIndicatorProps,
+  type RecoveryPointState,
+} from "./SaveStateIndicator";
 
 // Document lock: the banner and the claim behind it, for every editor of a
 // document rather than only this form. A custom edit view replaces the FORM,

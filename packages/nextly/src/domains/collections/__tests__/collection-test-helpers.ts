@@ -263,13 +263,33 @@ export function createMockCollectionService(
  * one. Allowing by default so a test that does not care about access does not
  * have to say so.
  */
+// ── The caller the collection gate reads ────────────────────────────────
+
+export {
+  callerIsSuperAdmin,
+  callerLookupFails,
+  callerMay,
+  callerMayNot,
+  fakeActorForUser,
+  fakeUserHoldsPermission,
+  fakeUserIsSuperAdmin,
+  resetCallerAccess,
+} from "../../../auth/access/__tests__/fake-caller";
+
 export function createMockRbacAccessControlService(): MockRecord {
+  const getRegisteredAccess = vi.fn().mockReturnValue(undefined);
   return {
     checkAccess: vi.fn().mockResolvedValue(true),
     // Answers `undefined`: no code-defined rule governs the operation, so an
     // anonymous caller falls through to the public default.
     checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
-    getRegisteredAccess: vi.fn().mockReturnValue(undefined),
+    getRegisteredAccess,
+    // Derived from `getRegisteredAccess`, as the service derives it, so a rule a test
+    // registers there reaches every caller that asks for the target.
+    getRegisteredTarget: (slug: string) => {
+      const access: unknown = getRegisteredAccess(slug);
+      return access ? { kind: "collection", slug, access } : undefined;
+    },
   };
 }
 

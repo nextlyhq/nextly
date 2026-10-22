@@ -86,6 +86,7 @@ export { siteSettingsPg as siteSettings } from "../site-settings/postgres";
 export { userFieldDefinitionsPg as userFieldDefinitions } from "../user-field-definitions/postgres";
 export { emailProvidersPg as emailProviders } from "../email-providers/postgres";
 export { emailDeliveriesPg as emailDeliveries } from "../email-deliveries/postgres";
+export { emailSendClaimsPg as emailSendClaims } from "../email-send-claims/postgres";
 export { emailTemplatesPg as emailTemplates } from "../email-templates/postgres";
 
 export { nextlySchemaEventsPg as nextlySchemaEvents } from "../schema-events/postgres";
@@ -129,6 +130,10 @@ export { nextlyJobsPg as nextlyJobs } from "../jobs/postgres";
 // above gives — this map is what the push creates.
 export { nextlyNoticesPg as nextlyNotices } from "../notices/postgres";
 
+// The site's email brand settings; in the bundle for the reason the releases
+// note above gives — this map is what the push creates.
+export { nextlyEmailBrandPg as nextlyEmailBrand } from "../email-brand/postgres";
+
 // Version view markers; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.
 export { nextlyVersionViewsPg as nextlyVersionViews } from "../version-views/postgres";
@@ -138,3 +143,6 @@ export {
   nextlyContentEventsPg as nextlyContentEvents,
   nextlyContentEventPartsPg as nextlyContentEventParts,
 } from "../content-events/postgres";
+// Recorded preview links; in the bundle so freshPushSchema creates the table on
+// a fresh database, for the reason the release tables above give.
+export { nextlyPreviewLinksPg as nextlyPreviewLinks } from "../preview-links/postgres";

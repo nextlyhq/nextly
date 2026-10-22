@@ -30,6 +30,7 @@ import {
   toast,
 } from "@admin/components/ui";
 import {
+  useDocumentEvents,
   useRestoreVersion,
   useSetVersionLabel,
   useVersion,
@@ -42,13 +43,13 @@ import type { VersionScope } from "@admin/services/versionApi";
 
 import { useDocumentHistory } from "./document-history-context";
 import { useHistoryAddress } from "./history-address";
+import { loadedWindow } from "./history-story";
+import { HistoryStoryList } from "./HistoryStoryList";
 import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
 import { useMarkVersionSeen } from "./useMarkVersionSeen";
 import { newestInLocale, predecessorOf } from "./version-pairing";
 import { versionsHref } from "./VersionComparePage";
 import { VersionLabelDialog } from "./VersionLabelDialog";
-import { VersionLocaleFilter } from "./VersionLocaleFilter";
-import { VersionRow } from "./VersionRow";
 
 // How many extra history pages the panel will auto-fetch while searching for a
 // previewed version's previous same-locale version before deferring to the
@@ -128,6 +129,16 @@ export interface VersionHistorySheetProps {
    * it, so the refusal has to be carried into the confirmation as well.
    */
   restoreRefused?: boolean;
+  /**
+   * Whether the document has the Draft/Published lifecycle. Its pinned
+   * "Current draft" and "Currently published" exist only with one, and only
+   * its publishes ship saves.
+   */
+  lifecycle?: boolean;
+  /** The language being edited, which the list opens on with shared fields. */
+  editingLocale?: string | null;
+  /** The retention limit, which the list states in one line. */
+  retention?: number | false;
 }
 
 function ListSkeleton() {
@@ -155,6 +166,9 @@ export function VersionHistorySheet({
   entityLocalized,
   liveDirty = false,
   restoreRefused = false,
+  lifecycle = false,
+  editingLocale = null,
+  retention,
 }: VersionHistorySheetProps) {
   // The version chosen lives in the address beside the panel's own key, so a
   // link names it; the list shows while none is chosen.
@@ -163,11 +177,6 @@ export function VersionHistorySheet({
   // The version being renamed, which is not necessarily the one being previewed
   // — an editor can name a row without opening it.
   const [renaming, setRenaming] = useState<number | null>(null);
-  // Active locale filter for the listing, or undefined for every locale. Only
-  // meaningful for a localized document; the filter control hides otherwise.
-  const [localeFilter, setLocaleFilter] = useState<string | undefined>(
-    undefined
-  );
 
   // Reopening the panel should start at the list. Without this the previously
   // previewed version would still be showing, which reads as a stale panel.
@@ -179,9 +188,6 @@ export function VersionHistorySheet({
       // does not close it. Left set, it would stay on screen over a dismissed
       // panel, or reappear the moment the panel was reopened.
       setRenaming(null);
-      // Start every open showing all locales rather than a filter left from a
-      // previous document.
-      setLocaleFilter(undefined);
     }
   }, [open, setSelected]);
 
@@ -206,12 +212,11 @@ export function VersionHistorySheet({
     // render must not write, and another document's address carries none.
     setConfirmingRestore(false);
     setRenaming(null);
-    // A different document may not have the previously filtered locale at all,
-    // so the filter resets with the rest of the panel's per-document state.
-    setLocaleFilter(undefined);
   }
 
-  const list = useVersions({ scope, enabled: open, locale: localeFilter });
+  const list = useVersions({ scope, enabled: open });
+  // The document's events, which the story shows beside its versions.
+  const eventList = useDocumentEvents({ scope, enabled: open });
   // Destructured so the boundary-fetch effect can depend on the paging members
   // by identity rather than on the whole query object, which changes each render.
   // `isRefetching` is a whole-list revalidation (not a page fetch), during which
@@ -305,12 +310,25 @@ export function VersionHistorySheet({
   // authoritative signal is the entity's own localization flag: a localized
   // document can record shared-field writes with a null locale, so a loaded page
   // that happens to hold only such rows (or only one locale) cannot prove it
-  // either way. When the flag is not supplied, fall back to inferring it — any
-  // locale present in the history, or an active filter (which could not have
-  // been set on a non-localized document).
+  // either way. When the flag is not supplied, fall back to inferring it from
+  // any locale present in the history.
   const isLocalizedDocument =
-    entityLocalized ??
-    (localeFilter !== undefined || versions.some(v => v.locale !== null));
+    entityLocalized ?? versions.some(v => v.locale !== null);
+
+  // The story reads both lists, each a page at a time, so it shows only the
+  // window both have loaded; "Load more" extends whichever has more.
+  const events = eventList.data?.pages.flatMap(page => page.items) ?? [];
+  const story = loadedWindow({
+    versions,
+    versionsComplete: !hasNextPage,
+    events,
+    eventsComplete: !eventList.hasNextPage,
+  });
+  const hasMore = hasNextPage || eventList.hasNextPage;
+  const loadMore = () => {
+    if (hasNextPage) void fetchNextPage();
+    if (eventList.hasNextPage) void eventList.fetchNextPage();
+  };
 
   // The comparison target for the version being previewed: the next-older
   // version in the same language (the server rejects a cross-locale pair), not
@@ -570,6 +588,23 @@ export function VersionHistorySheet({
     },
   });
   const isEmpty = !list.isLoading && !list.isError && versions.length === 0;
+  // The versions and the events tell one story, so the panel loads, fails and
+  // goes stale with either. Events read as an empty list while their request
+  // is loading or has failed would drop unpublishes and discards from the
+  // story and pin a withdrawn version as currently published.
+  const storyLoading = list.isLoading || eventList.isLoading;
+  const storyLoadFailed =
+    (list.isError && versions.length === 0) ||
+    // Events that loaded can rightly be none, so it is the absence of any
+    // page, not of any event, that makes their failure a load failure.
+    (eventList.isError && eventList.data === undefined);
+  const storyStale =
+    (isRefetchError && versions.length > 0) || eventList.isRefetchError;
+  const storyRetrying = isRefetching || eventList.isRefetching;
+  const retryStory = () => {
+    void list.refetch();
+    void eventList.refetch();
+  };
 
   /*
    * The claim, and the ONE fact both behaviours below are derived from. A panel
@@ -625,22 +660,7 @@ export function VersionHistorySheet({
               {/* The list stays whole with the chosen row marked, so the panel
                 is History whichever version is on screen. */}
               <SheetTitle>History</SheetTitle>
-              {/* Locale filter, only while browsing the list (a chosen version is
-                already locale-fixed) and only for a document whose own history
-                carries locales — so it never appears on a non-localized
-                document in an otherwise localized app. */}
               <div className="flex items-center gap-1">
-                {selected === null && isLocalizedDocument && (
-                  <VersionLocaleFilter
-                    value={localeFilter}
-                    onChange={locale => {
-                      // Changing the visible locale set can drop the previewed
-                      // version out of view, so return to the list.
-                      setLocaleFilter(locale);
-                      setSelected(null);
-                    }}
-                  />
-                )}
                 {/* The sheet primitive renders no close icon of its own, so the
                   panel supplies one. It sits beside the title rather than in
                   the footer because the footer's action row gains the compare
@@ -670,7 +690,7 @@ export function VersionHistorySheet({
             another window focus could trigger. This keeps the gate but gives the
             recovery a visible control. Suppressed when there are no rows, since
             the full-panel load error covers that. */}
-          {isRefetchError && versions.length > 0 ? (
+          {storyStale ? (
             <div className="px-4 pt-4">
               <Alert variant="warning" role="status">
                 <div className="flex flex-1 flex-wrap items-center justify-between gap-3">
@@ -682,10 +702,10 @@ export function VersionHistorySheet({
                     size="sm"
                     // Disabled while a retry is in flight; the same refetch also
                     // fires from window focus, so this reflects either trigger.
-                    disabled={isRefetching}
-                    onClick={() => void list.refetch()}
+                    disabled={storyRetrying}
+                    onClick={retryStory}
                   >
-                    {isRefetching ? "Retrying…" : "Try again"}
+                    {storyRetrying ? "Retrying…" : "Try again"}
                   </Button>
                 </div>
               </Alert>
@@ -698,9 +718,9 @@ export function VersionHistorySheet({
             editor is asking is how the page read then, and only the page can
             answer it. */}
           <div className="flex-1 overflow-y-auto">
-            {list.isLoading ? (
+            {storyLoading ? (
               <ListSkeleton />
-            ) : list.isError && versions.length === 0 ? (
+            ) : storyLoadFailed ? (
               // Only a genuine load failure (no pages) replaces the panel. A failed
               // speculative next-page (from the automatic previous-version search)
               // also flips the query to error, but the loaded history stays on
@@ -711,11 +731,7 @@ export function VersionHistorySheet({
                     This document&apos;s history could not be loaded.
                   </AlertDescription>
                 </Alert>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void list.refetch()}
-                >
+                <Button variant="outline" size="sm" onClick={retryStory}>
                   Try again
                 </Button>
               </div>
@@ -734,37 +750,48 @@ export function VersionHistorySheet({
               </div>
             ) : (
               <>
-                {versions.map(version => (
-                  <VersionRow
-                    key={version.id}
-                    version={version}
-                    active={selected === version.versionNo}
-                    onSelect={setSelected}
-                    // Renaming writes to the document's history, which needs the
-                    // same permission restoring does. Offering it to a read-only
-                    // caller would open a dialog whose save the route rejects.
-                    onRename={canRestore ? setRenaming : undefined}
-                  />
-                ))}
-
-                {hasNextPage ? (
-                  <div className="p-4">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full"
-                      // Disabled while the head is revalidating or its revalidation
-                      // failed: `fetchNextPage` would otherwise cancel the refetch
-                      // or clear the error, leaving a stale head trusted as current.
-                      disabled={
-                        isFetchingNextPage || isRefetching || isRefetchError
-                      }
-                      onClick={() => void fetchNextPage()}
-                    >
-                      {isFetchingNextPage ? "Loading…" : "Load more"}
-                    </Button>
-                  </div>
-                ) : null}
+                <HistoryStoryList
+                  scope={scope}
+                  versions={story.versions}
+                  events={story.events}
+                  lifecycle={lifecycle}
+                  localized={isLocalizedDocument}
+                  editingLocale={editingLocale}
+                  {...(retention !== undefined ? { retention } : {})}
+                  hasMore={hasMore}
+                  selected={selected}
+                  onSelect={setSelected}
+                  onClearSelection={() => setSelected(null)}
+                  // Renaming writes to the document's history, which needs the
+                  // same permission restoring does. Offering it to a read-only
+                  // caller would open a dialog whose save the route rejects.
+                  {...(canRestore ? { onRename: setRenaming } : {})}
+                  footer={
+                    hasMore ? (
+                      <div className="p-4">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full"
+                          // Disabled while the head is revalidating or its revalidation
+                          // failed: `fetchNextPage` would otherwise cancel the refetch
+                          // or clear the error, leaving a stale head trusted as current.
+                          disabled={
+                            isFetchingNextPage ||
+                            eventList.isFetchingNextPage ||
+                            isRefetching ||
+                            isRefetchError
+                          }
+                          onClick={loadMore}
+                        >
+                          {isFetchingNextPage || eventList.isFetchingNextPage
+                            ? "Loading…"
+                            : "Load more"}
+                        </Button>
+                      </div>
+                    ) : null
+                  }
+                />
               </>
             )}
           </div>

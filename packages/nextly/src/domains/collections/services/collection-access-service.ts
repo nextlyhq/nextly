@@ -5,21 +5,19 @@
  * with no deps on other new split services.
  *
  * Responsibilities:
- * - The RBAC gate (super-admin bypass → code-defined access → DB permissions),
- *   which is the whole collection-level access decision
- * - The secure-by-default refusal of an anonymous publish/unpublish
+ * - The collection-level access decision, asked of the one access decision
+ *   (`auth/access`) through the adapter that keeps this gate's answers
+ * - Wording each refusal as this gate always has
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import {
-  apiKeyWriteAllowed,
-  type AuthenticatedScope,
-} from "../../../auth/authenticated-scope";
+import { collectionGateVerdict } from "../../../auth/access/gate-adapters";
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { effectiveCallerScope } from "../../../auth/caller-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
-import type { Principal } from "../../../plugins/principals/types";
+import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import type { AccessOperation } from "../../../services/access";
 import { isSuperAdminContext } from "../../../services/access";
 import { hasPermission } from "../../../services/lib/permissions";
@@ -102,210 +100,66 @@ export class CollectionAccessService extends BaseService {
       return null;
     }
 
-    // A call made as a plugin-defined person, decided here and nowhere below.
-    // Every path below is a staff or API-key path, and none of them may apply
-    // to a person: no super-admin bypass, no database permission, no key's
-    // grants, and no anonymous fall-through to the public default. A person is
-    // admitted only by the collection's code-defined rule.
-    const principal = currentPrincipal();
-    if (principal !== null) {
-      return this.checkPrincipalAccess<T>(principal, collectionName, operation);
-    }
-
-    // The scope the request arrived with, when this caller did not name one.
+    // Asked of the one access decision, through the adapter that keeps this
+    // gate's answers as they were (`auth/access/gate-adapters`).
     //
-    // Two of this method's callers cannot name one: the transaction entry
-    // points (`createEntryInTransaction` and its siblings) take write params
-    // that declare no `authenticatedScope`, and the plugin service facade
-    // exposes them, so an API-key request reaching a write through a
-    // transaction was judged on the key OWNER's roles while the identical write
-    // through `createEntry` was held to the key's own grants. Widening those
-    // params would fix the two that exist; reading the request's scope here
-    // fixes the one written next as well.
-    //
-    // An explicit argument still wins, so a caller may narrow.
-    const scope = effectiveCallerScope(authenticatedScope);
-
-    // Super-admin bypasses the RBAC gate so an admin can act on any record on
-    // every transport — EXCEPT via a scoped API key. The bypass belongs to the
-    // session path: a key is authoritative on its OWN stamped scope, never on
-    // the owner's roles, so a read/update-only key issued by an administrator
-    // is not equivalent to their full account (mirrors canReadEntity). Applying
-    // the bypass here would let a super-admin-owned, update-only key publish,
-    // recreating the very hole this scope check closes.
-    const isScopedApiKey = scope?.actorType === "apiKey";
-    if (!isScopedApiKey && isSuperAdminContext(user)) {
-      return null;
-    }
-
-    // `routeAuthorized` asserts the route middleware already authenticated AND
-    // gated THIS user, so it may skip only the redundant RBAC re-check. Without
-    // a user that assertion is invalid: a bare flag on an exported surface
-    // (e.g. bulkUpdateByQuery) must not skip the gate and fall through to the
-    // public default for a rule-less collection. Fail closed, mirroring the
-    // Single helper's `routeAuthorized && user` guard.
-    if (routeAuthorized && !user) {
-      return {
-        success: false,
-        statusCode: 403,
-        message: `Access denied: ${operation} on ${collectionName} requires an authenticated user`,
-        data: null as unknown as T,
-      };
-    }
-
-    // RBAC coarse gate: super-admin bypass → code-defined access → DB
-    // permissions. Skipped when routeAuthorized, because the route middleware
-    // (requireCollectionAccess) already performed this exact check.
-    //
-    // For a scoped API key the gate judges the key's OWN stamped grants, not the
-    // owner's DB permissions: the route only authorized the write as `update`,
-    // so this publish/unpublish re-check must consult the key's scope or an
-    // update-only key owned by a publisher could publish. `apiKeyWriteAllowed`
-    // evaluates both the key's permission grant AND the code-defined access rule
-    // against that scope, and returns null for a non-API-key caller, which falls
-    // through to RBAC.
-    const scopeDecision =
-      !routeAuthorized && user
-        ? await apiKeyWriteAllowed(
-            scope,
-            operation,
-            collectionName,
-            user,
-            this.rbacAccessControlService
-          )
-        : null;
-    if (!routeAuthorized && user && scopeDecision !== null) {
-      if (!scopeDecision) {
-        return {
-          success: false,
-          statusCode: 403,
-          message: `Access denied: insufficient permissions for ${operation} on ${collectionName}`,
-          data: null as unknown as T,
-        };
-      }
-    } else if (!routeAuthorized && user) {
-      try {
-        // Without the access-control service, the caller's database grants:
-        // the answer the route gate (`requireCollectionAccess`) and a
-        // relationship's gate give without it. Admitting the caller here
-        // served directly what both of those refuse.
-        const allowed = this.rbacAccessControlService
-          ? await this.rbacAccessControlService.checkAccess({
-              userId: user.id,
-              operation,
-              resource: collectionName,
-              executor,
-            })
-          : // On this service's own database, with its dialect's tables.
-            // Without them the check reads through the global container and
-            // the process's configured dialect, which a setup with no
-            // access-control service may not have set, or may have set for
-            // another instance.
-            await hasPermission(
-              user.id,
-              operation,
-              collectionName,
-              executor ?? this.db,
-              this.dialect
-            );
-        if (!allowed) {
-          return {
-            success: false,
-            statusCode: 403,
-            message: `Access denied: insufficient permissions for ${operation} on ${collectionName}`,
-            data: null as unknown as T,
-          };
-        }
-      } catch (error: unknown) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
-        this.logger.error("RBAC access check failed", {
+    // The key scope is the caller's own, or the request's when this caller did
+    // not name one. Two of this method's callers cannot name one: the
+    // transaction entry points (`createEntryInTransaction` and its siblings)
+    // take write params that declare no `authenticatedScope`, and the plugin
+    // service facade exposes them, so an API-key request reaching a write
+    // through a transaction would otherwise be judged on the key OWNER's roles
+    // while the identical write through `createEntry` was held to the key's own
+    // grants. An explicit argument still wins, so a caller may narrow.
+    const verdict = await collectionGateVerdict({
+      slug: collectionName,
+      action: operation,
+      user,
+      routeAuthorized,
+      scope: effectiveCallerScope(authenticatedScope),
+      principal: currentPrincipal(),
+      executor,
+      rules: this.rbacAccessControlService,
+      // On this service's own database, with its dialect's tables. Without
+      // them the check reads through the global container and the process's
+      // configured dialect, which a setup with no access-control service may
+      // not have set, or may have set for another instance.
+      permissionWithoutService: () =>
+        hasPermission(
+          user?.id ?? "",
+          operation,
           collectionName,
-          operation,
-          userId: user.id,
-          error: errorMessage,
-        });
-        // Fail-secure: deny on unexpected RBAC errors
-        return {
-          success: false,
-          statusCode: 500,
-          message: "Failed to verify RBAC permissions",
-          data: null as unknown as T,
-        };
-      }
-    } else if (!routeAuthorized && this.rbacAccessControlService && !user) {
-      // A caller with NO session, judged against the collection's own
-      // code-defined rule.
-      //
-      // Both branches above require a user, because everything they do resolves
-      // roles and permissions from a user id. That left `access: { create:
-      // false }` and `read: ({ user }) => !!user` accepted at boot, recorded in
-      // the registry, and never consulted for the one caller they most clearly
-      // describe — and with no other layer to ask, the declaration would be
-      // silently inert.
-      //
-      // `undefined` means no code-defined rule governs this operation, and an
-      // anonymous caller then falls through to the public default below. A
-      // boolean is the rule's own verdict.
-      const allowed =
-        await this.rbacAccessControlService.checkAnonymousCodeAccess({
-          operation,
-          resource: collectionName,
-        });
-      if (allowed === false) {
-        return {
-          success: false,
-          statusCode: 403,
-          message: `Access denied: insufficient permissions for ${operation} on ${collectionName}`,
-          data: null as unknown as T,
-        };
-      }
-    }
+          executor ?? this.db,
+          this.dialect
+        ),
+    });
+    if (verdict.allowed) return null;
 
-    // Publishing is never anonymous: it moves a document into a privileged
-    // published state. Even a code-defined rule that admits an anonymous
-    // caller above does not lift this — the operation has no identity to stamp
-    // — so an unauthenticated caller is refused outright rather than falling
-    // through to the permission-less default below.
-    if (!user && (operation === "publish" || operation === "unpublish")) {
+    if (verdict.refusal === "failed") {
+      const error = verdict.error;
+      this.logger.error("RBAC access check failed", {
+        collectionName,
+        operation,
+        userId: user?.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Fail-secure: deny on unexpected RBAC errors. A typed refusal keeps
+      // its own code and status (a busy database is DATABASE_BUSY, 503).
       return {
         success: false,
-        statusCode: 403,
-        message: `Access denied: ${operation} on ${collectionName} requires an authenticated user`,
+        statusCode: 500,
+        message: "Failed to verify RBAC permissions",
         data: null as unknown as T,
+        ...errorEnvelopeFields(error),
       };
     }
-
-    // The RBAC/permission gate above is the whole decision. Code-defined
-    // `access` from `defineCollection` is evaluated by that gate (see
-    // `apiKeyWriteAllowed` / `rbacAccessControlService.checkAccess`, both of
-    // which consult the registered access functions), so there is nothing
-    // further to ask here.
-    return null;
-  }
-
-  /**
-   * The gate for a call made as a plugin-defined person: the access-control
-   * service's one decision for a person (`checkPrincipalCodeAccess`), or a
-   * refusal when there is no such service and so no rule to consult.
-   */
-  private async checkPrincipalAccess<T>(
-    principal: Principal,
-    collectionName: string,
-    operation: AccessOperation
-  ): Promise<CollectionServiceResult<T> | null> {
-    const allowed =
-      this.rbacAccessControlService !== undefined &&
-      (await this.rbacAccessControlService.checkPrincipalCodeAccess({
-        operation,
-        resource: collectionName,
-        principal,
-      }));
-    if (allowed) return null;
     return {
       success: false,
       statusCode: 403,
-      message: `Access denied: insufficient permissions for ${operation} on ${collectionName}`,
+      message:
+        verdict.refusal === "unauthenticated"
+          ? `Access denied: ${operation} on ${collectionName} requires an authenticated user`
+          : `Access denied: insufficient permissions for ${operation} on ${collectionName}`,
       data: null as unknown as T,
     };
   }

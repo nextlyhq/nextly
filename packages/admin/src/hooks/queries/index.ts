@@ -62,6 +62,7 @@ export {
   collectionKeys, // Query key factory for stable caching
   useCollection,
   useCollectionSchema,
+  NAV_COLLECTIONS_PARAMS,
   useCollections,
   useCreateCollection,
   useDeleteCollection,

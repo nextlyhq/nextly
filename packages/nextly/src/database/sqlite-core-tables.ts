@@ -1,3 +1,5 @@
+import { EMAIL_BRAND_TABLE } from "../schemas/email-brand/table-name";
+import { EMAIL_SEND_CLAIMS_TABLE } from "../schemas/email-send-claims/table-name";
 import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
 import { NOTICES_TABLE } from "../schemas/notices/table-name";
 import { RBAC_EPOCH_TABLE } from "../schemas/rbac-epoch/table-name";
@@ -60,12 +62,18 @@ export function generateSqliteCoreTableStatements(): string[] {
     `CREATE TABLE IF NOT EXISTS "password_reset_tokens" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "identifier" TEXT NOT NULL,
+      "user_id" TEXT REFERENCES "users"("id") ON DELETE CASCADE,
       "token_hash" TEXT NOT NULL,
       "expires" INTEGER NOT NULL,
       "used_at" INTEGER,
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE("identifier", "token_hash")
     )`,
+    // Its own statement, as the other indexes are. On a database whose table
+    // predates "user_id" it fails and is skipped, until the core reconcile
+    // adds the column and the index with it.
+    `CREATE INDEX IF NOT EXISTS "prt_user_id_idx"
+      ON "password_reset_tokens" ("user_id")`,
     `CREATE INDEX IF NOT EXISTS "prt_expires_idx"
       ON "password_reset_tokens" ("expires")`,
     `CREATE INDEX IF NOT EXISTS "prt_used_at_idx"
@@ -75,11 +83,14 @@ export function generateSqliteCoreTableStatements(): string[] {
     `CREATE TABLE IF NOT EXISTS "email_verification_tokens" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "identifier" TEXT NOT NULL,
+      "user_id" TEXT REFERENCES "users"("id") ON DELETE CASCADE,
       "token_hash" TEXT NOT NULL,
       "expires" INTEGER NOT NULL,
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE("identifier", "token_hash")
     )`,
+    `CREATE INDEX IF NOT EXISTS "evt_user_id_idx"
+      ON "email_verification_tokens" ("user_id")`,
     `CREATE INDEX IF NOT EXISTS "evt_expires_idx"
       ON "email_verification_tokens" ("expires")`,
     `CREATE INDEX IF NOT EXISTS "evt_token_hash_idx"
@@ -479,6 +490,32 @@ export function generateSqliteCoreTableStatements(): string[] {
       "part" TEXT NOT NULL,
       PRIMARY KEY ("event_id", "part")
     )`,
+    // Recorded preview links. Columns match schemas/preview-links/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_preview_links" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "document_kind" TEXT NOT NULL,
+      "document_slug" TEXT NOT NULL,
+      "entry_id" TEXT,
+      "locale" TEXT,
+      "created_by" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "created_at" INTEGER NOT NULL,
+      "expires_at" INTEGER NOT NULL,
+      "generation" INTEGER NOT NULL,
+      "revoked_at" INTEGER,
+      "revoked_by" TEXT REFERENCES "users"("id") ON DELETE SET NULL,
+      "open_count" INTEGER NOT NULL DEFAULT 0,
+      "last_opened_at" INTEGER
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nextly_preview_links_document_idx"
+      ON "nextly_preview_links" ("document_kind", "document_slug", "entry_id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_preview_links_expires_idx"
+      ON "nextly_preview_links" ("expires_at")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_preview_links_created_by_idx"
+      ON "nextly_preview_links" ("created_by")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_preview_links_revoked_by_idx"
+      ON "nextly_preview_links" ("revoked_by")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_preview_links_revoked_idx"
+      ON "nextly_preview_links" ("revoked_at")`,
     // Content releases. Columns match schemas/releases/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_releases" (
       "id" TEXT PRIMARY KEY NOT NULL,
@@ -504,6 +541,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "action" TEXT NOT NULL,
       "member_key" TEXT NOT NULL,
       "single_slot" INTEGER,
+      "applied_revision" INTEGER,
       "created_by" TEXT,
       "created_at" INTEGER NOT NULL
     )`,
@@ -696,6 +734,21 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "${NOTICES_TABLE}" ("subject_type", "subject_id")`,
     `CREATE INDEX IF NOT EXISTS "nextly_notices_created_idx"
       ON "${NOTICES_TABLE}" ("created_at")`,
+    // The site's email brand settings, one row. Columns match
+    // schemas/email-brand/sqlite.ts; each setting is nullable, null being its
+    // starting value.
+    `CREATE TABLE IF NOT EXISTS "${EMAIL_BRAND_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "logo_url" TEXT,
+      "logo_width" INTEGER,
+      "accent_color" TEXT,
+      "background_color" TEXT,
+      "content_color" TEXT,
+      "font_family" TEXT,
+      "footer_text" TEXT,
+      "footer_links" TEXT,
+      "updated_at" INTEGER NOT NULL
+    )`,
     `CREATE TABLE IF NOT EXISTS "nextly_widget_layout" (
       "id" TEXT PRIMARY KEY NOT NULL,
       "scope_kind" TEXT NOT NULL,
@@ -724,6 +777,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "retention_class" TEXT NOT NULL,
       "principal_kind" TEXT,
       "principal_id" TEXT,
+      "key_digest" TEXT,
       "created_at" INTEGER NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_created_idx"
@@ -738,6 +792,26 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "email_deliveries" ("retention_class", "created_at")`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_principal_idx"
       ON "email_deliveries" ("principal_kind", "principal_id")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_key_idx"
+      ON "email_deliveries" ("key_digest")`,
+    `CREATE TABLE IF NOT EXISTS "${EMAIL_SEND_CLAIMS_TABLE}" (
+      "id" TEXT PRIMARY KEY,
+      "scope" TEXT NOT NULL,
+      "key_digest" TEXT,
+      "message_digest" TEXT,
+      "state" TEXT NOT NULL,
+      "holder" TEXT NOT NULL,
+      "result" TEXT,
+      "claimed_at" INTEGER NOT NULL,
+      "lease_expires_at" INTEGER NOT NULL,
+      "settled_at" INTEGER
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "email_send_claims_key_idx"
+      ON "${EMAIL_SEND_CLAIMS_TABLE}" ("key_digest")`,
+    `CREATE INDEX IF NOT EXISTS "email_send_claims_state_idx"
+      ON "${EMAIL_SEND_CLAIMS_TABLE}" ("state", "settled_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_send_claims_lease_idx"
+      ON "${EMAIL_SEND_CLAIMS_TABLE}" ("lease_expires_at")`,
   ];
 }
 

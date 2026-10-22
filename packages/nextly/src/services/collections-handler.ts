@@ -198,9 +198,9 @@ export class CollectionsHandler {
             };
           }
         } catch (error) {
-          console.error(
-            "[CollectionsHandler] Failed to fetch collection metadata:",
-            error
+          this.logger.error(
+            "[CollectionsHandler] Failed to fetch collection metadata",
+            { error: error }
           );
         }
         return null;
@@ -319,6 +319,19 @@ export class CollectionsHandler {
     action: "publish" | "unpublish";
   }): Promise<Map<string, ValidationIssue[]>> {
     return this.entryService.releasePublishIssues(params);
+  }
+
+  /**
+   * Each of these entries as a release would put it live, read as stored. See
+   * the mutation service.
+   *
+   * @experimental
+   */
+  async releaseGoingLiveDocuments(params: {
+    collectionName: string;
+    entryIds: readonly string[];
+  }): Promise<Map<string, Record<string, unknown>>> {
+    return this.entryService.releaseGoingLiveDocuments(params);
   }
 
   /**
@@ -513,11 +526,14 @@ export class CollectionsHandler {
           }
         }
       } catch (enrichError) {
-        console.error(
-          "[CollectionsHandler.getCollection] Failed to enrich component fields:",
-          enrichError instanceof Error
-            ? enrichError.message
-            : String(enrichError)
+        this.logger.error(
+          "[CollectionsHandler.getCollection] Failed to enrich component fields",
+          {
+            detail:
+              enrichError instanceof Error
+                ? enrichError.message
+                : String(enrichError),
+          }
         );
       }
 
@@ -806,7 +822,18 @@ export class CollectionsHandler {
   async discardWorkingDraft(
     params: Parameters<CollectionEntryService["discardWorkingDraft"]>[0]
   ): Promise<void> {
-    return this.entryService.discardWorkingDraft(params);
+    await this.entryService.discardWorkingDraft(params);
+  }
+
+  /**
+   * {@link discardWorkingDraft}, answering how many drafts it removed, counted
+   * by the delete made under the document's lock. A separate method so the
+   * published `discardWorkingDraft` keeps its contract.
+   */
+  async discardWorkingDraftCounted(
+    params: Parameters<CollectionEntryService["discardWorkingDraft"]>[0]
+  ): Promise<number> {
+    return this.entryService.discardWorkingDraftCounted(params);
   }
 
   /**

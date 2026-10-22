@@ -107,6 +107,7 @@ describe("booting with a source a plugin's setup sets", () => {
 describe("ctx.security.passwords", () => {
   it("never calls the app's configured passwordHasher", async () => {
     const passwordHasher = {
+      reach: "unbounded" as const,
       hash: vi.fn(async () => "the app's own hash"),
       verify: vi.fn(async () => true),
     };

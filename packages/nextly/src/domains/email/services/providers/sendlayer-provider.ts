@@ -9,7 +9,9 @@
  * @since 1.0.0
  */
 
+import { httpFailure, providerFailure, withEmailFailure } from "../../failure";
 import type { EmailProviderAdapter } from "../../types";
+import { displayNameAndMailbox, messageToAddresses } from "../recipients";
 
 /** SendLayer API base URL. */
 const SENDLAYER_API_URL = "https://console.sendlayer.com/api/v1/email";
@@ -23,6 +25,15 @@ interface SendLayerProviderConfig {
 }
 
 /**
+ * The most `to` addresses SendLayer accepts on one message.
+ *
+ * SendLayer's rate-limit reference caps every account at 10 `To` addresses per
+ * request (and 10 `CC`, 5 `BCC`). Declared so a longer list is refused before
+ * the request with the limit named, instead of failing at SendLayer.
+ */
+export const SENDLAYER_MAX_TO = 10;
+
+/**
  * Parse a "from" address string into name and email parts.
  *
  * Handles formats:
@@ -30,11 +41,9 @@ interface SendLayerProviderConfig {
  * - `"noreply@example.com"` → `{ name: "", email: "noreply@example.com" }`
  */
 function parseFromAddress(from: string): { name: string; email: string } {
-  const match = from.match(/^(.+?)\s*<([^>]+)>$/);
-  if (match) {
-    return { name: match[1].trim(), email: match[2].trim() };
-  }
-  return { name: "", email: from.trim() };
+  // Quote-aware, as the address was checked: a `<` inside a quoted display
+  // name is text, not the start of the mailbox.
+  return displayNameAndMailbox(from);
 }
 
 /**
@@ -61,12 +70,19 @@ export function createSendLayerProvider(
   config: SendLayerProviderConfig
 ): EmailProviderAdapter {
   return {
+    maxToPerMessage: SENDLAYER_MAX_TO,
     async send(options) {
       const from = parseFromAddress(options.from);
 
       const body: Record<string, unknown> = {
         From: from,
-        To: [{ name: "", email: options.to }],
+        // Every `to` address when there is more than one, else the one. Each
+        // address is split into SendLayer's name and email fields, so a
+        // display-name form (`Name <user@example.com>`) is sent to the mailbox
+        // it names rather than refused as an invalid email.
+        To: messageToAddresses(options).map(address =>
+          parseFromAddress(address)
+        ),
         Subject: options.subject,
         ContentType: "HTML",
         HTMLContent: options.html,
@@ -84,11 +100,11 @@ export function createSendLayerProvider(
       }
 
       if (options.cc && options.cc.length > 0) {
-        body.CC = options.cc.map(email => ({ name: "", email }));
+        body.CC = options.cc.map(address => parseFromAddress(address));
       }
 
       if (options.bcc && options.bcc.length > 0) {
-        body.BCC = options.bcc.map(email => ({ name: "", email }));
+        body.BCC = options.bcc.map(address => parseFromAddress(address));
       }
 
       if (options.attachments && options.attachments.length > 0) {
@@ -99,6 +115,9 @@ export function createSendLayerProvider(
         }));
       }
 
+      // Whether SendLayer answered at all: a throw before it did is a network
+      // failure, and a throw after it a classified or unreadable answer.
+      let answered = false;
       try {
         const response = await fetch(SENDLAYER_API_URL, {
           method: "POST",
@@ -108,11 +127,17 @@ export function createSendLayerProvider(
           },
           body: JSON.stringify(body),
         });
+        answered = true;
 
         if (!response.ok) {
           const errorBody = await response.text();
-          throw new Error(
-            `HTTP ${response.status}: ${errorBody || response.statusText}`
+          // Classified by status alone: SendLayer's error body names a code,
+          // not whether the request can succeed later.
+          throw withEmailFailure(
+            new Error(
+              `HTTP ${response.status}: ${errorBody || response.statusText}`
+            ),
+            httpFailure(response.status)
           );
         }
 
@@ -123,9 +148,14 @@ export function createSendLayerProvider(
           messageId: data.MessageID,
         };
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "SendLayer send failed";
-        throw new Error(`SendLayer provider error: ${message}`);
+        throw providerFailure(
+          {
+            prefix: "SendLayer provider error",
+            fallback: "SendLayer send failed",
+          },
+          error,
+          answered
+        );
       }
     },
   };

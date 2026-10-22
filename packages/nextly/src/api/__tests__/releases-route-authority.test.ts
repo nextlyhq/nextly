@@ -125,6 +125,7 @@ function namespace() {
       addMember: vi.fn(async () => ({ id: "m1" })),
       removeMember: vi.fn(async () => undefined),
       listMembers: vi.fn(async () => []),
+      membersOf: vi.fn(async () => ({ items: [], hidden: [] })),
       // The route decorates every release it returns with what this caller may
       // do to it. Answering with the rows' own ids rather than an empty map,
       // because an absent entry means "not permitted" — a fake that returned
@@ -151,6 +152,12 @@ function namespace() {
       blockingReasons: vi.fn(async () => [
         { memberId: "m1", reason: "AUTHOR_GONE" as const },
       ]),
+      blockersOf: vi.fn(async () => ({
+        items: [{ memberId: "m1", reason: "AUTHOR_GONE" as const }],
+        hidden: [],
+      })),
+      // The list puts each release's member counts on its row.
+      memberCounts: vi.fn(async () => ({})),
       readiness: vi.fn(async () => ({
         releaseId: "r1",
         hard: [{ memberId: "m1", code: "DOCUMENT_GONE" }],
@@ -930,7 +937,7 @@ describe("the detail read explains a BLOCKED release", () => {
     // Without this the state is a dead end: it says the launch will not happen
     // and nothing says which member to fix.
     const { api, body } = await detail("blocked");
-    expect(api.releases.blockingReasons).toHaveBeenCalled();
+    expect(api.releases.blockersOf).toHaveBeenCalled();
     expect(body.blockedBy).toEqual([{ memberId: "m1", reason: "AUTHOR_GONE" }]);
   });
 
@@ -939,7 +946,7 @@ describe("the detail read explains a BLOCKED release", () => {
     // every member, and asking it on every detail read would pay that to be
     // told nothing is wrong — which the state already said.
     const { api, body } = await detail("scheduled");
-    expect(api.releases.blockingReasons).not.toHaveBeenCalled();
+    expect(api.releases.blockersOf).not.toHaveBeenCalled();
     expect(body.blockedBy).toBeUndefined();
   });
 });

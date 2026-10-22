@@ -9,7 +9,7 @@ Nextly ships a complete custom authentication system. It is **not** built on Nex
 - Stateless JWT access tokens (jose, HS256) plus opaque refresh tokens stored hashed in the database.
 - API key authentication (`Authorization: Bearer nx_live_...`) with read-only / full-access / role-based scopes.
 - Role-Based Access Control (RBAC) with code-defined and database-managed permissions.
-- A super-admin bootstrap flow at `/admin/setup` that creates the first user.
+- A first-administrator flow: the setup form at `/admin/setup`, behind a one-time setup token in production, or the `nextly users:create-admin` command.
 
 There is no OAuth provider integration in the runtime. Authentication is local to your database.
 
@@ -147,6 +147,41 @@ address without activating the account, no new verification link is sent, and
 an invite link or a password-reset link is refused. Activating the account
 again lifts all of these.
 
+## Reset and verification links belong to one account
+
+A password-reset or email-verification link is issued for the account that
+holds the address it is sent to, and records that account. It works only for
+that account, and only while the account still holds that address:
+
+- Changing an account's address revokes every reset and verification link it
+  holds. A link sent to the old address stays dead even if the account later
+  moves back to it.
+- Deleting an account removes its links, whatever address they went to.
+- Someone who is later given an address keeps their own account: a link sent
+  to an earlier holder of the address never resets or verifies theirs.
+
+Issuing, following, changing an address and deleting an account are ordered
+against each other, so a link issued or followed while the account is moving
+or being deleted either completes first and is then revoked, or is refused.
+
+An installation upgrading to this release adds the column with
+`nextly migrate`, as for any new core column. The same run removes every
+password reset link already sent, so anyone part-way through a reset requests
+a new link: a reset link may have been given any lifetime, and its stored
+times cannot show reliably when it was sent. It ties each email verification
+link already sent to the account it was issued for, so it keeps working, when
+that account was created and last changed before the link was sent. A
+verification link whose account was created or changed afterwards, or in the
+same second, may have been sent to someone else, so it is removed, and its
+owner requests a new one. Expired links, and links to an address no account
+holds, are removed too. Until that run, a link from before the upgrade is
+refused.
+
+These guarantees hold once every server runs this release. During a rolling
+deploy, a server still on the previous release keeps the previous behaviour:
+it neither revokes a link when an address changes nor checks the account when
+a link is followed. Drain the old servers before relying on them.
+
 ## What a token is for
 
 Session tokens and the pending tokens of a second-factor exchange carry a
@@ -172,15 +207,55 @@ and the page asks the server which challenge is outstanding.
 
 See [plugin authentication](/docs/plugins/auth) for the full flow.
 
-## Super-admin setup
+## The first administrator
 
-The first time someone visits `/admin`, the panel redirects them to `/admin/setup` (driven by `GET /admin/api/auth/setup-status`). The form creates the first user, assigns the built-in `Super Admin` role, seeds the core permission rows, and logs the new admin in -- all in a single CSRF-protected request.
+> **Needs the release after 0.0.2-alpha.68.** Before it, setup has no token and closes once the first account exists, and registration is open: create the first administrator before the site is reachable, or keep it behind your host's access protection until you have.
 
-A few things to note:
+The first administrator is the account that holds the built-in `Super Admin` role. Nextly creates it in one of two ways: the setup form at `/admin/setup`, or the `nextly users:create-admin` command. Either way the account gets the role, the core permission rows are seeded, and setup then closes.
 
-- Setup is a one-shot. Once any user exists, `POST /admin/api/auth/setup` returns `403 SETUP_COMPLETE`.
+Setup stays open until someone holds `Super Admin`, directly or through a role that inherits it, not until the first account exists. An install that already has accounts but no `Super Admin` holder therefore still offers setup: give one of its accounts the role before you upgrade to this behaviour. Once someone holds it, `POST /admin/api/auth/setup` returns `403 SETUP_COMPLETE`.
+
+Only an account the app provisions itself can become the first administrator: the setup form, the command, or your own server code. An account someone created through [registration](#registration) never does, and gets no role. Setup also refuses an email address that already belongs to an account, so it never takes one over.
+
+### In development
+
+The first time someone visits `/admin`, the panel redirects them to `/admin/setup` (driven by `GET /admin/api/auth/setup-status`). Under `next dev` the form asks only for a name, an email and a password, creates the account and signs the new administrator in, in a single CSRF-protected request.
+
+### In production: the setup token
+
+While `NODE_ENV` is `production` and nobody holds `Super Admin`, `/admin/setup` also asks for a **setup token**, and `setup-status` reports `requiresSetupToken: true`. Without it, anyone who reached the site first could make themselves its administrator. The token comes from one of two places:
+
+- **Generated.** At the first production start with no administrator, Nextly generates a token and prints it once to the server's output, on a line that starts with `[nextly] SETUP TOKEN`, beside the setup address: `https://<VERCEL_PROJECT_PRODUCTION_URL>/admin/setup` on Vercel, otherwise `/admin/setup` on the site. Search the deployment's logs for that prefix. A generated token is valid for 24 hours and for one setup; a start after it expires prints a new one. Only a digest of it is stored.
+- **Set by you.** `NEXTLY_SETUP_TOKEN` in the environment is the token, and nothing is generated. It must be at least 43 characters long with at least 16 distinct characters; a weaker value keeps setup closed, and the server's start-up output says so on a `[nextly] SETUP TOKEN` line. Setting it discards any generated token for good.
+
+`nextly setup-token --generate` prints a value suitable for `NEXTLY_SETUP_TOKEN` and changes nothing.
+
+Lost a generated token? Run `nextly setup-token` with the install's own environment, so it reaches the production database. It replaces the token and prints the new one, and the old one stops working. It refuses while `NEXTLY_SETUP_TOKEN` is set, since that variable is the token and is changed where it is set.
+
+A valid token completes setup whatever the auth rate limit holds. A missing, wrong or expired one gets one answer, "A valid setup token is required. Find it in the server's output, or set NEXTLY_SETUP_TOKEN.", and counts against the [auth rate limit](#auth-rate-limit), which answers `429` once it is spent. One setup runs at a time: of simultaneous attempts, exactly one creates the administrator, and the others are told setup is complete and create no account. The token is spent when the administrator is created, so afterwards no token opens setup again. `nextly setup-token` refuses once an administrator exists; `nextly setup-token --generate` reads no database and always prints a value.
+
+### From the command line
+
+`nextly users:create-admin` creates the first administrator directly in the database, with no browser and no setup token:
+
+```bash
+NEXTLY_ADMIN_PASSWORD='<your password>' \
+  pnpm nextly users:create-admin --email admin@example.com --name "Site Admin"
+```
+
+- It uses the database the environment names (`DATABASE_URL`, and `DB_DIALECT` when set), as the other `nextly` commands do, so run it with the production environment to set up a production install.
+- The password comes from `NEXTLY_ADMIN_PASSWORD`, or, at a terminal, from a prompt that does not echo and asks twice. It is never taken from an argument. It must pass the same strength rules as the setup form: 8 to 128 characters, with a lowercase letter, an uppercase letter, a number and a symbol. The command lists the rules it fails.
+- A missing `--email` or `--name` is prompted for at a terminal; with no terminal, the command refuses and names the flag.
+- It refuses, creating nothing and exiting with code 1, when an administrator already exists, when another setup is in progress at that moment, when an account already uses that email (matched as sign-in matches it), or when the password is weak, the two prompts differ, the email is invalid or no password source is available.
+- It spends any generated setup token, as the setup form does, so a pending one stops working.
+- On success it prints "Created the first administrator. Sign in as \<email\>." and exits with code 0.
+
+### Notes
+
 - Passwords are validated for strength (length, character classes) before hashing -- see `validatePasswordStrength` for the exact rules.
 - `Super Admin` is a system role that bypasses every permission check. Hand it out sparingly.
+- Only a super-admin can give someone super-admin authority. That covers assigning `Super Admin` or a role that inherits it, creating or updating a user with one, and making a role inherit one, by adding inheritance or through `childRoleIds`. Anyone else gets `403 FORBIDDEN`, including an API key made by a super-admin. Server code with no request caller, such as the Direct API, is unaffected.
+- Making a role super-admin, by having it inherit `Super Admin`, also makes super-admin every role that inherits that role, and everyone who holds one of them.
 - The last active super-admin can't be removed. Deleting them, deactivating them, or taking the role from them is refused with `409 CONFLICT` ("Make another user super-admin first"), whether the request comes from the admin, the REST API or the Direct API. A plugin may not make these writes to any super-admin account, so it gets `403 FORBIDDEN` instead. Only an active account holding the `Super Admin` role itself counts: not one that is a super-admin through a role built on it, since that role's inheritance can be edited away, and not a deactivated account. To remove that person, first give another user the `Super Admin` role. Two removals sent at once can't remove both of the last two.
 - For programmatic / test seeding, `seedSuperAdmin(adapter, { email, password, name? })` exists, but the recommended path is the setup wizard. It ships **no** default credentials -- `email` and `password` are required, and it throws a `VALIDATION_ERROR` if either is missing, so a known-weak default admin can never be created by accident. Pass throwaway values in tests and real, secret values anywhere else.
 
@@ -249,9 +324,9 @@ export default defineCollection({
     read: true,
 
     // Function: the caller's role holds the permission (`create-posts`, ...)
-    create: ({ permissions }) => permissions.includes("posts:create"),
-    update: ({ permissions }) => permissions.includes("posts:update"),
-    delete: ({ permissions }) => permissions.includes("posts:delete"),
+    create: ({ permissions }) => permissions.includes("create-posts"),
+    update: ({ permissions }) => permissions.includes("update-posts"),
+    delete: ({ permissions }) => permissions.includes("delete-posts"),
   },
   fields: [
     // ...
@@ -374,7 +449,7 @@ Raw tokens are returned to the user once (in the email link); only the hashes ar
 
 ## Auth configuration
 
-The `auth` block in `defineConfig()` currently exposes a single opt-in flag. The TTLs and brute-force settings listed below as defaults are wired in the runtime today; they are not yet exposed as user-tunable config keys.
+The `auth` block in `defineConfig()` exposes opt-in flags. The TTLs and brute-force settings listed below as defaults are wired in the runtime today; they are not yet exposed as user-tunable config keys.
 
 ```typescript
 // nextly.config.ts
@@ -390,6 +465,12 @@ export default defineConfig({
   },
 });
 ```
+
+### Registration
+
+> **Needs the release after 0.0.2-alpha.68.**
+
+Self-registration is off unless the `auth` block sets `allowRegistration: true`. While it's off, `POST /admin/api/auth/register` answers `403` "Registration is not open.", creating no account and sending no email; an account already awaiting verification can still verify. With it on, a registered account gets no role, and never becomes the [first administrator](#the-first-administrator).
 
 Built-in defaults you can rely on (not configurable yet):
 
@@ -410,6 +491,8 @@ Built-in defaults you can rely on (not configurable yet):
 | `NEXTLY_SECRET`          | yes (prod) | JWT signing secret. **Min 32 characters in production.** |
 | `NEXTLY_ALLOWED_ORIGINS` | self-hosted | Comma-separated additional CSRF origins; include the origin browsers use whenever it differs from the address the server listens on. |
 | `NEXT_PUBLIC_APP_URL`    | yes (prod) | Public URL of the deployment, used in email links. |
+| `NEXTLY_SETUP_TOKEN`     | no         | The production [setup token](#in-production-the-setup-token), at least 43 characters with at least 16 distinct ones. Unset, Nextly generates one and prints it to the server's output. |
+| `NEXTLY_ADMIN_PASSWORD`  | no         | The password `nextly users:create-admin` gives the [first administrator](#from-the-command-line), read instead of prompting. Set it only for that command. |
 
 Generate `NEXTLY_SECRET` with:
 
@@ -421,18 +504,18 @@ openssl rand -base64 32
 
 | Method | Path                           | Description                                  |
 |--------|--------------------------------|----------------------------------------------|
-| GET    | `/admin/api/auth/setup-status`       | Has the first user been created?             |
+| GET    | `/admin/api/auth/setup-status`       | Is setup still open, and does it need a setup token (`requiresSetupToken`)? |
 | GET    | `/admin/api/auth/session`            | Get the current session.                     |
 | GET    | `/admin/api/auth/csrf`               | Mint a CSRF token.                           |
 | GET    | `/admin/api/auth/pending`            | Which second factor an interrupted sign-in left outstanding. Never returns the token itself. |
 | GET    | `/admin/api/auth/ui`                 | The login page's provider buttons, challenge views and slots. |
-| POST   | `/admin/api/auth/setup`              | Create the first super-admin (auto-logs in). |
+| POST   | `/admin/api/auth/setup`              | Create the first super-admin (auto-logs in); in production, with the setup token. |
 | POST   | `/admin/api/auth/login`              | Email + password login.                      |
 | POST   | `/admin/api/auth/challenge/resolve`  | Answer a second factor with the pending token. |
 | POST   | `/admin/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in. |
 | POST   | `/admin/api/auth/logout`             | Revoke the current session.                  |
 | POST   | `/admin/api/auth/refresh`            | Rotate access + refresh tokens.              |
-| POST   | `/admin/api/auth/register`           | User registration.                           |
+| POST   | `/admin/api/auth/register`           | User registration, when `auth.allowRegistration` is on. |
 | PATCH  | `/admin/api/auth/change-password`    | Change password (auth required).             |
 | POST   | `/admin/api/auth/forgot-password`    | Request a password-reset email.              |
 | POST   | `/admin/api/auth/reset-password`     | Reset password with the email token.         |

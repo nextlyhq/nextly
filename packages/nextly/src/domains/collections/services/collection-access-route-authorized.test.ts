@@ -13,24 +13,56 @@
  * the claim is about how the layers combine.
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { CollectionAccessService } from "./collection-access-service";
 
 import {
+  callerMay,
   createMockDb,
   createMockAdapter,
+  fakeActorForUser,
+  fakeUserHoldsPermission,
+  fakeUserIsSuperAdmin,
+  resetCallerAccess,
   silentLogger,
 } from "../__tests__/collection-test-helpers";
 
+// The signed-in caller the gate looks up, set per test (`callerMay`); spied,
+// since "was the caller looked up" is what several tests here assert.
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  ...(await (async () => {
+    const fake = await import("../__tests__/collection-test-helpers");
+    return {
+      actorForUser: fake.fakeActorForUser,
+      userHoldsPermission: fake.fakeUserHoldsPermission,
+      userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
+    };
+  })()),
+}));
+
+beforeEach(() => {
+  resetCallerAccess();
+  fakeActorForUser.mockClear();
+  fakeUserHoldsPermission.mockClear();
+});
+
 function buildAccessService() {
+  const getRegisteredAccess = vi.fn().mockReturnValue(undefined);
   const rbac = {
     checkAccess: vi.fn().mockResolvedValue(true),
     // Answers `undefined`: no code-defined rule governs the operation.
     checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
     // No code-defined access by default: a scoped API key is judged on its
     // permission grant alone unless a test registers a rule.
-    getRegisteredAccess: vi.fn().mockReturnValue(undefined),
+    getRegisteredAccess,
+    // Derived from `getRegisteredAccess`, as the service derives it, so a rule a test
+    // registers there reaches every caller that asks for the target.
+    getRegisteredTarget: (slug: string) => {
+      const access: unknown = getRegisteredAccess(slug);
+      return access ? { kind: "collection", slug, access } : undefined;
+    },
   };
   const service = new CollectionAccessService(
     createMockAdapter(createMockDb({ rows: [] })) as never,
@@ -54,7 +86,7 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
     const { service, rbac } = buildAccessService();
     // Would deny if it were consulted, which is what makes the skip observable
     // rather than merely unobjectionable.
-    rbac.checkAccess.mockResolvedValue(false);
+    callerMay();
 
     const result = await service.checkCollectionAccess({
       collectionName: "posts",
@@ -65,12 +97,13 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
     });
 
     expect(result).toBeNull();
-    expect(rbac.checkAccess).not.toHaveBeenCalled();
+    expect(fakeActorForUser).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 
   it("runs the RBAC gate when NOT routeAuthorized (Direct API)", async () => {
     const { service, rbac } = buildAccessService();
-    rbac.checkAccess.mockResolvedValue(false);
+    callerMay();
 
     const result = await service.checkCollectionAccess({
       collectionName: "posts",
@@ -81,12 +114,12 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
     });
 
     expect(result?.statusCode).toBe(403);
-    expect(rbac.checkAccess).toHaveBeenCalledTimes(1);
+    expect(fakeUserHoldsPermission).toHaveBeenCalledTimes(1);
   });
 
   it("bypasses everything when overrideAccess is true (system write)", async () => {
     const { service, rbac } = buildAccessService();
-    rbac.checkAccess.mockResolvedValue(false);
+    callerMay();
 
     const result = await service.checkCollectionAccess({
       collectionName: "posts",
@@ -97,12 +130,13 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
     });
 
     expect(result).toBeNull();
-    expect(rbac.checkAccess).not.toHaveBeenCalled();
+    expect(fakeActorForUser).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 
   it("lets a super-admin (by authorized role) bypass the gate", async () => {
     const { service, rbac } = buildAccessService();
-    rbac.checkAccess.mockResolvedValue(false);
+    callerMay();
 
     const result = await service.checkCollectionAccess({
       collectionName: "posts",
@@ -113,12 +147,13 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
     });
 
     expect(result).toBeNull();
-    expect(rbac.checkAccess).not.toHaveBeenCalled();
+    expect(fakeActorForUser).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 
   it("lets a super-admin identified by the singular `role` bypass the gate", async () => {
     const { service, rbac } = buildAccessService();
-    rbac.checkAccess.mockResolvedValue(false);
+    callerMay();
 
     const result = await service.checkCollectionAccess({
       collectionName: "posts",
@@ -145,7 +180,8 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
     // A bare routeAuthorized flag (e.g. a direct bulkUpdateByQuery caller) must
     // not skip the RBAC gate and fall through to the permission-less default.
     expect(result?.statusCode).toBe(403);
-    expect(rbac.checkAccess).not.toHaveBeenCalled();
+    expect(fakeActorForUser).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 });
 
@@ -179,7 +215,6 @@ describe("checkCollectionAccess — scoped API key", () => {
   it("denies a publish the key is not scoped for, even when the owner's RBAC allows", async () => {
     const { service, rbac } = buildAccessService();
     // The OWNER can publish...
-    rbac.checkAccess.mockResolvedValue(true);
 
     const result = await service.checkCollectionAccess({
       collectionName: "posts",
@@ -195,8 +230,9 @@ describe("checkCollectionAccess — scoped API key", () => {
     });
 
     expect(result?.statusCode).toBe(403);
-    // The owner's RBAC is never consulted for a scoped key.
-    expect(rbac.checkAccess).not.toHaveBeenCalled();
+    // The owner is never looked up for a scoped key.
+    expect(fakeActorForUser).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 
   it("does not let a super-admin-owned key bypass its scope for publish", async () => {
@@ -263,7 +299,7 @@ describe("checkCollectionAccess — scoped API key", () => {
   it("allows a publish the key IS scoped for, even when the owner's RBAC denies", async () => {
     const { service, rbac } = buildAccessService();
     // The OWNER cannot publish...
-    rbac.checkAccess.mockResolvedValue(false);
+    callerMay();
 
     const result = await service.checkCollectionAccess({
       collectionName: "posts",
@@ -279,12 +315,13 @@ describe("checkCollectionAccess — scoped API key", () => {
     });
 
     expect(result).toBeNull();
-    expect(rbac.checkAccess).not.toHaveBeenCalled();
+    expect(fakeActorForUser).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 
   it("falls through to the owner's RBAC for a session caller (no api-key scope)", async () => {
     const { service, rbac } = buildAccessService();
-    rbac.checkAccess.mockResolvedValue(false);
+    callerMay();
 
     const result = await service.checkCollectionAccess({
       collectionName: "posts",
@@ -298,6 +335,6 @@ describe("checkCollectionAccess — scoped API key", () => {
     });
 
     expect(result?.statusCode).toBe(403);
-    expect(rbac.checkAccess).toHaveBeenCalledTimes(1);
+    expect(fakeUserHoldsPermission).toHaveBeenCalledTimes(1);
   });
 });

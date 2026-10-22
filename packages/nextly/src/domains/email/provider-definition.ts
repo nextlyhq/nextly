@@ -15,6 +15,7 @@
 
 import { NextlyError } from "../../errors";
 
+import { type EmailFailure, failureOf, withEmailFailure } from "./failure";
 import type { EmailProviderAdapter } from "./types";
 
 /**
@@ -1415,6 +1416,42 @@ function withoutLeakedSecrets(
   result: EmailSendResult,
   secrets: { comparable: readonly string[]; hasUnmatchable: boolean }
 ): EmailSendResult {
+  // A refusal's reason is the provider's own text, contained like any other.
+  // Read defensively: this runs after the provider has answered, so a throw
+  // here would report a message it accepted as failed. A value that is not a
+  // list, or an entry that is not an object, is dropped rather than read.
+  const refusals: unknown = result.refusals;
+  const contained = Array.isArray(refusals)
+    ? {
+        ...result,
+        refusals: refusals.flatMap(refusal => {
+          if (refusal === null || typeof refusal !== "object") return [];
+          const entry = refusal as NonNullable<
+            EmailSendResult["refusals"]
+          >[number];
+          // Every entry through containment, a reason-less one included: its
+          // status reaches the caller too, and could be a credential.
+          return [
+            typeof entry.reason === "string"
+              ? containedClassification(
+                  { ...entry, reason: entry.reason },
+                  secrets
+                )
+              : withContainedStatus(entry, secrets),
+          ];
+        }),
+      }
+    : refusals === undefined
+      ? result
+      : { ...result, refusals: undefined };
+  return withoutLeakedMessageId(contained, secrets);
+}
+
+/** `result` without a message id that carries a declared credential. */
+function withoutLeakedMessageId(
+  result: EmailSendResult,
+  secrets: { comparable: readonly string[]; hasUnmatchable: boolean }
+): EmailSendResult {
   const messageId = result.messageId;
   if (typeof messageId !== "string") return result;
 
@@ -1774,19 +1811,7 @@ function containedFailure(
   // match. The literal is escaped before it becomes a pattern, so a credential
   // containing characters a regular expression would read as syntax matches
   // itself rather than whatever they would have meant.
-  let text = texts.join(": ");
-  // LONGEST first. A provider may declare one credential that is a prefix of
-  // another -- `sk_live` beside `sk_live_REAL_SECRET` -- and redacting the
-  // short one first consumes the head of the long one, leaving its tail in the
-  // text as `[secret]_REAL_SECRET`. Replacing the longest match first cannot
-  // be undone by a shorter one, because the characters are already gone.
-  const byLengthDescending = [...secrets.comparable].sort(
-    (left, right) => right.length - left.length
-  );
-  for (const secret of byLengthDescending) {
-    if (secret.length === 0) continue;
-    text = text.replace(caseInsensitivePattern(secret), REDACTED_SECRET);
-  }
+  const text = withoutDeclaredSecrets(texts.join(": "), secrets);
   // A `NextlyError`, not a bare one: this value is attached as the `cause` of
   // the error the wrapper throws, and everything constructed as an error in
   // this package is a `NextlyError`. Its sentence is the provider's own
@@ -1800,6 +1825,76 @@ function containedFailure(
   });
 }
 
+/**
+ * `text` with every declared credential replaced, case-insensitively.
+ */
+function withoutDeclaredSecrets(
+  text: string,
+  secrets: { comparable: readonly string[] }
+): string {
+  // LONGEST first. A provider may declare one credential that is a prefix of
+  // another -- `sk_live` beside `sk_live_REAL_SECRET` -- and redacting the
+  // short one first consumes the head of the long one, leaving its tail in the
+  // text as `[secret]_REAL_SECRET`. Replacing the longest match first cannot
+  // be undone by a shorter one, because the characters are already gone.
+  const byLengthDescending = [...secrets.comparable].sort(
+    (left, right) => right.length - left.length
+  );
+  let redacted = text;
+  for (const secret of byLengthDescending) {
+    if (secret.length === 0) continue;
+    redacted = redacted.replace(
+      caseInsensitivePattern(secret),
+      REDACTED_SECRET
+    );
+  }
+  return redacted;
+}
+
+/**
+ * A provider's classification, with its reason fit to reach a caller: free of
+ * the declared credentials, or, where they cannot be compared, replaced by the
+ * sentence the classification itself gives.
+ */
+/**
+ * A status a provider chose, unless it could be a declared credential: one
+ * that equals a credential, or any status at all where a credential is too
+ * short to compare, is not passed on.
+ */
+function containedStatus(
+  status: number | undefined,
+  secrets: { comparable: readonly string[]; hasUnmatchable: boolean }
+): number | undefined {
+  return status !== undefined &&
+    !secrets.hasUnmatchable &&
+    !secrets.comparable.includes(String(status))
+    ? status
+    : undefined;
+}
+
+/** `entry` with its status contained, for a refusal that gave no reason. */
+function withContainedStatus<E extends { status?: number }>(
+  entry: E,
+  secrets: { comparable: readonly string[]; hasUnmatchable: boolean }
+): Omit<E, "status"> & { status?: number } {
+  const status = containedStatus(entry.status, secrets);
+  const { status: _withheld, ...rest } = entry;
+  return { ...rest, ...(status !== undefined ? { status } : {}) };
+}
+
+function containedClassification<F extends EmailFailure>(
+  failure: F,
+  secrets: { comparable: readonly string[]; hasUnmatchable: boolean }
+): Omit<F, "status" | "reason"> & EmailFailure {
+  const status = containedStatus(failure.status, secrets);
+  const reason = secrets.hasUnmatchable
+    ? (failureOf({ emailFailure: { retryable: failure.retryable, status } })
+        ?.reason ?? failure.reason)
+    : withoutDeclaredSecrets(failure.reason, secrets);
+  const { status: _withheld, reason: _replaced, ...rest } = failure;
+  return { ...rest, ...(status !== undefined ? { status } : {}), reason };
+}
+
 function normalizeProviderFailure(
   type: string,
   error: unknown,
@@ -1811,17 +1906,27 @@ function normalizeProviderFailure(
   // applied to everything else, HERE rather than at the call sites, so a
   // contained cause can never be handed back into this check and mistaken for
   // that deliberate error.
-  if (NextlyError.is(error)) return error;
+  // Its classification, if it has one, is carried across, contained like the
+  // rest of what the provider said.
+  const failure = failureOf(error);
+  if (NextlyError.is(error)) {
+    return failure
+      ? withEmailFailure(error, containedClassification(failure, secrets))
+      : error;
+  }
   // Constructed rather than `NextlyError.internal()`, which fixes its own
   // public sentence: naming the provider is what tells an operator which of
   // several configured providers failed, and the type comes from the install's
   // own code rather than from a request.
-  return new NextlyError({
+  const normalized = new NextlyError({
     code: "INTERNAL_ERROR",
     publicMessage: `The "${type}" email provider failed. Check the server logs for the reason.`,
     cause: containedFailure(error, secrets),
     logContext: { providerType: type, stage },
   });
+  return failure
+    ? withEmailFailure(normalized, containedClassification(failure, secrets))
+    : normalized;
 }
 
 /**

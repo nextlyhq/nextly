@@ -71,6 +71,14 @@ export interface ActivityLogEntry {
   collection: string;
   entryId: string | null;
   entryTitle: string | null;
+  /**
+   * What the row is about, as it was recorded: a collection's entry, a
+   * Single, or an install-level settings change. NULL on a row written before
+   * the kind was recorded, which is a collection's or a settings change's.
+   * Lets a reader head a Single's row by its label rather than read
+   * `collection` as a collection's slug.
+   */
+  subjectKind?: ActivitySubjectKind | null;
   metadata: Record<string, unknown> | null;
   createdAt: string;
   /**
@@ -171,6 +179,122 @@ export interface ActivityLogQueryOptions {
    * makes those different sets.
    */
   caller?: ReadCaller;
+  /**
+   * The Singles as the registry holds them now, for the rows that are a
+   * Single's. Omitted, or from a registry read that did not complete, no
+   * Single's row is returned: which Singles are kept off the dashboard is then
+   * unknown, and showing every Single's row would show the hidden ones too.
+   */
+  singles?: ActivitySingles;
+}
+
+/**
+ * The Singles one registry read found: each one's label, and which are kept
+ * off the dashboard. `complete` is false when the read did not finish, and the
+ * two sets then describe nothing.
+ */
+export interface ActivitySingles {
+  labels: ReadonlyMap<string, string>;
+  keptOff: ReadonlySet<string>;
+  complete: boolean;
+}
+
+/**
+ * The condition that leaves the rows of Singles kept off the dashboard out of
+ * the feed, by the row's stated kind.
+ *
+ * Written as three alternatives so a row that states no kind, from before the
+ * kind was recorded, always passes: that row is a collection's or a settings
+ * change's, and a bare `NOT (kind = 'single' AND ...)` evaluates to unknown on
+ * its NULL and would drop it. With no complete read of the Singles, only the
+ * first two remain, so every Single's row is left out rather than a hidden
+ * one shown.
+ */
+function singlesKeptOffClause(
+  singles: SinglesKeptOff | undefined
+): WhereClause | undefined {
+  const complete = singles?.complete === true;
+  // Nothing to leave out: no clause, rather than one every row satisfies.
+  if (complete && singles.keptOff.size === 0) return undefined;
+  return {
+    or: [
+      { column: "subjectKind", op: "IS NULL" },
+      { column: "subjectKind", op: "!=", value: "single" },
+      ...(complete
+        ? [
+            {
+              column: "collection",
+              op: "NOT IN" as const,
+              value: [...singles.keptOff],
+            },
+          ]
+        : []),
+    ],
+  };
+}
+
+/** What the feed needs of the Singles to leave the hidden ones out: not their labels. */
+type SinglesKeptOff = Pick<ActivitySingles, "keptOff" | "complete">;
+
+/**
+ * The conditions every read of the feed starts from: inside what the caller may read, and
+ * without the rows of Singles kept off the dashboard. `null` when the scope admits nothing,
+ * which is answered without a query: an empty `IN ()` is a syntax error on some dialects.
+ */
+function feedConditions(
+  scope: ReadableResources,
+  singles: SinglesKeptOff | undefined
+): NonNullable<WhereClause["and"]> | null {
+  const conditions: NonNullable<WhereClause["and"]> = [];
+  if (scope.kind === "some") {
+    if (scope.resources.size === 0) return null;
+    conditions.push({
+      column: "collection",
+      op: "IN",
+      value: [...scope.resources],
+    });
+  }
+  const singlesClause = singlesKeptOffClause(singles);
+  if (singlesClause !== undefined) conditions.push(singlesClause);
+  return conditions;
+}
+
+/**
+ * The condition that leaves the rows of collections kept off the dashboard out of a count. A
+ * row that states no kind is read as a collection's, as the feed reads it, so only rows stating
+ * another kind are spared; `IN` is unknown on that row's NULL, and the slug decides.
+ */
+function collectionsKeptOffClause(
+  keptOff: ReadonlySet<string>
+): WhereClause | undefined {
+  if (keptOff.size === 0) return undefined;
+  return {
+    or: [
+      { column: "subjectKind", op: "IN", value: ["single", "settings"] },
+      { column: "collection", op: "NOT IN", value: [...keptOff] },
+    ],
+  };
+}
+
+/** Options for counting recent activity; see `countRecentActivity`. */
+export interface RecentActivityCountOptions {
+  /** Rows after this instant are counted. */
+  since: Date;
+  /** Which resources the caller may read; omitted denies, as the feed's does. */
+  scope?: ReadableResources;
+  /** Who is reading, so each row's document is authorized as the feed's is. */
+  caller?: ReadCaller;
+  /** The Singles kept off the dashboard, as the feed is given them. */
+  singles?: SinglesKeptOff;
+  /** The collections kept off the dashboard, whose rows the figure leaves out. */
+  keptOffCollections?: ReadonlySet<string>;
+}
+
+/** A count of the feed's rows: whole, or a floor when the walk stopped at its bound. */
+export interface RecentActivityCount {
+  count: number;
+  /** The walk stopped at its bound with rows unread: at least `count` rows. */
+  atLeast: boolean;
 }
 
 const TABLE = "activity_log";
@@ -207,6 +331,23 @@ function statedKindOf(
   return stated === "collection" || stated === "single" || stated === "settings"
     ? stated
     : undefined;
+}
+
+/**
+ * The heading a row is shown under. A Single's row takes the Single's label as
+ * the registry holds it now, so a renamed Single's rows read as it does today,
+ * and falls back to the label stored with the row. Every other row keeps the
+ * title it was recorded with: a deleted entry's title can be recovered nowhere
+ * else.
+ */
+function headingOf(
+  row: Record<string, unknown>,
+  singleLabels: ReadonlyMap<string, string> | undefined
+): string | null {
+  const stored = toNullableString(row.entryTitle);
+  if (statedKindOf(row) !== "single") return stored;
+  const slug = stringOr(row.collection);
+  return (slug === undefined ? undefined : singleLabels?.get(slug)) ?? stored;
 }
 
 /** True when `slug` names one of the install-level settings namespaces. */
@@ -249,6 +390,13 @@ function documentSubject(
  * return a real document's row unauthorized, so it is dropped. Rows written from
  * here on state their kind and are never ambiguous; what is lost is legacy
  * settings detail, on colliding installations only.
+ *
+ * A row from before the column is a COLLECTION's or a settings change's, never
+ * a Single's: Singles were not recorded until every row they write stated its
+ * kind. So a legacy row under a slug the registry now holds as a Single is a
+ * collection row whose slug a Single has since taken, and it is dropped rather
+ * than shown as that Single's. The kept-off filters read such a row as a
+ * collection's too, so the two never disagree about what it is.
  */
 function legacySubject(
   row: Record<string, unknown>,
@@ -260,7 +408,7 @@ function legacySubject(
   if (isSettingsNamespace(slug)) {
     return registered ? { kind: "undecidable" } : { kind: "install-level" };
   }
-  if (!registered) return { kind: "undecidable" };
+  if (registered !== "collection") return { kind: "undecidable" };
   return documentSubject(registered, slug, entryId, row);
 }
 
@@ -279,6 +427,12 @@ function subjectOf(
   const slug = stringOr(row.collection);
   const entryId = stringOr(row.entryId);
   const stated = statedKindOf(row);
+
+  // A Single's row with no document id names a document no read check can be
+  // asked about, and a Single's row is shown only once one has answered. Every
+  // Single row is written with its live id, so this drops only a row that was
+  // not, rather than showing it to everyone as an install-level event.
+  if (stated === "single" && !entryId) return { kind: "undecidable" };
 
   // No entry id, or a row that says it is a settings change: an install-level
   // event with no document to authorize.
@@ -677,32 +831,19 @@ export class ActivityLogService extends BaseService {
           value: options.userId,
         });
       }
-      if (scope.kind === "some") {
-        // An empty scope yields an `IN ()`, which matches nothing -- the
-        // intended answer for a caller who may read nothing. Short-circuit
-        // instead, because an empty IN list is a syntax error on some
-        // dialects, and the short-circuit must happen BEFORE the query is
-        // built rather than let the driver reject it.
-        if (scope.resources.size === 0) {
-          return { activities: [], hasMore: false };
-        }
-        filters.push({
-          property: "collection",
-          op: "IN",
-          value: [...scope.resources],
-        });
-      }
-
-      const where =
-        filters.length > 0
-          ? {
-              and: filters.map(f => ({
-                column: f.property,
-                op: f.op,
-                value: f.value,
-              })),
-            }
-          : undefined;
+      // A scope that admits nothing matches nothing, the intended answer for a caller who may
+      // read nothing, and is answered before any query is built.
+      const starting = feedConditions(scope, options?.singles);
+      if (starting === null) return { activities: [], hasMore: false };
+      const conditions: NonNullable<WhereClause["and"]> = [
+        ...filters.map(f => ({
+          column: f.property,
+          op: f.op,
+          value: f.value,
+        })),
+        ...starting,
+      ];
+      const where = conditions.length > 0 ? { and: conditions } : undefined;
 
       // One past the page, so `hasMore` is an observation rather than a guess:
       // the extra row is fetched, AUTHORIZED, and then dropped. Counting
@@ -715,7 +856,9 @@ export class ActivityLogService extends BaseService {
         caller
       );
       return {
-        activities: visible.rows.slice(0, limit).map(this.mapRow),
+        activities: visible.rows
+          .slice(0, limit)
+          .map(row => this.mapRow(row, options?.singles?.labels)),
         // 🔴 `end` as well as the count, because a page can come back short for
         // two opposite reasons. The extra row is the ordinary signal; a refill
         // that stopped at its round limit found fewer than that and has said
@@ -735,6 +878,50 @@ export class ActivityLogService extends BaseService {
       // collapsing to INTERNAL_ERROR / 500.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+  }
+
+  /**
+   * How many activity rows after `since` this caller may be told about: the rows the feed itself
+   * would show, counted by the feed's own walk rather than by an aggregate beside it.
+   *
+   * 🔴 Not a `COUNT(*)`. A document read rule cannot be pushed into a query over this table (see
+   * `visibleActivity`), so a count of what the scope admits counts edits to documents the caller
+   * may not open, and the number then says such edits happened. Walking and authorizing is
+   * bounded work instead: the walk reads at most its rounds of pages, and past that the count is
+   * a floor, said plainly (`atLeast`), the rule every bounded count in the dashboard follows.
+   * The cost is up to that many page reads and their authorization, where one aggregate used to
+   * run.
+   *
+   * Collections kept off the dashboard are left out as well, which the feed itself does not do:
+   * the figure promises to leave them out. Their rows are removed from the candidates before the
+   * walk, so the walk is still the only thing deciding what may be seen.
+   */
+  async countRecentActivity(
+    options: RecentActivityCountOptions
+  ): Promise<RecentActivityCount> {
+    const starting = feedConditions(
+      options.scope ?? someResources([]),
+      options.singles
+    );
+    if (starting === null) return { count: 0, atLeast: false };
+    const keptOff = collectionsKeptOffClause(
+      options.keptOffCollections ?? new Set()
+    );
+    const where: WhereClause = {
+      and: [
+        ...starting,
+        { column: "createdAt", op: ">", value: options.since },
+        ...(keptOff === undefined ? [] : [keptOff]),
+      ],
+    };
+    // As many rows as the walk can find, so it stops at the table's end or at its own bound.
+    const visible = await this.visibleActivity(
+      where,
+      Number.MAX_SAFE_INTEGER,
+      0,
+      options.caller
+    );
+    return { count: visible.rows.length, atLeast: !visible.end };
   }
 
   /**
@@ -1006,7 +1193,11 @@ export class ActivityLogService extends BaseService {
     return value === "apiKey" || value === "system" ? value : "user";
   }
 
-  private mapRow = (row: Record<string, unknown>): ActivityLogEntry => {
+  private mapRow = (
+    row: Record<string, unknown>,
+    /** The Singles' labels now, which head a Single's row over the stored one. */
+    singleLabels?: ReadonlyMap<string, string>
+  ): ActivityLogEntry => {
     let metadata: Record<string, unknown> | null = null;
     if (row.metadata) {
       try {
@@ -1045,7 +1236,8 @@ export class ActivityLogService extends BaseService {
       // Type-narrow before stringification so we don't fall through to
       // Object#toString for non-primitive driver values.
       entryId: toNullableString(row.entryId),
-      entryTitle: toNullableString(row.entryTitle),
+      entryTitle: headingOf(row, singleLabels),
+      subjectKind: statedKindOf(row) ?? null,
       metadata,
       createdAt:
         createdAt instanceof Date ? createdAt.toISOString() : String(createdAt),

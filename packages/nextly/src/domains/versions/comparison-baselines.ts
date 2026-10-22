@@ -22,15 +22,18 @@
 
 import { getService } from "../../di";
 import { NextlyError } from "../../errors";
-import type { VersionStatus } from "../../schemas/versions/types";
 
+import {
+  recordsServedContent,
+  type RecordedVersionStatus,
+} from "./recorded-status";
 import { readLastLookedAt } from "./version-views";
 import type { VersionRef } from "./versions-repository";
 
 /** One durable version, as a baseline sees it. */
 export interface PartVersion {
   versionNo: number;
-  status: VersionStatus;
+  status: RecordedVersionStatus;
   /** The part the version belongs to: its language, or null. */
   locale: string | null;
 }
@@ -51,6 +54,11 @@ export interface BaselineContext {
    * the history alone still shows the last publish as if it were live.
    */
   live: boolean;
+  /**
+   * Whether the document has the Draft/Published lifecycle. Without it every
+   * version was served and none is a draft, whatever its own `status` says.
+   */
+  lifecycle: boolean;
 }
 
 /**
@@ -201,13 +209,15 @@ function requireBaseline(name: string): ComparisonBaseline {
 }
 
 /**
- * The part's latest published version. What its readers are served only while
- * the part is live; see `BaselineContext.live`.
+ * The part's latest published version: content its readers were served, which
+ * without the lifecycle is every version whatever its status. What its readers
+ * are served only while the part is live; see `BaselineContext.live`.
  */
 export function latestPublished(
-  versions: readonly PartVersion[]
+  versions: readonly PartVersion[],
+  lifecycle: boolean
 ): PartVersion | undefined {
-  return versions.find(v => v.status === "published");
+  return versions.find(v => recordsServedContent(v.status, lifecycle));
 }
 
 /**
@@ -217,9 +227,12 @@ export function latestPublished(
  * latest publish.
  */
 export function currentDraft(
-  versions: readonly PartVersion[]
+  versions: readonly PartVersion[],
+  lifecycle: boolean
 ): PartVersion | undefined {
-  const published = latestPublished(versions)?.versionNo ?? 0;
+  // Without the lifecycle every version was served, so none is newer than the
+  // latest served one and nothing is a draft.
+  const published = latestPublished(versions, lifecycle)?.versionNo ?? 0;
   return versions.find(v => v.status === "draft" && v.versionNo > published);
 }
 
@@ -234,8 +247,8 @@ registerComparisonBaseline({
   name: "published",
   label: "Currently published",
   // Nothing is currently published in a part that has been withdrawn.
-  resolve: ({ versions, live }) =>
-    live ? (latestPublished(versions)?.versionNo ?? null) : null,
+  resolve: ({ versions, live, lifecycle }) =>
+    live ? (latestPublished(versions, lifecycle)?.versionNo ?? null) : null,
   unavailable: ({ live, target }) =>
     live
       ? `Version ${target} has no "published" version to compare with.`
@@ -245,7 +258,8 @@ registerComparisonBaseline({
 registerComparisonBaseline({
   name: "draft",
   label: "Current draft",
-  resolve: ({ versions }) => currentDraft(versions)?.versionNo ?? null,
+  resolve: ({ versions, lifecycle }) =>
+    currentDraft(versions, lifecycle)?.versionNo ?? null,
 });
 
 registerComparisonBaseline({
@@ -310,6 +324,8 @@ export interface ComparisonRequest {
   workingDraftParts?: readonly (string | null)[];
   /** Whether a part is served now: read from the document, not its history. */
   partIsLive: (part: string | null) => Promise<boolean>;
+  /** Whether the document has the Draft/Published lifecycle. */
+  lifecycle: boolean;
 }
 
 /** The pair a request resolves to, and the baseline that chose `from`. */
@@ -343,7 +359,7 @@ export async function resolveComparisonPair(
 ): Promise<ResolvedComparison> {
   const part = partOf(request, versions);
   const inPart = versions.filter(v => v.locale === part);
-  const draft = currentDraft(inPart);
+  const draft = currentDraft(inPart, request.lifecycle);
   assertDraftHasVersion(request, part, draft);
   const target = request.to ?? draft?.versionNo ?? inPart[0]?.versionNo;
   if (target === undefined) {
@@ -352,7 +368,9 @@ export async function resolveComparisonPair(
     });
   }
   const live = await request.partIsLive(part);
-  const name = request.baseline ?? defaultBaseline(target, draft, live, inPart);
+  const name =
+    request.baseline ??
+    defaultBaseline(target, draft, live, inPart, request.lifecycle);
 
   const context: BaselineContext = {
     ref: request.ref,
@@ -361,6 +379,7 @@ export async function resolveComparisonPair(
     userId: request.userId,
     versions,
     live,
+    lifecycle: request.lifecycle,
   };
   const choice = await chooseComparisonBaseline(name, context);
   if (choice !== null && "unavailable" in choice) {
@@ -418,9 +437,12 @@ function defaultBaseline(
   target: number,
   draft: PartVersion | undefined,
   live: boolean,
-  inPart: readonly PartVersion[]
+  inPart: readonly PartVersion[],
+  lifecycle: boolean
 ): string {
-  return target === draft?.versionNo && live && latestPublished(inPart)
+  return target === draft?.versionNo &&
+    live &&
+    latestPublished(inPart, lifecycle)
     ? "published"
     : "previous";
 }

@@ -16,7 +16,7 @@
 import { expectTypeOf } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
-import type { WidgetSetting } from "../settings";
+import type { AnyWidgetSetting, WidgetSetting } from "../settings";
 
 // Each variant, named individually: a union asserted as a whole passes when
 // only one member matches, which is exactly the drift worth catching.
@@ -57,10 +57,21 @@ type NumberField = Extract<FieldConfig, { type: "number" }>;
 type CheckboxField = Extract<FieldConfig, { type: "checkbox" }>;
 type SelectField = Extract<FieldConfig, { type: "select" }>;
 
-expectTypeOf<Exclude<keyof TextSetting, keyof TextField>>().toBeNever();
-expectTypeOf<Exclude<keyof NumberSetting, keyof NumberField>>().toBeNever();
-expectTypeOf<Exclude<keyof CheckboxSetting, keyof CheckboxField>>().toBeNever();
-expectTypeOf<Exclude<keyof SelectSetting, keyof SelectField>>().toBeNever();
+// `quick` is the one key allowed beyond the field's: the card's header reads
+// it, never `FieldRenderer`, so a renderer that ignores it loses nothing.
+type CardOnly = "quick";
+expectTypeOf<
+  Exclude<keyof TextSetting, keyof TextField | CardOnly>
+>().toBeNever();
+expectTypeOf<
+  Exclude<keyof NumberSetting, keyof NumberField | CardOnly>
+>().toBeNever();
+expectTypeOf<
+  Exclude<keyof CheckboxSetting, keyof CheckboxField | CardOnly>
+>().toBeNever();
+expectTypeOf<
+  Exclude<keyof SelectSetting, keyof SelectField | CardOnly>
+>().toBeNever();
 
 /*
  * The control for the four above, and it is a different one from the control
@@ -74,3 +85,39 @@ expectTypeOf<TextField>().not.toBeNever();
 expectTypeOf<NumberField>().not.toBeNever();
 expectTypeOf<CheckboxField>().not.toBeNever();
 expectTypeOf<SelectField>().not.toBeNever();
+
+/*
+ * The other side of the same promise. The content settings (`collection`,
+ * `filter`, `sort`, `groupBy`) are core's rules' too, but no field config draws
+ * a collection picker or a filter builder, so they stay out of the published
+ * `WidgetSetting` that the settings sheet hands to `FieldRenderer`. Joined to it
+ * before the sheet draws them, every assertion above would still pass while a
+ * registered widget's sheet crashed. Each is checked present in the wider type
+ * the rules read, and not assignable to the published one, so neither side can
+ * drift alone.
+ *
+ * 🔴 Assignability, not an `Extract` of the published union. `Extract` keeps a
+ * member only when it is wholly assignable to `{ type: "collection" }`, so a
+ * member typed `{ type: string }` or `{ type: "text" | "collection" }` came out
+ * as `never` and read as "absent" while accepting a collection setting. Each
+ * concrete content setting is asked here whether `WidgetSetting` takes it,
+ * which is the question the sheet's prop answers.
+ */
+expectTypeOf<
+  Extract<AnyWidgetSetting, { type: "collection" }>
+>().not.toExtend<WidgetSetting>();
+expectTypeOf<
+  Extract<AnyWidgetSetting, { type: "filter" }>
+>().not.toExtend<WidgetSetting>();
+expectTypeOf<
+  Extract<AnyWidgetSetting, { type: "sort" }>
+>().not.toExtend<WidgetSetting>();
+expectTypeOf<
+  Extract<AnyWidgetSetting, { type: "groupBy" }>
+>().not.toExtend<WidgetSetting>();
+expectTypeOf<
+  Extract<AnyWidgetSetting, { type: "collection" }>
+>().not.toBeNever();
+expectTypeOf<Extract<AnyWidgetSetting, { type: "filter" }>>().not.toBeNever();
+expectTypeOf<Extract<AnyWidgetSetting, { type: "sort" }>>().not.toBeNever();
+expectTypeOf<Extract<AnyWidgetSetting, { type: "groupBy" }>>().not.toBeNever();

@@ -24,7 +24,10 @@ import type { LimitStore } from "../../domains/limits/limit-store";
 import { NextlyError } from "../../errors";
 import { getHookRegistry } from "../../hooks/hook-registry";
 import { env } from "../../lib/env";
-import type { RateLimitStore } from "../../middleware/rate-limit";
+import {
+  isRateLimitStore,
+  type RateLimitStore,
+} from "../../middleware/rate-limit";
 import {
   NO_PLUGIN_GRANTS,
   type PluginGrants,
@@ -56,10 +59,22 @@ import { databaseSpentChallenges } from "../pipeline/spent-challenges";
 import type { AuthHooks, ChallengeDefinition } from "../pipeline/types";
 import type { AccountState } from "../session/account-state";
 import type { SessionRoles } from "../session/session-roles";
+import { claimFirstSetup, sharedRecordReader } from "../setup-token/setup-gate";
+import {
+  readSetupTokenRecord,
+  spendSetupToken,
+  verifySetupToken,
+  type SetupTokenMeta,
+} from "../setup-token/setup-token";
 
 import { aggregateAuthUi } from "./auth-ui";
 import type { AuthRouterDeps } from "./router";
 import type { SessionRowTransaction } from "./session-row";
+import type { SetupHandlerDeps } from "./setup";
+
+/** The router's dependencies as Nextly builds them: always with a setup token store. */
+export type BridgedAuthRouterDeps = AuthRouterDeps &
+  Required<Pick<AuthRouterDeps, "setupToken">>;
 
 /**
  * Build AuthRouterDeps from the DI container services.
@@ -70,10 +85,10 @@ import type { SessionRowTransaction } from "./session-row";
 export function buildAuthRouterDeps(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getService: (name: string) => any
-): AuthRouterDeps {
+): BridgedAuthRouterDeps {
   const credentialDeps = passwordCredentialDeps(() => getService("adapter"));
   const base: Omit<
-    AuthRouterDeps,
+    BridgedAuthRouterDeps,
     | "authStrategies"
     | "authHooks"
     | "challengeRegistry"
@@ -297,6 +312,8 @@ export function buildAuthRouterDeps(
       const adapter = getService("adapter");
       return superAdminRoleHeld(adapter.getDrizzle(), getDialectTables());
     },
+
+    setupToken: setupTokenDeps(getService, env.NODE_ENV === "production"),
 
     createSuperAdmin: async data => {
       const { seedPermissions } = await import(
@@ -771,6 +788,29 @@ function readServiceConfig(
 }
 
 /**
+ * The production setup token, read and spent through `nextly_meta`, where
+ * every instance of the install sees the same row.
+ */
+function setupTokenDeps(
+  getService: (name: string) => unknown,
+  isProduction: boolean
+): SetupHandlerDeps["setupToken"] {
+  const meta = () => getService("metaService") as SetupTokenMeta;
+  return {
+    required: isProduction,
+    verify: presented =>
+      verifySetupToken({ presented, readRecord: sharedRecordReader(meta()) }),
+    confirm: presented =>
+      verifySetupToken({
+        presented,
+        readRecord: () => readSetupTokenRecord(meta()),
+      }),
+    spend: () => spendSetupToken(meta()),
+    claim: () => claimFirstSetup(meta()),
+  };
+}
+
+/**
  * Read a boolean `auth.<name>` flag from the NextlyConfig registered in the DI
  * container. Only `true` turns a flag on; an unset or non-boolean value, or a
  * container not yet initialised, answers `false`, each flag's safe default.
@@ -877,6 +917,23 @@ function readLimitStore(
 }
 
 /**
+ * Where core's own limits count, as the container registered it, or the app's
+ * own store of the older contract where the container has none.
+ */
+function countsIn(
+  getService: (name: string) => unknown,
+  configured?: RateLimitStore
+): { counts?: RateLimitStore } {
+  try {
+    const counts = getService("coreRateLimitStore");
+    if (isRateLimitStore(counts)) return { counts };
+  } catch {
+    // A container built without the limit services.
+  }
+  return configured === undefined ? {} : { counts: configured };
+}
+
+/**
  * The configured per-IP auth limit.
  *
  * Exported so a plugin route opting into `rateLimit: "auth"` uses the same
@@ -886,9 +943,19 @@ function readLimitStore(
 export function readAuthRateLimit(getService: (name: string) => unknown): {
   requestsPerHour: number;
   windowMs: number;
+  /** An app's store of the older contract, when it configured one. */
   store?: RateLimitStore;
+  /**
+   * Where core's own limits count: that store, or the selected limit store.
+   * Undefined only where the container has neither registered.
+   */
+  counts?: RateLimitStore;
 } {
-  const fallback = { requestsPerHour: 30, windowMs: 3_600_000 };
+  const fallback = {
+    requestsPerHour: 30,
+    windowMs: 3_600_000,
+    ...countsIn(getService),
+  };
   try {
     const config = getService("config");
 
@@ -905,13 +972,20 @@ export function readAuthRateLimit(getService: (name: string) => unknown): {
       "authRateLimit"
     );
 
+    const counted = countsIn(getService, store);
     return {
       requestsPerHour: numberOr(
         limits?.["requestsPerHour"],
         fallback.requestsPerHour
       ),
       windowMs: numberOr(limits?.["windowMs"], fallback.windowMs),
-      ...(store === undefined ? {} : { store }),
+      // The app's own store as core's limits use it: where the container
+      // registered core's store, that is the same store held to the limit
+      // store's time and watched for an outage, under the keys core always
+      // gave it. The second-factor fallback reads `store`, so a store that
+      // stops answering is answered there within that time too.
+      ...(store === undefined ? {} : { store: counted.counts ?? store }),
+      ...counted,
     };
   } catch {
     return fallback;

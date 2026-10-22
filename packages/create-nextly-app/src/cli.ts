@@ -41,7 +41,12 @@ program
   )
   .option("-a, --approach <approach>", "Schema approach (code-first, visual)")
   .option("-d, --database <db>", "Database type (sqlite, postgresql, mysql)")
-  .option("-b, --branch <branch>", "Git branch for template download", "main")
+  // No default: with none given, a downloaded template comes from this CLI's
+  // own release, which an explicit `--branch main` does not.
+  .option(
+    "-b, --branch <branch>",
+    "Git branch to take the template from (default: this release)"
+  )
   .option(
     "--local-template <path>",
     "Path to local templates directory (development only)"

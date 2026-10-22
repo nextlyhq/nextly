@@ -134,12 +134,28 @@ export interface EmailTemplateInsert {
 
   /**
    * Per-template From override (e.g. `Support <help@example.com>`).
-   * When null/omitted, the provider / config From is used.
+   * When null/omitted, the provider / config From is used. The display name
+   * may use the send's variables (`{{shopName}} <shop@example.com>`); the
+   * address may not.
    */
   fromOverride?: string | null;
 
-  /** Per-template Reply-To address. When null/omitted, no Reply-To is set. */
+  /**
+   * Per-template Reply-To address. When null/omitted, no Reply-To is set. May
+   * use the send's variables (`{{customerEmail}}`); a send whose rendered
+   * Reply-To is not an address fails, as retrying cannot fix it.
+   */
   replyTo?: string | null;
+
+  /**
+   * Fixed addresses copied on every send, after the send's own copies, with
+   * no address twice. Never variables, and refused on a template its owner
+   * marks as carrying a secret.
+   */
+  cc?: string[] | null;
+
+  /** Fixed addresses blind-copied on every send, on the same rules as `cc`. */
+  bcc?: string[] | null;
 
   /**
    * Available template variables with descriptions.
@@ -173,6 +189,46 @@ export interface EmailTemplateInsert {
    * no default attachments.
    */
   attachments?: EmailAttachmentInput[] | null;
+
+  /**
+   * When the template is sent, in a sentence. Owners write one for each
+   * template they own; a site may write one for its own.
+   */
+  description?: string | null;
+}
+
+// ============================================================
+// Ownership
+// ============================================================
+
+/**
+ * Who a template belongs to.
+ *
+ * - `core`: one of Nextly's own templates or layouts.
+ * - `plugin`: contributed by the plugin named `name`. `installed` is false when
+ *   that plugin is no longer running; its templates are kept, and the site may
+ *   delete them.
+ * - `site`: made by the site.
+ */
+export type EmailTemplateOwner =
+  | { kind: "core" }
+  | { kind: "plugin"; name: string; installed: boolean }
+  | { kind: "site" };
+
+/** The stored owner kinds. */
+export type EmailTemplateOwnerKind = EmailTemplateOwner["kind"];
+
+/**
+ * The part of a template its owner versions and a site's override replaces:
+ * what the email says. Settings such as the provider, the layout, From,
+ * Reply-To, attachments and whether it is active are the site's and are never
+ * changed by an owner update.
+ */
+export interface EmailTemplateVersion {
+  subject: string;
+  htmlContent: string;
+  plainTextContent: string | null;
+  preheader: string | null;
 }
 
 // ============================================================
@@ -228,6 +284,12 @@ export interface EmailTemplateRecord extends EmailTemplateInsert {
   /** Per-template Reply-To (required on record, nullable). */
   replyTo: string | null;
 
+  /** Fixed copies (required on record, nullable). */
+  cc: string[] | null;
+
+  /** Fixed blind copies (required on record, nullable). */
+  bcc: string[] | null;
+
   /** Available template variables (required on record, nullable). */
   variables: EmailTemplateVariable[] | null;
 
@@ -248,4 +310,36 @@ export interface EmailTemplateRecord extends EmailTemplateInsert {
 
   /** When the template was last updated. */
   updatedAt: Date;
+
+  /** When the template is sent (required on record, nullable). */
+  description: string | null;
+
+  /** Who owns the template. */
+  owner: EmailTemplateOwner;
+
+  /**
+   * Whether the template's owner marks it as carrying a secret, such as a
+   * reset or verification link. Declared by the owner and never editable:
+   * such a template takes no `cc` or `bcc`, and any stored on it are not sent.
+   */
+  carriesSecret: boolean;
+
+  /**
+   * Whether the site has overridden an owned template. Always false for a
+   * site's own template, which has nothing to override.
+   */
+  overridden: boolean;
+
+  /**
+   * Whether the owner's version changed since the override started, so an
+   * update is waiting for review. False when not overridden.
+   */
+  ownerChanged: boolean;
+
+  /**
+   * Whether the site's code sets this template (`email.templates` in
+   * `defineConfig()`). Such a version is sent while the template is not
+   * overridden.
+   */
+  setInCode: boolean;
 }

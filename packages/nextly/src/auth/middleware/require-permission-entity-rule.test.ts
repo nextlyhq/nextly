@@ -41,6 +41,10 @@ const services = vi.hoisted(() => ({
   },
   rbac: {
     getRegisteredAccess: (slug: string) => state.rules.get(slug),
+    getRegisteredTarget: (slug: string) => {
+      const access = state.rules.get(slug);
+      return access ? { kind: "collection", slug, access } : undefined;
+    },
   },
 }));
 

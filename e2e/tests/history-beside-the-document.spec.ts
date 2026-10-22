@@ -7,8 +7,9 @@
  * window's width, the layout keeps room for it, and the form has to survive
  * the panel opening and closing without remounting.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 const excerpt = (page: Page) =>
@@ -135,11 +136,13 @@ test.describe("history beside the document", () => {
       .click();
     // Read in the document itself: the page over it steps aside.
     await expect(panel(page)).toBeHidden();
-    const banner = page.getByRole("status").filter({ hasText: "past version" });
-    await expect(banner).toBeVisible({ timeout: 30_000 });
+    // The version reads in the editor under its comparison bar, which leads
+    // back to the list.
+    const comparison = page.getByRole("region", { name: "Comparison" });
+    await expect(comparison).toBeVisible({ timeout: 30_000 });
     expect(new URL(page.url()).searchParams.get("version")).toBe("1");
 
-    await banner.getByRole("button", { name: "History", exact: true }).click();
+    await comparison.getByRole("button", { name: "History" }).click();
     await expect(panel(page)).toBeVisible();
     expect(new URL(page.url()).searchParams.get("version")).toBeNull();
   });

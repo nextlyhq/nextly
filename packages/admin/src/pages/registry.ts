@@ -2,6 +2,15 @@ import { lazy } from "react";
 
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
 import {
+  EMAIL_HUB_PERMISSIONS,
+  EMAIL_PROVIDER_CREATE_PERMISSIONS,
+  EMAIL_PROVIDER_READ_PERMISSIONS,
+  EMAIL_PROVIDER_UPDATE_PERMISSIONS,
+  EMAIL_TEMPLATE_CREATE_PERMISSIONS,
+  EMAIL_TEMPLATE_READ_PERMISSIONS,
+  EMAIL_TEMPLATE_UPDATE_PERMISSIONS,
+} from "../constants/email-hub";
+import {
   API_KEYS_LIST_PERMISSIONS,
   RELEASE_SECTION_PERMISSIONS,
 } from "../constants/navigation";
@@ -23,6 +32,13 @@ import ResetPasswordPage from "./(auth)/reset-password";
 import SetupPage from "./(auth)/setup";
 import VerifyEmailPage from "./(auth)/verify-email";
 import CollectionsPage from "./dashboard/collection/index";
+import EmailDesignPage from "./dashboard/email/design";
+import EmailMessagesPage from "./dashboard/email/index";
+import CreateEmailTemplatePage from "./dashboard/email/messages/create";
+import EditEmailTemplatePage from "./dashboard/email/messages/edit/[id]";
+import CreateEmailProviderPage from "./dashboard/email/sending/create";
+import EditEmailProviderPage from "./dashboard/email/sending/edit/[id]";
+import EmailProvidersPage from "./dashboard/email/sending/index";
 import EditEntryPage from "./dashboard/entries/[slug]/[id]/index";
 import EntryVersionsPage from "./dashboard/entries/[slug]/[id]/versions";
 import APIPlaygroundPage from "./dashboard/entries/[slug]/api";
@@ -36,6 +52,7 @@ import PluginSettingsPage from "./dashboard/plugins/[slug]/settings";
 import PluginBrowsePage from "./dashboard/plugins/browse";
 import PluginsOverviewPage from "./dashboard/plugins/index";
 import CollectionsLandingRedirect from "./dashboard/redirects/CollectionsLandingRedirect";
+import EmailSettingsRedirect from "./dashboard/redirects/EmailSettingsRedirect";
 import FieldGroupsLandingRedirect from "./dashboard/redirects/FieldGroupsLandingRedirect";
 import SinglesLandingRedirect from "./dashboard/redirects/SinglesLandingRedirect";
 import ReleaseDetailPage from "./dashboard/releases/[id]";
@@ -47,12 +64,6 @@ import CreateApiKeyPage from "./dashboard/settings/api-keys/create";
 import EditApiKeyPage from "./dashboard/settings/api-keys/edit/[id]";
 import ApiKeysPage from "./dashboard/settings/api-keys/index";
 import BackgroundJobsPage from "./dashboard/settings/background-jobs/index";
-import CreateEmailProviderPage from "./dashboard/settings/email-providers/create";
-import EditEmailProviderPage from "./dashboard/settings/email-providers/edit/[id]";
-import EmailProvidersPage from "./dashboard/settings/email-providers/index";
-import CreateEmailTemplatePage from "./dashboard/settings/email-templates/create";
-import EditEmailTemplatePage from "./dashboard/settings/email-templates/edit/[id]";
-import EmailTemplatesPage from "./dashboard/settings/email-templates/index";
 import CreateImageSizePage from "./dashboard/settings/image-sizes/create";
 import EditImageSizePage from "./dashboard/settings/image-sizes/edit/[id]";
 import ImageSizesSettingsPage from "./dashboard/settings/image-sizes/index";
@@ -424,47 +435,95 @@ export const routeConfig: Record<string, RouteConfig> = {
   // picks the first destination in the panel they can actually open, and every
   // grant in `settingsPanelSlugs()` opens one, so the fallthrough to
   // `/admin/settings` is unreachable for anyone this guard admits.
+  // ============================================================
+  // The Email hub. Each tab is guarded by the grants that read what it shows,
+  // and each editor by the grant its save needs; the server checks the same
+  // grants again on every request. The landing page admits any hub grant and
+  // moves a reader who may not see Messages on to a tab they may see.
+  // Literal paths are registered before the [id] ones they would match.
+  // ============================================================
+  [ROUTES.EMAIL]: {
+    component: EmailMessagesPage,
+    type: "private",
+    requiredPermission: [...EMAIL_HUB_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_DESIGN]: {
+    component: EmailDesignPage,
+    type: "private",
+    requiredPermission: [...EMAIL_TEMPLATE_READ_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_SENDING]: {
+    component: EmailProvidersPage,
+    type: "private",
+    requiredPermission: [...EMAIL_PROVIDER_READ_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_MESSAGES_CREATE]: {
+    component: CreateEmailTemplatePage,
+    type: "private",
+    requiredPermission: [...EMAIL_TEMPLATE_CREATE_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_MESSAGES_EDIT]: {
+    component: EditEmailTemplatePage,
+    type: "private",
+    requiredPermission: [...EMAIL_TEMPLATE_UPDATE_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_SENDING_CREATE]: {
+    component: CreateEmailProviderPage,
+    type: "private",
+    requiredPermission: [...EMAIL_PROVIDER_CREATE_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_SENDING_EDIT]: {
+    component: EditEmailProviderPage,
+    type: "private",
+    requiredPermission: [...EMAIL_PROVIDER_UPDATE_PERMISSIONS],
+    section: "email",
+  },
+
   [ROUTES.SETTINGS]: {
     component: SettingsPage,
     type: "private",
     requiredPermission: settingsPanelSlugs(),
     section: overridableBy("settings"),
   },
+  // Where email lived before the hub. Each redirects to its place there, and
+  // carries no permission of its own: the page it lands on is guarded, and a
+  // refusal here would leave the reader on a URL that no longer means
+  // anything.
   [ROUTES.SETTINGS_EMAIL_PROVIDERS]: {
-    component: EmailProvidersPage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-providers",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS_CREATE]: {
-    component: CreateEmailProviderPage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-providers",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS_EDIT]: {
-    component: EditEmailProviderPage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-providers",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES]: {
-    component: EmailTemplatesPage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-templates",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES_CREATE]: {
-    component: CreateEmailTemplatePage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-templates",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES_EDIT]: {
-    component: EditEmailTemplatePage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-templates",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_PERMISSIONS]: {
     component: SettingsPermissionsPage,
@@ -614,11 +673,7 @@ export const routeConfig: Record<string, RouteConfig> = {
 // The builder's editor routes stay in the table unconditionally, and nothing
 // here may consult NODE_ENV to drop them. This package is PREBUILT: tsup folds
 // `process.env.NODE_ENV` at package build time, so a module-load env check in
-// the dist answers where the LIBRARY was built, never where it is RUNNING —
-// the published bundle carried the folded "development" for months, then a
-// production-folding define silently deleted these routes for every consumer
-// (the sidebar's Builders links and /admin/builder/* still resolved, but every
-// New/Edit entry fell through routing to NotFound).
+// the dist answers where the LIBRARY was built, never where it is RUNNING.
 //
 // Availability is a runtime question with runtime answers at every layer that
 // needs one: the route entries below carry `requiresBuilder: true`, so

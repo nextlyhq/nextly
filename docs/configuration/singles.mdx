@@ -57,7 +57,7 @@ export default defineSingle({
   ],
   access: {
     read: true,
-    update: ({ permissions }) => permissions.includes("site-settings:update"),
+    update: ({ permissions }) => permissions.includes("update-site-settings"),
   },
   hooks: {
     afterChange: [
@@ -111,7 +111,7 @@ The Schema Builder produces the same `SingleConfig` that code-first singles use.
 | **Entries** | Many | Exactly one |
 | **List view** | Yes | No |
 | **Create/Delete** | Yes | No (auto-created on first access; cannot be deleted) |
-| **Access control operations** | `create`, `read`, `update`, `delete` | `read`, `update` only |
+| **Access control operations** | `create`, `read`, `update`, `delete`, `publish`, `unpublish` | `read`, `update`, `publish`, `unpublish` |
 | **Hooks** | 8 hooks | 4 hooks (`beforeRead`, `afterRead`, `beforeChange`, `afterChange`) |
 | **Default table prefix** | None — uses slug as table name | `single_` (e.g. `single_site_settings`) |
 | **API endpoint** | `/admin/api/collections/[slug]/entries` | `/admin/api/singles/[slug]` |
@@ -200,17 +200,17 @@ Configure how the single appears in the admin panel via the `admin` property.
 
 ## Access control
 
-Singles only support `read` and `update` — there is no create or delete since the document is auto-created on first access and cannot be removed.
+A single's access rules are `read`, `update`, `publish` and `unpublish` — there is no `create` or `delete`, since the document is auto-created on first access and cannot be removed. `publish` and `unpublish` are judged on top of `update`, for a single with `status: true`. Any other key stops startup with `ACCESS_KEY_UNKNOWN`, naming the key; remove it to fix the config.
 
 ```typescript
 access: {
   read: true,
-  update: ({ permissions, collection }) =>
-    permissions.includes(`${collection}:update`),
+  update: ({ permissions, target }) =>
+    permissions.includes(`update-${target.slug}`),
 }
 ```
 
-Each operation accepts a function (returning `boolean | Promise<boolean>`), a literal `boolean`, or can be omitted to fall back to database role/permission checks. A declared rule is what a signed-in user is judged by, so it checks the permission itself and narrows from there; don't decide by a role's name. Super-admin always bypasses checks. The `AccessControlContext` shape is the same as for [collections](/docs/configuration/collections#access-control).
+Each operation accepts a function (returning `boolean | Promise<boolean>`), a literal `boolean`, or can be omitted to fall back to database role/permission checks. A declared rule is what a signed-in user is judged by, so it checks the permission itself and narrows from there; don't decide by a role's name. Super-admin always bypasses checks. A Single's rule is handed the same context as a collection's, with `target.kind` set to `"single"`: see [collections](/docs/configuration/collections#access-control).
 
 ## Hooks
 
@@ -305,7 +305,7 @@ export default defineSingle({
   ],
   access: {
     read: true,
-    update: ({ permissions }) => permissions.includes("header:update"),
+    update: ({ permissions }) => permissions.includes("update-header"),
   },
 });
 ```

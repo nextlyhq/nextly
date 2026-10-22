@@ -24,6 +24,7 @@ import type {
   VersionsWhere,
   VersionsWhereCondition,
 } from "./db-api";
+import type { RecordedVersionStatus } from "./recorded-status";
 import type { PrunableVersion } from "./retention";
 import { workingDraftKey } from "./working-draft-key";
 
@@ -221,7 +222,8 @@ export interface VersionRef {
 export interface InsertVersionInput {
   ref: VersionRef;
   versionNo: number | null;
-  status: VersionStatus;
+  /** A lifecycle status, or a document's own where it has no lifecycle. */
+  status: RecordedVersionStatus;
   isAutosave: boolean;
   snapshot: unknown;
   label?: string | null;
@@ -237,7 +239,8 @@ export interface VersionRow {
   scopeSlug: string;
   entryId: string;
   versionNo: number | null;
-  status: VersionStatus;
+  /** A lifecycle status, or a document's own where it has no lifecycle. */
+  status: RecordedVersionStatus;
   isAutosave: boolean;
   snapshot: unknown;
   label: string | null;
@@ -352,18 +355,7 @@ export class VersionsRepository {
    * error or a NULL write.
    */
   private serializeSnapshot(snapshot: unknown): string {
-    try {
-      const serialized = JSON.stringify(snapshot);
-      if (typeof serialized !== "string") {
-        throw new TypeError("snapshot did not serialize to a JSON string");
-      }
-      return serialized;
-    } catch (cause) {
-      throw NextlyError.internal({
-        cause: cause instanceof Error ? cause : undefined,
-        logContext: { reason: "version-snapshot-not-serializable" },
-      });
-    }
+    return serializeVersionSnapshot(snapshot);
   }
 
   /**
@@ -764,10 +756,18 @@ export class VersionsRepository {
    * partial unique index on Postgres; a MySQL/SQLite serialization or unique
    * guard is needed before capture is wired into concurrent writes.
    */
-  async getMaxVersionNo(ref: VersionRef): Promise<number> {
+  async getMaxVersionNo(
+    ref: VersionRef,
+    // A locking read, for a retry after a lost race: on MySQL a plain read
+    // answers from the transaction's snapshot, which still lacks the number a
+    // concurrent transaction committed, so it would hand out the same number
+    // again. A locking read sees the latest committed row on every dialect.
+    options: { latest?: boolean } = {}
+  ): Promise<number> {
     // Project only version_no and take a single row (order desc, limit 1), so
     // this never materializes a full version row (which carries the snapshot).
     const rows = await this.db.select<VersionRow>(TABLE, {
+      ...(options.latest ? { forUpdate: true } : {}),
       columns: ["versionNo"],
       where: {
         and: [
@@ -863,6 +863,7 @@ export class VersionsRepository {
       includeAutosave?: boolean;
       cursor?: number;
       locale?: string;
+      locales?: readonly string[];
     } = {}
   ): Promise<VersionMeta[]> {
     const and: (VersionsWhereCondition | VersionsWhere)[] = [
@@ -898,6 +899,21 @@ export class VersionsRepository {
           { column: "locale", op: "IS NULL" },
         ],
       });
+    }
+    // Only the languages a caller may read, in the database so a page stays
+    // full. A version in no language belongs to the whole document, whose read
+    // the caller has passed, so it stays.
+    if (opts.locales !== undefined) {
+      and.push(
+        opts.locales.length === 0
+          ? { column: "locale", op: "IS NULL" }
+          : {
+              or: [
+                { column: "locale", op: "IN", value: [...opts.locales] },
+                { column: "locale", op: "IS NULL" },
+              ],
+            }
+      );
     }
     // Keyset pagination: return versions strictly older than the cursor, which
     // is the last versionNo the caller already has. Stable under concurrent
@@ -945,8 +961,13 @@ export class VersionsRepository {
    * always kept, and the snapshot is never read. Autosave rows are excluded
    * because they never count toward the cap.
    */
-  async listDurableForPrune(ref: VersionRef): Promise<PrunableVersion[]> {
+  async listDurableForPrune(
+    ref: VersionRef,
+    // A locking read, after a lost allocation race: see `getMaxVersionNo`.
+    options: { latest?: boolean } = {}
+  ): Promise<PrunableVersion[]> {
     return this.db.select<PrunableVersion>(TABLE, {
+      ...(options.latest ? { forUpdate: true } : {}),
       columns: [
         "id",
         "versionNo",
@@ -1283,5 +1304,25 @@ export class VersionsRepository {
       });
     }
     return deleted;
+  }
+}
+
+/**
+ * A snapshot as the versions table stores it: its JSON text, or a refusal when
+ * it has none. Exported so a caller that must copy a snapshot before storing
+ * it copies exactly what the store would keep, rather than by rules of its own.
+ */
+export function serializeVersionSnapshot(snapshot: unknown): string {
+  try {
+    const serialized = JSON.stringify(snapshot);
+    if (typeof serialized !== "string") {
+      throw new TypeError("snapshot did not serialize to a JSON string");
+    }
+    return serialized;
+  } catch (cause) {
+    throw NextlyError.internal({
+      cause: cause instanceof Error ? cause : undefined,
+      logContext: { reason: "version-snapshot-not-serializable" },
+    });
   }
 }

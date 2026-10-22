@@ -28,19 +28,30 @@ import { widgetAsAsked } from "../widget-as-asked";
 import { WidgetRenderer } from "../WidgetRenderer";
 
 import { CardActionsMenu, CardWidthLabel } from "./CardActionsMenu";
+import { CardMenu } from "./CardMenu";
 import {
   CardControlsOverlay,
   CardControlsSpace,
   CustomizingFence,
 } from "./CustomizingFence";
 import { DismissWidgetButton } from "./DismissWidgetButton";
-import { SortableWidgetCell } from "./SortableWidgetCell";
+import { DraggableWidgetCell, type CellDrag } from "./DraggableWidgetCell";
+import {
+  useCardQuickSetting,
+  type CellSettingsWrite,
+} from "./useCardQuickSetting";
 import type { ArrangedWidget } from "./useDashboardArrangement";
 import { WidgetSettingsSheet } from "./WidgetSettingsSheet";
 
 export interface ArrangedCellProps {
   row: ArrangedWidget;
   isEditing: boolean;
+  /** The card just placed: moved, resized, added or put back. */
+  highlighted?: boolean;
+  /** Its handle's drag, while dragging is on; absent at one column. */
+  drag?: CellDrag;
+  /** Lists the card menu's widths in the menu itself: where the dashboard draws one column. */
+  widthsInPlace?: boolean;
   /**
    * Whether a layout write is in flight anywhere on this dashboard.
    *
@@ -76,6 +87,12 @@ export interface ArrangedCellProps {
     /** Reload this card's data on its own, offered in its error state. */
     onRetry?: () => void;
   };
+  /**
+   * How this card's settings are saved at once, outside customise mode: its quick setting.
+   * ABSENT while customising, where a change waits for the dashboard's Save, and before an
+   * arrangement has been read, when there is no stored placement to write into.
+   */
+  settingsWrite?: CellSettingsWrite | undefined;
   /** Registers the card's controls, so focus can be sent back to them. */
   refs: {
     menu: (element: HTMLElement | null) => void;
@@ -123,22 +140,47 @@ function dismissAffordance(
     ArrangedCellProps,
     "isEditing" | "isWriting" | "singleCardWriteBlocked" | "refs"
   >,
-  dismiss: (() => void) | undefined
+  dismiss: (() => void) | undefined,
+  /** The card's menu at rest, drawn beside the dismiss control when both are offered. */
+  menu?: ReactNode
 ): { floating?: ReactNode; header?: ReactNode } {
-  if (!dismiss || props.isEditing || widget.dismissible !== true) return {};
-  const button = (floating: boolean) => (
-    <DismissWidgetButton
-      title={widget.title}
-      isDismissing={props.isWriting}
-      unavailableReason={props.singleCardWriteBlocked}
-      floating={floating}
-      buttonRef={props.refs.dismiss}
-      onDismiss={dismiss}
-    />
-  );
-  return widget.chrome === "none"
-    ? { floating: button(true) }
-    : { header: button(false) };
+  const dismissible =
+    dismiss !== undefined && !props.isEditing && widget.dismissible === true;
+  if (!dismissible && !menu) return {};
+  const button = (floating: boolean) =>
+    dismissible ? (
+      <DismissWidgetButton
+        title={widget.title}
+        isDismissing={props.isWriting}
+        unavailableReason={props.singleCardWriteBlocked}
+        floating={floating}
+        buttonRef={props.refs.dismiss}
+        onDismiss={dismiss}
+      />
+    ) : null;
+  if (widget.chrome === "none") {
+    if (!menu) return { floating: button(true) };
+    // An unframed card has no header, so its controls float together in the corner the drag
+    // handle leaves free, rather than each claiming the same spot.
+    return {
+      floating: (
+        <div className="absolute right-2 top-2 z-10 flex items-center gap-1">
+          {button(false)}
+          {menu}
+        </div>
+      ),
+    };
+  }
+  return {
+    header: menu ? (
+      <span className="flex items-center gap-1">
+        {button(false)}
+        {menu}
+      </span>
+    ) : (
+      button(false)
+    ),
+  };
 }
 
 /** A card's width and its one menu, side by side, while customising. */
@@ -151,6 +193,7 @@ function CardEditActions(props: {
   on: ArrangedCellProps["on"];
   /** Present only when the widget offers settings. */
   openSettings?: () => void;
+  widthsInPlace: boolean;
 }) {
   const { row, width, can, isWriting, refs, on, openSettings } = props;
   return (
@@ -163,6 +206,7 @@ function CardEditActions(props: {
         can={can}
         disabled={isWriting}
         triggerRef={refs.menu}
+        widthsInPlace={props.widthsInPlace}
         on={{
           move: on.move,
           setWidth: on.setWidth,
@@ -200,12 +244,15 @@ function CardBody(props: {
   widget: DashboardWidget;
   placement: ComponentProps<typeof WidgetRenderer>["placement"];
   headerAction: ReactNode;
+  /** The card's quick setting, at rest; the frame decides when to draw it. */
+  quick: ReactNode;
   data: ArrangedCellProps["data"];
   isEditing: boolean;
   /** Whether a floated dismiss control shares the cell. */
   floated: boolean;
 }) {
-  const { widget, placement, headerAction, data, isEditing, floated } = props;
+  const { widget, placement, headerAction, quick, data, isEditing, floated } =
+    props;
   if (isEditing) {
     // While customising: drawn, and out of reach. A different element from
     // the resting cell's, so entering and leaving customise mode mounts the
@@ -227,7 +274,12 @@ function CardBody(props: {
     // anything. Present only where a floated control shares the cell.
     return (
       <div data-widget-body>
-        <WidgetRenderer definition={widget} placement={placement} {...data} />
+        <WidgetRenderer
+          definition={widget}
+          placement={placement}
+          quick={quick}
+          {...data}
+        />
       </div>
     );
   }
@@ -239,9 +291,72 @@ function CardBody(props: {
       definition={widget}
       placement={placement}
       headerAction={headerAction}
+      quick={quick}
       {...data}
     />
   );
+}
+
+/**
+ * What a card offers at rest: its quick setting, its dismiss control and menu (in its header,
+ * or floated over an unframed card), and where its sheet's save goes.
+ */
+function useRestingControls(
+  props: ArrangedCellProps,
+  widget: DashboardWidget,
+  hasSettings: boolean,
+  setSettingsOpen: (open: boolean) => void
+) {
+  // From the DECLARED widget, so the change is judged against the reader's stored settings.
+  const quick = useCardQuickSetting({
+    widget: props.row.widget,
+    config: props.row.config,
+    isEditing: props.isEditing,
+    isFetching: props.data.isFetching,
+    updatedAt: props.data.updatedAt,
+    settingsWrite: props.settingsWrite,
+  });
+  const menu = restingMenuFor(props, widget, hasSettings, quick, () =>
+    setSettingsOpen(true)
+  );
+  return {
+    quick,
+    ...dismissAffordance(widget, props, props.on.dismiss, menu),
+    saveSettings: settingsSaverFor(props),
+  };
+}
+
+/** The card's menu at rest, for a card whose settings can be saved there; otherwise none. */
+function restingMenuFor(
+  props: ArrangedCellProps,
+  widget: DashboardWidget,
+  hasSettings: boolean,
+  quick: ReturnType<typeof useCardQuickSetting>,
+  openSettings: () => void
+): ReactNode | undefined {
+  const write = props.settingsWrite;
+  if (props.isEditing || !write || !hasSettings) return undefined;
+  return (
+    <CardMenu
+      title={widget.title}
+      {...(quick.menu ? { quick: quick.menu } : {})}
+      onOpenSettings={openSettings}
+      disabled={write.isWriting || write.unavailable !== undefined}
+    />
+  );
+}
+
+/**
+ * Where the sheet's save goes. Outside customise mode it is saved at once, through the same
+ * write as the quick setting; while customising it is recorded in the draft, saved with the rest.
+ */
+function settingsSaverFor(
+  props: ArrangedCellProps
+): (config: Record<string, unknown>) => void {
+  const write = props.settingsWrite;
+  if (props.isEditing || !write) return props.on.saveSettings;
+  return config =>
+    write.write(config, { onLanded: () => {}, onFailed: () => {} });
 }
 
 /** The cell's classes: its width, its collapse when empty, and its spacing. */
@@ -279,8 +394,25 @@ function cellClassName(
   );
 }
 
+/** The card's width and menu while customising, or nothing at rest. */
+function editActionsOf(
+  props: ArrangedCellProps,
+  width: WidgetWidth,
+  openSettings: (() => void) | undefined
+): ReactNode {
+  if (!props.isEditing) return null;
+  const { row, can, isWriting, refs, on } = props;
+  return (
+    <CardEditActions
+      {...{ row, width, can, isWriting, refs, on }}
+      widthsInPlace={props.widthsInPlace === true}
+      {...(openSettings ? { openSettings } : {})}
+    />
+  );
+}
+
 export function ArrangedCell(props: ArrangedCellProps) {
-  const { row, isEditing, isWriting, can, data, refs, on } = props;
+  const { row, isEditing, data } = props;
   /*
    * Open state lives with the CELL rather than with the grid: the sheet belongs
    * to one card, and hoisting it would make the grid track which of many is
@@ -305,20 +437,23 @@ export function ArrangedCell(props: ArrangedCellProps) {
     }),
     [row.placementId, widget.settings, row.config]
   );
-  const { floating: floatingControl, header: dismissControl } =
-    dismissAffordance(widget, props, on.dismiss);
+  const {
+    quick,
+    floating: floatingControl,
+    header: dismissControl,
+    saveSettings,
+  } = useRestingControls(props, widget, hasSettings, setSettingsOpen);
   const width = drawnWidth(row.width, row.allowedWidths);
 
   // While customising, the card's width and its one menu, side by side. A
   // framed card shows them over its own header's right end; an unframed one
   // in the small header the cell draws for it below. Both outside the fence
   // that puts the card's own content out of reach.
-  const editActions = isEditing ? (
-    <CardEditActions
-      {...{ row, width, can, isWriting, refs, on }}
-      {...(hasSettings ? { openSettings: () => setSettingsOpen(true) } : {})}
-    />
-  ) : null;
+  const editActions = editActionsOf(
+    props,
+    width,
+    hasSettings ? () => setSettingsOpen(true) : undefined
+  );
   const unframed = widget.chrome === "none";
   // While customising, a framed card's header keeps the room its controls are
   // drawn over; at rest it holds the dismiss control, if any.
@@ -326,10 +461,12 @@ export function ArrangedCell(props: ArrangedCellProps) {
   const headerAction = unframed ? undefined : framedHeaderAction;
 
   return (
-    <SortableWidgetCell
+    <DraggableWidgetCell
       id={row.placementId}
       title={widget.title}
       isEditing={isEditing}
+      highlighted={props.highlighted}
+      {...(props.drag === undefined ? {} : { drag: props.drag })}
       data-testid={`widget-cell-${widget.id}`}
       className={cellClassName(row, unframed, isEditing)}
     >
@@ -353,13 +490,14 @@ export function ArrangedCell(props: ArrangedCellProps) {
           title={widget.title}
           settings={widget.settings ?? []}
           config={row.config}
-          onSave={on.saveSettings}
+          onSave={saveSettings}
         />
       ) : null}
       <CardBody
         {...{ widget, placement, headerAction, data, isEditing }}
+        quick={quick.inline}
         floated={floatingControl !== undefined}
       />
-    </SortableWidgetCell>
+    </DraggableWidgetCell>
   );
 }

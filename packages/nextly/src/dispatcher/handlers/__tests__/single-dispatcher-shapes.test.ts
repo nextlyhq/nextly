@@ -62,6 +62,11 @@ import {
   getSingleMetadataServiceFromDI,
   getSingleRegistryFromDI,
 } from "../../helpers/di";
+import {
+  asCaller,
+  keyCaller,
+  sessionCaller,
+} from "../../__tests__/request-caller";
 import { dispatchSingles } from "../single-dispatcher";
 
 /** Silent: these tests read Response shapes, not the log. */
@@ -411,7 +416,7 @@ describe("dispatchSingles, mutations (respondMutation)", () => {
     expect(body).not.toHaveProperty("data");
   });
 
-  it("updateSingleDocument forwards decoded roles into the user context", async () => {
+  it("updateSingleDocument forwards the caller's roles into the user context", async () => {
     const registry = makeRegistry();
     const updateSpy = vi.fn().mockResolvedValue({
       success: true,
@@ -421,14 +426,12 @@ describe("dispatchSingles, mutations (respondMutation)", () => {
     });
     wireDi(registry, makeEntry({ update: updateSpy }));
 
-    await dispatchSingles(
-      "updateSingleDocument",
-      {
-        slug: "site",
-        _authenticatedUserId: "u1",
-        _authenticatedUserRoles: JSON.stringify(["editor"]),
-      },
-      { title: "Updated" }
+    await asCaller(sessionCaller({ userId: "u1", roles: ["editor"] }), () =>
+      dispatchSingles(
+        "updateSingleDocument",
+        { slug: "site" },
+        { title: "Updated" }
+      )
     );
 
     // Field-level access.read redaction on the response must see the caller's
@@ -528,20 +531,21 @@ describe("dispatchSingles getSingleDocument — read access forwarding", () => {
     data: { id: "doc1", title: "Welcome" },
   };
 
-  /** The reserved params the route handler stamps once it has authenticated. */
-  const authedParams = {
-    slug: "site",
-    _authenticatedUserId: "u1",
-    _authenticatedUserName: "Ada",
-    _authenticatedUserEmail: "ada@example.com",
-    _authenticatedUserRoles: JSON.stringify(["editor", "author"]),
+  /** The caller the route handler sets once it has authenticated. */
+  const authedFields = {
+    userId: "u1",
+    name: "Ada",
+    email: "ada@example.com",
+    roles: ["editor", "author"],
   };
 
   it("passes the authenticated user and attests route authorization", async () => {
     const entry = makeEntry({ get: vi.fn().mockResolvedValue(okResult) });
     wireDi(makeRegistry(), entry);
 
-    await dispatchSingles("getSingleDocument", { ...authedParams }, undefined);
+    await asCaller(sessionCaller(authedFields), () =>
+      dispatchSingles("getSingleDocument", { slug: "site" }, undefined)
+    );
 
     const options = entry.get.mock.calls[0][1];
     expect(options.user).toEqual({
@@ -561,7 +565,9 @@ describe("dispatchSingles getSingleDocument — read access forwarding", () => {
     const entry = makeEntry({ get: vi.fn().mockResolvedValue(okResult) });
     wireDi(makeRegistry(), entry);
 
-    await dispatchSingles("getSingleDocument", { slug: "site" }, undefined);
+    await asCaller(undefined, () =>
+      dispatchSingles("getSingleDocument", { slug: "site" }, undefined)
+    );
 
     const options = entry.get.mock.calls[0][1];
     // An absent user must never be mistaken for a trusted one, and nothing
@@ -574,15 +580,11 @@ describe("dispatchSingles getSingleDocument — read access forwarding", () => {
     const entry = makeEntry({ get: vi.fn().mockResolvedValue(okResult) });
     wireDi(makeRegistry(), entry);
 
-    await dispatchSingles(
-      "getSingleDocument",
-      {
-        ...authedParams,
-        _authenticatedActorType: "apiKey",
-        _authenticatedActorId: "key-1",
-        _authenticatedPermissions: JSON.stringify(["singles:read"]),
-      },
-      undefined
+    // The key's own grant, pinned as its scope by the route handler.
+    await asCaller(
+      keyCaller("key-1", authedFields),
+      () => dispatchSingles("getSingleDocument", { slug: "site" }, undefined),
+      { actorType: "apiKey", permissions: ["singles:read"] }
     );
 
     const options = entry.get.mock.calls[0][1];

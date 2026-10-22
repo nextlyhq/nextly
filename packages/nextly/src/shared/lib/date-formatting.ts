@@ -1,5 +1,6 @@
 import { container } from "../../di/container";
 import type { SupportedDialect } from "../../types/database";
+import { consoleLogger } from "../types";
 
 // ============================================================================
 // Global API Date/Time Formatting Constants
@@ -44,7 +45,7 @@ export function debugTimezone(
   details: Record<string, unknown>
 ): void {
   if (!shouldDebugTimezone()) return;
-  console.debug(`[timezone][${stage}]`, details);
+  consoleLogger.debug(`[timezone][${stage}]`, { details });
 }
 
 export function isTimestampFieldKey(key: string | undefined): boolean {
@@ -301,6 +302,31 @@ export function normalizeTimestampsInPayload(
 }
 
 /**
+ * The timezone every API answer renders content timestamps in: the one the
+ * general settings name, or `null` when none is configured (or the settings
+ * cannot be read), which keeps payloads in UTC so browser-side formatters can
+ * apply the reader's local timezone consistently.
+ *
+ * One lookup for every encoding of an answer. A JSON response is rewritten by
+ * {@link withTimezoneFormatting}; a streamed one, which that pass cannot read
+ * whole, formats each part itself with this same timezone, so a value reads
+ * the same in either.
+ */
+export async function configuredTimezone(): Promise<string | null> {
+  try {
+    if (container.has("generalSettingsService")) {
+      const svc = container.get<{ getTimezone(): Promise<string | null> }>(
+        "generalSettingsService"
+      );
+      return (await svc.getTimezone()) ?? null;
+    }
+  } catch {
+    // An unreadable setting falls back to UTC, as an unset one does.
+  }
+  return null;
+}
+
+/**
  * Higher-order function to apply timezone formatting to a JSON response.
  */
 export async function withTimezoneFormatting(
@@ -336,23 +362,10 @@ export async function withTimezoneFormatting(
     return response;
   }
 
-  let timezone: string | null = null;
-  try {
-    if (container.has("generalSettingsService")) {
-      const svc = container.get<{ getTimezone(): Promise<string | null> }>(
-        "generalSettingsService"
-      );
-      timezone = await svc.getTimezone();
-    }
-  } catch (_err) {
-    // Fall back to system default below
-  }
-
-  // If no timezone is explicitly configured in settings, keep payloads in UTC
-  // so browser-side formatters can apply the user's local timezone consistently.
-  const activeTimezone = timezone ?? null;
-
-  const transformed = normalizeTimestampsInPayload(parsed, activeTimezone);
+  const transformed = normalizeTimestampsInPayload(
+    parsed,
+    await configuredTimezone()
+  );
 
   const headers = new Headers(response.headers);
   headers.set("Content-Type", "application/json");

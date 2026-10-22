@@ -44,7 +44,7 @@ function recentOrders(startingItems: number) {
     title: "Recent orders",
     description: "The newest orders",
     category: "Shop",
-    widths: ["1/2", "full"],
+    widths: ["half", "full"],
     width: "full",
     permission: `read-${ORDERS}`,
     settings: {
@@ -55,6 +55,7 @@ function recentOrders(startingItems: number) {
       query: ({ settings }) => ({
         collection: settings.collection,
         op: "list",
+        select: ["state"],
         limit: settings.items,
       }),
     },
@@ -158,7 +159,7 @@ describe("startup with a declaration that cannot work (sqlite)", () => {
       contributes: {
         dashboard: {
           widgets: [
-            { ...recentOrders(5), id: "core/orders", width: "1/4" },
+            { ...recentOrders(5), id: "core/orders", width: "quarter" },
           ] as unknown as NonNullable<
             NonNullable<
               Parameters<typeof definePlugin>[0]["contributes"]
@@ -181,7 +182,7 @@ describe("startup with a declaration that cannot work (sqlite)", () => {
       'plugin "@test/broken", widget "core/orders": id "core/orders" is in the reserved "core/" namespace'
     );
     expect(message).toContain(
-      'plugin "@test/broken", widget "core/orders": width "1/4" is not one of the widths it allows'
+      'plugin "@test/broken", widget "core/orders": width "quarter" is not one of the widths it allows'
     );
   });
 });
@@ -213,6 +214,7 @@ function listingPlugin(name: string, collection: string, sort: string) {
               query: ({ settings }) => ({
                 collection: settings.collection,
                 op: "list",
+                select: [sort],
                 sort,
               }),
             },

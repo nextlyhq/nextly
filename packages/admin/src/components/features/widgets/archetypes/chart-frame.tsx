@@ -5,11 +5,12 @@
  * looking at the card. Two things carry the same data, and both are needed
  * because neither replaces the other:
  *
- * - The SVG is `role="img"` with a `<title>` and a `<desc>`, so a screen reader
- *   announces WHAT the chart shows and its headline shape instead of walking
- *   into a bag of unlabelled `<path>` elements. `role="img"` also prunes the
- *   children from the accessibility tree, which is the point: the shapes are
- *   decoration once the text alternative exists.
+ * - The chart's one accessible object is the focusable area around the picture,
+ *   named by what it shows and described by its text alternative, so a screen
+ *   reader announces WHAT the chart shows and its headline shape instead of
+ *   walking into a bag of unlabelled shapes. The picture itself is hidden from
+ *   assistive tech: the shapes are decoration once the text alternative exists,
+ *   and exposing both would announce the chart twice.
  * - The DISCLOSURE holds the real numbers as an HTML table, which is the only
  *   form that can be navigated cell by cell, compared, and copied.
  *
@@ -20,9 +21,9 @@
  * reader, so nobody is asked to take a longer route to the numbers. The `<desc>`
  * is what keeps the chart itself meaningful while the table is closed.
  *
- * `role="img"` and not `role="application"`, which is what the popular chart
- * libraries emit: `application` puts a screen reader into forms mode and hands
- * every keystroke to a widget that has no keyboard interface to receive them.
+ * A `group` and not `role="application"`, which is what the popular chart
+ * libraries emit: `application` puts a screen reader into forms mode for the
+ * whole region, taking browse mode away from the description and the table.
  *
  * @module components/features/widgets/archetypes/chart-frame
  */
@@ -63,6 +64,8 @@ export interface ChartRow {
    * now says what it is instead of relying on a colour.
    */
   announce?: string;
+  /** The count is a lower bound: drawn "N+" and heard "N or more", in the chart and its table. */
+  floor?: boolean;
 }
 
 export interface ChartFrameProps {
@@ -189,7 +192,7 @@ export function ChartFrame({
                     )}
                   </th>
                   <td className="py-1 text-right tabular-nums text-foreground">
-                    <CardFigure value={row.count} />
+                    <CardFigure value={row.count} floor={row.floor} />
                   </td>
                 </tr>
               ))}

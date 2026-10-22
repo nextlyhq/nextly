@@ -48,6 +48,7 @@ import {
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
 import type { SingleConfig } from "../../../singles/config/types";
+import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
@@ -493,6 +494,23 @@ export class SingleRegistryService extends BaseRegistryService<
       updated_at: new Date(),
     };
 
+    // Whether this update changes what the Single's document is judged
+    // against: its fields (by hash), or its draft/published or localization
+    // switch. Asked of the update itself, so a pure-metadata sync that
+    // re-sends unchanged fields is not one.
+    const fieldsActuallyChanged =
+      data.fields !== undefined &&
+      (data.schemaHash === undefined ||
+        !schemaHashesMatch(data.schemaHash, existing.schemaHash));
+    const statusToggled =
+      data.status !== undefined &&
+      (data.status === true) !== (existing.status === true);
+    const judgedDifferently =
+      fieldsActuallyChanged ||
+      statusToggled ||
+      (data.localized !== undefined &&
+        (data.localized === true) !== (existing.localized === true));
+
     if (data.label !== undefined) {
       updateData.label = data.label;
     }
@@ -512,12 +530,6 @@ export class SingleRegistryService extends BaseRegistryService<
       // Singles), so a localized-only toggle has nothing to migrate and would
       // otherwise leave the Single falsely pending forever. Without a hash we
       // cannot compare fields, so fall back to the prior always-bump.
-      const fieldsActuallyChanged =
-        data.schemaHash === undefined ||
-        !schemaHashesMatch(data.schemaHash, existing.schemaHash);
-      const statusToggled =
-        data.status !== undefined &&
-        (data.status === true) !== (existing.status === true);
       if (fieldsActuallyChanged || statusToggled) {
         updateData.schema_version = existing.schemaVersion + 1;
         updateData.migration_status = data.migrationStatus || "pending";
@@ -619,6 +631,12 @@ export class SingleRegistryService extends BaseRegistryService<
 
       this.logger.info("Single updated", { slug });
 
+      // A stricter schema (a required field added, a rule tightened, the
+      // lifecycle switched off) can leave a scheduled release holding this
+      // Single with a hard problem: it is checked again once this is durable,
+      // and such a release stops now rather than at its instant.
+      if (judgedDifferently) await this.recheckReleasesHolding(slug);
+
       return this.deserializeRecord(results[0]);
     } catch (error) {
       // Preserve already-mapped NextlyErrors (notFound above, forbidden above).
@@ -629,6 +647,18 @@ export class SingleRegistryService extends BaseRegistryService<
       }
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+  }
+
+  /**
+   * Hand the scheduled releases holding this Single to the early stop, once
+   * the change is durable.
+   */
+  private recheckReleasesHolding(slug: string): Promise<void> {
+    return this.afterCommit(() =>
+      stopReleasesHolding({
+        scopes: [{ scopeKind: "single", scopeSlug: slug }],
+      })
+    );
   }
 
   // ============================================================
@@ -696,6 +726,10 @@ export class SingleRegistryService extends BaseRegistryService<
       clearWebhookRecording("single", slug);
 
       this.logger.info("Single deleted", { slug, force: true });
+
+      // Its document is gone with it, so a scheduled release holding it
+      // cannot run: stopped now rather than at its instant.
+      await this.recheckReleasesHolding(slug);
 
       if (this.permissionSeedService) {
         try {
