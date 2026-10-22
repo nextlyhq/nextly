@@ -49,6 +49,9 @@ export default defineConfig({
     },
   ],
   test: {
+    // What each file loaded on its last run, so `--changed` and `related` pick
+    // tests from real dependencies rather than a static import graph.
+    experimental: { recordDependencies: true },
     // The suites read `theme.css` and the package sources through the
     // filesystem rather than importing them, so Vitest has no module
     // dependency to invalidate and a watch session would keep reporting on

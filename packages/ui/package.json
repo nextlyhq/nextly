@@ -113,8 +113,8 @@
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
     "@vitejs/plugin-react": "^5.1.0",
-    "@vitest/coverage-v8": "^4.1.0",
-    "@vitest/ui": "^4.1.0",
+    "@vitest/coverage-v8": "^5.0.5",
+    "@vitest/ui": "^5.0.5",
     "culori": "^4.0.2",
     "eslint": "^9.39.1",
     "jsdom": "^27.1.0",
@@ -128,7 +128,7 @@
     "tsx": "^4.20.5",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.5"
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.2.12",

@@ -41,7 +41,7 @@
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "test:watch": "vitest",
-    "bench": "vitest bench --run",
+    "bench": "vitest bench --run --reporter=verbose",
     "clean": "rimraf dist"
   },
   "engines": {
@@ -61,7 +61,7 @@
     "rimraf": "^6.1.3",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.5"
   },
   "publishConfig": {
     "access": "public",

@@ -1555,7 +1555,7 @@ async function generatePluginPackageJson(
     "@types/react-dom": PINNED_VERSIONS["@types/react-dom"],
     typescript: PINNED_VERSIONS.typescript,
     tsup: "^8.5.0",
-    vitest: "^4.1.0",
+    vitest: "^5.0.5",
     eslint: PINNED_VERSIONS.eslint,
     "@eslint/js": PINNED_VERSIONS.eslint,
     "typescript-eslint": "^8.0.0",

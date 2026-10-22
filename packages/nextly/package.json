@@ -271,8 +271,8 @@
     "@types/pg": "^8.15.5",
     "@types/react": "19.2.0",
     "@types/semver": "^7.5.8",
-    "@vitest/coverage-v8": "^4.1.0",
-    "@vitest/ui": "^4.1.0",
+    "@vitest/coverage-v8": "^5.0.5",
+    "@vitest/ui": "^5.0.5",
     "better-sqlite3": "^12.10.0",
     "esbuild": "^0.28.1",
     "eslint": "^9.39.1",
@@ -287,7 +287,7 @@
     "tsx": "^4.20.5",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.5"
   },
   "peerDependencies": {
     "@nextlyhq/adapter-mysql": "workspace:*",

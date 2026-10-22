@@ -16,6 +16,9 @@ export default defineConfig({
     __NEXTLY_ADMIN_VERSION__: JSON.stringify(adminVersion),
   },
   test: {
+    // What each file loaded on its last run, so `--changed` and `related` pick
+    // tests from real dependencies rather than a static import graph.
+    experimental: { recordDependencies: true },
     name: "admin",
     globals: true,
     environment: "jsdom",

@@ -1,6 +1,28 @@
+import * as jestDomMatchers from "@testing-library/jest-dom/matchers";
+import type { TestingLibraryMatchers } from "@testing-library/jest-dom/matchers";
 import { cleanup } from "@testing-library/react";
-import { afterEach } from "vitest";
-import "@testing-library/jest-dom/vitest";
+import { afterEach, expect } from "vitest";
+
+// jest-dom's matchers, registered on the `expect` these tests import.
+//
+// Not through `@testing-library/jest-dom/vitest`, which registers them from
+// inside jest-dom on whichever vitest resolves from jest-dom's own folder. The
+// workspace installs vitest once per `@types/node` peer, so that is a second
+// copy, not the one running these tests, and on Vitest 5 extending its `expect`
+// breaks `rejects` here: `await expect(Promise.reject(new Error("boom")))
+// .rejects.toThrow("boom")` fails with "got ''". The matchers entry imports
+// no vitest at all.
+expect.extend(jestDomMatchers);
+
+// Their types, on the interface Vitest 5 reads custom matchers from.
+// jest-dom's own declarations augment `Assertion<T>`, Vitest 4's shape, which no
+// longer merges with Vitest 5's `Assertion<R, T>`.
+declare module "vitest" {
+  interface Matchers<
+    R extends void | Promise<void> = void | Promise<void>,
+    T = unknown,
+  > extends TestingLibraryMatchers<unknown, R> {}
+}
 
 // Mock ResizeObserver for Radix UI components
 global.ResizeObserver = class ResizeObserver {

@@ -57,8 +57,8 @@
     "@types/picomatch": "^4.0.3",
     "@types/tar": "^6.1.13",
     "@typescript-eslint/parser": "^8.59.0",
-    "@vitest/coverage-v8": "^4.1.0",
-    "@vitest/ui": "^4.1.0",
+    "@vitest/coverage-v8": "^5.0.5",
+    "@vitest/ui": "^5.0.5",
     "eslint": "^9.39.1",
     "jsdom": "^27.1.0",
     "react": "19.2.0",
@@ -66,7 +66,7 @@
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.5"
   },
   "engines": {
     "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
