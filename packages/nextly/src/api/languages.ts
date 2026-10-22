@@ -15,9 +15,9 @@ import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import type { LanguageSettingsService } from "../domains/i18n/services/language-settings-service";
-import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 
+import { readJsonBody } from "./read-json-body";
 import { respondData, respondMutation } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
@@ -57,12 +57,20 @@ const changeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("setDefault"), code, confirmed: z.literal(true) }),
 ]);
 
-export const getLanguages = withErrorHandler(async (req: Request) => {
+/** Refuses a caller holding neither `action` nor `manage` on settings, as the rest of Settings does. */
+async function requireSettings(
+  req: Request,
+  action: "read" | "update"
+): Promise<void> {
   const authResult = await requireAnyPermission(req, [
-    { action: "read", resource: "settings" },
+    { action, resource: "settings" },
     { action: "manage", resource: "settings" },
   ]);
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+}
+
+export const getLanguages = withErrorHandler(async (req: Request) => {
+  await requireSettings(req, "read");
   const settings = await languageSettings();
   // `?defaultPreview=fr`: what making `fr` the default would touch, shown before it is confirmed.
   const preview = new URL(req.url).searchParams.get("defaultPreview");
@@ -73,27 +81,8 @@ export const getLanguages = withErrorHandler(async (req: Request) => {
 });
 
 export const changeLanguages = withErrorHandler(async (req: Request) => {
-  const authResult = await requireAnyPermission(req, [
-    { action: "update", resource: "settings" },
-    { action: "manage", resource: "settings" },
-  ]);
-  if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
-  const text = await req.text();
-  let body: unknown;
-  try {
-    body = text ? JSON.parse(text) : {};
-  } catch {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "",
-          code: "invalid_json",
-          message: "Request body is not valid JSON.",
-        },
-      ],
-    });
-  }
-  const parsed = changeSchema.safeParse(body);
+  await requireSettings(req, "update");
+  const parsed = changeSchema.safeParse(await readJsonBody(req));
   if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
   const list = await (await languageSettings()).change(parsed.data);
   return respondMutation("Languages saved.", { ...list });

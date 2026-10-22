@@ -22,13 +22,7 @@ import type { PermissionSeedService } from "../../domains/auth/services/permissi
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../../domains/dynamic-collections";
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
-import { MetaRetentionGate } from "../../domains/retention/gate";
-import {
-  buildRetentionRunner,
-  retentionPoliciesFrom,
-} from "../../domains/retention/passes";
-import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
-import type { CacheRevalidator } from "../../revalidation/types";
+import { retentionPoliciesFrom } from "../../domains/retention/passes";
 import { CollectionFileManager } from "../../services/collection-file-manager";
 import { CollectionEntryService } from "../../services/collections/collection-entry-service";
 import { CollectionMetadataService } from "../../services/collections/collection-metadata-service";
@@ -40,6 +34,7 @@ import type { FieldGroupDataService } from "../../services/field-groups";
 import { consoleLogger } from "../../shared/types";
 import { container } from "../container";
 
+import { contentWriteSeams } from "./content-write-seams";
 import { createNoOpHookRegistry } from "./no-op-hook-registry";
 import type { RegistrationContext } from "./types";
 
@@ -175,28 +170,7 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       // i18n M4: forward normalized localization config so localized reads resolve
       // translatable fields from the companion table.
       ctx.languages,
-      // CollectionService writes append events through this same service, so it
-      // needs its own runner — the handler's is not on this path.
-      buildRetentionRunner({
-        adapter,
-        ...retentionPoliciesFrom(ctx.config),
-        gate: new MetaRetentionGate(adapter),
-        logger,
-      }),
-      // Shared post-response drain fast path (registered by the webhook
-      // services). Absent only when webhooks were never registered.
-      container.has("webhookFastDrainScheduler")
-        ? container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
-        : undefined,
-      // Cache revalidator that flushes each write's revalidation intents
-      // post-commit. Resolved lazily at flush time (not captured here) because
-      // this service is constructed during boot, before a Next cache adapter
-      // registers — an eager capture would memoize the no-op and ignore the
-      // real adapter that registers later, at request time.
-      () =>
-        container.has("cacheRevalidator")
-          ? container.get<CacheRevalidator>("cacheRevalidator")
-          : undefined
+      ...contentWriteSeams(ctx)
     );
 
     return new CollectionService(

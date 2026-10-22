@@ -25,6 +25,7 @@ import {
   runAsRoleChangeCaller,
 } from "../../domains/auth/services/super-admin-grant";
 import type { RouteGrant } from "../../domains/auth/system-write-policy";
+import { withCurrentLanguages } from "../../domains/i18n/configured-locales";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
 import { assertRunnableAsPrincipal } from "../../plugins/principals/run-as";
@@ -82,12 +83,35 @@ export async function runAsCaller<
   args: A,
   operation: (args: A) => Promise<R>
 ): Promise<R> {
+  // One language list for the whole call, as a REST request has: the list is
+  // brought up to date first, so a process that serves no requests still sees
+  // a language added elsewhere, and a change made while the call runs reaches
+  // the next call rather than half of this one. A call made inside a request
+  // or another call keeps that one's list.
   // One memo of access lookups for the call, so a list whose field rules ask
   // about the caller on every row looks the caller up once. A call made inside
   // a request shares that request's memo.
-  return runWithAccessMemo(() =>
-    runAsCallerInMemo(defaultConfig, args, operation)
+  return withCurrentLanguages(() =>
+    runWithAccessMemo(() => runAsCallerInMemo(defaultConfig, args, operation))
   );
+}
+
+/**
+ * `namespace` with each of its methods run under one language list (`withCurrentLanguages`), as
+ * `runAsCaller` runs a collection or Single call: for a namespace whose calls reach content
+ * without passing through `runAsCaller`, such as a form submission or a field group's change.
+ */
+export function withLanguagesPinned<N extends object>(namespace: N): N {
+  const members: [string, unknown][] = Object.entries(namespace);
+  return Object.fromEntries(
+    members.map(([name, member]) => [
+      name,
+      typeof member === "function"
+        ? (...args: unknown[]) =>
+            withCurrentLanguages(async () => member.apply(namespace, args))
+        : member,
+    ])
+  ) as N;
 }
 
 function runAsCallerInMemo<A extends DirectAPIConfig & RunAsPrincipal, R>(

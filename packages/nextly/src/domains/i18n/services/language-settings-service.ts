@@ -16,6 +16,7 @@ import { LANGUAGES_TABLE } from "../../../schemas/languages/table-name";
 import type { LanguageDirection } from "../../../schemas/languages/types";
 import { fallbackCodes } from "../config/stored-languages";
 import {
+  countPendingChangesIn,
   type DefaultChangeSummary,
   pendingChangesIn,
   summarizeDefaultChange,
@@ -126,13 +127,28 @@ export class LanguageSettingsService {
    */
   async change(change: LanguageChange): Promise<LanguageListView> {
     this.refuseWhenLocked();
+    // Asked before the transaction, so it cannot run inside it on another connection.
+    const draftsKept =
+      change.kind === "setDefault" &&
+      (await this.adapter.tableExists("nextly_versions"));
     if (change.kind === "setDefault") {
       await this.refusePendingDefaultChanges();
     }
     await this.adapter.transaction(async tx => {
+      // Locked, so a second change made at the same moment plans from this one's result: planned
+      // from the same rows, both would write the same next revision, and the fingerprint would
+      // stay where the first left it, hiding the second from every other instance. SQLite takes
+      // no row lock and needs none, as its writers already run one at a time.
       const rows = await tx.select<LanguageRow>(LANGUAGES_TABLE, {
         columns: [...COLUMNS],
+        forUpdate: true,
       });
+      // Asked again where the change is written: the admin confirms from a summary that can stay
+      // open for minutes, and a draft saved meanwhile in the current default would be left behind.
+      if (draftsKept) {
+        const current = defaultCodeOf(rows);
+        refuseWhenPending(current, await countPendingChangesIn(tx, current));
+      }
       const was = new Map(rows.map(row => [row.code, row]));
       const now = new Date();
       for (const row of planLanguageChange(rows, change)) {
@@ -183,18 +199,7 @@ export class LanguageSettingsService {
   /** Refuses a default change while the current default has pending changes. */
   private async refusePendingDefaultChanges(): Promise<void> {
     const current = defaultCodeOf(await this.storedRows());
-    const pending = await pendingChangesIn(this.adapter, current);
-    if (pending === 0) return;
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "code",
-          code: "default_has_pending_changes",
-          message: `"${current}" has ${pending} pending change(s). Publish or discard them before making another language the default.`,
-        },
-      ],
-      logContext: { reason: "default-language-has-pending-changes", pending },
-    });
+    refuseWhenPending(current, await pendingChangesIn(this.adapter, current));
   }
 
   private storedRows(): Promise<LanguageRow[]> {
@@ -202,6 +207,21 @@ export class LanguageSettingsService {
       tx.select<LanguageRow>(LANGUAGES_TABLE, { columns: [...COLUMNS] })
     );
   }
+}
+
+/** Refuses a default change while `current`, the default, has `pending` changes. */
+function refuseWhenPending(current: string, pending: number): void {
+  if (pending === 0) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "code",
+        code: "default_has_pending_changes",
+        message: `"${current}" has ${pending} pending change(s). Publish or discard them before making another language the default.`,
+      },
+    ],
+    logContext: { reason: "default-language-has-pending-changes", pending },
+  });
 }
 
 /** The default language's code, English while nothing is stored. */

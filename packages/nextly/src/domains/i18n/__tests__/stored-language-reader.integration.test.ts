@@ -11,6 +11,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { LanguageRegistry } from "../language-registry";
 import { storedLanguageReader } from "../stored-language-reader";
 
 function quote(dialect: TestDialect, name: string): string {
@@ -76,6 +77,30 @@ describeEachDialect("the stored language list", dialect => {
         ["fr", false, true],
       ])
     );
+  });
+
+  it("tells the registry when the caller is inside an open transaction, so a refresh there reads nothing", async () => {
+    const reader = storedLanguageReader(current.adapter);
+    const registry = new LanguageRegistry({ reader, ttlMs: 0 });
+    await registry.refresh();
+    await store("en", 0, true);
+
+    // A read here would run on another pooled connection, which the transaction-escape check
+    // fails on PostgreSQL and MySQL; the list stays as it was until the transaction ends.
+    const inside = await current.adapter.transaction(async () => {
+      await registry.refresh();
+      return {
+        open: reader.inOpenTransaction?.(),
+        codes: registry.current()?.locales.map(locale => locale.code),
+      };
+    });
+
+    expect(inside).toEqual({ open: true, codes: undefined });
+    expect(reader.inOpenTransaction?.()).toBe(false);
+    await registry.refresh();
+    expect(registry.current()?.locales.map(locale => locale.code)).toEqual([
+      "en",
+    ]);
   });
 
   it("reads a database without the table as nothing stored", async () => {

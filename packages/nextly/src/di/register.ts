@@ -1071,6 +1071,13 @@ async function registerServicesOnce(
     logger: resolvedLogger,
   });
 
+  // The stored language list is read before any plugin starts and before registration publishes:
+  // until its first read the registry knows no stored languages, and a plugin's `init` writing
+  // through the services, or a request served in that gap, would read a site with languages as
+  // one without, sending translated values to the main table. After the boot migrations, so the
+  // table exists; a read that fails for any other reason fails the boot.
+  await ctx.languages.refresh({ force: true });
+
   await assertBootPluginSchemaVersions(
     transformedConfig,
     adapter,
@@ -1158,12 +1165,6 @@ async function registerServicesOnce(
   // cached singleton was bootstrapped before the boot-time seed
   // attempted to run. System bootstrap (permissions table) still
   // happens automatically — see permission-seed-service.
-
-  // The stored language list is read before registration publishes: until its first read the
-  // registry knows no stored languages, and a request served in that gap would read a site with
-  // languages as one without, sending translated values to the main table. After the boot
-  // migrations, so the table exists; a read that fails for any other reason fails the boot.
-  await ctx.languages.refresh({ force: true });
 
   bindDirectApi();
 

@@ -81,6 +81,22 @@ describe("a change to the stored language list", () => {
     }
   });
 
+  it("keeps a label without its surrounding spaces, and refuses one that is only spaces", () => {
+    const added = planLanguageChange([en], {
+      kind: "add",
+      code: "fr",
+      label: "  French ",
+    });
+    expect(added.find(row => row.code === "fr")?.label).toBe("French");
+
+    for (const change of [
+      { kind: "add", code: "fr", label: "   " },
+      { kind: "update", code: "en", label: " \t " },
+    ] as const) {
+      expect(refusal(() => planLanguageChange([en], change))).toMatch(/label/i);
+    }
+  });
+
   it("refuses fallback lists that loop through other languages", () => {
     const rows = [
       en,

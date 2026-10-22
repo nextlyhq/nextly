@@ -6,6 +6,9 @@
  * of a handful of rows. A database an upgrade has not reached yet has no table, which reads as
  * nothing stored, so such a site keeps behaving as it did.
  *
+ * Both reads go to the pool, so inside an open transaction the registry is told not to make them
+ * (`inOpenTransaction`): they would run on another connection, outside that transaction.
+ *
  * @module domains/i18n/stored-language-reader
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -46,6 +49,7 @@ export function storedLanguageReader(
     }
   };
   return {
+    inOpenTransaction: () => adapter.transactionOpenInFlow(),
     fingerprint: () =>
       orNothing(async () => {
         const [row] = await db()

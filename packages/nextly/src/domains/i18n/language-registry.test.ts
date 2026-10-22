@@ -149,4 +149,105 @@ describe("the language registry", () => {
 
     expect(codes(registry.current())).toEqual(["en", "fr"]);
   });
+
+  it("makes no read while the caller's transaction is open, forced or not", async () => {
+    // A read there would take a second connection from the pool: outside the transaction, and
+    // able to stall a small pool. The list already held serves until the transaction ends.
+    let now = 0;
+    let inTransaction = false;
+    const stored = storedRows([english]);
+    const registry = new LanguageRegistry({
+      reader: { ...stored.reader, inOpenTransaction: () => inTransaction },
+      ttlMs: 1000,
+      now: () => now,
+    });
+    await registry.refresh();
+
+    stored.set([english, french]);
+    now = 5000;
+    inTransaction = true;
+    await registry.refresh();
+    await registry.refresh({ force: true });
+
+    expect(stored.reader.fingerprint).toHaveBeenCalledTimes(1);
+    expect(codes(registry.current())).toEqual(["en"]);
+
+    inTransaction = false;
+    await registry.refresh();
+    expect(codes(registry.current())).toEqual(["en", "fr"]);
+  });
+
+  it("brings the list up to date before pinning it for a call", async () => {
+    let now = 0;
+    const stored = storedRows([english]);
+    const registry = new LanguageRegistry({
+      reader: stored.reader,
+      ttlMs: 1000,
+      now: () => now,
+    });
+    await registry.refresh();
+
+    stored.set([english, french]);
+    now = 5000;
+    const seen = await registry.runWithLatest(async () => {
+      const before = codes(registry.current());
+      stored.set([english]);
+      await registry.refresh({ force: true });
+      return { before, during: codes(registry.current()) };
+    });
+
+    expect(seen).toEqual({ before: ["en", "fr"], during: ["en", "fr"] });
+  });
+
+  it("keeps the enclosing call's list for a call made inside it, and reads nothing", async () => {
+    // A hook's own call, say: it belongs to the call that set it going, which already chose a list.
+    let now = 0;
+    const stored = storedRows([english]);
+    const registry = new LanguageRegistry({
+      reader: stored.reader,
+      ttlMs: 1000,
+      now: () => now,
+    });
+    await registry.refresh();
+
+    const inner = await registry.runWithSnapshot(async () => {
+      stored.set([english, french]);
+      now = 5000;
+      return registry.runWithLatest(async () => codes(registry.current()));
+    });
+
+    expect(inner).toEqual(["en"]);
+    expect(stored.reader.fingerprint).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a forced refresh's list when an older read started before it finishes after it", async () => {
+    // The older read gets as far as the rows and is held there, still holding the list as it was.
+    let releaseOlderRows: (rows: StoredLanguage[]) => void = () => {};
+    let revision = 1;
+    let rowsNow = [english];
+    const reader: StoredLanguageReader = {
+      fingerprint: async () => `${rowsNow.length}:${revision}`,
+      rows: vi
+        .fn<() => Promise<StoredLanguage[]>>()
+        .mockImplementationOnce(
+          () =>
+            new Promise(resolve => {
+              releaseOlderRows = resolve;
+            })
+        )
+        .mockImplementation(async () => rowsNow),
+    };
+    const registry = new LanguageRegistry({ reader, ttlMs: 60_000 });
+
+    const older = registry.refresh();
+    await vi.waitFor(() => expect(reader.rows).toHaveBeenCalledTimes(1));
+
+    rowsNow = [english, french];
+    revision = 2;
+    await registry.refresh({ force: true });
+    releaseOlderRows([english]);
+    await older;
+
+    expect(codes(registry.current())).toEqual(["en", "fr"]);
+  });
 });

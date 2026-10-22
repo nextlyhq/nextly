@@ -83,7 +83,7 @@ import { installLegacyFieldGroupsNamespaceGuard } from "./legacy-field-groups-na
 import * as authNs from "./namespaces/auth";
 import * as collectionsNs from "./namespaces/collections";
 import type { NextlyContext } from "./namespaces/context";
-import { runAsCaller } from "./namespaces/helpers";
+import { runAsCaller, withLanguagesPinned } from "./namespaces/helpers";
 import {
   createAccessNamespace,
   createApiKeysNamespace,
@@ -300,8 +300,10 @@ export class Nextly implements NextlyContext {
 
     this.users = createUsersNamespace(this);
     this.media = createMediaNamespace(this);
-    this.forms = createFormsNamespace(this);
-    this.fieldGroups = createFieldGroupsNamespace(this);
+    // One language list per call, as the collection and Single methods have through
+    // `runAsCaller`: a submission writes an entry, and a field group's change seeds its rows.
+    this.forms = withLanguagesPinned(createFormsNamespace(this));
+    this.fieldGroups = withLanguagesPinned(createFieldGroupsNamespace(this));
     this.email = createEmailNamespace(this);
     this.emailProviders = createEmailProvidersNamespace(this);
     this.emailTemplates = createEmailTemplatesNamespace(this);

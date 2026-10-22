@@ -55,7 +55,18 @@ export async function pendingChangesIn(
   locale: string
 ): Promise<number> {
   if (!(await adapter.tableExists("nextly_versions"))) return 0;
-  const [row] = await adapter.queryStatement<{ n: unknown }>(
+  return countPendingChangesIn(adapter, locale);
+}
+
+/**
+ * Pending changes in `locale`, counted on `executor`: the open transaction's, when the count
+ * decides a write made in it. The versions table must exist (`pendingChangesIn` asks first).
+ */
+export async function countPendingChangesIn(
+  executor: Pick<DrizzleAdapter, "queryStatement">,
+  locale: string
+): Promise<number> {
+  const [row] = await executor.queryStatement<{ n: unknown }>(
     sql`SELECT COUNT(*) AS n FROM ${sql.identifier("nextly_versions")} WHERE ${sql.identifier("draft_key")} IS NOT NULL AND ${sql.identifier("locale")} = ${locale}`
   );
   return Number(row?.n ?? 0);

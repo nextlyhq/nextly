@@ -103,7 +103,8 @@ function updateLanguage(
   change: Extract<LanguageChange, { kind: "update" }>
 ): LanguageRow[] {
   const row = activeRow(list, change.code);
-  row.label = change.label ?? row.label;
+  row.label =
+    change.label === undefined ? row.label : labelOf(row.code, change.label);
   row.direction = change.direction ?? row.direction;
   if (change.fallback !== undefined) {
     row.fallback = fallbackList(list, change.fallback);
@@ -146,7 +147,7 @@ function addLanguage(
     );
   }
   const fields = {
-    label: change.label,
+    label: labelOf(code, change.label),
     direction: change.direction ?? "ltr",
     fallback: fallbackList(list, change.fallback ?? []),
     active: true,
@@ -281,6 +282,22 @@ function sameLanguage(a: LanguageRow, b: LanguageRow): boolean {
     a.isDefault === b.isDefault &&
     a.active === b.active
   );
+}
+
+/**
+ * A label as stored: without surrounding spaces. One that is nothing but spaces is refused, since
+ * Settings and every language picker would show it as a blank name.
+ */
+function labelOf(code: string, label: string): string {
+  const trimmed = label.trim();
+  if (trimmed.length === 0) {
+    throw refused(
+      code,
+      "blank_label",
+      `"${code}" needs a label: give the name editors should see for this language.`
+    );
+  }
+  return trimmed;
 }
 
 function refused(path: string, code: string, message: string): NextlyError {
