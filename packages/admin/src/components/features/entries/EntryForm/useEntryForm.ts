@@ -553,6 +553,8 @@ export function useEntryForm({
     entryId: entry?.id ?? "",
     showToast: true,
     setError: form.setError,
+    // For the labels a refusal over out-of-date shared fields names them by.
+    fields,
     // Route the save to the active content language.
     locale,
     // Match the editor's read mode so the optimistic update, rollback, and

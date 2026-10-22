@@ -18,7 +18,10 @@ import {
   currentCallerScope,
   runWithCallerScope,
 } from "../../auth/caller-scope";
-import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../../domains/auth/system-write-policy";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
   MediaFile,
@@ -42,6 +45,7 @@ import type { NextlyContext } from "./context";
 import {
   checkedCaller,
   checkedScope,
+  checkRead,
   checkWrite,
   createRequestContext,
   directApiActor,
@@ -123,13 +127,19 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
 
   const folders: MediaFoldersNamespace = {
     async list(args: ListFoldersArgs = {}): Promise<MediaFolder[]> {
-      if (args.parent) {
-        return await ctx.mediaService.listSubfolders(
-          args.parent,
+      // A read is held to the key scope it is checked with, as a write is.
+      return asChecked(args, async () => {
+        await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.media.read);
+        if (args.parent) {
+          return await ctx.mediaService.listSubfolders(
+            args.parent,
+            createRequestContext(args)
+          );
+        }
+        return await ctx.mediaService.listRootFolders(
           createRequestContext(args)
         );
-      }
-      return await ctx.mediaService.listRootFolders(createRequestContext(args));
+      });
     },
 
     async create(args: CreateFolderArgs): Promise<MediaFolder> {
@@ -185,39 +195,47 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
     },
 
     async find(args: FindMediaArgs = {}): Promise<ListResult<MediaFile>> {
-      const limit = args.limit ?? 24;
-      const page = args.page ?? 1;
+      return asChecked(args, async () => {
+        await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.media.read);
+        const limit = args.limit ?? 24;
+        const page = args.page ?? 1;
 
-      const result = await ctx.mediaService.listMedia(
-        {
-          page,
-          limit,
-          search: args.search,
-          type: args.mimeType as MediaMimeType | undefined,
-          folderId: args.folder,
-          sortBy: args.sortBy,
-          sortOrder: args.sortOrder,
-        },
-        createRequestContext(args)
-      );
+        const result = await ctx.mediaService.listMedia(
+          {
+            page,
+            limit,
+            search: args.search,
+            type: args.mimeType as MediaMimeType | undefined,
+            folderId: args.folder,
+            sortBy: args.sortBy,
+            sortOrder: args.sortOrder,
+          },
+          createRequestContext(args)
+        );
 
-      return toListResult(result, limit, page);
+        return toListResult(result, limit, page);
+      });
     },
 
     async findByID(args: FindMediaByIDArgs): Promise<MediaFile | null> {
-      const config = mergeConfig(ctx.defaultConfig, args);
+      return asChecked(args, async () => {
+        // Refused before the lookup, so `disableErrors` answers a refusal as
+        // a refusal, never as a missing file.
+        await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.media.read);
+        const config = mergeConfig(ctx.defaultConfig, args);
 
-      try {
-        return await ctx.mediaService.findById(
-          args.id,
-          createRequestContext(args)
-        );
-      } catch (error) {
-        if (config.disableErrors && isNotFoundError(error)) {
-          return null;
+        try {
+          return await ctx.mediaService.findById(
+            args.id,
+            createRequestContext(args)
+          );
+        } catch (error) {
+          if (config.disableErrors && isNotFoundError(error)) {
+            return null;
+          }
+          throw error;
         }
-        throw error;
-      }
+      });
     },
 
     async update(args: UpdateMediaArgs): Promise<MutationResult<MediaFile>> {

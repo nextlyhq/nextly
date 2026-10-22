@@ -18,6 +18,11 @@
  * slots a feature relies on, and a misspelt holder cannot quietly create pins
  * nobody releases.
  *
+ * Core registers one holder: `shared-publish-base`, a slot per language, each
+ * holding the version a pending change began from, so the comparison that
+ * keeps a publish from reverting a newer shared value always has its copy
+ * (`shared-publish-base`).
+ *
  * Every call takes the caller's transaction, so a feature pins in the same
  * transaction as the change it records. A pin takes the document's write lock,
  * the lock every save holds, so a pin and a save's retention pass cannot
