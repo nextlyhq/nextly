@@ -12,6 +12,7 @@ import { isDeepStrictEqual } from "node:util";
 import { vi } from "vitest";
 
 import { GET as listCollectionsSchema } from "../../../api/collections-schema";
+import { requireRouteAuthentication } from "../../../api/route-auth";
 import { createMediaHandlers } from "../../../api/media-handlers";
 import { container } from "../../../di/container";
 import { CollectionAccessService } from "../../../domains/collections/services/collection-access-service";
@@ -22,11 +23,17 @@ import type {
   DocumentLockService,
   DocumentRef,
 } from "../../../domains/document-lock";
-import { widgetAudience } from "../../../domains/widgets/visibility";
+import {
+  permissionVerdicts,
+  widgetAudience,
+} from "../../../domains/widgets/visibility";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { resolveContent } from "../../../runtime/routing/resolve-content";
 import { consoleLogger } from "../../../services/shared";
 import { recordingDeviations, type Deviation } from "../../access/deviations";
+import { schemaListed } from "../../access/route-gate-adapters";
+import { getRBACService } from "../../code-access";
+import type { AuthContext } from "../../middleware";
 import { canReadEntity, readAccessCaller } from "../../entity-read-access";
 import { canReadSystemResource } from "../../resource-readable";
 
@@ -451,12 +458,18 @@ async function entity(_world: World, row: Row, who: CallerHandle) {
   return fromBoolean(await canReadEntity(targetSlug(row), caller));
 }
 
-const schemaLists = new WeakMap<
-  World,
-  Map<string, Promise<Answer | string[]>>
->();
+/** What the schema builder lists for a caller, and who it authenticated. */
+type Listed = Answer | { slugs: string[]; auth: AuthContext };
 
-/** The collections the schema builder lists for a caller, asked once. */
+const schemaLists = new WeakMap<World, Map<string, Promise<Listed>>>();
+
+/**
+ * Whether the schema builder lists the row's collection to the caller. The
+ * list is asked once per caller; what deviated on the way is every
+ * collection's at once, so it is set aside, and the row's own collection is
+ * asked of the list's decision for what deviated in deciding it, which must
+ * give the list's answer.
+ */
 async function schema(world: World, row: Row, who: CallerHandle) {
   let cache = schemaLists.get(world);
   if (!cache) {
@@ -465,21 +478,31 @@ async function schema(world: World, row: Row, who: CallerHandle) {
   }
   let listed = cache.get(row.caller);
   if (!listed) {
-    listed = (async () => {
-      const res = await listCollectionsSchema(
+    listed = recordingDeviations(async (): Promise<Listed> => {
+      const request = () =>
         new Request(`${ORIGIN}/api/collections/schema?limit=500`, {
           headers: who.headers,
-        })
-      );
+        });
+      const res = await listCollectionsSchema(request());
       if (res.status !== 200) return String(res.status);
       const body = (await res.json()) as { items: { slug: string }[] };
-      return body.items.map(item => item.slug);
-    })();
+      return {
+        slugs: body.items.map(item => item.slug),
+        auth: await requireRouteAuthentication(request()),
+      };
+    }).then(({ result }) => result);
     cache.set(row.caller, listed);
   }
   const answer = await listed;
   if (typeof answer === "string") return answer;
-  return answer.includes(collectionOf(row.rule)) ? "A" : "R";
+  const slug = collectionOf(row.rule);
+  const shown = answer.slugs.includes(slug);
+  const decided =
+    (await schemaListed(answer.auth, [{ slug }], getRBACService())).length > 0;
+  if (decided !== shown) {
+    throw new Error(`the schema list and its decision disagree on ${slug}`);
+  }
+  return shown ? "A" : "R";
 }
 
 /**
@@ -551,19 +574,34 @@ async function widget(world: World, row: Row, who: CallerHandle) {
     audiences.set(world, cache);
   }
   const key = `${row.setup} ${row.caller}`;
+  const caller = readAccessCaller({
+    user: who.user,
+    ...(who.actor ? { authenticatedScope: who.actor } : {}),
+  });
   let offered = cache.get(key);
   if (!offered) {
-    const caller = readAccessCaller({
-      user: who.user,
-      ...(who.actor ? { authenticatedScope: who.actor } : {}),
-    });
-    offered = widgetAudience(caller).then(
-      ({ visible }) => new Set(visible.map(card => card.id))
+    // Every widget is decided at once, so what deviated on the way is not
+    // any one row's: it is set aside, and each row asks its own widget's
+    // permission below.
+    offered = recordingDeviations(() => widgetAudience(caller)).then(
+      ({ result: { visible } }) => new Set(visible.map(card => card.id))
     );
     cache.set(key, offered);
   }
-  const id = widgetFor(targetSlug(row), row.action);
-  return (await offered).has(id) ? "A" : "R";
+  const slug = targetSlug(row);
+  const id = widgetFor(slug, row.action);
+  const shown = (await offered).has(id);
+  // The row's widget's permission, decided as the dashboard decides each
+  // one, for what deviated in deciding it; it must give the dashboard's
+  // answer.
+  const permission = `${row.action}-${slug}`;
+  const held = Boolean(
+    (await permissionVerdicts([permission], caller)).get(permission)
+  );
+  if (held !== shown) {
+    throw new Error(`the dashboard and its decision disagree on ${id}`);
+  }
+  return shown ? "A" : "R";
 }
 
 /** The id of a Single's one document, made by the reads that came before. */

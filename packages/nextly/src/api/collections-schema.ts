@@ -19,6 +19,8 @@
 
 import { z } from "zod";
 
+import { schemaListed } from "../auth/access/route-gate-adapters";
+import { getRBACService } from "../auth/code-access";
 import {
   COLLECTION_DEFINITION_ACTION,
   COLLECTION_DEFINITION_RESOURCE,
@@ -31,7 +33,6 @@ import { getFilterRegistry, FilterSeams } from "../filters";
 import { getCachedNextly } from "../init";
 import { resolveBuilderRevalidate } from "../revalidation/builder-revalidate";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
-import { hasPermission, isSuperAdmin } from "../services/lib/permissions";
 import { requireBuilderEnabled } from "../shared/builder-access";
 import { simplePluralize } from "../shared/lib/pluralization";
 
@@ -181,39 +182,15 @@ export const GET = withErrorHandler(async (request: Request) => {
     search,
   });
 
-  // Filter to the collections the caller may read. The authorization
-  // MUST honor the authentication method: an API key carries its own
-  // pre-resolved, possibly-narrowed permission set, so authorizing it via
-  // the owner's session RBAC (`hasPermission`/`isSuperAdmin` by user id)
-  // would let a restricted key list collections outside its scope. This
-  // mirrors how `requirePermission` branches on `authMethod`.
-  let filteredCollections = result.data;
-
-  if (auth.authMethod === "api-key") {
-    // The key's resolved permission set is the source of truth (no
-    // super-admin bypass — that is already reflected in the resolved set).
-    filteredCollections = result.data.filter(collection =>
-      auth.permissions.includes(`read-${collection.slug}`)
-    );
-  } else {
-    // Session auth: super-admins see everything; others need explicit
-    // read-{slug} permission via their RBAC roles.
-    const isAdmin = await isSuperAdmin(auth.userId);
-    if (!isAdmin) {
-      const permittedCollections = [];
-      for (const collection of result.data) {
-        const canRead = await hasPermission(
-          auth.userId,
-          "read",
-          collection.slug
-        );
-        if (canRead) {
-          permittedCollections.push(collection);
-        }
-      }
-      filteredCollections = permittedCollections;
-    }
-  }
+  // Narrowed to the collections the caller may read, judged on how it
+  // authenticated: a key on its own scope, never its owner's grants, so a
+  // restricted key lists nothing outside it. The caller's access is read once
+  // for the whole list.
+  const filteredCollections = await schemaListed(
+    auth,
+    result.data,
+    getRBACService()
+  );
 
   // D63 seam: let plugins transform the admin nav collection list.
   const navItems = await applyAdminNavFilter(filteredCollections, auth.userId);

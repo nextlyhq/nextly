@@ -51,6 +51,21 @@ export const DEVIATIONS = [
   // A read with no caller, a visitor or a plugin's person, keeps the media
   // rows it populates, where the decision refuses a caller with no grant.
   "visitor-keeps-media",
+  // `ctx.caller.can` hands back a signed-in user's rule answer as the rule
+  // gave it, `null` or a string included, rather than a yes or no.
+  "can-returns-raw-rule-value",
+  // Without the access-control service, `ctx.caller.can` and a held
+  // permission refuse a signed-in user, where a route reads their permission.
+  "can-no-service-refuses-people",
+  // `ctx.caller.can` and a held permission refuse an empty action or
+  // resource, a super-admin's included.
+  "can-refuses-empty-action-or-resource",
+  // A key holds a named permission by its stored slug alone: the target's
+  // rule is not read, nor, for a publish or an unpublish, update's.
+  "holds-permission-key-skips-rules",
+  // The schema list shows a collection to whoever holds its read permission,
+  // without reading the collection's read rule.
+  "schema-list-ignores-rules",
 ] as const;
 
 export type Deviation = (typeof DEVIATIONS)[number];
