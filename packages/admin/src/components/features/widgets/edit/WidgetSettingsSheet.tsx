@@ -30,7 +30,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -192,6 +191,20 @@ export function resetToDefaults(
   return reset;
 }
 
+/**
+ * A copy of `values` the form may own.
+ *
+ * 🔴 The form must never be handed the sheet's memoised baseline itself.
+ * react-hook-form copies only PLAIN objects; one with no prototype, as
+ * `initialValues` builds, it keeps by reference. Every keystroke then wrote
+ * into the baseline, and the reset on Cancel restored the cancelled value: the
+ * sheet reopened on a change nothing had saved. The copy keeps the null
+ * prototype, so a setting named `__proto__` stays data.
+ */
+function formCopy(values: Record<string, unknown>): Record<string, unknown> {
+  return Object.assign(Object.create(null), values);
+}
+
 export function WidgetSettingsSheet({
   open,
   onOpenChange,
@@ -230,21 +243,17 @@ export function WidgetSettingsSheet({
     return values;
   }, [settings, config, stale, sources]);
 
-  const form = useForm({ defaultValues });
+  const form = useForm({ defaultValues: formCopy(defaultValues) });
 
   // The form keeps the values it was mounted with, and `defaultValues` changing
   // later does not replace them. So while the sheet is closed it is rebuilt
   // from the latest baseline: sources that arrive or change after mounting are
-  // what it opens with, and a value a notice says was reset is the value Done
-  // keeps. And again as it opens, so a sheet always opens on what is stored,
-  // never on a change a reader cancelled, whatever wrote to the form after it
-  // closed. Never while it stays open, where it would discard the reader's edits.
-  const wasOpen = useRef(open);
+  // what it opens with, a value a notice says was reset is the value Done
+  // keeps, and a change the reader cancelled is gone. Never while it stays
+  // open, where it would discard the reader's edits.
   useEffect(() => {
-    const opening = open && !wasOpen.current;
-    wasOpen.current = open;
-    if (!open || opening) {
-      form.reset(defaultValues);
+    if (!open) {
+      form.reset(formCopy(defaultValues));
       setFailure(undefined);
     }
   }, [open, defaultValues, form]);
@@ -394,7 +403,9 @@ export function WidgetSettingsSheet({
                   className="mr-auto"
                   onClick={() =>
                     form.reset(
-                      resetToDefaults(settings, form.getValues(), sources)
+                      formCopy(
+                        resetToDefaults(settings, form.getValues(), sources)
+                      )
                     )
                   }
                 >

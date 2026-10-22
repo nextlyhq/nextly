@@ -98,32 +98,64 @@ describe("the settings sheet's Done", () => {
   });
 });
 
+/*
+ * The settings and the stored config are held at module level, as a card holds them between
+ * renders. Written inline they are new objects on every render, the sheet rebuilds its baseline
+ * each time, and a form that writes into that baseline goes unseen.
+ */
+const NOTHING_STORED: Record<string, unknown> | undefined = undefined;
+const HEADING: AnyWidgetSetting[] = [
+  { name: "heading", type: "text", label: "Heading" },
+];
+const STORED_HEADING: Record<string, unknown> = { heading: "Stored" };
+
 describe("reopening the settings sheet", () => {
+  function Harness(props: {
+    settings: AnyWidgetSetting[];
+    config: Record<string, unknown> | undefined;
+  }) {
+    const [open, setOpen] = useState(true);
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          Open again
+        </button>
+        <WidgetSettingsSheet
+          open={open}
+          onOpenChange={setOpen}
+          title="Recent posts"
+          settings={props.settings}
+          config={props.config}
+          onDone={() => {}}
+        />
+      </>
+    );
+  }
+
+  async function cancelAndReopen() {
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Open again" }));
+  }
+
+  it("opens on the default, not on a change the reader cancelled", async () => {
+    render(<Harness settings={SETTINGS} config={NOTHING_STORED} />);
+    const items = () =>
+      screen.getByRole("spinbutton", { name: /Number of items/ });
+    await userEvent.clear(items());
+    await userEvent.type(items(), "2");
+    await cancelAndReopen();
+    expect(items()).toHaveValue(5);
+  });
+
   it("opens on what is stored, not on a change the reader cancelled", async () => {
-    function Harness() {
-      const [open, setOpen] = useState(true);
-      return (
-        <>
-          <button type="button" onClick={() => setOpen(true)}>
-            Open again
-          </button>
-          <WidgetSettingsSheet
-            open={open}
-            onOpenChange={setOpen}
-            title="Recent posts"
-            settings={[{ name: "heading", type: "text", label: "Heading" }]}
-            config={{ heading: "Stored" }}
-            onDone={() => {}}
-          />
-        </>
-      );
-    }
-    render(<Harness />);
+    render(<Harness settings={HEADING} config={STORED_HEADING} />);
     const heading = () => screen.getByRole("textbox", { name: /Heading/ });
     await userEvent.clear(heading());
     await userEvent.type(heading(), "Cancelled");
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await userEvent.click(screen.getByRole("button", { name: "Open again" }));
+    await cancelAndReopen();
     expect(heading()).toHaveValue("Stored");
   });
 });
