@@ -21,48 +21,48 @@ service visitor read collection true at service  # visitor-public-default
 service user-without read collection true at rest
 service user-without read collection true at direct  # rule-alone-for-people
 service user-without read collection true at website  # rule-alone-for-people
-service user-without read collection true at route
+service user-without read collection true at route  # rule-alone-for-people
 service user-without read collection true at can
 service user-without read collection true at service  # rule-alone-for-people
 service user-without read collection true at entity
 service user-without create collection true at rest
 service user-without create collection true at direct  # rule-alone-for-people
-service user-without create collection true at route
+service user-without create collection true at route  # rule-alone-for-people
 service user-without create collection true at can
 service user-without create collection true at service  # rule-alone-for-people
 service user-partial create collection true at rest
 service user-partial create collection true at direct  # rule-alone-for-people
-service user-partial create collection true at route
+service user-partial create collection true at route  # rule-alone-for-people
 service user-partial create collection true at can
 service user-partial create collection true at service  # rule-alone-for-people
 service user-without update collection true at rest
 service user-without update collection true at direct  # rule-alone-for-people
-service user-without update collection true at route
+service user-without update collection true at route  # rule-alone-for-people
 service user-without update collection true at can
 service user-without update collection true at service  # rule-alone-for-people
 service user-without delete collection true at rest
 service user-without delete collection true at direct  # rule-alone-for-people
-service user-without delete collection true at route
+service user-without delete collection true at route  # rule-alone-for-people
 service user-without delete collection true at can
 service user-without delete collection true at service  # rule-alone-for-people
 service user-partial delete collection true at rest
 service user-partial delete collection true at direct  # rule-alone-for-people
-service user-partial delete collection true at route
+service user-partial delete collection true at route  # rule-alone-for-people
 service user-partial delete collection true at can
 service user-partial delete collection true at service  # rule-alone-for-people
 service user-without publish collection true at rest
 service user-without publish collection true at direct  # rule-alone-for-people
-service user-without publish collection true at route
+service user-without publish collection true at route  # rule-alone-for-people
 service user-without publish collection true at can
 service user-without publish collection true at service  # rule-alone-for-people
 service user-without unpublish collection true at rest
 service user-without unpublish collection true at direct  # rule-alone-for-people
-service user-without unpublish collection true at route
+service user-without unpublish collection true at route  # rule-alone-for-people
 service user-without unpublish collection true at can
 service user-without unpublish collection true at service  # rule-alone-for-people
 service user-partial unpublish collection true at rest
 service user-partial unpublish collection true at direct  # rule-alone-for-people
-service user-partial unpublish collection true at route
+service user-partial unpublish collection true at route  # rule-alone-for-people
 service user-partial unpublish collection true at can
 service user-partial unpublish collection true at service  # rule-alone-for-people
 service user-with read collection false at schema
@@ -79,48 +79,48 @@ service visitor read collection returns-true at service  # visitor-public-defaul
 service user-without read collection returns-true at rest
 service user-without read collection returns-true at direct  # rule-alone-for-people
 service user-without read collection returns-true at website  # rule-alone-for-people
-service user-without read collection returns-true at route
+service user-without read collection returns-true at route  # rule-alone-for-people
 service user-without read collection returns-true at can
 service user-without read collection returns-true at service  # rule-alone-for-people
 service user-without read collection returns-true at entity
 service user-without create collection returns-true at rest
 service user-without create collection returns-true at direct  # rule-alone-for-people
-service user-without create collection returns-true at route
+service user-without create collection returns-true at route  # rule-alone-for-people
 service user-without create collection returns-true at can
 service user-without create collection returns-true at service  # rule-alone-for-people
 service user-partial create collection returns-true at rest
 service user-partial create collection returns-true at direct  # rule-alone-for-people
-service user-partial create collection returns-true at route
+service user-partial create collection returns-true at route  # rule-alone-for-people
 service user-partial create collection returns-true at can
 service user-partial create collection returns-true at service  # rule-alone-for-people
 service user-without update collection returns-true at rest
 service user-without update collection returns-true at direct  # rule-alone-for-people
-service user-without update collection returns-true at route
+service user-without update collection returns-true at route  # rule-alone-for-people
 service user-without update collection returns-true at can
 service user-without update collection returns-true at service  # rule-alone-for-people
 service user-without delete collection returns-true at rest
 service user-without delete collection returns-true at direct  # rule-alone-for-people
-service user-without delete collection returns-true at route
+service user-without delete collection returns-true at route  # rule-alone-for-people
 service user-without delete collection returns-true at can
 service user-without delete collection returns-true at service  # rule-alone-for-people
 service user-partial delete collection returns-true at rest
 service user-partial delete collection returns-true at direct  # rule-alone-for-people
-service user-partial delete collection returns-true at route
+service user-partial delete collection returns-true at route  # rule-alone-for-people
 service user-partial delete collection returns-true at can
 service user-partial delete collection returns-true at service  # rule-alone-for-people
 service user-without publish collection returns-true at rest
 service user-without publish collection returns-true at direct  # rule-alone-for-people
-service user-without publish collection returns-true at route
+service user-without publish collection returns-true at route  # rule-alone-for-people
 service user-without publish collection returns-true at can
 service user-without publish collection returns-true at service  # rule-alone-for-people
 service user-without unpublish collection returns-true at rest
 service user-without unpublish collection returns-true at direct  # rule-alone-for-people
-service user-without unpublish collection returns-true at route
+service user-without unpublish collection returns-true at route  # rule-alone-for-people
 service user-without unpublish collection returns-true at can
 service user-without unpublish collection returns-true at service  # rule-alone-for-people
 service user-partial unpublish collection returns-true at rest
 service user-partial unpublish collection returns-true at direct  # rule-alone-for-people
-service user-partial unpublish collection returns-true at route
+service user-partial unpublish collection returns-true at route  # rule-alone-for-people
 service user-partial unpublish collection returns-true at can
 service user-partial unpublish collection returns-true at service  # rule-alone-for-people
 service user-with read collection returns-false at schema
@@ -223,48 +223,48 @@ service visitor read collection async-true at service  # visitor-public-default
 service user-without read collection async-true at rest
 service user-without read collection async-true at direct  # rule-alone-for-people
 service user-without read collection async-true at website  # rule-alone-for-people
-service user-without read collection async-true at route
+service user-without read collection async-true at route  # rule-alone-for-people
 service user-without read collection async-true at can
 service user-without read collection async-true at service  # rule-alone-for-people
 service user-without read collection async-true at entity
 service user-without create collection async-true at rest
 service user-without create collection async-true at direct  # rule-alone-for-people
-service user-without create collection async-true at route
+service user-without create collection async-true at route  # rule-alone-for-people
 service user-without create collection async-true at can
 service user-without create collection async-true at service  # rule-alone-for-people
 service user-partial create collection async-true at rest
 service user-partial create collection async-true at direct  # rule-alone-for-people
-service user-partial create collection async-true at route
+service user-partial create collection async-true at route  # rule-alone-for-people
 service user-partial create collection async-true at can
 service user-partial create collection async-true at service  # rule-alone-for-people
 service user-without update collection async-true at rest
 service user-without update collection async-true at direct  # rule-alone-for-people
-service user-without update collection async-true at route
+service user-without update collection async-true at route  # rule-alone-for-people
 service user-without update collection async-true at can
 service user-without update collection async-true at service  # rule-alone-for-people
 service user-without delete collection async-true at rest
 service user-without delete collection async-true at direct  # rule-alone-for-people
-service user-without delete collection async-true at route
+service user-without delete collection async-true at route  # rule-alone-for-people
 service user-without delete collection async-true at can
 service user-without delete collection async-true at service  # rule-alone-for-people
 service user-partial delete collection async-true at rest
 service user-partial delete collection async-true at direct  # rule-alone-for-people
-service user-partial delete collection async-true at route
+service user-partial delete collection async-true at route  # rule-alone-for-people
 service user-partial delete collection async-true at can
 service user-partial delete collection async-true at service  # rule-alone-for-people
 service user-without publish collection async-true at rest
 service user-without publish collection async-true at direct  # rule-alone-for-people
-service user-without publish collection async-true at route
+service user-without publish collection async-true at route  # rule-alone-for-people
 service user-without publish collection async-true at can
 service user-without publish collection async-true at service  # rule-alone-for-people
 service user-without unpublish collection async-true at rest
 service user-without unpublish collection async-true at direct  # rule-alone-for-people
-service user-without unpublish collection async-true at route
+service user-without unpublish collection async-true at route  # rule-alone-for-people
 service user-without unpublish collection async-true at can
 service user-without unpublish collection async-true at service  # rule-alone-for-people
 service user-partial unpublish collection async-true at rest
 service user-partial unpublish collection async-true at direct  # rule-alone-for-people
-service user-partial unpublish collection async-true at route
+service user-partial unpublish collection async-true at route  # rule-alone-for-people
 service user-partial unpublish collection async-true at can
 service user-partial unpublish collection async-true at service  # rule-alone-for-people
 service user-with read collection async-false at schema
@@ -295,22 +295,22 @@ service visitor read single none at direct  # visitor-public-default
 service visitor read single true at direct  # visitor-public-default
 service user-without read single true at rest
 service user-without read single true at direct  # rule-alone-for-people
-service user-without read single true at route
+service user-without read single true at route  # rule-alone-for-people
 service user-without read single true at can
 service user-without read single true at entity
 service user-without update single true at rest
 service user-without update single true at direct  # rule-alone-for-people
-service user-without update single true at route
+service user-without update single true at route  # rule-alone-for-people
 service user-without update single true at can
 service visitor read single returns-true at direct  # visitor-public-default
 service user-without read single returns-true at rest
 service user-without read single returns-true at direct  # rule-alone-for-people
-service user-without read single returns-true at route
+service user-without read single returns-true at route  # rule-alone-for-people
 service user-without read single returns-true at can
 service user-without read single returns-true at entity
 service user-without update single returns-true at rest
 service user-without update single returns-true at direct  # rule-alone-for-people
-service user-without update single returns-true at route
+service user-without update single returns-true at route  # rule-alone-for-people
 service user-without update single returns-true at can
 service visitor read single returns-null at direct  # visitor-public-default
 service user-with read single returns-null at can
@@ -341,12 +341,12 @@ service user-partial update single returns-undefined at can
 service visitor read single async-true at direct  # visitor-public-default
 service user-without read single async-true at rest
 service user-without read single async-true at direct  # rule-alone-for-people
-service user-without read single async-true at route
+service user-without read single async-true at route  # rule-alone-for-people
 service user-without read single async-true at can
 service user-without read single async-true at entity
 service user-without update single async-true at rest
 service user-without update single async-true at direct  # rule-alone-for-people
-service user-without update single async-true at route
+service user-without update single async-true at route  # rule-alone-for-people
 service user-without update single async-true at can
 service visitor read single other-operation at direct  # visitor-public-default
 service visitor read related none at population
@@ -422,29 +422,29 @@ service key-role-based read collection async-throws at schema
 service key-super-admin read collection async-throws at schema
 service user-partial read collection async-throws at schema
 service key-partial read collection async-throws at schema
-service user-with publish collection other-operation at route
+service user-with publish collection other-operation at route  # lifecycle-judged-alone
 service user-with publish collection other-operation at can
-service custom-role publish collection other-operation at route
+service custom-role publish collection other-operation at route  # lifecycle-judged-alone
 service custom-role publish collection other-operation at can
-service key-full-access publish collection other-operation at route
+service key-full-access publish collection other-operation at route  # lifecycle-judged-alone
 service key-full-access publish collection other-operation at can
-service key-role-based publish collection other-operation at route
+service key-role-based publish collection other-operation at route  # lifecycle-judged-alone
 service key-role-based publish collection other-operation at can
-service key-super-admin publish collection other-operation at route
+service key-super-admin publish collection other-operation at route  # lifecycle-judged-alone
 service key-super-admin publish collection other-operation at can
-service user-partial publish collection other-operation at route
+service user-partial publish collection other-operation at route  # lifecycle-judged-alone
 service user-partial publish collection other-operation at can
-service key-partial publish collection other-operation at route
+service key-partial publish collection other-operation at route  # lifecycle-judged-alone
 service key-partial publish collection other-operation at can
-service user-with unpublish collection other-operation at route
+service user-with unpublish collection other-operation at route  # lifecycle-judged-alone
 service user-with unpublish collection other-operation at can
-service custom-role unpublish collection other-operation at route
+service custom-role unpublish collection other-operation at route  # lifecycle-judged-alone
 service custom-role unpublish collection other-operation at can
-service key-full-access unpublish collection other-operation at route
+service key-full-access unpublish collection other-operation at route  # lifecycle-judged-alone
 service key-full-access unpublish collection other-operation at can
-service key-role-based unpublish collection other-operation at route
+service key-role-based unpublish collection other-operation at route  # lifecycle-judged-alone
 service key-role-based unpublish collection other-operation at can
-service key-super-admin unpublish collection other-operation at route
+service key-super-admin unpublish collection other-operation at route  # lifecycle-judged-alone
 service key-super-admin unpublish collection other-operation at can
 service visitor list collection none at direct  # visitor-public-default
 service visitor list collection none at service  # visitor-public-default
@@ -494,27 +494,27 @@ service visitor count collection other-operation at direct  # visitor-public-def
 service visitor count collection other-operation at service  # visitor-public-default
 service user-without publish single-pub true at rest
 service user-without publish single-pub true at direct  # rule-alone-for-people
-service user-without publish single-pub true at route
+service user-without publish single-pub true at route  # rule-alone-for-people
 service user-without publish single-pub true at can
 service user-without unpublish single-pub true at rest
 service user-without unpublish single-pub true at direct  # rule-alone-for-people
-service user-without unpublish single-pub true at route
+service user-without unpublish single-pub true at route  # rule-alone-for-people
 service user-without unpublish single-pub true at can
 service user-partial unpublish single-pub true at rest
 service user-partial unpublish single-pub true at direct  # rule-alone-for-people
-service user-partial unpublish single-pub true at route
+service user-partial unpublish single-pub true at route  # rule-alone-for-people
 service user-partial unpublish single-pub true at can
 service user-without publish single-pub returns-true at rest
 service user-without publish single-pub returns-true at direct  # rule-alone-for-people
-service user-without publish single-pub returns-true at route
+service user-without publish single-pub returns-true at route  # rule-alone-for-people
 service user-without publish single-pub returns-true at can
 service user-without unpublish single-pub returns-true at rest
 service user-without unpublish single-pub returns-true at direct  # rule-alone-for-people
-service user-without unpublish single-pub returns-true at route
+service user-without unpublish single-pub returns-true at route  # rule-alone-for-people
 service user-without unpublish single-pub returns-true at can
 service user-partial unpublish single-pub returns-true at rest
 service user-partial unpublish single-pub returns-true at direct  # rule-alone-for-people
-service user-partial unpublish single-pub returns-true at route
+service user-partial unpublish single-pub returns-true at route  # rule-alone-for-people
 service user-partial unpublish single-pub returns-true at can
 service user-with publish single-pub returns-null at can
 service user-without publish single-pub returns-null at can
@@ -534,39 +534,39 @@ service custom-role unpublish single-pub returns-undefined at can
 service user-partial unpublish single-pub returns-undefined at can
 service user-without publish single-pub async-true at rest
 service user-without publish single-pub async-true at direct  # rule-alone-for-people
-service user-without publish single-pub async-true at route
+service user-without publish single-pub async-true at route  # rule-alone-for-people
 service user-without publish single-pub async-true at can
 service user-without unpublish single-pub async-true at rest
 service user-without unpublish single-pub async-true at direct  # rule-alone-for-people
-service user-without unpublish single-pub async-true at route
+service user-without unpublish single-pub async-true at route  # rule-alone-for-people
 service user-without unpublish single-pub async-true at can
 service user-partial unpublish single-pub async-true at rest
 service user-partial unpublish single-pub async-true at direct  # rule-alone-for-people
-service user-partial unpublish single-pub async-true at route
+service user-partial unpublish single-pub async-true at route  # rule-alone-for-people
 service user-partial unpublish single-pub async-true at can
-service user-with publish single-pub other-operation at route
+service user-with publish single-pub other-operation at route  # lifecycle-judged-alone
 service user-with publish single-pub other-operation at can
-service custom-role publish single-pub other-operation at route
+service custom-role publish single-pub other-operation at route  # lifecycle-judged-alone
 service custom-role publish single-pub other-operation at can
-service key-full-access publish single-pub other-operation at route
+service key-full-access publish single-pub other-operation at route  # lifecycle-judged-alone
 service key-full-access publish single-pub other-operation at can
-service key-role-based publish single-pub other-operation at route
+service key-role-based publish single-pub other-operation at route  # lifecycle-judged-alone
 service key-role-based publish single-pub other-operation at can
-service key-super-admin publish single-pub other-operation at route
+service key-super-admin publish single-pub other-operation at route  # lifecycle-judged-alone
 service key-super-admin publish single-pub other-operation at can
-service user-partial publish single-pub other-operation at route
+service user-partial publish single-pub other-operation at route  # lifecycle-judged-alone
 service user-partial publish single-pub other-operation at can
-service key-partial publish single-pub other-operation at route
+service key-partial publish single-pub other-operation at route  # lifecycle-judged-alone
 service key-partial publish single-pub other-operation at can
-service user-with unpublish single-pub other-operation at route
+service user-with unpublish single-pub other-operation at route  # lifecycle-judged-alone
 service user-with unpublish single-pub other-operation at can
-service custom-role unpublish single-pub other-operation at route
+service custom-role unpublish single-pub other-operation at route  # lifecycle-judged-alone
 service custom-role unpublish single-pub other-operation at can
-service key-full-access unpublish single-pub other-operation at route
+service key-full-access unpublish single-pub other-operation at route  # lifecycle-judged-alone
 service key-full-access unpublish single-pub other-operation at can
-service key-role-based unpublish single-pub other-operation at route
+service key-role-based unpublish single-pub other-operation at route  # lifecycle-judged-alone
 service key-role-based unpublish single-pub other-operation at can
-service key-super-admin unpublish single-pub other-operation at route
+service key-super-admin unpublish single-pub other-operation at route  # lifecycle-judged-alone
 service key-super-admin unpublish single-pub other-operation at can
 service custom-role read collection user-is-key-maker at schema
 service key-super-admin read collection user-is-key-maker at schema
@@ -606,7 +606,7 @@ service user-naming-super-admin read related throws at population
 service user-naming-super-admin read related true at population
 service user-naming-super-admin read related user-is-key-maker at population
 no-service user-with read media none at population
-no-service user-with read media none at system
+no-service user-with read media none at system  # no-service
 no-service visitor read media none at population
 bound key-without-rows read related permission-spelling at population
 bound user-naming-super-admin read related async-false at population
@@ -638,14 +638,14 @@ bound visitor read related returns-null at population
 bound visitor read related returns-true at population
 bound visitor read related returns-undefined at population
 bound visitor read related true at population
-service key-super-admin update providers none at route
+service key-super-admin update providers none at route  # manage-not-counted
 service key-super-admin update providers none at can
 service key-super-admin update providers none at widget
 service user-without read collection true at widget
 service user-without create collection true at widget
 service user-partial create collection true at widget
 service user-without update collection true at widget
-service user-without update collection true at lock
+service user-without update collection true at lock  # rule-alone-for-people
 service user-without delete collection true at widget
 service user-partial delete collection true at widget
 service user-without publish collection true at widget
@@ -677,7 +677,7 @@ service user-without read collection returns-true at widget
 service user-without create collection returns-true at widget
 service user-partial create collection returns-true at widget
 service user-without update collection returns-true at widget
-service user-without update collection returns-true at lock
+service user-without update collection returns-true at lock  # rule-alone-for-people
 service user-without delete collection returns-true at widget
 service user-partial delete collection returns-true at widget
 service user-without publish collection returns-true at widget
@@ -775,7 +775,7 @@ service user-without read collection async-true at widget
 service user-without create collection async-true at widget
 service user-partial create collection async-true at widget
 service user-without update collection async-true at widget
-service user-without update collection async-true at lock
+service user-without update collection async-true at lock  # rule-alone-for-people
 service user-without delete collection async-true at widget
 service user-partial delete collection async-true at widget
 service user-without publish collection async-true at widget
@@ -893,7 +893,7 @@ service key-role-based unpublish collection publish-false at widget
 service key-super-admin unpublish collection publish-false at widget
 service user-without read single true at widget
 service user-without update single true at widget
-service user-without update single true at lock
+service user-without update single true at lock  # rule-alone-for-people
 service key-read-only read single false at widget
 service key-full-access read single false at widget
 service key-role-based read single false at widget
@@ -905,7 +905,7 @@ service key-super-admin update single false at widget
 service key-partial update single false at widget
 service user-without read single returns-true at widget
 service user-without update single returns-true at widget
-service user-without update single returns-true at lock
+service user-without update single returns-true at lock  # rule-alone-for-people
 service key-read-only read single returns-false at widget
 service key-full-access read single returns-false at widget
 service key-role-based read single returns-false at widget
@@ -944,7 +944,7 @@ service key-super-admin update single throws at widget
 service key-partial update single throws at widget
 service user-without read single async-true at widget
 service user-without update single async-true at widget
-service user-without update single async-true at lock
+service user-without update single async-true at lock  # rule-alone-for-people
 service key-read-only read single async-false at widget
 service key-full-access read single async-false at widget
 service key-role-based read single async-false at widget

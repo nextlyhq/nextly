@@ -11,11 +11,9 @@
  */
 import {
   Activity,
-  FileText,
   Image,
   Key,
   List,
-  Mail,
   Settings,
   ShieldAlert,
   Users,
@@ -133,26 +131,6 @@ export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
         icon: Image,
         href: ROUTES.SETTINGS_IMAGE_SIZES,
         gate: { kind: "permission", permission: "manage-settings" },
-      },
-    ],
-  },
-  {
-    id: "email",
-    label: "Email Configuration",
-    items: [
-      {
-        id: "email-providers",
-        label: "Providers",
-        icon: Mail,
-        href: ROUTES.SETTINGS_EMAIL_PROVIDERS,
-        gate: { kind: "permission", permission: "manage-email-providers" },
-      },
-      {
-        id: "email-templates",
-        label: "Templates",
-        icon: FileText,
-        href: ROUTES.SETTINGS_EMAIL_TEMPLATES,
-        gate: { kind: "permission", permission: "manage-email-templates" },
       },
     ],
   },

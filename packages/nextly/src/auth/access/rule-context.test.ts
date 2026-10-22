@@ -154,6 +154,43 @@ describe("a rule checking the old spelling", () => {
 });
 
 describe("the one context", () => {
+  it("names the language it judges, and every language the operation involves", () => {
+    const ctx = buildRuleContext(() => true, editor, {
+      operation: "publish",
+      target: { kind: "collection", slug: "posts" },
+      locale: "fr",
+      locales: ["en", "fr"],
+    });
+    expect(ctx.locale).toBe("fr");
+    expect(ctx.locales).toEqual(["en", "fr"]);
+  });
+
+  it("names a language judged alone as the only one involved", () => {
+    const ctx = buildRuleContext(() => true, editor, {
+      ...readPosts,
+      locale: "de",
+    });
+    expect(ctx.locale).toBe("de");
+    expect(ctx.locales).toEqual(["de"]);
+  });
+
+  it("names no language where the operation involves none", () => {
+    const ctx = buildRuleContext(() => true, editor, readPosts);
+    expect(ctx.locale).toBeUndefined();
+    expect(ctx.locales).toEqual([]);
+  });
+
+  it("hands each rule its own list of languages", () => {
+    const locales = ["en", "fr"];
+    const ctx = buildRuleContext(() => true, editor, {
+      ...readPosts,
+      locale: "en",
+      locales,
+    });
+    ctx.locales.push("de");
+    expect(locales).toEqual(["en", "fr"]);
+  });
+
   it("names the caller, the operation and the target, with no entry at a collection's gate", () => {
     const ctx = buildRuleContext(() => true, editor, {
       operation: "delete",

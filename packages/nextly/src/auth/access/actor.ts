@@ -188,6 +188,46 @@ export function holdsPermission(
   );
 }
 
+/**
+ * The system resources whose `manage-` permission still counts as read,
+ * create, update and delete on that same resource: a bridge for installs
+ * whose roles were given `manage-<resource>` before every action had a plain
+ * permission of its own. It never counts as publish or unpublish, as any
+ * other action, or on any other resource, and a collection's `manage-`
+ * permission means nothing here.
+ */
+const MANAGE_COUNTS_ON: ReadonlySet<string> = new Set([
+  "media",
+  "settings",
+  "email-providers",
+  "email-templates",
+]);
+const MANAGE_COUNTS_AS: ReadonlySet<string> = new Set([
+  "read",
+  "create",
+  "update",
+  "delete",
+]);
+
+/** Whether a `manage-` permission on `resource` can count for `action`. */
+export function manageCounts(action: string, resource: string): boolean {
+  return MANAGE_COUNTS_AS.has(action) && MANAGE_COUNTS_ON.has(resource);
+}
+
+/**
+ * Whether the actor holds `action` on a system resource through that
+ * resource's `manage-` permission alone ({@link manageCounts}).
+ */
+export function holdsByManage(
+  actor: Actor,
+  action: string,
+  resource: string
+): boolean {
+  return (
+    manageCounts(action, resource) && holdsPermission(actor, "manage", resource)
+  );
+}
+
 /** The actor's permissions as their rows store them, `read-posts`. */
 export function storedPermissions(actor: Actor): string[] {
   return grantsOf(actor).map(grant => grant.slug);

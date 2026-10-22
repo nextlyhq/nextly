@@ -1,9 +1,10 @@
 /**
  * The REST route gates ask exactly what the system write policy says.
  *
- * The Direct API reads `SYSTEM_WRITE_POLICY` for its checked role, permission
- * and field-group writes. REST picks its own grants today, in the route gate
- * (`resolveAuthorization`) and in the field-group route files, so this holds
+ * The Direct API reads `SYSTEM_WRITE_POLICY` for its checked role, permission,
+ * field-group and media writes, and a plugin's media service reads it too.
+ * REST picks its own grants today, in the route gate (`resolveAuthorization`),
+ * in the field-group route files and in the media routes' gate, so this holds
  * each of those, route by route, to the policy: a grant changed on one side
  * and not the other fails here rather than leaving two doors that answer one
  * caller differently.
@@ -74,6 +75,7 @@ vi.mock("../../../di", async importOriginal => ({
 
 import * as fieldGroupsDetailRoute from "../../../api/field-groups-detail";
 import * as fieldGroupsRoute from "../../../api/field-groups";
+import { createMediaHandlers } from "../../../api/media-handlers";
 import { _resolveAuthorizationForTest } from "../../../routeHandler";
 
 /** The policy entry as a gate asks it: the single form, or the any-of list. */
@@ -188,6 +190,61 @@ describe("the field-group route files ask what the system write policy says", ()
           context
         ),
       SYSTEM_WRITE_POLICY.fieldGroups.delete,
+    ],
+  ] as const)("%s", async (_route, call, grant) => {
+    await call();
+    expect(asked.grants).toEqual([expected(grant)]);
+  });
+});
+
+describe("the media routes ask what the system write policy says", () => {
+  // The admin mount, where every media write is gated; the public mount
+  // serves no write at all.
+  const media = createMediaHandlers({ requireAuth: true });
+  const at = (...path: string[]) => ({ params: Promise.resolve({ path }) });
+  const request = (method: string) =>
+    new Request("http://localhost/api/media", { method });
+
+  it.each([
+    [
+      "POST /media",
+      () => media.POST(request("POST"), at()),
+      SYSTEM_WRITE_POLICY.media.upload,
+    ],
+    [
+      "POST /media/folders",
+      () => media.POST(request("POST"), at("folders")),
+      SYSTEM_WRITE_POLICY.media.createFolder,
+    ],
+    [
+      "PATCH /media/:id",
+      () => media.PATCH(request("PATCH"), at("m1")),
+      SYSTEM_WRITE_POLICY.media.update,
+    ],
+    [
+      "PATCH /media/:id/move",
+      () => media.PATCH(request("PATCH"), at("m1", "move")),
+      SYSTEM_WRITE_POLICY.media.moveToFolder,
+    ],
+    [
+      "PATCH /media/folders/:id",
+      () => media.PATCH(request("PATCH"), at("folders", "f1")),
+      SYSTEM_WRITE_POLICY.media.updateFolder,
+    ],
+    [
+      "DELETE /media/:id",
+      () => media.DELETE(request("DELETE"), at("m1")),
+      SYSTEM_WRITE_POLICY.media.delete,
+    ],
+    [
+      "DELETE /media/bulk",
+      () => media.DELETE(request("DELETE"), at("bulk")),
+      SYSTEM_WRITE_POLICY.media.bulkDelete,
+    ],
+    [
+      "DELETE /media/folders/:id",
+      () => media.DELETE(request("DELETE"), at("folders", "f1")),
+      SYSTEM_WRITE_POLICY.media.deleteFolder,
     ],
   ] as const)("%s", async (_route, call, grant) => {
     await call();

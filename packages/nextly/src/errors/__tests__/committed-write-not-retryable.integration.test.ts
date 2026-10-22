@@ -17,6 +17,7 @@ import { poolWaitTimeoutError } from "@nextlyhq/adapter-drizzle/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../config";
+import { container } from "../../di/container";
 import { CollectionMutationService } from "../../domains/collections/services/collection-mutation-service";
 import { SingleQueryService } from "../../domains/singles/services/single-query-service";
 import {
@@ -25,6 +26,10 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../plugins/test-nextly";
+import type {
+  CacheRevalidator,
+  RevalidationIntent,
+} from "../../revalidation/types";
 import {
   errorFromServiceEnvelope,
   type ServiceErrorEnvelope,
@@ -135,10 +140,27 @@ const pages = defineCollection({
 
 type PublishResult = ServiceErrorEnvelope & { success: boolean };
 
+/** Records every flushed intent, so a test can see which tags a write busts. */
+class RecordingRevalidator implements CacheRevalidator {
+  readonly flushed: RevalidationIntent[] = [];
+  flush(intents: RevalidationIntent[]): void {
+    this.flushed.push(...intents);
+  }
+  get tags(): string[] {
+    return this.flushed.flatMap(intent => intent.tags);
+  }
+}
+
 describe.each(getConfiguredTestDialects())(
   "a busy database around publishing every language of an entry (%s)",
   (dialect: TestDialect) => {
     async function boot() {
+      // Registered before boot, so the services keep it over the no-op one.
+      const revalidator = new RecordingRevalidator();
+      container.registerSingleton<CacheRevalidator>(
+        "cacheRevalidator",
+        () => revalidator
+      );
       handle = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
         collections: [pages],
@@ -148,6 +170,8 @@ describe.each(getConfiguredTestDialects())(
         collection: "pages",
         data: { title: "A", heading: "h" },
       })) as unknown as { item: { id: string } };
+      // Only what the publish flushes counts.
+      revalidator.flushed.length = 0;
       const handler = handle.getService("collectionsHandler") as unknown as {
         publishAllLocales: (
           p: Record<string, unknown>
@@ -167,8 +191,30 @@ describe.each(getConfiguredTestDialects())(
             overrideAccess: true,
           })) as { status?: string }
         ).status;
-      return { publish, status, adapter: handle.adapter };
+      return {
+        publish,
+        status,
+        adapter: handle.adapter,
+        revalidator,
+        id: created.item.id,
+      };
     }
+
+    it("after the commit, still busts the entry's cached pages", async () => {
+      const { publish, revalidator, id } = await boot();
+      vi.spyOn(
+        CollectionMutationService.prototype as unknown as {
+          readCompanionSlugsAllLocales: () => Promise<unknown>;
+        },
+        "readCompanionSlugsAllLocales"
+      ).mockRejectedValueOnce(poolWaitTimeoutError(15000));
+
+      await publish();
+
+      // The caller is told not to retry, so this flush is the only one: the
+      // published entry's own tag must be in it.
+      expect(revalidator.tags.some(tag => tag.includes(id))).toBe(true);
+    });
 
     it("after the commit, answers that the change was saved, with no retry hint", async () => {
       const { publish, status } = await boot();
@@ -190,8 +236,8 @@ describe.each(getConfiguredTestDialects())(
       expect(await status()).toBe("published");
     });
 
-    it("before the commit, keeps DATABASE_BUSY and its retry hint", async () => {
-      const { publish, status, adapter } = await boot();
+    it("before the commit, keeps DATABASE_BUSY and its retry hint, and busts nothing", async () => {
+      const { publish, status, adapter, revalidator } = await boot();
       vi.spyOn(adapter, "transaction").mockRejectedValueOnce(
         poolWaitTimeoutError(15000)
       );
@@ -201,6 +247,7 @@ describe.each(getConfiguredTestDialects())(
       expect(error.code).toBe("DATABASE_BUSY");
       expect(retryAfterSeconds(error)).toBe(5);
       expect(await status()).toBe("draft");
+      expect(revalidator.tags).toEqual([]);
     });
   }
 );

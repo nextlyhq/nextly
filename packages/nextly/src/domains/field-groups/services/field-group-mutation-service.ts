@@ -48,6 +48,7 @@ import {
   containedComponentResolver,
   type ComponentFieldResolver,
 } from "../../versions/tag-component-types";
+import { omitDirectComponentFields } from "../direct-component-fields";
 import {
   isFieldGroupFieldType,
   withResolvedFieldGroupReferences,
@@ -1785,13 +1786,15 @@ export class FieldGroupMutationService extends BaseService {
     // The stored definition carries no functions, so a component field's own
     // `validate` is attached from the field-level registry, as the parent's
     // fields are; without it that validator never ran on any write.
+    // A component placed directly among these fields is judged by the refusal alone: nothing
+    // stores it and the admin never draws it, so the rest of validation does not ask for it, a
+    // required one included, or an instance of this component could never be written.
+    const judged = omitDirectComponentFields(componentFields);
     const issues = [
       ...unstoredNestedComponentIssues(instance, componentFields),
       ...(await validateEntryData(
         instance,
-        slug
-          ? attachFieldValidators("fieldGroup", slug, componentFields)
-          : componentFields,
+        slug ? attachFieldValidators("fieldGroup", slug, judged) : judged,
         { mode, req, componentFields: nested }
       )),
     ];
