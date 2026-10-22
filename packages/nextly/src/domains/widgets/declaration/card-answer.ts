@@ -14,12 +14,16 @@
  *
  * @module domains/widgets/declaration/card-answer
  */
+import { NextlyError } from "../../../errors/nextly-error";
+import { ARCHETYPE_OPS } from "../definition";
+import type { WidgetResult } from "../result";
+
 import {
   displayDataProblem,
   isCoreDisplay,
   type CoreDisplay,
 } from "./displays";
-import { transportableProblem } from "./transportable";
+import { transportableProblem, type TransportableValue } from "./transportable";
 
 /** Why a value cannot be a card's data. */
 export type CardAnswerProblem =
@@ -55,4 +59,41 @@ export function cardAnswerProblem(
   return mismatch === undefined
     ? undefined
     : { kind: "shape", display, detail: mismatch };
+}
+
+/**
+ * A data function's answer as its card's slot carries it, once
+ * {@link cardAnswerProblem} accepts it: a core display's answer as the result
+ * of the one op that display draws, and a widget's own component's answer as
+ * core's `data` result.
+ *
+ * 🔴 A value the rule refuses fails THIS card alone, as an internal error: the
+ * reader sees the generic sentence, and the log names the widget and the
+ * problem, since what the function answered is the author's to fix and may
+ * hold what the reader should not see.
+ */
+export function cardAnswerResult(
+  display: unknown,
+  value: unknown,
+  widgetId: string
+): WidgetResult {
+  const problem = cardAnswerProblem(display, value);
+  if (problem !== undefined) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "widget-data-answer-refused",
+        widget: widgetId,
+        kind: problem.kind,
+        detail: problem.detail,
+      },
+    });
+  }
+  if (!isCoreDisplay(display)) {
+    // Known to travel as itself by the rule above.
+    return { op: "data", data: value as TransportableValue };
+  }
+  return {
+    op: ARCHETYPE_OPS[display][0],
+    ...(value as object),
+  } as WidgetResult;
 }

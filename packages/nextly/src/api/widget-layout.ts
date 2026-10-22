@@ -271,6 +271,29 @@ async function visibleWidgets(auth: AuthContext) {
 }
 
 /**
+ * The cards this caller was handed, by card id: exactly what a by-card query
+ * may ask for, and nothing else.
+ *
+ * 🔴 Read by the same two passes and the same arrangement the layout read
+ * takes ({@link visibleWidgets}, {@link visibleArrangement}), so a card the
+ * reader was never shown -- another person's, a widget they may not see, one
+ * they removed -- is simply not here, and the query endpoint cannot answer it
+ * differently from the dashboard that drew it.
+ */
+export async function handedCards(
+  auth: AuthContext
+): Promise<ReadonlyMap<string, WidgetPlacement>> {
+  const service = await getLayoutService();
+  const view = await visibleWidgets(auth);
+  const stored = await service.getLayout(SCOPE_KIND, view.caller.userId);
+  return new Map(
+    visibleArrangement(stored.layout, view.visibleIds)
+      .filter(placement => placement.removed !== true)
+      .map(placement => [placement.id, placement])
+  );
+}
+
+/**
  * The version the client must echo back.
  *
  * An unreadable row keeps its real version rather than reporting 0. Reporting 0

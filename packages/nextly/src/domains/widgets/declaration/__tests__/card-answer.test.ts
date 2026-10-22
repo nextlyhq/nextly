@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { cardAnswerProblem } from "../card-answer";
+import { cardAnswerProblem, cardAnswerResult } from "../card-answer";
 
 describe("whether a value can be a card's data", () => {
   it("accepts a value that travels as itself in the shape its display draws", () => {
@@ -46,5 +46,48 @@ describe("whether a value can be a card's data", () => {
       kind: "untransportable",
       detail: "the value.at is NaN",
     });
+  });
+});
+
+describe("a data function's answer as its card's slot carries it", () => {
+  it("is the result of the one op a core display draws", () => {
+    expect(cardAnswerResult("metric", { total: 3 }, "acme/orders")).toEqual({
+      op: "count",
+      total: 3,
+    });
+    expect(
+      cardAnswerResult("list", { items: [{ id: "a" }] }, "acme/orders")
+    ).toEqual({ op: "list", items: [{ id: "a" }] });
+  });
+
+  it("is core's data result for a widget's own component, carrying the value as it is", () => {
+    const value = { anything: ["goes", 1, null] };
+    expect(
+      cardAnswerResult({ component: "acme/orders#Card" }, value, "acme/orders")
+    ).toEqual({ op: "data", data: value });
+  });
+
+  it("fails this card alone when refused, naming the widget and the problem for the log only", () => {
+    let refused: unknown;
+    try {
+      cardAnswerResult("metric", { total: "a secret" }, "acme/orders");
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toMatchObject({
+      code: "INTERNAL_ERROR",
+      publicMessage: "An unexpected error occurred.",
+      logContext: {
+        reason: "widget-data-answer-refused",
+        widget: "acme/orders",
+        kind: "shape",
+      },
+    });
+    // What the function answered stays out of what the reader is told.
+    expect(
+      JSON.stringify({
+        message: (refused as { publicMessage?: string }).publicMessage,
+      })
+    ).not.toContain("a secret");
   });
 });
