@@ -77,13 +77,23 @@ describe("applyComponentReadAccess", () => {
     expect(entry.hero.title).toBe("a");
   });
 
-  it("judges a live dynamic-zone block with no declared type by every component the zone allows", async () => {
+  it("withholds a live dynamic-zone block whose type the zone does not allow", async () => {
     registerFieldFunctions("fieldGroup", "card", [
       { name: "title", type: "text" },
       { name: "secret", type: "text", access: denied },
     ]);
+    // Readable only while the block holds no `secret`: judged after `card`
+    // removed it, it would allow what the block as stored denies.
     registerFieldFunctions("fieldGroup", "quote", [
       { name: "secret", type: "text" },
+      {
+        name: "label",
+        type: "text",
+        access: {
+          read: ({ data }: { data?: Record<string, unknown> }) =>
+            !(data !== undefined && "secret" in data),
+        },
+      },
     ]);
     // `plain` declares no rule and the zone does not allow it.
     registerFieldFunctions("fieldGroup", "plain", [
@@ -91,7 +101,7 @@ describe("applyComponentReadAccess", () => {
     ]);
     const entry = {
       blocks: [
-        { title: "untagged", secret: "S-1" },
+        { title: "untagged", secret: "S-1", label: "L-1" },
         { _componentType: "ghost", secret: "S-2" },
         { _componentType: "plain", secret: "S-3" },
         // A type the zone allows is still judged by its own rules alone.
@@ -110,9 +120,11 @@ describe("applyComponentReadAccess", () => {
       { ...caller, declaredComponentDecides: true }
     );
 
-    expect(JSON.stringify(entry)).not.toMatch(/S-\d/);
-    expect(entry.blocks[0].title).toBe("untagged");
-    expect(entry.blocks[3].secret).toBe("kept");
+    expect(entry.blocks.slice(0, 3)).toEqual([{}, {}, {}]);
+    expect(entry.blocks[3]).toEqual({
+      _componentType: "quote",
+      secret: "kept",
+    });
   });
 
   it("judges the instances a container holds as JSON text, and keeps it text", async () => {
