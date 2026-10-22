@@ -14,11 +14,18 @@
  * @module domains/releases/release-events
  * @experimental
  */
+import { eq, type Column, type Table } from "drizzle-orm";
 import { z } from "zod";
 
+import { getDialectTables } from "../../database/index";
 import { NextlyError } from "../../errors";
 import { CONTENT_EVENTS_TABLE } from "../../schemas/content-events";
 import type { ReleaseMemberAction } from "../../schemas/releases/types";
+import {
+  readUnderRowLock,
+  type LockableRead,
+  type RowLockServer,
+} from "../../shared/lib/row-lock";
 import type { ContentEventActor } from "../content-events/actor";
 import {
   contentEventKind,
@@ -27,6 +34,8 @@ import {
 } from "../content-events/kinds";
 import { recordContentEvent } from "../content-events/record";
 import type { VersionsDbApi } from "../versions/db-api";
+
+import type { DocumentRef } from "./releases-repository";
 
 /** An instant, as an ISO string: a payload is plain JSON. */
 const instant = z.string().datetime();
@@ -224,25 +233,83 @@ function recordTx(tx: ReleaseEventTx): VersionsDbApi {
   };
 }
 
-/** The display name kept with the event, read on its transaction. */
+/** The Drizzle surface a locked read of one row needs. */
+interface LockedReadDb {
+  select(fields: Record<string, Column>): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        limit(count: number): LockableRead<Record<string, unknown>[]>;
+      };
+    };
+  };
+}
+
+/** A transaction a row can be read under lock on: the adapter's own context. */
+export interface LockingReadTx {
+  getDrizzle?<T = unknown>(): T;
+}
+
+/**
+ * One row by id, read on `tx` under the existence-check lock (`FOR SHARE`
+ * where the server takes it), so what it answers is the row as last
+ * committed and it cannot be deleted until `tx` ends. SQLite takes no lock:
+ * its one writer keeps any deletion out of the transaction.
+ */
+export async function readOneUnderLock(
+  tx: LockingReadTx,
+  server: RowLockServer,
+  table: Table & { id: Column },
+  id: string,
+  fields: Record<string, Column>
+): Promise<Record<string, unknown> | undefined> {
+  if (typeof tx.getDrizzle !== "function") {
+    // Refused rather than read without the lock: the answer would then be
+    // a snapshot a deletion may already have overtaken.
+    throw NextlyError.internal({
+      logContext: { reason: "release-locked-read-without-drizzle" },
+    });
+  }
+  const db = tx.getDrizzle<LockedReadDb>();
+  const [row] = await readUnderRowLock(
+    db.select(fields).from(table).where(eq(table.id, id)).limit(1),
+    server,
+    "existence-check"
+  );
+  return row;
+}
+
+/**
+ * The display name kept with the event, read on its transaction.
+ *
+ * A person's is read from their account under its existence-check lock, the
+ * lock every write naming a person takes: an account deletion then either
+ * waits for this event and erases its name with the rest, or has committed
+ * and the name is not there to keep. A key's is its own name.
+ */
 async function actorNameOf(
-  tx: ReleaseEventTx,
-  actor: ReleaseEventActor
+  tx: ReleaseEventTx & LockingReadTx,
+  actor: ReleaseEventActor,
+  server: RowLockServer | undefined
 ): Promise<string | null> {
   if (actor.kind === "system") return null;
-  const [row] =
-    actor.kind === "apiKey"
-      ? await tx.select<{ name: string | null }>("api_keys", {
-          columns: ["name"],
-          where: { and: [{ column: "id", op: "=", value: actor.keyId }] },
-          limit: 1,
-        })
-      : await tx.select<{ name: string | null }>("users", {
-          columns: ["name"],
-          where: { and: [{ column: "id", op: "=", value: actor.userId }] },
-          limit: 1,
-        });
-  return row?.name ?? null;
+  if (actor.kind === "apiKey") {
+    const [row] = await tx.select<{ name: string | null }>("api_keys", {
+      columns: ["name"],
+      where: { and: [{ column: "id", op: "=", value: actor.keyId }] },
+      limit: 1,
+    });
+    return row?.name ?? null;
+  }
+  if (server === undefined) {
+    throw NextlyError.internal({
+      logContext: { reason: "release-event-person-without-lock" },
+    });
+  }
+  const users = getDialectTables(server.dialect).users;
+  const row = await readOneUnderLock(tx, server, users, actor.userId, {
+    name: users.name,
+  });
+  return typeof row?.name === "string" ? row.name : null;
 }
 
 /** The actor as the record keeps it, with the name read for it. */
@@ -267,19 +334,61 @@ function recordedActor(
  * @experimental
  */
 export async function recordReleaseEvent(
-  tx: ReleaseEventTx,
+  tx: ReleaseEventTx & LockingReadTx,
   releaseId: string,
-  event: ReleaseEventInput
+  event: ReleaseEventInput,
+  /**
+   * The server's row-lock facts, for reading a person's name under lock.
+   * Required when `event.actor` is a person.
+   */
+  server?: RowLockServer
 ): Promise<void> {
   ensureReleaseContentEventKinds();
   await recordContentEvent(recordTx(tx), {
     subject: { kind: "release", id: releaseId },
     kind: RELEASE_CONTENT_EVENT_KINDS[event.kind].name,
-    actor: recordedActor(event.actor, await actorNameOf(tx, event.actor)),
+    actor: recordedActor(
+      event.actor,
+      await actorNameOf(tx, event.actor, server)
+    ),
     fromState: event.fromState ?? null,
     toState: event.toState ?? null,
     payload: event.payload ?? null,
   });
+}
+
+/** The kinds of release event that name a document of the release. */
+const DOCUMENT_EVENT_KINDS: ReadonlySet<string> = new Set([
+  RELEASE_CONTENT_EVENT_KINDS.documentAdded.name,
+  RELEASE_CONTENT_EVENT_KINDS.documentRemoved.name,
+  RELEASE_CONTENT_EVENT_KINDS.documentActionChanged.name,
+]);
+
+/** The document fields a membership event's payload carries. */
+const eventDocument = z.object({
+  scopeKind: z.enum(["collection", "single", "page"]),
+  scopeSlug: z.string().min(1),
+  entryId: z.string().min(1),
+  locale: z.string().nullable(),
+});
+
+/**
+ * The document a release event is about: `undefined` for an event about no
+ * document, `null` for a document event whose payload does not say which
+ * (read back from a row that is not the shape written), and the document
+ * otherwise.
+ */
+export function documentOfReleaseEvent(event: {
+  kind: string;
+  payload: unknown;
+}): DocumentRef | null | undefined {
+  if (!DOCUMENT_EVENT_KINDS.has(event.kind)) return undefined;
+  const raw: unknown =
+    typeof event.payload === "string"
+      ? (JSON.parse(event.payload) as unknown)
+      : event.payload;
+  const parsed = eventDocument.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
 /** The payload of a membership event about `member`. */

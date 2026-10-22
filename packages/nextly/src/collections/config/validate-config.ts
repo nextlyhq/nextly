@@ -54,7 +54,6 @@ import {
   DEFAULT_SQL_KEYWORDS_SET,
   validateComponentFieldRefShared,
   validateContainerFieldsShared,
-  validateFieldNameShared,
   validateFieldTypeShared,
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
@@ -62,6 +61,8 @@ import {
   validateSelectOptionsShared,
   validateSlugShared,
   validateAccessShared,
+  COLLECTION_ACCESS_KEYS,
+  validateFieldBasicsShared,
 } from "../../shared/base-validator";
 import { isPlainObject } from "../../shared/lib/plain-copy";
 // RESERVED_SLUGS and SQL_RESERVED_KEYWORDS used to live in this file. They
@@ -142,6 +143,7 @@ export type ValidationErrorCode =
   // Access errors
   | "ACCESS_INVALID_TYPE"
   | "ACCESS_FUNCTION_INVALID"
+  | "ACCESS_KEY_UNKNOWN"
   // Index errors
   | "INDEX_INVALID_TYPE"
   | "INDEX_FIELDS_REQUIRED"
@@ -446,13 +448,7 @@ function validateField(
   // the deferral returns before this, and the boot gate asks only whether the
   // token was claimed. A duplicate or SQL-reserved name reached schema
   // generation as a colliding column.
-  validateFieldNameShared(
-    f.name,
-    path,
-    errsBase,
-    seenNames,
-    DEFAULT_SQL_KEYWORDS_SET
-  );
+  validateFieldBasicsShared(f, path, errsBase, seenNames);
 
   if (
     !validateFieldTypeShared(f.type, path, errsBase, type =>
@@ -694,7 +690,7 @@ function validateFields(
  * this entity supports.
  */
 function validateAccess(access: unknown, errors: ValidationError[]): void {
-  validateAccessShared(access, ["create", "read", "update", "delete"], errors);
+  validateAccessShared(access, COLLECTION_ACCESS_KEYS, errors);
 }
 
 /**

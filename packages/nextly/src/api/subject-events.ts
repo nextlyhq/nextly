@@ -194,19 +194,81 @@ export async function readSubjectEvents(
     caller,
     repository
   );
+  const { items, nextBefore } =
+    subject.kind === "release"
+      ? await visibleReleasePage(
+          subject,
+          { ...query, limit },
+          releaseActorOf(caller),
+          repository,
+          page
+        )
+      : { items: page.items, nextBefore: page.nextBefore };
   return {
-    items: page.items,
+    items,
     // A cursor walk: page and total describe the window returned, and the
     // next page passes the last item's id as `before`.
     meta: {
-      total: page.items.length,
+      total: items.length,
       page: 1,
       limit,
       totalPages: 1,
-      hasNext: page.nextBefore !== null,
+      hasNext: nextBefore !== null,
       hasPrev: query.before !== undefined,
+      ...(nextBefore === null ? {} : { nextBefore }),
     },
   };
+}
+
+/**
+ * How many further reads one page of a release's history may make past its
+ * first, looking for events its reader may see. Bounded, so a history mostly
+ * hidden from its reader costs a request a fixed number of reads; the page's
+ * `nextBefore` then says where the scan stopped.
+ */
+const MAX_FURTHER_HISTORY_READS = 10;
+
+/**
+ * A page of a release's history as the caller may be shown it: only the
+ * documents they may read, as the release's own document list does
+ * (`historyVisibleTo`).
+ *
+ * Filled from further reads, each starting where the last ended, until it
+ * holds `limit` events, the history runs out, or it has made
+ * {@link MAX_FURTHER_HISTORY_READS} further reads. The cursor it answers
+ * always moves on: the last event returned when the page was cut to
+ * `limit`, and otherwise the last row scanned, so a walk can pass any run of
+ * events the caller may not see, a bounded number of reads at a time.
+ */
+async function visibleReleasePage(
+  subject: ContentEventSubject,
+  query: ContentEventQuery,
+  actor: ReturnType<typeof releaseActorOf>,
+  repository: ContentEventsRepository,
+  first: Awaited<ReturnType<ContentEventsRepository["listForSubject"]>>
+): Promise<{ items: ContentEventRecord[]; nextBefore: string | null }> {
+  const releases = getService("releasesService");
+  const items = await releases.historyVisibleTo(first.items, actor);
+  let next = first.nextBefore;
+  for (
+    let reads = 0;
+    items.length < query.limit &&
+    next !== null &&
+    reads < MAX_FURTHER_HISTORY_READS;
+    reads += 1
+  ) {
+    const more = await repository.listForSubject(subject, {
+      ...query,
+      before: next,
+    });
+    items.push(...(await releases.historyVisibleTo(more.items, actor)));
+    next = more.nextBefore;
+  }
+  if (items.length > query.limit) {
+    const page = items.slice(0, query.limit);
+    return { items: page, nextBefore: page[page.length - 1]?.id ?? null };
+  }
+  return { items, nextBefore: next };
 }
 
 /** How many times a read is authorized again when a life ends under it. */
@@ -361,20 +423,25 @@ async function authorizeRelease(
   caller: SubjectEventsCaller
 ): Promise<void> {
   try {
-    await getService("releasesService").findByID(id, {
-      userId: caller.user?.id ?? null,
-      overrideAccess: caller.overrideAccess === true,
-      ...(caller.authenticatedScope === undefined
-        ? {}
-        : { authenticatedScope: caller.authenticatedScope }),
-      ...(caller.user?.roles ? { userRoles: [...caller.user.roles] } : {}),
-    });
+    await getService("releasesService").findByID(id, releaseActorOf(caller));
   } catch (error) {
     if (error instanceof NextlyError && error.code === "FORBIDDEN") {
       throw refused({ kind: "release", id }, "releases-not-readable");
     }
     throw error;
   }
+}
+
+/** The caller as Releases judges it: its read check and its document reads. */
+function releaseActorOf(caller: SubjectEventsCaller) {
+  return {
+    userId: caller.user?.id ?? null,
+    overrideAccess: caller.overrideAccess === true,
+    ...(caller.authenticatedScope === undefined
+      ? {}
+      : { authenticatedScope: caller.authenticatedScope }),
+    ...(caller.user?.roles ? { userRoles: [...caller.user.roles] } : {}),
+  };
 }
 
 /** Whether the document still exists, read without the caller's access. */

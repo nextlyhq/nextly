@@ -32,9 +32,28 @@ import {
   createMockComponentDataService,
   createMockCollection,
   createSampleEntry,
+  callerMay,
+  fakeActorForUser,
+  fakeUserHoldsPermission,
+  fakeUserIsSuperAdmin,
+  resetCallerAccess,
 } from "./collection-test-helpers";
 
 // ── Module mocks ──────────────────────────────────────────────────────────
+
+// The caller the collection gate decides for: a signed-in user's actions are
+// set per test (`callerMay`), and every test starts from one holding all.
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  ...(await (async () => {
+    const fake = await import("./collection-test-helpers");
+    return {
+      actorForUser: fake.fakeActorForUser,
+      userHoldsPermission: fake.fakeUserHoldsPermission,
+      userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
+    };
+  })()),
+}));
 
 vi.mock("../../../di/container", () => ({
   container: {
@@ -124,6 +143,10 @@ describe("CollectionEntryService — Hook Contracts", () => {
   let mockHookRegistry: ReturnType<typeof createMockHookRegistry>;
 
   beforeEach(() => {
+    resetCallerAccess();
+    fakeActorForUser.mockClear();
+    fakeUserHoldsPermission.mockClear();
+    fakeUserIsSuperAdmin.mockClear();
     vi.clearAllMocks();
 
     schema = createMockSchema();

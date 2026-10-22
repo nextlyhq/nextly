@@ -12,12 +12,15 @@ import type {
 // PR 4 migration: replaced legacy result-shape returns and
 // mapDbErrorToServiceError calls with throw-based NextlyError.
 import { toDbError } from "../../../../database/errors";
+import { resolveRelations } from "../../../../database/resolve-relations";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { BaseService } from "../../../../services/base-service";
 import type { Logger } from "../../../../services/shared";
 import { requireFilterValue } from "../../../../shared/lib/require-filter-value";
 import { isUniqueViolation } from "../../../../shared/lib/unique-violation";
+import type { LastSuperAdminTx } from "../../../users/services/last-super-admin";
 import { afterRoleGrantsChanged } from "../role-grants-changed";
+import { refuseGrantingSuperAdmin } from "../super-admin-grant";
 
 import { toDialectBool, validateRoleId } from "./utils";
 
@@ -324,15 +327,10 @@ export class RoleMutationService extends BaseService {
         }
       }
 
-      // Wrap mutations in a transaction when the underlying driver allows
-      // async callbacks (postgres, mysql). better-sqlite3 is synchronous and
-      // rejects promise-returning callbacks with "Transaction function cannot
-      // return a promise" — for SQLite we fall back to sequential execution
-      // on the base connection. The method's comment block at the top of
-      // the file already documents this constraint; the fix is to honor it.
+      // Every mutation in one transaction. better-sqlite3 rejects an async
+      // callback in Drizzle's own transaction, so `withTransaction` runs it
+      // through the adapter on SQLite and natively elsewhere.
       try {
-        const isSqlite = this.dialect === "sqlite";
-
         const runMutations = async (
           // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dialect-specific Drizzle typing
           executor: any
@@ -340,6 +338,14 @@ export class RoleMutationService extends BaseService {
           assignedPermIds: string[];
           assignedChildRoleIds: string[];
         }> => {
+          // Before any write, in the same transaction: a role that inherits
+          // one conferring super-admin gives super-admin to whoever holds it.
+          await refuseGrantingSuperAdmin(
+            executor as LastSuperAdminTx,
+            this.dialect,
+            uniqueChildRoleIds,
+            { roleSlug: input.slug }
+          );
           await executor.insert(this.tables.roles).values(roleData);
 
           if (uniqueIds.length > 0) {
@@ -382,10 +388,10 @@ export class RoleMutationService extends BaseService {
           return { assignedPermIds, assignedChildRoleIds };
         };
 
-        const result = isSqlite
-          ? await runMutations(this.db)
-          : // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle transaction callback type varies by dialect
-            await this.db.transaction(async (tx: any) => runMutations(tx));
+        // A transaction on every dialect: on SQLite it runs through the
+        // adapter, so the decision above and these writes are not split by
+        // another request's.
+        const result = await this.withTransaction(tx => runMutations(tx));
 
         // Awaited, and the ordering is the invariant rather than a preference:
         // a runtime that freezes after responding can abandon an unawaited
@@ -611,6 +617,18 @@ export class RoleMutationService extends BaseService {
       // before it changed anything.
       try {
         await this.adapter.transaction(async tx => {
+          // First, in the same transaction: inheriting a role that confers
+          // super-admin gives super-admin to everyone who holds this one.
+          if (changes.childRoleIds !== undefined) {
+            await refuseGrantingSuperAdmin(
+              tx.drizzleWithRelations<LastSuperAdminTx>(
+                resolveRelations(this.dialect)
+              ),
+              this.dialect,
+              uniqueChildRoleIds,
+              { roleId }
+            );
+          }
           // Update role basic fields if any provided
           if (Object.keys(updateData).length > 0) {
             await tx.update("roles", updateData, this.whereEq("id", roleId));

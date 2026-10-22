@@ -225,6 +225,28 @@ describe("createResendProvider", () => {
     expect(r2.messageId).toBe("id2");
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledTimes(2);
   });
+
+  it("declares that it takes an idempotency key, and sends it as Resend's header", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(okResponse());
+
+    const adapter = createResendProvider({ apiKey: "re_test_key" });
+    await adapter.send({ ...BASE_OPTIONS, idempotencyKey: "nextly-abc" });
+
+    expect(adapter.acceptsIdempotencyKey).toBe(true);
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0];
+    expect(init?.headers).toMatchObject({ "Idempotency-Key": "nextly-abc" });
+    expect(sentBody()).not.toHaveProperty("idempotencyKey");
+  });
+
+  it("sends no Idempotency-Key header for a send without a key", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(okResponse());
+
+    const adapter = createResendProvider({ apiKey: "re_test_key" });
+    await adapter.send(BASE_OPTIONS);
+
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0];
+    expect(init?.headers).not.toHaveProperty("Idempotency-Key");
+  });
 });
 
 describe("Resend adapter — endpoint resolution", () => {

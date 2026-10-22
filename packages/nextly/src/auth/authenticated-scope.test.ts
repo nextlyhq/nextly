@@ -1,9 +1,15 @@
 /**
  * `apiKeyScopeAllows` judges a scoped API key on its own grants and defers for
- * everyone else; `readAuthenticatedScope` decodes the scope the route stamps.
+ * everyone else; `readAuthenticatedScope` reads the scope the request caller
+ * was authenticated with.
  */
 import { describe, it, expect } from "vitest";
 
+import {
+  asCaller,
+  keyCaller,
+  sessionCaller,
+} from "../dispatcher/__tests__/request-caller";
 import { readAuthenticatedScope } from "../dispatcher/helpers/authenticated-actor";
 
 import {
@@ -50,35 +56,37 @@ describe("apiKeyScopeAllows", () => {
 });
 
 describe("readAuthenticatedScope", () => {
-  it("decodes an API key's stamped permission list", () => {
-    const scope = readAuthenticatedScope({
-      _authenticatedActorType: "apiKey",
-      _authenticatedPermissions: JSON.stringify([
-        "update-posts",
-        "publish-posts",
-      ]),
-    });
-    expect(scope).toEqual({
-      actorType: "apiKey",
-      permissions: ["update-posts", "publish-posts"],
-    });
+  it("answers an API key with the scope the route pinned, whole", () => {
+    // The same object every other gate sees, rows included, so a service
+    // re-check judges the key on its own grants rather than a copy of them.
+    const pinned = apiKeyScope([
+      { slug: "update-posts", action: "update", resource: "posts" },
+      { slug: "publish-posts", action: "publish", resource: "posts" },
+    ]);
+    const scope = asCaller(
+      keyCaller("key-1"),
+      () => readAuthenticatedScope(),
+      pinned
+    );
+    expect(scope).toBe(pinned);
+    expect(scope?.permissions).toEqual(["update-posts", "publish-posts"]);
   });
 
   it("yields an empty permission list for a session caller", () => {
-    const scope = readAuthenticatedScope({ _authenticatedActorType: "user" });
+    const scope = asCaller(sessionCaller(), () => readAuthenticatedScope());
     expect(scope).toEqual({ actorType: "user", permissions: [] });
   });
 
-  it("returns undefined when no actor type is stamped", () => {
-    expect(readAuthenticatedScope({})).toBeUndefined();
+  it("returns undefined when the request has no caller", () => {
+    expect(asCaller(undefined, () => readAuthenticatedScope())).toBeUndefined();
   });
 
-  it("denies safely (empty list) when the permissions value is corrupt", () => {
-    const scope = readAuthenticatedScope({
-      _authenticatedActorType: "apiKey",
-      _authenticatedPermissions: "{not json",
-    });
+  it("denies safely (empty list) for an API key with no pinned scope", () => {
+    // Still judged as a key, on no grants at all, rather than falling back to
+    // the account that owns it.
+    const scope = asCaller(keyCaller("key-1"), () => readAuthenticatedScope());
     expect(scope).toEqual({ actorType: "apiKey", permissions: [] });
+    expect(apiKeyScopeAllows(scope, "publish", "posts")).toBe(false);
   });
 });
 

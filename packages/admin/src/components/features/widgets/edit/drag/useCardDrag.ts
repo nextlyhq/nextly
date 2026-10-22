@@ -43,6 +43,7 @@ import {
 
 import { drawnSpan, drawnWidth, type DashboardBand } from "../../sizes";
 import type { ArrangedWidget } from "../useDashboardArrangement";
+import type { DashboardFocus } from "../useDashboardFocus";
 
 import { DRAG_INSTRUCTIONS, dragMessages } from "./drag-messages";
 import {
@@ -344,19 +345,25 @@ function useCancelOnResize(
   drag: DragInProgress | null,
   enabled: boolean,
   width: number | undefined,
-  carrying: Pick<Carrying, "setDrag" | "say">
+  carrying: Pick<Carrying, "setDrag" | "say"> & {
+    requestFocus: DashboardFocus["request"];
+  }
 ): void {
-  const { setDrag, say } = carrying;
+  const { setDrag, say, requestFocus } = carrying;
   useEffect(() => {
     if (drag === null) return;
     if (!enabled) {
       setDrag(null);
       say(dragMessages.cancelledByNarrowing());
+      // One column draws no handles, so the one a keyboard drag was on is gone with its focus.
+      // The card's menu, which moves it at every width, is where the reader goes on from.
+      if (drag.by === "keyboard")
+        requestFocus({ kind: "menu", placementId: drag.placementId });
     } else if (width !== drag.atWidth) {
       setDrag(null);
       say(dragMessages.cancelledByResize());
     }
-  }, [drag, enabled, width, setDrag, say]);
+  }, [drag, enabled, width, setDrag, say, requestFocus]);
 }
 
 export function useCardDrag({
@@ -366,6 +373,7 @@ export function useCardDrag({
   gridRef,
   say,
   drop,
+  requestFocus,
 }: {
   /** The cards drawn, in order. */
   rows: readonly ArrangedWidget[];
@@ -378,6 +386,8 @@ export function useCardDrag({
   say: (sentence: string) => void;
   /** Put a card down at `final`, saying where it went. */
   drop: (placementId: string, final: number) => void;
+  /** Asks for focus: a keyboard drag goes on from its card's menu once its handle is gone. */
+  requestFocus: DashboardFocus["request"];
 }): CardDrag {
   const oneColumn = band === "narrow";
   const enabled = band !== undefined && !oneColumn;
@@ -431,7 +441,7 @@ export function useCardDrag({
     say(dragMessages.cancelled());
   }, [setDrag, say]);
 
-  useCancelOnResize(drag, enabled, width, { setDrag, say });
+  useCancelOnResize(drag, enabled, width, { setDrag, say, requestFocus });
 
   const carrying: Carrying = {
     enabled,

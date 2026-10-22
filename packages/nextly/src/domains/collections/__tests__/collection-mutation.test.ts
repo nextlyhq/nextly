@@ -44,9 +44,28 @@ import {
   createMockRbacAccessControlService,
   createMockComponentDataService,
   createSampleEntry,
+  callerMay,
+  fakeActorForUser,
+  fakeUserHoldsPermission,
+  fakeUserIsSuperAdmin,
+  resetCallerAccess,
 } from "./collection-test-helpers";
 
 // ── Module mocks ──────────────────────────────────────────────────────────
+
+// The caller the collection gate decides for: a signed-in user's actions are
+// set per test (`callerMay`), and every test starts from one holding all.
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  ...(await (async () => {
+    const fake = await import("./collection-test-helpers");
+    return {
+      actorForUser: fake.fakeActorForUser,
+      userHoldsPermission: fake.fakeUserHoldsPermission,
+      userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
+    };
+  })()),
+}));
 
 vi.mock("../../../di/container", () => ({
   container: {
@@ -241,6 +260,10 @@ describe("CollectionEntryService — Mutation Contracts", () => {
   });
 
   beforeEach(() => {
+    resetCallerAccess();
+    fakeActorForUser.mockClear();
+    fakeUserHoldsPermission.mockClear();
+    fakeUserIsSuperAdmin.mockClear();
     vi.clearAllMocks();
 
     schema = createMockSchema();
@@ -277,11 +300,11 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         { title: "New Post" }
       );
 
-      expect(mockRbac.checkAccess).toHaveBeenCalled();
+      expect(fakeUserHoldsPermission).toHaveBeenCalled();
     });
 
     it("should return 403 when access is denied", async () => {
-      mockRbac.checkAccess.mockResolvedValueOnce(false);
+      callerMay();
 
       const result = await service.createEntry(
         { collectionName: "posts", user: { id: "user-1" } },
@@ -486,11 +509,11 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         user: { id: "user-1", role: "viewer" },
       });
 
-      expect(mockRbac.checkAccess).toHaveBeenCalled();
+      expect(fakeUserHoldsPermission).toHaveBeenCalled();
     });
 
     it("should return 403 when access is denied", async () => {
-      mockRbac.checkAccess.mockResolvedValueOnce(false);
+      callerMay();
 
       const result = await service.getEntry({
         collectionName: "posts",
@@ -584,12 +607,12 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         { title: "Updated" }
       );
 
-      expect(mockRbac.checkAccess).toHaveBeenCalled();
+      expect(fakeUserHoldsPermission).toHaveBeenCalled();
     });
 
     it("should return 403 when access denied", async () => {
       selectData.rows = [createSampleEntry()];
-      mockRbac.checkAccess.mockResolvedValueOnce(false);
+      callerMay();
 
       const result = await service.updateEntry(
         {
@@ -618,7 +641,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       registerFieldFunctions("collection", "posts", [
         { name: "title", type: "text", access: { update: titleFieldAccess } },
       ]);
-      mockRbac.checkAccess.mockResolvedValueOnce(false);
+      callerMay();
 
       await service.updateEntry(
         { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
@@ -748,12 +771,12 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         user: { id: "user-1", role: "editor" },
       });
 
-      expect(mockRbac.checkAccess).toHaveBeenCalled();
+      expect(fakeUserHoldsPermission).toHaveBeenCalled();
     });
 
     it("should return 403 when access denied", async () => {
       selectData.rows = [createSampleEntry()];
-      mockRbac.checkAccess.mockResolvedValueOnce(false);
+      callerMay();
 
       const result = await service.deleteEntry({
         collectionName: "posts",

@@ -30,6 +30,7 @@ import {
   previewCallerAuthorized,
   type AuthorizedPreviewCaller,
 } from "../domains/collections/services/preview-redirect-resolver";
+import { EVERY_TRANSLATION } from "../domains/i18n/locale-selector";
 import {
   singleDocumentEditable,
   singleDocumentReadable,
@@ -114,6 +115,11 @@ export async function assertEntryPreviewable(
   // status-enabled collection otherwise filters to published only, so an entry
   // that has never been published reports as missing — exactly the entry an
   // editor most wants to share for review.
+  //
+  // Read in every language: an entry grant names none, and a link minted on it
+  // can be signed for any, so it holds only where the read rule admits every
+  // language. A rule that closes one refuses the link rather than being asked
+  // about the default language alone.
   const read = await collections.getEntry({
     collectionName: collection,
     entryId,
@@ -121,6 +127,7 @@ export async function assertEntryPreviewable(
     overrideAccess: false,
     user,
     status: "all",
+    locale: EVERY_TRANSLATION,
   });
 
   if (!readVerdict(read)) {

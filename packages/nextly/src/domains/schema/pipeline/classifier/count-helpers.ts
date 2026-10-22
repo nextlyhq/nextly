@@ -12,7 +12,7 @@
 //   - SQLite: db.all() returns T[] (no execute()); take first row.
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors";
 
@@ -100,6 +100,50 @@ export async function countNulls(
   const dbTyped = db as PgMysqlExecute;
   const result = await dbTyped.execute(query);
   return extractCount(result, dialect);
+}
+
+/**
+ * How many rows hold a value in `column` longer than `length` characters: the values a narrowing to
+ * `varchar(length)` would cut short. Counted in characters, as `varchar(N)` bounds them, by each
+ * dialect's character-length function. The names go through Drizzle's identifier quoting, which
+ * escapes them, and the length is a bound parameter, so nothing reaches the SQL text as a string.
+ * A name is not narrowed to a stricter grammar than the naming rules accept: a configured `dbName`
+ * such as `my-table` is created verbatim, and its narrowing must be countable.
+ */
+export async function countLongerThan(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string,
+  column: string,
+  length: number
+): Promise<number> {
+  const charLength = dialect === "sqlite" ? sql`length` : sql`CHAR_LENGTH`;
+  return readCount(
+    db,
+    dialect,
+    sql`SELECT COUNT(*) AS count FROM ${sql.identifier(table)} WHERE ${charLength}(${sql.identifier(column)}) > ${length}`
+  );
+}
+
+/**
+ * A count query's one number, read from each dialect's result shape: SQLite's synchronous `all`,
+ * the others' `execute`. A query that returns no row is a broken integration, never a zero.
+ */
+async function readCount(
+  db: unknown,
+  dialect: SupportedDialect,
+  query: SQL
+): Promise<number> {
+  if (dialect === "sqlite") {
+    const rows = (db as SqliteAll).all(query);
+    if (rows.length === 0) {
+      throw NextlyError.internal({
+        logContext: { reason: "count query returned no rows", dialect },
+      });
+    }
+    return asNumber(rows[0].count);
+  }
+  return extractCount(await (db as PgMysqlExecute).execute(query), dialect);
 }
 
 export async function countRows(

@@ -41,8 +41,13 @@ vi.mock("./authenticated-read", () => ({
 // The collection registry is reached through the DI container, so the
 // container module is the seam -- the same one `dashboard-scope.test.ts` uses
 // for `DashboardService`.
-const { containerGet } = vi.hoisted(() => ({ containerGet: vi.fn() }));
-vi.mock("../di/container", () => ({ container: { get: containerGet } }));
+const { containerGet, containerHas } = vi.hoisted(() => ({
+  containerGet: vi.fn(),
+  containerHas: vi.fn(),
+}));
+vi.mock("../di/container", () => ({
+  container: { get: containerGet, has: containerHas },
+}));
 
 // The entity-level read decision. Mocked so this handler test can put a caller
 // on either side of it without standing up the RBAC stack.
@@ -70,6 +75,7 @@ import {
 } from "../domains/widgets/system-sources";
 import { NextlyError } from "../errors/nextly-error";
 import { setNextlyLogger } from "../observability/logger";
+import { withTimezoneFormatting } from "../shared/lib/date-formatting";
 
 import { postWidgetQuery } from "./widget-query";
 
@@ -119,6 +125,8 @@ beforeEach(() => {
   clearSystemResolvers();
   logged.length = 0;
   setNextlyLogger(testLogger);
+  // No general settings unless a case configures them: dates stay in UTC.
+  containerHas.mockReturnValue(false);
   containerGet.mockImplementation((name: string) => {
     if (name === "collectionRegistryService") {
       return { getAllCollections: async () => registeredCollections };
@@ -1511,5 +1519,289 @@ describe("a batch that asks one source several times", () => {
     expect(slots.map(slot => slot.ok)).toEqual([true, false, true]);
     expect(resolveMany).toHaveBeenCalledTimes(1);
     expect((resolveMany.mock.calls[0]?.[0] as unknown[]).length).toBe(2);
+  });
+});
+
+describe("the streamed answer", () => {
+  /** A batch request asking for each slot as it settles. */
+  function streamReq(body: unknown): Request {
+    return new Request("http://localhost/api/dashboard/query", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/x-ndjson",
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  interface Line {
+    index: number;
+    slot: { ok: boolean; error?: string; code?: string; result?: unknown };
+  }
+
+  /** Every line of a finished stream, parsed. */
+  async function linesOf(res: Response): Promise<Line[]> {
+    const text = await res.text();
+    return text
+      .split("\n")
+      .filter(line => line.length > 0)
+      .map(line => JSON.parse(line) as Line);
+  }
+
+  /** Reads the stream one write at a time, each write as the lines it carried. */
+  function writesOf(res: Response) {
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    return {
+      async next(): Promise<Line[] | undefined> {
+        const { done, value } = await reader.read();
+        if (done) return undefined;
+        return decoder
+          .decode(value)
+          .split("\n")
+          .filter(line => line.length > 0)
+          .map(line => JSON.parse(line) as Line);
+      },
+      cancel: () => reader.cancel(),
+    };
+  }
+
+  /** A promise this test settles when it chooses. */
+  function held<T>() {
+    let release!: (value: T) => void;
+    const promise = new Promise<T>(resolve => {
+      release = resolve;
+    });
+    return { promise, release };
+  }
+
+  function registerResolverSource(id: string, resolve: unknown) {
+    registerSystemSource(
+      {
+        id,
+        label: id,
+        kind: "system",
+        supports: ["count", "list"],
+        fields: [{ name: "total", type: "number" }],
+      },
+      resolve as never
+    );
+  }
+
+  it("answers with today's JSON when the client does not ask for the stream", async () => {
+    const res = await postWidgetQuery(
+      makeReq({ queries: [{ source: "collection:posts", op: "count" }] })
+    );
+
+    expect(res.headers.get("content-type")).toMatch(/application\/json/);
+    // Two encodings of one URL: a cache keyed without `Accept` would hand one to the other.
+    expect(res.headers.get("vary")).toMatch(/Accept/);
+    expect(await slotsOf(res)).toEqual([
+      { ok: true, result: { op: "count", total: 3 } },
+    ]);
+  });
+
+  it("writes one line per slot, each the slot the JSON answer holds and nothing more", async () => {
+    // One readable query, one the caller may not read, one invalid for its source, and one
+    // whose execution fails with an internal message that must never reach the wire.
+    registeredCollections = [
+      ...registeredCollections,
+      {
+        slug: "salaries",
+        fields: [{ name: "amount", type: "number" }],
+        timestamps: true,
+      },
+    ];
+    canReadEntity.mockImplementation(
+      async (slug: string) => slug !== "salaries"
+    );
+    executeWidgetQuery.mockImplementation((query: { op: string }) =>
+      query.op === "list"
+        ? Promise.reject(new Error('relation "posts_internal" does not exist'))
+        : Promise.resolve({ op: "count", total: 4 })
+    );
+    const body = {
+      queries: [
+        { source: "collection:posts", op: "count" },
+        { source: "collection:salaries", op: "count" },
+        {
+          source: "collection:posts",
+          op: "count",
+          where: { zzz: { equals: 1 } },
+        },
+        { source: "collection:posts", op: "list" },
+      ],
+    };
+
+    const json = await slotsOf(await postWidgetQuery(makeReq(body)));
+    const res = await postWidgetQuery(streamReq(body));
+    const lines = await linesOf(res);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/x-ndjson");
+    expect(res.headers.get("cache-control")).toBe(
+      "private, no-store, no-transform"
+    );
+    expect(res.headers.get("x-accel-buffering")).toBe("no");
+    expect(res.headers.get("vary")).toMatch(/Accept/);
+    // Every slot exactly once, each exactly as the JSON answer holds it.
+    expect(lines.map(line => line.index).sort()).toEqual([0, 1, 2, 3]);
+    for (const line of lines) {
+      expect(Object.keys(line).sort()).toEqual(["index", "slot"]);
+      expect(line.slot).toEqual(json[line.index]);
+    }
+    // The control: the four slots differ, so a line carrying another's slot would show.
+    expect(json.map(slot => slot.ok)).toEqual([true, false, false, false]);
+    expect(json[1]).toMatchObject({ code: "unavailable" });
+    expect(JSON.stringify(lines)).not.toContain("posts_internal");
+  });
+
+  it("writes a slot as soon as it settles, ahead of a slower one", async () => {
+    const slow = held<{ op: string; total: number }>();
+    registerResolverSource("system:slow", vi.fn());
+    executeWidgetQuery.mockImplementation((query: { source: string }) =>
+      query.source === "system:slow"
+        ? slow.promise
+        : Promise.resolve({ op: "count", total: 9 })
+    );
+
+    const writes = writesOf(
+      await postWidgetQuery(
+        streamReq({
+          queries: [
+            { source: "system:slow", op: "count" },
+            { source: "collection:posts", op: "count" },
+          ],
+        })
+      )
+    );
+
+    // The fast slot arrives while the slow one is still held: the batch did not wait for it.
+    expect(await writes.next()).toEqual([
+      { index: 1, slot: { ok: true, result: { op: "count", total: 9 } } },
+    ]);
+    slow.release({ op: "count", total: 2 });
+    expect(await writes.next()).toEqual([
+      { index: 0, slot: { ok: true, result: { op: "count", total: 2 } } },
+    ]);
+    expect(await writes.next()).toBeUndefined();
+  });
+
+  it("writes the slots one many-query call answered together, in one write", async () => {
+    const ISSUES = "plugin:acme/issues";
+    registerResolvedSource(
+      {
+        id: ISSUES,
+        label: "Issues",
+        kind: "plugin",
+        supports: ["count"],
+        fields: [{ name: "issue", type: "string" }],
+      },
+      vi.fn(),
+      (async (queries: unknown[]) =>
+        queries.map((_, i) => ({ op: "count", total: i + 1 }))) as never
+    );
+
+    const writes = writesOf(
+      await postWidgetQuery(
+        streamReq({
+          queries: [
+            { source: ISSUES, op: "count", where: { issue: { equals: "a" } } },
+            { source: ISSUES, op: "count", where: { issue: { equals: "b" } } },
+          ],
+        })
+      )
+    );
+
+    expect(await writes.next()).toEqual([
+      { index: 0, slot: { ok: true, result: { op: "count", total: 1 } } },
+      { index: 1, slot: { ok: true, result: { op: "count", total: 2 } } },
+    ]);
+    expect(await writes.next()).toBeUndefined();
+  });
+
+  it("keeps a whole-batch refusal in the error envelope, never a stream", async () => {
+    const res = await postWidgetQuery(streamReq({ notQueries: true }));
+
+    expect(res.status).toBe(400);
+    // The canonical error envelope, served as problem JSON, never as lines.
+    expect(res.headers.get("content-type")).toMatch(/json/);
+    expect(res.headers.get("content-type")).not.toMatch(/ndjson/);
+    expect(
+      ((await res.json()) as { error?: { code?: string } }).error?.code
+    ).toBeDefined();
+  });
+
+  it("formats a streamed slot's dates exactly as the JSON answer's are formatted", async () => {
+    // A configured timezone, so the formatting pass has something to change: the raw value
+    // passing through untouched would otherwise look like agreement.
+    containerHas.mockImplementation(
+      (name: string) => name === "generalSettingsService"
+    );
+    const settings = { getTimezone: async () => "Asia/Karachi" };
+    const registry = containerGet.getMockImplementation()!;
+    containerGet.mockImplementation((name: string) =>
+      name === "generalSettingsService" ? settings : registry(name)
+    );
+    const stored = "2026-10-21T06:00:00.000Z";
+    executeWidgetQuery.mockResolvedValue({
+      op: "list",
+      items: [{ id: "p1", createdAt: stored }],
+    });
+    const body = { queries: [{ source: "collection:posts", op: "list" }] };
+
+    const formatted = await withTimezoneFormatting(
+      await postWidgetQuery(makeReq(body))
+    );
+    const json = await slotsOf(formatted);
+    const [line] = await linesOf(await postWidgetQuery(streamReq(body)));
+
+    expect(line?.slot).toEqual(json[0]);
+    expect(JSON.stringify(line?.slot)).not.toContain(stored);
+  });
+
+  it("gives the batch up when the reader cancels: running work is told, and nothing more is written", async () => {
+    let handed: AbortSignal | undefined;
+    registerResolverSource("system:slow", vi.fn());
+    executeWidgetQuery.mockImplementation(
+      (
+        query: { source: string },
+        _caller: unknown,
+        opts?: { signal?: AbortSignal }
+      ) => {
+        if (query.source !== "system:slow") {
+          return Promise.resolve({ op: "count", total: 1 });
+        }
+        handed = opts?.signal;
+        return new Promise<never>(() => {});
+      }
+    );
+
+    const writes = writesOf(
+      await postWidgetQuery(
+        streamReq({
+          queries: [
+            { source: "system:slow", op: "count" },
+            { source: "collection:posts", op: "count" },
+          ],
+        })
+      )
+    );
+    expect((await writes.next())?.[0]?.index).toBe(1);
+    // The must-differ half: the slow slot's work is still running before the reader leaves.
+    expect(handed?.aborted).toBe(false);
+
+    await writes.cancel();
+
+    expect(handed?.aborted).toBe(true);
+    // Given up, not failed: a departing reader's cards are not logged as broken. A turn of
+    // the event loop first, so the abandoned slot has finished settling.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(
+      logged.some(entry =>
+        JSON.stringify(entry).includes("widget-query-failed")
+      )
+    ).toBe(false);
   });
 });

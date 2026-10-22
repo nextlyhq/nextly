@@ -47,7 +47,7 @@ const ARGS = {
   slug: "posts",
   entryId: "e1",
   user: { id: "user-1" },
-  params: { _authenticatedUserId: "user-1" },
+  params: {},
   snapshot: { title: "typed" },
 };
 

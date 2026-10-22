@@ -21,14 +21,20 @@ import {
   type ClassifierEvent,
 } from "../resolution/types";
 
+import { narrowingRefusal } from "./narrowing-refusal";
 import { buildPerDialectWarning } from "./type-warnings";
-import { isWideningChange } from "./type-widening";
+import { isWideningChange, stringNarrowingLimit } from "./type-widening";
 
 export class RealClassifier implements Classifier {
   async classify(args: {
     operations: Operation[];
     countNulls: (table: string, column: string) => Promise<number>;
     countRows: (table: string) => Promise<number>;
+    countLongerThan?: (
+      table: string,
+      column: string,
+      length: number
+    ) => Promise<number>;
     dialect: SupportedDialect;
   }): Promise<ClassificationResult> {
     const events: ClassifierEvent[] = [];
@@ -69,6 +75,31 @@ export class RealClassifier implements Classifier {
         // Everything else surfaces a per-dialect warning so silent coercion
         // (MySQL/SQLite) and hard-failure (PG without USING) are loud.
         const widening = isWideningChange(op.fromType, op.toType, args.dialect);
+        // A string narrowed to varchar(N) is judged by its data: lossless when no stored value is
+        // longer than N, so it needs no confirmation; otherwise every way of running it loses or
+        // refuses data (MySQL cuts the value short without strict mode and fails with it), so the
+        // apply stops here, before any DDL, and names what does not fit.
+        const limit = stringNarrowingLimit(
+          op.fromType,
+          op.toType,
+          args.dialect
+        );
+        if (limit !== null && args.countLongerThan !== undefined) {
+          const longer = await args.countLongerThan(
+            op.tableName,
+            op.columnName,
+            limit
+          );
+          if (longer === 0) continue;
+          throw narrowingRefusal({
+            tableName: op.tableName,
+            columnName: op.columnName,
+            fromType: op.fromType,
+            toType: op.toType,
+            limit,
+            longer,
+          });
+        }
         if (!widening) {
           events.push({
             id: formatEventId("type_change", op.tableName, op.columnName),

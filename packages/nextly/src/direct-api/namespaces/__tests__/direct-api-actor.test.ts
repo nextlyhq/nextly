@@ -36,6 +36,26 @@ describe("the actor a Direct API call carries", () => {
     ).toEqual({ type: "user", id: "other" });
   });
 
+  it("is the person a call names, not the instance's key, when the call names no key", () => {
+    // The access check reads the call the same way: a user named without a key
+    // is that person, not the key the instance was made with. Recording the
+    // key would put a write the check judged as a person against the key.
+    const key = { actorType: "apiKey" as const, permissions: [] };
+    expect(
+      directApiActor(
+        { user: { id: "owner" }, actor: key },
+        { user: { id: "other" } }
+      )
+    ).toEqual({ type: "user", id: "other" });
+  });
+
+  it("keeps the instance's key when the call names nobody", () => {
+    const key = { actorType: "apiKey" as const, permissions: [] };
+    expect(directApiActor({ user: { id: "owner" }, actor: key }, {})).toEqual({
+      type: "apiKey",
+    });
+  });
+
   it("is absent when nobody is named", () => {
     // Absent means absent. A call naming nobody records nothing, rather than
     // attributing a credential change to a placeholder identity.

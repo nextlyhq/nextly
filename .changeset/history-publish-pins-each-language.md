@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-In the admin's version history, a publish that shipped several languages now shows as the current publish in each of those languages' views, and an older save of one of them is no longer pinned as its current draft. Changing the language view returns the document to its current state when the version being previewed is no longer shown.
+In the admin's version history, a publish that shipped several languages is now pinned as the current publish in each of those languages' views (as that publish, with no version to open, in a language whose own version it did not record), and an older save of one of them is no longer pinned as its current draft. Changing the language view returns the document to its current state when the version being previewed is no longer shown.
