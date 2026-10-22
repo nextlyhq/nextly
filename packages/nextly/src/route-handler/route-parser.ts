@@ -905,6 +905,25 @@ function parseCollectionEntryVersionRoutes(
     };
   }
 
+  // `versions/working-draft/take-live` POST brings one language's pending
+  // change up to date with the live shared values (`?locale=` names it).
+  // Authorized as an update, as a discard is: it rewrites the pending change.
+  if (
+    additionalParams.length === 3 &&
+    additionalParams[1] === "working-draft" &&
+    additionalParams[2] === "take-live" &&
+    httpMethod === "POST"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    return {
+      service: "collections",
+      operation: "update",
+      method: "takeLiveSharedValues",
+      routeParams,
+    };
+  }
+
   // `versions/autosave` PUT records the author's rolling recovery point.
   // `autosave` is a named sub-resource and a version number is always numeric,
   // so the two can never collide.
@@ -1044,6 +1063,24 @@ function parseSingleVersionRoutes(
 ): ParsedRoute | null {
   if (!id || subresource !== "versions") {
     return null;
+  }
+
+  // `versions/working-draft/take-live` POST: see the collection parser. Matched
+  // before the version actions, whose `versions/{versionNo}/{action}` shape it
+  // shares; `working-draft` is a name, never a version number.
+  if (
+    subId === "working-draft" &&
+    additionalParams.length === 1 &&
+    additionalParams[0] === "take-live" &&
+    httpMethod.toUpperCase() === "POST"
+  ) {
+    routeParams.slug = id;
+    return {
+      service: "singles",
+      operation: "update",
+      method: "takeLiveSingleSharedValues",
+      routeParams,
+    };
   }
 
   // `versions/{versionNo}/{action}`: an action on one version, matched from

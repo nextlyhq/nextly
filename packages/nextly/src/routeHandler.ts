@@ -673,6 +673,9 @@ export const COLLECTION_ENTRY_METHODS = new Set([
   // route parser marks it an `update` operation, so it resolves to the
   // `update-{slug}` permission rather than a definition mutation's manage-settings.
   "discardWorkingDraft",
+  // Taking the live shared values rewrites the pending change, as a discard
+  // does, so it is authorized as an update of the entry too.
+  "takeLiveSharedValues",
   // Storing a recovery point writes the entry's content into history, so it is
   // authorized as an update of the entry like a discard is.
   "autosaveEntry",
@@ -717,6 +720,8 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
   // of the read branch below so it resolves to `update-{slug}`: a caller who may
   // not update the document may not throw away its pending edits either.
   "discardSingleWorkingDraft",
+  // Taking the live shared values rewrites the pending change: an update too.
+  "takeLiveSingleSharedValues",
 ]);
 
 /**

@@ -32,6 +32,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import type { UserContext } from "../../domains/collections/services/collection-types";
+import { clearCollectionRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
@@ -121,6 +122,7 @@ import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   discardWorkingDraftForDocument,
+  takeLiveSharedValuesForDocument,
   getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
@@ -319,6 +321,20 @@ export const COLLECTION_VERSION_METHODS: Record<
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
       });
       return respondMutation("Working draft discarded.", item);
+    },
+  },
+  takeLiveSharedValues: {
+    execute: async (_svc, p) => {
+      const item = await takeLiveSharedValuesForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: requireAuthenticatedUser(),
+        // `?locale=` names the language whose pending change takes the live
+        // values. An empty value is the same as none: the default language.
+        locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+      });
+      return respondMutation("Live values taken.", item);
     },
   },
   autosaveEntry: {
@@ -1062,6 +1078,9 @@ const COLLECTIONS_METHODS: Record<
           },
           { and: [{ column: "slug", op: "=", value: p.collectionName }] }
         );
+        // Written past the registry services, so the cached rows are cleared
+        // here: a read during the save may have cached the row from before it.
+        clearCollectionRowCache();
       } catch (err) {
         versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);

@@ -136,6 +136,7 @@ vi.mock("../lib/env", () => ({
 
 import { verifyPreviewToken } from "../auth/preview/preview-token";
 import { container } from "../di";
+import { EVERY_TRANSLATION } from "../domains/i18n/locale-selector";
 
 import {
   requireRouteCollectionAccess,
@@ -323,9 +324,10 @@ describe("mintPreviewLink for a Single", () => {
       );
     });
 
-    // The token names one translation; the probe must judge that one. A custom
-    // read rule can allow the default document and deny the requested locale,
-    // and authorizing the default while signing the other authorizes nothing
+    // The token names one translation; the probe must judge that one. A rule
+    // told the language may allow one and refuse another, and a localized
+    // Single is a different document in each language, with a lifecycle of its
+    // own, so authorizing the default while signing another authorizes nothing
     // about what the bearer receives.
     it("authorizes the translation the token will name", async () => {
       await mintPreviewLink(post({ single: "homepage", locale: "fr" }));
@@ -1139,6 +1141,21 @@ describe("mintPreviewLink", () => {
     expect(canUpdateEntry.mock.calls[0][0].authenticatedScope).toBeUndefined();
   });
 
+  it("asks the route gate in the language the link names, and in every language for one naming none", async () => {
+    await mintPreviewLink(post({ single: "homepage", locale: "fr" }));
+    expect(requireRouteCollectionAccess).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "update",
+      "homepage",
+      { method: "sharePreviewLink", params: { locale: "fr" } }
+    );
+
+    await mintPreviewLink(post({ single: "homepage" }));
+    expect(
+      (requireRouteCollectionAccess as ReturnType<typeof vi.fn>).mock.lastCall
+    ).toHaveLength(3);
+  });
+
   it("gates on update for the collection that was named", async () => {
     // Per collection, not a blanket permission: otherwise a caller who may
     // edit posts could mint a link into a collection they cannot read.
@@ -1423,6 +1440,23 @@ describe("revokePreviewLinks", () => {
     expect(revokeAll).not.toHaveBeenCalled();
     expect(records.revokeDocumentLinks).not.toHaveBeenCalled();
     expect(requireRoutePermission).not.toHaveBeenCalled();
+  });
+
+  it("judges revoking a document's links in every language, whatever language the request names", async () => {
+    // Revoking acts on every link to the entry, whatever language each is
+    // to, so a caller allowed English alone must not end the French ones.
+    await revokePreviewLinks(
+      post(
+        { collection: "pages", entryId: "7", locale: "en" },
+        "http://x/api/nextly/preview-links/revoke"
+      )
+    );
+    expect(
+      (requireRouteCollectionAccess as ReturnType<typeof vi.fn>).mock.lastCall
+    ).toEqual([expect.anything(), "update", "pages"]);
+    expect(getEntry).toHaveBeenLastCalledWith(
+      expect.objectContaining({ entryId: "7", locale: EVERY_TRANSLATION })
+    );
   });
 
   it("revokes one document's links behind the sharer's rule, not manage settings", async () => {

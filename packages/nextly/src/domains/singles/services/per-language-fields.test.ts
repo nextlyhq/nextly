@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 
-import { perLanguageFieldNames } from "./single-publish-all";
+import { perLanguageFieldNames } from "./live-shared-single";
 
 const translated = new Set(["banner"]);
 const isComponentLocalized = (slug: string) =>
