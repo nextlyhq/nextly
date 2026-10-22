@@ -244,10 +244,21 @@ async function outcome(work: () => Promise<unknown>): Promise<Response> {
       typeof result === "boolean" ? { ok: true, found: result } : { ok: true }
     );
   } catch (error) {
-    const status = (error as { statusCode?: unknown }).statusCode;
+    // What the call threw, as its caller would read it: the status, and the
+    // code and public message a refusal carries.
+    const thrown = error as {
+      statusCode?: unknown;
+      code?: unknown;
+      publicMessage?: unknown;
+    };
     return Response.json({
       ok: false,
-      status: typeof status === "number" ? status : null,
+      status: typeof thrown.statusCode === "number" ? thrown.statusCode : null,
+      code: typeof thrown.code === "string" ? thrown.code : undefined,
+      message:
+        typeof thrown.publicMessage === "string"
+          ? thrown.publicMessage
+          : undefined,
     });
   }
 }
