@@ -21,6 +21,7 @@ process.env.NEXTLY_SECRET =
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../../config";
+import { readClientWhere } from "../../../dispatcher/helpers/validation";
 import type { AccessRuleContext } from "../../../shared/types/access";
 import { resetHookRegistry } from "../../../hooks/hook-registry";
 import {
@@ -210,6 +211,18 @@ async function listed(
     total: (list.json.meta as { total: number }).total,
     counted: count.json.total as number,
   };
+}
+
+/**
+ * A filter as a client sends it, read through the same check the REST routes
+ * and the bulk-by-query body apply. The workflow keys take `true`, which the
+ * published `WhereFilter` type does not admit, so a typed caller reaches them
+ * the way a client's JSON does.
+ */
+function clientWhere(where: Record<string, unknown>) {
+  const read = readClientWhere(where);
+  if (read === undefined) throw new Error("no filter");
+  return read;
 }
 
 /** A REST read's refusal: its status and the problems it names. */
@@ -469,7 +482,7 @@ describe.each(getConfiguredTestDialects())(
       await expect(
         handler.bulkUpdateByQuery({
           collectionName: "posts",
-          where: { _inRelease: true },
+          where: clientWhere({ _inRelease: true }),
           data: { title: "Selected by release" },
           user: owner,
           authenticatedScope: writer,
@@ -478,7 +491,7 @@ describe.each(getConfiguredTestDialects())(
       await expect(
         handler.bulkDeleteByQuery({
           collectionName: "posts",
-          where: { _inRelease: true },
+          where: clientWhere({ _inRelease: true }),
           user: owner,
           authenticatedScope: writer,
         })
@@ -498,7 +511,7 @@ describe.each(getConfiguredTestDialects())(
       // exactly the entries the list filter keeps.
       const updated = await handler.bulkUpdateByQuery({
         collectionName: "posts",
-        where: { _inRelease: true },
+        where: clientWhere({ _inRelease: true }),
         data: { title: "Selected by release" },
         user: owner,
         authenticatedScope: {
@@ -611,7 +624,7 @@ describe.each(getConfiguredTestDialects())(
     ): Promise<Set<string>> {
       const read = {
         collectionName: collection,
-        where,
+        where: clientWhere(where),
         status: "all" as const,
         ...language,
         ...reader,
