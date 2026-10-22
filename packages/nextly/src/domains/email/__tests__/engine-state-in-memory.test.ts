@@ -2,7 +2,7 @@
  * The template engine state is answered from the instance's copy on every
  * send, so a send reads nothing from the meta table, and nothing on another
  * connection inside a caller's open transaction. Outside a transaction the
- * copy is read again once it is older than ENGINE_STATE_MAX_AGE_MS, which is
+ * copy is read again once it is older than SNAPSHOT_MAX_AGE_MS, which is
  * how long a confirmation another instance made can go unseen here.
  *
  * On a real in-memory SQLite database; two service objects on it stand for
@@ -19,10 +19,8 @@ import { emailTemplatesSqlite } from "../../../schemas/email-templates/sqlite";
 import { nextlyMetaTables } from "../../../schemas/nextly-meta";
 import { MetaService } from "../../meta";
 import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
-import {
-  ENGINE_STATE_MAX_AGE_MS,
-  EmailTemplateService,
-} from "../services/email-template-service";
+import { EmailTemplateService } from "../services/email-template-service";
+import { SNAPSHOT_MAX_AGE_MS } from "../transaction-flow";
 
 import { silentLogger } from "./template-ownership-fixture";
 
@@ -36,11 +34,15 @@ let adapter: DrizzleAdapter;
 let clock = 1_000_000;
 let transactionOpen = false;
 
-async function createTables(tables: Record<string, unknown>): Promise<void> {
+/** Create `tables`, on a database that already has `existing`. */
+async function createTables(
+  tables: Record<string, unknown>,
+  existing: Record<string, unknown> = {}
+): Promise<void> {
   const kit = await getDrizzleKitForDialect("sqlite");
   const statements = await kit.generateMigration(
-    await kit.generateDrizzleJson({}),
-    await kit.generateDrizzleJson(tables)
+    await kit.generateDrizzleJson(existing),
+    await kit.generateDrizzleJson({ ...existing, ...tables })
   );
   for (const statement of splitStatements(statements)) {
     await adapter.executeQuery(statement);
@@ -76,7 +78,7 @@ beforeEach(async () => {
     htmlContent: STORED,
     useLayout: false,
   });
-  await createTables({ emailTemplatesSqlite, ...nextlyMetaTables("sqlite") });
+  await createTables(nextlyMetaTables("sqlite"), { emailTemplatesSqlite });
 });
 
 afterEach(async () => {
@@ -112,7 +114,7 @@ describe("the template engine state", () => {
     const rewritten = await site.getTemplate(kept.id);
 
     // Within the window this instance still reads it as kept.
-    clock += ENGINE_STATE_MAX_AGE_MS;
+    clock += SNAPSHOT_MAX_AGE_MS;
     expect((await site.renderStored(rewritten, DATA)).html).toBe(
       "<p>Members: {% if vip %}VIP{% endif %} Priya</p>"
     );
@@ -137,7 +139,7 @@ describe("the template engine state", () => {
 
   it("reads nothing from the meta table inside an open transaction, however old its copy", async () => {
     const site = await boot();
-    clock += ENGINE_STATE_MAX_AGE_MS * 10;
+    clock += SNAPSHOT_MAX_AGE_MS * 10;
     transactionOpen = true;
     const reads = watchMetaReads();
 

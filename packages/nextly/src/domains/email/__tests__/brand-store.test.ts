@@ -20,11 +20,13 @@ import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
 import { STARTING_BRAND, type BrandSettings } from "../brand-settings";
 import { EmailBrandStore } from "../services/email-brand-store";
 import { EmailTemplateService } from "../services/email-template-service";
+import { SNAPSHOT_MAX_AGE_MS } from "../transaction-flow";
 
 import { silentLogger } from "./template-ownership-fixture";
 
 let adapter: DrizzleAdapter;
 let transactionOpen = false;
+let clock = 1_000_000;
 
 beforeEach(async () => {
   adapter = createSqliteAdapter({ memory: true }) as unknown as DrizzleAdapter;
@@ -41,6 +43,8 @@ beforeEach(async () => {
     await adapter.executeQuery(statement);
   }
   transactionOpen = false;
+  clock = 1_000_000;
+  vi.spyOn(Date, "now").mockImplementation(() => clock);
   // Whether the calling flow holds a transaction, as the adapter says.
   Object.assign(adapter, { transactionOpenInFlow: () => transactionOpen });
 });
@@ -70,6 +74,8 @@ describe("the copy of the settings a render inside a transaction reads", () => {
       .spyOn(reader, "readTable")
       .mockImplementationOnce(() => slow)
       .mockImplementation(original);
+    // Past the window, so the read goes to the table.
+    clock += SNAPSHOT_MAX_AGE_MS + 1;
     const pending = store.read();
 
     await store.update({ accentColor: "#ff0066" });
@@ -108,21 +114,49 @@ describe("the copy of the settings a render inside a transaction reads", () => {
     expect((await store.read()).accentColor).toBe("#222222");
   });
 
-  it("is what a read outside a transaction last found", async () => {
+  it("is answered on every send within the window, with no read of the table", async () => {
     const store = new EmailBrandStore(adapter, silentLogger);
     await store.load();
-    // Another instance saves; this one sees it at its next outside read.
+    const reader = store as unknown as TableReader;
+    const spy = vi.spyOn(reader, "readTable");
+
+    for (let i = 0; i < 3; i++) await store.read();
+    clock += SNAPSHOT_MAX_AGE_MS;
+    await store.read();
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("sees another instance's save once older than the window, outside a transaction only", async () => {
+    const store = new EmailBrandStore(adapter, silentLogger);
+    await store.load();
     await new EmailBrandStore(adapter, silentLogger).update({
       backgroundColor: "#102030",
     });
+
+    // Within the window the copy answers.
+    expect((await store.read()).backgroundColor).toBe(
+      STARTING_BRAND.backgroundColor
+    );
+    // Past it, inside a transaction, the copy still answers: a read there
+    // would run on another connection.
+    clock += SNAPSHOT_MAX_AGE_MS + 1;
     transactionOpen = true;
     expect((await store.read()).backgroundColor).toBe(
       STARTING_BRAND.backgroundColor
     );
+    // Outside one, the table is read again, and the copy follows it.
     transactionOpen = false;
     expect((await store.read()).backgroundColor).toBe("#102030");
     transactionOpen = true;
     expect((await store.read()).backgroundColor).toBe("#102030");
+  });
+
+  it("follows this instance's own save at once", async () => {
+    const store = new EmailBrandStore(adapter, silentLogger);
+    await store.load();
+    await store.update({ accentColor: "#ff0066" });
+    expect((await store.read()).accentColor).toBe("#ff0066");
   });
 });
 
