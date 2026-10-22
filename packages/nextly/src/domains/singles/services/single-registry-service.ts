@@ -49,9 +49,9 @@ import {
 import type { Logger } from "../../../shared/types";
 import type { SingleConfig } from "../../../singles/config/types";
 import {
-  moveEntitySlug,
-  slugKeyedTablesPresent,
-} from "../../entity-rename/move-entity-slug";
+  moveWebhookRecording,
+  renameEntity,
+} from "../../entity-rename/rename-entity";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   calculateSchemaHash,
@@ -626,6 +626,13 @@ export class SingleRegistryService extends BaseRegistryService<
         throw NextlyError.notFound({ logContext: { slug } });
       }
 
+      // A rename carries the live recording decision to the new slug and
+      // drops the old slug's entry, so a Single created there later starts
+      // from the default rather than inheriting this one's choice.
+      if (targetSlug !== slug && !isConfigOwnedSource(existing.source)) {
+        moveWebhookRecording({ kind: "single", from: slug, to: targetSlug });
+      }
+
       // Mirror the stored change into the live policy so turning the switch
       // off takes effect on the next write rather than the next restart. Keyed
       // on the slug the row is stored under, the new one after a rename, and
@@ -668,7 +675,8 @@ export class SingleRegistryService extends BaseRegistryService<
   /**
    * Write a Single's row under its new slug and move what is keyed by the old
    * one (history, markers, events, release members), in one transaction, so
-   * the registry and those tables commit together or neither does.
+   * the registry and those tables commit together or neither does. Its
+   * permissions and webhook filters move with them (see `renameEntity`).
    *
    * Read back by the new slug inside the transaction: MySQL has no RETURNING,
    * and re-reading by the old slug would find nothing once the row has moved.
@@ -679,25 +687,22 @@ export class SingleRegistryService extends BaseRegistryService<
     to: string,
     updateData: Record<string, unknown>
   ): Promise<DynamicSingleRecord[]> {
-    const present = await slugKeyedTablesPresent(this.adapter);
-    return this.adapter.transaction(async tx => {
-      const written = await tx.updateCount(
-        this.registryTableName,
-        { ...updateData, slug: to },
-        this.whereEq("slug", from)
-      );
-      if (written === 0) return [];
-      await moveEntitySlug(tx, {
-        dialect: this.dialect,
-        present,
-        move: { kind: "single", from, to },
-      });
-      const row = await tx.selectOne<DynamicSingleRecord>(
-        this.registryTableName,
-        { where: this.whereEq("slug", to) }
-      );
-      return row ? [row] : [];
+    const row = await renameEntity(this.adapter, {
+      dialect: this.dialect,
+      move: { kind: "single", from, to },
+      writeRegistry: async tx => {
+        const written = await tx.updateCount(
+          this.registryTableName,
+          { ...updateData, slug: to },
+          this.whereEq("slug", from)
+        );
+        if (written === 0) return null;
+        return tx.selectOne<DynamicSingleRecord>(this.registryTableName, {
+          where: this.whereEq("slug", to),
+        });
+      },
     });
+    return row ? [row] : [];
   }
 
   /**

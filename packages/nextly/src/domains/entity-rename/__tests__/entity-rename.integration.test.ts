@@ -3,8 +3,11 @@
  * versions and working draft, its version pins, each person's "last looked
  * at" marker, its content events and their parts, its release membership, its
  * schema events, its activity feed and its archived translations all read
- * under the new slug, and nothing is left under the old one. Its document
- * locks and preview links end with the old name.
+ * under the new slug, and nothing is left under the old one. So do who may use
+ * it (its permissions, and every role's grants of them) and where its webhooks
+ * go (endpoint filters that list it, and its recording choice). Its document
+ * locks, preview links and kept permission answers end with the old name, and
+ * an entity created later under the old name inherits none of it.
  *
  * The rename either happens whole or not at all: a failure writing any one of
  * the moved tables leaves the registry and every table exactly as they were.
@@ -24,12 +27,21 @@ import type {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../../config";
+import { container } from "../../../di";
+import { ServiceContainer } from "../../../services/index";
+import {
+  clearInMemoryPermissionTiersForTests,
+  hasPermission,
+} from "../../../services/lib/permissions";
+import { resetEpochForTests } from "../../../services/lib/rbac-epoch";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { entityPermissionSpelling } from "../../auth/services/entity-permission-spelling";
+import { PermissionCacheService } from "../../auth/services/permission-cache-service";
 import { DynamicCollectionRegistryService } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { recordContentEvent } from "../../content-events/record";
 import { documentLockKey } from "../../document-lock/lock-key";
@@ -47,15 +59,26 @@ import {
   versionViewKey,
 } from "../../versions/version-views";
 import { workingDraftKey } from "../../versions/working-draft-key";
+import type { WebhookEndpointRegistry } from "../../webhooks/endpoint-registry";
+import { fanOutDueEvents, type FanOutDatabase } from "../../webhooks/fan-out";
+import { isWebhookRecordingEnabled } from "../../webhooks/recording-policy";
 import {
   VersionsRepository,
   type VersionRef,
 } from "../../versions/versions-repository";
 import {
+  jsonSlugColumns,
   renamedSlugColumns,
   SLUG_COLUMNS,
   type RenamedEntityKind,
 } from "../slug-columns";
+
+// Webhook signing secrets are encrypted under NEXTLY_SECRET, so creating an
+// endpoint needs one; `??=` never replaces a real environment's.
+process.env.NEXTLY_SECRET ??= "integration-test-application-secret";
+
+// An address literal, so the endpoint URL check makes no DNS lookup.
+const ENDPOINT_URL = "https://93.184.216.34/hooks";
 
 const HOLDER = "rename-test-workflows";
 const workflows = registerVersionPinHolder({
@@ -117,14 +140,15 @@ async function rowsNaming(
   for (const column of renamedSlugColumns()) {
     const rows = await t().adapter.select<Row>(column.table);
     // Rows are read by property name; the declaration names SQL columns.
-    const kindProperty = camel(column.kindColumn);
-    const slugProperty = camel(column.slugColumn);
+    const kindColumn = column.kind;
     counts[column.table] = rows.filter(
       row =>
-        row[slugProperty] === slug &&
-        column.kinds[kind].includes(
-          (row[kindProperty] ?? null) as string | null
-        )
+        row[camel(column.slugColumn)] === slug &&
+        (column.onlyWhereNull ?? []).every(name => row[camel(name)] == null) &&
+        (kindColumn === undefined ||
+          kindColumn.values[kind].includes(
+            (row[camel(kindColumn.column)] ?? null) as string | null
+          ))
     ).length;
   }
   return counts;
@@ -142,13 +166,20 @@ function camel(column: string): string {
 }
 
 /**
- * Every row of the registries and of every declared table, in a stable order,
- * to compare a database before and after a refused rename.
+ * Every row of the registries, the role grants and every declared table, in a
+ * stable order, to compare a database before and after a refused rename.
  */
 async function snapshot(): Promise<string> {
+  // The permission cache is left out: every permission write retires it,
+  // committed or not, by design, and a retired answer is recomputed rather
+  // than lost.
   const tables = [
     ...Object.values(REGISTRY),
-    ...renamedSlugColumns().map(column => column.table),
+    "role_permissions",
+    ...renamedSlugColumns()
+      .map(column => column.table)
+      .filter(table => table !== "user_permission_cache"),
+    ...jsonSlugColumns().map(column => column.table),
   ];
   const out: Record<string, string[]> = {};
   for (const table of tables) {
@@ -236,7 +267,7 @@ async function writeMasthead(): Promise<string> {
  * Everything else a document's history holds, through the writers that write
  * it where one exists, and as rows where the writer needs a running request:
  * a working draft, a pin, a marker, an event with parts, a release member, a
- * schema event, an
+ * schema event, a kept permission answer, an
  * activity row (and, for a collection, one from before kinds were recorded),
  * an archived translation, a lock and a preview link.
  */
@@ -321,6 +352,14 @@ async function seedHistory(
     acquiredAt: now,
     expiresAt: new Date(now.getTime() + 60_000),
   });
+  // A kept answer about the entity, written by the cache's own writer.
+  await new PermissionCacheService(adapter, silentLogger).setCachedPermission(
+    ANA.id,
+    "read",
+    slug,
+    true,
+    []
+  );
   await adapter.insert("nextly_preview_links", {
     id: randomUUID().replace(/-/g, ""),
     documentKind: kind === "collection" ? "entry" : "single",
@@ -492,6 +531,133 @@ function failingOn(
   });
 }
 
+/**
+ * An endpoint row whose filter lists `collections`, written as a row so a
+ * test that only needs the filter does not depend on endpoint creation.
+ */
+async function endpointFiltering(collections: string[]): Promise<string> {
+  const id = randomUUID();
+  const now = new Date();
+  await t().adapter.insert("nextly_webhooks", {
+    id,
+    name: "Filtered",
+    url: ENDPOINT_URL,
+    enabled: true,
+    eventTypes: ["*"],
+    filter: { version: 1, collections },
+    secretHash: [],
+    secretPrefix: "whsec_test",
+    createdAt: now,
+    updatedAt: now,
+  });
+  return id;
+}
+
+/** Endpoint filters, by endpoint id. */
+async function filters(): Promise<Map<string, unknown>> {
+  return new Map(
+    (await rowsOf("nextly_webhooks")).map(row => [String(row.id), row.filter])
+  );
+}
+
+/**
+ * A person, made the way an install makes one. The first account an install
+ * provisions is its super-admin, which every check lets through, so each test
+ * makes a founder first.
+ */
+async function makeUser(email: string): Promise<string> {
+  const created = await new ServiceContainer(t().adapter).users.createLocalUser(
+    {
+      email,
+      name: email,
+      password: "Str0ng-P@ssw0rd!",
+      isActive: true,
+      emailVerification: "admin-vouched",
+    }
+  );
+  return String(created.id);
+}
+
+/**
+ * A role holding the framework's permissions for these actions on these
+ * entities, given to `userId`. Grants point at the permissions the boot
+ * seeded, by id, as an administrator's grant does.
+ */
+async function grant(
+  roleId: string,
+  userId: string,
+  grants: readonly (readonly [string, string])[]
+): Promise<void> {
+  const adapter = t().adapter;
+  const now = new Date();
+  await adapter.insert("roles", {
+    id: roleId,
+    name: roleId,
+    slug: roleId,
+    level: 10,
+    isSystem: false,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const permissions = await rowsOf("permissions");
+  for (const [action, resource] of grants) {
+    const permission = permissions.find(
+      row =>
+        row.action === action && row.resource === resource && row.owner == null
+    );
+    expect([action, resource, permission !== undefined]).toEqual([
+      action,
+      resource,
+      true,
+    ]);
+    await adapter.insert("role_permissions", {
+      id: randomUUID(),
+      roleId,
+      permissionId: permission?.id,
+    });
+  }
+  await adapter.insert("user_roles", {
+    id: randomUUID(),
+    userId,
+    roleId,
+    expiresAt: null,
+    createdAt: now,
+  });
+}
+
+/** What each action answers for this person on this entity, asked for real. */
+async function mayDo(
+  userId: string,
+  actions: readonly string[],
+  resource: string
+): Promise<Record<string, boolean>> {
+  const answers: Record<string, boolean> = {};
+  for (const action of actions) {
+    answers[action] = await hasPermission(userId, action, resource);
+  }
+  return answers;
+}
+
+/** Every action answered the same way. */
+function all(
+  actions: readonly string[],
+  answer: boolean
+): Record<string, boolean> {
+  return Object.fromEntries(actions.map(action => [action, answer]));
+}
+
+const COLLECTION_ACTIONS = ["read", "create", "update", "publish"] as const;
+const SINGLE_ACTIONS = ["read", "update", "publish"] as const;
+
+/** Boot with access state that starts clean for this instance. */
+async function bootForAccess(dialect: TestDialect): Promise<void> {
+  // Started afresh, so an earlier instance in this process leaves no
+  // permission answer or revision for this one to read.
+  resetEpochForTests();
+  clearInMemoryPermissionTiersForTests();
+  await boot(dialect);
+}
+
 describe.each(getConfiguredTestDialects())(
   "renaming a collection or Single (integration, %s)",
   dialect => {
@@ -588,20 +754,261 @@ describe.each(getConfiguredTestDialects())(
       ).toHaveLength(3);
     }, 120_000);
 
+    it("keeps who may use a renamed collection or Single, and changes no other role", async () => {
+      await bootForAccess(dialect);
+      await makeUser("founder@x.test");
+      const editor = await makeUser("editor@x.test");
+      const other = await makeUser("other@x.test");
+      await grant("role-rename-editor", editor, [
+        ...COLLECTION_ACTIONS.map(action => [action, "notes"] as const),
+        ...SINGLE_ACTIONS.map(action => [action, "masthead"] as const),
+      ]);
+      await grant("role-rename-other", other, [["read", "masthead"]]);
+      // A plugin's own permission on the collection, declared by the plugin
+      // under the slug its code names.
+      const now = new Date();
+      await t().adapter.insert("permissions", {
+        id: "perm-plugin-export-notes",
+        name: "Export Notes",
+        slug: "export-notes",
+        action: "export",
+        resource: "notes",
+        owner: "plugin-exporter",
+        createdAt: now,
+        updatedAt: now,
+      });
+      // Asked once before, so a kept answer about the old names exists for
+      // the rename to retire.
+      expect(await mayDo(editor, COLLECTION_ACTIONS, "notes")).toEqual(
+        all(COLLECTION_ACTIONS, true)
+      );
+      expect(await mayDo(editor, SINGLE_ACTIONS, "masthead")).toEqual(
+        all(SINGLE_ACTIONS, true)
+      );
+
+      await rename("collection", "notes", "journal");
+      await rename("single", "masthead", "header");
+
+      expect(await mayDo(editor, COLLECTION_ACTIONS, "journal")).toEqual(
+        all(COLLECTION_ACTIONS, true)
+      );
+      expect(await mayDo(editor, COLLECTION_ACTIONS, "notes")).toEqual(
+        all(COLLECTION_ACTIONS, false)
+      );
+      expect(await mayDo(editor, SINGLE_ACTIONS, "header")).toEqual(
+        all(SINGLE_ACTIONS, true)
+      );
+      expect(await mayDo(editor, SINGLE_ACTIONS, "masthead")).toEqual(
+        all(SINGLE_ACTIONS, false)
+      );
+      // The other role holds what it held, under the new name, and nothing
+      // the rename could have handed it.
+      expect(await mayDo(other, ["read", "update"], "header")).toEqual({
+        read: true,
+        update: false,
+      });
+      expect(await mayDo(other, ["read"], "journal")).toEqual({ read: false });
+
+      // The plugin's permission stays with the plugin's declaration.
+      expect(
+        (await rowsOf("permissions")).find(
+          row => row.id === "perm-plugin-export-notes"
+        )
+      ).toMatchObject({ resource: "notes", slug: "export-notes" });
+
+      // The moved permissions are spelled as the seeder spells a new one.
+      const moved = (await rowsOf("permissions")).filter(
+        row => row.resource === "journal" && row.owner == null
+      );
+      expect(moved.length).toBeGreaterThanOrEqual(COLLECTION_ACTIONS.length);
+      for (const row of moved) {
+        const spelled = entityPermissionSpelling(String(row.action), "journal");
+        expect(row).toMatchObject({
+          slug: spelled.slug,
+          name: spelled.name,
+          description: spelled.description,
+        });
+      }
+    }, 120_000);
+
+    it("delivers a renamed collection's events to the endpoints that filtered on it, and keeps a Single's recording choice", async () => {
+      await boot(dialect);
+      const founder = await makeUser("founder@x.test");
+      const created = (await t()
+        .getService("webhookEndpointService")
+        .createEndpoint(
+          { name: "Notes", url: ENDPOINT_URL, eventTypes: ["*"] },
+          founder
+        )) as { endpoint: { id: string } };
+      const endpointId = created.endpoint.id;
+      // Created a minute ago: an endpoint receives only events after it, and
+      // MySQL keeps this column to the second, rounding up, so an event in the
+      // same second would read as earlier than the endpoint.
+      await t().adapter.update(
+        "nextly_webhooks",
+        {
+          filter: { version: 1, collections: ["notes"] },
+          createdAt: new Date(Date.now() - 60_000),
+        },
+        { and: [{ column: "id", op: "=", value: endpointId }] }
+      );
+      await t()
+        .getService("singleRegistryService")
+        .updateSingle(
+          "masthead",
+          { webhooks: { record: false } },
+          { source: "ui" }
+        );
+      expect(isWebhookRecordingEnabled("single", "masthead")).toBe(false);
+      // Loaded before the rename with the filter naming the old slug, so the
+      // delivery below reads a list the rename had to drop. Creating the
+      // endpoint loaded it with no filter yet, which matches every event, so
+      // that list is dropped first.
+      const endpoints = container.get<WebhookEndpointRegistry>(
+        "webhookEndpointRegistry"
+      );
+      endpoints.invalidate();
+      expect(
+        (await endpoints.getEnabledEndpoints()).find(
+          endpoint => endpoint.id === endpointId
+        )?.filter
+      ).toMatchObject({ version: 1, collections: ["notes"] });
+
+      await rename("collection", "notes", "journal");
+      await rename("single", "masthead", "header");
+
+      expect((await filters()).get(endpointId)).toEqual({
+        version: 1,
+        collections: ["journal"],
+      });
+      expect(isWebhookRecordingEnabled("single", "header")).toBe(false);
+      expect(isWebhookRecordingEnabled("single", "masthead")).toBe(true);
+
+      await t()
+        .getService("collectionsHandler")
+        .createEntry(
+          { collectionName: "journal", overrideAccess: true },
+          { title: "after the rename" }
+        );
+      expect(
+        (await rowsOf("nextly_events")).filter(
+          row => row.resourceCollection === "journal"
+        ).length
+      ).toBeGreaterThan(0);
+      await fanOutDueEvents({
+        // The adapter as the delivery job resolves it: by the port it needs.
+        db: container.get<FanOutDatabase>("adapter"),
+        loadEndpoints: () => endpoints.getEnabledEndpoints(),
+      });
+      expect(
+        (await rowsOf("nextly_webhook_deliveries")).filter(
+          row => row.webhookId === endpointId
+        ).length
+      ).toBeGreaterThan(0);
+    }, 120_000);
+
+    it("gives a collection created under the old slug none of the renamed one's grants, webhooks or history", async () => {
+      await bootForAccess(dialect);
+      await makeUser("founder@x.test");
+      const editor = await makeUser("editor@x.test");
+      await grant(
+        "role-rename-editor",
+        editor,
+        COLLECTION_ACTIONS.map(action => [action, "notes"] as const)
+      );
+      const endpointId = await endpointFiltering(["notes"]);
+      await new DynamicCollectionRegistryService(
+        t().adapter,
+        silentLogger
+      ).updateCollectionMetadata("notes", { webhooks: { record: false } });
+      const entryId = await writeNote();
+      await seedHistory("collection", "notes", entryId);
+
+      await rename("collection", "notes", "journal");
+      // A new collection under the old slug, made by the two calls a create
+      // makes: the registry row, and the permissions seeded for it. Its own
+      // table name, because the renamed collection keeps `dc_notes`, the name
+      // the Builder would give a new `notes`.
+      await new DynamicCollectionRegistryService(
+        t().adapter,
+        silentLogger
+      ).registerCollection({
+        id: randomUUID(),
+        slug: "notes",
+        tableName: "dc_notes_again",
+        labels: { singular: "Note", plural: "Notes" },
+        fields: [],
+        schemaHash: "new-notes",
+        source: "ui",
+      });
+      await t()
+        .getService("permissionSeedService")
+        .seedCollectionPermissions("notes");
+
+      // Asked through the real access decision: the editor's grants were of
+      // the renamed collection's permissions, so the new one answers no.
+      expect(await mayDo(editor, COLLECTION_ACTIONS, "notes")).toEqual(
+        all(COLLECTION_ACTIONS, false)
+      );
+      expect(await mayDo(editor, COLLECTION_ACTIONS, "journal")).toEqual(
+        all(COLLECTION_ACTIONS, true)
+      );
+      // No kept answer says yes about the old name: the ones the questions
+      // above just kept say no, and any yes could only be the old entity's.
+      expect(
+        (await rowsOf("user_permission_cache")).filter(
+          row =>
+            row.resource === "notes" &&
+            (row.hasPermission === true || row.hasPermission === 1)
+        )
+      ).toEqual([]);
+      expect((await filters()).get(endpointId)).toEqual({
+        version: 1,
+        collections: ["journal"],
+      });
+      expect(isWebhookRecordingEnabled("collection", "notes")).toBe(true);
+      expect(isWebhookRecordingEnabled("collection", "journal")).toBe(false);
+      const history = await rowsNaming("collection", "notes");
+      for (const table of [
+        "nextly_versions",
+        "nextly_version_pins",
+        "nextly_version_views",
+        "nextly_content_events",
+        "nextly_release_members",
+        "nextly_i18n_archive",
+        "nextly_document_lock",
+        "nextly_preview_links",
+      ]) {
+        expect([table, history[table]]).toEqual([table, 0]);
+      }
+    }, 120_000);
+
     it("fails the whole rename when any table's move fails, collection or Single", async () => {
       await boot(dialect);
       const noteId = await writeNote();
       await seedHistory("collection", "notes", noteId);
       const mastheadId = await writeMasthead();
       await seedHistory("single", "masthead", mastheadId);
+      await endpointFiltering(["notes"]);
       const unchanged = await snapshot();
 
       const renames = [
         ["collection", "notes", "journal"],
         ["single", "masthead", "header"],
       ] as const;
-      for (const column of renamedSlugColumns()) {
+      const declared = [
+        ...renamedSlugColumns().map(column => ({
+          table: column.table,
+          kinds: ["collection", "single"] as readonly RenamedEntityKind[],
+        })),
+        ...jsonSlugColumns().map(column => ({
+          table: column.table,
+          kinds: column.renames,
+        })),
+      ];
+      for (const column of declared) {
         for (const [kind, from, to] of renames) {
+          if (!column.kinds.includes(kind)) continue;
           const hits = { count: 0 };
           failWritesTo(column.table, hits);
 

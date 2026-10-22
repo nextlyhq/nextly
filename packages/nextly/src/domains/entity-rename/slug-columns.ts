@@ -23,6 +23,8 @@
  *   one: keeping them would hand them to a later entity under the old slug.
  * - `keep`: the column holds a slug that is not an entity's, or a record that
  *   must read as it was written. The reason is part of the declaration.
+ * - `follow-json`: a JSON value names the slug inside it (a webhook filter's
+ *   list of collections), and is rewritten to name the new one.
  *
  * Column names are SQL names, the ones the core schema declares.
  *
@@ -32,6 +34,7 @@
 import { NextlyError } from "../../errors";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { VersionScopeKind } from "../../schemas/versions/types";
+import { entityPermissionSpelling } from "../auth/services/entity-permission-spelling";
 import { releaseMemberKey } from "../releases/release-member-key";
 import { versionPinKey } from "../versions/version-pins";
 import { versionViewKey } from "../versions/version-views";
@@ -44,37 +47,54 @@ export type RenamedEntityKind = "collection" | "single";
 export type SlugKeyedRow = Readonly<Record<string, unknown>>;
 
 /**
- * A column holding a digest of the row's identity, the slug among its inputs.
- * Rows whose key is NULL keep it NULL; the others get the digest of their own
- * columns with the new slug.
+ * Columns whose values are made from the slug: a digest of the row's identity,
+ * or a permission's slug and name. Each moved row gets them written again from
+ * its own columns and the new slug, by the function every writer of the table
+ * uses.
  */
-export interface SlugKeyColumn {
-  /** The digest column. */
-  column: string;
-  /** The column a row is addressed by when its new key is written. */
+export interface SlugDerivedColumns {
+  /** The column a row is addressed by when its new values are written. */
   rowId: string;
-  /** The columns, besides the kind and the slug, the digest is made from. */
+  /** The columns `derive` writes. */
+  columns: readonly string[];
+  /** The columns, besides the kind and the slug, they are made from. */
   sources: readonly string[];
-  /** The digest of `row` under `slug`, from the function every writer uses. */
-  derive(row: SlugKeyedRow, slug: string): string;
+  /**
+   * Derive only rows where this column holds a value; the rest keep it NULL
+   * and move with the others. Only a working draft carries a `draft_key`.
+   */
+  onlyWhereSet?: string;
+  /** The derived columns of `row` under `slug`, by SQL column name. */
+  derive(row: SlugKeyedRow, slug: string): Readonly<Record<string, string>>;
 }
 
-/** Where the entity's kind and slug are, and which stored kinds name it. */
+/** Where a row says which kind of entity it belongs to. */
+export interface EntityKindColumn {
+  column: string;
+  /**
+   * The values `column` holds for each kind. `null` is listed where the
+   * table's own readers take a NULL kind to mean that kind.
+   */
+  values: Readonly<Record<RenamedEntityKind, readonly (string | null)[]>>;
+}
+
+/** Which rows of a table belong to one entity. */
 interface EntityScopedColumn {
   table: string;
-  kindColumn: string;
   slugColumn: string;
   /**
-   * The values `kindColumn` holds for each kind of entity. `null` is listed
-   * where the table's own readers take a NULL kind to mean that kind.
+   * Absent where the table records no kind: collection and Single slugs are
+   * unique across both kinds, so there the slug alone says whose a row is.
    */
-  kinds: Readonly<Record<RenamedEntityKind, readonly (string | null)[]>>;
+  kind?: EntityKindColumn;
+  /** Columns that must be NULL for a row to be the entity's own. */
+  onlyWhereNull?: readonly string[];
 }
 
 /** Rows that move to the new slug. */
 export interface FollowingSlugColumn extends EntityScopedColumn {
   onRename: "follow";
-  key?: SlugKeyColumn;
+  derived?: SlugDerivedColumns;
 }
 
 /** Rows that a rename deletes. */
@@ -91,10 +111,31 @@ export interface KeptSlugColumn {
   reason: string;
 }
 
+/**
+ * A JSON column that names entities by slug inside its value. Every row is
+ * read and its value rewritten in code, because no portable condition reaches
+ * inside JSON, so this is for small tables only. The scan of the core schema
+ * cannot see inside JSON either: a declaration here is the only record that a
+ * value names a slug.
+ */
+export interface JsonSlugColumn {
+  table: string;
+  jsonColumn: string;
+  rowId: string;
+  /** The kinds whose slugs the value can name. */
+  renames: readonly RenamedEntityKind[];
+  onRename: "follow-json";
+  /** Whether `value` names `slug`. */
+  names(value: unknown, slug: string): boolean;
+  /** `value` naming `to` wherever it named `from`. */
+  rewrite(value: unknown, from: string, to: string): unknown;
+}
+
 export type SlugColumn =
   | FollowingSlugColumn
   | EndingSlugColumn
-  | KeptSlugColumn;
+  | KeptSlugColumn
+  | JsonSlugColumn;
 
 /** A column a rename moves or deletes rows by. */
 export type RenamedSlugColumn = FollowingSlugColumn | EndingSlugColumn;
@@ -132,6 +173,36 @@ function scopeKindOf(row: SlugKeyedRow, column: string): VersionScopeKind {
   });
 }
 
+/**
+ * The `collections` a webhook filter lists, for the one filter version that
+ * has the list, or null when the value is not such a filter.
+ */
+function filterCollections(value: unknown): unknown[] | null {
+  if (typeof value !== "object" || value === null) return null;
+  if (!("version" in value) || value.version !== 1) return null;
+  if (!("collections" in value) || !Array.isArray(value.collections)) {
+    return null;
+  }
+  return value.collections;
+}
+
+/** The filter with `from` renamed to `to` in its list, listed once. */
+function withCollectionRenamed(
+  value: unknown,
+  from: string,
+  to: string
+): unknown {
+  const listed = filterCollections(value);
+  if (listed === null || typeof value !== "object" || value === null) {
+    return value;
+  }
+  const renamed = listed.map(entry => (entry === from ? to : entry));
+  return {
+    ...value,
+    collections: renamed.filter((entry, at) => renamed.indexOf(entry) === at),
+  };
+}
+
 /** How every history table spells the two kinds a rename moves. */
 const SCOPE_KINDS = {
   collection: ["collection"],
@@ -148,16 +219,16 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     // Versions, autosaves and working drafts. Only a working draft carries a
     // `draft_key`; durable and autosave rows keep theirs NULL.
     table: "nextly_versions",
-    kindColumn: "scope_kind",
     slugColumn: "scope_slug",
-    kinds: SCOPE_KINDS,
+    kind: { column: "scope_kind", values: SCOPE_KINDS },
     onRename: "follow",
-    key: {
-      column: "draft_key",
+    derived: {
       rowId: "id",
+      columns: ["draft_key"],
+      onlyWhereSet: "draft_key",
       sources: ["entry_id", "locale"],
-      derive: (row, slug) =>
-        workingDraftKey(
+      derive: (row, slug) => ({
+        draft_key: workingDraftKey(
           {
             scopeKind: scopeKindOf(row, "scope_kind"),
             scopeSlug: slug,
@@ -165,21 +236,21 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
           },
           textOrNullOf(row, "locale")
         ),
+      }),
     },
   },
   {
     // The versions a feature holds against retention, one row per slot.
     table: "nextly_version_pins",
-    kindColumn: "scope_kind",
     slugColumn: "scope_slug",
-    kinds: SCOPE_KINDS,
+    kind: { column: "scope_kind", values: SCOPE_KINDS },
     onRename: "follow",
-    key: {
-      column: "pin_key",
+    derived: {
       rowId: "id",
+      columns: ["pin_key"],
       sources: ["entry_id", "holder", "slot"],
-      derive: (row, slug) =>
-        versionPinKey(
+      derive: (row, slug) => ({
+        pin_key: versionPinKey(
           {
             scopeKind: scopeKindOf(row, "scope_kind"),
             scopeSlug: slug,
@@ -188,21 +259,21 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
           textOf(row, "holder"),
           textOf(row, "slot")
         ),
+      }),
     },
   },
   {
     // Each person's "last looked at" marker, per document and part.
     table: "nextly_version_views",
-    kindColumn: "scope_kind",
     slugColumn: "scope_slug",
-    kinds: SCOPE_KINDS,
+    kind: { column: "scope_kind", values: SCOPE_KINDS },
     onRename: "follow",
-    key: {
-      column: "view_key",
+    derived: {
       rowId: "id",
+      columns: ["view_key"],
       sources: ["user_id", "entry_id", "part"],
-      derive: (row, slug) =>
-        versionViewKey({
+      derive: (row, slug) => ({
+        view_key: versionViewKey({
           userId: textOf(row, "user_id"),
           ref: {
             scopeKind: scopeKindOf(row, "scope_kind"),
@@ -211,52 +282,53 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
           },
           part: textOrNullOf(row, "part"),
         }),
+      }),
     },
   },
   {
     // The record of content events. Each event's parts are keyed by the
     // event's id, so they move with it.
     table: "nextly_content_events",
-    kindColumn: "subject_kind",
     slugColumn: "subject_slug",
-    kinds: SCOPE_KINDS,
+    kind: { column: "subject_kind", values: SCOPE_KINDS },
     onRename: "follow",
   },
   {
     // The documents a release holds.
     table: "nextly_release_members",
-    kindColumn: "scope_kind",
     slugColumn: "scope_slug",
-    kinds: SCOPE_KINDS,
+    kind: { column: "scope_kind", values: SCOPE_KINDS },
     onRename: "follow",
-    key: {
-      column: "member_key",
+    derived: {
       rowId: "id",
+      columns: ["member_key"],
       sources: ["release_id", "entry_id", "locale"],
-      derive: (row, slug) =>
-        releaseMemberKey(textOf(row, "release_id"), {
+      derive: (row, slug) => ({
+        member_key: releaseMemberKey(textOf(row, "release_id"), {
           scopeKind: scopeKindOf(row, "scope_kind"),
           scopeSlug: slug,
           entryId: textOf(row, "entry_id"),
           locale: textOrNullOf(row, "locale"),
         }),
+      }),
     },
   },
   {
     // The schema changes recorded against the entity.
     table: "nextly_schema_events",
-    kindColumn: "scope_kind",
     slugColumn: "scope_slug",
-    kinds: SCOPE_KINDS,
+    kind: { column: "scope_kind", values: SCOPE_KINDS },
     onRename: "follow",
   },
   {
     // The dashboard's activity feed. Its readers take a NULL kind, which rows
     // written before the kind was recorded carry, to be a collection's.
     table: "activity_log",
-    kindColumn: "subject_kind",
     slugColumn: "collection",
-    kinds: { collection: ["collection", null], single: ["single"] },
+    kind: {
+      column: "subject_kind",
+      values: { collection: ["collection", null], single: ["single"] },
+    },
     onRename: "follow",
   },
   {
@@ -265,28 +337,82 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     // `unknown` or `unresolved` and are left where they are: their owner cannot
     // be told from the slug alone, which a field group may share.
     table: "nextly_i18n_archive",
-    kindColumn: "entity_kind",
     slugColumn: "collection",
-    kinds: SCOPE_KINDS,
+    kind: { column: "entity_kind", values: SCOPE_KINDS },
     onRename: "follow",
   },
   {
     table: "nextly_document_lock",
-    kindColumn: "scope_kind",
     slugColumn: "slug",
-    kinds: SCOPE_KINDS,
+    kind: { column: "scope_kind", values: SCOPE_KINDS },
     onRename: "end",
     reason:
       "A lock is a short lease on a document open under the old slug. The editor holding it can no longer save there, and the row's id is made from the slug.",
   },
   {
     table: "nextly_preview_links",
-    kindColumn: "document_kind",
     slugColumn: "document_slug",
-    kinds: { collection: ["entry"], single: ["single"] },
+    kind: {
+      column: "document_kind",
+      values: { collection: ["entry"], single: ["single"] },
+    },
     onRename: "end",
     reason:
       "A preview link's signed token names the old slug and is only honoured while its row names the same document. Moved, the row would be listed as live under the new slug while its token could never open; kept, it would open whatever is next created under the old slug.",
+  },
+  {
+    // The permissions the framework creates for the entity, `read-<slug>` and
+    // its siblings. Grants reference a permission by id, so every role keeps
+    // exactly what it held, now for the new slug, and no other role's access
+    // changes. A plugin's own permissions (`owner` set) are declared by the
+    // plugin under the slug its code names, and stay with that declaration.
+    table: "permissions",
+    slugColumn: "resource",
+    onlyWhereNull: ["owner"],
+    onRename: "follow",
+    derived: {
+      rowId: "id",
+      columns: ["slug", "name", "description"],
+      sources: ["action"],
+      derive: (row, slug) => {
+        const spelled = entityPermissionSpelling(textOf(row, "action"), slug);
+        return {
+          slug: spelled.slug,
+          name: spelled.name,
+          description: spelled.description,
+        };
+      },
+    },
+  },
+  {
+    table: "user_permission_cache",
+    slugColumn: "resource",
+    onRename: "end",
+    reason:
+      'Kept answers to "may this person act on <slug>". Ones about the old slug answer for nothing once it is gone, and would answer for whatever is created there next.',
+  },
+  {
+    // Endpoints whose filter lists the collection. A Single never feeds the
+    // `collections` filter, so only a collection's rename touches it.
+    table: "nextly_webhooks",
+    jsonColumn: "filter",
+    rowId: "id",
+    renames: ["collection"],
+    onRename: "follow-json",
+    names: (value, slug) => filterCollections(value)?.includes(slug) ?? false,
+    rewrite: (value, from, to) => withCollectionRenamed(value, from, to),
+  },
+  {
+    table: "nextly_events",
+    slugColumn: "resource_kind",
+    onRename: "keep",
+    reason: "The kind of resource an event is about, not a slug.",
+  },
+  {
+    table: "nextly_events",
+    slugColumn: "resource_id",
+    onRename: "keep",
+    reason: "The id of the resource an event is about, not a slug.",
   },
   {
     table: "nextly_events",
@@ -320,12 +446,6 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     reason: "A role's own slug.",
   },
   {
-    table: "permissions",
-    slugColumn: "slug",
-    onRename: "keep",
-    reason: "A permission's own slug, such as `read-posts`.",
-  },
-  {
     table: "email_templates",
     slugColumn: "slug",
     onRename: "keep",
@@ -345,9 +465,17 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
   },
 ];
 
-/** The declared columns a rename acts on, in the order it writes them. */
+/** The declared columns a rename moves or deletes rows by, in order. */
 export function renamedSlugColumns(): RenamedSlugColumn[] {
   return SLUG_COLUMNS.filter(
-    (column): column is RenamedSlugColumn => column.onRename !== "keep"
+    (column): column is RenamedSlugColumn =>
+      column.onRename === "follow" || column.onRename === "end"
+  );
+}
+
+/** The declared JSON columns a rename rewrites, in order. */
+export function jsonSlugColumns(): JsonSlugColumn[] {
+  return SLUG_COLUMNS.filter(
+    (column): column is JsonSlugColumn => column.onRename === "follow-json"
   );
 }

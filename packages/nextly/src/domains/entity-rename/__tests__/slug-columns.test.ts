@@ -5,22 +5,33 @@
  * The columns are read out of the core schema itself, on every dialect, rather
  * than listed here: a list in this file would agree with the declarations on
  * the day it was written and miss the next table exactly as the rename would.
- * A column holds a slug when its name has a `slug` or `collection` part; both
- * spellings occur (`scope_slug`, `activity_log.collection`).
+ * A column holds a slug when its name has a `slug`, `collection` or `resource`
+ * part; all three spellings occur (`scope_slug`, `activity_log.collection`,
+ * `permissions.resource`).
  */
 import { describe, expect, it } from "vitest";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { getCoreSchema } from "../../../schemas";
-import { SLUG_COLUMNS, renamedSlugColumns } from "../slug-columns";
+import {
+  SLUG_COLUMNS,
+  renamedSlugColumns,
+  type FollowingSlugColumn,
+  type RenamedSlugColumn,
+  type SlugColumn,
+} from "../slug-columns";
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 
 /** Whether a column's name says it holds a slug. */
 function holdsSlug(column: string): boolean {
   const parts = column.split("_");
-  return parts.includes("slug") || parts.includes("collection");
+  return (
+    parts.includes("slug") ||
+    parts.includes("collection") ||
+    parts.includes("resource")
+  );
 }
 
 /** `table.column` for every slug-holding column the core schema declares. */
@@ -32,6 +43,50 @@ function slugColumnsInSchema(dialect: SupportedDialect): string[] {
         .map(column => `${table.name}.${column.name}`)
     )
     .sort();
+}
+
+/**
+ * `table.column` for every column a declaration accounts for: the slug column
+ * itself, and the columns a moved row has derived again from the new slug
+ * (a permission's `slug` beside its `resource`).
+ */
+function declaredColumns(): Set<string> {
+  return new Set(
+    SLUG_COLUMNS.flatMap(column =>
+      column.onRename === "follow-json"
+        ? [`${column.table}.${column.jsonColumn}`]
+        : [
+            `${column.table}.${column.slugColumn}`,
+            ...(column.onRename === "follow" && column.derived
+              ? column.derived.columns.map(name => `${column.table}.${name}`)
+              : []),
+          ]
+    )
+  );
+}
+
+/** The columns a moved row's derived values are read from and written to. */
+function derivedNames(column: FollowingSlugColumn): string[] {
+  const derived = column.derived;
+  if (derived === undefined) return [];
+  const present = derived.onlyWhereSet ? [derived.onlyWhereSet] : [];
+  return [derived.rowId, ...derived.columns, ...derived.sources, ...present];
+}
+
+/** The columns that say which rows of a table are one entity's. */
+function scopeNames(column: RenamedSlugColumn): string[] {
+  const kind = column.kind ? [column.kind.column] : [];
+  return [column.slugColumn, ...kind, ...(column.onlyWhereNull ?? [])];
+}
+
+/** Every column a declaration names, for checking that the table has it. */
+function namedBy(column: SlugColumn): string[] {
+  if (column.onRename === "keep") return [column.slugColumn];
+  if (column.onRename === "follow-json") {
+    return [column.jsonColumn, column.rowId];
+  }
+  if (column.onRename === "end") return scopeNames(column);
+  return [...scopeNames(column), ...derivedNames(column)];
 }
 
 /** The columns of each core table, by table name. */
@@ -53,16 +108,14 @@ describe.each(DIALECTS)("slug-keyed core tables (%s)", dialect => {
         "nextly_versions.scope_slug",
         "nextly_content_events.subject_slug",
         "nextly_release_members.scope_slug",
+        "permissions.resource",
       ])
     );
   });
 
   it("declares every slug-holding column", () => {
-    const declared = new Set(
-      SLUG_COLUMNS.map(column => `${column.table}.${column.slugColumn}`)
-    );
     const undeclared = slugColumnsInSchema(dialect).filter(
-      column => !declared.has(column)
+      column => !declaredColumns().has(column)
     );
     expect(undeclared).toEqual([]);
   });
@@ -70,29 +123,19 @@ describe.each(DIALECTS)("slug-keyed core tables (%s)", dialect => {
   it("declares only columns the core schema has", () => {
     const tables = columnsByTable(dialect);
     const missing = SLUG_COLUMNS.flatMap(column => {
-      const named = [
-        column.slugColumn,
-        ...(column.onRename === "keep"
-          ? []
-          : [
-              column.kindColumn,
-              ...(column.onRename === "follow" && column.key
-                ? [column.key.column, column.key.rowId, ...column.key.sources]
-                : []),
-            ]),
-      ];
       const have = tables.get(column.table);
-      return named
+      return namedBy(column)
         .filter(name => !have?.has(name))
         .map(name => `${column.table}.${name}`);
     });
     expect(missing).toEqual([]);
   });
 
-  it("names each kind a rename moves on every column it acts on", () => {
+  it("names each kind a rename moves on every column that records a kind", () => {
     for (const column of renamedSlugColumns()) {
-      expect(column.kinds.collection.length).toBeGreaterThan(0);
-      expect(column.kinds.single.length).toBeGreaterThan(0);
+      if (column.kind === undefined) continue;
+      expect(column.kind.values.collection.length).toBeGreaterThan(0);
+      expect(column.kind.values.single.length).toBeGreaterThan(0);
     }
   });
 });

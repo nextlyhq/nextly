@@ -16,9 +16,9 @@ import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 import type { DatabaseAdapter } from "../../../shared/types/database-adapter";
 import {
-  moveEntitySlug,
-  slugKeyedTablesPresent,
-} from "../../entity-rename/move-entity-slug";
+  moveWebhookRecording,
+  renameEntity,
+} from "../../entity-rename/rename-entity";
 import {
   clearWebhookRecording,
   setWebhookRecording,
@@ -339,27 +339,42 @@ export class DynamicCollectionRegistryService extends BaseService {
         .set(updateData)
         .where(eq(this.dynamicCollections.slug, collectionSlug));
 
+    const move = {
+      kind: "collection" as const,
+      from: collectionSlug,
+      to: targetSlug,
+    };
     if (targetSlug === existing[0].slug) {
       await writeRow(this.db);
     } else {
       // A changed slug is a rename. Everything keyed by the old slug (history,
-      // markers, events, release members) moves in the same transaction as the
-      // registry row, so the two commit together or neither does; otherwise the
-      // renamed collection would lose its history and the next collection
-      // created under the old slug would inherit it.
-      const present = await slugKeyedTablesPresent(this.adapter);
-      await this.adapter.transaction(async tx => {
-        await writeRow(
-          tx.drizzleWithRelations<DatabaseAdapter["db"]>(
-            resolveRelations(this.dialect)
-          )
-        );
-        await moveEntitySlug(tx, {
-          dialect: this.dialect,
-          present,
-          move: { kind: "collection", from: collectionSlug, to: targetSlug },
-        });
+      // markers, events, release members, permissions, webhook filters) moves
+      // in the same transaction as the registry row, so the two commit
+      // together or neither does; otherwise the renamed collection would lose
+      // them and the next collection created under the old slug would inherit
+      // them.
+      await renameEntity(this.adapter, {
+        dialect: this.dialect,
+        move,
+        writeRegistry: async tx => {
+          await writeRow(
+            tx.drizzleWithRelations<DatabaseAdapter["db"]>(
+              resolveRelations(this.dialect)
+            )
+          );
+          return move;
+        },
       });
+    }
+
+    // A rename carries the live recording decision to the new slug and drops
+    // the old slug's entry, so a collection created there later starts from
+    // the default rather than inheriting this one's choice.
+    if (
+      targetSlug !== existing[0].slug &&
+      !isConfigOwnedSource(existing[0].source)
+    ) {
+      moveWebhookRecording(move);
     }
 
     // Mirror the stored change into the live policy so turning the switch off
