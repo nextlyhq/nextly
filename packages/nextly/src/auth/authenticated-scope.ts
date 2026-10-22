@@ -14,6 +14,7 @@
  */
 
 import { NextlyError } from "../errors/nextly-error";
+import { parsePermissionSlug } from "../plugins/routes/permission-slug";
 import { permissionSlug } from "../schemas/_zod/rbac";
 
 import type { AccessTarget } from "./access/decide";
@@ -216,13 +217,7 @@ export function scopeGrants(
 ): readonly GrantedPermission[] | undefined {
   if (!scope.grants) return undefined;
   const { grants } = scope;
-  // Positional, because both halves come from one `map` over one list. A set
-  // comparison would accept a reordering that no constructor can produce, and
-  // accepting shapes nothing builds is how a check stops separating anything.
-  const agree =
-    grants.length === scope.permissions.length &&
-    grants.every((grant, index) => grant.slug === scope.permissions[index]);
-  if (!agree) {
+  if (!slugsNameGrants(grants, scope.permissions)) {
     throw NextlyError.internal({
       logContext: {
         reason:
@@ -236,18 +231,49 @@ export function scopeGrants(
 }
 
 /**
- * Whether the scope carries the grant rows its permission slugs came from, so
- * its key can be judged on those rows. A scope rebuilt from slugs alone, or
- * one whose slugs were narrowed apart from its rows, does not.
+ * Whether `permissions` are exactly the slugs of `grants`, in order.
+ *
+ * Positional, because both halves come from one `map` over one list. A set
+ * comparison would accept a reordering that no constructor can produce, and
+ * accepting shapes nothing builds is how a check stops separating anything.
  */
-export function scopeRowsAgree(scope: AuthenticatedScope): boolean {
-  if (!scope.grants) return false;
-  try {
-    scopeGrants(scope);
-    return true;
-  } catch {
-    return false;
-  }
+function slugsNameGrants(
+  grants: readonly GrantedPermission[],
+  permissions: readonly string[]
+): boolean {
+  return (
+    grants.length === permissions.length &&
+    grants.every((grant, index) => grant.slug === permissions[index])
+  );
+}
+
+/**
+ * Whether a key's scope, or a reader's caller built from one, carries the
+ * grant rows its permission slugs came from, so the key can be judged on
+ * those rows. A scope rebuilt from slugs alone, or one whose slugs were
+ * narrowed apart from its rows, does not.
+ */
+export function scopeRowsAgree(scope: {
+  readonly grants?: readonly GrantedPermission[];
+  readonly permissions: readonly string[];
+}): boolean {
+  return (
+    scope.grants !== undefined &&
+    slugsNameGrants(scope.grants, scope.permissions)
+  );
+}
+
+/**
+ * The grants a scope's stored slugs name, for a scope that carries no rows.
+ *
+ * Only what a decision that could read the slugs would see, for comparing a
+ * key judged on its slugs with the decision: never an answer itself. A slug
+ * is split on its first hyphen, the inverse of how permission slugs are made.
+ */
+export function slugGrants(
+  permissions: readonly string[]
+): GrantedPermission[] {
+  return permissions.map(slug => ({ slug, ...parsePermissionSlug(slug) }));
 }
 
 /**

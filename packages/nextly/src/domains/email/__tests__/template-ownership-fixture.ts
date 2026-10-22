@@ -17,6 +17,10 @@ import {
   type ScratchDatabase,
 } from "../../../__tests__/helpers/fresh-database";
 import { getDrizzleKitForDialect } from "../../../database/drizzle-kit-lazy";
+import {
+  EMAIL_BRAND_TABLE,
+  emailBrandTables,
+} from "../../../schemas/email-brand";
 import { emailTemplatesMysql } from "../../../schemas/email-templates/mysql";
 import { emailTemplatesPg } from "../../../schemas/email-templates/postgres";
 import { emailTemplatesSqlite } from "../../../schemas/email-templates/sqlite";
@@ -76,12 +80,13 @@ export async function openTemplateStore(
   await adapter.connect();
 
   const kit = await getDrizzleKitForDialect(entry.dialect);
+  // The templates, and the brand settings every layout reads.
   const table =
     entry.dialect === "postgresql"
-      ? { emailTemplatesPg }
+      ? { emailTemplatesPg, ...emailBrandTables("postgresql") }
       : entry.dialect === "mysql"
-        ? { emailTemplatesMysql }
-        : { emailTemplatesSqlite };
+        ? { emailTemplatesMysql, ...emailBrandTables("mysql") }
+        : { emailTemplatesSqlite, ...emailBrandTables("sqlite") };
   const statements = await kit.generateMigration(
     await kit.generateDrizzleJson({}),
     await kit.generateDrizzleJson(table)
@@ -110,6 +115,7 @@ export async function openTemplateStore(
     q,
     clear: async () => {
       await adapter.executeQuery(`DELETE FROM ${q("email_templates")}`);
+      await adapter.executeQuery(`DELETE FROM ${q(EMAIL_BRAND_TABLE)}`);
     },
     close: async () => {
       try {

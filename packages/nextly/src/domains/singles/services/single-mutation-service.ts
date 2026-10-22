@@ -574,7 +574,13 @@ export class SingleMutationService extends BaseService {
     /** Who discarded it, for the Single's history. */
     actor?: RequestActor;
     user?: UserContext;
-  }): Promise<void> {
+    /**
+     * The document the caller was checked against, when it was. A Single
+     * deleted and made again since is a different document, so the discard
+     * is refused rather than removing that document's draft.
+     */
+    entryId?: string;
+  }): Promise<number> {
     const singleMeta = await resolveSingleForRequest(
       this.adapter,
       this.singleRegistryService,
@@ -590,13 +596,22 @@ export class SingleMutationService extends BaseService {
       });
     }
 
-    await this.adapter.transaction(async tx => {
+    // The drafts it removed, counted by the delete made under the lock.
+    return this.adapter.transaction(async tx => {
       // A Single is one row, so its identity comes from reading that row rather
       // than from the request. No row means the document has never been written,
       // which cannot have a pending change against it.
       const row = await tx.selectOne<{ id?: string }>(singleMeta.tableName, {});
       const entryId = row?.id;
-      if (entryId === undefined) return;
+      if (params.entryId !== undefined && entryId !== params.entryId) {
+        throw NextlyError.notFound({
+          logContext: {
+            reason: "discard-working-draft-single-replaced",
+            scopeSlug: params.slug,
+          },
+        });
+      }
+      if (entryId === undefined) return 0;
 
       // Serialize with concurrent draft-save upserts, which lock this same row
       // before writing the sidecar.
@@ -630,6 +645,7 @@ export class SingleMutationService extends BaseService {
           }
         );
       }
+      return removed;
     });
   }
 

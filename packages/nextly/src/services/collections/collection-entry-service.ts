@@ -891,6 +891,17 @@ export class CollectionEntryService extends BaseService {
   async discardWorkingDraft(
     params: Parameters<CollectionMutationService["discardWorkingDraft"]>[0]
   ): Promise<void> {
+    await this.discardWorkingDraftCounted(params);
+  }
+
+  /**
+   * {@link discardWorkingDraft}, answering how many drafts it removed, counted
+   * by the delete made under the document's lock. A separate method so the
+   * published `discardWorkingDraft` keeps its contract.
+   */
+  async discardWorkingDraftCounted(
+    params: Parameters<CollectionMutationService["discardWorkingDraft"]>[0]
+  ): Promise<number> {
     // The draft is deleted under the language as named, so one the site no
     // longer configures is told every language, not the default.
     return withRuleLanguage(

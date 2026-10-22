@@ -53,6 +53,12 @@ export interface OwnedTemplate {
    * version is Liquid unless Liquid can't read it.
    */
   engine?: TemplateEngine;
+  /**
+   * Digests of versions the owner shipped before this one. A row that holds
+   * one was never edited, only not yet brought up to date, so it follows the
+   * owner like a row holding the current version.
+   */
+  earlier?: ReadonlyArray<string>;
 }
 
 /** The engines a plugin can declare a template was written for. */
@@ -123,6 +129,33 @@ export function absentPluginFor(slug: string): string | null {
     entry.slugs.includes(slug)
   );
   return match ? match.plugin : null;
+}
+
+/**
+ * Which version a send of a template uses: the stored one, the site's code
+ * version, or none at all. The one decision, read by the send and by every
+ * report of what a send does. The stored one sends when it is active and the
+ * code does not come first; otherwise the code version does, if there is one.
+ */
+export function sendSource(input: {
+  stored: { isActive: boolean } | null;
+  /** Whether the code version comes first (see `resolveForSend`). */
+  preferCode: boolean;
+  hasCode: boolean;
+}): "stored" | "code" | "none" {
+  if (input.stored?.isActive && !(input.hasCode && input.preferCode)) {
+    return "stored";
+  }
+  return input.hasCode ? "code" : "none";
+}
+
+/** Whether a version is the owner's, current or earlier, rather than the site's. */
+export function isOwnersVersion(
+  entry: OwnedTemplate,
+  version: EmailTemplateVersion
+): boolean {
+  const digest = versionDigest(version);
+  return digest === entry.digest || (entry.earlier ?? []).includes(digest);
 }
 
 /** The versioned part of a template. */
@@ -213,7 +246,10 @@ export function sameVersion(
 function owned(
   owner: RegisteredOwner,
   declared: OwnerTemplate,
-  engine?: TemplateEngine
+  extras: {
+    engine?: TemplateEngine;
+    earlier?: ReadonlyArray<EmailTemplateVersion>;
+  } = {}
 ): OwnedTemplate {
   const { carriesSecret, ...defaults } = declared;
   const version = versionOf(defaults);
@@ -226,7 +262,8 @@ function owned(
     // Strictly true: a plugin is plain JavaScript at runtime, and only an
     // explicit mark should count as one.
     carriesSecret: carriesSecret === true,
-    ...(engine ? { engine } : {}),
+    ...(extras.engine ? { engine: extras.engine } : {}),
+    earlier: (extras.earlier ?? []).map(versionDigest),
   };
 }
 
@@ -323,6 +360,10 @@ export function ownershipFromConfig(
 export interface RegistryInput {
   /** Core's built-in templates and layouts. */
   builtIns: ReadonlyArray<OwnerTemplate>;
+  /** Versions of core's built-ins it shipped before the current ones, by slug. */
+  earlierBuiltIns?: Readonly<
+    Record<string, ReadonlyArray<EmailTemplateVersion>>
+  >;
   /** Each running plugin, with the templates it contributes. */
   plugins: ReadonlyArray<{
     name: string;
@@ -396,7 +437,12 @@ export function buildTemplateOwnerRegistry(input: RegistryInput): {
   const refused: RefusedEngine[] = [];
 
   for (const template of input.builtIns) {
-    map.set(template.slug, owned({ kind: "core" }, template));
+    map.set(
+      template.slug,
+      owned({ kind: "core" }, template, {
+        earlier: input.earlierBuiltIns?.[template.slug],
+      })
+    );
   }
   for (const plugin of input.plugins) {
     for (const template of plugin.templates) {
@@ -424,11 +470,9 @@ export function buildTemplateOwnerRegistry(input: RegistryInput): {
       }
       map.set(
         template.slug,
-        owned(
-          { kind: "plugin", name: plugin.name },
-          pluginDefaults(template),
-          template.engine
-        )
+        owned({ kind: "plugin", name: plugin.name }, pluginDefaults(template), {
+          engine: template.engine,
+        })
       );
     }
   }

@@ -21,6 +21,7 @@ import {
 import {
   assertComparisonRequest,
   assertHistoryLocalesReadable,
+  assertVersionLanguageReadable,
   assertVersionDocumentReadable,
   assertDocumentUpdatable,
   compareDocumentVersions,
@@ -31,17 +32,14 @@ import {
   readingPersonId,
   redactSnapshotForUser,
   resolveVersionsPolicy,
-  tryResolveCurrentFields,
+  stripAutosavePasswords,
   withLastViewedMarks,
 } from "../../api/versions-access";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { canReadEntity } from "../../auth/entity-read-access";
 import { actorForWrite, type RequestActor } from "../../auth/request-actor";
-import type { FieldConfig } from "../../collections/fields/types";
 import { getService } from "../../di";
-import { container } from "../../di/container";
 import type { ContentEventSubject } from "../../domains/content-events/record";
-import type { FieldGroupDataService } from "../../domains/field-groups/services/field-group-data-service";
 import type { UserContext } from "../../domains/singles/types";
 import {
   attachVersionAuthors,
@@ -55,16 +53,11 @@ import {
 import { lockDocument, lockPerson } from "../../domains/versions/history-locks";
 import { restoreVersion } from "../../domains/versions/restore-version";
 import type { TakenLiveValues } from "../../domains/versions/shared-publish-base";
-import {
-  resolveComponentFieldMap,
-  stripPasswordsThroughComponents,
-} from "../../domains/versions/tag-component-types";
 import { markVersionSeen } from "../../domains/versions/version-views";
 import { VersionsRepository } from "../../domains/versions/versions-repository";
 import type { VersionRow } from "../../domains/versions/versions-repository";
 import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
-import { stripPasswordFieldValues } from "../../shared/lib/password-fields";
 import { isUniqueViolation } from "../../shared/lib/unique-violation";
 import {
   readAuthenticatedActor,
@@ -133,38 +126,6 @@ export function requireSnapshotBody(body: unknown): Record<string, unknown> {
     });
   }
   return body as Record<string, unknown>;
-}
-
-/**
- * Whether any field in this schema references a component by slug, at any
- * depth. Used to decide whether an unavailable component registry is a problem
- * for THIS entity: a schema with no references has nothing unresolvable in it.
- */
-function declaresComponentReference(fields: FieldConfig[]): boolean {
-  for (const field of fields) {
-    // Either spelling declares a reference: a migrated definition whose keys
-    // went unread would skip the registry-unavailable guard entirely.
-    if (typeof (field as { component?: unknown }).component === "string") {
-      return true;
-    }
-    if (typeof (field as { fieldGroup?: unknown }).fieldGroup === "string") {
-      return true;
-    }
-    if (Array.isArray((field as { components?: unknown }).components)) {
-      return true;
-    }
-    if (Array.isArray((field as { fieldGroups?: unknown }).fieldGroups)) {
-      return true;
-    }
-    const children = (field as { fields?: unknown }).fields;
-    if (
-      Array.isArray(children) &&
-      declaresComponentReference(children as FieldConfig[])
-    ) {
-      return true;
-    }
-  }
-  return false;
 }
 
 /** What every version method needs to identify and authorize a document. */
@@ -377,42 +338,6 @@ export async function getVersionForDocument(
   );
 
   return { ...row, withheld: [...withheld] };
-}
-
-/**
- * Refuse a caller the language of one version, before anything is written or
- * returned about it. Returns the version's part, or undefined when there is no
- * such version, which the read or write that follows refuses in its own way.
- */
-async function assertVersionLanguageReadable(
-  document: {
-    scopeKind: VersionScopeKind;
-    slug: string;
-    entryId: string;
-    user: UserContext;
-    authenticatedScope?: AuthenticatedScope;
-  },
-  versionNo: number
-): Promise<string | null | undefined> {
-  const part = await getService("versionsService").partOfVersion(
-    {
-      scopeKind: document.scopeKind,
-      scopeSlug: document.slug,
-      entryId: document.entryId,
-    },
-    versionNo
-  );
-  if (part === undefined) return undefined;
-  await assertHistoryLocalesReadable(
-    document.scopeKind,
-    document.slug,
-    document.entryId,
-    document.user,
-    document.authenticatedScope,
-    {},
-    [part]
-  );
-  return part;
 }
 
 /**
@@ -971,7 +896,7 @@ export async function discardWorkingDraftForDocument(
     "discard-working-draft-read-denied"
   );
 
-  return discardWorkingDraft({
+  const { document } = await discardWorkingDraft({
     scopeKind: args.scopeKind,
     slug: args.slug,
     entryId: args.entryId,
@@ -980,6 +905,7 @@ export async function discardWorkingDraftForDocument(
     authenticatedScope,
     actor: readAuthenticatedActor(),
   });
+  return document;
 }
 
 /**
@@ -1032,84 +958,11 @@ export async function autosaveForDocument(
   }
 
   // The snapshot arrives straight from the editor, so it carries whatever the
-  // author has typed -- including a NEW password, in plaintext, which no write
-  // has hashed yet. Durable capture never faces this: it snapshots the stored
-  // row, where the value is already hashed or absent. Strip before persisting,
-  // with the same schema-driven recursive helper the version reads use, so a
-  // credential never reaches the snapshot column at all.
+  // author has typed, which no write has hashed yet. Durable capture never
+  // faces this: it snapshots the stored row. Stripped before persisting, so a
+  // password value never reaches the snapshot column at all.
   const snapshot = args.snapshot;
-  if (
-    snapshot &&
-    typeof snapshot === "object" &&
-    !Array.isArray(snapshot) &&
-    // `page` scopes hold block documents rather than user-defined fields, and
-    // field resolution has no answer for them.
-    (args.scopeKind === "collection" || args.scopeKind === "single")
-  ) {
-    // Fail CLOSED on a failed LOOKUP, which is what `null` means here. An
-    // empty list is a different answer: a valid entity can have no
-    // user-defined fields at all (a freshly created Single, whose identity
-    // columns alone form a document), and there is genuinely nothing to strip
-    // from one. Treating those alike would refuse every autosave for such an
-    // entity, while treating a failed lookup as "nothing to strip" would write
-    // whatever the editor sent, credentials included, exactly when the lookup
-    // meant to find them had broken.
-    const fields = await tryResolveCurrentFields(args.scopeKind, args.slug);
-    if (fields === null) {
-      throw NextlyError.internal({
-        logContext: {
-          reason: "autosave-field-resolution-failed",
-          scopeKind: args.scopeKind,
-          scopeSlug: args.slug,
-        },
-      });
-    }
-    if (fields.length > 0) {
-      // A `component` field is a REFERENCE: its schema lives under another
-      // slug, so the stripper sees `{ type: "component" }` and has nothing to
-      // descend into. A password declared inside a referenced component would
-      // survive in the snapshot. Resolve those schemas, rewrite the references
-      // into the container shapes the stripper already walks, and strip once.
-      const dataService = container.has("fieldGroupDataService")
-        ? container.get<FieldGroupDataService>("fieldGroupDataService")
-        : null;
-      // No executor: autosave runs outside any transaction by design, and the
-      // parameter exists so an in-transaction caller can read on its own
-      // connection rather than take a second one.
-      const componentFields = dataService
-        ? await resolveComponentFieldMap(fields, slug =>
-            dataService.getComponentFields(slug)
-          )
-        : new Map<string, FieldConfig[]>();
-
-      // Fail CLOSED where a reference cannot be resolved. `resolveComponentFieldMap`
-      // propagates a lookup error rather than reporting the component absent,
-      // so an unresolvable schema arrives here as a thrown error and refuses
-      // the write; what this guards is the other case, a registry that is not
-      // wired at all while the schema still declares references.
-      if (!dataService && declaresComponentReference(fields)) {
-        throw NextlyError.internal({
-          logContext: {
-            reason: "autosave-component-schema-unavailable",
-            scopeKind: args.scopeKind,
-            scopeSlug: args.slug,
-          },
-        });
-      }
-
-      // Walks the SNAPSHOT rather than an expanded schema. A component may
-      // reference itself, so a schema-side expansion has to stop at some
-      // depth, and everything below that cut-off would keep its passwords.
-      // The data is finite, so this terminates on its own and strips every
-      // level that actually exists.
-      stripPasswordsThroughComponents(
-        snapshot,
-        fields,
-        componentFields,
-        stripPasswordFieldValues
-      );
-    }
-  }
+  await stripAutosavePasswords(args.scopeKind, args.slug, snapshot);
 
   return getService("versionsService").autosave({
     ref: {

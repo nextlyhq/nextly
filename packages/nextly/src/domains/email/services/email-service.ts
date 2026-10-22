@@ -57,7 +57,7 @@ import {
   renderTemplateReplyTo,
   withTemplateCopies,
 } from "../template-envelope";
-import { CODE_TEMPLATE_KEYS } from "../template-ownership";
+import { CODE_TEMPLATE_KEYS, sendSource } from "../template-ownership";
 import type {
   EmailAttachmentInput,
   EmailConfig,
@@ -429,7 +429,11 @@ export class EmailService extends BaseService {
       );
     }
 
-    if (dbTemplate && dbTemplate.isActive && !(codeFn && preferCode)) {
+    if (
+      dbTemplate &&
+      sendSource({ stored: dbTemplate, preferCode, hasCode: !!codeFn }) ===
+        "stored"
+    ) {
       // Surface missing required variables without blocking the send — the
       // authoring UI validates at edit time, and existing sends must not
       // start failing on data that previously rendered (blank).
