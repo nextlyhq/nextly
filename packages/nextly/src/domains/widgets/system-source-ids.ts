@@ -21,3 +21,6 @@ export const RELEASES_SOURCE_ID = "system:releases";
 
 /** The documents carrying edits that are not live. */
 export const VERSIONS_SOURCE_ID = "system:versions";
+
+/** What is waiting for someone: pending changes, releases due soon and overdue. */
+export const ATTENTION_SOURCE_ID = "system:attention";

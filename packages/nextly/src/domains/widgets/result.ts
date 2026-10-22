@@ -96,8 +96,12 @@ export type WidgetResult =
        * `value` is null where the column is null, which is a bucket in its own
        * right rather than an absence: "how many rows have no region" is a real
        * answer and folding it into another bucket would misreport both.
+       *
+       * A bucket's `atLeast` says its own count is a floor, for a source whose
+       * buckets are bounded one by one; absent, that count is whole. Optional
+       * and additive: a reader that ignores it still reads every bucket.
        */
-      buckets: { value: string | null; count: number }[];
+      buckets: { value: string | null; count: number; atLeast?: boolean }[];
       /**
        * Whether buckets were left out because a cap was reached.
        *

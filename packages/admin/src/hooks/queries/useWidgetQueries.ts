@@ -495,23 +495,37 @@ function asCount(total: unknown, atLeast: unknown): WidgetResult | undefined {
  * A null `value` is KEPT. It is the bucket of rows whose column is empty --
  * "how many have no region" is a real answer, and dropping it would silently
  * remove rows from a chart that claims to account for all of them.
+ *
+ * A bucket's own `atLeast` is carried when it is `true`: it says that one
+ * count is a floor, where the result's flag says only that some count is, so
+ * a reader that drew from the result's flag alone would put "N+" on whole
+ * counts beside it.
  */
 function asBuckets(
   value: unknown
-): { value: string | null; count: number }[] | undefined {
+): { value: string | null; count: number; atLeast?: boolean }[] | undefined {
   if (!Array.isArray(value)) return undefined;
 
-  const buckets: { value: string | null; count: number }[] = [];
+  const buckets: { value: string | null; count: number; atLeast?: boolean }[] =
+    [];
   for (const raw of value) {
     if (!isObject(raw)) return undefined;
-    const bucket = raw as { value?: unknown; count?: unknown };
+    const bucket = raw as {
+      value?: unknown;
+      count?: unknown;
+      atLeast?: unknown;
+    };
     if (bucket.value !== null && typeof bucket.value !== "string") {
       return undefined;
     }
     if (typeof bucket.count !== "number" || !Number.isFinite(bucket.count)) {
       return undefined;
     }
-    buckets.push({ value: bucket.value, count: bucket.count });
+    buckets.push({
+      value: bucket.value,
+      count: bucket.count,
+      ...(bucket.atLeast === true ? { atLeast: true } : {}),
+    });
   }
   return buckets;
 }

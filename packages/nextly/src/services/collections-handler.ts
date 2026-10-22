@@ -903,6 +903,17 @@ export class CollectionsHandler {
     return this.entryService.groupEntries(params);
   }
 
+  /**
+   * How many entries a count would find, read no further than a cap.
+   *
+   * @experimental
+   */
+  async countEntriesUpTo(
+    params: Parameters<CollectionEntryService["countEntriesUpTo"]>[0]
+  ): ReturnType<CollectionEntryService["countEntriesUpTo"]> {
+    return this.entryService.countEntriesUpTo(params);
+  }
+
   /** How many rows fall in each interval of a recent window. */
   async timeseriesEntries(
     params: Parameters<CollectionEntryService["timeseriesEntries"]>[0]

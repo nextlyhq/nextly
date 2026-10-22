@@ -479,6 +479,50 @@ async function resolveVersions(
 }
 
 /**
+ * The Singles this caller may read that hold unpublished changes, by slug.
+ *
+ * For a reader that shows Singles beside collections' pending changes. A
+ * Single has no list to filter, so it is not counted through the entry list's
+ * `_pendingChange` condition but through this source's own walk: the same
+ * snapshot, the same per-language authorization and the same work budget as
+ * the count above, over the Singles alone. Both read the working-draft shape
+ * the versions repository defines, so the rule is one.
+ *
+ * `atLeast` says the walk stopped at its budget, so more Singles may hold
+ * changes than the slugs returned. `anyReadable` says whether the caller may
+ * read any Single at all, so a reader can tell "none waiting" from "none this
+ * caller could be shown".
+ *
+ * @experimental
+ */
+export async function singlesWithPendingChanges(
+  caller: ReadCaller,
+  opts?: ResolverOptions
+): Promise<{ slugs: string[]; atLeast: boolean; anyReadable: boolean }> {
+  const { scope, readableSlugs } = await sharedReadableScope(caller, opts);
+  const singles = readableSlugs.filter(
+    slug => scope.kinds.get(slug) === "single"
+  );
+  if (singles.length === 0) {
+    return { slugs: [], atLeast: false, anyReadable: false };
+  }
+  const { documents, exhausted } = await gatherVisibleDocuments(
+    Number.MAX_SAFE_INTEGER,
+    COUNT_ROW_BUDGET,
+    "identity",
+    singles,
+    caller,
+    scope
+  );
+  return {
+    // Sorted, so the parts come back in the same order on every read.
+    slugs: [...new Set(documents.map(row => row.scopeSlug))].sort(),
+    atLeast: !exhausted,
+    anyReadable: true,
+  };
+}
+
+/**
  * Publish the source and the function that answers it.
  *
  * `supports` names both ops because both are genuinely answerable: the count is

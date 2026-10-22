@@ -348,6 +348,25 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
+   * How many rows `countEntries` would count, read no further than a cap.
+   *
+   * Through the same refusal and rule-language wrapping as the count, so the
+   * bounded count and the exact one are one door with two reads behind it.
+   *
+   * @experimental
+   */
+  async countEntriesUpTo(
+    params: Parameters<CollectionQueryService["countEntriesUpTo"]>[0]
+  ): ReturnType<CollectionQueryService["countEntriesUpTo"]> {
+    return (
+      refusedFilter(params.where) ??
+      withRuleLanguage(this.readLanguages(params), () =>
+        this.queryService.countEntriesUpTo(params)
+      )
+    );
+  }
+
+  /**
    * How many rows carry each distinct value of one field.
    *
    * Forwarded whole rather than rebuilt: the query service answers this over

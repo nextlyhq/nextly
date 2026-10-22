@@ -3816,6 +3816,74 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
+   * How many rows a `countEntries` with the same request would count, read no
+   * further than `cap`: the exact number up to the cap, or the cap with
+   * `atLeast` once there are more.
+   *
+   * The same plan as the count, so the same access, read rules, hooks and
+   * workflow conditions decide the rows; only the read differs. It selects ids
+   * and stops one row past the cap rather than counting the whole set, so a
+   * caller that shows "99+" never pays for counting a large table, and "there
+   * are more" is observed rather than assumed.
+   *
+   * @experimental
+   */
+  async countEntriesUpTo(
+    params: FilteredReadParams & { cap: number }
+  ): Promise<CollectionServiceResult<{ count: number; atLeast: boolean }>> {
+    try {
+      // A cap that is not a positive integer would reach the query builder as
+      // `.limit(NaN)` or a fraction, and fail the read rather than bound it.
+      if (!Number.isSafeInteger(params.cap) || params.cap < 1) {
+        throw NextlyError.internal({
+          logContext: { reason: "count-cap-not-a-positive-integer" },
+        });
+      }
+      const plan = await this.resolveReadPlan<{
+        count: number;
+        atLeast: boolean;
+      }>(params);
+      if (!plan.allowed) return plan.denied;
+      const { schema, whereConditions } = plan;
+
+      let query = this.db.select({ id: schema.id }).from(schema);
+      if (whereConditions.length > 0) {
+        query = query.where(
+          whereConditions.length === 1
+            ? whereConditions[0]
+            : and(...whereConditions)
+        );
+      }
+      const rows = await query.limit(params.cap + 1);
+
+      return {
+        success: true,
+        statusCode: 200,
+        message: "Count retrieved successfully",
+        data: {
+          count: Math.min(rows.length, params.cap),
+          atLeast: rows.length > params.cap,
+        },
+      };
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "Failed to count entries";
+      this.logger.error("Error counting entries", {
+        collectionName: params.collectionName,
+        error: message,
+      });
+      // Reported as `countEntries` reports it, so a refusal stays a typed 403.
+      return {
+        success: false,
+        statusCode: NextlyError.is(error) ? error.statusCode : 500,
+        message,
+        data: null,
+        ...errorEnvelopeFields(error),
+      };
+    }
+  }
+
+  /**
    * How many rows carry each distinct value of one field, over exactly the
    * rows a `countEntries` with the same request would have counted.
    *

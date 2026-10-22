@@ -155,7 +155,9 @@ export async function readerMayCreateEntry(
  * its widget; so the walk below stays inside it, and a fresh install whose one
  * collection is mid-migration keeps its onboarding card.
  */
-function queryableCollectionSlugs(readable: readonly string[]): string[] {
+export function queryableCollectionSlugs(
+  readable: readonly string[]
+): string[] {
   const published = new Set(
     listSources()
       .filter(source => sourceKindFromId(source.id) === "collection")
