@@ -13,7 +13,9 @@
  * translation not yet published, among the languages the site still
  * configures, and the default language where it stores no translation and
  * the main row is not yet published, since the main row goes live with it
- * whether or not it stores one.
+ * whether or not it stores one. While the main row is not published, a
+ * translation already marked published is still hidden, since a read goes
+ * by the main row's status, so publishing the main row puts it live too.
  *
  * A removed language's row can outlive it, and judged it would be read as the
  * default language, refusing every publish over content no request can reach
@@ -32,7 +34,7 @@ export function languagesGoingLiveFrom(args: {
   const going = [...args.statuses]
     .filter(
       ([locale, status]) =>
-        status !== "published" &&
+        (status !== "published" || !args.mainPublished) &&
         (configured.size === 0 || configured.has(locale))
     )
     .map(([locale]) => locale);
