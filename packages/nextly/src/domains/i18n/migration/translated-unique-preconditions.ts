@@ -1,0 +1,105 @@
+/**
+ * What must hold before a translated field becomes unique within each language.
+ *
+ * - **The server can key the index.** It keys on `NULLIF(value, '')`, an expression, which
+ *   PostgreSQL and SQLite always can and MySQL can from 8.0.13. On a server that cannot, the rule
+ *   is refused rather than left unenforced.
+ * - **No language already holds a value twice.** Adding the rule over duplicates would fail
+ *   part-way; it stops first instead, and names the documents in each language that share a value.
+ *   It never names the value: the person adding the rule may not be allowed to read every document.
+ *
+ * Blank values are never duplicates, here as in the index.
+ *
+ * @module domains/i18n/migration/translated-unique-preconditions
+ */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { sql } from "drizzle-orm";
+
+import type { UniqueTranslatedColumn } from "./companion-unique-indexes";
+
+/** The documents in one language that share a value of a field, by id. */
+export interface TranslatedDuplicate {
+  field: string;
+  locale: string;
+  documents: string[];
+}
+
+/** The most documents a refusal lists per field, so a large table answers in one screen. */
+const LISTED = 50;
+
+/** A refusal in the shape a validation error carries. */
+export interface TranslatedUniqueRefusal {
+  path: string;
+  code:
+    | "TRANSLATED_UNIQUE_OVER_DUPLICATES"
+    | "UNIQUE_NOT_ENFORCEABLE_ON_DIALECT";
+  message: string;
+}
+
+/** Whether the adapter's server can key a unique index on an expression. */
+export function canKeyOnExpressions(adapter: DrizzleAdapter): boolean {
+  const capabilities = adapter.getCapabilities();
+  return (
+    capabilities.dialect !== "mysql" || capabilities.functionalIndexes === true
+  );
+}
+
+/** The refusal for each translated unique field a server cannot index per language. */
+export function refusalsForUnindexableTranslatedUnique(
+  adapter: DrizzleAdapter,
+  columns: readonly UniqueTranslatedColumn[]
+): TranslatedUniqueRefusal[] {
+  if (canKeyOnExpressions(adapter)) return [];
+  return columns.map(({ field }) => ({
+    path: `fields.${field}`,
+    code: "UNIQUE_NOT_ENFORCEABLE_ON_DIALECT",
+    message:
+      `"${field}" is translated and unique, which needs a unique index on an expression. ` +
+      `This database server cannot create one (it needs MySQL 8.0.13 or later). Remove Unique, ` +
+      `or make the field shared.`,
+  }));
+}
+
+/** The documents in each language that already share a value of one of `columns`. */
+export async function duplicateTranslatedValues(
+  adapter: DrizzleAdapter,
+  companionTable: string,
+  columns: readonly UniqueTranslatedColumn[]
+): Promise<TranslatedDuplicate[]> {
+  const found: TranslatedDuplicate[] = [];
+  const table = sql.identifier(companionTable);
+  const locale = sql.identifier("_locale");
+  const parent = sql.identifier("_parent");
+  for (const { field, column } of columns) {
+    const value = sql.identifier(column);
+    const rows = await adapter.queryStatement<{
+      locale: string;
+      parent: unknown;
+    }>(
+      sql`SELECT a.${locale} AS locale, a.${parent} AS parent FROM ${table} a JOIN (SELECT ${value} AS v, ${locale} AS l FROM ${table} WHERE ${value} IS NOT NULL AND ${value} <> '' GROUP BY ${value}, ${locale} HAVING COUNT(*) > 1) d ON a.${value} = d.v AND a.${locale} = d.l ORDER BY a.${locale}, a.${parent} LIMIT ${LISTED}`
+    );
+    const byLocale = new Map<string, string[]>();
+    for (const row of rows) {
+      byLocale.set(row.locale, [
+        ...(byLocale.get(row.locale) ?? []),
+        String(row.parent),
+      ]);
+    }
+    for (const [lang, documents] of byLocale)
+      found.push({ field, locale: lang, documents });
+  }
+  return found;
+}
+
+/** The refusal for each field and language that already holds a value twice. */
+export function refusalsForTranslatedUniqueOverDuplicates(
+  duplicates: readonly TranslatedDuplicate[]
+): TranslatedUniqueRefusal[] {
+  return duplicates.map(({ field, locale, documents }) => ({
+    path: `fields.${field}`,
+    code: "TRANSLATED_UNIQUE_OVER_DUPLICATES",
+    message:
+      `"${field}" cannot become unique: in "${locale}", these documents share a value: ` +
+      `${documents.join(", ")}. Give each a different value, or leave one blank, then try again.`,
+  }));
+}

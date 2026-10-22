@@ -1165,6 +1165,16 @@ export class DynamicCollectionService extends BaseService {
       liveCompanionColumns: companionExists
         ? await companionColumnNames(this.adapter, args.tableName)
         : undefined,
+      // Its indexes too, so a per-language unique index is created only where it is missing.
+      liveCompanionIndexes: companionExists
+        ? [
+            ...(await readIndexNames(
+              this.adapter.getDrizzle(),
+              this.adapter.dialect,
+              companionTable
+            )),
+          ]
+        : undefined,
     });
 
     // Separate statements with the migration-file breakpoint marker (not blank lines): the file

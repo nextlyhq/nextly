@@ -6,6 +6,12 @@ import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
 
+import {
+  companionUniqueIndexName,
+  companionUniqueIndexStatements,
+  type UniqueFieldLike,
+  uniqueTranslatedColumns,
+} from "./companion-unique-indexes";
 import { ddlType, lit, q } from "./ddl-types";
 import { deriveCompanionSpec } from "./derive-companion-spec";
 import { storageDiffers } from "./field-leaves-translation-rules";
@@ -597,6 +603,12 @@ export interface CompanionTransitionArgs {
    * migration file is planned without it (`buildCompanionTransitionPlans`).
    */
   liveCompanionColumns?: readonly string[];
+  /**
+   * The companion's index names as this database has them, so a per-language unique index is
+   * created only where missing and dropped only where present. Left out, they are planned from
+   * the fields before the change, which is what a migration file, replayed elsewhere, must be.
+   */
+  liveCompanionIndexes?: readonly string[];
 }
 
 /** The plan produced by {@link buildCompanionTransitionStatements}. */
@@ -753,7 +765,11 @@ export function buildCompanionTransitionStatements(
       .map(c => c.name)
       .filter(n => oldColumnNames.has(n));
     return {
-      statements: buildLocalizationUpStatements(spec),
+      statements: [
+        ...buildLocalizationUpStatements(spec),
+        // The companion is new, so every unique translated field's index is created.
+        ...uniqueIndexDelta({ ...args, liveCompanionIndexes: [] }),
+      ],
       needsArchive: false,
       companionDropped: false,
     };
@@ -858,6 +874,8 @@ export function buildCompanionTransitionStatements(
           // As the companion will be once this change's own RENAME has run.
           liveCompanionColumns: rename?.live ?? args.liveCompanionColumns,
         }),
+        // Last, so every column it keys on has been added or renamed by then.
+        ...uniqueIndexDelta(args),
       ],
       needsArchive: sharedAfter.length > 0,
       companionDropped: false,
@@ -997,11 +1015,13 @@ export function buildCompanionTransitionPlans(
     existingMainColumns: undefined,
     presentOnCompanion: undefined,
     liveCompanionColumns: undefined,
+    liveCompanionIndexes: undefined,
   });
   if (
     !args.existingMainColumns?.length &&
     !args.presentOnCompanion?.length &&
-    !args.liveCompanionColumns?.length
+    !args.liveCompanionColumns?.length &&
+    args.liveCompanionIndexes === undefined
   ) {
     return { artefact };
   }
@@ -1013,4 +1033,37 @@ export function buildCompanionTransitionPlans(
     (local.beforeMain ?? []).join("\n") ===
       (artefact.beforeMain ?? []).join("\n");
   return same ? { artefact } : { artefact, local };
+}
+
+/**
+ * The per-language unique indexes a change adds and drops on the companion
+ * (`companionUniqueIndexStatements`): wanted for the translated fields marked unique after it,
+ * against the indexes the companion has, or, with none read, the ones the fields before the change
+ * gave it. Those are read off the fields as they were, before any rename, since an index keeps the
+ * name it was created under.
+ */
+function uniqueIndexDelta(args: CompanionTransitionArgs): string[] {
+  const { dialect, builtBy } = args;
+  const companionTable = `${args.tableName}_locales`;
+  const columnsOf = (fields: readonly UniqueFieldLike[], localized: boolean) =>
+    uniqueTranslatedColumns({
+      fields,
+      entityLocalized: localized,
+      dialect,
+      builtBy,
+    });
+  const had = columnsOf(args.oldFields, args.wasLocalized).map(c =>
+    companionUniqueIndexName(companionTable, c.column)
+  );
+  const translatedColumns = [...args.oldFields, ...args.newFields]
+    .filter(f => isFieldLocalized(f, true))
+    .map(f => fieldToLocalizedColumnSpec(f, dialect, builtBy)?.name)
+    .filter((name): name is string => typeof name === "string");
+  return companionUniqueIndexStatements({
+    dialect,
+    companionTable,
+    wanted: columnsOf(args.newFields, args.isLocalized),
+    translatedColumns,
+    liveIndexNames: new Set(args.liveCompanionIndexes ?? had),
+  });
 }

@@ -19,6 +19,7 @@ import type { ColumnOrigin } from "../../schema/services/field-column-descriptor
 import { isFieldLocalized } from "../classify-fields";
 import { companionColumnNames } from "../runtime/companion-io";
 
+import { uniqueTranslatedColumns } from "./companion-unique-indexes";
 import { ensureI18nArchive } from "./ensure-archive";
 import { fieldsJoiningTranslation } from "./field-joins-translation";
 import {
@@ -36,6 +37,11 @@ import {
   fieldsLeavingTranslation,
 } from "./reconcile-companion";
 import type { I18nTransitionKind } from "./transition-state";
+import {
+  duplicateTranslatedValues,
+  refusalsForTranslatedUniqueOverDuplicates,
+  refusalsForUnindexableTranslatedUnique,
+} from "./translated-unique-preconditions";
 
 /**
  * Creates the archive table when it is missing, then runs the given archive writes.
@@ -123,6 +129,7 @@ export async function archiveFieldsLeavingTranslation(args: {
    */
   renamed?: FieldRename | null;
 }): Promise<void> {
+  await refuseTranslatedUniqueThatCannotHold(args);
   if (!args.wasLocalized) return;
   if (!args.isLocalized) {
     await refuseRenameAsTranslationEnds(args);
@@ -198,6 +205,55 @@ export async function archiveFieldsLeavingTranslation(args: {
       renamedFrom: source.renamedFrom,
     })
   );
+}
+
+/**
+ * Refuses a translated field becoming unique within each language where the rule cannot hold,
+ * before anything runs: on a server that cannot key the index (`refusalsForUnindexableTranslatedUnique`),
+ * or where a language already holds a value twice (`refusalsForTranslatedUniqueOverDuplicates`),
+ * naming the documents. A field that was already unique and translated was checked when it became
+ * so, and a column the companion does not have yet holds nothing to collide.
+ *
+ * @throws NextlyError `VALIDATION_ERROR` naming each field the rule cannot hold for
+ */
+async function refuseTranslatedUniqueThatCannotHold(
+  args: Parameters<typeof archiveFieldsLeavingTranslation>[0]
+): Promise<void> {
+  // Judged by the flags first, so a save that marks nothing unique asks the adapter nothing.
+  if (!args.isLocalized || !args.newFields.some(f => f.unique === true)) return;
+  const dialect = args.adapter.getCapabilities().dialect;
+  const columnsOf = (fields: readonly LeavingFieldLike[], localized: boolean) =>
+    uniqueTranslatedColumns({
+      fields,
+      entityLocalized: localized,
+      dialect,
+      builtBy: args.builtBy,
+    });
+  const already = new Set(
+    columnsOf(args.oldFields, args.wasLocalized).map(c => c.field)
+  );
+  const becoming = columnsOf(args.newFields, true).filter(
+    c => !already.has(c.field)
+  );
+  if (becoming.length === 0) return;
+  let refusals = refusalsForUnindexableTranslatedUnique(args.adapter, becoming);
+  if (refusals.length === 0 && args.wasLocalized) {
+    const live = new Set(
+      await companionColumnNames(args.adapter, args.tableName)
+    );
+    refusals = refusalsForTranslatedUniqueOverDuplicates(
+      await duplicateTranslatedValues(
+        args.adapter,
+        `${args.tableName}_locales`,
+        becoming.filter(c => live.has(c.column))
+      )
+    );
+  }
+  if (refusals.length === 0) return;
+  throw NextlyError.validation({
+    errors: refusals,
+    logContext: { entity: args.entity, fields: refusals.map(r => r.path) },
+  });
 }
 
 /**
