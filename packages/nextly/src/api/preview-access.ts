@@ -437,16 +437,20 @@ export async function authorizePreviewSharer(
   purpose: "mint" | "manage"
 ): Promise<AuthorizedSharer> {
   const slug = "single" in document ? document.single : document.collection;
+  // The language every question below is asked in. A mint makes a link to
+  // that one language, so it is judged there. Listing and revoking act on
+  // every link to the document, whatever language each is to, so they are
+  // judged in every language, whatever language the request names.
+  const locale = purpose === "mint" ? document.locale : undefined;
   // The gate is per COLLECTION or Single, so a caller who may edit posts
   // cannot act on another collection's links by naming it here. It is asked
-  // in the language the link is to, as the checks below are; a link naming
-  // none is asked in every language.
+  // in that language, as the checks below are; with none, in every language.
   const auth =
-    document.locale === undefined
+    locale === undefined
       ? await requireRouteCollectionAccess(req, "update", slug)
       : await requireRouteCollectionAccess(req, "update", slug, {
           method: "sharePreviewLink",
-          params: { locale: document.locale },
+          params: { locale },
         });
   refuseApiKey(auth);
 
@@ -460,24 +464,17 @@ export async function authorizePreviewSharer(
   const grant =
     "single" in document
       ? purpose === "mint"
-        ? await assertSinglePreviewable(
-            document.single,
-            document.locale,
-            user,
-            {
-              routeAuthorized: true,
-            }
-          )
-        : await assertSingleManageable(document.single, document.locale, user)
+        ? await assertSinglePreviewable(document.single, locale, user, {
+            routeAuthorized: true,
+          })
+        : await assertSingleManageable(document.single, locale, user)
       : await assertEntryPreviewable(
           document.collection,
           document.entryId,
           user,
           {
             routeAuthorized: true,
-            ...(document.locale === undefined
-              ? {}
-              : { locale: document.locale }),
+            ...(locale === undefined ? {} : { locale }),
           }
         );
 

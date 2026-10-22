@@ -136,6 +136,7 @@ vi.mock("../lib/env", () => ({
 
 import { verifyPreviewToken } from "../auth/preview/preview-token";
 import { container } from "../di";
+import { EVERY_TRANSLATION } from "../domains/i18n/locale-selector";
 
 import {
   requireRouteCollectionAccess,
@@ -1439,6 +1440,23 @@ describe("revokePreviewLinks", () => {
     expect(revokeAll).not.toHaveBeenCalled();
     expect(records.revokeDocumentLinks).not.toHaveBeenCalled();
     expect(requireRoutePermission).not.toHaveBeenCalled();
+  });
+
+  it("judges revoking a document's links in every language, whatever language the request names", async () => {
+    // Revoking acts on every link to the entry, whatever language each is
+    // to, so a caller allowed English alone must not end the French ones.
+    await revokePreviewLinks(
+      post(
+        { collection: "pages", entryId: "7", locale: "en" },
+        "http://x/api/nextly/preview-links/revoke"
+      )
+    );
+    expect(
+      (requireRouteCollectionAccess as ReturnType<typeof vi.fn>).mock.lastCall
+    ).toEqual([expect.anything(), "update", "pages"]);
+    expect(getEntry).toHaveBeenLastCalledWith(
+      expect.objectContaining({ entryId: "7", locale: EVERY_TRANSLATION })
+    );
   });
 
   it("revokes one document's links behind the sharer's rule, not manage settings", async () => {
