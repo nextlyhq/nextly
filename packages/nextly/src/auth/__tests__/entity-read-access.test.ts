@@ -3,21 +3,30 @@
  * dispatch. Each case here is a way an earlier reimplementation of this rule
  * was more permissive than the original.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 
-const { hasSpy, checkAccessSpy, registeredAccessSpy, actorForUserSpy } =
-  vi.hoisted(() => ({
-    hasSpy: vi.fn(),
-    checkAccessSpy: vi.fn(),
-    registeredAccessSpy: vi.fn(),
-    actorForUserSpy: vi.fn(),
-  }));
+const {
+  hasSpy,
+  checkAccessSpy,
+  registeredAccessSpy,
+  actorForUserSpy,
+  throwingActorSpy,
+} = vi.hoisted(() => ({
+  hasSpy: vi.fn(),
+  checkAccessSpy: vi.fn(),
+  registeredAccessSpy: vi.fn(),
+  actorForUserSpy: vi.fn(),
+  throwingActorSpy: vi.fn(),
+}));
 
-// A signed-in user's actor: their roles and grants, as one lookup resolves
-// them. Mocked so each case names the grants the decision reads.
+// A signed-in user's actor: their roles and grants, each lookup that fails
+// counted as holding nothing. Mocked so each case names the grants the
+// decision reads. The resolver that throws on a failed lookup answers by
+// throwing, so a reader that reached for it fails these cases.
 vi.mock("../access/resolve-actor", async importOriginal => ({
   ...(await importOriginal<typeof import("../access/resolve-actor")>()),
-  actorForUser: actorForUserSpy,
+  actorForUserFailingClosed: actorForUserSpy,
+  actorForUser: throwingActorSpy,
 }));
 
 vi.mock("../../di/container", () => ({
@@ -37,6 +46,7 @@ vi.mock("../../di/container", () => ({
 }));
 
 import { userActor } from "../access/actor";
+import { clearDeclaredTargets, declareTarget } from "../access/declared-rules";
 import { apiKeyScope } from "../authenticated-scope";
 import {
   canReadEntity,
@@ -79,12 +89,48 @@ const readerOf = (...slugs: string[]) =>
     })),
   });
 
+beforeEach(() => {
+  throwingActorSpy.mockRejectedValue(new Error("roles unreadable"));
+});
+
+afterEach(() => {
+  clearDeclaredTargets();
+});
+
 describe("canReadEntity — API key callers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hasSpy.mockReturnValue(true);
     registeredAccessSpy.mockReturnValue(undefined);
     checkAccessSpy.mockResolvedValue(true);
+  });
+
+  it("refuses a key whose row holds the read under a slug of its own", async () => {
+    // Judged on its stored slug as before: `read-posts` is not in the scope,
+    // though the row's action and resource name the read.
+    const key: ReadAccessCaller = {
+      userId: "owner-1",
+      authMethod: "api-key",
+      permissions: ["view-posts"],
+      grants: [{ slug: "view-posts", action: "read", resource: "posts" }],
+      roles: ["editor"],
+    };
+
+    await expect(canReadEntity("posts", key)).resolves.toBe(false);
+  });
+
+  it("answers from the rule registered now, not one declared before", async () => {
+    // A rule an earlier registration declared, which the service in hand no
+    // longer holds, must not refuse the key's read.
+    declareTarget({
+      kind: "collection",
+      slug: "posts",
+      access: { read: false },
+    });
+
+    await expect(canReadEntity("posts", apiKey(["read-posts"]))).resolves.toBe(
+      true
+    );
   });
 
   it("allows a key scoped to read the entity", async () => {
@@ -227,6 +273,29 @@ describe("canReadEntity — session callers", () => {
     actorForUserSpy.mockResolvedValue(readerOf("pages"));
 
     await expect(canReadEntity("posts", session)).resolves.toBe(false);
+  });
+
+  it("answers from the rule registered now, not one declared before", async () => {
+    actorForUserSpy.mockResolvedValue(readerOf("posts"));
+    declareTarget({
+      kind: "collection",
+      slug: "posts",
+      access: { read: false },
+    });
+
+    await expect(canReadEntity("posts", session)).resolves.toBe(true);
+  });
+
+  it("hands back a declared rule's answer without reading the user's grants", async () => {
+    // The service judges a declared rule, super-admin first, as before; the
+    // user's full roles and grants are not needed for that answer, so a
+    // lookup that cannot read them does not fail it.
+    actorForUserSpy.mockRejectedValue(new Error("grants unreadable"));
+    registeredAccessSpy.mockReturnValue({ read: true });
+    checkAccessSpy.mockResolvedValue(true);
+
+    await expect(canReadEntity("posts", session)).resolves.toBe(true);
+    expect(actorForUserSpy).not.toHaveBeenCalled();
   });
 
   it("lets a declared read rule decide alone, its answer handed back as given", async () => {

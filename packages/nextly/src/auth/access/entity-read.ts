@@ -15,11 +15,11 @@ import type { RBACAccessControlService } from "../../domains/auth/services/rbac-
 import { scopeRowsAgree, slugGrants } from "../authenticated-scope";
 import { codeAccessAllows, type ReadAccessCaller } from "../code-access";
 
-import { isSuperAdmin, type Actor } from "./actor";
+import { holdsPermission, type Actor } from "./actor";
 import { decide, declaresRule, type AccessTarget } from "./decide";
 import { targetAsDeclared } from "./declared-rules";
 import { deviate } from "./deviations";
-import { actorForKey, actorForUser } from "./resolve-actor";
+import { actorForKey, actorForUserFailingClosed } from "./resolve-actor";
 
 /** The target as the access-control service registers it, or one with no rule. */
 function targetOf(
@@ -29,9 +29,13 @@ function targetOf(
   return rbac?.getRegisteredTarget(slug) ?? { kind: "collection", slug };
 }
 
-/** The decision about reading `target`, for the answer a deviation keeps. */
+/**
+ * The decision about reading `target`: the reader's answer, or the one a
+ * deviation compares today's with. With the service, `target` is what it
+ * registers now; without one, the rules the app declared stand in.
+ */
 async function decided(actor: Actor, target: AccessTarget): Promise<boolean> {
-  return (await decide(actor, "read", targetAsDeclared(target))).allowed;
+  return (await decide(actor, "read", target)).allowed;
 }
 
 /**
@@ -63,9 +67,16 @@ async function keyReads(
   const slugAllows = caller.permissions.includes(`read-${slug}`);
   if (!rbac) {
     // Without the service no rule is read: the grant is the whole answer.
-    return deviate("no-service", slugAllows, () => decided(actor, target));
+    return deviate("no-service", slugAllows, () =>
+      decided(actor, targetAsDeclared(target))
+    );
   }
-  if (!scopeRowsAgree(caller)) {
+  if (
+    !scopeRowsAgree(caller) ||
+    slugAllows !== holdsPermission(actor, "read", slug)
+  ) {
+    // The stored slug and the rows answer differently: a scope without rows,
+    // or a grant stored under a slug of its own.
     const today =
       slugAllows &&
       (target.access === undefined ||
@@ -84,27 +95,31 @@ async function userReads(
   rbac: RBACAccessControlService | undefined
 ): Promise<boolean> {
   const target = targetOf(slug, rbac);
+  // A lookup that fails counts as holding nothing of its kind, so the read
+  // is refused rather than failed.
+  const actor = () => actorForUserFailingClosed(caller.userId);
   if (!rbac) {
     // Without the service a signed-in user's grant is never asked.
     return deviate("no-service", false, async () =>
-      decided(await actorForUser(caller.userId), target)
+      decided(await actor(), targetAsDeclared(target))
     );
   }
-  const actor = await actorForUser(caller.userId);
-  if (!isSuperAdmin(actor) && declaresRule(target, "read")) {
-    // A declared read rule decides alone, whatever the user's grants, and
-    // its answer is handed back as the rule gave it: today's answer is the
-    // access-control service's, which asks the rule once.
+  if (declaresRule(target, "read")) {
+    // A declared read rule decides alone for anyone but a super-admin,
+    // whatever their grants, and its answer is handed back as the rule gave
+    // it: today's answer is the access-control service's, which admits a
+    // super-admin and otherwise asks the rule once, with no need of the
+    // user's grants.
     const today = await rbac.checkAccess({
       userId: caller.userId,
       operation: "read",
       resource: slug,
     });
-    return deviate("rule-alone-for-people", today, () =>
-      decided(actor, target)
+    return deviate("rule-alone-for-people", today, async () =>
+      decided(await actor(), target)
     );
   }
-  return decided(actor, target);
+  return decided(await actor(), target);
 }
 
 /**
