@@ -27,7 +27,10 @@ afterEach(async () => {
 
 const SLUG = "site";
 
-async function boot(dialect: TestDialect): Promise<SingleEntryService> {
+async function boot(
+  dialect: TestDialect,
+  maxPerDoc: number | false = false
+): Promise<SingleEntryService> {
   current = await createTestNextly({
     dialect,
     singles: [
@@ -35,7 +38,7 @@ async function boot(dialect: TestDialect): Promise<SingleEntryService> {
         slug: SLUG,
         localized: true,
         status: true,
-        versions: { drafts: true },
+        versions: { drafts: true, maxPerDoc },
         access: { read: () => true, update: () => true },
         fields: [
           // Translated.
@@ -113,6 +116,31 @@ async function basePinCount(): Promise<number> {
   return rows.length;
 }
 
+/** How many of the Single's kept versions hold this count. */
+async function versionsHoldingCount(count: number): Promise<number> {
+  const rows = await current!.adapter.select<{ snapshot: unknown }>(
+    "nextly_versions",
+    {
+      columns: ["snapshot"],
+      where: {
+        and: [
+          { column: "scopeKind", op: "=", value: "single" },
+          { column: "scopeSlug", op: "=", value: SLUG },
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "IS NOT NULL" },
+        ],
+      },
+    }
+  );
+  return rows.filter(row => {
+    const snapshot: unknown =
+      typeof row.snapshot === "string"
+        ? JSON.parse(row.snapshot)
+        : row.snapshot;
+    return (snapshot as { articleCount?: unknown }).articleCount === count;
+  }).length;
+}
+
 /** Live in both languages with a count of 10. */
 async function live(singles: SingleEntryService): Promise<void> {
   expect(
@@ -173,7 +201,10 @@ describe.each(getConfiguredTestDialects())(
       }).toEqual({
         success: false,
         statusCode: 409,
-        publicData: { outOfDate: ["articleCount"] },
+        publicData: {
+          reason: "shared-fields-out-of-date",
+          fields: ["articleCount"],
+        },
       });
       expect(await liveCount(singles)).toBe(13);
       expect(await liveName(singles, "en")).toBe("EN");
@@ -222,8 +253,9 @@ describe.each(getConfiguredTestDialects())(
 
       expect(refused.statusCode).toBe(409);
       expect(refused.publicData).toEqual({
-        outOfDate: ["articleCount"],
-        hiddenOutOfDate: 1,
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+        hiddenCount: 1,
       });
     });
 
@@ -236,7 +268,10 @@ describe.each(getConfiguredTestDialects())(
         singles.publishAllLocales(SLUG, { overrideAccess: true })
       ).rejects.toMatchObject({
         statusCode: 409,
-        publicData: { outOfDate: ["articleCount"] },
+        publicData: {
+          reason: "shared-fields-out-of-date",
+          fields: ["articleCount"],
+        },
       });
       expect(await liveCount(singles)).toBe(13);
       expect(await pendingLocales()).toEqual(["en"]);
@@ -308,7 +343,10 @@ describe.each(getConfiguredTestDialects())(
       // old score look current.
       const refused = await save(singles, "en", { status: "published" });
       expect(refused.statusCode).toBe(409);
-      expect(refused.publicData).toEqual({ outOfDate: ["internalScore"] });
+      expect(refused.publicData).toEqual({
+        reason: "shared-fields-out-of-date",
+        fields: ["internalScore"],
+      });
     });
 
     // Every case publishes all three languages at once.
@@ -390,6 +428,71 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // English edits the count, then Spanish edits it later; saves of words
+    // follow until retention has removed both edits. Each case says how many
+    // kept versions still hold each count.
+    const unorderedCases: [
+      label: string,
+      maxPerDoc: number,
+      steps: Step[],
+      kept: { english: number; spanish: number },
+    ][] = [
+      [
+        "only English's later saves keep its count",
+        3,
+        [
+          ["en", { articleCount: 11 }],
+          ["es", { articleCount: 12 }],
+          ["en", { siteName: "EN 2" }],
+          ["en", { siteName: "EN 3" }],
+          ["en", { siteName: "EN 4" }],
+        ],
+        { english: 3, spanish: 0 },
+      ],
+      [
+        "both counts survive only in later saves, English's the newer",
+        4,
+        [
+          ["en", { articleCount: 11 }],
+          ["es", { articleCount: 12 }],
+          ["es", { siteName: "ES 2" }],
+          ["es", { siteName: "ES 3" }],
+          ["en", { siteName: "EN 2" }],
+          ["en", { siteName: "EN 3" }],
+        ],
+        { english: 2, spanish: 2 },
+      ],
+    ];
+
+    it.each(unorderedCases)(
+      "publishing every language refuses edits of one field history can no longer order (%s), and keeps live",
+      async (_label, maxPerDoc, steps, kept) => {
+        const singles = await boot(dialect, maxPerDoc);
+        await live(singles);
+        for (const [locale, data] of steps) {
+          expect((await save(singles, locale, data)).success).toBe(true);
+        }
+        // Both edits are gone from history.
+        expect({
+          english: await versionsHoldingCount(11),
+          spanish: await versionsHoldingCount(12),
+        }).toEqual(kept);
+
+        await expect(
+          singles.publishAllLocales(SLUG, { overrideAccess: true })
+        ).rejects.toMatchObject({
+          statusCode: 409,
+          publicData: {
+            reason: "shared-edits-unordered",
+            fields: ["articleCount"],
+          },
+        });
+        // Neither count was guessed into place.
+        expect(await liveCount(singles)).toBe(10);
+        expect(await pendingLocales()).toEqual(["en", "es"]);
+      }
+    );
+
     it("publishing every language refuses a change whose base is behind live, and keeps live", async () => {
       // Spanish and French begin at 10; English publishes 30 on its own; then
       // every language is published with the older changes still pending.
@@ -410,7 +513,10 @@ describe.each(getConfiguredTestDialects())(
         singles.publishAllLocales(SLUG, { overrideAccess: true })
       ).rejects.toMatchObject({
         statusCode: 409,
-        publicData: { outOfDate: ["articleCount"] },
+        publicData: {
+          reason: "shared-fields-out-of-date",
+          fields: ["articleCount"],
+        },
       });
       // Nothing stale won, and nothing else moved either.
       expect(await liveShared(singles)).toEqual({
