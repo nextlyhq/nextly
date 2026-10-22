@@ -55,6 +55,11 @@ export interface CodeMirrorEditorProps {
    * equivalent in the value/onChange pair.
    */
   onCreateEditor?: (view: EditorView) => void;
+  /**
+   * The accessible name, where no `<label>` can point at the editor: its
+   * text area is CodeMirror's own element, not one the caller renders.
+   */
+  label?: string;
 }
 
 // ============================================================
@@ -263,6 +268,7 @@ export function CodeMirrorEditor({
   editorOptions,
   placeholder,
   onCreateEditor,
+  label,
 }: CodeMirrorEditorProps): JSX.Element {
   // Not a colour: see `EditorChromeOptions.dark`.
   const { resolvedTheme } = useTheme();
@@ -270,6 +276,9 @@ export function CodeMirrorEditor({
   const extensions = useMemo(
     () => [
       ...getLanguageExtensions(language),
+      ...(label
+        ? [EditorView.contentAttributes.of({ "aria-label": label })]
+        : []),
       nextlyHighlighting,
       nextlyEditorChrome({
         fontSize: editorOptions.fontSize ?? 14,
@@ -287,7 +296,13 @@ export function CodeMirrorEditor({
           ]
         : []),
     ],
-    [language, editorOptions.fontSize, editorOptions.fontFamily, resolvedTheme]
+    [
+      language,
+      label,
+      editorOptions.fontSize,
+      editorOptions.fontFamily,
+      resolvedTheme,
+    ]
   );
 
   return (
