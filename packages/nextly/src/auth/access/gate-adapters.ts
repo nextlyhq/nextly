@@ -144,38 +144,19 @@ export function collectionGateVerdict(
 }
 
 /**
- * The Single gate's answer. It reads only the key scope it is handed: asked
- * inside a request that arrived on a key, without that scope, it judges the
- * caller as the user, where the collection gate judges the key.
+ * The Single gate's answer. A call that names no key scope is judged under the
+ * one in force, as the collection gate judges it: inside a request that arrived
+ * on a key, the key, not the person who made it.
  */
 export async function singleGateVerdict(
   q: SingleQuestion
 ): Promise<GateVerdict> {
-  // Without the service a signed-in user is allowed, the permission unread.
-  const asked = { ...q, permissionWithoutService: () => Promise.resolve(true) };
-  const today = await gateVerdict("single", asked);
-  await scopeInForceDeviation(asked, today);
-  return today;
-}
-
-/**
- * Where the request's key would have been judged, had the Single gate read the
- * scope in force: compared with the decision for that key, asked directly, so
- * recording runs no second gate and takes none of its deviations.
- */
-async function scopeInForceDeviation(
-  q: GateQuestion,
-  today: GateVerdict
-): Promise<void> {
-  const inForce = effectiveCallerScope(q.scope);
-  if (inForce === q.scope || inForce?.actorType !== "apiKey") return;
-  // A plugin's person, a route-authorized request and a visitor are judged
-  // without the key's scope by either gate.
-  if (q.principal !== null || q.routeAuthorized || !q.user) return;
-  const actor = keyActorOf(inForce, q.user);
-  await deviate("single-explicit-scope-only", today.allowed, () =>
-    decided(actor, q.action, registeredTarget("single", q))
-  );
+  return gateVerdict("single", {
+    ...q,
+    scope: effectiveCallerScope(q.scope),
+    // Without the service a signed-in user is allowed, the permission unread.
+    permissionWithoutService: () => Promise.resolve(true),
+  });
 }
 
 /**
