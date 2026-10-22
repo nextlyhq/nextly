@@ -62,6 +62,7 @@ export { emailProvidersMysql as emailProviders } from "../email-providers/mysql"
 export { emailDeliveriesMysql as emailDeliveries } from "../email-deliveries/mysql";
 export { emailSendClaimsMysql as emailSendClaims } from "../email-send-claims/mysql";
 export { emailQueueMysql as emailQueue } from "../email-queue/mysql";
+export { emailQueueRecipientsMysql as emailQueueRecipients } from "../email-queue-recipients/mysql";
 export { emailTemplatesMysql as emailTemplates } from "../email-templates/mysql";
 
 export { nextlySchemaEventsMysql as nextlySchemaEvents } from "../schema-events/mysql";
