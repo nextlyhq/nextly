@@ -34,6 +34,22 @@ vi.mock("../../../domains/singles/services/single-document-access", () => ({
   singleStoredDocumentReadable,
 }));
 
+// Which languages the checks are told, watched where they are set: the
+// languages themselves come from the site's configuration, which is not here.
+const EVERY_LANGUAGE = vi.hoisted(() => ({ locales: ["every"] }));
+const told = vi.hoisted(() => ({ current: undefined as unknown }));
+vi.mock("../../../auth/access/rule-language", () => ({
+  everyLanguage: () => EVERY_LANGUAGE,
+  withRuleLanguage: async <T>(language: unknown, operation: () => T) => {
+    told.current = language;
+    try {
+      return await operation();
+    } finally {
+      told.current = undefined;
+    }
+  },
+}));
+
 vi.mock("../preview-route-defaults", () => ({
   // The link's own record. What it decides is covered by the integration
   // suite against real rows; here it allows, so these cases stay about the
@@ -122,6 +138,39 @@ describe("previewSingleDraftGate", () => {
     await expect(
       previewSingleDraftGate()({ slug: "homepage", locale: "en" })
     ).resolves.toEqual({ readAs: SHARER });
+  });
+
+  it("judges the sharer in the language the link names", async () => {
+    // Asked of the language the link is to, at every open.
+    await cookieFor({ kind: "single", single: "homepage", locale: "fr" });
+
+    await previewSingleDraftGate()({ slug: "homepage", locale: "fr" });
+
+    for (const check of [
+      singleDocumentEditable,
+      singleStoredDocumentReadable,
+    ]) {
+      expect(check).toHaveBeenCalledWith(
+        "homepage",
+        expect.objectContaining({ routeAuthorized: false, locale: "fr" })
+      );
+    }
+  });
+
+  it("tells the checks every language for a link naming none, and sets nothing for one naming a language", async () => {
+    const seen: unknown[] = [];
+    singleDocumentEditable.mockImplementation(async () => {
+      seen.push(told.current);
+      return true;
+    });
+
+    await cookieFor({ kind: "single", single: "homepage" });
+    await previewSingleDraftGate()({ slug: "homepage" });
+    // Named in the call for a link to one language, so nothing is set.
+    await cookieFor({ kind: "single", single: "homepage", locale: "fr" });
+    await previewSingleDraftGate()({ slug: "homepage", locale: "fr" });
+
+    expect(seen).toEqual([EVERY_LANGUAGE, undefined]);
   });
 
   it("refuses a token whose locale is not the one the route reads", async () => {

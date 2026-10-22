@@ -232,10 +232,15 @@ export interface Row {
   rule: Rule;
 }
 
-/** Which callers a door can name, and which actions it asks of each target. */
+/**
+ * Which callers a door can name, and which actions it asks of each target.
+ * `callersOf` narrows the callers for one target, where the door names fewer
+ * there than it does elsewhere.
+ */
 interface Reach {
   callers: readonly Caller[];
   targets: Partial<Record<Target, readonly Action[]>>;
+  callersOf?: Partial<Record<Target, readonly Caller[]>>;
 }
 
 const READ: readonly Action[] = ["read"];
@@ -278,12 +283,23 @@ const REACH: Record<Door, Reach> = {
       providers: CRUD,
     },
   },
+  // Media, users and roles are read by the namespaces a principal cannot call
+  // (only collection and Single operations can be made as one), so they are
+  // asked of the callers REST names there.
   direct: {
     callers: PRESENTED,
     targets: {
       collection: ACTIONS,
       single: READ_UPDATE,
+      media: READ,
+      users: READ,
       "single-pub": PUBLISHING,
+      roles: READ,
+    },
+    callersOf: {
+      media: NOT_PRINCIPAL,
+      users: NOT_PRINCIPAL,
+      roles: NOT_PRINCIPAL,
     },
   },
   website: { callers: ["visitor", ...USERS], targets: { collection: READ } },
@@ -379,7 +395,8 @@ const REACH_BY_SETUP: Record<Setup, Partial<Record<Door, Reach>>> = {
 /** Whether a door asks a case, so a row is never sent where it cannot be. */
 function asks(door: Door, row: Row): boolean {
   const reach = REACH_BY_SETUP[row.setup][door];
-  if (!reach || !reach.callers.includes(row.caller)) return false;
+  const callers = reach?.callersOf?.[row.target] ?? reach?.callers;
+  if (!reach || !callers?.includes(row.caller)) return false;
   return reach.targets[row.target]?.includes(row.action) ?? false;
 }
 

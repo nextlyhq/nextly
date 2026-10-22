@@ -63,7 +63,7 @@ export default function EditEmailTemplatePage() {
     (values: TemplateFormValues) => {
       if (!templateId) return;
       updateTemplate(
-        { id: templateId, data: formValuesToUpdatePayload(values) },
+        { id: templateId, data: formValuesToUpdatePayload(values, template) },
         {
           onSuccess: () => {
             toast.success("Template updated", {
@@ -82,7 +82,7 @@ export default function EditEmailTemplatePage() {
         }
       );
     },
-    [templateId, updateTemplate, listedUnderDesign]
+    [templateId, updateTemplate, listedUnderDesign, template]
   );
 
   if (!templateId) {

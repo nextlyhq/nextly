@@ -32,21 +32,9 @@ import {
   text,
   upload,
 } from "../../../config";
-import * as resourceReadable from "../../../auth/resource-readable";
+import { canReadSystemResource } from "../../../auth/resource-readable";
 import { getDialectTables } from "../../../database/index";
 import { container } from "../../../di/container";
-// Relationship expansion decides whether a reader may see a related `users` row through
-// `canReadSystemResource`. It is wrapped, not replaced, so the count below observes the
-// real call path while every answer stays the one the real function gives.
-vi.mock("../../../auth/resource-readable", async importOriginal => {
-  const actual =
-    await importOriginal<typeof import("../../../auth/resource-readable")>();
-  return {
-    ...actual,
-    canReadSystemResource: vi.fn(actual.canReadSystemResource),
-  };
-});
-
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -59,6 +47,17 @@ import { _resetEnvCache } from "../../../shared/lib/env";
 import type { TrustBound } from "../../../services/collections/trust-grant";
 import { ApiKeyService } from "../../auth/services/api-key-service";
 import { CollectionAccessService } from "../services/collection-access-service";
+
+// Watched, not changed: every call is answered by the real reader, so a
+// population of `users` can be counted where it is decided.
+vi.mock("../../../auth/resource-readable", async importOriginal => {
+  const real =
+    await importOriginal<typeof import("../../../auth/resource-readable")>();
+  return {
+    ...real,
+    canReadSystemResource: vi.fn(real.canReadSystemResource),
+  };
+});
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -500,26 +499,31 @@ describe.each(getConfiguredTestDialects())(
 
       it("asks once per expansion whether the caller may read users, however many fields relate to them", async () => {
         const fx = await boot(dialect);
-        const decisions = vi.mocked(resourceReadable.canReadSystemResource);
-        // Depth 2: a component is a level of its own, so a relationship
-        // inside one is populated from the second level.
-        for (const read of [readRef, listRef]) {
-          decisions.mockClear();
-          const data = await read(fx, as(fx.userReader), 2);
-          // Both fields relate to the same user, and both carry it, as do
-          // both component instances that relate to it.
-          expect(shows(data.author, TITLE.user)).toBe(true);
-          expect(shows(data.reviewer, TITLE.user)).toBe(true);
-          const bylines = data.bylines as unknown[];
-          expect(bylines).toHaveLength(2);
-          for (const byline of bylines) {
-            expect(shows(byline, TITLE.user)).toBe(true);
+        // A related `users` row is decided by the system-resource reader, the
+        // question a direct read of users asks, kept for the expansion.
+        const checks = vi.mocked(canReadSystemResource);
+        try {
+          // Depth 2: a component is a level of its own, so a relationship
+          // inside one is populated from the second level.
+          for (const read of [readRef, listRef]) {
+            checks.mockClear();
+            const data = await read(fx, as(fx.userReader), 2);
+            // Both fields relate to the same user, and both carry it, as do
+            // both component instances that relate to it.
+            expect(shows(data.author, TITLE.user)).toBe(true);
+            expect(shows(data.reviewer, TITLE.user)).toBe(true);
+            const bylines = data.bylines as unknown[];
+            expect(bylines).toHaveLength(2);
+            for (const byline of bylines) {
+              expect(shows(byline, TITLE.user)).toBe(true);
+            }
+            const usersReads = checks.mock.calls.filter(
+              ([resource]) => resource === "users"
+            );
+            expect(usersReads).toHaveLength(1);
           }
-          const usersReads = decisions.mock.calls.filter(
-            ([resource, userId]) =>
-              resource === "users" && userId === fx.userReader
-          );
-          expect(usersReads).toHaveLength(1);
+        } finally {
+          checks.mockClear();
         }
       });
 

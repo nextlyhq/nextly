@@ -463,9 +463,11 @@ type OperationLanguage =
  *   `_translated` filter, is told every language; see `readLanguagesFor`.
  * - `write`: a write of one language's content, `?locale=` (every language
  *   for `*`) or the default.
- * - `as-named`: an autosave, or discarding a working draft, which keep the
- *   language as the request names it: a language the site does not
- *   configure is told every language, not the default a write resolves it to.
+ * - `as-named`: an autosave, discarding a working draft, or sharing a preview
+ *   link to one language, which keep the language as the request names it: a
+ *   language the site does not configure is told every language, not the
+ *   default a write resolves it to. A preview link naming no language is
+ *   shared with no operation named, so it is told every language.
  * - `default-write`: a bulk update of named entries, which takes no locale
  *   and writes the default language. A bulk update by query is not one: its
  *   filter, in the request body, may choose its rows by any language's
@@ -489,6 +491,7 @@ const OPERATION_LANGUAGES: ReadonlyMap<string, OperationLanguage> = new Map([
   ["updateSingleDocument", "write"],
   ["autosaveSingle", "as-named"],
   ["discardSingleWorkingDraft", "as-named"],
+  ["sharePreviewLink", "as-named"],
   ["bulkUpdateEntries", "default-write"],
   ["duplicateEntry", "duplicate"],
   ["listEntryVersions", "filtered-history"],
