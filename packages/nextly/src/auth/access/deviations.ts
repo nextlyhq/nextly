@@ -51,35 +51,88 @@ export const DEVIATIONS = [
   // A read with no caller, a visitor or a plugin's person, keeps the media
   // rows it populates, where the decision refuses a caller with no grant.
   "visitor-keeps-media",
+  // `ctx.caller.can` hands back a signed-in user's rule answer as the rule
+  // gave it, `null` or a string included, rather than a yes or no.
+  "can-returns-raw-rule-value",
+  // Without the access-control service, `ctx.caller.can` and a held
+  // permission refuse a signed-in user, where a route reads their permission.
+  "can-no-service-refuses-people",
+  // `ctx.caller.can` and a held permission refuse an empty action or
+  // resource, a super-admin's included.
+  "can-refuses-empty-action-or-resource",
+  // A key holds a named permission by its stored slug alone: the target's
+  // rule is not read, nor, for a publish or an unpublish, update's.
+  "holds-permission-key-skips-rules",
+  // The schema list shows a collection to whoever holds its read permission,
+  // without reading the collection's read rule.
+  "schema-list-ignores-rules",
 ] as const;
 
 export type Deviation = (typeof DEVIATIONS)[number];
 
-const listening = new AsyncLocalStorage<Set<Deviation>>();
+/** What a listening test is told: every deviation, and each by its subject. */
+interface Listener {
+  readonly seen: Set<Deviation>;
+  readonly bySubject: Map<string, Set<Deviation>>;
+}
+
+const listening = new AsyncLocalStorage<Listener>();
+const subjects = new AsyncLocalStorage<string>();
 
 /**
  * Today's answer where a way in still deviates from the decision. `decided`
  * is the decision's answer, worked out only while a test listens; when the
- * two differ, the deviation is recorded.
+ * two differ, the deviation is recorded, under the subject it was decided for
+ * when there is one ({@link aboutSubject}).
  */
 export async function deviate(
   name: Deviation,
   today: boolean,
   decided: () => boolean | Promise<boolean>
 ): Promise<boolean> {
-  const seen = listening.getStore();
-  if (seen && (await decided()) !== today) seen.add(name);
+  const listener = listening.getStore();
+  if (listener && (await decided()) !== today) {
+    listener.seen.add(name);
+    const subject = subjects.getStore();
+    if (subject !== undefined) {
+      let named = listener.bySubject.get(subject);
+      if (!named) listener.bySubject.set(subject, (named = new Set()));
+      named.add(name);
+    }
+  }
   return today;
 }
 
 /**
- * Runs `work` and reports each deviation that changed an answer during it,
- * in the order {@link DEVIATIONS} names them.
+ * Runs `work` as the decision about one subject (a collection, a permission),
+ * so a way in that decides many at once still says which deviation belongs to
+ * which. Outside a test nothing listens, and the work runs as it is.
  */
-export async function recordingDeviations<T>(
-  work: () => Promise<T>
-): Promise<{ result: T; deviations: Deviation[] }> {
-  const seen = new Set<Deviation>();
-  const result = await listening.run(seen, work);
-  return { result, deviations: DEVIATIONS.filter(name => seen.has(name)) };
+export function aboutSubject<T>(subject: string, work: () => T): T {
+  return listening.getStore() ? subjects.run(subject, work) : work();
+}
+
+/** The deviations in `seen`, in the order {@link DEVIATIONS} names them. */
+const inOrder = (seen: ReadonlySet<Deviation>): Deviation[] =>
+  DEVIATIONS.filter(name => seen.has(name));
+
+/**
+ * Runs `work` and reports each deviation that changed an answer during it,
+ * in the order {@link DEVIATIONS} names them, and those recorded about each
+ * subject.
+ */
+export async function recordingDeviations<T>(work: () => Promise<T>): Promise<{
+  result: T;
+  deviations: Deviation[];
+  bySubject: ReadonlyMap<string, Deviation[]>;
+}> {
+  const listener: Listener = { seen: new Set(), bySubject: new Map() };
+  const result = await listening.run(listener, work);
+  return {
+    result,
+    deviations: inOrder(listener.seen),
+    bySubject: new Map(
+      [...listener.bySubject].map(([subject, seen]) => [subject, inOrder(seen)])
+    ),
+  };
 }

@@ -1,12 +1,13 @@
 /**
- * What each write to a system resource asks of its caller.
+ * What each write, and each read, of a system resource asks of its caller.
  *
- * Roles, permissions, field groups and media are written through more than
- * one door, the REST routes and the Direct API when it is asked to be checked
- * (and, for media, a plugin's `ctx.services.media`), and every door must ask
- * the same question. Declared once here, as `API_KEY_ACTION_POLICY` is for API
- * keys; `system-write-policy.test.ts` holds the REST route gates to it, route
- * by route, so a change on either side that the other does not follow fails.
+ * Roles, permissions, users, field groups and media are written and read
+ * through more than one door, the REST routes and the Direct API when it is
+ * asked to be checked (and, for media writes, a plugin's
+ * `ctx.services.media`), and every door must ask the same question. Declared
+ * once here, as `API_KEY_ACTION_POLICY` is for API keys;
+ * `system-write-policy.test.ts` holds the REST route gates to it, route by
+ * route, so a change on either side that the other does not follow fails.
  *
  * @module domains/auth/system-write-policy
  */
@@ -77,5 +78,46 @@ export const SYSTEM_WRITE_POLICY = {
     delete: { action: "delete", resource: "media" },
     bulkDelete: { action: "delete", resource: "media" },
     deleteFolder: { action: "delete", resource: "media" },
+  },
+} as const satisfies Record<string, Record<string, RouteGrant>>;
+
+/** `read-roles`, or `read-permissions`, either one. */
+const ROLE_OR_PERMISSION_READ: RouteGrant = {
+  anyOf: [
+    { action: "read", resource: "roles" },
+    { action: "read", resource: "permissions" },
+  ],
+};
+
+/**
+ * The grant each system read asks, as REST's read routes ask it.
+ *
+ * - Users: `read-users`, for a list, a search or one user.
+ * - Roles: `read-roles`; a role's permissions, `read-roles` or
+ *   `read-permissions`.
+ * - Permissions: `read-roles` to list them, which the role form needs, and
+ *   `read-roles` or `read-permissions` for one.
+ * - Media: `read-media`, for files and folders, as the admin's media routes
+ *   ask; the public media mount serves reads without a check, but a call that
+ *   asks to be checked is judged as the admin's are.
+ *
+ * Field groups ask no grant: REST serves their list and each one to any
+ * signed-in caller, since the builder's palette reads them.
+ */
+export const SYSTEM_READ_POLICY = {
+  users: {
+    read: { action: "read", resource: "users" },
+  },
+  roles: {
+    read: { action: "read", resource: "roles" },
+    readPermissions: ROLE_OR_PERMISSION_READ,
+  },
+  permissions: {
+    // Any of one, as REST asks it.
+    list: { anyOf: [{ action: "read", resource: "roles" }] },
+    read: ROLE_OR_PERMISSION_READ,
+  },
+  media: {
+    read: { action: "read", resource: "media" },
   },
 } as const satisfies Record<string, Record<string, RouteGrant>>;
