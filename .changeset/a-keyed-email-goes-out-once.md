@@ -31,7 +31,7 @@
 
 A send can now carry an `idempotencyKey`, and the email then goes out once on
 every provider: on `nextly.email.send` and `sendWithTemplate`, the same two on a
-plugin's `ctx.services.email`, and both REST send routes. A repeat of a send
+plugin's `ctx.services.email`. A repeat of a send
 that succeeded returns its result with `repeat: true` and sends nothing; a
 repeat after a failure sends again; the same key with a different message is
 refused. Keys are scoped to their caller, so two plugins never share one, and
