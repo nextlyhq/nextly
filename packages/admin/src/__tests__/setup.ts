@@ -24,6 +24,18 @@ declare module "vitest" {
   > extends TestingLibraryMatchers<unknown, R> {}
 }
 
+// Unit tests have no network. A request no test stubbed is refused at once,
+// as a server that is not there would refuse it, rather than sent: jsdom sends
+// it to localhost:3000, where whatever happens to be listening answers, and a
+// refusal that arrives after the file has finished is logged during Vitest's
+// teardown, which fails a run whose every test passed
+// (`EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was
+// pending`). A test that needs a response replaces `fetch` itself, as before.
+globalThis.fetch = ((input: RequestInfo | URL) =>
+  Promise.reject(
+    new TypeError(`unit tests have no network: ${String(input)}`)
+  )) as typeof fetch;
+
 // Mock ResizeObserver for Radix UI components
 global.ResizeObserver = class ResizeObserver {
   observe() {
