@@ -137,13 +137,18 @@ export interface ReleasesNamespace {
    * member's action, because a release can publish one document while taking
    * another down. Declared in the return type rather than left to the
    * runtime: a caller that cannot see `memberAction` cannot tell which way a
-   * release moves the document it just asked about.
+   * release moves the document it just asked about. Each row also carries
+   * `memberId`, the membership `removeMember` takes the document out with.
    *
    * `tab`, `kind`, `search`, `day` and `page` are `@experimental`.
    */
   find(
     args?: FindReleasesQuery & ReleaseCallerArgs
-  ): Promise<ListResult<ReleaseRow & { memberAction?: ReleaseMemberAction }>>;
+  ): Promise<
+    ListResult<
+      ReleaseRow & { memberAction?: ReleaseMemberAction; memberId?: string }
+    >
+  >;
   /**
    * How many releases a listing holds, without reading them: the same tab,
    * state, window and search `find` takes, and the same answer as its

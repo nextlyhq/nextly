@@ -1033,8 +1033,14 @@ export interface ReleaseCountQuery {
  * @experimental
  */
 export interface ReleaseListPage {
-  /** Carries `memberAction` when the listing was filtered by `containing`. */
-  rows: Array<ReleaseRow & { memberAction?: ReleaseMemberAction }>;
+  /**
+   * Carries `memberAction` and `memberId` when the listing was filtered by
+   * `containing`: what the release does to that document, and the membership
+   * that takes the document out of it.
+   */
+  rows: Array<
+    ReleaseRow & { memberAction?: ReleaseMemberAction; memberId?: string }
+  >;
   /** Every release the query matches, across all pages. */
   total: number;
   page: number;
@@ -1969,7 +1975,8 @@ export class ReleasesService {
    *
    * The member's ACTION travels with each release, because it is the thing an
    * editor needs and it belongs to the membership rather than to the release: a
-   * release can publish one document while unpublishing another.
+   * release can publish one document while unpublishing another. So does the
+   * member's id, which is what removing the document from that release names.
    *
    * Ordered by instant ascending — the order the changes will actually happen —
    * so a document in several releases reads as a sequence. The final state is
@@ -1980,7 +1987,9 @@ export class ReleasesService {
     query: FindReleasesFilters & { containing: DocumentRef },
     now: Date,
     actor: ReleaseActor
-  ): Promise<Array<ReleaseRow & { memberAction: ReleaseMemberAction }>> {
+  ): Promise<
+    Array<ReleaseRow & { memberAction: ReleaseMemberAction; memberId: string }>
+  > {
     const ref = query.containing;
     // ASKED FOR, rather than filtered out of the answer afterwards. The
     // repository's default is the read path's narrow list, so a banner that
@@ -2031,7 +2040,14 @@ export class ReleasesService {
         // anything.
         if (!RELEASE_STATES_SHOWN_ON_A_DOCUMENT.includes(release.state))
           return [];
-        return [{ ...release, memberAction: member.action, member }];
+        return [
+          {
+            ...release,
+            memberAction: member.action,
+            memberId: member.memberId,
+            member,
+          },
+        ];
       })
       // THE ENGINE'S OWN ORDER, not a simpler one that agrees with it most of
       // the time. `resolveReleaseEffect` breaks a tied instant on the member's
