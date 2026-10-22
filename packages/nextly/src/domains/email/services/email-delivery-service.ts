@@ -293,25 +293,30 @@ export class EmailDeliveryService extends BaseService {
     claim: HeldClaim,
     outcome: EmailSendOutcome,
     acceptedRecipients: readonly string[] = [],
-    records?: EmailDeliveryInput[]
-  ): Promise<void> {
+    records?: EmailDeliveryInput[],
+    acceptedCalls: readonly string[] = []
+  ): Promise<boolean> {
     const keep = !this.keepsNothing();
+    let committed = true;
     try {
       if (records === undefined) {
         await settleSendClaim(this.adapter, claim, outcome, {
           keep,
           acceptedRecipients,
+          acceptedCalls,
         });
       } else {
         await this.recordAndSettle(claim, outcome, {
           keep,
           acceptedRecipients,
+          acceptedCalls,
           records,
         });
       }
     } catch (error) {
       // Neither written: the claim stays held until its lease lapses, and a
       // later send with the key takes it over and completes both.
+      committed = false;
       warnQuietly(this.logger, "Email send claim could not be recorded", {
         error,
       });
@@ -324,6 +329,7 @@ export class EmailDeliveryService extends BaseService {
         error,
       });
     }
+    return committed;
   }
 
   /**
@@ -339,6 +345,7 @@ export class EmailDeliveryService extends BaseService {
     options: {
       keep: boolean;
       acceptedRecipients: readonly string[];
+      acceptedCalls: readonly string[];
       records: EmailDeliveryInput[];
     }
   ): Promise<void> {
@@ -354,6 +361,7 @@ export class EmailDeliveryService extends BaseService {
         await this.settleWithin(db, claim, outcome, {
           keep: options.keep,
           acceptedRecipients: options.acceptedRecipients,
+          acceptedCalls: options.acceptedCalls,
         });
       });
     try {

@@ -264,10 +264,28 @@ function adapterMessage(
   };
 }
 
+/**
+ * The calls a keyed send has had wholly accepted, by provider key: those an
+ * earlier attempt recorded and those of this one, kept on the claim for an
+ * instance of the earlier version that reads progress only that way.
+ */
+function acceptedCallsOf(
+  claim: HeldClaim,
+  calls: readonly CallOutcome[]
+): string[] {
+  return [
+    ...claim.acceptedCalls,
+    ...calls
+      .filter(call => call.accepted && call.outcome.success)
+      .map(call => claim.providerKey(call.message)),
+  ];
+}
+
 /** Resolve once `at` (epoch milliseconds) has passed. */
 function untilTime(at: number): Promise<void> {
   return new Promise(resolve => {
-    setTimeout(resolve, Math.max(0, at - Date.now()));
+    // Never what keeps a process alive: nothing else is waiting on it.
+    setTimeout(resolve, Math.max(0, at - Date.now())).unref?.();
   });
 }
 
@@ -891,7 +909,9 @@ export class EmailService extends BaseService {
       previouslyAccepted,
       calls
     );
-    if (calls.some(call => call.late)) {
+    const late = calls.some(call => call.late);
+    let committed = true;
+    if (late) {
       // A call is still unsettled: its claim stays held, renewed, until the
       // call answers or the lease limit passes, and is settled then.
       void this.finishLateCalls({
@@ -903,17 +923,23 @@ export class EmailService extends BaseService {
         actions: { deferred, run: runAfterSend },
       });
     } else if (claimed) {
-      await this.deliveries?.settleSend(
-        claimed.keyed.claim,
-        outcome,
-        accepted,
-        records
-      );
+      committed =
+        (await this.deliveries?.settleSend(
+          claimed.keyed.claim,
+          outcome,
+          accepted,
+          records,
+          acceptedCallsOf(claimed.keyed.claim, calls)
+        )) ?? true;
     }
 
-    // Taken, not iterated in place: a call that answers late adds its
-    // actions afterwards, and the late finisher runs those.
-    await runActions(deferred.splice(0), runAfterSend);
+    // A keyed send's actions run once its outcome is committed: not at all
+    // when the commit failed, since the send that takes its claim over runs
+    // them, and from the late finisher when a call is still unsettled.
+    // Taken, not iterated in place: a late call adds its actions afterwards.
+    if (committed && !(claimed && late)) {
+      await runActions(deferred.splice(0), runAfterSend);
+    }
 
     return outcome;
   }
@@ -928,7 +954,14 @@ export class EmailService extends BaseService {
     envelope: SendEnvelope,
     maxToPerMessage: number | undefined
   ): ReadonlySet<string> {
-    if (!claim || claim.acceptedCalls.size === 0) {
+    // Calls are read only from a claim the earlier version wrote, which has no
+    // recipients: a claim that records both is read by its recipients, which
+    // keep a refused copy apart from the call that carried it.
+    if (
+      !claim ||
+      claim.acceptedRecipients.size > 0 ||
+      claim.acceptedCalls.size === 0
+    ) {
       return claim?.acceptedRecipients ?? new Set<string>();
     }
     const calls = messagesFor(envelope, maxToPerMessage).filter(message =>
@@ -973,6 +1006,7 @@ export class EmailService extends BaseService {
       run: (value: EmailAfterSendValue) => Promise<void>;
     };
   }): Promise<void> {
+    let committed = true;
     const renewal = setInterval(() => {
       void late.keyed?.renew();
     }, LEASE_RENEWAL_MS);
@@ -990,22 +1024,27 @@ export class EmailService extends BaseService {
           late.previouslyAccepted,
           calls
         );
-        await this.deliveries?.settleSend(
-          late.keyed.claim,
-          outcome,
-          accepted,
-          late.records
-        );
+        committed =
+          (await this.deliveries?.settleSend(
+            late.keyed.claim,
+            outcome,
+            accepted,
+            late.records,
+            acceptedCallsOf(late.keyed.claim, calls)
+          )) ?? true;
       }
     } catch (error) {
+      committed = false;
       warnQuietly(this.logger, "A late email send could not be finished", {
         error,
       });
     } finally {
       clearInterval(renewal);
     }
-    // The actions of the calls that answered late, after their commit.
-    await runActions(late.actions.deferred.splice(0), late.actions.run);
+    // The actions still waiting, after the commit, and only once it holds.
+    if (committed) {
+      await runActions(late.actions.deferred.splice(0), late.actions.run);
+    }
   }
 
   /**
@@ -1097,7 +1136,10 @@ export class EmailService extends BaseService {
           // An answer that is itself unknown, as the cancellation gives a
           // keyless adapter that honours it, may still be processing at the
           // provider: its claim is held to the lease limit all the same.
-          if (answered.outcome.failure?.unknown) await untilTime(limitAt);
+          // Only a keyed call has a claim to hold.
+          if (context.keyed && answered.outcome.failure?.unknown) {
+            await untilTime(limitAt);
+          }
           return answered;
         }
         // Never answered: recorded as without an answer, and its claim let go.

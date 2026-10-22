@@ -16,6 +16,7 @@ import {
   type CallOutcome,
 } from "../services/recipient-outcomes";
 import type { SendEnvelope } from "../services/recipients";
+import { combinedFailure } from "../services/send-failures";
 
 vi.mock("../../../lib/env", () => ({
   env: { NEXTLY_SECRET: "test-secret-that-is-long-enough-for-derivation" },
@@ -55,6 +56,21 @@ describe("the recipients a keyed retry sends to", () => {
 
     expect(pending.to).toEqual(["b@example.com"]);
     expect(pending.cc).toEqual([]);
+  });
+});
+
+describe("a split send's combined failure", () => {
+  it("is unknown when any of its calls' outcome is", () => {
+    expect(
+      combinedFailure([
+        { retryable: true, status: 429, reason: "rate limited" },
+        {
+          retryable: true,
+          unknown: true,
+          reason: "The email provider's answer was lost.",
+        },
+      ])
+    ).toMatchObject({ unknown: true });
   });
 });
 

@@ -569,6 +569,12 @@ export async function settleSendClaim(
 export interface SettleOptions {
   keep: boolean;
   acceptedRecipients?: readonly string[];
+  /**
+   * The calls wholly accepted, by provider key, written beside the
+   * recipients so an instance of the earlier version that reads only those
+   * keeps the progress too, during a rolling upgrade or a rollback.
+   */
+  acceptedCalls?: readonly string[];
   now?: number;
 }
 
@@ -600,7 +606,13 @@ export async function settleClaimIn(
         ? { state: "sent", result: JSON.stringify(outcome), settledAt: now }
         : {
             state: accepted.length > 0 ? "partial" : "failed",
-            result: accepted.length > 0 ? JSON.stringify({ accepted }) : null,
+            result:
+              accepted.length > 0
+                ? JSON.stringify({
+                    accepted,
+                    acceptedLegs: options.acceptedCalls ?? [],
+                  })
+                : null,
             leaseExpiresAt: now,
             settledAt: now,
           }

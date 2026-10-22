@@ -249,6 +249,29 @@ describe.each(getConfiguredTestDialects())(
       expect(seen).toEqual(["sent"]);
     }, 120_000);
 
+    it("runs no after-send action for a keyed send whose commit failed, and runs it once on the retry", async () => {
+      const t = await boot(dialect);
+      const actions: unknown[] = [];
+      getFilterRegistry().addAction(FilterSeams.EmailAfterSend, value => {
+        actions.push(value.to);
+      });
+      const deliveries = container.get<EmailDeliveryService>(
+        "emailDeliveryService"
+      );
+      const settle = deliveries.settleWithin.bind(deliveries);
+      deliveries.settleWithin = async () => {
+        deliveries.settleWithin = settle;
+        throw new Error("stopped before the commit");
+      };
+
+      await t.nextly.email.send(keyed);
+      expect(actions).toEqual([]);
+
+      await wait(500);
+      await t.nextly.email.send(keyed);
+      expect(actions).toEqual([A]);
+    }, 120_000);
+
     it("runs the after-send action of a split send's call that answers late", async () => {
       const t = await boot(dialect);
       const actions: unknown[] = [];
@@ -259,7 +282,8 @@ describe.each(getConfiguredTestDialects())(
       hold.only = B;
 
       await t.nextly.email.send({ ...keyed, to: [A, B] });
-      expect(actions).toEqual([A]);
+      // A keyed send's actions wait for its commit, after the late call.
+      expect(actions).toEqual([]);
       hold.release?.();
       await wait(300);
 

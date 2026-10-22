@@ -180,7 +180,13 @@ export function combinedFailure(
   const present = failures.filter(
     (failure): failure is EmailFailure => failure !== undefined
   );
-  return present.find(failure => failure.retryable) ?? present[0];
+  // A failure whose delivery cannot be known first: a message may have been
+  // delivered, and a caller must not read the send as definitely not sent.
+  return (
+    present.find(failure => failure.unknown) ??
+    present.find(failure => failure.retryable) ??
+    present[0]
+  );
 }
 
 /**

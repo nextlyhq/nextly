@@ -510,6 +510,28 @@ describe.each(getConfiguredTestDialects())(
       expect(messages.map(m => m.options.to)).toEqual([A, B, B]);
     }, 120_000);
 
+    it("writes a partly delivered claim's accepted calls too, for an instance of the earlier version", async () => {
+      const { t, keyedOneAtATime } = await boot(dialect);
+      behaviour.failures = 1;
+      behaviour.failFor = B;
+
+      await t.nextly.email.send({
+        to: [A, B],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: KEY,
+        providerId: keyedOneAtATime,
+      });
+
+      const [claim] = await t.adapter.select<{ result: string }>(
+        "email_send_claims"
+      );
+      expect(JSON.parse(claim.result)).toEqual({
+        accepted: ["to:0"],
+        acceptedLegs: [messages[0].options.idempotencyKey],
+      });
+    }, 120_000);
+
     it("refuses the key with a different message, through the Direct API", async () => {
       const { t } = await boot(dialect);
       await t.nextly.email.send({
