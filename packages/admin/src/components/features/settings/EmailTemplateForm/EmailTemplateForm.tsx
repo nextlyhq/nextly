@@ -83,7 +83,9 @@ function ContentColumn({
     "fromOverride",
   ]);
   return (
-    <div className="flex min-h-full flex-col gap-4 p-4 lg:p-6">
+    // The column scrolls, so its cards keep their height (a shrunk card clips
+    // its own fields); only the body grows into what is left.
+    <div className="flex min-h-full flex-col gap-4 p-4 *:shrink-0 lg:p-6">
       <OwnershipNotices
         record={template}
         ownsContent={owns}
@@ -100,7 +102,10 @@ function ContentColumn({
           preheader={preheader}
         />
       )}
-      <div className="overflow-hidden rounded-lg border border-border">
+      <div
+        data-testid="workbench-envelope"
+        className="overflow-hidden rounded-lg border border-border"
+      >
         <EnvelopeBar
           control={form.control}
           isPending={isPending}

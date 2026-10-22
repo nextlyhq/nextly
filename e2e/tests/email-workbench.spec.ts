@@ -2,8 +2,12 @@
  * The email workbench against a real server, at phone, tablet and desktop
  * widths: the preview keeps its width beside the side sheet, nothing scrolls
  * sideways, a phone gets its tabs and its fixed bar, and an owner's email is
- * overridden, reset and the reset undone.
+ * overridden, reset and the reset undone. Set `WORKBENCH_SHOTS_DIR` to keep
+ * a screenshot of each width.
  */
+import { writeFileSync } from "node:fs";
+import path from "node:path";
+
 import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
@@ -31,7 +35,7 @@ async function openWelcome(page: Page): Promise<void> {
   await gotoAdmin(page, "/email");
   // Below tablet width the list is cards; either way the name links in.
   await page
-    .getByRole("link", { name: "Welcome", exact: true })
+    .getByRole("link", { name: "Welcome Email", exact: true })
     .filter({ visible: true })
     .first()
     .click();
@@ -86,6 +90,17 @@ for (const size of WIDTHS) {
       await page.getByRole("tab", { name: "Preview" }).click();
       await expect(page.getByTestId("workbench-phone-preview")).toBeVisible();
     } else {
+      // The envelope card keeps its height: a shrunk card clips its own
+      // fields, which a visibility check can't see.
+      const envelope = await box(page, "workbench-envelope");
+      const from = await page
+        .getByRole("textbox", { name: "From" })
+        .boundingBox();
+      expect(
+        from!.y + from!.height,
+        "From inside its card"
+      ).toBeLessThanOrEqual(envelope.y + envelope.height);
+
       await page.getByRole("button", { name: "Details" }).click();
       await expect(page.getByTestId("workbench-sheet")).toBeVisible();
       const preview = await box(page, "workbench-preview");
@@ -102,10 +117,13 @@ for (const size of WIDTHS) {
     }
 
     expect(await scrollsSideways(page), `at ${size.width}`).toBe(false);
+    const shot = await page.screenshot({ fullPage: true });
     await testInfo.attach(`workbench-${size.width}`, {
-      body: await page.screenshot({ fullPage: true }),
+      body: shot,
       contentType: "image/png",
     });
+    const dir = process.env.WORKBENCH_SHOTS_DIR;
+    if (dir) writeFileSync(path.join(dir, `workbench-${size.width}.png`), shot);
   });
 }
 

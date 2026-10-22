@@ -154,8 +154,28 @@ function UnsavedMark({ isDirty }: { isDirty: boolean }) {
   );
 }
 
+/**
+ * A button's label: shown on a desktop, read by a screen reader everywhere.
+ * On a tablet the secondary actions keep only their icons, so the name keeps
+ * the room it needs.
+ */
+function ActionLabel({
+  tier,
+  children,
+}: {
+  tier: WorkbenchTier;
+  children: string;
+}) {
+  return (
+    <span className={tier === "tablet" ? "sr-only" : undefined}>
+      {children}
+    </span>
+  );
+}
+
 /** The page's actions, beside the name above a phone's width. */
 function HeaderActions({
+  tier,
   hasData,
   sheet,
   onToggleSheet,
@@ -166,6 +186,7 @@ function HeaderActions({
   onOverride,
 }: Pick<
   WorkbenchHeaderProps,
+  | "tier"
   | "hasData"
   | "sheet"
   | "onToggleSheet"
@@ -174,7 +195,7 @@ function HeaderActions({
   | "onSendTest"
   | "ownsContent"
   | "onOverride"
->) {
+> & { tier: WorkbenchTier }) {
   return (
     <div className="flex shrink-0 items-center gap-2">
       {hasData ? (
@@ -185,7 +206,7 @@ function HeaderActions({
           onClick={() => onToggleSheet("data")}
         >
           <Braces className="h-4 w-4" />
-          Data
+          <ActionLabel tier={tier}>Data</ActionLabel>
         </Button>
       ) : null}
       <Button
@@ -195,7 +216,7 @@ function HeaderActions({
         onClick={() => onToggleSheet("details")}
       >
         <SlidersHorizontal className="h-4 w-4" />
-        Details
+        <ActionLabel tier={tier}>Details</ActionLabel>
       </Button>
       {isEdit ? (
         <Button
@@ -205,7 +226,7 @@ function HeaderActions({
           onClick={onSendTest}
         >
           <Send className="h-4 w-4" />
-          Send test
+          <ActionLabel tier={tier}>Send test</ActionLabel>
         </Button>
       ) : null}
       {ownsContent ? null : (

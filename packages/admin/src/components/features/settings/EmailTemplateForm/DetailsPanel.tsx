@@ -137,7 +137,7 @@ export function DetailsPanel({
                 readOnly={!ownsContent}
                 disabled={isPending}
                 placeholder="Sent when a customer asks to reset their password"
-                className="min-h-16 text-sm"
+                className="min-h-24 text-sm"
               />
             </FormControl>
             <FormMessage />
