@@ -97,6 +97,22 @@ export interface FieldGroupWriteAccess {
 }
 
 /**
+ * The access a write made as `caller` hands its field-group save: the one
+ * spelling of it, so every door states trust, user and key scope alike.
+ */
+export function fieldGroupWriteAccessOf(caller: {
+  overrideAccess?: boolean;
+  user?: Record<string, unknown>;
+  authenticatedScope?: AuthenticatedScope;
+}): FieldGroupWriteAccess {
+  return {
+    overrideAccess: caller.overrideAccess === true,
+    user: caller.user,
+    authenticatedScope: caller.authenticatedScope,
+  };
+}
+
+/**
  * Parameters for saving component data as part of a parent entry operation.
  */
 export interface SaveComponentDataParams {

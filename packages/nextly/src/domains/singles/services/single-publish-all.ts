@@ -40,7 +40,10 @@ import {
 import type { Logger } from "../../../shared/types";
 import { recordTransitionEvents } from "../../content-events/write-event";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
-import type { FieldGroupWriteAccess } from "../../field-groups/services/field-group-mutation-service";
+import {
+  fieldGroupWriteAccessOf,
+  type FieldGroupWriteAccess,
+} from "../../field-groups/services/field-group-mutation-service";
 import { readCompanionLocaleStatusAll } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
@@ -533,11 +536,7 @@ export class SinglePublishAllService extends BaseService {
       lockedRow,
       priorCompanionStatuses,
       pending,
-      {
-        overrideAccess: options.overrideAccess === true,
-        user: options.user,
-        authenticatedScope: options.authenticatedScope,
-      }
+      fieldGroupWriteAccessOf(options)
     );
 
     let publishVersionNo: number | null = null;

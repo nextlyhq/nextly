@@ -145,6 +145,54 @@ export async function resolvePromotedDocument(
 }
 
 /**
+ * What an UPDATE writes once the field rules have judged it: everything the
+ * writer may set, as sent, and every denied value inside a container at the
+ * value the row already holds.
+ *
+ * A group or a repeater is stored whole, in one column, so the rules deleting
+ * a denied child from the update would write the container without it and
+ * clear a value the writer may not change. That is the same question a
+ * promotion asks of a denied field, so it is answered the same way, by
+ * `restoreDenied`: the update keeps its own allowed values and takes the row's
+ * for the rest, including a denied child the update left out, since leaving it
+ * out of a container that is written whole would delete it.
+ *
+ * A denied field at the top level is left out, as the rules leave it: its
+ * column is not written, so the row keeps it without being handed it back.
+ * The row is narrowed to the update's own keys for the same reason, so a field
+ * the update does not name is never written.
+ */
+export async function keepDeniedAtStored(input: {
+  /** The update as the caller sent it, before any rule has run. */
+  update: Record<string, unknown>;
+  /** The row as it stands, in the update's representation. */
+  stored: Record<string, unknown>;
+  /** Applies the field rules to the document it is given, in place. */
+  applyRules: (document: Record<string, unknown>) => Promise<void>;
+}): Promise<Record<string, unknown>> {
+  const permitted = detachData(input.update);
+  await input.applyRules(permitted);
+  const stored: Record<string, unknown> = {};
+  for (const key of Object.keys(input.update)) {
+    if (hasOwn(input.stored, key)) stored[key] = input.stored[key];
+  }
+  // Judged too, so a denied child the update omits is told from an allowed
+  // one it deletes: only the first is put back.
+  const permittedStored = detachData(stored);
+  await input.applyRules(permittedStored);
+  const out = restoreDenied(
+    input.update,
+    permitted,
+    stored,
+    permittedStored
+  ) as Record<string, unknown>;
+  for (const key of Object.keys(input.update)) {
+    if (!hasOwn(permitted, key)) delete out[key];
+  }
+  return out;
+}
+
+/**
  * Every path the rules deny, on the promoted document AND on the live row,
  * both kept whole.
  *

@@ -127,11 +127,18 @@ import {
 } from "../../content-events/write-event";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import {
+  applyInlineFieldGroupWriteAccess,
+  keepDeniedAtStoredOnUpdate,
+} from "../../field-groups/field-group-write-access";
+import {
   liveFieldGroupReadPass,
   sharedPerTransaction,
 } from "../../field-groups/live-read-access";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
-import type { FieldGroupWriteAccess } from "../../field-groups/services/field-group-mutation-service";
+import {
+  fieldGroupWriteAccessOf,
+  type FieldGroupWriteAccess,
+} from "../../field-groups/services/field-group-mutation-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import {
@@ -2055,6 +2062,58 @@ export class CollectionMutationService extends BaseService {
       }
     }
     return componentFieldData;
+  }
+
+  /**
+   * The field rules of the field groups a create stores inline, inside its
+   * groups and repeaters, applied in place: no field-group save reaches an
+   * instance stored in its container's column, so it is judged here, as the
+   * caller the entry's own fields are judged as.
+   */
+  private async judgeInlineFieldGroups(args: {
+    data: Record<string, unknown>;
+    fields: FieldDefinition[];
+    params: {
+      user?: UserContext;
+      overrideAccess?: boolean;
+      authenticatedScope?: AuthenticatedScope;
+    };
+    executor?: unknown;
+  }): Promise<void> {
+    await applyInlineFieldGroupWriteAccess({
+      data: args.data,
+      fields: args.fields as unknown as FieldConfig[],
+      source: this.fieldGroupDataService,
+      operation: "create",
+      access: fieldGroupWriteAccessOf(args.params),
+      executor: args.executor,
+    });
+  }
+
+  /**
+   * The field rules an update applies beyond the entry's own fields, with
+   * every denied value inside a container kept as the row holds it, in place;
+   * see `keepDeniedAtStoredOnUpdate`.
+   */
+  private async keepDeniedFieldsAtStored(args: {
+    data: Record<string, unknown>;
+    stored: Record<string, unknown>;
+    fields: FieldDefinition[];
+    params: {
+      user?: UserContext;
+      overrideAccess?: boolean;
+      authenticatedScope?: AuthenticatedScope;
+    };
+    executor?: unknown;
+  }): Promise<void> {
+    await keepDeniedAtStoredOnUpdate({
+      data: args.data,
+      stored: args.stored,
+      fields: args.fields as unknown as FieldConfig[],
+      source: this.fieldGroupDataService,
+      access: fieldGroupWriteAccessOf(args.params),
+      executor: args.executor,
+    });
   }
 
   /**
@@ -4828,6 +4887,13 @@ export class CollectionMutationService extends BaseService {
         overrideAccess: params.overrideAccess,
         grants: writeGrants,
       });
+      // The field groups this entry stores inline, inside its groups and
+      // repeaters, by their own rules: no field-group save reaches them.
+      await this.judgeInlineFieldGroups({
+        data: finalData,
+        fields,
+        params,
+      });
 
       // Field-level beforeValidate hooks transform values ahead of the
       // validation gate (functions resolved via the field-level registry).
@@ -5144,11 +5210,7 @@ export class CollectionMutationService extends BaseService {
             req: params.user ? { user: params.user } : {},
             // Who the write is made as, for each instance's own field rules: the
             // caller and trust the entry's own fields are judged with.
-            access: {
-              overrideAccess: params.overrideAccess === true,
-              user: params.user,
-              authenticatedScope: params.authenticatedScope,
-            },
+            access: fieldGroupWriteAccessOf(params),
           });
         }
 
@@ -7600,11 +7662,7 @@ export class CollectionMutationService extends BaseService {
         req: params.user ? { user: params.user } : {},
         // Who the write is made as, for each instance's own field rules: the
         // caller and trust the entry's own fields are judged with.
-        access: {
-          overrideAccess: params.overrideAccess === true,
-          user: params.user,
-          authenticatedScope: params.authenticatedScope,
-        },
+        access: fieldGroupWriteAccessOf(params),
       });
     }
     // The response and hooks see the draft as an ordinary read, so
@@ -8062,6 +8120,18 @@ export class CollectionMutationService extends BaseService {
         authenticatedScope: params.authenticatedScope,
         overrideAccess: params.overrideAccess,
         id: params.entryId,
+      });
+      // The field groups this entry stores inline, by their own rules, and
+      // what a denied field inside a container held kept as the row holds it.
+      await this.keepDeniedFieldsAtStored({
+        data: finalData,
+        stored: this.readShapeEventDocument(
+          existingEntry as Record<string, unknown>,
+          fields,
+          tableName
+        ),
+        fields,
+        params,
       });
 
       // Field-level beforeValidate hooks transform values ahead of the
@@ -9272,11 +9342,7 @@ export class CollectionMutationService extends BaseService {
                 req: params.user ? { user: params.user } : {},
                 // Who the write is made as, for each instance's own field rules: the
                 // caller and trust the entry's own fields are judged with.
-                access: {
-                  overrideAccess: params.overrideAccess === true,
-                  user: params.user,
-                  authenticatedScope: params.authenticatedScope,
-                },
+                access: fieldGroupWriteAccessOf(params),
               }
             );
           }
@@ -10940,6 +11006,15 @@ export class CollectionMutationService extends BaseService {
         authenticatedScope: params.authenticatedScope,
         overrideAccess: params.overrideAccess,
       });
+      // The field groups this entry stores inline, inside its groups and
+      // repeaters, by their own rules: no field-group save reaches them.
+      await this.judgeInlineFieldGroups({
+        data: finalData,
+        fields,
+        params,
+        // Still inside the caller-owned transaction.
+        executor: tx.getDrizzle(),
+      });
 
       // Field-level beforeValidate hooks transform values ahead of the
       // validation gate (functions resolved via the field-level registry). A
@@ -11149,11 +11224,7 @@ export class CollectionMutationService extends BaseService {
         fields,
         data: componentFieldData,
         user: params.user,
-        access: {
-          overrideAccess: params.overrideAccess === true,
-          user: params.user,
-          authenticatedScope: params.authenticatedScope,
-        },
+        access: fieldGroupWriteAccessOf(params),
       });
 
       // Junction rows, the version snapshot, the outbox event and the
@@ -11510,6 +11581,16 @@ export class CollectionMutationService extends BaseService {
         authenticatedScope: params.authenticatedScope,
         overrideAccess: params.overrideAccess,
         id: entryId,
+      });
+      // The field groups this entry stores inline, by their own rules, and
+      // what a denied field inside a container held kept as the row holds it.
+      await this.keepDeniedFieldsAtStored({
+        data: finalData,
+        stored: this.readShapeEventDocument(existingEntry, fields, tableName),
+        fields,
+        params,
+        // Still inside the caller-owned transaction.
+        executor: tx.getDrizzle(),
       });
 
       // Field-level beforeValidate hooks transform values ahead of the
@@ -12107,11 +12188,7 @@ export class CollectionMutationService extends BaseService {
           fields,
           data: componentFieldData,
           user: params.user,
-          access: {
-            overrideAccess: params.overrideAccess === true,
-            user: params.user,
-            authenticatedScope: params.authenticatedScope,
-          },
+          access: fieldGroupWriteAccessOf(params),
         });
       }
 

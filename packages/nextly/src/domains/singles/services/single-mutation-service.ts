@@ -85,7 +85,9 @@ import {
   recordTransitionEvents,
   recordWriteEvent,
 } from "../../content-events/write-event";
+import { keepDeniedAtStoredOnUpdate } from "../../field-groups/field-group-write-access";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
+import { fieldGroupWriteAccessOf } from "../../field-groups/services/field-group-mutation-service";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
@@ -1217,6 +1219,15 @@ export class SingleMutationService extends BaseService {
         user: options.user,
         overrideAccess: options.overrideAccess,
         id: existingDoc.id,
+      });
+      // The field groups this Single stores inline, by their own rules, and
+      // what a denied field inside a container held kept as the row holds it.
+      await keepDeniedAtStoredOnUpdate({
+        data: currentData,
+        stored: existingDeserialized,
+        fields: fieldConfigs,
+        source: this.fieldGroupDataService,
+        access: fieldGroupWriteAccessOf(options),
       });
       await runFieldHooks({
         kind: "single",
@@ -2658,11 +2669,7 @@ export class SingleMutationService extends BaseService {
               req: options.user ? { user: options.user } : {},
               // Who the write is made as, for each instance's own field rules:
               // the caller and trust the Single's own fields are judged with.
-              access: {
-                overrideAccess: options.overrideAccess === true,
-                user: options.user,
-                authenticatedScope: options.authenticatedScope,
-              },
+              access: fieldGroupWriteAccessOf(options),
             });
             if (
               !holdEdit &&
