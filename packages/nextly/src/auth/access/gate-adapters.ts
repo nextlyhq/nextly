@@ -53,7 +53,7 @@ import {
 } from "./resolve-actor";
 
 /** Allowed, or refused with the kind of refusal the gate words. */
-export type GateVerdict =
+export type GateVerdict = (
   | { readonly allowed: true }
   | {
       readonly allowed: false;
@@ -64,7 +64,15 @@ export type GateVerdict =
        */
       readonly refusal: "insufficient" | "unauthenticated" | "failed";
       readonly error?: unknown;
-    };
+    }
+) & {
+  /**
+   * A signed-in user's rule answer when it was not a yes or no (`null`, a
+   * string): the gate judges it truthy, and `ctx.caller.can` hands it back as
+   * it came.
+   */
+  readonly ruleAnswer?: unknown;
+};
 
 const ALLOWED: GateVerdict = Object.freeze({ allowed: true });
 const INSUFFICIENT: GateVerdict = Object.freeze({
@@ -491,9 +499,14 @@ async function ruleVerdict({
   const outcome = await askRule(actor, q.action, target);
   const today =
     outcome.declared && !("threw" in outcome) && Boolean(outcome.value);
-  return verdictOf(
+  const verdict = verdictOf(
     await deviate("rule-alone-for-people", today, () =>
       decidedFrom(actor, q.action, target, outcome)
     )
   );
+  return outcome.declared &&
+    !("threw" in outcome) &&
+    typeof outcome.value !== "boolean"
+    ? { ...verdict, ruleAnswer: outcome.value }
+    : verdict;
 }

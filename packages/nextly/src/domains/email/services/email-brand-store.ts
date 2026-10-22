@@ -1,6 +1,6 @@
 /**
  * Where the site's email brand settings are kept: the one row of
- * `nextly_email_brand`.
+ * `email_brand`.
  *
  * Read on every render that uses a layout, so a read never fails for want of
  * the row or the table: a site that never saved settings, or whose database

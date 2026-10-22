@@ -286,7 +286,7 @@ export function getCoreSchema(
     // `nextly_notices` — each person's own notices. In the snapshot for the
     // reason every table above is: it is the set `nextly migrate` creates.
     ...Object.values(noticesTables(dialect)),
-    // `nextly_email_brand` — the site's email brand settings, one row. In the
+    // `email_brand` — the site's email brand settings, one row. In the
     // snapshot for the reason every table above is.
     ...Object.values(emailBrandTables(dialect)),
   ];
@@ -394,6 +394,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "email_providers",
   "email_templates",
   "email_deliveries",
+  "email_brand",
   EMAIL_SEND_CLAIMS_TABLE,
   "nextly_schema_events",
   "nextly_i18n_archive",
@@ -410,7 +411,6 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_webhooks",
   "nextly_webhook_deliveries",
   "nextly_notices",
-  "nextly_email_brand",
 ] as const;
 
 /**

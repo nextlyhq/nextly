@@ -28,7 +28,7 @@
  * @module domains/widgets/condition-probe
  */
 
-import { callerMayPerform } from "../../auth/authenticated-scope";
+import { callerMayPerform } from "../../auth/access/route-gate-adapters";
 import {
   COLLECTION_DEFINITION_ACTION,
   COLLECTION_DEFINITION_RESOURCE,
