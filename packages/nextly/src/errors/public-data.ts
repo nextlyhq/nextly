@@ -63,16 +63,24 @@ export type ReleaseProblemsPublicData = {
 };
 
 /**
- * The shared fields a language's pending change may not publish, because
- * someone else published newer values for them after the change began: the
- * names the caller may read, and a count of the others, so a refusal never
- * reveals that a protected field exists. Names only, never values.
+ * Why a publish of a language's pending change was refused over the fields
+ * every language shares, and which fields: the names the caller may read, and
+ * a count of the others, so a refusal never reveals that a protected field
+ * exists. Names only, never values.
+ *
+ * - `shared-fields-out-of-date`: someone else published newer values for
+ *   these fields after the change began. Taking the live values brings the
+ *   change up to date.
+ * - `shared-edits-unordered`: publishing every language at once, two
+ *   languages changed these fields and which changed them last can no longer
+ *   be confirmed. Publishing one language at a time settles it.
  *
  * @experimental
  */
-export type OutOfDateSharedFieldsPublicData = {
-  outOfDate: string[];
-  hiddenOutOfDate?: number;
+export type SharedFieldsConflictPublicData = {
+  reason: "shared-fields-out-of-date" | "shared-edits-unordered";
+  fields: string[];
+  hiddenCount?: number;
 };
 
 export type PublicData =
@@ -81,5 +89,5 @@ export type PublicData =
   | RateLimitPublicData
   | SingleAbsentPublicData
   | ReleaseProblemsPublicData
-  | OutOfDateSharedFieldsPublicData
+  | SharedFieldsConflictPublicData
   | undefined;

@@ -157,7 +157,10 @@ describe.each(getConfiguredTestDialects())(
       const refused = await save(entries, id, "en", { status: "published" });
 
       expect(refused.statusCode).toBe(409);
-      expect(refused.publicData).toEqual({ outOfDate: ["hero"] });
+      expect(refused.publicData).toEqual({
+        reason: "shared-fields-out-of-date",
+        fields: ["hero"],
+      });
       expect((await liveDoc(entries, id, "en")).heading).toBe("new hero");
     });
 
@@ -169,7 +172,10 @@ describe.each(getConfiguredTestDialects())(
       const refused = await save(entries, id, "en", { status: "published" });
 
       expect(refused.statusCode).toBe(409);
-      expect(refused.publicData).toEqual({ outOfDate: ["tags"] });
+      expect(refused.publicData).toEqual({
+        reason: "shared-fields-out-of-date",
+        fields: ["tags"],
+      });
       expect((await liveDoc(entries, id, "en")).tags).toEqual([t2]);
     });
 

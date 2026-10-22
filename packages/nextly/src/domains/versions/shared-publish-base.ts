@@ -27,7 +27,7 @@
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
-import { NextlyError } from "../../errors";
+import { NextlyError, type SharedFieldsConflictPublicData } from "../../errors";
 import {
   applyFieldReadAccess,
   type CallerGrants,
@@ -79,7 +79,8 @@ function alignedWith(value: unknown, other: unknown): unknown {
   }
 }
 
-function sameValue(a: unknown, b: unknown): boolean {
+/** Whether two stored values of one shared field are the same value. */
+export function sameSharedValue(a: unknown, b: unknown): boolean {
   return comparable(alignedWith(a, b)) === comparable(alignedWith(b, a));
 }
 
@@ -120,8 +121,8 @@ export function differingFields(
   return shared.filter(name => {
     const view = views?.get(name);
     return view
-      ? !sameValue(view(a[name]), view(b[name]))
-      : !sameValue(a[name], b[name]);
+      ? !sameSharedValue(view(a[name]), view(b[name]))
+      : !sameSharedValue(a[name], b[name]);
   });
 }
 
@@ -228,7 +229,10 @@ export async function readableFieldNames(
   names: readonly string[],
   document: Record<string, unknown>
 ): Promise<{ named: string[]; hidden: number }> {
-  const readable = { ...document };
+  // A whole copy: the read rules remove nested values too, and a shallow copy
+  // would remove them from the caller's document, which it may write or judge
+  // again.
+  const readable = structuredClone(document);
   await applyFieldReadAccess({
     kind: reader.kind,
     slug: reader.slug,
@@ -242,9 +246,20 @@ export async function readableFieldNames(
   return { named, hidden: names.length - named.length };
 }
 
+const CONFLICT_MESSAGES: Record<
+  SharedFieldsConflictPublicData["reason"],
+  string
+> = {
+  "shared-fields-out-of-date":
+    "Shared values were published by someone else after this change began. Take the live values for them, then publish.",
+  "shared-edits-unordered":
+    "Two languages changed these shared fields and the order can't be confirmed. Publish one language at a time.",
+};
+
 /**
- * The refusal of a pending change holding out-of-date shared values: a
- * conflict naming each field the caller may read, and counting the others.
+ * The refusal of a publish over shared fields: a conflict saying why, naming
+ * each field the caller may read, and counting the others. Out of date unless
+ * another reason is given.
  *
  * @param live The live document the fields were judged against, which the
  *   field read rules are shown.
@@ -254,8 +269,10 @@ export async function sharedValuesConflict(
     entryId: string;
     fields: readonly string[];
     live: Record<string, unknown>;
+    reason?: SharedFieldsConflictPublicData["reason"];
   }
 ): Promise<NextlyError> {
+  const reason = args.reason ?? "shared-fields-out-of-date";
   const { named, hidden } = await readableFieldNames(
     args,
     args.fields,
@@ -263,14 +280,14 @@ export async function sharedValuesConflict(
   );
   return NextlyError.conflict({
     reason: "state",
-    message:
-      "Shared values were published by someone else after this change began. Take the live values for them, then publish.",
+    message: CONFLICT_MESSAGES[reason],
     data: {
-      outOfDate: named,
-      ...(hidden > 0 ? { hiddenOutOfDate: hidden } : {}),
+      reason,
+      fields: named,
+      ...(hidden > 0 ? { hiddenCount: hidden } : {}),
     },
     logContext: {
-      reason: "shared-values-out-of-date",
+      reason,
       kind: args.kind,
       slug: args.slug,
       entryId: args.entryId,
@@ -383,12 +400,50 @@ export async function editedSharedFields(
 }
 
 /**
- * When a language last edited each of these shared fields: the version from
- * which its history has held the pending change's value. A later save of
- * other fields leaves that version where it was, so two languages' edits of
- * one field are ordered by the edits themselves, not by whichever language
- * saved anything last. A field whose value no recorded version holds counts
- * as edited at the language's newest version.
+ * When a language last edited one shared field, as far as the document's
+ * history can show: after version `after` and no later than version `by`.
+ * The edit is the version from which the language's history has held the
+ * pending change's value, so a later save of other fields leaves it where it
+ * was. That version is certain (`after` is `by - 1`) only when no version
+ * before it, back to the one that held another value, is missing: retention
+ * may have removed the language's real edit and left a later save that only
+ * kept the value. A value no kept version holds has no `by` at all
+ * (`Infinity`): the version that recorded it is gone.
+ */
+export interface SharedEditTime {
+  after: number;
+  by: number;
+}
+
+/** Version numbers of a document's durable versions within `(from, to)`. */
+async function versionNumbersBetween(
+  tx: TransactionContext,
+  ref: VersionRef,
+  from: number,
+  to: number
+): Promise<Set<number>> {
+  if (to - from <= 1) return new Set();
+  const rows = await tx.select<{ versionNo: number }>(VERSIONS_TABLE, {
+    columns: ["versionNo"],
+    where: {
+      and: [
+        { column: "scopeKind", op: "=", value: ref.scopeKind },
+        { column: "scopeSlug", op: "=", value: ref.scopeSlug },
+        { column: "entryId", op: "=", value: ref.entryId },
+        { column: "isAutosave", op: "=", value: false },
+        { column: "versionNo", op: ">", value: from },
+        { column: "versionNo", op: "<", value: to },
+      ],
+    },
+  });
+  return new Set(rows.map(row => row.versionNo));
+}
+
+/**
+ * {@link SharedEditTime} of each of these shared fields in a language's
+ * pending change. Version numbers run in one sequence per document, so a
+ * number missing between two of the language's versions is a version
+ * retention removed.
  */
 export async function sharedEditOrder(
   tx: TransactionContext,
@@ -398,20 +453,55 @@ export async function sharedEditOrder(
     fields: readonly string[];
     pending: Record<string, unknown>;
   }
-): Promise<Map<string, number>> {
+): Promise<Map<string, SharedEditTime>> {
   const { ref, locale, fields, pending } = args;
-  const order = new Map<string, number>();
+  const order = new Map<string, SharedEditTime>();
   if (fields.length === 0) return order;
   const snapshots = await recentVersions(tx, ref, locale);
-  for (const name of fields) {
-    let since = snapshots[0]?.versionNo ?? 0;
+  // Fewer versions than were asked for: the language's whole history.
+  const wholeHistory = snapshots.length < BASE_SEARCH_DEPTH;
+  const spans = fields.map(name => {
+    let by = Number.POSITIVE_INFINITY;
+    let before: number | null = wholeHistory ? 0 : null;
     for (const row of snapshots) {
-      if (!sameValue(row.values[name], pending[name])) break;
-      since = row.versionNo;
+      if (!sameSharedValue(row.values[name], pending[name])) {
+        before = row.versionNo;
+        break;
+      }
+      by = row.versionNo;
     }
-    order.set(name, since);
+    return { name, before, by };
+  });
+  const known = spans.flatMap(span =>
+    span.before === null ? [] : [span.before]
+  );
+  const present =
+    known.length === 0
+      ? new Set<number>()
+      : await versionNumbersBetween(
+          tx,
+          ref,
+          Math.min(...known),
+          Math.max(...spans.map(span => span.by).filter(Number.isFinite), 0)
+        );
+  for (const { name, before, by } of spans) {
+    order.set(name, editTime(before, by, present));
   }
   return order;
+}
+
+/** The edit's time from the version that held another value, when known. */
+function editTime(
+  before: number | null,
+  by: number,
+  present: ReadonlySet<number>
+): SharedEditTime {
+  if (before === null || !Number.isFinite(by))
+    return { after: before ?? 0, by };
+  for (let no = before + 1; no < by; no += 1) {
+    if (!present.has(no)) return { after: before, by };
+  }
+  return { after: by - 1, by };
 }
 
 /**
@@ -508,14 +598,24 @@ export async function takenLiveValues(
     byHand?: ReadonlySet<string>;
   }
 ): Promise<TakenLiveValues> {
-  const taken = await readableFieldNames(reader, took.taken, took.live);
-  const left = await readableFieldNames(reader, took.remaining, took.live);
-  const byHand = left.named.filter(name => took.byHand?.has(name));
+  // One verdict for both lists, so a field is never judged against a
+  // document the other judgement changed.
+  const { named } = await readableFieldNames(
+    reader,
+    [...took.taken, ...took.remaining],
+    took.live
+  );
+  const readable = new Set(named);
+  const taken = took.taken.filter(name => readable.has(name));
+  const left = took.remaining.filter(name => readable.has(name));
+  const hiddenTaken = took.taken.length - taken.length;
+  const hiddenLeft = took.remaining.length - left.length;
+  const byHand = left.filter(name => took.byHand?.has(name));
   return {
-    taken: taken.named,
-    ...(taken.hidden > 0 ? { hiddenTaken: taken.hidden } : {}),
-    outOfDate: left.named,
-    ...(left.hidden > 0 ? { hiddenOutOfDate: left.hidden } : {}),
+    taken,
+    ...(hiddenTaken > 0 ? { hiddenTaken } : {}),
+    outOfDate: left,
+    ...(hiddenLeft > 0 ? { hiddenOutOfDate: hiddenLeft } : {}),
     ...(byHand.length > 0
       ? { copyByHand: { fields: byHand, reason: COPY_BY_HAND_REASON } }
       : {}),

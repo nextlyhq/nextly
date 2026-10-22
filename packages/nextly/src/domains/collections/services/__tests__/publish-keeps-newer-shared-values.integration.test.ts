@@ -196,7 +196,10 @@ describe.each(getConfiguredTestDialects())(
       }).toEqual({
         success: false,
         statusCode: 409,
-        publicData: { outOfDate: ["articleCount"] },
+        publicData: {
+          reason: "shared-fields-out-of-date",
+          fields: ["articleCount"],
+        },
       });
       // Nothing changed: 13 is live, English's title is not, and English's
       // pending change is still there to bring up to date.
@@ -219,7 +222,10 @@ describe.each(getConfiguredTestDialects())(
       const refused = await publish(entries, id, "en");
 
       expect(refused.statusCode).toBe(409);
-      expect(refused.publicData).toEqual({ outOfDate: ["articleCount"] });
+      expect(refused.publicData).toEqual({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      });
       expect((await liveValues(entries, id, "en")).articleCount).toBe(13);
     });
 
@@ -313,7 +319,10 @@ describe.each(getConfiguredTestDialects())(
       const refused = await publish(entries, id, "en");
 
       expect(refused.statusCode).toBe(409);
-      expect(refused.publicData).toEqual({ outOfDate: ["articleCount"] });
+      expect(refused.publicData).toEqual({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      });
       expect((await liveValues(entries, id, "en")).articleCount).toBe(13);
     });
 
@@ -354,7 +363,10 @@ describe.each(getConfiguredTestDialects())(
 
       const refused = await publish(entries, id, "en");
       expect(refused.statusCode).toBe(409);
-      expect(refused.publicData).toEqual({ outOfDate: ["articleCount"] });
+      expect(refused.publicData).toEqual({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      });
 
       expect(
         (
@@ -408,7 +420,10 @@ describe.each(getConfiguredTestDialects())(
       expect(base).toHaveLength(1);
       // And it still answers the question it was kept for.
       const refused = await publish(entries, id, "en");
-      expect(refused.publicData).toEqual({ outOfDate: ["articleCount"] });
+      expect(refused.publicData).toEqual({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      });
     });
 
     it("names a shared text whose new value differs only in spacing from JSON", async () => {
@@ -431,7 +446,10 @@ describe.each(getConfiguredTestDialects())(
       const refused = await publish(entries, id, "en");
 
       expect(refused.statusCode).toBe(409);
-      expect(refused.publicData).toEqual({ outOfDate: ["note"] });
+      expect(refused.publicData).toEqual({
+        reason: "shared-fields-out-of-date",
+        fields: ["note"],
+      });
     });
 
     it("keeps the base an in-place save made current when retention keeps one version", async () => {

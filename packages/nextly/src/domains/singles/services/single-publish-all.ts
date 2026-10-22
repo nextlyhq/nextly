@@ -24,6 +24,7 @@ import { actorForWrite } from "../../../auth/request-actor";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../../../errors/nextly-error";
+import type { SharedFieldsConflictPublicData } from "../../../errors/public-data";
 import {
   buildSingleRevalidationIntent,
   readRevalidateConfig,
@@ -55,8 +56,10 @@ import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
 import {
   editedSharedFields,
   outOfDateSharedFields,
-  sharedEditOrder,
   releaseAllSharedBases,
+  sameSharedValue,
+  sharedEditOrder,
+  type SharedEditTime,
   sharedValuesConflict,
   snapshotRecord,
   type SharedViews,
@@ -978,7 +981,9 @@ export class SinglePublishAllService extends BaseService {
    *
    * Otherwise every change began from the live shared values, and each brings
    * only the shared fields it edited itself, measured against its own base.
-   * Where two edited one field, the later save's value is kept. Combining the
+   * Where two edited one field, the later edit's value is kept, and the
+   * publish is refused, naming the field, when history can no longer show
+   * which edit was later. Combining the
    * edits of changes that are all current is not the field-by-field merge an
    * out-of-date change was refused to avoid: no change here is behind live,
    * so none of its values reverts another's. Every change is then written with
@@ -1014,21 +1019,25 @@ export class SinglePublishAllService extends BaseService {
         translated: new Set(companion.localizedFields.map(f => f.name)),
       }
     );
+    const caller = { options, promoteGrants };
     await this.assertNoneOutOfDate(
       tx,
       plan,
       pending,
       { live, shared, views },
-      {
-        options,
-        promoteGrants,
-      }
+      caller
     );
     // A translated component's shared sub-fields are judged above but not
     // merged: each language's component also holds its own translated values,
     // so it goes live as that language saved it.
     const merged = shared.filter(name => !byHand.has(name));
-    const state = await this.mergedSharedState(tx, plan, pending, live, merged);
+    const state = await this.mergedSharedState(
+      tx,
+      plan,
+      pending,
+      { live, shared: merged },
+      caller
+    );
     return pending.map(draft => withSharedState(draft, merged, state));
   }
 
@@ -1042,10 +1051,7 @@ export class SinglePublishAllService extends BaseService {
       shared: readonly string[];
       views: SharedViews;
     },
-    caller: {
-      options: PublishAllSingleLocalesOptions;
-      promoteGrants?: () => Promise<CallerGrants>;
-    }
+    caller: SharedFieldsCaller
   ): Promise<void> {
     const ref = this.workingDraftRef(plan);
     const stale = new Set<string>();
@@ -1061,13 +1067,28 @@ export class SinglePublishAllService extends BaseService {
       for (const name of fields) stale.add(name);
     }
     if (stale.size === 0) return;
+    throw await this.sharedConflict(plan, caller, {
+      fields: [...stale],
+      live: document.live,
+    });
+  }
+
+  /** A refusal over shared fields, named as this caller may read them. */
+  private sharedConflict(
+    plan: PublishPlan,
+    caller: SharedFieldsCaller,
+    refused: {
+      fields: string[];
+      live: Record<string, unknown>;
+      reason?: SharedFieldsConflictPublicData["reason"];
+    }
+  ): Promise<NextlyError> {
     const { options } = caller;
-    throw await sharedValuesConflict({
+    return sharedValuesConflict({
       kind: "single",
       slug: plan.slug,
       entryId: plan.existingDoc.id,
-      fields: [...stale],
-      live: document.live,
+      ...refused,
       user: options.user,
       // A routed request runs trusted but still answers to the caller's field
       // read rules.
@@ -1082,20 +1103,19 @@ export class SinglePublishAllService extends BaseService {
    * The live shared values, each overlaid by the change that edited it last:
    * where two changes edited one field, the one whose edit of THAT field is
    * the later, from its language's version history, whichever language saved
-   * anything last.
+   * anything last. Later only where history proves it: a field whose edits it
+   * can no longer order is refused, naming it, and never decided by a guess.
    */
   private async mergedSharedState(
     tx: TransactionContext,
     plan: PublishPlan,
     pending: readonly PendingChange[],
-    live: Record<string, unknown>,
-    shared: readonly string[]
+    document: { live: Record<string, unknown>; shared: readonly string[] },
+    caller: SharedFieldsCaller
   ): Promise<Record<string, unknown>> {
+    const { live, shared } = document;
     const ref = this.workingDraftRef(plan);
-    const state: Record<string, unknown> = Object.fromEntries(
-      shared.map(name => [name, live[name]])
-    );
-    const editedAt = new Map<string, number>();
+    const edits = new Map<string, SharedEdit[]>();
     for (const draft of pending) {
       const values = snapshotRecord(draft.snapshot);
       const edited = await editedSharedFields(tx, {
@@ -1111,11 +1131,28 @@ export class SinglePublishAllService extends BaseService {
         pending: values,
       });
       for (const name of edited) {
-        const at = order.get(name) ?? 0;
-        if (at < (editedAt.get(name) ?? -1)) continue;
-        editedAt.set(name, at);
-        state[name] = values[name];
+        const time = order.get(name) ?? { after: 0, by: 0 };
+        edits.set(name, [
+          ...(edits.get(name) ?? []),
+          { value: values[name], ...time },
+        ]);
       }
+    }
+    const state: Record<string, unknown> = Object.fromEntries(
+      shared.map(name => [name, live[name]])
+    );
+    const unordered: string[] = [];
+    for (const [name, candidates] of edits) {
+      const winner = latestEdit(candidates);
+      if (winner) state[name] = winner.value;
+      else unordered.push(name);
+    }
+    if (unordered.length > 0) {
+      throw await this.sharedConflict(plan, caller, {
+        fields: unordered,
+        live,
+        reason: "shared-edits-unordered",
+      });
     }
     return state;
   }
@@ -1639,6 +1676,34 @@ function languagesGoingLiveAsStored(
 }
 
 /** A pending change carrying the one shared state a publish of every language leaves. */
+/** Who publishes, for the field read rules a refusal answers to. */
+interface SharedFieldsCaller {
+  options: PublishAllSingleLocalesOptions;
+  promoteGrants?: () => Promise<CallerGrants>;
+}
+
+/** One language's edit of a shared field, and when it was made. */
+interface SharedEdit extends SharedEditTime {
+  value: unknown;
+}
+
+/**
+ * The edit history proves later than every edit of another value, or null
+ * when none is: two edits whose times overlap can't be ordered.
+ */
+function latestEdit(edits: readonly SharedEdit[]): SharedEdit | null {
+  return (
+    edits.find(edit =>
+      edits.every(
+        other =>
+          other === edit ||
+          sameSharedValue(other.value, edit.value) ||
+          edit.after >= other.by
+      )
+    ) ?? null
+  );
+}
+
 function withSharedState(
   draft: PendingChange,
   shared: readonly string[],

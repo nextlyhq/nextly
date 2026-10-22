@@ -119,7 +119,10 @@ describe.each(getConfiguredTestDialects())(
       const refused = await save(singles, "en", { status: "published" });
 
       expect(refused.statusCode).toBe(409);
-      expect(refused.publicData).toEqual({ outOfDate: ["hero"] });
+      expect(refused.publicData).toEqual({
+        reason: "shared-fields-out-of-date",
+        fields: ["hero"],
+      });
       expect(await heading(singles)).toBe("new hero");
     });
 
@@ -164,7 +167,10 @@ describe.each(getConfiguredTestDialects())(
 
       const refused = await save(singles, "en", { status: "published" });
       expect(refused.statusCode).toBe(409);
-      expect(refused.publicData).toEqual({ outOfDate: ["banner"] });
+      expect(refused.publicData).toEqual({
+        reason: "shared-fields-out-of-date",
+        fields: ["banner"],
+      });
 
       // A take cannot match the banner's instances to English's safely, so it
       // says so rather than copying the Spanish banner over English's words.

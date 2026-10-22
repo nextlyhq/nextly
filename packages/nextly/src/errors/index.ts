@@ -10,5 +10,5 @@ export type {
   RateLimitPublicData,
   SingleAbsentPublicData,
   ReleaseProblemsPublicData,
-  OutOfDateSharedFieldsPublicData,
+  SharedFieldsConflictPublicData,
 } from "./public-data";
