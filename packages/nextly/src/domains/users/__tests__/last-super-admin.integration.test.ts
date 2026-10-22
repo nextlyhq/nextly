@@ -18,6 +18,11 @@
  * deadlock or both land; with it the second is refused once the first commits.
  * SQLite serializes write transactions, so there the second simply queues.
  *
+ * Taking super-admin authority from someone by a role change is a
+ * super-admin person's act, as giving it is: an admin who may change users
+ * and roles but is no super-admin is refused, as is a full-access key made by
+ * a super-admin, each with a super-admin person's control beside it.
+ *
  * Run on every configured dialect: the lock and the locking reads are
  * statements each dialect builds and runs itself.
  */
@@ -30,8 +35,14 @@ process.env.NEXTLY_SECRET =
 import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-/** Run once, when the next guard has decided to let a removal through. */
+type GuardModule = typeof import("../services/last-super-admin");
+
+/**
+ * The real guard of the install under test, and a hook run once when the next
+ * guard has decided to let a removal through.
+ */
 const afterGuard = vi.hoisted(() => ({
+  real: undefined as GuardModule | undefined,
   run: undefined as (() => Promise<void>) | undefined,
 }));
 
@@ -39,15 +50,19 @@ const afterGuard = vi.hoisted(() => ({
 // the removal through holds that transaction open with the guard's locks and
 // none of the write's, which is the moment a second removal's guard would
 // otherwise read the same rows and decide the same way.
+//
+// The guard forwards to the real one `loadModules` imported after its reset,
+// rather than to one taken when this factory first ran: the mock outlives a
+// reset, and a guard kept from before it would read the caller another
+// module graph's request pinned, which is none.
 vi.mock("../services/last-super-admin", async importOriginal => {
-  const real =
-    await importOriginal<typeof import("../services/last-super-admin")>();
+  const first = await importOriginal<GuardModule>();
   return {
-    ...real,
+    ...first,
     refuseRemovingLastSuperAdmin: async (
-      ...args: Parameters<typeof real.refuseRemovingLastSuperAdmin>
+      ...args: Parameters<GuardModule["refuseRemovingLastSuperAdmin"]>
     ) => {
-      await real.refuseRemovingLastSuperAdmin(...args);
+      await (afterGuard.real ?? first).refuseRemovingLastSuperAdmin(...args);
       const hook = afterGuard.run;
       if (hook) {
         afterGuard.run = undefined;
@@ -75,6 +90,9 @@ import {
  */
 async function loadModules() {
   vi.resetModules();
+  afterGuard.real = await vi.importActual<GuardModule>(
+    "../services/last-super-admin"
+  );
   const harness = await import("../../../plugins/test-nextly");
   const routes = await import("../../../routeHandler");
   const database = await import("../../../database/index");
@@ -149,7 +167,10 @@ function direct(): { users: DirectUsers; roles: DirectRoles } {
   };
 }
 
-/** What every case starts from: who exists, and the key REST calls carry. */
+/** Who a REST call comes from: a signed-in person, or an API key. */
+type Caller = { session: string } | { key: string };
+
+/** What every case starts from: who exists, and who REST calls come from. */
 interface Install {
   /** The install's first account, which its creation makes super-admin. */
   first: string;
@@ -158,8 +179,16 @@ interface Install {
   editorRole: string;
   /** A permission to build roles from: a role must grant at least one. */
   readUsers: string;
-  /** A full-access key of an account that manages users but is no super-admin. */
-  operatorKey: string;
+  /**
+   * The person REST calls come from unless a case names another: a
+   * super-admin, so may take super-admin away, whose role expires, so the
+   * guard never counts it among the super-admins it keeps.
+   */
+  steward: string;
+  /** An account that may change users and roles, and is no super-admin. */
+  operator: string;
+  /** A full-access key the first account, a super-admin, made. */
+  superAdminKey: string;
 }
 
 async function makeUser(email: string): Promise<string> {
@@ -216,10 +245,9 @@ async function boot(on: TestDialect): Promise<Install> {
   expect(superAdmin).toBeDefined();
   const superAdminRole = String(superAdmin.id);
 
-  // The caller REST requests come from: it may manage users, and is not a
-  // super-admin itself, so it is never one of the accounts being counted.
-  // The core permissions are seeded by first-run setup, which this instance
-  // never ran, so they are seeded here as setup seeds them.
+  // An admin who may manage users and roles, and is no super-admin. The core
+  // permissions are seeded by first-run setup, which this instance never ran,
+  // so they are seeded here as setup seeds them.
   await m.seedPermissions(handle.adapter, { silent: true });
   const slugs = [
     "read-users",
@@ -256,10 +284,16 @@ async function boot(on: TestDialect): Promise<Install> {
       input: { name: string; tokenType: string; expiresIn: string }
     ) => Promise<{ key: string }>;
   };
-  const { key } = await apiKeys.createApiKey(operator, {
-    name: "operator",
+  const { key } = await apiKeys.createApiKey(first, {
+    name: "automation",
     tokenType: "full-access",
     expiresIn: "never",
+  });
+  // Super-admin until tomorrow: may take super-admin away, and is never one
+  // of the permanent super-admins the guard keeps.
+  const steward = await makeUser("steward@example.com");
+  await grant(steward, superAdminRole, {
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
   });
 
   return {
@@ -267,7 +301,9 @@ async function boot(on: TestDialect): Promise<Install> {
     superAdminRole,
     editorRole: editor.item.id,
     readUsers: userGrants[0],
-    operatorKey: key,
+    steward,
+    operator,
+    superAdminKey: key,
   };
 }
 
@@ -289,8 +325,7 @@ async function rest(
   method: "POST" | "PATCH" | "DELETE",
   path: string[],
   body?: Record<string, unknown>,
-  /** Sign in as this user, rather than with the operator's key. */
-  as?: string
+  as: Caller = { session: install.steward }
 ): Promise<Response> {
   const handlers = m.createDynamicHandlers({
     config: m.sanitizeConfig({ collections: [] }),
@@ -298,9 +333,9 @@ async function rest(
   const req = new Request(`http://localhost/api/${path.join("/")}`, {
     method,
     headers: {
-      ...(as === undefined
-        ? { authorization: `Bearer ${install.operatorKey}` }
-        : { cookie: await sessionCookie(as) }),
+      ...("key" in as
+        ? { authorization: `Bearer ${as.key}` }
+        : { cookie: await sessionCookie(as.session) }),
       ...(body ? { "content-type": "application/json" } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
@@ -624,6 +659,140 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("taking super-admin from someone while another remains", () => {
+      /** Whom a change takes super-admin from, and the role it goes through. */
+      interface Target {
+        id: string;
+        role: string;
+      }
+
+      /** A second super-admin holding the role itself. */
+      async function holder(install: Install): Promise<Target> {
+        return {
+          id: await secondSuperAdmin(install),
+          role: install.superAdminRole,
+        };
+      }
+
+      /** A second super-admin through a role built on `super-admin`. */
+      async function heir(install: Install): Promise<Target> {
+        const owner = await direct().roles.create({
+          data: {
+            name: "Owner",
+            slug: "owner",
+            permissionIds: [install.readUsers],
+          },
+        });
+        await raw().insert(m.getDialectTables().roleInherits).values({
+          id: "owner-inherits-super-admin",
+          parentRoleId: owner.item.id,
+          childRoleId: install.superAdminRole,
+        });
+        const id = await makeUser("heir@example.com");
+        await grant(id, owner.item.id);
+        return { id, role: owner.item.id };
+      }
+
+      const takings: Array<{
+        name: string;
+        target: (install: Install) => Promise<Target>;
+        take: (
+          install: Install,
+          target: Target,
+          as: Caller
+        ) => Promise<Response>;
+      }> = [
+        {
+          name: "replacing their roles",
+          target: holder,
+          take: (i, t, as) =>
+            rest(i, "PATCH", ["users", t.id], { roles: [i.editorRole] }, as),
+        },
+        {
+          name: "replacing their roles while deactivating them",
+          target: holder,
+          take: (i, t, as) =>
+            rest(
+              i,
+              "PATCH",
+              ["users", t.id],
+              { roles: [i.editorRole], isActive: false },
+              as
+            ),
+        },
+        {
+          name: "unassigning the role",
+          target: holder,
+          take: (i, t, as) =>
+            rest(i, "DELETE", ["users", t.id, "roles", t.role], undefined, as),
+        },
+        {
+          name: "removing the inheritance of their role",
+          target: heir,
+          take: (i, t, as) =>
+            rest(
+              i,
+              "DELETE",
+              ["roles", t.role, "children", i.superAdminRole],
+              undefined,
+              as
+            ),
+        },
+        {
+          name: "replacing their role's childRoleIds",
+          target: heir,
+          take: (i, t, as) =>
+            rest(i, "PATCH", ["roles", t.role], { childRoleIds: [] }, as),
+        },
+        {
+          name: "deleting their role",
+          target: heir,
+          take: (i, t, as) =>
+            rest(i, "DELETE", ["roles", t.role], undefined, as),
+        },
+      ];
+
+      describe.each(takings)("by $name", taking => {
+        it("is refused to an admin who isn't a super-admin, and they stay one", async () => {
+          const install = await boot(on);
+          const target = await taking.target(install);
+          expect(await activeSuperAdmin(target.id)).toBe(true);
+
+          const res = await taking.take(install, target, {
+            session: install.operator,
+          });
+
+          expect(res.status, await res.text()).toBe(403);
+          expect(await activeSuperAdmin(target.id)).toBe(true);
+        });
+
+        it("is refused to a full-access key a super-admin made, and they stay one", async () => {
+          const install = await boot(on);
+          const target = await taking.target(install);
+
+          const res = await taking.take(install, target, {
+            key: install.superAdminKey,
+          });
+
+          expect(res.status, await res.text()).toBe(403);
+          expect(await activeSuperAdmin(target.id)).toBe(true);
+        });
+
+        it("is carried out for a super-admin person", async () => {
+          const install = await boot(on);
+          const target = await taking.target(install);
+
+          const res = await taking.take(install, target, {
+            session: install.first,
+          });
+
+          expect(res.status, await res.text()).toBeLessThan(300);
+          expect(await activeSuperAdmin(target.id)).toBe(false);
+          expect(await activeSuperAdmin(install.first)).toBe(true);
+        });
+      });
+    });
+
     describe("a super-admin through a role that inherits the role", () => {
       /** A role built on `super-admin`, as creating a role with a base role writes it. */
       async function ownerRole(
@@ -762,7 +931,7 @@ describe.each(getConfiguredTestDialects())(
             roleId: install.superAdminRole,
             expiresAt: IN_AN_HOUR().toISOString(),
           },
-          install.first
+          { session: install.first }
         );
         const text = await res.text();
         expect(res.status, text).toBe(409);
@@ -782,7 +951,7 @@ describe.each(getConfiguredTestDialects())(
             roleId: install.superAdminRole,
             expiresAt: IN_AN_HOUR().toISOString(),
           },
-          install.first
+          { session: install.first }
         );
         expect(res.status, await res.text()).toBeLessThan(300);
         expect(
