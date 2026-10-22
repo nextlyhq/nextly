@@ -163,14 +163,6 @@
       "types": "./dist/api/email-templates-draft-preview.d.ts",
       "import": "./dist/api/email-templates-draft-preview.mjs"
     },
-    "./api/email-send": {
-      "types": "./dist/api/email-send.d.ts",
-      "import": "./dist/api/email-send.mjs"
-    },
-    "./api/email-send-template": {
-      "types": "./dist/api/email-send-template.d.ts",
-      "import": "./dist/api/email-send-template.mjs"
-    },
     "./api/singles": {
       "types": "./dist/api/singles.d.ts",
       "import": "./dist/api/singles.mjs"

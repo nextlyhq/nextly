@@ -24,8 +24,6 @@
     "src/__tests__/routeHandler-direct-branches.test.ts",
     "src/api/api-keys.test.ts",
     "src/api/dashboard.test.ts",
-    "src/api/email-send-template.test.ts",
-    "src/api/email-send.test.ts",
     "src/api/general-settings.test.ts",
     "src/api/media.upload.test.ts",
     "src/api/schema-journal.test.ts",

@@ -33,6 +33,9 @@ vi.mock("../../services/lib/permissions", async importOriginal => {
   return {
     ...actual,
     listRoleSlugsForUser: vi.fn(async () => ["editor"]),
+    // A session's permission, as the decision asks it where no rule names
+    // the action; super-admin authority is part of the same answer.
+    hasPermission: vi.fn(async () => false),
     // The same answer by the name `readCaller` asks through: the module calls
     // its own binding, which a mock of the export above cannot reach.
     resolveRoleSlugs: vi.fn(
@@ -43,6 +46,7 @@ vi.mock("../../services/lib/permissions", async importOriginal => {
 });
 
 import { container } from "../../di/container";
+import { hasPermission } from "../../services/lib/permissions";
 import {
   requireAuthentication,
   requirePermission,
@@ -56,6 +60,7 @@ import type { PluginRoute, PluginRouteContext } from "./route-types";
 
 const reqAuth = vi.mocked(requireAuthentication);
 const reqPerm = vi.mocked(requirePermission);
+const holds = vi.mocked(hasPermission);
 
 /**
  * The owner is allowed EVERYTHING, deliberately.
@@ -173,6 +178,8 @@ beforeEach(() => {
   reqPerm.mockReset();
   checkAccess.mockClear();
   checkAccess.mockResolvedValue(true);
+  holds.mockReset();
+  holds.mockResolvedValue(false);
   getRegisteredAccess.mockReset();
   getRegisteredAccess.mockReturnValue(undefined);
   container.register(
@@ -198,24 +205,24 @@ describe("a plugin route is told what the caller may do", () => {
     await expect(seen!.caller!.can("read", "posts")).resolves.toBe(true);
     await expect(seen!.caller!.can("create", "posts")).resolves.toBe(false);
     // A super-admin OWNER does not lift a key's scope: the bypass lives on the
-    // session path, and `checkAccess` (which holds it) is never consulted.
+    // session path, and neither the owner's permissions nor `checkAccess` is
+    // consulted.
     expect(checkAccess).not.toHaveBeenCalled();
+    expect(holds).not.toHaveBeenCalled();
   });
 
-  it("answers can() for a session through the RBAC service, super-admin included", async () => {
+  it("answers can() for a session from its permissions, in both directions", async () => {
     reqAuth.mockResolvedValue(sessionAuth as never);
+    // The session holds create on posts and nothing else; no rule names
+    // either action, so the permission decides.
+    holds.mockImplementation(
+      async (_userId: string, action: string, resource: string) =>
+        action === "create" && resource === "posts"
+    );
     await runPluginRoute(req(), match(route({}), baseCtx()));
 
     await expect(seen!.caller!.can("create", "posts")).resolves.toBe(true);
-    expect(checkAccess).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: "u1",
-        operation: "create",
-        resource: "posts",
-      })
-    );
-
-    checkAccess.mockResolvedValue(false);
+    expect(holds).toHaveBeenCalledWith("u1", "create", "posts", undefined);
     await expect(seen!.caller!.can("delete", "posts")).resolves.toBe(false);
   });
 

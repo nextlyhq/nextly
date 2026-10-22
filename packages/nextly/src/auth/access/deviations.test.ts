@@ -4,7 +4,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { deviate, recordingDeviations } from "./deviations";
+import { aboutSubject, deviate, recordingDeviations } from "./deviations";
 
 describe("a deviation", () => {
   it("answers today's answer, whatever the decision says", async () => {
@@ -54,5 +54,35 @@ describe("a deviation", () => {
     });
     expect((await first).deviations).toEqual(["no-service"]);
     expect((await second).deviations).toEqual(["claimed-super-admin"]);
+  });
+});
+
+describe("a deviation about a subject", () => {
+  it("is recorded under the subject it was decided for, and for the whole work too", async () => {
+    const { deviations, bySubject } = await recordingDeviations(async () => {
+      // Decided side by side, as a list or a dashboard decides its items.
+      await Promise.all([
+        aboutSubject("posts", async () => {
+          await new Promise(resolve => setTimeout(resolve, 5));
+          await deviate("rule-alone-for-people", true, () => false);
+        }),
+        aboutSubject("pages", () => deviate("no-service", true, () => false)),
+        aboutSubject("agreed", () => deviate("no-service", true, () => true)),
+      ]);
+      await deviate("claimed-super-admin", true, () => false);
+    });
+    expect(deviations).toEqual([
+      "rule-alone-for-people",
+      "no-service",
+      "claimed-super-admin",
+    ]);
+    expect(bySubject.get("posts")).toEqual(["rule-alone-for-people"]);
+    expect(bySubject.get("pages")).toEqual(["no-service"]);
+    // A subject whose answer agreed recorded nothing.
+    expect(bySubject.has("agreed")).toBe(false);
+  });
+
+  it("runs the work as it is when nothing listens", async () => {
+    expect(await aboutSubject("posts", async () => "done")).toBe("done");
   });
 });
