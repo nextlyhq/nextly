@@ -44,6 +44,7 @@ describeEachDialect("a translated unique field", dialect => {
       fields: [
         { name: "handle", type: "text", unique: true },
         { name: "note", type: "text" },
+        { name: "code", type: "text", unique: true, localized: false },
       ],
     });
     expect(created.success, JSON.stringify(created)).toBe(true);
@@ -76,7 +77,19 @@ describeEachDialect("a translated unique field", dialect => {
 
     const second = await write("en", { handle: "about" });
     expect(second.success).toBe(false);
-    expect(second).toMatchObject({ statusCode: 409 });
+    // Refused exactly as a duplicate of a shared unique field is.
+    await write("en", { code: "c1" });
+    const shared = await write("en", { code: "c1" });
+    expect(second).toMatchObject({ statusCode: 409, code: "DUPLICATE" });
+    expect({
+      statusCode: second.statusCode,
+      code: second.code,
+      message: second.message,
+    }).toEqual({
+      statusCode: shared.statusCode,
+      code: shared.code,
+      message: shared.message,
+    });
 
     const french = await write("en", { handle: "a-propos" });
     expect(french.success, JSON.stringify(french)).toBe(true);
