@@ -81,6 +81,26 @@ const ROW_MENU: readonly RowMenuEntry[] = [
   },
 ];
 
+/** One action a reader may take on a release, named as every surface names it. */
+export interface ReleaseActionOffer {
+  id: ReleaseRowAction | "schedule";
+  label: string;
+  destructive?: boolean;
+}
+
+/**
+ * The actions a reader may take on a release, in order: the one list every
+ * surface offers them from, so the row menu and the release's own page offer
+ * the same actions under the same names.
+ */
+export function releaseActionsFor(release: Release): ReleaseActionOffer[] {
+  return ROW_MENU.filter(entry => entry.offered(release)).map(entry => ({
+    id: entry.id,
+    label: entry.label(release),
+    destructive: entry.destructive,
+  }));
+}
+
 /** The actions a reader may take on a release, for its row menu. */
 export function rowActionsFor(
   release: Release,
@@ -92,11 +112,9 @@ export function rowActionsFor(
     onSelect: () =>
       navigateTo(buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })),
   };
-  const offered = ROW_MENU.filter(entry => entry.offered(release)).map(
+  const offered = releaseActionsFor(release).map(
     (entry): RowAction<Release> => ({
-      id: entry.id,
-      label: entry.label(release),
-      destructive: entry.destructive,
+      ...entry,
       onSelect: () => open({ release, action: entry.id }),
     })
   );
@@ -108,10 +126,13 @@ export function ReleaseRowDialogs({
   dialog,
   open,
   onOpenChange,
+  onDone,
 }: {
   dialog: OpenDialog | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Called once a publish, cancel or delete has been done. */
+  onDone?: (action: ReleaseRowAction) => void;
 }) {
   if (!dialog) return null;
   if (dialog.action === "schedule") {
@@ -133,6 +154,7 @@ export function ReleaseRowDialogs({
       action={dialog.action}
       open={open}
       onOpenChange={onOpenChange}
+      onDone={onDone}
     />
   );
 }

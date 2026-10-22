@@ -109,6 +109,11 @@ export interface ReleaseRowActionDialogProps {
   action: ReleaseRowAction;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * Called once the action has been done, for a surface that has to move on
+   * from it: the release's own page leaves a release that was deleted.
+   */
+  onDone?: (action: ReleaseRowAction) => void;
 }
 
 export function ReleaseRowActionDialog({
@@ -116,6 +121,7 @@ export function ReleaseRowActionDialog({
   action,
   open,
   onOpenChange,
+  onDone,
 }: ReleaseRowActionDialogProps) {
   // All three hooks, every render: which one runs is chosen by `action`, and a
   // hook called conditionally would change the order React reads them in.
@@ -142,7 +148,10 @@ export function ReleaseRowActionDialog({
   const confirm = () => {
     setAfterLoss(null);
     const done = {
-      onSuccess: () => onOpenChange(false),
+      onSuccess: () => {
+        onOpenChange(false);
+        onDone?.(action);
+      },
       onError: (error: unknown) => void onFailed(error),
     };
     if (action === "publish") publish.mutate(undefined, done);
