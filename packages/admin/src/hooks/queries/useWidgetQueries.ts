@@ -671,16 +671,7 @@ function asResult(value: unknown): WidgetResult | undefined {
 
   if (result.op === "count") return asCount(result.total, result.atLeast);
 
-  if (result.op === "list") {
-    // The MEMBERS as well as the array, because a row is dereferenced per field
-    // by whatever draws it, and `[null]` is an array that fails there rather
-    // than here -- the same shape as the `total` above, one level down.
-    if (!Array.isArray(result.items)) return undefined;
-    const items: unknown[] = result.items;
-    if (!items.every(isObject)) return undefined;
-    const fields = asResultFields(result.fields);
-    return { op: "list", items, ...(fields && { fields }) };
-  }
+  if (result.op === "list") return asList(result.items, result.fields);
 
   if (result.op === "groupBy") {
     return asGrouped(
@@ -695,22 +686,38 @@ function asResult(value: unknown): WidgetResult | undefined {
     return asTimeline(result.points, result.interval);
   }
 
-  // A declared widget's own data, for the component it draws itself with. Any
-  // value JSON carries is one: the server held it to the transport rule before
-  // it was sent, and the component is what reads its shape.
-  if (result.op === "data" && "data" in result) {
-    // JSON.parse answers only JSON values, and every JSON value is data a
-    // component may be handed, so the parsed value is that type as it is.
-    return {
-      op: "data",
-      data: (result as { data: unknown }).data as Extract<
-        WidgetResult,
-        { op: "data" }
-      >["data"],
-    };
-  }
+  if (result.op === "data") return asData(result);
 
   return undefined;
+}
+
+/**
+ * A list answer: the MEMBERS as well as the array, because a row is
+ * dereferenced per field by whatever draws it, and `[null]` is an array that
+ * fails there rather than here -- the same shape as a count's `total`, one
+ * level down.
+ */
+function asList(items: unknown, fields: unknown): WidgetResult | undefined {
+  if (!Array.isArray(items)) return undefined;
+  const rows: unknown[] = items;
+  if (!rows.every(isObject)) return undefined;
+  const described = asResultFields(fields);
+  return { op: "list", items: rows, ...(described && { fields: described }) };
+}
+
+/**
+ * A declared widget's own data, for the component it draws itself with. Any
+ * value JSON carries is one: the server held it to the transport rule before
+ * it was sent, and the component is what reads its shape.
+ */
+function asData(result: object): WidgetResult | undefined {
+  if (!("data" in result)) return undefined;
+  // JSON.parse answers only JSON values, and every JSON value is data a
+  // component may be handed, so the parsed value is that type as it is.
+  return {
+    op: "data",
+    data: result.data as Extract<WidgetResult, { op: "data" }>["data"],
+  };
 }
 
 /**

@@ -17,7 +17,11 @@
  * @module components/features/widgets/archetypes/table
  */
 
-import { declaredAnswerFields, selectsNothing } from "./cell-text";
+import {
+  declaredAnswerFields,
+  rowsOrInstead,
+  selectsNothing,
+} from "./cell-text";
 import { TieredRows } from "./tiered-rows";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
@@ -28,25 +32,12 @@ export const tableAccepts: ArchetypeAccepts = definition => {
   return selectsNothing(definition.title, "table", "column");
 };
 
-export const tableBody: ArchetypeBody = (result, definition) => {
-  if (result.op !== "list") {
-    return {
-      ok: false,
-      message: `"${definition.title}" expected a table of rows, but the query returned a ${result.op}.`,
-    };
-  }
-
-  if (result.items.length === 0) {
-    // The frame's one empty state, worded for a table. Source-neutral: the card may read any
-    // collection's, system's or plugin's data, so it names no kind of row it cannot know.
-    return {
-      ok: true,
-      empty: {
-        title: "Nothing here yet",
-        detail: "Rows appear here once something matches this card.",
-      },
-    };
-  }
+export const tableBody: ArchetypeBody = (answer, definition) => {
+  const result = rowsOrInstead(answer, definition.title, {
+    expected: "a table of rows",
+    rows: "Rows",
+  });
+  if (!("op" in result)) return result;
 
   // A card core answered on the server describes its own rows: the rows are its
   // data function's own answer, so they are not ones a query heading could

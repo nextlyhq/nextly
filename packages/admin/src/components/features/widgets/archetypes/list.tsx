@@ -20,7 +20,11 @@
  * @module components/features/widgets/archetypes/list
  */
 
-import { declaredAnswerFields, selectsNothing } from "./cell-text";
+import {
+  declaredAnswerFields,
+  rowsOrInstead,
+  selectsNothing,
+} from "./cell-text";
 import { TieredRows } from "./tiered-rows";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
@@ -57,28 +61,12 @@ export const listAccepts: ArchetypeAccepts = definition => {
  */
 export const LIST_RENDERED_FIELDS = 2;
 
-export const listBody: ArchetypeBody = (result, definition) => {
-  if (result.op !== "list") {
-    return {
-      ok: false,
-      message: `"${definition.title}" expected a list, but the query returned a ${result.op}.`,
-    };
-  }
-
-  if (result.items.length === 0) {
-    // Before the fields are read: a card core answered on the server names its
-    // fields by its first row, and an answer with no rows is empty, not one
-    // that names nothing to draw.
-    // The frame's one empty state, worded for a list. Source-neutral: the card may read any
-    // collection's, system's or plugin's data, so it names no kind of row it cannot know.
-    return {
-      ok: true,
-      empty: {
-        title: "Nothing here yet",
-        detail: "Items appear here once something matches this card.",
-      },
-    };
-  }
+export const listBody: ArchetypeBody = (answer, definition) => {
+  const result = rowsOrInstead(answer, definition.title, {
+    expected: "a list",
+    rows: "Items",
+  });
+  if (!("op" in result)) return result;
 
   // A card core answered on the server has no query: its answer says which
   // fields it is drawn by (`declaredAnswerFields`).

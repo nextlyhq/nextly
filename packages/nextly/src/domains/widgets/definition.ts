@@ -1391,39 +1391,46 @@ export function archetypeResultProblem(
  * reader may not return it to is the size range's own failure, in other words.
  */
 function validateWidths(d: Partial<WidgetDefinition>): void {
-  const allowed: readonly unknown[] | undefined = d.allowedWidths;
-  const known = (value: unknown) =>
-    (WIDGET_WIDTHS as readonly unknown[]).includes(value);
-  if (allowed !== undefined) {
-    if (!Array.isArray(allowed) || allowed.length === 0) {
-      fail(`${d.id}: allowedWidths must list at least one width`);
-    }
-    for (const width of allowed) {
-      if (!known(width)) {
-        fail(
-          `${d.id}: allowedWidths must hold only ${WIDGET_WIDTHS.join(", ")}`
-        );
-      }
-    }
-    if (new Set(allowed).size !== allowed.length) {
-      fail(`${d.id}: allowedWidths names a width twice`);
-    }
-  }
-  if (d.defaultWidth !== undefined) {
-    if (!known(d.defaultWidth)) {
-      fail(`${d.id}: defaultWidth must be one of ${WIDGET_WIDTHS.join(", ")}`);
-    }
-    if (allowed !== undefined && !allowed.includes(d.defaultWidth)) {
-      fail(
-        `${d.id}: defaultWidth "${d.defaultWidth}" is not one of its allowedWidths`
-      );
-    }
-  }
+  validateAllowedWidths(d);
+  validateDefaultWidth(d);
   if (d.allowsSeveral !== undefined && typeof d.allowsSeveral !== "boolean") {
     fail(`${d.id}: allowsSeveral must be true or false`);
   }
   if (d.sketch !== undefined && !DATA_ARCHETYPE_SET.has(d.sketch)) {
     fail(`${d.id}: sketch must be one of ${DATA_ARCHETYPES.join(", ")}`);
+  }
+}
+
+/** Whether a value is one of the widths a placement and the admin use. */
+const isWidgetWidth = (value: unknown) =>
+  (WIDGET_WIDTHS as readonly unknown[]).includes(value);
+
+/** `allowedWidths`, when stated: at least one width, only real ones, none twice. */
+function validateAllowedWidths(d: Partial<WidgetDefinition>): void {
+  const allowed: readonly unknown[] | undefined = d.allowedWidths;
+  if (allowed === undefined) return;
+  if (!Array.isArray(allowed) || allowed.length === 0) {
+    fail(`${d.id}: allowedWidths must list at least one width`);
+  }
+  if (!allowed.every(isWidgetWidth)) {
+    fail(`${d.id}: allowedWidths must hold only ${WIDGET_WIDTHS.join(", ")}`);
+  }
+  if (new Set(allowed).size !== allowed.length) {
+    fail(`${d.id}: allowedWidths names a width twice`);
+  }
+}
+
+/** `defaultWidth`, when stated: a real width, and one of `allowedWidths` when those are stated. */
+function validateDefaultWidth(d: Partial<WidgetDefinition>): void {
+  if (d.defaultWidth === undefined) return;
+  if (!isWidgetWidth(d.defaultWidth)) {
+    fail(`${d.id}: defaultWidth must be one of ${WIDGET_WIDTHS.join(", ")}`);
+  }
+  const allowed: readonly unknown[] | undefined = d.allowedWidths;
+  if (allowed !== undefined && !allowed.includes(d.defaultWidth)) {
+    fail(
+      `${d.id}: defaultWidth "${d.defaultWidth}" is not one of its allowedWidths`
+    );
   }
 }
 
@@ -1441,18 +1448,25 @@ function validateEmpty(d: Partial<WidgetDefinition>): void {
   if (d.serverData !== true) {
     fail(`${d.id}: empty is published by core for a declared widget only`);
   }
-  const text = (value: unknown) =>
-    typeof value === "string" && value.trim() !== "";
   const { message, action } = empty as { message?: unknown; action?: unknown };
-  const actionOk =
-    action === undefined ||
-    (typeof action === "object" &&
-      action !== null &&
-      text((action as { label?: unknown }).label) &&
-      text((action as { link?: unknown }).link));
-  if ((message !== undefined && !text(message)) || !actionOk) {
+  if (
+    (message !== undefined && !isText(message)) ||
+    !emptyActionIsText(action)
+  ) {
     fail(`${d.id}: empty has a message or an action that is not text`);
   }
+}
+
+/** Words a person reads: a string with something in it. */
+const isText = (value: unknown) =>
+  typeof value === "string" && value.trim() !== "";
+
+/** An empty state's action, when stated: a label and a link, each of them text. */
+function emptyActionIsText(action: unknown): boolean {
+  if (action === undefined) return true;
+  if (typeof action !== "object" || action === null) return false;
+  const { label, link } = action as { label?: unknown; link?: unknown };
+  return isText(label) && isText(link);
 }
 
 /**
