@@ -48,6 +48,9 @@ export const DEVIATIONS = [
   // system-resource readers, do not count that resource's `manage-`
   // permission as read, create, update or delete on it.
   "manage-not-counted",
+  // A read with no caller, a visitor or a plugin's person, keeps the media
+  // rows it populates, where the decision refuses a caller with no grant.
+  "visitor-keeps-media",
 ] as const;
 
 export type Deviation = (typeof DEVIATIONS)[number];
