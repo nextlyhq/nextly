@@ -63,6 +63,7 @@ import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
   attachFieldValidators,
+  callerAccessGrants,
   runFieldHooks,
   resolvedCallerGrants,
   type CallerGrants,
@@ -1215,12 +1216,19 @@ export class SingleMutationService extends BaseService {
       // and every denied value inside a container kept as the row holds it: a
       // group is written whole, so a denied child of one would otherwise clear.
       const documentId = existingDoc.id;
+      // One resolver for the Single's own rules and its field groups', with
+      // the key's scope: a scoped key is judged by its own grants on both,
+      // never by its owner's.
+      const writeGrants = callerAccessGrants(
+        options.user,
+        options.authenticatedScope
+      );
       await keepDeniedAtStoredOnUpdate({
         data: currentData,
         stored: existingDeserialized,
         fields: fieldConfigs,
         source: this.fieldGroupDataService,
-        access: fieldGroupWriteAccessOf(options),
+        access: { ...fieldGroupWriteAccessOf(options), grants: writeGrants },
         ownRules: document =>
           applyFieldWriteAccess({
             kind: "single",
@@ -1228,8 +1236,10 @@ export class SingleMutationService extends BaseService {
             data: document,
             operation: "update",
             user: options.user,
+            authenticatedScope: options.authenticatedScope,
             overrideAccess: options.overrideAccess,
             id: documentId,
+            grants: writeGrants,
           }),
       });
       await runFieldHooks({
