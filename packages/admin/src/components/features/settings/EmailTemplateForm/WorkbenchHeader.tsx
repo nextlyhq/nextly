@@ -58,27 +58,11 @@ export interface WorkbenchMenu {
   deleteRefusal?: string;
 }
 
-export function WorkbenchHeader({
-  tier,
-  control,
-  onNameChange,
-  record,
-  isEdit,
-  isPending,
-  isDirty,
-  isActive,
-  ownsContent,
-  hasData,
-  sheet,
-  onToggleSheet,
-  onExit,
-  exitLabel,
-  onSendTest,
-  onOverride,
-  menu,
-}: {
+type FormControlOf = ReturnType<typeof useForm<TemplateFormValues>>["control"];
+
+export interface WorkbenchHeaderProps {
   tier: WorkbenchTier;
-  control: ReturnType<typeof useForm<TemplateFormValues>>["control"];
+  control: FormControlOf;
   onNameChange: (value: string, onChange: (v: string) => void) => void;
   /** The saved email, or nothing while creating one. */
   record?: EmailTemplateRecord;
@@ -97,12 +81,173 @@ export function WorkbenchHeader({
   onSendTest: () => void;
   onOverride: () => void;
   menu: WorkbenchMenu;
-}) {
-  const isPhone = tier === "phone";
-  const owner = record ? ownerName(record) : null;
-  const state = record ? stateOf(record) : null;
+}
 
-  const menuItems = [
+/** The email's name, editable on any email: it is the site's setting. */
+function NameField({
+  control,
+  onNameChange,
+  isPending,
+}: Pick<WorkbenchHeaderProps, "control" | "onNameChange" | "isPending">) {
+  return (
+    <FormField
+      control={control}
+      name="name"
+      render={({ field }) => (
+        // A refused save has to say why here: this field is always on
+        // screen, so without its message Save reads as a dead control.
+        <FormItem className="min-w-0 space-y-0">
+          <FormControl>
+            <input
+              {...field}
+              onChange={e => onNameChange(e.target.value, field.onChange)}
+              disabled={isPending}
+              placeholder="Untitled email"
+              aria-label="Email name"
+              className="w-full truncate bg-transparent text-base font-semibold text-foreground outline-none placeholder:text-muted-foreground"
+            />
+          </FormControl>
+          <FormMessage />
+        </FormItem>
+      )}
+    />
+  );
+}
+
+/** Under the name: the state, whether it's off, the owner, the description. */
+function StateLine({
+  tier,
+  record,
+  isActive,
+}: {
+  tier: WorkbenchTier;
+  record: EmailTemplateRecord;
+  isActive: boolean;
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs text-muted-foreground">
+      <Badge variant="outline" className="shrink-0">
+        {STATE_LABELS[stateOf(record)]}
+      </Badge>
+      {isActive ? null : (
+        <Badge variant="outline" className="shrink-0">
+          Off
+        </Badge>
+      )}
+      <span className="shrink-0" data-testid="workbench-owner">
+        {ownerName(record)}
+      </span>
+      {tier === "desktop" && record.description ? (
+        <span className="truncate">· {record.description}</span>
+      ) : null}
+    </div>
+  );
+}
+
+function UnsavedMark({ isDirty }: { isDirty: boolean }) {
+  if (!isDirty) return null;
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
+      <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-warning" />
+      Unsaved changes
+    </span>
+  );
+}
+
+/** The page's actions, beside the name above a phone's width. */
+function HeaderActions({
+  hasData,
+  sheet,
+  onToggleSheet,
+  isEdit,
+  isPending,
+  onSendTest,
+  ownsContent,
+  onOverride,
+}: Pick<
+  WorkbenchHeaderProps,
+  | "hasData"
+  | "sheet"
+  | "onToggleSheet"
+  | "isEdit"
+  | "isPending"
+  | "onSendTest"
+  | "ownsContent"
+  | "onOverride"
+>) {
+  return (
+    <div className="flex shrink-0 items-center gap-2">
+      {hasData ? (
+        <Button
+          type="button"
+          variant="outline"
+          aria-pressed={sheet === "data"}
+          onClick={() => onToggleSheet("data")}
+        >
+          <Braces className="h-4 w-4" />
+          Data
+        </Button>
+      ) : null}
+      <Button
+        type="button"
+        variant="outline"
+        aria-pressed={sheet === "details"}
+        onClick={() => onToggleSheet("details")}
+      >
+        <SlidersHorizontal className="h-4 w-4" />
+        Details
+      </Button>
+      {isEdit ? (
+        <Button
+          type="button"
+          variant="outline"
+          disabled={isPending}
+          onClick={onSendTest}
+        >
+          <Send className="h-4 w-4" />
+          Send test
+        </Button>
+      ) : null}
+      {ownsContent ? null : (
+        <Button type="button" disabled={isPending} onClick={onOverride}>
+          <Pencil className="h-4 w-4" />
+          Override
+        </Button>
+      )}
+      <SaveButton
+        isEdit={isEdit}
+        isPending={isPending}
+        variant={ownsContent ? "default" : "outline"}
+      />
+    </div>
+  );
+}
+
+/** Delete, or the reason it isn't offered. */
+function DeleteItem({ menu }: { menu: WorkbenchMenu }) {
+  if (menu.onDelete) {
+    return (
+      <DropdownMenuItem
+        onSelect={menu.onDelete}
+        className="text-destructive focus:text-destructive"
+      >
+        <Trash2 className="h-4 w-4" />
+        Delete
+      </DropdownMenuItem>
+    );
+  }
+  if (!menu.deleteRefusal) return null;
+  return (
+    <DropdownMenuItem disabled>
+      <Trash2 className="h-4 w-4" />
+      {menu.deleteRefusal}
+    </DropdownMenuItem>
+  );
+}
+
+/** The acts done less often, behind one button; nothing when there are none. */
+function MoreMenu({ menu, owner }: { menu: WorkbenchMenu; owner: string }) {
+  const items = [
     menu.onDuplicate && (
       <DropdownMenuItem key="duplicate" onSelect={menu.onDuplicate}>
         <Copy className="h-4 w-4" />
@@ -122,21 +267,32 @@ export function WorkbenchHeader({
       </DropdownMenuItem>
     ),
   ].filter(Boolean);
-  const deleteItem = menu.onDelete ? (
-    <DropdownMenuItem
-      onSelect={menu.onDelete}
-      className="text-destructive focus:text-destructive"
-    >
-      <Trash2 className="h-4 w-4" />
-      Delete
-    </DropdownMenuItem>
-  ) : menu.deleteRefusal ? (
-    <DropdownMenuItem disabled>
-      <Trash2 className="h-4 w-4" />
-      {menu.deleteRefusal}
-    </DropdownMenuItem>
-  ) : null;
+  const hasDelete = Boolean(menu.onDelete || menu.deleteRefusal);
+  if (items.length === 0 && !hasDelete) return null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          aria-label="More actions"
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {items}
+        {hasDelete && items.length > 0 ? <DropdownMenuSeparator /> : null}
+        <DeleteItem menu={menu} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
+export function WorkbenchHeader(props: WorkbenchHeaderProps) {
+  const { tier, record, isEdit, onExit, exitLabel } = props;
+  const isPhone = tier === "phone";
   return (
     <div
       data-testid="workbench-header"
@@ -153,127 +309,60 @@ export function WorkbenchHeader({
       >
         <ArrowLeft className="h-4 w-4" />
       </button>
-
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <FormField
-          control={control}
-          name="name"
-          render={({ field }) => (
-            // A refused save has to say why here: this field is always on
-            // screen, so without its message Save reads as a dead control.
-            <FormItem className="min-w-0 space-y-0">
-              <FormControl>
-                <input
-                  {...field}
-                  onChange={e => onNameChange(e.target.value, field.onChange)}
-                  disabled={isPending}
-                  placeholder="Untitled email"
-                  aria-label="Email name"
-                  className="w-full truncate bg-transparent text-base font-semibold text-foreground outline-none placeholder:text-muted-foreground"
-                />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-        {!isPhone && record ? (
-          <div className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs text-muted-foreground">
-            {state ? (
-              <Badge variant="outline" className="shrink-0">
-                {STATE_LABELS[state]}
-              </Badge>
-            ) : null}
-            {!isActive ? (
-              <Badge variant="outline" className="shrink-0">
-                Off
-              </Badge>
-            ) : null}
-            <span className="shrink-0" data-testid="workbench-owner">
-              {owner}
-            </span>
-            {tier === "desktop" && record.description ? (
-              <span className="truncate">· {record.description}</span>
-            ) : null}
-          </div>
+        <NameField {...props} />
+        {record && !isPhone ? (
+          <StateLine tier={tier} record={record} isActive={props.isActive} />
         ) : null}
       </div>
-
-      {isDirty && !isPhone ? (
-        <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
-          <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-warning" />
-          Unsaved changes
-        </span>
-      ) : null}
-
-      {!isPhone ? (
-        <div className="flex shrink-0 items-center gap-2">
-          {hasData ? (
-            <Button
-              type="button"
-              variant="outline"
-              aria-pressed={sheet === "data"}
-              onClick={() => onToggleSheet("data")}
-            >
-              <Braces className="h-4 w-4" />
-              Data
-            </Button>
-          ) : null}
-          <Button
-            type="button"
-            variant="outline"
-            aria-pressed={sheet === "details"}
-            onClick={() => onToggleSheet("details")}
-          >
-            <SlidersHorizontal className="h-4 w-4" />
-            Details
-          </Button>
-          {isEdit ? (
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isPending}
-              onClick={onSendTest}
-            >
-              <Send className="h-4 w-4" />
-              Send test
-            </Button>
-          ) : null}
-          {!ownsContent ? (
-            <Button type="button" disabled={isPending} onClick={onOverride}>
-              <Pencil className="h-4 w-4" />
-              Override
-            </Button>
-          ) : null}
-          <SaveButton
-            isEdit={isEdit}
-            isPending={isPending}
-            variant={ownsContent ? "default" : "outline"}
-          />
-        </div>
-      ) : null}
-
-      {isEdit && (menuItems.length > 0 || deleteItem) ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              aria-label="More actions"
-            >
-              <MoreHorizontal className="h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {menuItems}
-            {deleteItem && menuItems.length > 0 ? (
-              <DropdownMenuSeparator />
-            ) : null}
-            {deleteItem}
-          </DropdownMenuContent>
-        </DropdownMenu>
+      {isPhone ? null : (
+        <>
+          <UnsavedMark isDirty={props.isDirty} />
+          <HeaderActions {...props} />
+        </>
+      )}
+      {isEdit && record ? (
+        <MoreMenu menu={props.menu} owner={ownerName(record)} />
       ) : null}
     </div>
+  );
+}
+
+/** The phone's bottom bar: the actions the header holds above that width. */
+export function PhoneActions({
+  isEdit,
+  isPending,
+  ownsContent,
+  onSendTest,
+  onOverride,
+}: Pick<
+  WorkbenchHeaderProps,
+  "isEdit" | "isPending" | "ownsContent" | "onSendTest" | "onOverride"
+>) {
+  return (
+    <>
+      {isEdit ? (
+        <Button
+          type="button"
+          variant="outline"
+          disabled={isPending}
+          onClick={onSendTest}
+        >
+          Send test
+        </Button>
+      ) : null}
+      {ownsContent ? null : (
+        <Button
+          type="button"
+          variant="outline"
+          disabled={isPending}
+          onClick={onOverride}
+        >
+          Override
+        </Button>
+      )}
+      <SaveButton isEdit={isEdit} isPending={isPending} />
+    </>
   );
 }
 
@@ -287,18 +376,12 @@ export function SaveButton({
   isPending: boolean;
   variant?: "default" | "outline";
 }) {
+  const idle = isEdit ? "Save" : "Create email";
+  const busy = isEdit ? "Saving…" : "Creating…";
   return (
     <Button type="submit" variant={variant} disabled={isPending}>
-      {isPending ? (
-        <>
-          <Loader2 className="h-4 w-4 animate-spin" />
-          {isEdit ? "Saving…" : "Creating…"}
-        </>
-      ) : isEdit ? (
-        "Save"
-      ) : (
-        "Create email"
-      )}
+      {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+      {isPending ? busy : idle}
     </Button>
   );
 }

@@ -34,6 +34,7 @@ import {
 import { isApiError } from "@admin/lib/api/parseApiError";
 import { cn } from "@admin/lib/utils";
 import type {
+  EmailTemplateComparison,
   EmailTemplateVersion,
   OwnerChange,
   OwnerChangeChoice,
@@ -259,6 +260,140 @@ function SideBySide({
   );
 }
 
+/** The changes, one by one or both versions whole. */
+function ReviewChanges({
+  comparison,
+  owner,
+  choices,
+  onChoose,
+}: {
+  comparison: EmailTemplateComparison;
+  owner: string;
+  choices: Record<string, OwnerChangeChoice>;
+  onChoose: (id: string, choice: OwnerChangeChoice) => void;
+}) {
+  const [view, setView] = useState<"changes" | "side">("changes");
+  const { changes } = comparison;
+  return (
+    <>
+      <Segmented<"changes" | "side">
+        value={view}
+        onChange={setView}
+        options={[
+          { value: "changes", label: `Changes one by one (${changes.length})` },
+          { value: "side", label: "Side by side" },
+        ]}
+      />
+      {view === "side" ? (
+        <SideBySide
+          mine={comparison.mine}
+          theirs={comparison.theirs}
+          owner={owner}
+        />
+      ) : (
+        changes.map((change, index) => (
+          <ChangeCard
+            key={change.id}
+            change={change}
+            index={index}
+            total={changes.length}
+            owner={owner}
+            choice={choices[change.id]}
+            onChoose={choice => onChoose(change.id, choice)}
+          />
+        ))
+      )}
+    </>
+  );
+}
+
+/** What the comparison holds: still loading, failed, nothing, or changes. */
+function ReviewBody({
+  comparison,
+  owner,
+  choices,
+  onChoose,
+}: {
+  comparison: ReturnType<typeof useEmailTemplateComparison>;
+  owner: string;
+  choices: Record<string, OwnerChangeChoice>;
+  onChoose: (id: string, choice: OwnerChangeChoice) => void;
+}) {
+  if (comparison.isLoading) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Comparing the versions…
+      </div>
+    );
+  }
+  if (comparison.error) {
+    return (
+      <p className="text-sm text-destructive" role="alert">
+        The versions couldn&apos;t be compared: {comparison.error.message}
+      </p>
+    );
+  }
+  if (!comparison.data) return null;
+  if (comparison.data.changes.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Nothing to review: your version already matches {owner}&apos;s.
+      </p>
+    );
+  }
+  return (
+    <ReviewChanges
+      comparison={comparison.data}
+      owner={owner}
+      choices={choices}
+      onChoose={onChoose}
+    />
+  );
+}
+
+function ReviewFooter({
+  chosen,
+  total,
+  isPending,
+  onCancel,
+  onApply,
+}: {
+  chosen: number;
+  total: number;
+  isPending: boolean;
+  onCancel: () => void;
+  onApply: () => void;
+}) {
+  const complete = total > 0 && chosen === total;
+  return (
+    <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-border px-6 py-3">
+      {total > 0 ? (
+        <span className="mr-auto text-sm text-muted-foreground">
+          {chosen} of {total} chosen
+        </span>
+      ) : null}
+      <Button
+        type="button"
+        variant="outline"
+        disabled={isPending}
+        onClick={onCancel}
+      >
+        Cancel
+      </Button>
+      <Button type="button" disabled={!complete || isPending} onClick={onApply}>
+        {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+        {isPending ? "Applying…" : "Apply"}
+      </Button>
+    </div>
+  );
+}
+
+/** Whether the server refused an apply because the email moved since. */
+function isStaleReview(error: Error): boolean {
+  return isApiError(error) && error.code === "CONFLICT";
+}
+
 export function OwnerUpdateReview({
   open,
   onOpenChange,
@@ -278,22 +413,25 @@ export function OwnerUpdateReview({
   const comparison = useEmailTemplateComparison(templateId, open);
   const apply = useApplyOwnerUpdate();
   const [choices, setChoices] = useState<Record<string, OwnerChangeChoice>>({});
-  const [view, setView] = useState<"changes" | "side">("changes");
 
   const changes = comparison.data?.changes ?? [];
   const chosen = changes.filter(change => choices[change.id]).length;
-  const complete = changes.length > 0 && chosen === changes.length;
 
   const close = (next: boolean) => {
-    if (!next) {
-      setChoices({});
-      setView("changes");
-    }
+    if (!next) setChoices({});
     onOpenChange(next);
   };
 
+  const onStale = () => {
+    toast.error("This email changed since you opened the review", {
+      description: "The review has been reloaded. Choose again.",
+    });
+    setChoices({});
+    void comparison.refetch();
+  };
+
   const submit = () => {
-    if (!comparison.data || !complete) return;
+    if (!comparison.data || chosen !== changes.length) return;
     apply.mutate(
       { id: templateId, choices, review: comparison.data.review },
       {
@@ -304,19 +442,12 @@ export function OwnerUpdateReview({
           onApplied(undo);
           close(false);
         },
-        onError: error => {
-          if (isApiError(error) && error.code === "CONFLICT") {
-            toast.error("This email changed since you opened the review", {
-              description: "The review has been reloaded. Choose again.",
-            });
-            setChoices({});
-            void comparison.refetch();
-            return;
-          }
-          toast.error("The update couldn't be applied", {
-            description: error.message,
-          });
-        },
+        onError: error =>
+          isStaleReview(error)
+            ? onStale()
+            : toast.error("The update couldn't be applied", {
+                description: error.message,
+              }),
       }
     );
   };
@@ -331,91 +462,23 @@ export function OwnerUpdateReview({
             each change, whether to keep your lines or use theirs.
           </DialogDescription>
         </DialogHeader>
-
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-5">
-          {comparison.isLoading ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Comparing the versions…
-            </div>
-          ) : comparison.error ? (
-            <p className="text-sm text-destructive" role="alert">
-              The versions couldn&apos;t be compared: {comparison.error.message}
-            </p>
-          ) : comparison.data && changes.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Nothing to review: your version already matches {owner}&apos;s.
-            </p>
-          ) : comparison.data ? (
-            <>
-              <Segmented<"changes" | "side">
-                value={view}
-                onChange={setView}
-                options={[
-                  {
-                    value: "changes",
-                    label: `Changes one by one (${changes.length})`,
-                  },
-                  { value: "side", label: "Side by side" },
-                ]}
-              />
-              {view === "changes" ? (
-                changes.map((change, index) => (
-                  <ChangeCard
-                    key={change.id}
-                    change={change}
-                    index={index}
-                    total={changes.length}
-                    owner={owner}
-                    choice={choices[change.id]}
-                    onChoose={choice =>
-                      setChoices(previous => ({
-                        ...previous,
-                        [change.id]: choice,
-                      }))
-                    }
-                  />
-                ))
-              ) : (
-                <SideBySide
-                  mine={comparison.data.mine}
-                  theirs={comparison.data.theirs}
-                  owner={owner}
-                />
-              )}
-            </>
-          ) : null}
+          <ReviewBody
+            comparison={comparison}
+            owner={owner}
+            choices={choices}
+            onChoose={(id, choice) =>
+              setChoices(previous => ({ ...previous, [id]: choice }))
+            }
+          />
         </div>
-
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-border px-6 py-3">
-          {changes.length > 0 ? (
-            <span className="mr-auto text-sm text-muted-foreground">
-              {chosen} of {changes.length} chosen
-            </span>
-          ) : null}
-          <Button
-            type="button"
-            variant="outline"
-            disabled={apply.isPending}
-            onClick={() => close(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            disabled={!complete || apply.isPending}
-            onClick={submit}
-          >
-            {apply.isPending ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Applying…
-              </>
-            ) : (
-              "Apply"
-            )}
-          </Button>
-        </div>
+        <ReviewFooter
+          chosen={chosen}
+          total={changes.length}
+          isPending={apply.isPending}
+          onCancel={() => close(false)}
+          onApply={submit}
+        />
       </DialogContent>
     </Dialog>
   );
