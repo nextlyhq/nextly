@@ -97,9 +97,30 @@ export interface CallOutcome {
   accepted: boolean;
   /**
    * A call still unsettled at its deadline: reported as without an answer,
-   * and finished here, within `withinMs`, with what it answers then.
+   * and finished here, by its own lease limit, with what it answers then.
    */
-  late?: (withinMs: number) => Promise<CallOutcome>;
+  late?: () => Promise<CallOutcome>;
+}
+
+/**
+ * The places in `envelope` of every recipient of `messages`, by mailbox: how
+ * a claim that recorded accepted calls rather than recipients is read.
+ */
+export function slotsOf(
+  envelope: SendEnvelope,
+  messages: readonly SendMessage[]
+): string[] {
+  const mailboxes = new Set(
+    messages.flatMap(message =>
+      LINES.flatMap(kind => linesOf(message)[kind].map(mailboxKey))
+    )
+  );
+  const lines = linesOf(envelope);
+  return LINES.flatMap(kind =>
+    lines[kind].flatMap((address, position) =>
+      mailboxes.has(mailboxKey(address)) ? [recipientSlot(kind, position)] : []
+    )
+  );
 }
 
 /** Each mailbox of one call, with what became of it. */

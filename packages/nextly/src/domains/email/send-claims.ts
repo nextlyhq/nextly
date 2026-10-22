@@ -286,24 +286,45 @@ export interface HeldClaim {
    * others, whatever provider carries it.
    */
   acceptedRecipients: ReadonlySet<string>;
+  /**
+   * The calls an earlier attempt had accepted, by provider key, as a claim
+   * written before recipients were recorded by position keeps them.
+   */
+  acceptedCalls: ReadonlySet<string>;
 }
 
-/** The recipients a partly delivered claim recorded, from its stored result. */
-function acceptedRecipientsOf(row: ClaimRow | undefined): Set<string> {
+/**
+ * What a partly delivered claim recorded, from its stored result: the
+ * recipients accepted, by place, and, from a claim written before recipients
+ * were recorded that way, the calls accepted, by provider key.
+ */
+function acceptedOf(row: ClaimRow | undefined): {
+  recipients: Set<string>;
+  calls: Set<string>;
+} {
   // `claimed` too: a send that took a partly delivered claim over and then
   // stopped leaves the recorded recipients in place.
-  if (row?.state !== "partial" && row?.state !== "claimed") return new Set();
-  try {
-    const stored = JSON.parse(row.result ?? "null") as {
-      accepted?: unknown;
-    } | null;
-    const slots = Array.isArray(stored?.accepted) ? stored.accepted : [];
-    return new Set(
-      slots.filter((slot): slot is string => typeof slot === "string")
-    );
-  } catch {
-    return new Set();
+  if (row?.state !== "partial" && row?.state !== "claimed") {
+    return { recipients: new Set(), calls: new Set() };
   }
+  let stored: { accepted?: unknown; acceptedLegs?: unknown } | null = null;
+  try {
+    stored = JSON.parse(row.result ?? "null") as typeof stored;
+  } catch {
+    // Unreadable: nothing recorded as accepted.
+  }
+  return {
+    recipients: stringsOf(stored?.accepted),
+    calls: stringsOf(stored?.acceptedLegs),
+  };
+}
+
+function stringsOf(value: unknown): Set<string> {
+  return new Set(
+    (Array.isArray(value) ? value : []).filter(
+      (entry): entry is string => typeof entry === "string"
+    )
+  );
 }
 
 /** What claiming a key decided. */
@@ -391,7 +412,8 @@ async function attemptClaim(
       holder,
       keyDigest: digests.key,
       providerKey: digests.providerKey,
-      acceptedRecipients: acceptedRecipientsOf(found),
+      acceptedRecipients: acceptedOf(found).recipients,
+      acceptedCalls: acceptedOf(found).calls,
     },
   });
   if (!found) {

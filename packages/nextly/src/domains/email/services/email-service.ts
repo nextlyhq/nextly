@@ -107,6 +107,7 @@ import {
   type CallOutcome,
   pendingEnvelope,
   sendResultOf,
+  slotsOf,
 } from "./recipient-outcomes";
 import {
   assertSendable,
@@ -261,6 +262,33 @@ function adapterMessage(
     bcc: message.bcc,
     attachments,
   };
+}
+
+/** Resolve once `at` (epoch milliseconds) has passed. */
+function untilTime(at: number): Promise<void> {
+  return new Promise(resolve => {
+    setTimeout(resolve, Math.max(0, at - Date.now()));
+  });
+}
+
+/**
+ * Run after-send actions in turn. Every message has been handed over by
+ * now, so nothing an action or its reporting does can change what was sent.
+ * Contained per value: a failure here would otherwise replace the send's
+ * result with an exception and skip the remaining actions.
+ */
+async function runActions(
+  values: readonly EmailAfterSendValue[],
+  run: (value: EmailAfterSendValue) => Promise<void>
+): Promise<void> {
+  for (const value of values) {
+    try {
+      await run(value);
+    } catch {
+      // The registry already isolates a failing action; reaching here means
+      // its own reporting failed too, and there is nowhere left to report it.
+    }
+  }
 }
 
 /** Whether `promise` settles, either way, within `ms`. */
@@ -808,8 +836,11 @@ export class EmailService extends BaseService {
 
     // A keyed retry sends only to the recipients an earlier attempt with the
     // key had not reached. With none, this is the envelope itself.
-    const previouslyAccepted =
-      claimed?.keyed.claim.acceptedRecipients ?? new Set<string>();
+    const previouslyAccepted = this.acceptedBefore(
+      claimed?.keyed.claim,
+      envelope,
+      maxToPerMessage
+    );
     const messages = messagesFor(
       pendingEnvelope(envelope, previouslyAccepted),
       maxToPerMessage
@@ -825,9 +856,13 @@ export class EmailService extends BaseService {
     // action runs. Actions are awaited, and one that never settles would
     // otherwise keep every later recipient from being sent to. A single
     // message runs its actions where it always has.
+    //
+    // A keyed send's actions also wait, until its records and outcome are
+    // committed: an action that stalls must not keep a delivered message
+    // uncommitted, to be sent again once its claim lapses.
     const deferred: EmailAfterSendValue[] = [];
     const afterSend =
-      messages.length === 1
+      messages.length === 1 && !claimed
         ? runAfterSend
         : (value: EmailAfterSendValue) => {
             deferred.push(value);
@@ -865,6 +900,7 @@ export class EmailService extends BaseService {
         previouslyAccepted,
         calls,
         records,
+        actions: { deferred, run: runAfterSend },
       });
     } else if (claimed) {
       await this.deliveries?.settleSend(
@@ -875,21 +911,30 @@ export class EmailService extends BaseService {
       );
     }
 
-    for (const value of deferred) {
-      // Every message has been handed over by now, so nothing an action or
-      // its reporting does can change what was sent. Contained per message,
-      // as a one-message send's are: a failure here would otherwise replace
-      // the send's result with an exception and skip the remaining actions.
-      try {
-        await runAfterSend(value);
-      } catch {
-        // The registry already isolates a failing action; reaching here
-        // means its own reporting failed too, and there is nowhere left to
-        // report it. The send's result stands.
-      }
-    }
+    // Taken, not iterated in place: a call that answers late adds its
+    // actions afterwards, and the late finisher runs those.
+    await runActions(deferred.splice(0), runAfterSend);
 
     return outcome;
+  }
+
+  /**
+   * The recipients an earlier attempt with the key had accepted, by place: as
+   * the claim records them, or, for a claim that recorded accepted calls,
+   * every recipient of each call it records.
+   */
+  private acceptedBefore(
+    claim: HeldClaim | undefined,
+    envelope: SendEnvelope,
+    maxToPerMessage: number | undefined
+  ): ReadonlySet<string> {
+    if (!claim || claim.acceptedCalls.size === 0) {
+      return claim?.acceptedRecipients ?? new Set<string>();
+    }
+    const calls = messagesFor(envelope, maxToPerMessage).filter(message =>
+      claim.acceptedCalls.has(claim.providerKey(message))
+    );
+    return new Set([...claim.acceptedRecipients, ...slotsOf(envelope, calls)]);
   }
 
   /**
@@ -923,6 +968,10 @@ export class EmailService extends BaseService {
     previouslyAccepted: ReadonlySet<string>;
     calls: readonly CallOutcome[];
     records?: EmailDeliveryInput[];
+    actions: {
+      deferred: EmailAfterSendValue[];
+      run: (value: EmailAfterSendValue) => Promise<void>;
+    };
   }): Promise<void> {
     const renewal = setInterval(() => {
       void late.keyed?.renew();
@@ -930,10 +979,9 @@ export class EmailService extends BaseService {
     // A renewal timer must not keep a process alive that has nothing else.
     renewal.unref?.();
     try {
-      const within = LEASE_LIMIT_MS - CALL_DEADLINE_MS;
       const calls = await Promise.all(
         late.calls.map(call =>
-          call.late ? call.late(within) : Promise.resolve(call)
+          call.late ? call.late() : Promise.resolve(call)
         )
       );
       if (late.keyed) {
@@ -956,6 +1004,8 @@ export class EmailService extends BaseService {
     } finally {
       clearInterval(renewal);
     }
+    // The actions of the calls that answered late, after their commit.
+    await runActions(late.actions.deferred.splice(0), late.actions.run);
   }
 
   /**
@@ -1028,15 +1078,27 @@ export class EmailService extends BaseService {
       return this.recordAnswer(message, context, sending, startedAt);
     }
     // No answer yet: the caller is told so now, the adapter is told to stop,
-    // and the call is finished later with whatever it answers.
+    // and the call is finished later with whatever it answers, by its own
+    // lease limit, counted from when it started.
     controller.abort();
+    const limitAt = startedAt + LEASE_LIMIT_MS;
     return {
       message,
       outcome: { success: false, failure: noAnswerFailure() },
       accepted: false,
-      late: async withinMs => {
-        if (await settlesWithin(sending, withinMs)) {
-          return this.recordAnswer(message, context, sending, startedAt);
+      late: async () => {
+        if (await settlesWithin(sending, Math.max(0, limitAt - Date.now()))) {
+          const answered = await this.recordAnswer(
+            message,
+            context,
+            sending,
+            startedAt
+          );
+          // An answer that is itself unknown, as the cancellation gives a
+          // keyless adapter that honours it, may still be processing at the
+          // provider: its claim is held to the lease limit all the same.
+          if (answered.outcome.failure?.unknown) await untilTime(limitAt);
+          return answered;
         }
         // Never answered: recorded as without an answer, and its claim let go.
         const outcome = await this.recordFailed(
