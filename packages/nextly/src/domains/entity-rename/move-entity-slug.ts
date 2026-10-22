@@ -18,9 +18,19 @@ import type {
   WhereClause,
   WhereCondition,
 } from "@nextlyhq/adapter-drizzle/types";
-import { getColumns, getTableName, is, Table } from "drizzle-orm";
+import {
+  getColumns,
+  getTableName,
+  inArray,
+  is,
+  sql,
+  Table,
+  type Column,
+  type SQL,
+} from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
+import { resolveRelations } from "../../database/resolve-relations";
 import { NextlyError } from "../../errors";
 
 import {
@@ -29,6 +39,7 @@ import {
   type EndingSlugColumn,
   type FollowingSlugColumn,
   type JsonSlugColumn,
+  type SlugDerivedColumns,
   type RenamedEntityKind,
   type RenamedSlugColumn,
   type SlugKeyedRow,
@@ -72,6 +83,11 @@ export async function slugKeyedTablesPresent(db: {
  * filter that listed it), and moving this entity's rows in beside them would
  * merge two entities into one. The refusal is a CONFLICT the caller's
  * transaction rolls back with.
+ *
+ * Refuses too, with a VALIDATION_ERROR, a new slug wider than a column it
+ * would be written to (`permissions.resource` holds 50 characters), by the
+ * narrowest width any dialect declares, so a rename one database would take
+ * is refused by every one alike rather than by some of them part-way.
  */
 export async function moveEntitySlug(
   tx: TransactionContext,
@@ -89,8 +105,13 @@ export async function moveEntitySlug(
       column =>
         column.onRename !== "follow-json" || column.renames.includes(move.kind)
     )
-    .map(column => ({ column, properties: propertiesOf(dialect, column) }));
+    .map(column => ({ column, ...declaredTable(dialect, column) }));
 
+  for (const { column } of columns) {
+    if (column.onRename === "follow") {
+      refuseTooWide(column.table, column.slugColumn, move.to, move);
+    }
+  }
   for (const { column, properties } of columns) {
     if (column.onRename === "follow") {
       await refuseTakenSlug(tx, column, properties, move);
@@ -99,10 +120,10 @@ export async function moveEntitySlug(
       await refuseNamedInJson(tx, column, properties, move);
     }
   }
-  for (const { column, properties } of columns) {
+  for (const { column, properties, table } of columns) {
     switch (column.onRename) {
       case "follow":
-        await followRename(tx, column, properties, move);
+        await followRename(tx, { dialect, table, properties }, column, move);
         break;
       case "end":
         await endOnRename(tx, column, properties, move);
@@ -117,31 +138,105 @@ export async function moveEntitySlug(
 /** SQL column name to the Drizzle property the adapter addresses it by. */
 type ColumnProperties = ReadonlyMap<string, string>;
 
-/**
- * The property names of a declared table's columns, read from the dialect's
- * Drizzle table: the adapter's reads and conditions address columns by
- * property, and the declarations by SQL name, which is what the schema says.
- */
-function propertiesOf(
+/** A declared table as the rename writes it: its Drizzle table and names. */
+interface DeclaredTable {
+  table: Table;
+  /**
+   * The property names of its columns: the adapter's reads and conditions
+   * address columns by property, and the declarations by SQL name, which is
+   * what the schema says.
+   */
+  properties: ColumnProperties;
+}
+
+/** The dialect's Drizzle table named `name`, if the schema has one. */
+function drizzleTable(
+  dialect: SupportedDialect,
+  name: string
+): Table | undefined {
+  const bundle: Record<string, unknown> = getDialectTables(dialect);
+  return Object.values(bundle).find(
+    (value): value is Table => is(value, Table) && getTableName(value) === name
+  );
+}
+
+/** A declared table, read from the dialect's Drizzle schema. */
+function declaredTable(
   dialect: SupportedDialect,
   column: WrittenColumn
-): ColumnProperties {
-  const bundle: Record<string, unknown> = getDialectTables(dialect);
-  for (const value of Object.values(bundle)) {
-    if (is(value, Table) && getTableName(value) === column.table) {
-      return new Map(
-        Object.entries(getColumns(value)).map(([property, sqlColumn]) => [
-          sqlColumn.name,
-          property,
-        ])
-      );
-    }
+): DeclaredTable {
+  const table = drizzleTable(dialect, column.table);
+  if (table === undefined) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "slug-keyed-table-not-in-schema",
+        table: column.table,
+        dialect,
+      },
+    });
   }
-  throw NextlyError.internal({
+  return {
+    table,
+    properties: new Map(
+      Object.entries(getColumns(table)).map(([property, sqlColumn]) => [
+        sqlColumn.name,
+        property,
+      ])
+    ),
+  };
+}
+
+const DIALECTS: readonly SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
+
+/**
+ * The narrowest width any dialect's schema declares for a column, or
+ * undefined where every dialect leaves it open.
+ */
+function narrowestWidth(table: string, sqlName: string): number | undefined {
+  const widths = DIALECTS.flatMap(dialect => {
+    const declared = drizzleTable(dialect, table);
+    if (declared === undefined) return [];
+    const sqlColumn = Object.values(getColumns(declared)).find(
+      candidate => candidate.name === sqlName
+    );
+    const length: unknown =
+      sqlColumn !== undefined && "length" in sqlColumn
+        ? sqlColumn.length
+        : undefined;
+    return typeof length === "number" ? [length] : [];
+  });
+  return widths.length === 0 ? undefined : Math.min(...widths);
+}
+
+/**
+ * Refuse a rename that would write `value` (the new slug, or a value made
+ * from it) into a column too narrow for it on some dialect. The answer names
+ * the longest slug that would fit.
+ */
+function refuseTooWide(
+  table: string,
+  sqlName: string,
+  value: string,
+  move: EntitySlugMove
+): void {
+  const width = narrowestWidth(table, sqlName);
+  if (width === undefined || value.length <= width) return;
+  const longest = width - (value.length - move.to.length);
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "slug",
+        code: "TOO_LONG",
+        message: `Must be at most ${longest} characters.`,
+      },
+    ],
     logContext: {
-      reason: "slug-keyed-table-not-in-schema",
-      table: column.table,
-      dialect,
+      reason: "rename-target-too-wide",
+      table,
+      column: sqlName,
+      width,
+      kind: move.kind,
+      slug: move.to,
     },
   });
 }
@@ -235,23 +330,41 @@ async function refuseTakenSlug(
 }
 
 /**
- * Move one table's rows to the new slug. A row with columns derived from the
- * slug is written on its own, with them derived again from its columns; the
- * rest move in one statement.
- *
- * One statement per derived row, because each value is derived here, by the
- * function every writer of the table uses, rather than by the database.
+ * Bound parameters one batched statement may carry: under the 999 SQLite
+ * allows, and far under PostgreSQL's and MySQL's limits.
+ */
+const STATEMENT_PARAMETERS = 900;
+
+/** The part of a Drizzle handle a batched update needs. */
+interface UpdatingDb {
+  update(table: Table): {
+    set(values: Record<string, unknown>): {
+      where(condition: SQL): Promise<unknown>;
+    };
+  };
+}
+
+/** One row's id and the derived values the declaration made for it. */
+interface DerivedRow {
+  id: SqlParam;
+  values: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Move one table's rows to the new slug. Rows with columns derived from the
+ * slug have them derived again, by the function every writer of the table
+ * uses, rather than by the database; the rest move in one statement.
  */
 async function followRename(
   tx: TransactionContext,
+  declared: DeclaredTable & { dialect: SupportedDialect },
   column: FollowingSlugColumn,
-  properties: ColumnProperties,
   move: EntitySlugMove
 ): Promise<void> {
+  const { properties } = declared;
   const slugProperty = property(properties, column, column.slugColumn);
   const derived = column.derived;
   if (derived !== undefined) {
-    const rowIdProperty = property(properties, column, derived.rowId);
     const read = [
       derived.rowId,
       ...(column.kind ? [column.kind.column] : []),
@@ -273,40 +386,177 @@ async function followRename(
         ],
       },
     });
-    for (const raw of rows) {
+    const derivedRows = rows.map((raw): DerivedRow => {
       const row: SlugKeyedRow = Object.fromEntries(
         read.map(name => [name, raw[property(properties, column, name)]])
       );
       const values = derived.derive(row, move.to, move.from);
-      await tx.update(
-        column.table,
-        {
-          [slugProperty]: move.to,
-          // Only the columns the declaration derived again: one it left out
-          // holds a value someone chose, and keeps it.
-          ...Object.fromEntries(
-            derived.columns
-              .filter(name => name in values)
-              .map(name => [property(properties, column, name), values[name]])
-          ),
-        },
-        {
-          and: [
-            {
-              column: rowIdProperty,
-              op: "=",
-              value: rowIdOf(column, row[derived.rowId]),
-            },
-          ],
+      for (const [name, value] of Object.entries(values)) {
+        if (typeof value === "string") {
+          refuseTooWide(column.table, name, value, move);
         }
-      );
-    }
+      }
+      return { id: rowIdOf(column, row[derived.rowId]), values };
+    });
+    await writeDerived(tx, declared, column, derivedRows, move);
   }
   await tx.update(
     column.table,
     { [slugProperty]: move.to },
     entityWhere(properties, column, move.kind, move.from)
   );
+}
+
+/**
+ * Write the derived rows' new slug and values. Rows are written many to a
+ * statement, each column's value chosen per row by id, so a table with a row
+ * per person and document moves in a bounded number of statements rather than
+ * one per row.
+ *
+ * A JSON column is the exception: the value chosen per row is a bound
+ * parameter, which PostgreSQL types as text and will not assign to `jsonb`,
+ * so rows deriving one are written one statement each. The one such
+ * declaration, events not yet fanned out, holds only what the delivery drain
+ * has yet to reach.
+ */
+async function writeDerived(
+  tx: TransactionContext,
+  declared: DeclaredTable & { dialect: SupportedDialect },
+  column: FollowingSlugColumn,
+  rows: readonly DerivedRow[],
+  move: EntitySlugMove
+): Promise<void> {
+  const derived = column.derived;
+  if (derived === undefined || rows.length === 0) return;
+  const target: DerivedTarget = {
+    ...declared,
+    column,
+    derived,
+    sqlColumns: columnsBySqlName(declared.table),
+  };
+  const writesJson = derived.columns.some(name =>
+    target.sqlColumns.get(name)?.dataType.split(" ").includes("json")
+  );
+  if (writesJson) {
+    await writeDerivedEach(tx, target, rows, move);
+  } else {
+    await writeDerivedBatched(tx, target, rows, move);
+  }
+}
+
+/** Where derived rows are written: the declared table and its declaration. */
+interface DerivedTarget extends DeclaredTable {
+  dialect: SupportedDialect;
+  column: FollowingSlugColumn;
+  derived: SlugDerivedColumns;
+  sqlColumns: ReadonlyMap<string, Column>;
+}
+
+/** A table's Drizzle columns, by SQL name. */
+function columnsBySqlName(table: Table): ReadonlyMap<string, Column> {
+  return new Map(
+    Object.values(getColumns(table)).map(sqlColumn => [
+      sqlColumn.name,
+      sqlColumn,
+    ])
+  );
+}
+
+/** Write each derived row in a statement of its own. */
+async function writeDerivedEach(
+  tx: TransactionContext,
+  { properties, column, derived }: DerivedTarget,
+  rows: readonly DerivedRow[],
+  move: EntitySlugMove
+): Promise<void> {
+  const rowIdProperty = property(properties, column, derived.rowId);
+  for (const row of rows) {
+    await tx.update(
+      column.table,
+      {
+        [property(properties, column, column.slugColumn)]: move.to,
+        // Only the columns the declaration derived again: one it left out
+        // holds a value someone chose, and keeps it.
+        ...Object.fromEntries(
+          derived.columns
+            .filter(name => name in row.values)
+            .map(name => [property(properties, column, name), row.values[name]])
+        ),
+      },
+      { and: [{ column: rowIdProperty, op: "=", value: row.id }] }
+    );
+  }
+}
+
+/** A table's id column, refusing a declaration whose table lacks it. */
+function rowIdColumn({ column, derived, sqlColumns }: DerivedTarget): Column {
+  const rowId = sqlColumns.get(derived.rowId);
+  if (rowId === undefined) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "slug-keyed-column-not-in-table",
+        table: column.table,
+        column: derived.rowId,
+      },
+    });
+  }
+  return rowId;
+}
+
+/**
+ * One batched statement's assignments: the new slug, and each derived
+ * column's value chosen per row by id. A row the declaration left a column
+ * out for keeps its value.
+ */
+function batchAssignments(
+  { properties, column, derived, sqlColumns }: DerivedTarget,
+  rowId: Column,
+  batch: readonly DerivedRow[],
+  move: EntitySlugMove
+): Record<string, unknown> {
+  const values: Record<string, unknown> = {
+    [property(properties, column, column.slugColumn)]: move.to,
+  };
+  for (const name of derived.columns) {
+    const sqlColumn = sqlColumns.get(name);
+    const chosen = batch.filter(row => name in row.values);
+    if (sqlColumn === undefined || chosen.length === 0) continue;
+    values[property(properties, column, name)] = sql`CASE ${rowId} ${sql.join(
+      chosen.map(row => sql`WHEN ${row.id} THEN ${row.values[name]}`),
+      sql` `
+    )} ELSE ${sqlColumn} END`;
+  }
+  return values;
+}
+
+/** Write the derived rows many to a statement. */
+async function writeDerivedBatched(
+  tx: TransactionContext,
+  target: DerivedTarget,
+  rows: readonly DerivedRow[],
+  move: EntitySlugMove
+): Promise<void> {
+  const rowId = rowIdColumn(target);
+  const db = tx.drizzleWithRelations<UpdatingDb>(
+    resolveRelations(target.dialect)
+  );
+  // Each row binds its id once for the condition, and an id and a value for
+  // each derived column.
+  const perStatement = Math.floor(
+    STATEMENT_PARAMETERS / (1 + 2 * target.derived.columns.length)
+  );
+  for (let at = 0; at < rows.length; at += perStatement) {
+    const batch = rows.slice(at, at + perStatement);
+    await db
+      .update(target.table)
+      .set(batchAssignments(target, rowId, batch, move))
+      .where(
+        inArray(
+          rowId,
+          batch.map(row => row.id)
+        )
+      );
+  }
 }
 
 /**

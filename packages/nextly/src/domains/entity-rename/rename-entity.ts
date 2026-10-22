@@ -40,7 +40,8 @@ import {
  * entity's permission rows: every cached answer about who may do what is
  * retired once it has finished, committed or not, as for any permission
  * write. After a commit, the cached list of webhook endpoints is dropped, so
- * the next delivery reads the filters the rename rewrote.
+ * the next delivery reads the filters the rename rewrote, and so is a renamed
+ * collection's cached schema under either slug.
  */
 export async function renameEntity<T>(
   adapter: DrizzleAdapter,
@@ -67,7 +68,35 @@ export async function renameEntity<T>(
       .get<WebhookEndpointRegistry>("webhookEndpointRegistry")
       .invalidate();
   }
+  if (written !== null && move.kind === "collection") {
+    dropCachedSchemas(move);
+  }
   return written;
+}
+
+/**
+ * Drop a renamed collection's cached Drizzle table under both slugs, in each
+ * cache that holds one: the collection service's, and the content handler's,
+ * which the entry reads and writes use. The old slug's entry still points at
+ * the renamed collection's table, so a collection later created under that
+ * slug would read and write it; the new slug's is rebuilt from the moved
+ * registry row on its next read.
+ */
+function dropCachedSchemas(move: EntitySlugMove): void {
+  if (container.has("collectionService")) {
+    const service = container.get<{
+      invalidateSchemaForSlug(slug: string): void;
+    }>("collectionService");
+    service.invalidateSchemaForSlug(move.from);
+    service.invalidateSchemaForSlug(move.to);
+  }
+  if (container.has("collectionsHandler")) {
+    const handler = container.get<{
+      invalidateCollectionSchema(slug: string): void;
+    }>("collectionsHandler");
+    handler.invalidateCollectionSchema(move.from);
+    handler.invalidateCollectionSchema(move.to);
+  }
 }
 
 /**

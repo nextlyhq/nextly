@@ -24,10 +24,12 @@ import type {
   TransactionContext,
   TransactionOptions,
 } from "@nextlyhq/adapter-drizzle/types";
+import { getTableName, is, Table } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../../config";
 import { container } from "../../../di";
+import { CollectionFileManager } from "../../../services/collection-file-manager";
 import { ServiceContainer } from "../../../services/index";
 import {
   clearInMemoryPermissionTiersForTests,
@@ -574,6 +576,70 @@ function failingOn(
       return value.bind(target);
     },
   });
+}
+
+/**
+ * The adapter's transactions, counting every statement that writes `table`:
+ * through the adapter's own writes, and through a Drizzle handle the
+ * transaction hands out.
+ */
+function countWritesTo(table: string, writes: { count: number }) {
+  const adapter = t().adapter;
+  const original = adapter.transaction.bind(adapter);
+  const counted = (name: unknown) => {
+    if (name === table || (is(name, Table) && getTableName(name) === table)) {
+      writes.count += 1;
+    }
+  };
+  vi.spyOn(adapter, "transaction").mockImplementation(
+    <T>(
+      work: (tx: TransactionContext) => Promise<T>,
+      options?: TransactionOptions
+    ) =>
+      original(
+        tx =>
+          work(
+            new Proxy(tx, {
+              get(target, name, receiver) {
+                const value: unknown = Reflect.get(target, name, receiver);
+                if (typeof value !== "function") return value;
+                if (name === "update" || name === "updateCount") {
+                  return (written: unknown, ...rest: unknown[]) => {
+                    counted(written);
+                    return Reflect.apply(value, target, [written, ...rest]);
+                  };
+                }
+                if (name === "drizzleWithRelations") {
+                  return (...args: unknown[]) => {
+                    const db: unknown = Reflect.apply(value, target, args);
+                    if (typeof db !== "object" || db === null) return db;
+                    return new Proxy(db, {
+                      get(inner, key, innerReceiver) {
+                        const member: unknown = Reflect.get(
+                          inner,
+                          key,
+                          innerReceiver
+                        );
+                        if (key !== "update" || typeof member !== "function") {
+                          return typeof member === "function"
+                            ? member.bind(inner)
+                            : member;
+                        }
+                        return (written: unknown) => {
+                          counted(written);
+                          return Reflect.apply(member, inner, [written]);
+                        };
+                      },
+                    });
+                  };
+                }
+                return value.bind(target);
+              },
+            })
+          ),
+        options
+      )
+  );
 }
 
 /**
@@ -1250,6 +1316,116 @@ describe.each(getConfiguredTestDialects())(
         collections: ["journal"],
       });
     }, 120_000);
+
+    it("drops the old slug's cached schema in every cache the content path reads, so a collection later created under it reads its own table", async () => {
+      await boot(dialect);
+      // The content path's writes and reads, which cache the collection's
+      // Drizzle table under its slug in every schema cache they go through.
+      const loads = vi.spyOn(
+        CollectionFileManager.prototype,
+        "loadDynamicSchema"
+      );
+      await writeNote();
+      await t()
+        .getService("collectionsHandler")
+        .listEntries({ collectionName: "notes", overrideAccess: true });
+      const caches = [
+        ...new Set(
+          loads.mock.contexts.filter(
+            (context): context is CollectionFileManager =>
+              context instanceof CollectionFileManager
+          )
+        ),
+      ];
+      expect(caches.length).toBeGreaterThan(0);
+      vi.restoreAllMocks();
+
+      await rename("collection", "notes", "journal");
+      await new DynamicCollectionRegistryService(
+        t().adapter,
+        silentLogger
+      ).registerCollection({
+        id: randomUUID(),
+        slug: "notes",
+        tableName: "dc_notes_again",
+        labels: { singular: "Note", plural: "Notes" },
+        fields: [{ name: "title", type: "text" }],
+        schemaHash: "new-notes",
+        source: "ui",
+      });
+
+      for (const cache of caches) {
+        const tableOf = async (slug: string) => {
+          const table: unknown = await cache.loadDynamicSchema(slug);
+          return is(table, Table) ? getTableName(table) : table;
+        };
+        expect(await tableOf("notes")).toBe("dc_notes_again");
+        expect(await tableOf("journal")).toBe("dc_notes");
+      }
+      // The renamed collection's own entries read through the content path
+      // under its new slug.
+      const listed = await t()
+        .getService("collectionsHandler")
+        .listEntries({ collectionName: "journal", overrideAccess: true });
+      expect(JSON.stringify(listed)).toContain("v3");
+    }, 120_000);
+
+    it("refuses a new slug wider than a column it would be written to, on every dialect, changing nothing", async () => {
+      await boot(dialect);
+      const entryId = await writeNote();
+      await seedHistory("collection", "notes", entryId);
+      const unchanged = await snapshot();
+      // Longer than the 50 characters a permission's resource holds, and
+      // within what the collection registry accepts.
+      const wide = "n".repeat(51);
+
+      await expect(rename("collection", "notes", wide)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+      });
+
+      expect(await snapshot()).toBe(unchanged);
+    }, 120_000);
+
+    it("moves a table's derived rows in a bounded number of statements, each with its key made again", async () => {
+      await boot(dialect);
+      // More markers than one statement may carry on any dialect: one person's
+      // "last looked at" on each of 700 documents.
+      const entries = Array.from({ length: 700 }, () => randomUUID());
+      await t().adapter.transaction(async tx => {
+        for (const entryId of entries) {
+          await markVersionSeen(
+            tx,
+            {
+              userId: ANA.id,
+              ref: refOf("collection", "notes", entryId),
+              part: null,
+            },
+            1,
+            new Date()
+          );
+        }
+      });
+      const writes = { count: 0 };
+      countWritesTo("nextly_version_views", writes);
+
+      await rename("collection", "notes", "journal");
+
+      vi.restoreAllMocks();
+      expect(writes.count).toBeGreaterThan(0);
+      expect(writes.count).toBeLessThanOrEqual(10);
+      const views = (await rowsOf("nextly_version_views")).filter(
+        row => row.userId === ANA.id
+      );
+      expect(views).toHaveLength(entries.length);
+      for (const row of views) {
+        const expected = versionViewKey({
+          userId: ANA.id,
+          ref: refOf("collection", "journal", String(row.entryId)),
+          part: null,
+        });
+        expect([row.scopeSlug, row.viewKey]).toEqual(["journal", expected]);
+      }
+    }, 240_000);
 
     it("fails the whole rename when any table's move fails, collection or Single", async () => {
       await boot(dialect);

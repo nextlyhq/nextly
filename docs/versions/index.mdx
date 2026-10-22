@@ -302,6 +302,9 @@ A rename onto a slug that still holds an earlier collection or Single's records 
 permissions, or a webhook filter that lists it, for example after it was deleted) is refused,
 and nothing changes. Moving one entity's records in beside another's would merge the two.
 
+A new slug longer than 50 characters is refused too, on every database, with a validation error
+that names the limit: a permission's resource holds 50 characters.
+
 <Callout type="info">
   Changing the `slug` of a code-first collection or Single in your config is not
   a rename. Nextly cannot tell it from removing one entity and adding another,
