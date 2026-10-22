@@ -23,14 +23,12 @@
   ],
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest",
-    "lint": "eslint ."
+    "test:watch": "vitest"
   },
   "peerDependencies": {
     "eslint": ">=9.0.0"
   },
   "devDependencies": {
-    "@eslint/js": "^9.34.0",
     "@typescript-eslint/parser": "^8.59.0",
     "eslint": "^9.39.1",
     "typescript": "^5.9.3",

@@ -54,12 +54,3 @@ $ pnpm turbo run check-types --continue --force   # at 10eded4b8-dirty
 dist-state at measurement: 0 of 25 packages have dist/
 ```
 
-## lint-cold
-
-lint with the turbo cache forced off (read the dist-state line before interpreting)
-
-```
-$ pnpm turbo run lint --continue --force   # at 10eded4b8-dirty
-9 of 24 successful  [exit 1]
-dist-state at measurement: 0 of 25 packages have dist/
-```

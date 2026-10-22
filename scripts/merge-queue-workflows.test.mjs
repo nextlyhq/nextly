@@ -1092,9 +1092,9 @@ describe("who owns what the required checks run", () => {
     const shared = files.filter(path => SHARING_CONFIGURATION.test(path)).flatMap(path => sharedConfigurationOf(path, packages));
     // The control: the walk reaches the shared packages, not nothing.
     expect(shared.some(path => path.startsWith("packages/tsconfig/"))).toBe(true);
-    expect(shared.some(path => path.startsWith("packages/eslint-config/"))).toBe(true);
-    // And a relative import, as the nextly package's lint configuration makes of its own rule.
-    expect(shared.some(path => path.startsWith("packages/nextly/"))).toBe(true);
+    // And the lint configuration's plugins, a workspace package by name and a
+    // module of the repository's own by path.
+    expect(shared).toEqual(expect.arrayContaining(["packages/eslint-plugin/package.json", "lint/guards.mjs"]));
     for (const path of new Set(shared)) expect(ownersOf(rules, path), path).not.toEqual([]);
   });
 
@@ -1104,7 +1104,7 @@ describe("who owns what the required checks run", () => {
   it("owns every file a package's own scripts run for the tasks the required checks run", () => {
     const tasks = tasksRequiredChecksRun();
     // The control: the lanes' tasks, and what the task graph adds to them, but no task only a developer runs.
-    expect([...tasks]).toEqual(expect.arrayContaining(["build", "lint", "check-types", "test", "test:integration", "build:surface-declarations"]));
+    expect([...tasks]).toEqual(expect.arrayContaining(["build", "check-types", "test", "test:integration", "build:surface-declarations"]));
     expect(tasks.has("dev")).toBe(false);
     // Every task reached is one the task graph defines: a dependency on
     // another package's task (`^build`) or a named package's (`nextly#build`)
@@ -1126,8 +1126,8 @@ describe("who owns what the required checks run", () => {
     const files = trackedFiles();
     const tracked = new Set(files);
     const loaded = loadedThrough(files.filter(path => LINT_CONFIGURATION.test(path)), tracked);
-    // The control: the nextly package's rule, the rule it imports and the allowlist it reads.
-    expect(loaded).toEqual(expect.arrayContaining(["packages/nextly/eslint-bare-error-rule.js", "packages/nextly/eslint-api-key-scope-rule.js", "packages/nextly/eslint-bare-error-allowlist.json"]));
+    // The control: the repository's own rules, which oxlint loads as a plugin, and the allowlists the configuration reads.
+    expect(loaded).toEqual(expect.arrayContaining(["lint/guards.mjs", "packages/nextly/bare-error-allowlist.json", "packages/nextly/console-allowlist.json"]));
     for (const path of loaded) expect(ownersOf(rules, path), path).not.toEqual([]);
   });
 
@@ -1190,6 +1190,21 @@ describe("who owns what the required checks run", () => {
     expect(loads.map(load => load.target).sort()).toEqual(["dynamic.mjs", "list.json", "re-export.js", "required.cjs", "rule.js", "side-effect.js"].map(file => `packages/a/${file}`));
     // A file it reads is not an import, and is not held to resolving.
     expect(loads.filter(load => !load.imported).map(load => load.specifier)).toEqual(["././list.json"]);
+  });
+
+  it("reads an oxlint configuration's JS plugins as imports, and not the names they are given", () => {
+    const text = [
+      "export default defineConfig({",
+      "  jsPlugins: [",
+      '    "eslint-plugin-turbo",',
+      '    // "./commented-out.mjs"',
+      '    { name: "renamed", specifier: "./renamed.mjs" },',
+      '    "./guards.mjs",',
+      "  ],",
+      "});",
+    ].join("\n");
+    expect(jsPluginsIn(text)).toEqual(["eslint-plugin-turbo", "./renamed.mjs", "./guards.mjs"]);
+    expect(loadsIn(text, "oxlint.config.mjs").map(load => [load.target, load.imported])).toEqual([["renamed.mjs", true], ["guards.mjs", true]]);
   });
 
   it("takes nothing for an import that sits in a comment or a string", () => {
@@ -1326,10 +1341,10 @@ const CHECK_CONFIGURATION = [
   ".commitlintrc.json",
   ".fallowrc.jsonc",
   ".gitleaks.toml",
-  "eslint.config.mjs",
-  "eslint.scripts.config.mjs",
   "fallow-health-baseline.json",
   "lint-staged.config.mjs",
+  "oxlint.config.mjs",
+  "oxlint.scripts.config.mjs",
   "tsconfig.base.json",
   "vitest.config.ts",
 ];
@@ -1374,11 +1389,11 @@ function ownersOf(rules, path) {
 }
 
 /** Manifests, task graphs, and the test, compiler, lint and build configuration the lanes run with. */
-const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|tsup|rollup)[^/]*\.config\.[^/]+)$/;
+const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|oxlint|tsup|rollup)[^/]*\.config\.[^/]+)$/;
 
 /** A workspace package's manifest, whose scripts Turbo runs. */
 const WORKSPACE_MANIFEST = /^(?:packages|apps)\/[^/]+\/package\.json$|^e2e\/package\.json$/;
-const LINT_CONFIGURATION = /(?:^|\/)eslint[^/]*\.config\.[^/]+$/;
+const LINT_CONFIGURATION = /(?:^|\/)(?:eslint|oxlint)[^/]*\.config\.[^/]+$/;
 const TEST_CONFIGURATION = /(?:^|\/)(?:vitest|playwright)[^/]*\.config\.[^/]+$/;
 /** A file a package script names from the package's own directory, as a program in any JavaScript or TypeScript form, a shell script or data. */
 const LOCAL_FILE = /(?:^|[\s="'])(\.{0,2}\/?[\w./-]+\.(?:[cm]?js|jsx|[cm]?ts|tsx|sh|json))(?=$|[\s"';&|)])/g;
@@ -1528,7 +1543,8 @@ function toolingImportedBy(roots, tracked, readFile = readRepositoryFile) {
 function loadsIn(text, path) {
   const beside = imported => specifier => ({ specifier, target: repositoryPathOf(specifier, path, new Map()), imported });
   const read = [...text.matchAll(/readFileSync\(([^;]*?)["']utf-?8["']/g)].flatMap(match => [...match[1].matchAll(/["']([^"']+)["']/g)].map(literal => `./${literal[1]}`));
-  return [...importsIn(text).filter(specifier => specifier.startsWith(".")).map(beside(true)), ...read.map(beside(false))];
+  const modules = [...importsIn(text), ...jsPluginsIn(text)];
+  return [...modules.filter(specifier => specifier.startsWith(".")).map(beside(true)), ...read.map(beside(false))];
 }
 
 /** The modules a test configuration's setup keys name, as repository paths. */
@@ -1557,7 +1573,7 @@ const SETUP_SHORTHAND = /\b(setupFiles|globalSetup|globalTeardown)\s*[,}]/;
 const SETUP_VALUE = /^(?:\[\s*(?:["'][^"'\n]+["']\s*,?\s*)*\]|["'][^"'\n]+["'])/;
 
 /** Compiler and lint configuration, which may extend or import shared configuration. */
-const SHARING_CONFIGURATION = /(?:^|\/)(?:tsconfig[^/]*\.json|eslint[^/]*\.config\.[^/]+)$/;
+const SHARING_CONFIGURATION = /(?:^|\/)(?:tsconfig[^/]*\.json|(?:eslint|oxlint)[^/]*\.config\.[^/]+)$/;
 const EXTENDS = /"extends"\s*:\s*(\[[^\]]*\]|"[^"]*")/;
 /**
  * The modules a module's text imports, as written: `import … from`,
@@ -1568,6 +1584,18 @@ const EXTENDS = /"extends"\s*:\s*(\[[^\]]*\]|"[^"]*")/;
  */
 function importsIn(text) {
   return ts.preProcessFile(text, true, true).importedFiles.map(file => file.fileName);
+}
+
+/**
+ * The modules an oxlint configuration's `jsPlugins` names, which oxlint loads
+ * as surely as an import: each string, or an entry's `specifier`, but never
+ * the `name` an entry gives its plugin. Comments are set aside first, so one
+ * naming a module is not taken for it.
+ */
+function jsPluginsIn(text) {
+  const list = /\bjsPlugins\s*:\s*\[([\s\S]*?)\]/.exec(text)?.[1] ?? "";
+  const entries = list.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, "").replace(/\bname\s*:\s*["'][^"']*["']/g, "");
+  return [...entries.matchAll(/["']([^"']+)["']/g)].map(match => match[1]);
 }
 
 function readRepositoryFile(path) {
@@ -1584,7 +1612,7 @@ function workspacePackages(files) {
 function sharedConfigurationOf(path, packages) {
   const text = readRepositoryFile(path);
   const extended = EXTENDS.exec(text)?.[1] ?? "";
-  const specifiers = [...[...extended.matchAll(/"([^"]+)"/g)].map(match => match[1]), ...importsIn(text)];
+  const specifiers = [...[...extended.matchAll(/"([^"]+)"/g)].map(match => match[1]), ...importsIn(text), ...jsPluginsIn(text)];
   return specifiers.map(specifier => repositoryPathOf(specifier, path, packages)).filter(Boolean);
 }
 

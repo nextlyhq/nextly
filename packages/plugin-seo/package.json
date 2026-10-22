@@ -22,8 +22,6 @@
     "build": "tsup",
     "dev": "tsup src/index.ts --format esm --dts --watch",
     "check-types": "tsc --noEmit",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest"
@@ -33,7 +31,6 @@
     "nextly": "0.0.2-alpha.68"
   },
   "devDependencies": {
-    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@types/node": "^20.19.17",

@@ -23,7 +23,7 @@
   // Task Execution Patterns:
   //   - dependsOn: ["^build"] = Build workspace dependencies FIRST (^ = dependencies)
   //   - cache: false = Never cache (for dev servers, formatters, destructive operations)
-  //   - cache: true = Reuses results if inputs unchanged (test, build, lint)
+  //   - cache: true = Reuses results if inputs unchanged (test, build)
   //   - persistent: true = Long-running process (dev servers, watch modes)
   //
   // Cache Behavior:
@@ -386,48 +386,9 @@
     // ==================== CODE QUALITY TASKS ====================
     // Linting, formatting, and code style enforcement
 
-    // lint - Run ESLint to check code quality and style issues
-    //
-    // Fast Parallel Execution:
-    //   - NO build dependency (lints source code directly)
-    //   - Can run alongside builds for faster CI/CD
-    //
-    // Usage:
-    //   - pnpm lint        = Check all packages for issues
-    //   - pnpm lint:fix    = Auto-fix issues (see below)
-    "lint": {
-      "dependsOn": [], // No build needed (lints source directly)
-      "inputs": [
-        "src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
-        "*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
-        "eslint.config.*",
-        "tsconfig.json"
-      ],
-      "outputs": [] // Linting produces no artifacts
-    },
-
-    // lint:fix - Auto-fix ESLint issues (formatting, simple errors)
-    //
-    // Difference from 'lint':
-    //   - lint = Read-only check (reports issues)
-    //   - lint:fix = Writes fixes to source files
-    //
-    // Why cache: false:
-    //   - Modifies source files (destructive operation)
-    //   - Each run should attempt fixes (not skip based on cache)
-    //
-    // Usage: Pre-commit hook or manual cleanup before PR
-    "lint:fix": {
-      "dependsOn": [], // No build needed
-      "inputs": [
-        "src/**/*.{ts,tsx,js,jsx}",
-        "*.{ts,tsx,js,jsx}",
-        "eslint.config.*",
-        "tsconfig.json"
-      ],
-      "outputs": [], // Modifies inputs (doesn't produce separate output)
-      "cache": false // Always run (fixes should attempt every time)
-    },
+    // Lint is not a task here: one oxlint process reads the whole repository
+    // (`pnpm lint`, configured by oxlint.config.mjs), faster than turbo could
+    // fan it out per package.
 
     // format - Run Prettier to format all files
     //

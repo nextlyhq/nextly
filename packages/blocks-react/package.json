@@ -40,8 +40,6 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "rimraf dist"
@@ -66,13 +64,11 @@
     }
   },
   "devDependencies": {
-    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@testing-library/react": "^16.3.0",
     "@types/node": "^20.19.17",
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
-    "eslint": "^9.39.1",
     "nextly": "workspace:*",
     "react": "19.2.0",
     "react-dom": "19.2.0",

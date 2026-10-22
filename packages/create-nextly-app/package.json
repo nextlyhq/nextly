@@ -27,8 +27,6 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "check-types": "tsc --noEmit",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "clean": "rimraf dist"
@@ -47,7 +45,6 @@
   },
   "devDependencies": {
     "@babel/types": "^7.29.7",
-    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/eslint-plugin": "workspace:*",
     "@nextlyhq/telemetry": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",

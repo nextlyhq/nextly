@@ -301,7 +301,7 @@ The following hooks run automatically:
 
 | Hook         | What runs                                                                             |
 | ------------ | ------------------------------------------------------------------------------------- |
-| `pre-commit` | Prettier formatting + ESLint on staged files (via lint-staged) + gitleaks secret scan |
+| `pre-commit` | Prettier formatting + oxlint on staged files (via lint-staged) + gitleaks secret scan |
 | `commit-msg` | Validates conventional commit format (see [Commit messages](#commit-messages))        |
 | `pre-push`   | Runs the production build to ensure all packages still compile                        |
 

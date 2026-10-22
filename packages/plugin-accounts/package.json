@@ -38,8 +38,6 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "check-types": "tsc --noEmit",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts"
@@ -67,7 +65,6 @@
   },
   "devDependencies": {
     "@nextlyhq/admin": "workspace:*",
-    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@testing-library/react": "^16.3.0",

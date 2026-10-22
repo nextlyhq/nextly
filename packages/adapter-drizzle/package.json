@@ -51,8 +51,6 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "check-types": "tsc --noEmit",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
@@ -66,12 +64,10 @@
     "drizzle-orm": "1.0.0-rc.4"
   },
   "devDependencies": {
-    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@types/node": "^20.19.17",
     "@vitest/coverage-v8": "^4.1.0",
     "@vitest/ui": "^4.1.0",
-    "eslint": "^9.39.1",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",

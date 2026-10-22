@@ -70,7 +70,6 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
-    "lint": "eslint . --max-warnings 0",
     "clean": "rimraf dist",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts"
@@ -100,7 +99,6 @@
   },
   "devDependencies": {
     "@nextlyhq/admin": "workspace:*",
-    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@types/node": "^20.19.17",
     "@types/react": "19.2.0",

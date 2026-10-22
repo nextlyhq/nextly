@@ -11,9 +11,7 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:report": "playwright show-report",
-    "check-types": "tsc --noEmit",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix"
+    "check-types": "tsc --noEmit"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
@@ -21,13 +19,11 @@
     "@nextlyhq/adapter-sqlite": "workspace:*",
     "@nextlyhq/admin": "workspace:*",
     "@nextlyhq/builder": "workspace:*",
-    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/plugin-form-builder": "workspace:*",
     "@nextlyhq/plugin-page-builder": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@playwright/test": "^1.58.2",
     "@types/node": "^24.10.0",
-    "eslint": "^9.39.1",
     "nextly": "workspace:*",
     "typescript": "^5.9.3"
   }

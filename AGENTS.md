@@ -201,8 +201,8 @@ budget, the overrides and each operating system's caveats: the
 - Every code change includes a comment explaining what and why. Comments
   describe the code only: never reference tasks, plans, conversations, or
   review findings.
-- No `as any`, `@ts-expect-error`, or eslint-disable to silence type or lint
-  errors. Fix the cause with real types, guards, or generics.
+- No `as any`, `@ts-expect-error`, or a lint-disable comment to silence type or
+  lint errors. Fix the cause with real types, guards, or generics.
 - API responses use the canonical envelopes in
   `packages/nextly/src/api/response-shapes.ts` (`{ items, meta }` for lists,
   `{ message, item }` for mutations). Never invent a new response shape.
