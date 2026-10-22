@@ -13,7 +13,7 @@ const { mayPerform, services } = vi.hoisted(() => ({
     activityLogService: { singlesWithRecordedSaves: vi.fn() },
   },
 }));
-vi.mock("../../../auth/authenticated-scope", () => ({
+vi.mock("../../../auth/access/route-gate-adapters", () => ({
   callerMayPerform: (
     _scope: unknown,
     action: string,

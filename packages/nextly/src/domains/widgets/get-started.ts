@@ -15,7 +15,7 @@
  * @module domains/widgets/get-started
  */
 
-import { callerMayPerform } from "../../auth/authenticated-scope";
+import { callerMayPerform } from "../../auth/access/route-gate-adapters";
 import { authorizationGroups } from "../../auth/entity-read-access";
 import { getService } from "../../di";
 

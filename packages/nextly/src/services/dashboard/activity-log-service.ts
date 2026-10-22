@@ -969,7 +969,11 @@ export class ActivityLogService extends BaseService {
    * counted, that record would tick a Single nobody has saved. The registry is
    * JOINED, read only, so the two instants are compared by the database, as
    * stored, with no conversion in between. A row within the same instant
-   * counts.
+   * counts, since a Single is commonly saved in the second it was created. So
+   * on the dialects that store whole seconds (SQLite, and MySQL at its default
+   * precision), a Single deleted and created again within the same second as
+   * its predecessor's save inherits that save; telling the two apart exactly
+   * would take a read of each Single's own document on every call.
    *
    * On MySQL the trail's instant is a TIMESTAMP, which the server converts
    * through the session's time zone, and the registry's a DATETIME, which it
