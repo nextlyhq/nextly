@@ -1300,11 +1300,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.inert != 'true'
     runs-on: ubuntu-latest
-    # 30, not 20. On a loaded runner pool this job's suite runs on one worker
-    # and a full pass took 17 minutes on main, so a 20-minute budget cancelled
-    # passing runs part way through; 30 leaves room for that without letting a
-    # hung run go on indefinitely.
-    timeout-minutes: 30
+    # 45, not 30. The suite runs on one worker, and at 402 tests a passing run
+    # was still going when 30 minutes cancelled it (job 120021242729: setup and
+    # build 8 minutes, then 22 minutes of tests, all passing). 45 leaves room for
+    # that without letting a hung run go on indefinitely.
+    timeout-minutes: 45
 
     # Job-wide, so every turbo here reads the cache the Restore step put in
     # `.turbo`, including the one `pnpm dev:app` runs inside the webServer.
