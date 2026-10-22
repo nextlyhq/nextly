@@ -35,6 +35,7 @@ import type {
 } from "../../domains/schema/extension/dsl";
 import type { SchemaOwner } from "../../domains/schema/extension/types";
 import { NextlyError } from "../../errors/nextly-error";
+import { getNextlyLogger } from "../../observability/logger";
 import { uuidV7 } from "../../utils/uuid-v7";
 import { transactionScope } from "../transaction-scope";
 
@@ -1266,7 +1267,12 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
     },
 
     async transaction(fn) {
-      return deps.transaction(async tx => {
+      // What core work inside asked to run once this transaction commits
+      // (`LinkedTransaction.afterCommit`). Run below, after `deps.transaction`
+      // has resolved, which it does only once the commit has succeeded; a
+      // rollback rejects first and the effects are dropped with the array.
+      const committed: Array<() => unknown> = [];
+      const result = await deps.transaction(async tx => {
         // The same surface, reading the transaction's handles. Built rather
         // than mutated so a caller holding the outer `ctx.db` cannot
         // accidentally write outside the transaction.
@@ -1324,7 +1330,11 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
           transaction: () => Promise.reject(nestedTransactionError()),
           track: scope.track,
         });
-        if (tx.adapterTx) linkPluginTransaction(scoped, tx.adapterTx, scope);
+        if (tx.adapterTx) {
+          linkPluginTransaction(scoped, tx.adapterTx, scope, effect =>
+            committed.push(effect)
+          );
+        }
         // Marked as the flow's transaction, so a core write that opens its
         // own and needs a lock this one holds can join it instead of waiting
         // on it (see `plugin-transaction-in-flow`).
@@ -1332,6 +1342,8 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
           runInPluginTransactionFlow(scoped, () => fn(scoped))
         );
       });
+      await runCommitEffects(committed);
+      return result;
     },
 
     // Resolved per access, never cached: the registry invalidates its
@@ -1601,6 +1613,27 @@ async function whenColumnsExist<T>(
  * `[header, fields]` pair rather than as the result itself, so the header is
  * read from there; read from the pair, every MySQL write reported -1.
  */
+/**
+ * Run a committed transaction's effects in the order they were registered.
+ * Each is awaited before the next starts, and one that fails is logged rather
+ * than thrown: the transaction has committed, and its caller is owed that
+ * result, not an effect's failure in its place.
+ */
+async function runCommitEffects(
+  effects: readonly (() => unknown)[]
+): Promise<void> {
+  for (const effect of effects) {
+    try {
+      await effect();
+    } catch (error) {
+      getNextlyLogger().error({
+        kind: "after-commit-effect-failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+}
+
 function affectedRows(result: unknown): number {
   const header = Array.isArray(result) ? result[0] : result;
   if (typeof header === "object" && header !== null) {

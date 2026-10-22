@@ -13,6 +13,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import {
+  type NextlyLogger,
+  setNextlyLogger,
+} from "../../../observability/logger";
 import { definePlugin, type PluginContext } from "../../plugin-context";
 import {
   createTestNextly,
@@ -25,6 +29,7 @@ import { linkedTransaction } from "../plugin-transaction-link";
 let current: TestNextly | undefined;
 
 afterEach(async () => {
+  setNextlyLogger(undefined);
   await current?.destroy();
   current = undefined;
 });
@@ -141,6 +146,113 @@ describe.each(getConfiguredTestDialects())(
       if (!kept) throw new Error("the transaction never ran");
       await expect(writeThrough(kept, "link-after-end")).rejects.toThrow();
       expect(await stored("link-after-end")).toBe(false);
+    });
+
+    it("runs an effect after the commit, where the pool sees the transaction's writes", async () => {
+      const ctx = await boot();
+      const seen: Array<{ at: string; stored?: boolean }> = [];
+      const result = await ctx.db.transaction(async tx => {
+        await writeThrough(tx, "link-effect-committed");
+        linkedTransaction(tx, "test.effect").afterCommit(async () => {
+          // Read on the pool, not the transaction's connection: on PostgreSQL
+          // and MySQL only a committed row is visible here.
+          seen.push({
+            at: "effect",
+            stored: await stored("link-effect-committed"),
+          });
+        });
+        seen.push({ at: "callback end" });
+        return "the callback's result";
+      });
+      seen.push({ at: "resolved" });
+      expect(result).toBe("the callback's result");
+      expect(seen).toEqual([
+        { at: "callback end" },
+        { at: "effect", stored: true },
+        { at: "resolved" },
+      ]);
+    });
+
+    it("runs effects in the order they were registered", async () => {
+      const ctx = await boot();
+      const order: string[] = [];
+      await ctx.db.transaction(async tx => {
+        const link = linkedTransaction(tx, "test.effect");
+        link.afterCommit(async () => {
+          await new Promise(resolve => setTimeout(resolve, 20));
+          order.push("first");
+        });
+        link.afterCommit(() => {
+          order.push("second");
+        });
+      });
+      expect(order).toEqual(["first", "second"]);
+    });
+
+    it("never runs an effect when the transaction rolls back", async () => {
+      const ctx = await boot();
+      const failure = new Error("the plugin's own work failed");
+      let ran = false;
+      await expect(
+        ctx.db.transaction(async tx => {
+          await writeThrough(tx, "link-effect-rolled-back");
+          linkedTransaction(tx, "test.effect").afterCommit(() => {
+            ran = true;
+          });
+          throw failure;
+        })
+      ).rejects.toBe(failure);
+      expect(ran).toBe(false);
+      expect(await stored("link-effect-rolled-back")).toBe(false);
+    });
+
+    it("logs an effect that fails, keeps the commit, and still runs the next effect", async () => {
+      const ctx = await boot();
+      const errors: object[] = [];
+      const quiet = () => undefined;
+      const logger: NextlyLogger = {
+        error: payload => errors.push(payload),
+        warn: quiet,
+        info: quiet,
+        debug: quiet,
+      };
+      setNextlyLogger(logger);
+      let next = false;
+      const result = await ctx.db.transaction(async tx => {
+        await writeThrough(tx, "link-effect-failed");
+        const link = linkedTransaction(tx, "test.effect");
+        link.afterCommit(() => {
+          throw new Error("the effect failed");
+        });
+        link.afterCommit(() => {
+          next = true;
+        });
+        return "committed";
+      });
+      expect(result).toBe("committed");
+      expect(await stored("link-effect-failed")).toBe(true);
+      expect(next).toBe(true);
+      expect(errors).toEqual([
+        { kind: "after-commit-effect-failed", message: "the effect failed" },
+      ]);
+    });
+
+    it("refuses an effect once the transaction has finished", async () => {
+      const ctx = await boot();
+      let kept: PluginTransaction | undefined;
+      await ctx.db.transaction(async tx => {
+        kept = tx;
+      });
+      if (!kept) throw new Error("the transaction never ran");
+      const link = linkedTransaction(kept, "test.effect");
+      let caught: unknown;
+      try {
+        link.afterCommit(() => undefined);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(NextlyError);
+      expect(JSON.stringify(caught)).toMatch(/already finished/);
     });
 
     it("refuses anything but a handle ctx.db.transaction passed its callback", async () => {

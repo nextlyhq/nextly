@@ -12,6 +12,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
@@ -22,8 +23,10 @@ import {
   type EmailFilterContext,
   type EmailAfterSendValue,
 } from "../../../filters";
+import { env } from "../../../lib/env";
 import { getBaseUrl } from "../../../lib/get-base-url";
 import { maskingServiceLogger } from "../../../observability/mask-emails";
+import { linkedTransaction } from "../../../plugins/database/plugin-transaction-link";
 import {
   isStaffPersonId,
   principalRefOf,
@@ -32,10 +35,14 @@ import {
 } from "../../../plugins/principals/ref";
 import { getPrincipalKind } from "../../../plugins/principals/registry";
 import type { PrincipalRef } from "../../../plugins/principals/types";
+import type { TxOption } from "../../../plugins/security/one-time-secrets";
 import type { EmailTemplateRecord } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
+import { runAdapterTransaction } from "../../../shared/lib/run-adapter-transaction";
+import { pluginSettingsSecrets } from "../../plugins/settings-service";
 import {
   isRecognisedMessageId,
   mailboxOf,
@@ -46,6 +53,13 @@ import {
 import { EmailErrorCode } from "../errors";
 import type { EmailFailure } from "../failure";
 import { describeProviderFailure } from "../provider-definition";
+import { warnAboutLateQueuedEmail } from "../queued-email-warning";
+import {
+  type QueuedEmail,
+  type QueuedMessage,
+  queuedEmailState,
+  storeQueuedEmail,
+} from "../queued-send";
 import {
   assertIdempotencyKey,
   CORE_KEY_SCOPE,
@@ -317,7 +331,13 @@ export class EmailService extends BaseService {
      * never a failed send: the log exists to observe delivery, and it must not
      * become a thing that can prevent it.
      */
-    private readonly deliveries?: EmailDeliveryService
+    private readonly deliveries?: EmailDeliveryService,
+    /**
+     * Run a queued email's job now: its first attempt, once the email is
+     * stored. Optional so a service built without the job queue -- a test's
+     * -- still queues; the email then waits for the jobs trigger.
+     */
+    private readonly runQueuedJob?: (jobId: string) => Promise<unknown>
   ) {
     // Masked here whatever logger an app supplied: what this service logs,
     // a provider error quoting a recipient included, never carries a full
@@ -1239,6 +1259,128 @@ export class EmailService extends BaseService {
       // The recorder already promises not to throw; one that breaks that
       // promise costs the record of this attempt, never the send.
     }
+  }
+
+  /**
+   * @experimental Queue an email: stored, sent right after, and retried
+   * through the job queue until it is sent or fails for good.
+   *
+   * Takes every option `send` takes. With `tx`, the handle a plugin's
+   * `ctx.db.transaction` passes its callback, the email is stored in that
+   * transaction and exists only if it commits; its first attempt is made once
+   * it has, before `ctx.db.transaction` resolves. Without `tx` the email is
+   * stored and attempted before this returns; a call made while the flow has
+   * a transaction open is then refused, since the email would commit on its
+   * own.
+   *
+   * A failure the provider marks temporary is retried with backoff, up to a
+   * limit; any other failure fails the email without another attempt. Every
+   * attempt sends with `idempotencyKey`, or with one derived from the queued
+   * email when none is given, so a retry after a lost response is not
+   * delivered twice where the provider takes a key. The message is held
+   * sealed under the install's secret, never in the job queue. A retry needs
+   * the jobs trigger (`/api/jobs/run`) to run.
+   *
+   * @returns The queued email's id, and where it stands
+   */
+  async queue(
+    options: Omit<Parameters<EmailService["send"]>[0], "templateSlug"> &
+      TxOption
+  ): Promise<QueuedEmail> {
+    const { tx, ...send } = options;
+    await this.assertQueueable(send.to, send.person, send.idempotencyKey);
+    return this.enqueue({ kind: "message", send }, tx, "email.queue");
+  }
+
+  /**
+   * @experimental Queue an email made from a template, as `queue` queues a
+   * message (see it for `tx`, retries and keys). The template is rendered at
+   * each attempt, from the template as saved then, with `variables` as given.
+   *
+   * @returns The queued email's id, and where it stands
+   */
+  async queueWithTemplate(
+    templateSlug: string,
+    to: string | string[],
+    variables: Record<string, unknown>,
+    options?: NonNullable<Parameters<EmailService["sendWithTemplate"]>[3]> &
+      TxOption
+  ): Promise<QueuedEmail> {
+    const { tx, ...rest } = options ?? {};
+    await this.assertQueueable(to, rest.person, rest.idempotencyKey);
+    return this.enqueue(
+      { kind: "template", slug: templateSlug, to, variables, options: rest },
+      tx,
+      "email.queueWithTemplate"
+    );
+  }
+
+  /**
+   * What a send would refuse before anything is resolved, refused when the
+   * email is queued rather than at its first attempt: the key, the person,
+   * and the recipients as the caller gave them.
+   */
+  private async assertQueueable(
+    to: string | string[],
+    person: unknown,
+    idempotencyKey: string | undefined
+  ): Promise<void> {
+    if (idempotencyKey !== undefined) assertIdempotencyKey(idempotencyKey);
+    const recorded = await this.personToRecord(person);
+    assertSendable(toAddressList(to), { namesPerson: recorded !== null });
+  }
+
+  /** Store a queued email, and start its first attempt once it is durable. */
+  private async enqueue(
+    message: QueuedMessage,
+    tx: TxOption["tx"],
+    operation: string
+  ): Promise<QueuedEmail> {
+    const input = {
+      scope: this.keyScope,
+      message,
+      secrets: pluginSettingsSecrets(env),
+      dialect: this.dialect,
+      now: new Date(),
+    };
+    if (tx !== undefined) {
+      const link = linkedTransaction(tx, operation);
+      const { id, jobId } = await link.run(adapterTx =>
+        storeQueuedEmail(adapterTx, input)
+      );
+      link.afterCommit(() => this.firstAttempt(jobId));
+      return { id, state: "waiting" };
+    }
+    assertNoOpenTransaction(this.adapter, operation);
+    const { id, jobId } = await runAdapterTransaction<
+      { id: string; jobId: string },
+      TransactionContext
+    >(
+      run => this.adapter.transaction(ctx => run(ctx)),
+      ctx => storeQueuedEmail(ctx, input)
+    );
+    await this.firstAttempt(jobId);
+    return {
+      id,
+      state: (await queuedEmailState(this.adapter, id)) ?? "waiting",
+    };
+  }
+
+  /**
+   * A stored email's first attempt, through its job, then the warning when
+   * queued email is overdue. Never throws: the email is stored, and an
+   * attempt that could not start is made by the next jobs trigger.
+   */
+  private async firstAttempt(jobId: string): Promise<void> {
+    try {
+      await this.runQueuedJob?.(jobId);
+    } catch (error) {
+      this.logger.warn(
+        "A queued email's first attempt did not start; the jobs trigger will make it.",
+        { error: error instanceof Error ? error.message : String(error) }
+      );
+    }
+    await warnAboutLateQueuedEmail(this.adapter, this.logger);
   }
 
   // ============================================================

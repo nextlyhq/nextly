@@ -17,6 +17,7 @@
  */
 
 import type { NextlyServiceConfig } from "../../di/register";
+import { QUEUED_EMAIL_JOB } from "../../domains/email/queued-email-job";
 import {
   normalizeJobSlug,
   type JobDefinition,
@@ -39,6 +40,12 @@ export interface CollectedJob {
  * own registrations bypass this fold entirely, so nothing legitimate is refused.
  */
 const RESERVED_JOB_PREFIXES = ["releases:", "webhooks:", "nextly:"];
+
+/**
+ * Exact slugs core registers outside those namespaces. Exact rather than a
+ * prefix, so a plugin that already declares another `email:` job still boots.
+ */
+const RESERVED_JOB_SLUGS = [QUEUED_EMAIL_JOB];
 
 /**
  * Fold `config.jobs` and every plugin's `contributes.jobs` into one list.
@@ -89,6 +96,12 @@ export function collectJobs(
       throw NextlyError.invalidInput({
         message: `NEXTLY_JOB_COLLISION: "${owner}" declares job slug "${slug}", but the "${reserved}" namespace is reserved for built-in job types.`,
         logContext: { slug, owner, reserved },
+      });
+    }
+    if (RESERVED_JOB_SLUGS.includes(slug)) {
+      throw NextlyError.invalidInput({
+        message: `NEXTLY_JOB_COLLISION: "${owner}" declares job slug "${slug}", which is a built-in job type.`,
+        logContext: { slug, owner, reserved: slug },
       });
     }
 

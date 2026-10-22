@@ -24,9 +24,13 @@ import {
   createDocumentLockSweepJob,
   type DocumentLockService,
 } from "../../domains/document-lock";
+import { createQueuedEmailJob } from "../../domains/email/queued-send";
+import { scopedSender } from "../../domains/email/send-claims";
+import type { EmailService } from "../../domains/email/services/email-service";
 import { JobRegistry } from "../../domains/jobs/job-registry";
 import { JobsRepository } from "../../domains/jobs/jobs-repository";
 import { databaseRunAs } from "../../domains/jobs/jobs-runner";
+import { pluginSettingsSecrets } from "../../domains/plugins/settings-service";
 import type { ApplyDueReleasesResult } from "../../domains/releases/apply-due-releases";
 import { createReleasesDrainJob } from "../../domains/releases/releases-drain-job";
 import {
@@ -37,6 +41,7 @@ import {
 import type { WebhookEndpointRegistry } from "../../domains/webhooks/endpoint-registry";
 import type { RunDrainResult } from "../../domains/webhooks/run-drain";
 import { createWebhookDrainJob } from "../../domains/webhooks/webhook-drain-job";
+import { env } from "../../lib/env";
 import { collectJobs } from "../../plugins/jobs/collect-jobs";
 import type { Logger } from "../../services/shared";
 import { container } from "../container";
@@ -227,6 +232,19 @@ export function registerJobServices(ctx: RegistrationContext): void {
         result => reportWebhookDrainOutcome(logger, result)
       )
     );
+    // Queued email: one attempt per run of a queued email's job, which carries
+    // only the email's id. The send service is resolved per run, as the
+    // queued email's own scope sends through it, so its key is claimed where
+    // the caller's would be.
+    registry.register(
+      createQueuedEmailJob(() => ({
+        adapter,
+        sender: scope =>
+          scopedSender(container.get<EmailService>("emailService"), scope),
+        secrets: pluginSettingsSecrets(env),
+      }))
+    );
+
     // Job types the application and its plugins declared. Registered AFTER the
     // built-ins so a plugin cannot shadow one: `collectJobs` already refuses a
     // reserved namespace, and `JobRegistry.register` refuses a duplicate slug

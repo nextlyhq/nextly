@@ -64,6 +64,20 @@ describe("collectJobs", () => {
     ).toThrow(/reserved for built-in job types/);
   });
 
+  it("refuses the queued-email job's slug, and only that one in its namespace", () => {
+    // `email:send` makes every queued email's attempts; a plugin's handler in
+    // its place would receive each queued id. Another `email:` slug is a
+    // plugin's own and still boots.
+    expect(() =>
+      collectJobs(config(), [plugin("acme", [job("email:send")])])
+    ).toThrow(/"email:send", which is a built-in job type/);
+    expect(
+      collectJobs(config(), [plugin("acme", [job("email:digest")])]).map(
+        c => c.definition.slug
+      )
+    ).toEqual(["email:digest"]);
+  });
+
   it("ignores a DISABLED plugin's jobs", () => {
     // `initializePlugins` skips a disabled plugin's init, services and hooks, so
     // registering its handler would make runnable code whose setup deliberately
