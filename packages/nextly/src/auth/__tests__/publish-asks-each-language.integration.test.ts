@@ -469,5 +469,33 @@ describe.each(getConfiguredTestDialects())(
       expect(refused.success).toBe(false);
       expect(refused.statusCode).toBe(403);
     });
+
+    it("asks a translation already marked published that publishing the main row exposes", async () => {
+      const t = await boot(dialect);
+      // English a draft, and French marked published on its own: a read goes
+      // by the main row's status, so French is hidden until the main row is
+      // published, and publishing every language puts it live.
+      const id = await draftArticle(t, ["en", "fr"]);
+      await t.nextly.update({
+        collection: ARTICLES,
+        id,
+        locale: "fr",
+        data: { status: "published" },
+      });
+      expect(await mainStatus(t, id)).toBe("draft");
+      asked = [];
+
+      const refused = await handlerOf(t).publishAllLocales({
+        collectionName: ARTICLES,
+        entryId: id,
+        overrideAccess: false,
+        user: USER,
+      });
+      expect(publishedLocales().map(question => question.locale)).toContain(
+        "fr"
+      );
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(403);
+    });
   }
 );
