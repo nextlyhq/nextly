@@ -155,13 +155,15 @@ async function unreadableFields(
   kind: EntityKind,
   slug: string,
   names: Iterable<string>,
-  caller: QueryCaller
+  caller: QueryCaller,
+  /** A resolver shared across several calls, so the caller is read once. */
+  grants = callerAccessGrants(caller.user, caller.authenticatedScope)
 ): Promise<string[]> {
   const fns = getFieldFunctions(kind, slug);
   if (!fns) return [];
   const ruleCaller = {
     user: caller.user,
-    grants: callerAccessGrants(caller.user, caller.authenticatedScope),
+    grants,
     target: fieldRuleTarget(kind, slug),
   };
   const denied: string[] = [];
@@ -323,6 +325,10 @@ export async function assertFieldGroupPathsFilterable(
 ): Promise<void> {
   // The same two exemptions, for the same reasons, as `assertFilterableFields`.
   if (opts.overrideAccess || opts.frameworkFilter) return;
+  const caller = opts.caller ?? {};
+  // One resolver for every target and field group judged, so the caller's
+  // roles are read once however many paths the filter names.
+  const grants = callerAccessGrants(caller.user, caller.authenticatedScope);
   const refused: string[] = [];
   for (const target of targets) {
     for (const slug of target.componentSlugs) {
@@ -330,7 +336,8 @@ export async function assertFieldGroupPathsFilterable(
         "fieldGroup",
         slug,
         [ownerOf(target.componentFieldPath)],
-        opts.caller ?? {}
+        caller,
+        grants
       );
       if (denied.length > 0) {
         refused.push(target.key);

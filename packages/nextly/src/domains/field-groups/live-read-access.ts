@@ -55,11 +55,20 @@ export async function liveFieldGroupReadPass(
     : new Map<string, FieldConfig[]>();
   // A live document: a single field group's value is judged by the field group
   // the field declares, whatever type a hook may have given it.
-  return (row, caller) =>
-    applyComponentReadAccess(row, fields, fieldGroupFields, {
-      ...caller,
-      declaredComponentDecides: true,
-    });
+  return (row, caller) => {
+    const walk = () =>
+      applyComponentReadAccess(row, fields, fieldGroupFields, {
+        ...caller,
+        declaredComponentDecides: true,
+      });
+    // A rule of an outer field group may read a field of one nested in it,
+    // whose removal belongs to the inner registration, so no instance's own
+    // restore reaches it: the whole walk is judged against the field groups
+    // as stored, and what that puts back is taken out again after it.
+    return caller.redactions
+      ? withFieldGroupEvidence(row, caller.redactions, walk)
+      : walk();
+  };
 }
 
 /**
