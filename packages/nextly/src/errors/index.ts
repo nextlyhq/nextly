@@ -10,4 +10,6 @@ export type {
   RateLimitPublicData,
   SingleAbsentPublicData,
   ReleaseProblemsPublicData,
+  SharedFieldsConflictPublicData,
+  SharedFieldsConflictReason,
 } from "./public-data";

@@ -233,6 +233,24 @@ export interface DiscardWorkingDraftResponse {
   item: Record<string, unknown>;
 }
 
+/**
+ * What taking the live shared values did: the fields taken, those still out
+ * of date, and those left to copy by hand, each named where the caller may
+ * read it and counted otherwise.
+ */
+export interface TakenLiveValues {
+  taken: string[];
+  hiddenTaken?: number;
+  outOfDate: string[];
+  hiddenOutOfDate?: number;
+  copyByHand?: { fields: string[]; reason: string };
+}
+
+export interface TakeLiveSharedValuesResponse {
+  message: string;
+  item: TakenLiveValues;
+}
+
 export const versionApi = {
   /**
    * A page of the document's events, newest first. The next page passes the
@@ -344,6 +362,26 @@ export const versionApi = {
 
     return protectedApi.delete<DiscardWorkingDraftResponse>(
       `${basePath(scope)}/working-draft${query ? `?${query}` : ""}`
+    );
+  },
+
+  /**
+   * Bring one language's pending change up to date with the live values of
+   * the fields every language shares: the way out of a publish refused
+   * because someone else published newer ones. Recorded as a save of the
+   * change, so its history shows it and a restore can undo it.
+   */
+  takeLiveSharedValues: (
+    scope: VersionScope,
+    locale?: string | null
+  ): Promise<TakeLiveSharedValuesResponse> => {
+    const search = new URLSearchParams();
+    if (locale) search.set("locale", locale);
+    const query = search.toString();
+
+    return protectedApi.post<TakeLiveSharedValuesResponse>(
+      `${basePath(scope)}/working-draft/take-live${query ? `?${query}` : ""}`,
+      {}
     );
   },
 
