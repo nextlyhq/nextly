@@ -580,6 +580,7 @@ describe("what a browser bundle can reach", () => {
   });
 
   it("reaches no server-only code", () => {
+    // A value imported from `nextly/schemas`, the server's barrel, fails here: it reaches drizzle-orm and node:crypto.
     expect(describeViolations(result)).toEqual([]);
   });
 });
