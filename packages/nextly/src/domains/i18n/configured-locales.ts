@@ -46,3 +46,19 @@ export function configuredLocales(): ReadonlySet<string> | null {
     return null;
   }
 }
+
+/**
+ * Runs one request with one language list from start to end: the registry is brought up to date
+ * (at most one fingerprint read per interval) and the list it then holds is the one every read
+ * inside `operation` sees, so a language added meanwhile reaches the next request rather than the
+ * second half of this one. Before services are registered there is no registry, and the request
+ * runs as it is.
+ */
+export async function withCurrentLanguages<T>(
+  operation: () => Promise<T>
+): Promise<T> {
+  if (!container.has("languageRegistry")) return operation();
+  const registry = container.get<LanguageRegistry>("languageRegistry");
+  await registry.refresh();
+  return registry.runWithSnapshot(operation);
+}

@@ -121,7 +121,10 @@ import { hasAuthRateLimit } from "./auth/handlers/router";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
-import { appLocalization } from "./domains/i18n/configured-locales";
+import {
+  appLocalization,
+  withCurrentLanguages,
+} from "./domains/i18n/configured-locales";
 import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
 import {
@@ -1286,7 +1289,18 @@ async function withinBuiltInLimit(
   return refused ?? serve();
 }
 
-async function handleServiceRequest(
+/** Serves one REST request with one language list from start to end (`withCurrentLanguages`). */
+function handleServiceRequest(
+  req: Request,
+  params: string[],
+  httpMethod: string
+): Promise<Response> {
+  return withCurrentLanguages(() =>
+    serveServiceRequest(req, params, httpMethod)
+  );
+}
+
+async function serveServiceRequest(
   req: Request,
   params: string[],
   httpMethod: string

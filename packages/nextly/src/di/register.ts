@@ -1152,6 +1152,12 @@ async function registerServicesOnce(
   // attempted to run. System bootstrap (permissions table) still
   // happens automatically — see permission-seed-service.
 
+  // The stored language list is read before registration publishes: until its first read the
+  // registry knows no stored languages, and a request served in that gap would read a site with
+  // languages as one without, sending translated values to the main table. After the boot
+  // migrations, so the table exists; a read that fails for any other reason fails the boot.
+  await ctx.languages.refresh({ force: true });
+
   bindDirectApi();
 
   // No boot-migrations gate is opened here. Migrations ran at Layer 6.5,
