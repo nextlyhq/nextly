@@ -18,6 +18,12 @@ import { useSettingsPreview } from "../useSettingsPreview";
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
 }));
+// The batch answered as the `protectedApi.post` mock above describes it; see `batch-over-post`.
+vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
+  (
+    await import("@admin/hooks/queries/__tests__/batch-over-post")
+  ).streamOverPost()
+);
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({
