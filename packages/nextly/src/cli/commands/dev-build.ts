@@ -22,7 +22,6 @@ import {
 import {
   beginI18nTransition,
   settleI18nTransition,
-  type I18nTransitionKind,
 } from "../../domains/i18n/migration/transition-state";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import { deleteEntityRegistryRow } from "../../domains/versions/entity-teardown";
@@ -949,53 +948,11 @@ export async function ensureLocalizedCompanions(
   // the app configures no default locale, in which case no entity can be localized and nothing
   // reaches the create below.
   const transitions = bindTransitionRecorder(transitionStore, config);
-  // Each entity kind resolves its physical table differently, and a custom
-  // `dbName` is where they diverge: collections and singles force their `dc_` /
-  // `single_` prefix onto it (and singles normalize the identifier), while field
-  // groups take no override at all. A single shared "prefix + slug" rule would
-  // point at a table the runtime never created — `dbName: "forms"` on a
-  // collection lives at `dc_forms`, so the companion would be built as
-  // `forms_locales` with a foreign key to a table that does not exist.
-  const { resolveCollectionTableName, resolveComponentTableName } =
-    await import("../../domains/schema/utils/resolve-table-name");
-  const { resolveSingleTableName } = await import(
-    "../../domains/singles/services/resolve-single-table-name"
+  // Each kind's entities and how its table is named, as the boot reads them too.
+  const { localizableConfigEntities } = await import(
+    "../../domains/i18n/runtime/localizable-config-entities"
   );
-
-  interface LocalizableEntity {
-    slug?: string;
-    dbName?: string;
-    localized?: boolean;
-    status?: boolean;
-    fields?: { name: string; type: string; localized?: boolean }[];
-  }
-
-  // The kind travels with each group because it is part of the transition record's
-  // key: a collection, a single and a field group may share one slug, and only one
-  // of them may have transitioned.
-  const groups: [
-    I18nTransitionKind,
-    LocalizableEntity[],
-    (e: LocalizableEntity) => string,
-  ][] = [
-    [
-      "collection",
-      (config.collections ?? []) as LocalizableEntity[],
-      e => resolveCollectionTableName(e.slug!, e.dbName),
-    ],
-    [
-      "single",
-      (config.singles ?? []) as LocalizableEntity[],
-      e => resolveSingleTableName({ slug: e.slug!, dbName: e.dbName }),
-    ],
-    [
-      "fieldGroup",
-      (config.fieldGroups ?? []) as LocalizableEntity[],
-      // Field groups derive their table from the slug alone — unlike collections
-      // and singles they carry no `dbName` override.
-      e => resolveComponentTableName(e.slug!),
-    ],
-  ];
+  const groups = localizableConfigEntities(config);
 
   const failures: string[] = [];
   for (const [kind, group, resolveTableName] of groups) {

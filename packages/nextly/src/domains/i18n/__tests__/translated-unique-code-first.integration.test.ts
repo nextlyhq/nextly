@@ -15,6 +15,7 @@ import {
 import { readIndexNames } from "../../schema/pipeline/live-table-facts";
 import { companionUniqueIndexName } from "../migration/companion-unique-indexes";
 import { reconcileCompanionUniqueIndexes } from "../runtime/companion-unique-reconcile";
+import { warnAboutUnindexedTranslatedUnique } from "../runtime/translated-unique-boot-check";
 
 const COMPANION = "dc_articles_locales";
 const INDEX = companionUniqueIndexName(COMPANION, "handle");
@@ -98,5 +99,32 @@ describeEachDialect("a code-first translated unique field", dialect => {
     expect(reported[0]).toContain(b);
     expect(reported[0]).not.toContain("about");
     expect(await indexes()).not.toContain(INDEX);
+  });
+
+  it("names the field at boot, with the commands, until its index is there", async () => {
+    const config = {
+      collections: [
+        {
+          slug: "articles",
+          localized: true,
+          fields: [{ name: "handle", type: "text", unique: true }],
+        },
+      ],
+    };
+    const warned = async () => {
+      const said: string[] = [];
+      await warnAboutUnindexedTranslatedUnique(current.adapter, config, m =>
+        said.push(m)
+      );
+      return said;
+    };
+
+    const before = await warned();
+    expect(before).toHaveLength(1);
+    expect(before[0]).toContain('"handle"');
+    expect(before[0]).toContain("nextly migrate:create");
+
+    await sync(true);
+    expect(await warned()).toEqual([]);
   });
 });

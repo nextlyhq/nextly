@@ -95,6 +95,23 @@ export async function runPostInitTasks(): Promise<void> {
     // marker stays unset, so the next boot tries again.
   }
 
+  // Name each configured translated unique field whose per-language index is not there yet. The
+  // boot never creates it, so until a migration or `db:sync` does, the rule is not enforced.
+  try {
+    const { warnAboutUnindexedTranslatedUnique } = await import(
+      "../domains/i18n/runtime/translated-unique-boot-check"
+    );
+    const logger = getService("logger");
+    await warnAboutUnindexedTranslatedUnique(
+      getService("adapter"),
+      getService("config"),
+      message => logger.warn(message)
+    );
+  } catch {
+    // Silently skip — the adapter may not be registered, or the tables may not exist yet. A
+    // diagnostic must never be the reason a server fails to start.
+  }
+
   // Say so when a stored provider needs a package this install does not have.
   // Runs LAST, after plugin contributions have registered, because whether a
   // type is usable is a question only the fully seeded registry can answer.
