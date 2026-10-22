@@ -247,6 +247,26 @@ describe("Integration on request", () => {
   });
 });
 
+describe("a dispatched run and the push run of one commit", () => {
+  /*
+   * main-catch-up.yml dispatches CI and Integration on a commit whose push run
+   * may still be queued. Sharing one group, whichever started later cancelled
+   * the other, and the commit lost the run meant to test it. Each workflow's
+   * group and cancellation are evaluated for both events on one commit.
+   */
+  const valueFor = (workflow, template, event) =>
+    String(template).replace(/\$\{\{([\s\S]*?)\}\}/g, (_, expression) =>
+      String(evaluate(conditionTokens(expression), expression, { "github.workflow": workflow.name, "github.event_name": event, "github.ref": "refs/heads/main", "github.sha": "s1", "github.event.pull_request.number": null }))
+    );
+
+  it.each([".github/workflows/ci.yml", ".github/workflows/integration.yml"])("%s keeps them in separate groups, and a dispatch cancels nothing", path => {
+    const workflow = read(path);
+    const { group, "cancel-in-progress": cancels } = workflow.concurrency;
+    expect(valueFor(workflow, group, "workflow_dispatch")).not.toBe(valueFor(workflow, group, "push"));
+    expect(valueFor(workflow, cancels, "workflow_dispatch")).toBe("false");
+  });
+});
+
 describe("a sharded leg", () => {
   /*
    * The lane check takes a matrix job that hands the lane its own shard as
