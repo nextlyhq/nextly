@@ -1,0 +1,23 @@
+{
+  // The playground's type-check without its production build.
+  //
+  // The root config makes every package's `check-types` wait for its own
+  // `build`, so two writers of one build-info file never run at once. Here that
+  // `build` is `next build`: about 4 to 5.5 GB at one worker and the largest
+  // single step of a local push, run only to produce the route types
+  // `.next/types` that `tsc` reads. `next typegen` writes those types without
+  // building, and the script runs `tsc` with `--incremental false`, so it
+  // writes no build-info file at all and the race the dependency guarded
+  // cannot happen.
+  //
+  // The production build still runs where it proves what tsc cannot (server-only
+  // code reaching a client bundle, bundling and route errors): in CI's build
+  // step and the browser tests, on every pull request and in the merge queue.
+  "$schema": "https://v2-9-7.turborepo.dev/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "check-types": {
+      "dependsOn": ["^check-types", "^build"]
+    }
+  }
+}
