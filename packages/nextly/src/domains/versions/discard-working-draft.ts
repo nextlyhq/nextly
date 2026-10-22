@@ -162,7 +162,7 @@ export async function discardWorkingDraft(
   // none exists is a no-op, not an error.
   const removed =
     args.scopeKind === "single"
-      ? await getService("singleEntryService").discardWorkingDraft({
+      ? await getService("singleEntryService").discardWorkingDraftCounted({
           slug: args.slug,
           // The document every check above was made against.
           entryId: args.entryId,

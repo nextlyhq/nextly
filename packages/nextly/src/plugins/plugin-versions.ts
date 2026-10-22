@@ -332,18 +332,7 @@ async function discardAsWriter(
   locale: string | null,
   writer: HistoryWriter
 ): Promise<number> {
-  if (writer.actor.id === undefined) {
-    throw NextlyError.forbidden({
-      logContext: {
-        // A key's own id does not reach plugin services yet, so a discard
-        // made with one cannot be recorded as the key.
-        reason: "checked-history-discard-by-key",
-        scopeKind: ref.scopeKind,
-        scopeSlug: ref.scopeSlug,
-        entryId: ref.entryId,
-      },
-    });
-  }
+  refuseUnnamedKey(ref, writer, "discard");
   // Only collections and Singles have a working draft; page history was
   // refused before this, when the writer was judged.
   const scopeKind = ref.scopeKind === "single" ? "single" : "collection";
@@ -358,6 +347,30 @@ async function discardAsWriter(
     ...writer.hookInputs,
   });
   return removed;
+}
+
+/**
+ * Refuse a write made with an API key whose own id is not known here. A
+ * plugin does not yet receive a key's id, and a discard or a recovery point
+ * made with one would have to be recorded as, or filed under, the key's
+ * owner, who did not make it: a recovery point so filed would overwrite the
+ * owner's own unsaved work.
+ */
+function refuseUnnamedKey(
+  ref: VersionRef,
+  writer: HistoryWriter,
+  write: "discard" | "autosave"
+): void {
+  if (writer.actor.id !== undefined) return;
+  throw NextlyError.forbidden({
+    logContext: {
+      reason: "checked-history-write-by-unnamed-key",
+      write,
+      scopeKind: ref.scopeKind,
+      scopeSlug: ref.scopeSlug,
+      entryId: ref.entryId,
+    },
+  });
 }
 
 /** `ctx.services.versions`' writes, over the host's versions service. */
@@ -408,6 +421,7 @@ export function pluginVersionWrites(
     autosave(input, opts) {
       return asCalled(opts, async resolved => {
         const writer = await checkedWriter(input.ref, resolved, "autosave");
+        if (writer) refuseUnnamedKey(input.ref, writer, "autosave");
         const named = input.createdBy ?? null;
         if (writer && named !== null && named !== writer.user.id) {
           refuseOtherAuthor(input.ref, "autosave");
