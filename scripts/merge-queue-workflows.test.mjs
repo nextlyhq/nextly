@@ -247,6 +247,40 @@ describe("Integration on request", () => {
   });
 });
 
+describe("when the Release job runs", () => {
+  /*
+   * A push to `main` runs it only for the Version Packages merge, the moment to
+   * publish; a dispatch runs it on demand, versioning pending changesets into
+   * that pull request or publishing when none are pending. Release health
+   * then skips the runs where Release itself skipped. Each condition is
+   * evaluated for the events it meets, not read by spelling.
+   */
+  const decide = (condition, known) => String(evaluate(conditionTokens(condition), condition, { "github.repository": "nextlyhq/nextly", ...known }));
+  const release = read(".github/workflows/release.yml").jobs.release.if;
+  const health = read(".github/workflows/release-health.yml").jobs.finalized.if;
+
+  it("runs on the Version Packages merge, stable or pre-release", () => {
+    for (const message of ["chore: version packages (#2400)", "chore: version packages (alpha) (#2295)"]) {
+      expect(decide(release, { "github.event_name": "push", "github.event.head_commit.message": message }), message).toBe("true");
+    }
+  });
+
+  it("skips every other push to main, and runs on a dispatch", () => {
+    expect(decide(release, { "github.event_name": "push", "github.event.head_commit.message": "fix(nextly): type the send-test error (#2563)" })).toBe("false");
+    expect(decide(release, { "github.event_name": "workflow_dispatch", "github.event.head_commit.message": "" })).toBe("true");
+  });
+
+  it("never runs in a fork", () => {
+    expect(decide(release, { "github.repository": "someone/nextly", "github.event_name": "workflow_dispatch" })).toBe("false");
+  });
+
+  it("leaves Release health to skip a skipped Release, and to run on its schedule", () => {
+    expect(decide(health, { "github.event_name": "workflow_run", "github.event.workflow_run.conclusion": "skipped" })).toBe("false");
+    expect(decide(health, { "github.event_name": "workflow_run", "github.event.workflow_run.conclusion": "success" })).toBe("true");
+    expect(decide(health, { "github.event_name": "schedule", "github.event.workflow_run.conclusion": null })).toBe("true");
+  });
+});
+
 describe("a sharded leg", () => {
   /*
    * The lane check takes a matrix job that hands the lane its own shard as

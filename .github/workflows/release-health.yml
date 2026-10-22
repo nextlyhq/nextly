@@ -47,7 +47,12 @@ jobs:
     # job skipped and still fires `workflow_run`, and this check reads the
     # upstream registry and the upstream GitHub Release, so on a fork it would
     # file an issue about a release the fork does not own.
-    if: github.repository == 'nextlyhq/nextly'
+    #
+    # Nor after a Release run whose job was skipped: Release runs its job only
+    # for the Version Packages merge or a dispatch, so most pushes to `main`
+    # complete a skipped run, which still fires `workflow_run` while changing
+    # nothing this check reads. The daily schedule still checks in any case.
+    if: github.repository == 'nextlyhq/nextly' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion != 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:

@@ -26,9 +26,11 @@ file by hand under `.changeset/` following an existing one.
 ## How releasing actually works (CI-only)
 
 1. PRs with changesets merge to `main`.
-2. The Changesets bot maintains a Version PR ("chore: version packages
-   (alpha)") that accumulates pending changesets, bumps every package in
-   lockstep, and updates changelogs.
+2. When a release is wanted, a maintainer runs the Release workflow from the
+   Actions tab ("Run workflow"). With changesets pending it opens or refreshes
+   the Version PR ("chore: version packages (alpha)"), which bumps every
+   package in lockstep and updates changelogs. A push to `main` does not
+   refresh it: only that PR's own merge runs the Release job on a push.
 3. **Merging the Version PR publishes**: the release workflow builds and
    publishes all packages to npm via trusted publishing (OIDC) in the
    protected environment. Every real version is published this way; never run

@@ -1,8 +1,23 @@
 name: Release
 
+# When this runs, and so when the Version Packages pull request changes.
+#
+# A push to `main` runs the job only when it is that pull request's own merge
+# ("chore: version packages", "(alpha)" in pre mode): that is the moment to
+# publish. Every other push leaves the job skipped, before a runner is taken.
+# Refreshing the Version Packages pull request after every merge restarted its
+# whole pipeline each time (132 times in one week, 7% of all runs, and 45-60
+# minutes per reset inside a release window) for a pull request that only
+# matters when someone decides to release.
+#
+# So the pull request is created or refreshed on demand, from the Actions tab
+# ("Run workflow"): with changesets pending the run versions them into the
+# pull request, and with none pending it publishes, which is also the way to
+# publish if that merge's message was ever edited away from the title.
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 # Only one release can run at a time. Never cancel a running publish.
 concurrency:
@@ -15,8 +30,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
-    # Block publishing from forks
-    if: github.repository == 'nextlyhq/nextly'
+    # Block publishing from forks, and run on a push only for the Version
+    # Packages merge (see `on:` above).
+    # A block scalar, since the title's ": " would end a plain YAML value.
+    if: >-
+      github.repository == 'nextlyhq/nextly' &&
+      (github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.head_commit.message, 'chore: version packages'))
 
     # Reads RELEASE_BOT_TOKEN from the Production environment. Also enables
     # environment protection rules (required reviewers, wait timers).
