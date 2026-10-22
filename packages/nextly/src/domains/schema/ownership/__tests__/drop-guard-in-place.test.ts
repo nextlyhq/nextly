@@ -403,8 +403,11 @@ describe("a form the guard cannot read, on another owner's table, is refused", (
   });
 
   it("keeps an unmodelled clause on the app's own table allowed", () => {
+    // `app_misc`, a table no row claims, is the app's and carries no other
+    // owner's element. On `app_notes`, which does, the same clause is
+    // refused (drop-guard-unread-clauses.test.ts).
     expect(() =>
-      guard(["ALTER TABLE app_notes DISABLE TRIGGER ALL"], "app", "postgresql")
+      guard(["ALTER TABLE app_misc DISABLE TRIGGER ALL"], "app", "postgresql")
     ).not.toThrow();
   });
 });

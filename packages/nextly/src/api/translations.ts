@@ -16,6 +16,10 @@
  * @since 1.0.0
  */
 
+import {
+  readLanguagesFor,
+  withRuleLanguage,
+} from "../auth/access/rule-language";
 import { canReadEntity, readAccessCaller } from "../auth/entity-read-access";
 import { container } from "../di";
 import { getAdapterFromDI } from "../dispatcher/helpers/di";
@@ -367,9 +371,20 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   // `skippedCollections` — where its work is never queried AND its slug is
   // named back to someone with no right to know it exists.
   const localized = await localizedCollections();
-  const readable = await readableCollections(
-    caller,
-    localized.map(c => c.slug)
+  // The read decision is told the languages this worklist reads: the one
+  // worked on, and those its titles are read in, the default language and
+  // each it falls back to, as the list read below resolves them.
+  const titleLanguages = readLanguagesFor(
+    configuredLocalization(),
+    undefined
+  ).locales;
+  const readable = await withRuleLanguage(
+    { locale, locales: [...new Set([...titleLanguages, locale])] },
+    () =>
+      readableCollections(
+        caller,
+        localized.map(c => c.slug)
+      )
   );
   // 🔴 Resolved ONLY for the state that reads it. The probe introspects, and a negative verdict is
   // deliberately not remembered, so asking for every state would put one catalogue read per

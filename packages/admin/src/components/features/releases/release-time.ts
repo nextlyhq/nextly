@@ -131,6 +131,25 @@ export function releaseTimeText(
 }
 
 /**
+ * The time of day `instant` reads on the clock in `timeZone`, as "9:00 AM",
+ * or `null` for no instant, one that does not parse, or a zone that cannot be
+ * honoured.
+ *
+ * For a place that already says which day it is, such as a calendar's day
+ * cell: the date would repeat the cell, and the zone is named once above the
+ * grid. Through the admin's formatter, so an installation's time format holds.
+ */
+export function releaseTimeOfDay(
+  instant: string | Date | null | undefined,
+  timeZone: string
+): string | null {
+  if (!instant) return null;
+  const at = instant instanceof Date ? instant : new Date(instant);
+  if (Number.isNaN(at.getTime())) return null;
+  return formatIn(at, timeZone, TIME_ONLY);
+}
+
+/**
  * The instant as one sentence, for a place with room for one line: a title
  * attribute, a notice, a screen reader's reading of the cell.
  */

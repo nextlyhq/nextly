@@ -3,6 +3,7 @@ import { collectPluginAuditKinds } from "../domains/audit/plugin-audit";
 import {
   assertModuleKeysFit,
   assertModuleNames,
+  assertModulesInNameOrder,
   assertModuleSchemaVersions,
   assertUniqueModuleNames,
   orderedMigrations,
@@ -333,6 +334,9 @@ function validatePluginMigrations(plugins: PluginDefinition[]): void {
     assertModuleNames(plugin.name, migrations);
     assertModuleKeysFit(plugin.name, migrations);
     assertUniqueModuleNames(plugin.name, migrations);
+    // In the order of their names, the order they run in: a list declared
+    // otherwise is refused here rather than re-sorted in silence.
+    assertModulesInNameOrder(plugin.name, migrations);
     assertModuleSchemaVersions(plugin.name, migrations);
     assertSchemaVersionDeclarable({
       pluginName: plugin.name,

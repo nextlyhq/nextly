@@ -736,6 +736,8 @@ interface WorkingDraftWriteContext {
   params: {
     collectionName: string;
     entryId: string;
+    /** The language the write named, which its components were read in. */
+    locale?: string;
     user?: UserContext;
     /** Who made the write, for the save's history event. */
     actor?: RequestActor;
@@ -5668,6 +5670,10 @@ export class CollectionMutationService extends BaseService {
     // publish busts the entry's cached reads. Publishing every locale, so no
     // single locale tag — the locale-less id tag covers them all.
     let revalidationIntent: RevalidationIntent | undefined;
+    // Set once the publish's transaction has committed, so a failure after it
+    // (the read of the published slugs, say) is reported as a change that was
+    // saved rather than one the caller should send again.
+    let committedWrite = false;
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
       const schema = await this.fileManager.loadDynamicSchema(
@@ -6342,6 +6348,12 @@ export class CollectionMutationService extends BaseService {
           data: null,
         };
       }
+      // Saved only once it is durable. Inside an enclosing SQLite transaction
+      // the publish is a savepoint that transaction can still roll back, so
+      // until it commits a failure below is not a saved change.
+      await this.afterCommit(() => {
+        committedWrite = true;
+      });
 
       // Once the publish is durable: inside an enclosing SQLite transaction,
       // once that commits, and never for a publish it rolls back.
@@ -6409,6 +6421,28 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
+      const intentFor = (localizedSlugs?: string[]) =>
+        buildEntryRevalidationIntent(
+          params.collectionName,
+          readRevalidateConfig(publishCollection),
+          {
+            id: params.entryId,
+            // Prefer the committed post-publish row's slug so a concurrent rename
+            // that landed after the pre-read still busts the actually-published
+            // URL; fall back to the pre-read only when no fresh row was
+            // reconstructed.
+            slug: readStringField(
+              (publishedParentRow ?? existingEntry) as Record<string, unknown>,
+              "slug"
+            ),
+            localizedSlugs,
+          }
+        );
+      // Set before the slug read below, which can fail after the commit. The
+      // failure result carries it, so a durable publish or unpublish still busts
+      // the entry's id and slug tags, though the caller is told not to retry.
+      revalidationIntent = intentFor();
+
       // Publishing all locales makes every locale's slug public at once, so bust
       // each localized slug's tag (read post-commit on the pool — publish only
       // flips status, so the committed companion slugs are stable here).
@@ -6417,22 +6451,7 @@ export class CollectionMutationService extends BaseService {
         params.collectionName,
         params.entryId
       );
-      revalidationIntent = buildEntryRevalidationIntent(
-        params.collectionName,
-        readRevalidateConfig(publishCollection),
-        {
-          id: params.entryId,
-          // Prefer the committed post-publish row's slug so a concurrent rename
-          // that landed after the pre-read still busts the actually-published
-          // URL; fall back to the pre-read only when no fresh row was
-          // reconstructed.
-          slug: readStringField(
-            (publishedParentRow ?? existingEntry) as Record<string, unknown>,
-            "slug"
-          ),
-          localizedSlugs: publishedLocalizedSlugs,
-        }
-      );
+      revalidationIntent = intentFor(publishedLocalizedSlugs);
 
       return {
         success: true,
@@ -6461,6 +6480,10 @@ export class CollectionMutationService extends BaseService {
         // a hook's refusal or rate limit as a server fault, and left a boundary
         // nothing to rebuild it from.
         ...errorEnvelopeFields(thrown),
+        committed: committedWrite,
+        // Set only once the publish has committed, so its tags flush whatever
+        // failed after it.
+        revalidationIntent,
       };
     }
   }
@@ -7440,8 +7463,19 @@ export class CollectionMutationService extends BaseService {
     const { versionNo } = await storeDraftSave(tx, this.versionCapture, {
       ref: draftRef,
       // The key the read overlay, the promote and the discard look under,
-      // from `workingDraftLocale`; the version is keyed the same way.
+      // from `workingDraftLocale`.
       locale: draftLocale,
+      // The version is keyed the same way, except where the document has no
+      // languages and the snapshot carries a component: that was read in the
+      // language the write named, and is recorded under it as every other
+      // save is.
+      versionLocale:
+        draftLocale ??
+        ((fields as unknown as FieldConfig[]).some(
+          field => isFieldGroupField(field) && draftDocument[field.name] != null
+        )
+          ? this.componentSnapshotLocale(params.locale)
+          : null),
       snapshot: draftDocument,
       replaces,
       createdBy: params.user?.id ?? null,

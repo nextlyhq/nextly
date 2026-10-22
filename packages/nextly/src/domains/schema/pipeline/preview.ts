@@ -26,6 +26,7 @@ import { getActiveExtensionSchema } from "../extension/build-extension-schema";
 
 import { RealClassifier } from "./classifier/classifier";
 import {
+  countLongerThan as countLongerThanHelper,
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
@@ -174,6 +175,8 @@ export async function previewDesiredSchema(
     operations: judged,
     countNulls: (table, column) => countNullsHelper(db, dialect, table, column),
     countRows: table => countRowsHelper(db, dialect, table),
+    countLongerThan: (table, column, length) =>
+      countLongerThanHelper(db, dialect, table, column, length),
     dialect,
   });
 

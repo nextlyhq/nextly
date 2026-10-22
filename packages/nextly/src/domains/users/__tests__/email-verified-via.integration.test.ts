@@ -16,6 +16,10 @@ import { getDialectTables } from "../../../database/index";
 import { seedPermissions } from "../../../database/seeders/permissions";
 import { seedSuperAdmin } from "../../../database/seeders/super-admin";
 import { generateSqliteCoreTableStatements } from "../../../database/sqlite-core-tables";
+import {
+  asCaller,
+  sessionCaller,
+} from "../../../dispatcher/__tests__/request-caller";
 import { dispatchUser } from "../../../dispatcher/handlers/user-dispatcher";
 import {
   createTestNextly,
@@ -32,6 +36,16 @@ afterEach(async () => {
   await current?.destroy();
   current = undefined;
 });
+
+/** A users route dispatched as `adminId`, as the route handler dispatches it. */
+function dispatchAsAdmin(
+  adminId: string,
+  ...args: Parameters<typeof dispatchUser>
+): ReturnType<typeof dispatchUser> {
+  return asCaller(sessionCaller({ userId: adminId }), () =>
+    dispatchUser(...args)
+  );
+}
 
 const PASSWORD = "Str0ng-P@ssw0rd!";
 
@@ -129,10 +143,11 @@ describe.each(getConfiguredTestDialects())(
       // would leave the address unproven.
       const t = await boot(dialect);
       const adminId = await seedFounder(t);
-      await dispatchUser(
+      await dispatchAsAdmin(
+        adminId,
         services(t),
         "createLocalUser",
-        { _authenticatedActorType: "user", _authenticatedActorId: adminId },
+        {},
         {
           email: "routed@example.com",
           name: "Routed",
@@ -300,13 +315,13 @@ describe.each(getConfiguredTestDialects())(
       const found = await users.findByEmail("pending@example.com", {});
       const params = {
         userId: found?.id as string,
-        _authenticatedActorType: "user",
-        _authenticatedActorId: adminId,
       };
 
       for (const emailVerified of ["0", "soon"]) {
         await expect(
-          dispatchUser(services(t), "updateUser", params, { emailVerified })
+          dispatchAsAdmin(adminId, services(t), "updateUser", params, {
+            emailVerified,
+          })
         ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
       }
       expect(await verification(t, "pending@example.com")).toEqual({
@@ -326,13 +341,11 @@ describe.each(getConfiguredTestDialects())(
       const stored = new Date(row?.emailVerified as Date | string);
       const params = {
         userId: id,
-        _authenticatedActorType: "user",
-        _authenticatedActorId: adminId,
       };
 
       // The stored moment: nothing is verified anew, so the provider still
       // vouches for the address.
-      await dispatchUser(services(t), "updateUser", params, {
+      await dispatchAsAdmin(adminId, services(t), "updateUser", params, {
         name: "Renamed",
         emailVerified: stored.toISOString(),
       });
@@ -342,7 +355,7 @@ describe.each(getConfiguredTestDialects())(
       });
 
       // Another moment: the administrator verifies it now.
-      await dispatchUser(services(t), "updateUser", params, {
+      await dispatchAsAdmin(adminId, services(t), "updateUser", params, {
         emailVerified: "2026-01-02T03:04:05.000Z",
       });
       expect(await verification(t, "external@example.com")).toEqual({

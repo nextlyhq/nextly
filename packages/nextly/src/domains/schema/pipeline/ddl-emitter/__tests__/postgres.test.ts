@@ -294,3 +294,22 @@ describe("emitPostgresDdl — change_column_default", () => {
     ]);
   });
 });
+
+// PostgreSQL's explicit length cast (`::varchar(N)`) cuts an overlong string to N characters
+// without an error, while the assignment cast an ALTER uses without one refuses it. So a string
+// narrowing is converted with the bare column, and a value that does not fit stops the change.
+describe("emitPostgresDdl — a string narrowing", () => {
+  it("converts with the bare column, so an overlong value is refused rather than cut", () => {
+    expect(
+      emitPostgresDdl({
+        type: "change_column_type",
+        tableName: "single_site",
+        columnName: "title",
+        fromType: "text",
+        toType: "varchar(255)",
+      })
+    ).toEqual([
+      `ALTER TABLE "single_site" ALTER COLUMN "title" SET DATA TYPE varchar(255) USING "title"`,
+    ]);
+  });
+});

@@ -7,13 +7,28 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { getEntrySpy, checkAccessSpy, findByIdSpy, listUsersByIdsSpy } =
-  vi.hoisted(() => ({
-    getEntrySpy: vi.fn(),
-    checkAccessSpy: vi.fn(),
-    findByIdSpy: vi.fn(),
-    listUsersByIdsSpy: vi.fn(),
-  }));
+const {
+  getEntrySpy,
+  checkAccessSpy,
+  findByIdSpy,
+  listUsersByIdsSpy,
+  actorForUserSpy,
+} = vi.hoisted(() => ({
+  actorForUserSpy: vi.fn(),
+  getEntrySpy: vi.fn(),
+  checkAccessSpy: vi.fn(),
+  findByIdSpy: vi.fn(),
+  listUsersByIdsSpy: vi.fn(),
+}));
+
+// A signed-in user's actor: the roles and grants the read decision judges,
+// as one lookup resolves them. Mocked so each case names the grants.
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../auth/access/resolve-actor")
+  >()),
+  actorForUserFailingClosed: actorForUserSpy,
+}));
 
 vi.mock("../../../di", () => ({
   getService: vi.fn((name: string) => {
@@ -40,6 +55,7 @@ vi.mock("../../../di/container", () => ({
   },
 }));
 
+import { userActor } from "../../../auth/access/actor";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { UserContext } from "../../singles/types";
 import {
@@ -56,6 +72,18 @@ const user = { id: "u1", roles: ["editor"] } as unknown as UserContext;
 function rel(collection: string, id: string): ReferenceRequest {
   return { kind: "relationship", collection, id };
 }
+
+/** The session user's actor, holding `read` on each of `resources`. */
+const readerOf = (...resources: string[]) =>
+  userActor({
+    userId: "u1",
+    roles: ["editor"],
+    permissions: resources.map(resource => ({
+      slug: `read-${resource}`,
+      action: "read",
+      resource,
+    })),
+  });
 
 describe("storedRefsOf", () => {
   it("reads a bare id, an array, a polymorphic pair, and a populated object", () => {
@@ -133,6 +161,7 @@ describe("referenceDisplayValue", () => {
       url: "/u",
       thumbnailUrl: "/t",
       mimeType: "image/png",
+      alt: "A picture",
     };
     expect(
       referenceDisplayValue({ id: "m1" }, { id: "m1", label: "pic.png", media })
@@ -253,13 +282,14 @@ describe("resolveReferenceLabels — uploads", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("checks media read access before projecting the file", async () => {
-    checkAccessSpy.mockResolvedValue(true);
+    actorForUserSpy.mockResolvedValue(readerOf("media"));
     findByIdSpy.mockResolvedValue({
       originalFilename: "pic.png",
       filename: "abc.png",
       url: "/u",
       thumbnailUrl: "/t",
       mimeType: "image/png",
+      altText: "A red barn at dusk",
     });
 
     const req: ReferenceRequest = {
@@ -269,11 +299,7 @@ describe("resolveReferenceLabels — uploads", () => {
     };
     const labels = await resolveReferenceLabels([req], user);
 
-    expect(checkAccessSpy).toHaveBeenCalledWith({
-      userId: "u1",
-      operation: "read",
-      resource: "media",
-    });
+    expect(actorForUserSpy).toHaveBeenCalledWith("u1");
     expect(findByIdSpy).toHaveBeenCalledWith("m1", {});
     expect(labels.get(referenceLabelKey(req))).toEqual({
       id: "m1",
@@ -284,12 +310,14 @@ describe("resolveReferenceLabels — uploads", () => {
         url: "/u",
         thumbnailUrl: "/t",
         mimeType: "image/png",
+        // The image described as the library describes it.
+        alt: "A red barn at dusk",
       },
     });
   });
 
   it("withholds the file when media read is denied", async () => {
-    checkAccessSpy.mockResolvedValue(false);
+    actorForUserSpy.mockResolvedValue(readerOf());
 
     const req: ReferenceRequest = {
       kind: "upload",
@@ -308,6 +336,7 @@ describe("resolveReferenceLabels — uploads", () => {
         url: null,
         thumbnailUrl: null,
         mimeType: null,
+        alt: null,
       },
     });
   });
@@ -352,8 +381,8 @@ describe("resolveReferenceLabels — configured label + system entities", () => 
   });
 
   it("resolves a users target through the user service, not getEntry", async () => {
-    // A session caller falls through to the role-based user-read check.
-    checkAccessSpy.mockResolvedValue(true);
+    // A session caller is judged on its own grants.
+    actorForUserSpy.mockResolvedValue(readerOf("users"));
     listUsersByIdsSpy.mockResolvedValue([{ id: "u9", name: "Grace" }]);
 
     const req: ReferenceRequest = {
@@ -363,11 +392,7 @@ describe("resolveReferenceLabels — configured label + system entities", () => 
     };
     const labels = await resolveReferenceLabels([req], user);
 
-    expect(checkAccessSpy).toHaveBeenCalledWith({
-      userId: "u1",
-      operation: "read",
-      resource: "users",
-    });
+    expect(actorForUserSpy).toHaveBeenCalledWith("u1");
     expect(listUsersByIdsSpy).toHaveBeenCalledWith(["u9"]);
     expect(getEntrySpy).not.toHaveBeenCalled();
     expect(labels.get(referenceLabelKey(req))).toEqual({
@@ -377,7 +402,7 @@ describe("resolveReferenceLabels — configured label + system entities", () => 
   });
 
   it("withholds a user name when the session lacks user-read access", async () => {
-    checkAccessSpy.mockResolvedValue(false);
+    actorForUserSpy.mockResolvedValue(readerOf());
     listUsersByIdsSpy.mockResolvedValue([{ id: "u9", name: "Grace" }]);
 
     const req: ReferenceRequest = {
@@ -471,6 +496,7 @@ describe("resolveReferenceLabels — API-key scope", () => {
     );
 
     expect(checkAccessSpy).not.toHaveBeenCalled();
+    expect(actorForUserSpy).not.toHaveBeenCalled();
     expect(findByIdSpy).toHaveBeenCalledWith("m1", {});
     expect(labels.get(referenceLabelKey(req))?.label).toBe("pic.png");
   });
@@ -508,6 +534,7 @@ describe("resolveReferenceLabels — API-key scope", () => {
     );
 
     expect(checkAccessSpy).not.toHaveBeenCalled();
+    expect(actorForUserSpy).not.toHaveBeenCalled();
     expect(labels.get(referenceLabelKey(req))?.label).toBe("Grace");
   });
 });
@@ -524,6 +551,7 @@ describe("resolveReferenceLabels — upload target collection", () => {
         url: "/u",
         thumbnailUrl: "/t",
         mimeType: "application/pdf",
+        altText: "Quarterly report",
       },
     });
     const req: ReferenceRequest = {
@@ -550,6 +578,7 @@ describe("resolveReferenceLabels — upload target collection", () => {
         url: "/u",
         thumbnailUrl: "/t",
         mimeType: "application/pdf",
+        alt: "Quarterly report",
       },
     });
   });
@@ -573,6 +602,7 @@ describe("resolveReferenceLabels — upload target collection", () => {
         url: null,
         thumbnailUrl: null,
         mimeType: null,
+        alt: null,
       },
     });
   });

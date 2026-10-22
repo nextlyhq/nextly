@@ -73,6 +73,11 @@ import {
   validateCrossPluginRelations,
 } from "../../plugins/schema/validate-relations";
 import { assertSettingsPermissionsOwned } from "../../plugins/settings-permission";
+import {
+  CONFIG_FILE_NAMES,
+  CONFIG_SEARCH_DIRS,
+  findConfigFile,
+} from "../../shared/lib/config-file";
 
 import { bundleAndRequire } from "./config-bundler";
 
@@ -253,15 +258,6 @@ export interface LoadConfigResult {
  */
 export type ConfigChangeCallback = (result: LoadConfigResult) => void;
 
-const CONFIG_FILE_NAMES = [
-  "nextly.config.ts",
-  "nextly.config.mts",
-  "nextly.config.js",
-  "nextly.config.mjs",
-];
-
-const CONFIG_SEARCH_DIRS = [".", "./src", "./config"];
-
 let cachedConfig: LoadConfigResult | null = null;
 
 let fileWatcher: FSWatcher | null = null;
@@ -335,18 +331,6 @@ function withRegistryLock<T>(load: () => Promise<T>): Promise<T> {
 }
 
 const changeCallbacks: Set<ConfigChangeCallback> = new Set();
-
-function findConfigFile(cwd: string): string | undefined {
-  for (const dir of CONFIG_SEARCH_DIRS) {
-    for (const fileName of CONFIG_FILE_NAMES) {
-      const filePath = resolve(cwd, dir, fileName);
-      if (existsSync(filePath)) {
-        return filePath;
-      }
-    }
-  }
-  return undefined;
-}
 
 function debugLog(options: LoadConfigOptions, ...args: unknown[]): void {
   if (options.debug) {

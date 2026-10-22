@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "vitest";
 
-import { isWideningChange } from "../type-widening";
+import { isWideningChange, stringNarrowingLimit } from "../type-widening";
 
 describe("isWideningChange — Postgres", () => {
   it("varchar(50) -> varchar(255) is widening", () => {
@@ -123,5 +123,52 @@ describe("isWideningChange — SQLite", () => {
   });
   it("blob -> real is NOT widening (cross storage class)", () => {
     expect(isWideningChange("blob", "real", "sqlite")).toBe(false);
+  });
+});
+
+// A change that can only cut a stored string short, and how long a value may be once it has run.
+// The bound is what a row is counted against before the change is allowed to run, so a missed
+// narrowing would let truncation through and a false one would refuse a lossless edit.
+describe("stringNarrowingLimit", () => {
+  it("bounds a MySQL text-family column narrowed to varchar(N)", () => {
+    expect(stringNarrowingLimit("text", "varchar(255)", "mysql")).toBe(255);
+    expect(stringNarrowingLimit("MEDIUMTEXT", "varchar(100)", "mysql")).toBe(
+      100
+    );
+    expect(stringNarrowingLimit("longtext", "varchar(36)", "mysql")).toBe(36);
+  });
+  it("bounds a varchar narrowed to a shorter varchar", () => {
+    expect(stringNarrowingLimit("varchar(500)", "varchar(100)", "mysql")).toBe(
+      100
+    );
+    expect(stringNarrowingLimit("text", "varchar(255)", "postgresql")).toBe(
+      255
+    );
+    expect(stringNarrowingLimit("varchar", "varchar(10)", "postgresql")).toBe(
+      10
+    );
+  });
+  it("bounds a fixed-width char narrowed to a shorter varchar", () => {
+    expect(stringNarrowingLimit("char(255)", "varchar(10)", "mysql")).toBe(10);
+    expect(isWideningChange("char(255)", "varchar(10)", "mysql")).toBe(false);
+    expect(isWideningChange("char(10)", "varchar(255)", "mysql")).toBe(true);
+    expect(isWideningChange("char(10)", "varchar", "postgresql")).toBe(true);
+  });
+  it("is null for a widening string change", () => {
+    expect(
+      stringNarrowingLimit("varchar(100)", "varchar(255)", "mysql")
+    ).toBeNull();
+    expect(stringNarrowingLimit("varchar(255)", "text", "mysql")).toBeNull();
+    expect(
+      stringNarrowingLimit("varchar(255)", "varchar(255)", "mysql")
+    ).toBeNull();
+  });
+  it("is null when either side is not a string type", () => {
+    expect(stringNarrowingLimit("text", "int", "mysql")).toBeNull();
+    expect(stringNarrowingLimit("int", "varchar(10)", "mysql")).toBeNull();
+    expect(stringNarrowingLimit("text", "json", "mysql")).toBeNull();
+  });
+  it("is null on SQLite, which never enforces a declared length", () => {
+    expect(stringNarrowingLimit("text", "varchar(255)", "sqlite")).toBeNull();
   });
 });

@@ -401,6 +401,33 @@ describe("the language being edited", () => {
     expect(onClearSelection).toHaveBeenCalledTimes(1);
   });
 
+  it("offers nothing in English that previews or restores another language's publish", async () => {
+    // A Spanish save that published English too: version 3 holds Spanish
+    // alone. What the English view selects is what a restore would write.
+    const onSelect = vi.fn();
+    renderList(
+      [
+        version(1, 1, { locale: "en" }),
+        version(2, 2, { locale: "es" }),
+        version(3, 3, { locale: "es", status: "published" }),
+      ],
+      [event("published", 3, { versionNo: 3, parts: ["en", "es"] })],
+      { localized: true, editingLocale: "en", onSelect }
+    );
+    const choices = screen.getAllByRole("button", {
+      name: /Version \d+|Currently published|Current draft/,
+    });
+    for (const choice of choices) await userEvent.click(choice);
+
+    expect(onSelect).toHaveBeenCalled();
+    expect(onSelect.mock.calls.map(([n]) => n)).not.toContain(3);
+    // English is published, by the Spanish publish, with no version to open.
+    expect(screen.getByText("Currently published")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Currently published/ })
+    ).toBeNull();
+  });
+
   it("shows every part under All languages", () => {
     renderList(versions, [], { lifecycle: false });
     expect(

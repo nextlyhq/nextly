@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (7e69207e4ae87d11). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (127717b7884d33e8). Edit that file, never this one. -->
 
 # packages/nextly: Agent Guide
 
@@ -39,12 +39,12 @@ inside `packages/nextly`.
   same question, so one rule gives one answer on every door. Two exceptions
   fail closed regardless: `publish`/`unpublish` with no user, and
   `routeAuthorized` with no user.
-- A code-defined rule reads permissions as `resource:action` (`posts:read`);
-  a key's scope stores them as `action-resource` (`read-posts`). The one
-  conversion is `ruleFacingPermissions`, and `ReadAccessCaller` carries both
-  spellings (`permissions` for coarse checks, `rulePermissions` for rules) so
-  no path hands a rule the stored form. Build callers with `readAccessCaller`;
-  a hand-assembled literal is how two doors came to answer one key differently.
+- A permission is spelled `read-posts` everywhere, rules included; their
+  context comes from `buildRuleContext`, which for one release also lists the
+  earlier `posts:read`, warned once per rule. `ReadAccessCaller` carries a
+  key's slugs (`permissions`) and rows (`grants`). Build callers with
+  `readAccessCaller`; a hand-assembled literal is how two doors came to answer
+  one key differently.
 - A collection whose code-defined `access` says nothing about an operation
   falls through to DB permissions; a caller with no matching grant is refused.
   A rule that throws denies. Relationship expansion (`judgeTarget`) asks a

@@ -13,16 +13,22 @@
  * @module components/features/versions/VersionChangesForm
  */
 
-import { ChevronDown, ChevronUp } from "lucide-react";
 import type { FieldConfig } from "nextly/config";
 import { Fragment } from "react";
 
 import { ReadOnlyDocumentForm } from "@admin/components/features/entries/EntryForm/ReadOnlyDocumentForm";
-import { Button } from "@admin/components/ui";
 import { cn } from "@admin/lib/utils";
 
 import { FieldDiffNode } from "./diff/FieldDiffNode";
-import type { VersionChanges } from "./version-changes";
+import { UnchangedFieldsToggle } from "./UnchangedFieldsToggle";
+import type { NoChanges, VersionChanges } from "./version-changes";
+
+/** What the editor says when no authored field changed. */
+const NO_CHANGES_IN_EDITOR: Record<NoChanges, string> = {
+  system: "Only system fields changed.",
+  unseen: "No changes in the fields you can read.",
+  identical: "No changes from the version before it.",
+};
 
 /** The DOM id of a changed field's card, so a move can bring it into view. */
 export function changeAnchorId(name: string): string {
@@ -154,29 +160,14 @@ export function VersionChangesForm({
       )}
       {order.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          {changes.incomplete
-            ? "No changes in the fields you can read."
-            : "No changes from the version before it."}
+          {NO_CHANGES_IN_EDITOR[changes.whenNone]}
         </p>
       ) : null}
-      {unchangedCount > 0 ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="self-start"
-          aria-expanded={showUnchanged}
-          onClick={onToggleUnchanged}
-        >
-          {showUnchanged ? (
-            <ChevronUp className="h-4 w-4" aria-hidden="true" />
-          ) : (
-            <ChevronDown className="h-4 w-4" aria-hidden="true" />
-          )}
-          {showUnchanged ? "Hide" : "Show"} {unchangedCount} unchanged{" "}
-          {unchangedCount === 1 ? "field" : "fields"}
-        </Button>
-      ) : null}
+      <UnchangedFieldsToggle
+        count={unchangedCount}
+        shown={showUnchanged}
+        onToggle={onToggleUnchanged}
+      />
     </div>
   );
 }
