@@ -210,6 +210,36 @@ describe.each(getConfiguredTestDialects())(
       expect(await pendingLocales(id)).toEqual(["en"]);
     });
 
+    it("recovers by retyping the live count and saving before publishing; one publish carrying it is still refused", async () => {
+      const entries = await boot(dialect);
+      const id = await spanishPublishesThirteen(entries);
+      expect((await publish(entries, id, "en")).statusCode).toBe(409);
+
+      // Retyping the live value into the publish itself: the check reads the
+      // stored change, so it is still refused, and nothing changes.
+      const inOne = await save(entries, id, "en", {
+        articleCount: 13,
+        status: "published",
+      });
+      expect(inOne.statusCode).toBe(409);
+      expect(await liveValues(entries, id, "en")).toEqual({
+        title: "en title",
+        articleCount: 13,
+      });
+
+      // Retyped and saved first, then published: it goes through, and
+      // English's own edit goes live with 13.
+      expect(
+        (await save(entries, id, "en", { articleCount: 13 })).success
+      ).toBe(true);
+      const published = await publish(entries, id, "en");
+      expect(published.success).toBe(true);
+      expect(await liveValues(entries, id, "en")).toEqual({
+        title: "en edited",
+        articleCount: 13,
+      });
+    });
+
     it("keeps the base where the change began when English saves again after Spanish's publish", async () => {
       const entries = await boot(dialect);
       const id = await spanishPublishesThirteen(entries);
