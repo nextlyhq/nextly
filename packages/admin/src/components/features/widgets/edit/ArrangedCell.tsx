@@ -431,6 +431,65 @@ function editActionsOf(
   );
 }
 
+/**
+ * The card's width and menu while customising, where its frame keeps them: over a framed card's
+ * own header, or in the small header the cell draws for an unframed one. Nothing at rest.
+ */
+function CellEditActions({
+  unframed,
+  title,
+  actions,
+}: {
+  unframed: boolean;
+  title: string;
+  actions: ReactNode;
+}) {
+  if (!actions) return null;
+  if (!unframed) return <CardControlsOverlay>{actions}</CardControlsOverlay>;
+  return <UnframedEditHeader title={title}>{actions}</UnframedEditHeader>;
+}
+
+/**
+ * The card's settings sheet, beside the card as the sheet's values would draw it: the declared
+ * widget, the reader's stored settings it was asked with, and the answer it shows now.
+ */
+function CellSettings({
+  row,
+  widget,
+  data,
+  done,
+  open,
+  onOpenChange,
+}: {
+  row: ArrangedCellProps["row"];
+  widget: DashboardWidget;
+  data: ArrangedCellProps["data"];
+  done: ReturnType<typeof doneFor>;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <WidgetSettingsSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title={widget.title}
+      settings={widget.settings ?? []}
+      config={row.config}
+      onDone={done.done}
+      {...(done.blocked === undefined ? {} : { blocked: done.blocked })}
+      renderPreview={draft => (
+        <SettingsPreview
+          widget={row.widget}
+          placementId={row.placementId}
+          stored={row.config}
+          draft={draft}
+          shown={data}
+        />
+      )}
+    />
+  );
+}
+
 export function ArrangedCell(props: ArrangedCellProps) {
   const { row, isEditing, data } = props;
   /*
@@ -490,37 +549,21 @@ export function ArrangedCell(props: ArrangedCellProps) {
       data-testid={`widget-cell-${widget.id}`}
       className={cellClassName(row, unframed, isEditing)}
     >
-      {!unframed && editActions ? (
-        <CardControlsOverlay>{editActions}</CardControlsOverlay>
-      ) : null}
-      {unframed && editActions ? (
-        <UnframedEditHeader title={widget.title}>
-          {editActions}
-        </UnframedEditHeader>
-      ) : null}
+      <CellEditActions
+        unframed={unframed}
+        title={widget.title}
+        actions={editActions}
+      />
       {floatingControl}
       {/* Mounted whenever the widget offers settings, not only while
           customising. A closed `Sheet` renders nothing, so this costs a card
           nothing — and it is what lets the panel outlive customise mode rather
           than being torn out from under a reader still filling it in. */}
       {hasSettings ? (
-        <WidgetSettingsSheet
+        <CellSettings
+          {...{ row, widget, data, done }}
           open={settingsOpen}
           onOpenChange={setSettingsOpen}
-          title={widget.title}
-          settings={widget.settings ?? []}
-          config={row.config}
-          onDone={done.done}
-          {...(done.blocked === undefined ? {} : { blocked: done.blocked })}
-          renderPreview={draft => (
-            <SettingsPreview
-              widget={row.widget}
-              placementId={row.placementId}
-              stored={row.config}
-              draft={draft}
-              shown={data}
-            />
-          )}
         />
       ) : null}
       <CardBody

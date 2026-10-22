@@ -33,7 +33,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { FormProvider, useForm } from "react-hook-form";
+import { FormProvider, useForm, type UseFormReturn } from "react-hook-form";
 
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
@@ -205,26 +205,21 @@ function formCopy(values: Record<string, unknown>): Record<string, unknown> {
   return Object.assign(Object.create(null), values);
 }
 
-export function WidgetSettingsSheet({
-  open,
-  onOpenChange,
-  title,
-  settings,
-  config,
-  onDone,
-  blocked,
-  renderPreview,
-}: WidgetSettingsSheetProps) {
-  // A Done in flight, and why the last one did not keep the change.
-  const [saving, setSaving] = useState(false);
-  const [failure, setFailure] = useState<string | undefined>(undefined);
-  // The collections and fields this reader may be offered, decided on the
-  // server; absent until the session-gated half of the payload arrives.
-  const sources = useBranding().widgetSources;
+/** The collections and fields this reader may be offered, as the sheet reads them. */
+type WidgetSources = ReturnType<typeof useBranding>["widgetSources"];
 
-  // A stored value naming a field the reader is no longer offered opens at
-  // its default, and the sheet says so in one line, rather than drawing a
-  // choice the reader cannot make again.
+/**
+ * The values the sheet opens on, and the stored values it could not open on.
+ *
+ * A stored value naming a field the reader is no longer offered opens at its
+ * default, and the sheet says so in one line, rather than drawing a choice the
+ * reader cannot make again.
+ */
+function useSheetBaseline(
+  settings: readonly AnyWidgetSetting[],
+  config: Record<string, unknown> | undefined,
+  sources: WidgetSources
+) {
   const stale = useMemo(
     () =>
       staleContentValues(settings, initialValues(settings, config), sources),
@@ -242,7 +237,19 @@ export function WidgetSettingsSheet({
     }
     return values;
   }, [settings, config, stale, sources]);
+  return { stale, defaultValues };
+}
 
+/**
+ * The sheet's form, and the only places values reach it: as it mounts, as the
+ * sheet closes, and on Reset to defaults, each through `formCopy`.
+ */
+function useSheetForm(
+  open: boolean,
+  settings: readonly AnyWidgetSetting[],
+  sources: WidgetSources,
+  defaultValues: Record<string, unknown>
+) {
   const form = useForm({ defaultValues: formCopy(defaultValues) });
 
   // The form keeps the values it was mounted with, and `defaultValues` changing
@@ -252,10 +259,7 @@ export function WidgetSettingsSheet({
   // keeps, and a change the reader cancelled is gone. Never while it stays
   // open, where it would discard the reader's edits.
   useEffect(() => {
-    if (!open) {
-      form.reset(formCopy(defaultValues));
-      setFailure(undefined);
-    }
+    if (!open) form.reset(formCopy(defaultValues));
   }, [open, defaultValues, form]);
 
   // A filter, sort or grouping names fields of ONE collection: when a person
@@ -276,6 +280,59 @@ export function WidgetSettingsSheet({
     return () => subscription.unsubscribe();
   }, [form, settings, sources]);
 
+  const reset = useCallback(
+    () =>
+      form.reset(
+        formCopy(resetToDefaults(settings, form.getValues(), sources))
+      ),
+    [form, settings, sources]
+  );
+  return { form, reset };
+}
+
+/**
+ * What Done would keep, as the reader changes the form, for the preview. Held as its JSON, a
+ * string that changes exactly when the draft does: the form hands every change the same values
+ * object, which would not re-render anything.
+ */
+function useSheetDraft(
+  form: UseFormReturn<Record<string, unknown>>,
+  settings: readonly AnyWidgetSetting[],
+  config: Record<string, unknown> | undefined
+): Record<string, unknown> {
+  const draftOf = useCallback(
+    (values: Record<string, unknown>) =>
+      JSON.stringify(toStoredConfig(settings, values, config)),
+    [settings, config]
+  );
+  const [draftKey, setDraftKey] = useState(() => draftOf(form.getValues()));
+  useEffect(() => {
+    setDraftKey(draftOf(form.getValues()));
+    const subscription = form.watch(values => setDraftKey(draftOf(values)));
+    return () => subscription.unsubscribe();
+  }, [form, draftOf]);
+  return useMemo(
+    () => JSON.parse(draftKey) as Record<string, unknown>,
+    [draftKey]
+  );
+}
+
+/** A Done in flight, why the last one did not keep the change, and closing that waits for it. */
+function useSheetDone(
+  props: Pick<
+    WidgetSettingsSheetProps,
+    "open" | "onOpenChange" | "settings" | "config" | "onDone"
+  >
+) {
+  const { open, onOpenChange, settings, config, onDone } = props;
+  const [saving, setSaving] = useState(false);
+  const [failure, setFailure] = useState<string | undefined>(undefined);
+
+  // A refusal belongs to the sheet it was said in: it is gone once that sheet closes.
+  useEffect(() => {
+    if (!open) setFailure(undefined);
+  }, [open]);
+
   const submit = useCallback(
     (values: Record<string, unknown>) => {
       setSaving(true);
@@ -294,25 +351,6 @@ export function WidgetSettingsSheet({
     [onDone, onOpenChange, settings, config]
   );
 
-  // What Done would keep, as the reader changes the form, for the preview. Held as its JSON, a
-  // string that changes exactly when the draft does: the form hands every change the same values
-  // object, which would not re-render anything.
-  const draftOf = useCallback(
-    (values: Record<string, unknown>) =>
-      JSON.stringify(toStoredConfig(settings, values, config)),
-    [settings, config]
-  );
-  const [draftKey, setDraftKey] = useState(() => draftOf(form.getValues()));
-  useEffect(() => {
-    setDraftKey(draftOf(form.getValues()));
-    const subscription = form.watch(values => setDraftKey(draftOf(values)));
-    return () => subscription.unsubscribe();
-  }, [form, draftOf]);
-  const draft = useMemo(
-    () => JSON.parse(draftKey) as Record<string, unknown>,
-    [draftKey]
-  );
-
   // Not closed mid-save, by Cancel, Escape or the overlay: the save would land anyway, and the
   // reader would be left not knowing whether it did.
   const changeOpen = useCallback(
@@ -322,6 +360,113 @@ export function WidgetSettingsSheet({
     },
     [saving, onOpenChange]
   );
+  return { saving, failure, submit, changeOpen };
+}
+
+/** Why Done is off, why the last Done did not keep the change, and which stored values were reset. */
+function SheetNotices({
+  blocked,
+  failure,
+  stale,
+}: {
+  blocked: string | undefined;
+  failure: string | undefined;
+  stale: ReturnType<typeof staleContentValues>;
+}) {
+  return (
+    <>
+      {blocked === undefined ? null : (
+        <p role="status" className="text-sm text-muted-foreground">
+          {blocked}
+        </p>
+      )}
+      {failure === undefined ? null : (
+        <p role="alert" className="text-sm text-destructive">
+          {failure}
+        </p>
+      )}
+      {stale.map(({ name, notice }) => (
+        <p key={name} role="status" className="text-sm text-muted-foreground">
+          {notice}
+        </p>
+      ))}
+    </>
+  );
+}
+
+/** One control per setting: a content setting's own control, any other through `FieldRenderer`. */
+function SheetFields({
+  settings,
+  sources,
+}: {
+  settings: readonly AnyWidgetSetting[];
+  sources: WidgetSources;
+}) {
+  return (
+    <>
+      {settings.map(setting =>
+        isContentSetting(setting) ? (
+          <ContentSettingControl
+            key={setting.name}
+            setting={setting}
+            sources={sources ?? []}
+          />
+        ) : (
+          // No cast: `WidgetSetting` is assignable to `FieldConfig`,
+          // and `settings.compat.test-d.ts` is what keeps that true.
+          <FieldRenderer key={setting.name} field={setting} mode="edit" />
+        )
+      )}
+    </>
+  );
+}
+
+/** Reset to defaults, Cancel and Done, with Done off while saving or when it cannot keep a change. */
+function SheetActions({
+  saving,
+  blocked,
+  onReset,
+  onCancel,
+}: {
+  saving: boolean;
+  blocked: string | undefined;
+  onReset: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <SheetFooter className="mt-auto flex-row justify-end gap-2 px-0">
+      <Button
+        type="button"
+        variant="ghost"
+        className="mr-auto"
+        onClick={onReset}
+      >
+        Reset to defaults
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        disabled={saving}
+        onClick={onCancel}
+      >
+        Cancel
+      </Button>
+      <Button type="submit" disabled={saving || blocked !== undefined}>
+        {saving ? "Saving…" : "Done"}
+      </Button>
+    </SheetFooter>
+  );
+}
+
+export function WidgetSettingsSheet(props: WidgetSettingsSheetProps) {
+  const { open, title, settings, config, blocked, renderPreview } = props;
+  // The collections and fields this reader may be offered, decided on the
+  // server; absent until the session-gated half of the payload arrives.
+  const sources = useBranding().widgetSources;
+  const { stale, defaultValues } = useSheetBaseline(settings, config, sources);
+  const { form, reset } = useSheetForm(open, settings, sources, defaultValues);
+  const draft = useSheetDraft(form, settings, config);
+  const { saving, failure, submit, changeOpen } = useSheetDone(props);
 
   return (
     <Sheet open={open} onOpenChange={changeOpen}>
@@ -359,73 +504,14 @@ export function WidgetSettingsSheet({
               }}
               className="flex flex-1 flex-col gap-4 overflow-y-auto px-4"
             >
-              {blocked === undefined ? null : (
-                <p role="status" className="text-sm text-muted-foreground">
-                  {blocked}
-                </p>
-              )}
-              {failure === undefined ? null : (
-                <p role="alert" className="text-sm text-destructive">
-                  {failure}
-                </p>
-              )}
-              {stale.map(({ name, notice }) => (
-                <p
-                  key={name}
-                  role="status"
-                  className="text-sm text-muted-foreground"
-                >
-                  {notice}
-                </p>
-              ))}
-              {settings.map(setting =>
-                isContentSetting(setting) ? (
-                  <ContentSettingControl
-                    key={setting.name}
-                    setting={setting}
-                    sources={sources ?? []}
-                  />
-                ) : (
-                  // No cast: `WidgetSetting` is assignable to `FieldConfig`,
-                  // and `settings.compat.test-d.ts` is what keeps that true.
-                  <FieldRenderer
-                    key={setting.name}
-                    field={setting}
-                    mode="edit"
-                  />
-                )
-              )}
-
-              <SheetFooter className="mt-auto flex-row justify-end gap-2 px-0">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className="mr-auto"
-                  onClick={() =>
-                    form.reset(
-                      formCopy(
-                        resetToDefaults(settings, form.getValues(), sources)
-                      )
-                    )
-                  }
-                >
-                  Reset to defaults
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={saving}
-                  onClick={() => changeOpen(false)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  disabled={saving || blocked !== undefined}
-                >
-                  {saving ? "Saving…" : "Done"}
-                </Button>
-              </SheetFooter>
+              <SheetNotices {...{ blocked, failure, stale }} />
+              <SheetFields settings={settings} sources={sources} />
+              <SheetActions
+                saving={saving}
+                blocked={blocked}
+                onReset={reset}
+                onCancel={() => changeOpen(false)}
+              />
             </form>
           </FormProvider>
         </div>
