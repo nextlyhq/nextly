@@ -121,6 +121,14 @@ import {
  */
 const ENGINE_KEY_PREFIX = "email.templates.liquid.";
 const LIQUID_ADOPTED_KEY = `${ENGINE_KEY_PREFIX}adoptedAt`;
+
+/**
+ * How long an instance answers the engine state from its copy before reading
+ * the table again: the longest a switch or a confirmation made by another
+ * instance can go unseen by this one. Inside a caller's open transaction the
+ * copy is used whatever its age.
+ */
+export const ENGINE_STATE_MAX_AGE_MS = 30_000;
 const keptKey = (id: string) => `${ENGINE_KEY_PREFIX}kept.${id}`;
 /**
  * A template saved as Liquid while the first boot on Liquid had not yet
@@ -423,15 +431,24 @@ export class EmailTemplateService extends BaseService {
   /**
    * The engine state as this instance last read it whole: whether the switch
    * is recorded, and the keys of the templates kept off it or saved as Liquid
-   * before it. A render made inside a caller's open transaction reads it
-   * here, because the email service is never handed that transaction and a
-   * read of the meta table would run on another connection, outside it. Read
-   * at the end of each boot and kept current by this instance's own writes;
-   * outside a transaction every read goes to the table, so a change another
-   * instance made is seen there.
+   * before it. Every render answers from it, so a send makes no read of the
+   * meta table, and none on another connection inside a caller's open
+   * transaction. Read at the end of each boot, kept current by this
+   * instance's own writes, and read again outside a transaction once it is
+   * older than ENGINE_STATE_MAX_AGE_MS, which is how long a change another
+   * instance made can go unseen here.
    */
-  private engineState: { adopted: boolean | null; keys: Set<string> } | null =
-    null;
+  private engineState: {
+    adopted: boolean | null;
+    keys: Set<string>;
+    readAt: number;
+  } | null = null;
+  /**
+   * Moved by every write of the engine state. A read of the table keeps what
+   * it read only if no write moved this while it ran, so it can never undo a
+   * write this instance made.
+   */
+  private engineGeneration = 0;
   /** The site's brand settings, which every layout reads as `brand`. */
   private readonly brandStore: EmailBrandStore;
 
@@ -724,20 +741,26 @@ export class EmailTemplateService extends BaseService {
   // ============================================================
 
   /**
-   * The engine state to answer from, inside an open transaction only. An
-   * adapter that can't say whether one is open (a hand-built one; the check
-   * is experimental) reads the table, as before.
+   * The engine state to answer from: the instance's copy, read again from the
+   * table when it is missing or older than ENGINE_STATE_MAX_AGE_MS, but never
+   * inside a caller's open transaction, which the read would escape. Null
+   * only inside one before any copy was read, when the caller reads the table.
    */
-  private engineSnapshot(): {
+  private async engineSnapshot(): Promise<{
     adopted: boolean | null;
     keys: Set<string>;
-  } | null {
-    return transactionOpenInFlow(this.adapter) ? this.engineState : null;
+  } | null> {
+    const state = this.engineState;
+    if (transactionOpenInFlow(this.adapter)) return state;
+    if (!state || Date.now() - state.readAt > ENGINE_STATE_MAX_AGE_MS) {
+      await this.loadEngineState();
+    }
+    return this.engineState;
   }
 
   /** Whether an engine-state key is recorded (see engineState). */
   private async engineKeyPresent(key: string): Promise<boolean> {
-    const snapshot = this.engineSnapshot();
+    const snapshot = await this.engineSnapshot();
     if (snapshot) return snapshot.keys.has(key);
     return (await this.meta.getEntry(key)).present;
   }
@@ -745,6 +768,7 @@ export class EmailTemplateService extends BaseService {
   /** Record an engine-state key, unless it is recorded already. */
   private async markEngine(key: string, value: unknown): Promise<void> {
     await this.meta.insertIfAbsent(key, value);
+    this.engineGeneration++;
     this.engineState?.keys.add(key);
     if (key === LIQUID_ADOPTED_KEY && this.engineState) {
       this.engineState.adopted = true;
@@ -754,23 +778,30 @@ export class EmailTemplateService extends BaseService {
   /** Remove an engine-state key. */
   private async unmarkEngine(key: string): Promise<void> {
     await this.meta.delete(key);
+    this.engineGeneration++;
     this.engineState?.keys.delete(key);
   }
 
   /** Read the whole engine state into engineState (at the end of a boot). */
   private async loadEngineState(): Promise<void> {
+    const started = this.engineGeneration;
+    const readAt = Date.now();
     let all: Record<string, unknown>;
     try {
       all = await this.meta.getAll();
     } catch (error) {
       if (!isMissingTable(error, this.dialect)) throw error;
-      this.engineState = { adopted: null, keys: new Set() };
+      // Nothing can be recorded without the table, which reads as null.
+      if (this.engineGeneration === started) {
+        this.engineState = { adopted: null, keys: new Set(), readAt };
+      }
       return;
     }
     const keys = new Set(
       Object.keys(all).filter(key => key.startsWith(ENGINE_KEY_PREFIX))
     );
-    this.engineState = { adopted: keys.has(LIQUID_ADOPTED_KEY), keys };
+    if (this.engineGeneration !== started) return;
+    this.engineState = { adopted: keys.has(LIQUID_ADOPTED_KEY), keys, readAt };
   }
 
   /**
@@ -778,7 +809,7 @@ export class EmailTemplateService extends BaseService {
    * recorded (a database without the meta table).
    */
   private async liquidAdopted(): Promise<boolean | null> {
-    const snapshot = this.engineSnapshot();
+    const snapshot = await this.engineSnapshot();
     if (snapshot) return snapshot.adopted;
     try {
       return (await this.meta.getEntry(LIQUID_ADOPTED_KEY)).present;
