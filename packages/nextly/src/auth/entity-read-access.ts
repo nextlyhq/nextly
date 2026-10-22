@@ -17,6 +17,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { parsePermissionSlug } from "../plugins/routes/permission-slug";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
+import { readsEntity } from "./access/entity-read";
 import { scopeGrants } from "./authenticated-scope";
 import {
   codeAccessAllows,
@@ -100,32 +101,9 @@ export async function canReadEntity(
   caller: ReadAccessCaller
 ): Promise<boolean> {
   if (!caller.userId || !slug) return false;
-
-  const rbac = getRBACService();
-
-  if (caller.authMethod === "api-key") {
-    if (!caller.permissions.includes(`read-${slug}`)) return false;
-
-    const target = rbac?.getRegisteredTarget(slug);
-    if (!target) return true;
-    return codeAccessAllows(target, "read", caller);
-  }
-
-  // Session: `checkAccess` already composes super-admin, code-defined access
-  // and the stored grants, so reproducing any of it here would be a second
-  // implementation to keep in step.
-  if (rbac) {
-    return rbac.checkAccess({
-      userId: caller.userId,
-      operation: "read",
-      resource: slug,
-    });
-  }
-
-  // Before the container is up there is nothing to decide against. Denying is
-  // the safe direction; the route-level gate has already run for any real
-  // request that reaches a dispatcher handler.
-  return false;
+  // Before the container is up there is no service to read rules from; the
+  // reader answers as it does without one, which refuses a signed-in user.
+  return readsEntity(slug, caller, getRBACService());
 }
 
 /**
