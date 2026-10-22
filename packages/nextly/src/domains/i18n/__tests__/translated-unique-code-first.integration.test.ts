@@ -127,4 +127,26 @@ describeEachDialect("a code-first translated unique field", dialect => {
     await sync(true);
     expect(await warned()).toEqual([]);
   });
+
+  it("through the Direct API, refuses a duplicate as DUPLICATE and reads blanks as before", async () => {
+    const blankBefore = await write("");
+    const readBlank = async (id: string) =>
+      (
+        await current.nextly.findByID({
+          collection: "articles",
+          id,
+          locale: "en",
+          overrideAccess: true,
+        })
+      )?.handle;
+    const before = await readBlank(blankBefore);
+
+    await sync(true);
+
+    const blankAfter = await write("");
+    expect(await readBlank(blankAfter)).toEqual(before);
+    expect(await readBlank(blankBefore)).toEqual(before);
+    await write("about");
+    await expect(write("about")).rejects.toMatchObject({ code: "DUPLICATE" });
+  });
 });
