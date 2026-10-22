@@ -6,10 +6,7 @@
       // The build writes its metafile through a plugin outside this package,
       // so the plugin is an input: editing it changes what the build records,
       // and a package-scoped hash alone would replay the old record.
-      "inputs": [
-        "$TURBO_EXTENDS$",
-        "$TURBO_ROOT$/scripts/build/rolldown-metafile.mjs"
-      ]
+      "inputs": ["$TURBO_EXTENDS$", "$TURBO_ROOT$/scripts/tsdown-metafile.mjs"]
     },
     "test": {
       // One suite here reads this package's OWN emitted bundles, because the

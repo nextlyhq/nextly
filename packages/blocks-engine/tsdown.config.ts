@@ -1,6 +1,6 @@
 import { defineConfig } from "tsdown";
 
-import { metafile } from "../../scripts/build/rolldown-metafile.mjs";
+import { metafile } from "../../scripts/tsdown-metafile.mjs";
 
 // The engine is runtime-free by contract: it ships no dependencies and must
 // stay importable from Node scripts, edge runtimes, and the browser alike, so

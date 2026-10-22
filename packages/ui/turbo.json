@@ -6,10 +6,7 @@
       // The server-safe build writes its metafile through a plugin outside
       // this package, so the plugin is an input: editing it changes what the
       // artifact check reads, and a package-scoped hash alone would replay it.
-      "inputs": [
-        "$TURBO_EXTENDS$",
-        "$TURBO_ROOT$/scripts/build/rolldown-metafile.mjs"
-      ]
+      "inputs": ["$TURBO_EXTENDS$", "$TURBO_ROOT$/scripts/tsdown-metafile.mjs"]
     },
     "test": {
       // `build` because guards here read this package's OWN `dist`, and the

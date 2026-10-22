@@ -1,6 +1,6 @@
 import { defineConfig } from "tsdown";
 
-import { metafile } from "../../scripts/build/rolldown-metafile.mjs";
+import { metafile } from "../../scripts/tsdown-metafile.mjs";
 
 import { serverSafeBuildEntries } from "./scripts/published-entries.js";
 
