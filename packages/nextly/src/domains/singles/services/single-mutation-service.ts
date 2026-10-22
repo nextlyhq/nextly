@@ -1886,32 +1886,6 @@ export class SingleMutationService extends BaseService {
             // already serializes writers via BEGIN IMMEDIATE).
             await tx.lockRow(singleMeta.tableName, existingDoc.id);
 
-            // Asked UNDER THE LOCK, for the reason the collection path states:
-            // a draft save serialises on this same row, so a check that ran
-            // before the transaction can be overtaken by one that commits
-            // first, and the release would proceed over work it never saw.
-            if (sweepAllLocales) {
-              const heldBy = await this.languagesHoldingDrafts(
-                new VersionsRepository(tx),
-                singleMeta,
-                slug,
-                existingDoc.id
-              );
-              if (heldBy.length > 0) {
-                transitionDeniedResult = {
-                  success: false,
-                  statusCode: 409,
-                  message:
-                    `This Single has unpublished changes in ${heldBy.join(", ")}. ` +
-                    `Publish or discard them first, or publish each language on ` +
-                    `its own — locale '${EVERY_LOCALE}' moves every language's ` +
-                    `status and will not decide what happens to work that has ` +
-                    `not been released.`,
-                };
-                throw new SingleStatusTransitionDeniedError();
-              }
-            }
-
             // Read the pre-write main row on THIS transaction before the update
             // overwrites it, so the outbox `previous` reports the prior state
             // and the changed-field diff is accurate. Re-read every attempt
@@ -2024,6 +1998,34 @@ export class SingleMutationService extends BaseService {
                   refusedLanguages: denied.refused,
                 });
                 transitionDeniedResult = denied.refusal;
+                throw new SingleStatusTransitionDeniedError();
+              }
+            }
+            // After the publish permission and rule above, so a caller who may
+            // not publish is refused before it learns which languages hold
+            // unreleased work. Asked UNDER THE LOCK, for the reason the
+            // collection path states: a draft save serialises on this same row,
+            // so a check that ran before the transaction can be overtaken by
+            // one that commits first, and the release would proceed over work
+            // it never saw.
+            if (sweepAllLocales) {
+              const heldBy = await this.languagesHoldingDrafts(
+                new VersionsRepository(tx),
+                singleMeta,
+                slug,
+                existingDoc.id
+              );
+              if (heldBy.length > 0) {
+                transitionDeniedResult = {
+                  success: false,
+                  statusCode: 409,
+                  message:
+                    `This Single has unpublished changes in ${heldBy.join(", ")}. ` +
+                    `Publish or discard them first, or publish each language on ` +
+                    `its own — locale '${EVERY_LOCALE}' moves every language's ` +
+                    `status and will not decide what happens to work that has ` +
+                    `not been released.`,
+                };
                 throw new SingleStatusTransitionDeniedError();
               }
             }
