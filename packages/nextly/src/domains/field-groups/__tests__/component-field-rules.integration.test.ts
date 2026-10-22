@@ -270,6 +270,33 @@ describe.each(getConfiguredTestDialects())(
               }),
             ],
           }),
+          // A field whose rule reads a field-group value, beside a hook that
+          // sets that field from a sibling: the second pass must judge it
+          // against the stored field group, not the one the first pass cut.
+          defineCollection({
+            slug: "hinted",
+            fields: [
+              text({
+                name: "title",
+                hooks: {
+                  afterRead: [
+                    ({ value, data }: { value: unknown; data: Doc }) => {
+                      data.hint = "hint-from-hook";
+                      return value;
+                    },
+                  ],
+                },
+              }),
+              text({
+                name: "hint",
+                access: {
+                  read: ({ data }: { data?: Doc }) =>
+                    (data?.one as Doc | undefined)?.secret === undefined,
+                },
+              }),
+              fieldGroup({ name: "one", component: "note" }),
+            ],
+          }),
           // A held edit: its response is the pending document.
           defineCollection({
             slug: "drafted",
@@ -346,6 +373,7 @@ describe.each(getConfiguredTestDialects())(
               "read-pages",
               "read-authors",
               "read-plain",
+              "read-hinted",
               "read-drafted",
               "update-drafted",
               "read-site",
@@ -508,6 +536,69 @@ describe.each(getConfiguredTestDialects())(
         expect(result.item.title).toBe("s2");
         expect(result.item).not.toHaveProperty("one");
         expect(JSON.stringify(result)).not.toContain("secret-w");
+      });
+    });
+
+    describe("a collection rule that reads a field-group value", () => {
+      it("is judged against the stored field group on both passes", async () => {
+        const { item } = await trusted.create({
+          collection: "hinted",
+          data: {
+            title: "t",
+            hint: "stored-hint",
+            one: { heading: "h", ...guardedValues("hinted") },
+          },
+        } as never);
+        const id = String(item.id);
+        // The stored instance holds `secret`, so `hint` is withheld from
+        // everyone, whatever the field group shows them and whatever a hook
+        // puts back.
+        for (const who of ["editor", "allowed"] as const) {
+          const read = (await checkedAs(who).findByID({
+            collection: "hinted",
+            id,
+            depth: 1,
+          } as never)) as Doc;
+          expect(read.title).toBe("t");
+          expect(read).not.toHaveProperty("hint");
+        }
+      });
+    });
+
+    describe("a filter on a field-group field", () => {
+      it("is refused where the field group's rule hides the field, as on the collection's own", async () => {
+        const id = await seed("filter");
+        const secret = "secret-filter-one";
+
+        // Which rows match is an answer about the hidden value, so the reader
+        // may not ask it, through either door.
+        await expect(
+          checkedAs("editor").find({
+            collection: "pages",
+            where: { "one.secret": { equals: secret } },
+          } as never)
+        ).rejects.toMatchObject({ statusCode: 400 });
+        const res = await rest(
+          "editor",
+          "GET",
+          ["collections", "pages", "entries"],
+          { query: `?where[one.secret][equals]=${secret}` }
+        );
+        expect(res.status).toBe(400);
+
+        // The controls: a field the rule leaves readable filters as before,
+        // and the allowed person may ask about the guarded one.
+        const byHeading = (await checkedAs("editor").find({
+          collection: "pages",
+          where: { "one.heading": { equals: "h" } },
+          limit: 100,
+        } as never)) as { items: Doc[] };
+        expect(byHeading.items.map(item => item.id)).toContain(id);
+        const asAllowed = (await checkedAs("allowed").find({
+          collection: "pages",
+          where: { "one.secret": { equals: secret } },
+        } as never)) as { items: Doc[] };
+        expect(asAllowed.items.map(item => item.id)).toEqual([id]);
       });
     });
 
