@@ -16,7 +16,7 @@ export const emailQueueSqlite = sqliteTable(
     id: text("id").primaryKey(),
     scope: text("scope").notNull(),
     state: text("state").notNull(),
-    jobId: text("job_id").notNull(),
+    jobId: text("job_id"),
     message: text("message"),
     principalKind: text("principal_kind"),
     principalId: text("principal_id"),

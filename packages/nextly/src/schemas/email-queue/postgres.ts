@@ -29,8 +29,8 @@ export const emailQueuePg = pgTable(
     scope: text("scope").notNull(),
     /** `waiting`, `sending`, `sent`, `failed` or `cancelled`. */
     state: varchar("state", { length: 16 }).notNull(),
-    /** The job that makes its attempts. */
-    jobId: varchar("job_id", { length: 36 }).notNull(),
+    /** The job that makes its attempts; none for one stored cancelled. */
+    jobId: varchar("job_id", { length: 36 }),
     /** The message, sealed: addresses, content and every send option. */
     message: text("message"),
     /**

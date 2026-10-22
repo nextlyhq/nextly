@@ -32,11 +32,22 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, inArray } from "drizzle-orm";
 
+import { getDialectTables } from "../../database/index";
 import { NextlyError } from "../../errors";
+import type { PrincipalRef } from "../../plugins/principals/types";
 import { emailQueueMysql } from "../../schemas/email-queue/mysql";
 import { emailQueuePg } from "../../schemas/email-queue/postgres";
 import { emailQueueSqlite } from "../../schemas/email-queue/sqlite";
 import { EMAIL_QUEUE_TABLE } from "../../schemas/email-queue/table-name";
+import { emailQueueRecipientsMysql } from "../../schemas/email-queue-recipients/mysql";
+import { emailQueueRecipientsPg } from "../../schemas/email-queue-recipients/postgres";
+import { emailQueueRecipientsSqlite } from "../../schemas/email-queue-recipients/sqlite";
+import type { RowLockServer } from "../../shared/lib/row-lock";
+import {
+  type PrincipalDigestDb,
+  principalDigestTablesOf,
+  readPrincipalDigests,
+} from "../audit/principal-digest";
 import {
   defineJob,
   type JobContext,
@@ -45,7 +56,7 @@ import {
 import { enqueueInTransaction } from "../jobs/jobs-repository";
 import { openSetting, sealSetting } from "../plugins/settings-crypto";
 
-import { storableError } from "./delivery-record";
+import { recipientDigest, storableError } from "./delivery-record";
 import { type EmailFailure, httpFailure } from "./failure";
 import { pruneQueuedEmails } from "./prune";
 import {
@@ -55,6 +66,7 @@ import {
 } from "./queued-email-job";
 import type { EmailService } from "./services/email-service";
 import { markHtml, TrustedHtml } from "./services/liquid-engine";
+import { toAddressList } from "./services/recipients";
 import { notAcceptedFailure } from "./services/send-failures";
 
 /**
@@ -122,6 +134,19 @@ export function emailQueueTableFor(dialect: string): EmailQueueTable {
         },
       });
   }
+}
+
+/** The recipients' digests table for a dialect. */
+function emailQueueRecipientsTableFor(
+  dialect: string
+):
+  | typeof emailQueueRecipientsPg
+  | typeof emailQueueRecipientsMysql
+  | typeof emailQueueRecipientsSqlite {
+  if (dialect === "postgresql") return emailQueueRecipientsPg;
+  if (dialect === "mysql") return emailQueueRecipientsMysql;
+  // `emailQueueTableFor` has refused any other dialect by now.
+  return emailQueueRecipientsSqlite;
 }
 
 /** The Drizzle surface the queue needs. */
@@ -336,21 +361,58 @@ export interface QueuedEmailInput {
   /** Who queued it, the scope its key is claimed in. */
   scope: string;
   message: QueuedMessage;
+  /** The person `to` is, as the send records them, when it names one. */
+  person: PrincipalRef | null;
   /** The install's secrets, current first. */
   secrets: readonly string[];
+  /** How the database takes the deleted-people lock. */
+  lockServer: RowLockServer;
   dialect: string;
   now: Date;
 }
 
+/** A stored queued email: its job, unless it was cancelled as it was stored. */
+export type StoredQueuedEmail =
+  | { id: string; state: "waiting"; jobId: string }
+  | { id: string; state: "cancelled" };
+
 /**
  * Store a queued email and the job that attempts it, in `tx`. Nothing is
  * attempted here; the caller starts the job once `tx` has committed.
+ *
+ * One naming a person reads whether they were deleted under the
+ * deleted-people lock, shared, which a deletion takes exclusive: either this
+ * commits first and the deletion then cancels the email, or the deletion
+ * commits first and the email is stored cancelled, with no job, no message
+ * and the person named by their digest.
  */
 export async function storeQueuedEmail(
   tx: TransactionContext,
   input: QueuedEmailInput
-): Promise<{ id: string; jobId: string }> {
+): Promise<StoredQueuedEmail> {
   const id = randomUUID();
+  const now = input.now.getTime();
+  const db = tx.getDrizzle<QueueDb>();
+  const table = emailQueueTableFor(input.dialect);
+  const erasedAs = input.person
+    ? await deletedDigestOf(tx, input, input.person)
+    : undefined;
+  if (input.person && erasedAs !== undefined) {
+    await db.insert(table).values({
+      id,
+      scope: input.scope,
+      state: "cancelled",
+      jobId: null,
+      message: null,
+      principalKind: input.person.kind,
+      principalId: erasedAs,
+      failure: null,
+      createdAt: now,
+      updatedAt: now,
+      settledAt: now,
+    });
+    return { id, state: "cancelled" };
+  }
   // Sealed before anything is written, so a message that cannot be stored
   // (variables that refer to themselves) refuses the queue with nothing left.
   const message = sealQueuedMessage(input.message, id, input.secrets);
@@ -361,22 +423,64 @@ export async function storeQueuedEmail(
     runAsUserId: null,
     now: input.now,
   });
-  const now = input.now.getTime();
-  await tx
-    .getDrizzle<QueueDb>()
-    .insert(emailQueueTableFor(input.dialect))
-    .values({
-      id,
-      scope: input.scope,
-      state: "waiting",
-      jobId,
-      message,
-      failure: null,
-      createdAt: now,
-      updatedAt: now,
-      settledAt: null,
-    });
-  return { id, jobId };
+  await db.insert(table).values({
+    id,
+    scope: input.scope,
+    state: "waiting",
+    jobId,
+    message,
+    principalKind: input.person?.kind ?? null,
+    principalId: input.person?.id ?? null,
+    failure: null,
+    createdAt: now,
+    updatedAt: now,
+    settledAt: null,
+  });
+  // Each address by its keyed digest, once, as the delivery records keep it:
+  // what erasing an address finds this email by.
+  const digests = [
+    ...new Set(queuedRecipients(input.message).map(recipientDigest)),
+  ];
+  if (digests.length > 0) {
+    await db
+      .insert(emailQueueRecipientsTableFor(input.dialect))
+      .values(digests.map(recipientHash => ({ queuedId: id, recipientHash })));
+  }
+  return { id, state: "waiting", jobId };
+}
+
+/**
+ * Every address a queued email goes to, `to`, `cc` and `bcc`, as the caller
+ * gave them. A template's own copies are fixed addresses of the site's, not
+ * the recipient's, and are not among them.
+ */
+function queuedRecipients(message: QueuedMessage): string[] {
+  const { to, cc, bcc } =
+    message.kind === "message"
+      ? message.send
+      : { to: message.to, ...message.options };
+  return [...toAddressList(to), ...(cc ?? []), ...(bcc ?? [])].filter(
+    (address): address is string => typeof address === "string"
+  );
+}
+
+/**
+ * The person's digest when they were reported deleted, read under the
+ * deleted-people lock, shared, held until `tx` ends; undefined otherwise.
+ */
+async function deletedDigestOf(
+  tx: TransactionContext,
+  input: QueuedEmailInput,
+  person: PrincipalRef
+): Promise<string | undefined> {
+  const digests = await readPrincipalDigests(
+    tx.getDrizzle<PrincipalDigestDb>(),
+    input.lockServer,
+    principalDigestTablesOf(getDialectTables(input.dialect)),
+    "shared",
+    input.secrets
+  );
+  return (await digests.isDeleted(person)) ? digests.digest(person) : undefined;
 }
 
 /** A queued email's state, or undefined when there is no such email. */
@@ -508,20 +612,10 @@ export async function attemptQueuedEmail(
   const db = deps.adapter.getDrizzle<QueueDb>();
   const table = emailQueueTableFor(deps.adapter.getCapabilities().dialect);
   const [row] = (await db
-    .select({
-      id: table.id,
-      scope: table.scope,
-      state: table.state,
-      message: table.message,
-    })
+    .select({ id: table.id, scope: table.scope, state: table.state })
     .from(table)
     .where(eq(table.id, input.queuedId))
-    .limit(1)) as Array<{
-    id: string;
-    scope: string;
-    state: QueuedEmailState;
-    message: string | null;
-  }>;
+    .limit(1)) as Array<{ id: string; scope: string; state: QueuedEmailState }>;
   if (!row || !ATTEMPTABLE.includes(row.state)) return;
 
   const now = context.now.getTime();
@@ -542,10 +636,22 @@ export async function attemptQueuedEmail(
     });
 
   await record({ state: "sending" });
-  const message =
-    row.message === null
-      ? undefined
-      : openQueuedMessage(row.message, row.id, deps.secrets);
+  // Read again: an erasure that committed since the first read cancelled the
+  // email, and the fenced write above then changed nothing. Once this reads
+  // `sending`, an erasure leaves the state alone and clears the message, and
+  // this attempt is the one already with the provider.
+  const [held] = (await db
+    .select({ state: table.state, message: table.message })
+    .from(table)
+    .where(eq(table.id, row.id))
+    .limit(1)) as Array<{ state: QueuedEmailState; message: string | null }>;
+  if (held?.state !== "sending") return;
+  // Cleared by an erasure: nothing is sent.
+  if (held.message === null) {
+    await settle("cancelled");
+    return;
+  }
+  const message = openQueuedMessage(held.message, row.id, deps.secrets);
   if (!message) {
     await settle("failed", {
       retryable: false,

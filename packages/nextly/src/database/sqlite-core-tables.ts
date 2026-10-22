@@ -816,7 +816,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "id" TEXT PRIMARY KEY,
       "scope" TEXT NOT NULL,
       "state" TEXT NOT NULL,
-      "job_id" TEXT NOT NULL,
+      "job_id" TEXT,
       "message" TEXT,
       "principal_kind" TEXT,
       "principal_id" TEXT,

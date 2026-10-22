@@ -43,6 +43,7 @@ import { BaseService } from "../../../shared/base-service";
 import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { runAdapterTransaction } from "../../../shared/lib/run-adapter-transaction";
+import { rowLockServer } from "../../audit/audit-log-writer";
 import { pluginSettingsSecrets } from "../../plugins/settings-service";
 import { warnQuietly } from "../../retention/safe-log";
 import {
@@ -66,6 +67,7 @@ import {
   type QueuedEmailState,
   type QueuedMessage,
   queuedEmailState,
+  type StoredQueuedEmail,
   storeQueuedEmail,
 } from "../queued-send";
 import {
@@ -1660,11 +1662,13 @@ export class EmailService extends BaseService {
    * and the recipients as the caller gave them. A staff person is read in
    * `tx` when the email is queued in a transaction, so a user that
    * transaction wrote is seen, as the queued email will be.
+   *
+   * @returns The person as the send records them, when it names one
    */
   private async assertQueueable(
     checks: QueueChecks,
     tx?: TransactionContext
-  ): Promise<void> {
+  ): Promise<PrincipalRef | null> {
     if (checks.idempotencyKey !== undefined) {
       assertIdempotencyKey(checks.idempotencyKey);
     }
@@ -1672,6 +1676,7 @@ export class EmailService extends BaseService {
     assertSendable(toAddressList(checks.to), {
       namesPerson: recorded !== null,
     });
+    return recorded;
   }
 
   /** Store a queued email, and start its first attempt once it is durable. */
@@ -1681,33 +1686,42 @@ export class EmailService extends BaseService {
     tx: TxOption["tx"],
     operation: string
   ): Promise<QueuedEmail> {
-    const input = {
+    const input = (person: PrincipalRef | null) => ({
       scope: this.keyScope,
       message,
+      person,
       secrets: pluginSettingsSecrets(env),
+      lockServer: rowLockServer(this.adapter, this.dialect),
       dialect: this.dialect,
       now: new Date(),
-    };
+    });
     if (tx !== undefined) {
       const link = linkedTransaction(tx, operation);
-      const { id, jobId } = await link.run(async adapterTx => {
-        await this.assertQueueable(checks, adapterTx);
-        return storeQueuedEmail(adapterTx, input);
+      const stored = await link.run(async adapterTx => {
+        const person = await this.assertQueueable(checks, adapterTx);
+        return storeQueuedEmail(adapterTx, input(person));
       });
-      link.afterCommit(() => this.firstAttempt(jobId));
-      return { id, state: "waiting" };
+      if (stored.state === "waiting") {
+        link.afterCommit(() => this.firstAttempt(stored.jobId));
+      }
+      return { id: stored.id, state: stored.state };
     }
     assertNoOpenTransaction(this.adapter, operation);
-    await this.assertQueueable(checks);
-    const { id, jobId } = await runAdapterTransaction<
-      { id: string; jobId: string },
+    const person = await this.assertQueueable(checks);
+    const stored = await runAdapterTransaction<
+      StoredQueuedEmail,
       TransactionContext
     >(
       run => this.adapter.transaction(ctx => run(ctx)),
-      ctx => storeQueuedEmail(ctx, input)
+      ctx => storeQueuedEmail(ctx, input(person))
     );
-    await this.firstAttempt(jobId);
-    return { id, state: await this.stateAfterFirstAttempt(id) };
+    // Stored cancelled: its person was deleted first, and nothing is sent.
+    if (stored.state === "cancelled") return stored;
+    await this.firstAttempt(stored.jobId);
+    return {
+      id: stored.id,
+      state: await this.stateAfterFirstAttempt(stored.id),
+    };
   }
 
   /**
