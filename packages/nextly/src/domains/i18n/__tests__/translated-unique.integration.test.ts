@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
+import { companionUniqueIndexName } from "../migration/companion-unique-indexes";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -246,6 +247,39 @@ describeEachDialect("a translated unique field", dialect => {
     await expect(writeBanner("b3", "en", "Sale")).rejects.toThrow(
       /unique|duplicate/i
     );
+  });
+
+  it("refuses the save that would index a field marked unique before the rule held, over duplicates", async () => {
+    // As a database from before the rule was enforced: the field is unique and translated, its
+    // companion has no index, and a language holds a value twice.
+    await seedCollection();
+    const index = companionUniqueIndexName("dc_pages_locales", "handle");
+    await query(
+      dialect === "mysql"
+        ? `DROP INDEX ${quoted(index)} ON ${quoted("dc_pages_locales")}`
+        : `DROP INDEX ${quoted(index)}`
+    );
+    const a = idOf(await write("en", { handle: "about" }));
+    const b = idOf(await write("en", { handle: "about" }));
+
+    const saved = await handler().updateCollection(
+      { collectionName: "pages" },
+      {
+        fields: [
+          { name: "handle", type: "text", unique: true },
+          { name: "note", type: "text" },
+          { name: "code", type: "number", unique: true, localized: false },
+          { name: "summary", type: "text" },
+        ],
+      }
+    );
+
+    expect(saved.success).toBe(false);
+    const said = JSON.stringify(saved);
+    expect(said).toMatch(/TRANSLATED_UNIQUE_OVER_DUPLICATES/);
+    expect(said).toContain(a);
+    expect(said).toContain(b);
+    expect(said).not.toContain("about");
   });
 
   const UNIQUE_HEADING = [

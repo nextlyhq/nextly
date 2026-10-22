@@ -19,6 +19,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 
 import {
+  companionUniqueIndexName,
   uniqueTranslatedColumns,
   type UniqueFieldLike,
   type UniqueTranslatedColumn,
@@ -84,13 +85,19 @@ export interface TranslatedUniqueChange {
   newFields: readonly UniqueFieldLike[];
   wasLocalized: boolean;
   isLocalized: boolean;
+  /**
+   * The per-language unique indexes the companion has, when read. A field counts as becoming
+   * unique when its index is missing, which also catches one marked unique before the rule was
+   * enforced and never indexed. Left out, it is judged by the fields before the change.
+   */
+  indexedOn?: { companionTable: string; names: ReadonlySet<string> };
 }
 
 /**
  * Refuses a change that makes a translated field unique within each language on a server that
  * cannot key the index (`refusalsForUnindexableTranslatedUnique`), before anything runs. Every
  * path that creates or changes a companion asks it, so none reaches the server's own error
- * part-way through. A field already translated and unique was checked when it became so.
+ * part-way through. A field already translated, unique and indexed was checked when it became so.
  *
  * Judged by the flags first, so a change that marks nothing unique asks the adapter nothing.
  *
@@ -111,11 +118,16 @@ export function refuseUnindexableTranslatedUnique(
       dialect,
       builtBy: change.builtBy,
     });
+  const { indexedOn } = change;
   const already = new Set(
     columnsOf(change.oldFields, change.wasLocalized).map(c => c.field)
   );
-  const becoming = columnsOf(change.newFields, true).filter(
-    c => !already.has(c.field)
+  const becoming = columnsOf(change.newFields, true).filter(c =>
+    indexedOn
+      ? !indexedOn.names.has(
+          companionUniqueIndexName(indexedOn.companionTable, c.column)
+        )
+      : !already.has(c.field)
   );
   const refusals = refusalsForUnindexableTranslatedUnique(adapter, becoming);
   if (refusals.length > 0) {

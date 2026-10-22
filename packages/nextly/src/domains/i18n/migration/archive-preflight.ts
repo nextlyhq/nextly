@@ -15,6 +15,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { readIndexNames } from "../../schema/pipeline/live-table-facts";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
 import { companionColumnNames } from "../runtime/companion-io";
@@ -218,7 +219,27 @@ export async function archiveFieldsLeavingTranslation(args: {
 async function refuseTranslatedUniqueThatCannotHold(
   args: Parameters<typeof archiveFieldsLeavingTranslation>[0]
 ): Promise<void> {
-  const becoming = refuseUnindexableTranslatedUnique(args.adapter, args);
+  const companionTable = `${args.tableName}_locales`;
+  // Judged against the indexes the companion has, so a field marked unique before the rule was
+  // enforced, and never indexed, is checked as the save that indexes it. Only read when a field
+  // is unique, so most saves ask nothing.
+  const indexedOn =
+    args.wasLocalized &&
+    args.isLocalized &&
+    args.newFields.some(f => f.unique === true)
+      ? {
+          companionTable,
+          names: await readIndexNames(
+            args.adapter.getDrizzle(),
+            args.adapter.getCapabilities().dialect,
+            companionTable
+          ),
+        }
+      : undefined;
+  const becoming = refuseUnindexableTranslatedUnique(args.adapter, {
+    ...args,
+    indexedOn,
+  });
   if (becoming.length === 0 || !args.wasLocalized) return;
   const live = new Set(
     await companionColumnNames(args.adapter, args.tableName)
@@ -226,7 +247,7 @@ async function refuseTranslatedUniqueThatCannotHold(
   const refusals = refusalsForTranslatedUniqueOverDuplicates(
     await duplicateTranslatedValues(
       args.adapter,
-      `${args.tableName}_locales`,
+      companionTable,
       becoming.filter(c => live.has(c.column))
     )
   );
