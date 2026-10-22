@@ -30,6 +30,7 @@ import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
 import { registerFieldFunctions } from "../../../shared/lib/field-level-registry";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
 
 import { ReleasesRepository } from "../releases-repository";
 
@@ -695,6 +696,11 @@ describe.each(getConfiguredTestDialects())(
         { status: false },
         { and: [{ column: "slug", op: "=", value: "seasonal" }] }
       );
+      // A direct write to the registry row goes round the registry services,
+      // so this process's cached row keeps the old lifecycle for up to its
+      // lifetime, as a change made by another instance would. Clearing it
+      // lets the next read see the change now.
+      clearCollectionRowCache();
       // The write itself now refuses the document-wide move.
       const written = await (
         t.getService("collectionsHandler") as CollectionsHandler
