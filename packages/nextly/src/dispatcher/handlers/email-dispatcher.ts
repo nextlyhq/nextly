@@ -386,11 +386,15 @@ const EMAIL_TEMPLATE_METHODS: Record<
       const { variables } = parseBody(sendTestSchema, body ?? {});
       const to = await ownAddressOfCaller();
       const emailService = fromContainer<EmailService>("emailService");
+      // Unwired services are a server fault: the caller gets the generic
+      // internal error and the log gets what to call first.
       if (!emailService) {
-        throw new Error(
-          "Email service not available. " +
-            "Ensure registerServices() or getNextly() has been called before API requests."
-        );
+        throw NextlyError.internal({
+          logContext: {
+            reason: "email-service-unavailable",
+            hint: "Ensure registerServices() or getNextly() has been called before API requests.",
+          },
+        });
       }
       const template = await svc.templateService.getTemplate(p.templateId);
       const result = await emailService.sendWithTemplate(
