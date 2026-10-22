@@ -84,15 +84,15 @@ function nameOf(field: FieldConfig): string | undefined {
  * type they claim: a value a hook retagged as a component with no rules is
  * still judged by the rules it was declared under. A block of a live dynamic
  * zone is judged by its own type only when the zone allows that type; one
- * with no type, or one the zone does not allow, is judged by every type the
- * zone allows, so a field any of them withholds stays withheld. A version
- * keeps the type it was captured under, so there the type decides.
+ * with no type, or one the zone does not allow, has no rules that can judge
+ * it, so its `slug` is `null` and it is withheld whole. A version keeps the
+ * type it was captured under, so there the type decides.
  */
 function componentInstances(
   field: FieldConfig,
   value: unknown,
   declaredComponentDecides: boolean
-): { slug: string; instance: Record<string, unknown> }[] {
+): { slug: string | null; instance: Record<string, unknown> }[] {
   const { single, many } = extractFieldGroupReferences(field);
   const allowed = fieldGroupSlugList(field);
   return rowsOf(value).flatMap(instance =>
@@ -107,7 +107,8 @@ function componentInstances(
 /**
  * The components one instance is judged by, given the type it claims
  * (`own`); see {@link componentInstances}. `zone` is the live dynamic zone's
- * allowed types, or `null` where the claimed type decides.
+ * allowed types, or `null` where the claimed type decides. `[null]` withholds
+ * the instance whole.
  */
 function judgingSlugs(
   own: string | undefined,
@@ -116,10 +117,10 @@ function judgingSlugs(
     zone: readonly string[] | null;
     declaredComponentDecides: boolean;
   }
-): readonly string[] {
+): readonly (string | null)[] {
   const { single, zone } = declared;
   if (zone !== null) {
-    return own !== undefined && zone.includes(own) ? [own] : zone;
+    return [own !== undefined && zone.includes(own) ? own : null];
   }
   if (declared.declaredComponentDecides && single !== undefined) {
     return [single];
@@ -193,7 +194,8 @@ async function judgeRows(
       rows,
       caller.declaredComponentDecides === true
     )) {
-      await judgeInstance(instance, slug, componentFields, caller);
+      if (slug === null) withholdWhole(instance);
+      else await judgeInstance(instance, slug, componentFields, caller);
     }
     return;
   }
@@ -201,6 +203,15 @@ async function judgeRows(
   for (const row of rows) {
     await applyComponentReadAccess(row, sub, componentFields, caller);
   }
+}
+
+/**
+ * Remove every field of an instance no rules can judge, in place: judged by
+ * several types in turn, one's removals would hide from the next the stored
+ * value its rule reads.
+ */
+function withholdWhole(instance: Record<string, unknown>): void {
+  for (const key of Object.keys(instance)) delete instance[key];
 }
 
 /** One component instance, by its component's own rules, then what it holds. */
