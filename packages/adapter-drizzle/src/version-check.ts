@@ -111,9 +111,10 @@ export interface DialectVersionInfo {
    * PostgreSQL and SQLite always can. MySQL can from 8.0.13 (functional key parts). The
    * MySQL-compatible variants are reported as unable: MariaDB has no functional key parts, and
    * the others are not tested, so a rule that needs one is refused there rather than left
-   * unenforced.
+   * unenforced. Optional, so a `DialectVersionInfo` written before this was reported still is
+   * one; absent means unknown, which a caller reads as unable.
    */
-  functionalIndexes: boolean;
+  functionalIndexes?: boolean;
 }
 
 // What: the variants that reject `SELECT ... FOR SHARE` as a syntax error.

@@ -7,7 +7,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
+import type { FieldGroupMetadataService } from "../../field-groups/services/field-group-metadata-service";
 import { companionUniqueIndexName } from "../migration/companion-unique-indexes";
+import * as bootCheck from "../runtime/translated-unique-boot-check";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -340,4 +342,168 @@ describeEachDialect("a translated unique field", dialect => {
       expect(await current.adapter.tableExists(`${table}_locales`)).toBe(false);
     }
   );
+
+  /** Every column `table` has, as the database reports it. */
+  async function columnsOf(table: string): Promise<string[]> {
+    const rows = await query<{ name: string }>(
+      dialect === "mysql"
+        ? `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}'`
+        : dialect === "sqlite"
+          ? `SELECT name FROM pragma_table_info('${table}')`
+          : `SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}'`
+    );
+    return rows.map(row => row.name);
+  }
+
+  // A number is a value like any other: zero and false are values, not blanks, and the index keys
+  // the column as it is. Only text has a blank, ''.
+  it("holds a translated unique number within each language, zero included", async () => {
+    const created = await handler().createCollection({
+      name: "ranks",
+      label: "Rank",
+      localized: true,
+      // Translated explicitly: a number is shared unless it says otherwise.
+      fields: [{ name: "rank", type: "number", unique: true, localized: true }],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const entries = handler().getEntryService();
+    const write = (
+      locale: string,
+      data: Record<string, unknown>,
+      entryId?: string
+    ) =>
+      entryId
+        ? entries.updateEntry(
+            { collectionName: "ranks", entryId, overrideAccess: true, locale },
+            data
+          )
+        : entries.createEntry(
+            { collectionName: "ranks", overrideAccess: true, locale },
+            data
+          );
+
+    const first = await write("en", { rank: 0 });
+    expect(first.success, JSON.stringify(first)).toBe(true);
+    expect(await write("en", { rank: 0 })).toMatchObject({
+      statusCode: 409,
+      code: "DUPLICATE",
+    });
+    const other = await write("en", { rank: 1 });
+    const zeroInFrench = await write("fr", { rank: 0 }, idOf(other));
+    expect(zeroInFrench.success, JSON.stringify(zeroInFrench)).toBe(true);
+  });
+
+  // MySQL's default collation compares text without case or accents, so a shared unique column
+  // refuses "About" beside "about"; a translated one must judge "the same value" as it does.
+  it.skipIf(dialect !== "mysql")(
+    "judges the same value as MySQL's collation does, case aside",
+    async () => {
+      await seedCollection();
+      const first = await write("en", { handle: "About" });
+      expect(first.success, JSON.stringify(first)).toBe(true);
+
+      expect(await write("en", { handle: "about" })).toMatchObject({
+        statusCode: 409,
+        code: "DUPLICATE",
+      });
+    }
+  );
+
+  it("refuses a field group's own update that makes a translated field unique over duplicates, and changes nothing", async () => {
+    await dispatchComponents(
+      "createComponent",
+      {},
+      {
+        slug: "banner",
+        label: "Banner",
+        localized: true,
+        fields: [{ name: "heading", type: "text" }],
+      }
+    );
+    await writeBanner("b1", "en", "Sale");
+    await writeBanner("b2", "en", "Sale");
+    const service = current.getService(
+      "fieldGroupMetadataService"
+    ) as FieldGroupMetadataService;
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "banner",
+        fields: [
+          { name: "heading", type: "text", unique: true },
+          { name: "subtitle", type: "text" },
+        ],
+      })
+      .then(
+        () => undefined,
+        (error: { publicData?: unknown }) => error
+      );
+
+    expect(JSON.stringify(refusal?.publicData ?? null)).toMatch(
+      /TRANSLATED_UNIQUE_OVER_DUPLICATES/
+    );
+    expect(await columnsOf("comp_banner_locales")).not.toContain("subtitle");
+  });
+
+  // An index under the per-language index's name proves nothing by its name: one left there that
+  // is not unique holds nothing, so the save that finds it puts the real one in its place.
+  it("replaces an index under the per-language index's name that is not unique", async () => {
+    await seedCollection();
+    const index = companionUniqueIndexName("dc_pages_locales", "handle");
+    await query(
+      dialect === "mysql"
+        ? `DROP INDEX ${quoted(index)} ON ${quoted("dc_pages_locales")}`
+        : `DROP INDEX ${quoted(index)}`
+    );
+    await query(
+      `CREATE INDEX ${quoted(index)} ON ${quoted("dc_pages_locales")} (${dialect === "mysql" ? "`handle`(50)" : quoted("handle")}, ${quoted("_locale")})`
+    );
+
+    const saved = await handler().updateCollection(
+      { collectionName: "pages" },
+      {
+        fields: [
+          { name: "handle", type: "text", unique: true },
+          { name: "note", type: "text" },
+          { name: "code", type: "number", unique: true, localized: false },
+          { name: "summary", type: "text" },
+        ],
+      }
+    );
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+
+    await write("en", { handle: "about" });
+    expect(await write("en", { handle: "about" })).toMatchObject({
+      statusCode: 409,
+      code: "DUPLICATE",
+    });
+  });
+
+  // An entity made in the Schema Builder before the rule was enforced has no index until it is
+  // saved again, so the boot names it, as it names a configured one.
+  it("names at boot a Schema Builder entity whose translated unique field has no index yet", async () => {
+    await seedCollection();
+    const index = companionUniqueIndexName("dc_pages_locales", "handle");
+    await query(
+      dialect === "mysql"
+        ? `DROP INDEX ${quoted(index)} ON ${quoted("dc_pages_locales")}`
+        : `DROP INDEX ${quoted(index)}`
+    );
+    const warnings: string[] = [];
+
+    await bootCheck.warnAboutUnindexedTranslatedUnique(
+      current.adapter,
+      { collections: [] },
+      message => warnings.push(message),
+      await bootCheck.storedLocalizableEntities({
+        collections: current.getService("collectionRegistryService"),
+        singles: current.getService("singleRegistryService"),
+        fieldGroups: current.getService("fieldGroupRegistryService"),
+      })
+    );
+
+    expect(warnings.join("\n")).toMatch(
+      /"pages": "handle" is translated and unique/
+    );
+  });
 });

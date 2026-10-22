@@ -20,10 +20,12 @@ import type { ColumnOrigin } from "../../schema/services/field-column-descriptor
 
 import {
   companionUniqueIndexName,
+  uniqueColumnsWithKind,
   uniqueTranslatedColumns,
   type UniqueFieldLike,
   type UniqueTranslatedColumn,
 } from "./companion-unique-indexes";
+import type { CompanionMigrationSpec } from "./types";
 
 /** The documents in one language that share a value of a field, by id. */
 export interface TranslatedDuplicate {
@@ -66,14 +68,17 @@ export function refusalsForUnindexableTranslatedUnique(
   columns: readonly UniqueTranslatedColumn[]
 ): TranslatedUniqueRefusal[] {
   if (canKeyOnExpressions(adapter)) return [];
-  return columns.map(({ field }) => ({
-    path: `fields.${field}`,
-    code: "UNIQUE_NOT_ENFORCEABLE_ON_DIALECT",
-    message:
-      `"${field}" is translated and unique, which needs a unique index on an expression. ` +
-      `This database server cannot create one (it needs MySQL 8.0.13 or later). Remove Unique, ` +
-      `or make the field shared.`,
-  }));
+  // A column that is not text is keyed as it is, which every server can do.
+  return columns
+    .filter(c => c.text)
+    .map(({ field }) => ({
+      path: `fields.${field}`,
+      code: "UNIQUE_NOT_ENFORCEABLE_ON_DIALECT",
+      message:
+        `"${field}" is translated and unique, which needs a unique index on an expression. ` +
+        `This database server cannot create one (it needs MySQL 8.0.13 or later). Remove Unique, ` +
+        `or make the field shared.`,
+    }));
 }
 
 /** A change to an entity's fields, as the unique-within-each-language preconditions read it. */
@@ -149,13 +154,18 @@ export async function duplicateTranslatedValues(
   const table = sql.identifier(companionTable);
   const locale = sql.identifier("_locale");
   const parent = sql.identifier("_parent");
-  for (const { field, column } of columns) {
+  for (const { field, column, text } of columns) {
     const value = sql.identifier(column);
+    // Only text has a blank to leave out, as the index leaves it out; a number compared with ''
+    // is an error on PostgreSQL and a zero on MySQL.
+    const present = text
+      ? sql`${value} IS NOT NULL AND ${value} <> ''`
+      : sql`${value} IS NOT NULL`;
     const rows = await adapter.queryStatement<{
       locale: string;
       parent: unknown;
     }>(
-      sql`SELECT a.${locale} AS locale, a.${parent} AS parent FROM ${table} a JOIN (SELECT ${value} AS v, ${locale} AS l FROM ${table} WHERE ${value} IS NOT NULL AND ${value} <> '' GROUP BY ${value}, ${locale} HAVING COUNT(*) > 1) d ON a.${value} = d.v AND a.${locale} = d.l ORDER BY a.${locale}, a.${parent} LIMIT ${LISTED}`
+      sql`SELECT a.${locale} AS locale, a.${parent} AS parent FROM ${table} a JOIN (SELECT ${value} AS v, ${locale} AS l FROM ${table} WHERE ${present} GROUP BY ${value}, ${locale} HAVING COUNT(*) > 1) d ON a.${value} = d.v AND a.${locale} = d.l ORDER BY a.${locale}, a.${parent} LIMIT ${LISTED}`
     );
     const byLocale = new Map<string, string[]>();
     for (const row of rows) {
@@ -194,14 +204,15 @@ export function refusalsForTranslatedUniqueOverDuplicates(
  */
 export async function refuseTranslatedUniqueMigrationThatCannotHold(
   adapter: TranslatedUniqueAdapter,
-  spec: {
-    collection: string;
-    companionTable: string;
-    unique?: readonly UniqueTranslatedColumn[];
-  },
+  spec: Pick<
+    CompanionMigrationSpec,
+    "collection" | "companionTable" | "columns" | "unique"
+  >,
   source: string
 ): Promise<void> {
-  const columns = spec.unique ?? [];
+  // The file's header records each unique column by name beside the companion's columns, so
+  // whether one stores text is read off the same header the file was written with.
+  const columns = uniqueColumnsWithKind(spec.unique ?? [], spec.columns);
   if (columns.length === 0) return;
   let refusals = refusalsForUnindexableTranslatedUnique(adapter, columns);
   if (refusals.length === 0) {

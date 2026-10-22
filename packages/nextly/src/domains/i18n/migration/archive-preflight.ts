@@ -15,7 +15,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import { readIndexNames } from "../../schema/pipeline/live-table-facts";
+import {
+  readIndexUniqueness,
+  uniqueIndexNames,
+} from "../../schema/pipeline/live-table-facts";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
 import { companionColumnNames } from "../runtime/companion-io";
@@ -216,8 +219,18 @@ export async function archiveFieldsLeavingTranslation(args: {
  *
  * @throws NextlyError `VALIDATION_ERROR` naming each field the rule cannot hold for
  */
-async function refuseTranslatedUniqueThatCannotHold(
-  args: Parameters<typeof archiveFieldsLeavingTranslation>[0]
+export async function refuseTranslatedUniqueThatCannotHold(
+  args: Pick<
+    Parameters<typeof archiveFieldsLeavingTranslation>[0],
+    | "adapter"
+    | "entity"
+    | "tableName"
+    | "builtBy"
+    | "oldFields"
+    | "newFields"
+    | "wasLocalized"
+    | "isLocalized"
+  >
 ): Promise<void> {
   const companionTable = `${args.tableName}_locales`;
   // Judged against the indexes the companion has, so a field marked unique before the rule was
@@ -229,10 +242,14 @@ async function refuseTranslatedUniqueThatCannotHold(
     args.newFields.some(f => f.unique === true)
       ? {
           companionTable,
-          names: await readIndexNames(
-            args.adapter.getDrizzle(),
-            args.adapter.getCapabilities().dialect,
-            companionTable
+          // Only the unique ones: an index under the name that is not unique holds nothing, so
+          // the save that replaces it asks the duplicates first, as it would of a missing one.
+          names: uniqueIndexNames(
+            await readIndexUniqueness(
+              args.adapter.getDrizzle(),
+              args.adapter.getCapabilities().dialect,
+              companionTable
+            )
           ),
         }
       : undefined;

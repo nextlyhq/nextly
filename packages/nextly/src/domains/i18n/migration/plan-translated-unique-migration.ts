@@ -15,6 +15,7 @@ import type { TableSpec } from "../../schema/pipeline/diff/types";
 import {
   companionUniqueIndexChanges,
   companionUniqueIndexName,
+  uniqueColumnsWithKind,
   type UniqueFieldLike,
   type UniqueTranslatedColumn,
   uniqueTranslatedColumns,
@@ -56,11 +57,13 @@ export function planTranslatedUniqueMigration(args: {
     | undefined;
 }): TranslatedUniquePlan | null {
   const { dialect, companionTable } = args.spec;
-  const had: UniqueTranslatedColumn[] = (
-    args.previous?.localized === true
+  const had: UniqueTranslatedColumn[] = uniqueColumnsWithKind(
+    (args.previous?.localized === true
       ? (args.previous.uniqueLocalizedColumns ?? [])
       : []
-  ).map(column => ({ field: column, column }));
+    ).map(column => ({ field: column, column })),
+    args.spec.columns
+  );
   const wanted = uniqueTranslatedColumns({
     fields: args.fields,
     entityLocalized: true,

@@ -3,12 +3,13 @@
  * companion table over its value and `_locale`, so the same value is refused twice in one
  * language and allowed in two.
  *
- * The index keys on `NULLIF(column, '')` rather than the column: a value left blank is stored as
- * `''`, and two blanks are not the same value. Inside the index a blank becomes NULL, and NULLs
- * never collide, so untranslated documents are never duplicates of one another, while what is
+ * A text column is keyed on `NULLIF(column, '')` rather than the column: a value left blank is
+ * stored as `''`, and two blanks are not the same value. Inside the index a blank becomes NULL, and
+ * NULLs never collide, so untranslated documents are never duplicates of one another, while what is
  * stored, and what every read returns, stays exactly as it was. PostgreSQL and SQLite key an index
- * on an expression; MySQL does from 8.0.13 (a functional key part, in its own parentheses), on
- * the value's SHA-256 since it cannot key an expression returning TEXT.
+ * on an expression; MySQL does from 8.0.13 (a functional key part, in its own parentheses), on a
+ * SHA-256 since it cannot key an expression returning TEXT. Any other column (a number, a
+ * boolean, a date) has no blank, so it is keyed as it is: zero and false are values like any other.
  *
  * @module domains/i18n/migration/companion-unique-indexes
  */
@@ -21,6 +22,7 @@ import { isFieldLocalized } from "../classify-fields";
 import { q } from "./ddl-types";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import type { CompanionFieldLike } from "./reconcile-companion";
+import type { LocalizedColumnKind } from "./types";
 
 /** A field as the companion knows it, with whether it is marked unique. */
 export type UniqueFieldLike = CompanionFieldLike & { unique?: boolean };
@@ -29,6 +31,20 @@ export type UniqueFieldLike = CompanionFieldLike & { unique?: boolean };
 export interface UniqueTranslatedColumn {
   field: string;
   column: string;
+  /** Whether the column stores text, which alone has a blank (`''`) to leave out. */
+  text: boolean;
+}
+
+/** The storage kinds that hold text. */
+const TEXT_KINDS: ReadonlySet<LocalizedColumnKind> = new Set([
+  "text",
+  "longText",
+  "shortText",
+]);
+
+/** Whether a companion column of `kind` stores text. */
+export function isTextKind(kind: LocalizedColumnKind): boolean {
+  return TEXT_KINDS.has(kind);
 }
 
 /** The translated fields marked unique, with the companion column each one has. */
@@ -42,7 +58,26 @@ export function uniqueTranslatedColumns(args: {
     if (field.unique !== true) return [];
     if (!isFieldLocalized(field, args.entityLocalized)) return [];
     const spec = fieldToLocalizedColumnSpec(field, args.dialect, args.builtBy);
-    return spec ? [{ field: field.name, column: spec.name }] : [];
+    return spec
+      ? [{ field: field.name, column: spec.name, text: isTextKind(spec.kind) }]
+      : [];
+  });
+}
+
+/**
+ * Unique columns recorded by name (a snapshot, a migration file's header), with whether each
+ * stores text, read off the companion's columns as the file or spec describes them. A column it no
+ * longer describes is taken as text, so a way back that recreates its index still leaves a blank
+ * out.
+ */
+export function uniqueColumnsWithKind(
+  entries: readonly { field: string; column: string }[],
+  columns: readonly { name: string; kind: LocalizedColumnKind }[]
+): UniqueTranslatedColumn[] {
+  const kindOf = new Map(columns.map(c => [c.name, c.kind]));
+  return entries.map(({ field, column }) => {
+    const kind = kindOf.get(column);
+    return { field, column, text: kind === undefined || isTextKind(kind) };
   });
 }
 
@@ -79,6 +114,13 @@ interface CompanionUniqueIndexArgs {
   /** Every translated column the companion has, so only this module's own indexes are dropped. */
   translatedColumns: readonly string[];
   liveIndexNames: ReadonlySet<string>;
+  /**
+   * Those of `liveIndexNames` the database holds as an index that is not unique. A name proves
+   * nothing about what an index enforces: one left under a wanted index's name that is not unique
+   * (drift, a hand-written migration) holds nothing, so it is dropped and the real one created.
+   * Left out where the indexes were not read, as for a migration file.
+   */
+  liveNotUnique?: ReadonlySet<string>;
 }
 
 /**
@@ -90,6 +132,27 @@ export function companionUniqueIndexStatements(
 ): string[] {
   const { drops, creates } = companionUniqueIndexChanges(args);
   return [...drops, ...creates];
+}
+
+/**
+ * What the index keys a column on. Text leaves its blank out (`NULLIF`); any other column is keyed
+ * as it is.
+ *
+ * MySQL takes an expression only as a functional key part, in parentheses of its own, and cannot
+ * key one that returns TEXT, which a companion's text column is. It keys a SHA-256 instead, of the
+ * value's collation weight (`WEIGHT_STRING`) rather than its bytes: two values the column's
+ * collation calls equal ("About" and "about" under a case-insensitive one) weigh the same, so the
+ * index judges "the same value" exactly as a shared unique column of that collation does, at any
+ * length, a blank still NULL.
+ */
+function indexKey(
+  column: UniqueTranslatedColumn,
+  dialect: SupportedDialect
+): string {
+  const quoted = q(column.column, dialect);
+  if (!column.text) return quoted;
+  const value = `NULLIF(${quoted}, '')`;
+  return dialect === "mysql" ? `(SHA2(WEIGHT_STRING(${value}), 256))` : value;
 }
 
 /**
@@ -107,37 +170,42 @@ export function companionUniqueIndexChanges(args: CompanionUniqueIndexArgs): {
   creates: string[];
 } {
   const { dialect, companionTable, liveIndexNames } = args;
+  const notUnique = args.liveNotUnique ?? new Set<string>();
   const table = q(companionTable, dialect);
   const wanted = new Set(args.wanted.map(w => w.column));
+  const nameOf = (column: string) =>
+    companionUniqueIndexName(companionTable, column);
+  // A wanted index held under its name but not unique is replaced: dropped with the drops, which
+  // run first, and created with the creates.
+  const replaced = args.wanted
+    .map(w => nameOf(w.column))
+    .filter(name => liveIndexNames.has(name) && notUnique.has(name));
   const creates = args.wanted
-    .filter(
-      w =>
-        !liveIndexNames.has(companionUniqueIndexName(companionTable, w.column))
-    )
+    .filter(w => {
+      const name = nameOf(w.column);
+      return !liveIndexNames.has(name) || notUnique.has(name);
+    })
     .map(w => {
       const name = q(
         companionUniqueIndexName(companionTable, w.column),
         dialect
       );
-      const value = `NULLIF(${q(w.column, dialect)}, '')`;
-      // MySQL takes an expression only as a functional key part, in parentheses of its own, and
-      // cannot key one that returns TEXT, which a companion's text column is. It keys the value's
-      // SHA-256 instead: any length, a blank still NULL, and values compared exactly, as
-      // PostgreSQL and SQLite compare them.
-      const key = dialect === "mysql" ? `(SHA2(${value}, 256))` : value;
+      const key = indexKey(w, dialect);
       const ifNotExists = dialect === "mysql" ? "" : "IF NOT EXISTS ";
       return `CREATE UNIQUE INDEX ${ifNotExists}${name} ON ${table} (${key}, ${q("_locale", dialect)})`;
     });
   // Each column once: a caller may list a column the change keeps under both its old and new
   // fields, and MySQL refuses a second DROP of the same index.
-  const drops = [...new Set(args.translatedColumns)]
-    .filter(column => !wanted.has(column))
-    .map(column => companionUniqueIndexName(companionTable, column))
-    .filter(name => liveIndexNames.has(name))
-    .map(name =>
-      dialect === "mysql"
-        ? `DROP INDEX ${q(name, dialect)} ON ${table}`
-        : `DROP INDEX IF EXISTS ${q(name, dialect)}`
-    );
+  const drops = [
+    ...[...new Set(args.translatedColumns)]
+      .filter(column => !wanted.has(column))
+      .map(nameOf)
+      .filter(name => liveIndexNames.has(name)),
+    ...replaced,
+  ].map(name =>
+    dialect === "mysql"
+      ? `DROP INDEX ${q(name, dialect)} ON ${table}`
+      : `DROP INDEX IF EXISTS ${q(name, dialect)}`
+  );
   return { drops, creates };
 }

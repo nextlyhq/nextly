@@ -15,12 +15,12 @@ import {
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { FieldGroupSchemaService } from "../../../services/field-groups/field-group-schema-service";
 import { consoleLogger } from "../../../shared/types";
+import { refuseTranslatedUniqueThatCannotHold } from "../../i18n/migration/archive-preflight";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import {
   buildCompanionTransitionStatements,
   type FieldRename,
 } from "../../i18n/migration/reconcile-companion";
-import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
 import { liveCompanionShape } from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 
@@ -172,9 +172,14 @@ export async function reconcileComponentCompanion(args: {
   const dialect = adapter.dialect;
   const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
 
-  // A translated field made unique is refused before any DDL on a server that cannot key its index.
-  refuseUnindexableTranslatedUnique(adapter, {
+  // A translated field made unique is refused before any DDL where the rule cannot hold: on a
+  // server that cannot key its index, or where a language already holds a value twice. Asked here,
+  // where every field-group path that changes the companion arrives, so the service's own update
+  // is refused as the schema dialog's is, before a statement runs (MySQL commits each one).
+  await refuseTranslatedUniqueThatCannotHold({
+    adapter,
     entity: slug,
+    tableName,
     builtBy: "fieldGroup",
     oldFields,
     newFields,

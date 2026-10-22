@@ -32,6 +32,7 @@ import {
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import {
   buildCompanionTransitionPlans,
+  companionIndexFacts,
   type FieldRename,
   fieldsLeavingTranslation,
 } from "../../i18n/migration/reconcile-companion";
@@ -48,6 +49,7 @@ import {
   readColumnNullState,
   readForeignKeyColumns,
   readIndexColumns,
+  readIndexUniqueness,
   readIndexNames,
   readUniqueColumns,
   tableHasRows,
@@ -1187,16 +1189,17 @@ export class DynamicCollectionService extends BaseService {
       liveCompanionColumns: companionExists
         ? await companionColumnNames(this.adapter, args.tableName)
         : undefined,
-      // Its indexes too, so a per-language unique index is created only where it is missing.
-      liveCompanionIndexes: companionExists
-        ? [
-            ...(await readIndexNames(
+      // Its indexes too, so a per-language unique index is created only where it is missing, and
+      // one under its name that is not unique is replaced.
+      ...(companionExists
+        ? companionIndexFacts(
+            await readIndexUniqueness(
               this.adapter.getDrizzle(),
               this.adapter.dialect,
               companionTable
-            )),
-          ]
-        : undefined,
+            )
+          )
+        : {}),
     });
 
     // Separate statements with the migration-file breakpoint marker (not blank lines): the file

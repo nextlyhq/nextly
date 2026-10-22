@@ -610,6 +610,29 @@ export interface CompanionTransitionArgs {
    * the fields before the change, which is what a migration file, replayed elsewhere, must be.
    */
   liveCompanionIndexes?: readonly string[];
+  /**
+   * Those of `liveCompanionIndexes` that are not unique, so one under a per-language index's name
+   * that holds nothing is replaced (`companionUniqueIndexChanges`).
+   */
+  liveCompanionNotUnique?: readonly string[];
+}
+
+/**
+ * A companion's live indexes as the transition takes them (`liveCompanionIndexes`,
+ * `liveCompanionNotUnique`), from `readIndexes`.
+ */
+export function companionIndexFacts(
+  indexes: ReadonlyMap<string, { unique: boolean }>
+): Pick<
+  CompanionTransitionArgs,
+  "liveCompanionIndexes" | "liveCompanionNotUnique"
+> {
+  return {
+    liveCompanionIndexes: [...indexes.keys()],
+    liveCompanionNotUnique: [...indexes]
+      .filter(([, index]) => !index.unique)
+      .map(([name]) => name),
+  };
 }
 
 /** The plan produced by {@link buildCompanionTransitionStatements}. */
@@ -1020,6 +1043,7 @@ export function buildCompanionTransitionPlans(
     presentOnCompanion: undefined,
     liveCompanionColumns: undefined,
     liveCompanionIndexes: undefined,
+    liveCompanionNotUnique: undefined,
   });
   if (
     !args.existingMainColumns?.length &&
@@ -1073,5 +1097,6 @@ function uniqueIndexDelta(
     wanted: columnsOf(args.newFields, args.isLocalized),
     translatedColumns,
     liveIndexNames: new Set(args.liveCompanionIndexes ?? had),
+    liveNotUnique: new Set(args.liveCompanionNotUnique ?? []),
   });
 }

@@ -13,7 +13,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../errors/nextly-error";
-import { readIndexNames } from "../../schema/pipeline/live-table-facts";
+import {
+  readIndexUniqueness,
+  uniqueIndexNames,
+} from "../../schema/pipeline/live-table-facts";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import {
   companionUniqueIndexName,
@@ -70,14 +73,17 @@ export async function reconcileCompanionUniqueIndexes(
   if (translatedColumns.length === 0) return;
   try {
     if (!(await companionTableExists(adapter, companionTable))) return;
-    const live = await readIndexNames(
+    const indexes = await readIndexUniqueness(
       adapter.getDrizzle(),
       dialect,
       companionTable
     );
+    // One under the name that is not unique holds nothing: it counts as missing for the checks,
+    // and is replaced.
+    const unique = uniqueIndexNames(indexes);
     const wanted = uniqueTranslatedColumns(shape);
     const missing = wanted.filter(
-      c => !live.has(companionUniqueIndexName(companionTable, c.column))
+      c => !unique.has(companionUniqueIndexName(companionTable, c.column))
     );
     let refusals = refusalsForUnindexableTranslatedUnique(adapter, missing);
     if (refusals.length === 0 && missing.length > 0) {
@@ -91,7 +97,10 @@ export async function reconcileCompanionUniqueIndexes(
       companionTable,
       wanted: wanted.filter(c => !held.has(`fields.${c.field}`)),
       translatedColumns,
-      liveIndexNames: live,
+      liveIndexNames: new Set(indexes.keys()),
+      liveNotUnique: new Set(
+        [...indexes.keys()].filter(name => !unique.has(name))
+      ),
     })) {
       await adapter.executeQuery(statement);
     }

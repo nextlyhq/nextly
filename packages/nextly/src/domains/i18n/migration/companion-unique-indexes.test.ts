@@ -21,7 +21,7 @@ describe("a translated field's uniqueness within each language", () => {
         dialect: "postgresql",
         builtBy: "collection",
       })
-    ).toEqual([{ field: "slug", column: "slug" }]);
+    ).toEqual([{ field: "slug", column: "slug", text: true }]);
     expect(
       uniqueTranslatedColumns({
         fields,
@@ -36,7 +36,7 @@ describe("a translated field's uniqueness within each language", () => {
     const [create] = companionUniqueIndexStatements({
       dialect: "postgresql",
       companionTable: "dc_posts_locales",
-      wanted: [{ field: "slug", column: "slug" }],
+      wanted: [{ field: "slug", column: "slug", text: true }],
       translatedColumns: ["slug", "title"],
       liveIndexNames: new Set(),
     });
@@ -45,17 +45,43 @@ describe("a translated field's uniqueness within each language", () => {
     );
   });
 
-  it("keys MySQL's functional key part on the value's hash, with no IF NOT EXISTS", () => {
+  it("keys MySQL's functional key part on the hash of the value's collation weight, with no IF NOT EXISTS", () => {
     const [create] = companionUniqueIndexStatements({
       dialect: "mysql",
       companionTable: "dc_posts_locales",
-      wanted: [{ field: "slug", column: "slug" }],
+      wanted: [{ field: "slug", column: "slug", text: true }],
       translatedColumns: ["slug"],
       liveIndexNames: new Set(),
     });
     expect(create).toMatch(
-      /^CREATE UNIQUE INDEX `[^`]+` ON `dc_posts_locales` \(\(SHA2\(NULLIF\(`slug`, ''\), 256\)\), `_locale`\)$/
+      /^CREATE UNIQUE INDEX `[^`]+` ON `dc_posts_locales` \(\(SHA2\(WEIGHT_STRING\(NULLIF\(`slug`, ''\)\), 256\)\), `_locale`\)$/
     );
+  });
+
+  it("keys a column that is not text as it is, on every dialect, since only text has a blank", () => {
+    const columns = uniqueTranslatedColumns({
+      fields: [{ name: "rank", type: "number", unique: true, localized: true }],
+      entityLocalized: true,
+      dialect: "postgresql",
+      builtBy: "collection",
+    });
+    expect(columns).toEqual([{ field: "rank", column: "rank", text: false }]);
+    const [pg] = companionUniqueIndexStatements({
+      dialect: "postgresql",
+      companionTable: "dc_posts_locales",
+      wanted: columns,
+      translatedColumns: ["rank"],
+      liveIndexNames: new Set(),
+    });
+    expect(pg).toMatch(/ON "dc_posts_locales" \("rank", "_locale"\)$/);
+    const [mysql] = companionUniqueIndexStatements({
+      dialect: "mysql",
+      companionTable: "dc_posts_locales",
+      wanted: columns,
+      translatedColumns: ["rank"],
+      liveIndexNames: new Set(),
+    });
+    expect(mysql).toMatch(/ON `dc_posts_locales` \(`rank`, `_locale`\)$/);
   });
 
   it("creates only what is missing, and drops the index of a field no longer unique", () => {
@@ -64,7 +90,7 @@ describe("a translated field's uniqueness within each language", () => {
       companionUniqueIndexStatements({
         dialect: "postgresql",
         companionTable: "dc_posts_locales",
-        wanted: [{ field: "slug", column: "slug" }],
+        wanted: [{ field: "slug", column: "slug", text: true }],
         translatedColumns: ["slug"],
         liveIndexNames: new Set([name]),
       })
