@@ -16,6 +16,11 @@ import { LANGUAGES_TABLE } from "../../../schemas/languages/table-name";
 import type { LanguageDirection } from "../../../schemas/languages/types";
 import { fallbackCodes } from "../config/stored-languages";
 import {
+  type DefaultChangeSummary,
+  pendingChangesIn,
+  summarizeDefaultChange,
+} from "../default-language-change";
+import {
   type LanguageChange,
   type LanguageRow,
   planLanguageChange,
@@ -86,9 +91,7 @@ export class LanguageSettingsService {
         })),
       };
     }
-    const rows = await this.adapter.transaction(tx =>
-      tx.select<LanguageRow>(LANGUAGES_TABLE, { columns: [...COLUMNS] })
-    );
+    const rows = await this.storedRows();
     return {
       lockedByConfig: false,
       languages:
@@ -99,24 +102,32 @@ export class LanguageSettingsService {
   }
 
   /**
+   * What making `code` the default would touch, for the admin to confirm first.
+   *
+   * @throws NextlyError `VALIDATION_ERROR` when the configuration locks the list, or `code` is not
+   *   an active language
+   */
+  async previewDefaultChange(code: string): Promise<DefaultChangeSummary> {
+    this.refuseWhenLocked();
+    const rows = await this.storedRows();
+    const from = defaultCodeOf(rows);
+    const to = defaultCodeOf(
+      planLanguageChange(rows, { kind: "setDefault", code })
+    );
+    return summarizeDefaultChange(this.adapter, from, to);
+  }
+
+  /**
    * Applies `change` and answers with the list after it.
    *
-   * @throws NextlyError `VALIDATION_ERROR` when the configuration locks the list, or when the
-   *   change is refused (`planLanguageChange`)
+   * @throws NextlyError `VALIDATION_ERROR` when the configuration locks the list, when a default
+   *   change meets pending changes in the current default, or when the change is refused
+   *   (`planLanguageChange`)
    */
   async change(change: LanguageChange): Promise<LanguageListView> {
-    if (this.registry.lockedByConfig) {
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: "languages",
-            code: "languages_locked_by_config",
-            message:
-              "This site's languages are set in its configuration (the `localization` block), so they can only be changed there.",
-          },
-        ],
-        logContext: { reason: "language-list-locked-by-config" },
-      });
+    this.refuseWhenLocked();
+    if (change.kind === "setDefault") {
+      await this.refusePendingDefaultChanges();
     }
     await this.adapter.transaction(async tx => {
       const rows = await tx.select<LanguageRow>(LANGUAGES_TABLE, {
@@ -153,6 +164,49 @@ export class LanguageSettingsService {
     await this.registry.refresh({ force: true });
     return this.list();
   }
+
+  private refuseWhenLocked(): void {
+    if (!this.registry.lockedByConfig) return;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "languages",
+          code: "languages_locked_by_config",
+          message:
+            "This site's languages are set in its configuration (the `localization` block), so they can only be changed there.",
+        },
+      ],
+      logContext: { reason: "language-list-locked-by-config" },
+    });
+  }
+
+  /** Refuses a default change while the current default has pending changes. */
+  private async refusePendingDefaultChanges(): Promise<void> {
+    const current = defaultCodeOf(await this.storedRows());
+    const pending = await pendingChangesIn(this.adapter, current);
+    if (pending === 0) return;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "code",
+          code: "default_has_pending_changes",
+          message: `"${current}" has ${pending} pending change(s). Publish or discard them before making another language the default.`,
+        },
+      ],
+      logContext: { reason: "default-language-has-pending-changes", pending },
+    });
+  }
+
+  private storedRows(): Promise<LanguageRow[]> {
+    return this.adapter.transaction(tx =>
+      tx.select<LanguageRow>(LANGUAGES_TABLE, { columns: [...COLUMNS] })
+    );
+  }
+}
+
+/** The default language's code, English while nothing is stored. */
+function defaultCodeOf(rows: readonly LanguageRow[]): string {
+  return rows.find(row => row.active && row.isDefault)?.code ?? "en";
 }
 
 function toView(row: LanguageRow): LanguageView {
