@@ -27,6 +27,7 @@ import { ReleasesRepository } from "../releases-repository";
 import {
   ANY_EDITABLE_STATE,
   scheduleAsItStands,
+  lockServerOf,
 } from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
@@ -110,7 +111,10 @@ async function draftInRelease(
 async function materialise(t: TestNextly, author: { id: string } | null) {
   return applyDueReleases({
     repository: new ReleasesRepository(t.adapter),
-    mutations: createReleaseMutations({ contentApi: t.nextly }),
+    mutations: createReleaseMutations({
+      contentApi: t.nextly,
+      lockServer: lockServerOf(t),
+    }),
     runAs: {
       findUser: async id => (author === null ? null : { id, isActive: true }),
       listRoleSlugs: async () => [],

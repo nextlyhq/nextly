@@ -6,7 +6,7 @@
  * The boot and the file writer are stubbed; the plugins are the ones the boot
  * would have resolved, put where the boot puts them.
  */
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -158,7 +158,9 @@ describe("in development", () => {
     expect(writeComponentMapFiles).toHaveBeenCalledWith(
       [shop],
       resolve(process.cwd(), "src/types/generated/nextly-types.ts"),
-      process.cwd()
+      process.cwd(),
+      // No config file here, so the map is written without the config's check, as before.
+      undefined
     );
     expect(info).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "admin-component-map-regenerated" })
@@ -249,13 +251,16 @@ describe("where the map is", () => {
     // the map beside it, lose their `src/`.
     await mkdir(join(root, "app"));
     await mkdir(join(root, "src"));
+    // The site's config, found as the loader finds it, so the map imports it for its check.
+    await writeFile(join(root, "nextly.config.ts"), "");
     vi.spyOn(process, "cwd").mockReturnValue(root);
     vi.stubEnv("NODE_ENV", "development");
     await check([]);
     expect(writeComponentMapFiles).toHaveBeenCalledWith(
       [shop],
       join(root, "types/generated/nextly-types.ts"),
-      root
+      root,
+      join(root, "nextly.config.ts")
     );
 
     vi.stubEnv("NODE_ENV", "production");
@@ -264,6 +269,38 @@ describe("where the map is", () => {
       "`types/generated/plugin-admin-imports.generated.ts`"
     );
     expect(refused.logMessage).not.toContain("src/types/generated");
+  });
+});
+
+describe("the config a development rewrite checks against", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "nextly-component-check-"));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  // `generate:types --config <path>` wrote the map against that config; a rewrite searching the
+  // default names again would check against a different file, or none.
+  it("is the one the existing map imports, not one found again by the default names", async () => {
+    await mkdir(join(root, "src/types/generated"), { recursive: true });
+    await writeFile(join(root, "nextly.config.ts"), "");
+    await writeFile(
+      join(root, "src/types/generated/plugin-admin-imports.generated.ts"),
+      'import type * as siteConfig from "../../../config/site.config.mjs";\n'
+    );
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    vi.stubEnv("NODE_ENV", "development");
+
+    await check([]);
+
+    expect(writeComponentMapFiles).toHaveBeenCalledWith(
+      [shop],
+      join(root, "src/types/generated/nextly-types.ts"),
+      root,
+      { import: "../../../config/site.config.mjs" }
+    );
   });
 });
 

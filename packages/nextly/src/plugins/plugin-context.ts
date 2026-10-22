@@ -38,6 +38,7 @@ import type {
 } from "../domains/schema/extension/types";
 import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { VersionsService } from "../domains/versions/versions-service";
+import type { AnyWidget } from "../domains/widgets/declaration/define-widget";
 import { NextlyError } from "../errors/nextly-error";
 import type { EventBus, EventHandler, EventName } from "../events/event-bus";
 import { getEventBus, isReservedEventName } from "../events/event-bus";
@@ -86,10 +87,16 @@ import { type PluginConfig, pluginConfigView } from "./plugin-config-view";
 import { NO_PLUGIN_GRANTS, type PluginGrants } from "./plugin-consent";
 import { currentDependencies } from "./plugin-dependencies";
 import { createPluginFetchFor } from "./plugin-fetch-provider";
+import { mediaForPlugin, type PluginMediaService } from "./plugin-media";
 import { createPluginSettings } from "./plugin-settings-provider";
 import { wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
 import { isInPluginNamespace } from "./plugin-slug";
+import {
+  PLUGIN_VERSIONS_READS,
+  pluginVersionWrites,
+  type PluginVersionWrites,
+} from "./plugin-versions";
 import { createPluginPrincipals } from "./principals/api";
 import type { PluginPrincipalsApi, PrincipalRef } from "./principals/types";
 import {
@@ -389,29 +396,6 @@ const PLUGIN_USER_METHODS = [
   "updateProfile",
 ] as const satisfies readonly (keyof UserService)[];
 
-const PLUGIN_MEDIA_METHODS = [
-  "upload",
-  "findById",
-  "listMedia",
-  "update",
-  "delete",
-  "bulkUpload",
-  "bulkDelete",
-  "moveToFolder",
-  "getStorageType",
-  "hasStorage",
-  "createFolder",
-  "findFolderById",
-  "listRootFolders",
-  "listSubfolders",
-  "getFolderContents",
-  "updateFolder",
-  "deleteFolder",
-  "isImage",
-  "validateImage",
-  "getImageDimensions",
-] as const satisfies readonly (keyof MediaService)[];
-
 const PLUGIN_EMAIL_METHODS = [
   "send",
   "sendWithTemplate",
@@ -422,26 +406,13 @@ const PLUGIN_EMAIL_METHODS = [
   "canSendTemplate",
 ] as const satisfies readonly (keyof EmailService)[];
 
-const PLUGIN_VERSIONS_METHODS = [
-  "list",
-  "get",
-  "setLabel",
-  "deleteWorkingDraft",
-  "autosave",
-  "getAutosave",
-  "pendingEditRows",
-] as const satisfies readonly (keyof VersionsService)[];
-
 /** @experimental `ctx.services.users`: the plugin view of the user service. */
 export type PluginUserService = Pick<
   UserService,
   (typeof PLUGIN_USER_METHODS)[number]
 >;
 /** @experimental `ctx.services.media`. */
-export type PluginMediaService = Pick<
-  MediaService,
-  (typeof PLUGIN_MEDIA_METHODS)[number]
->;
+export type { PluginMediaService } from "./plugin-media";
 /** @experimental `ctx.services.email`. */
 export type PluginEmailService = Pick<
   EmailService,
@@ -450,20 +421,21 @@ export type PluginEmailService = Pick<
 /** @experimental `ctx.services.versions`. */
 export type PluginVersionsService = Pick<
   VersionsService,
-  (typeof PLUGIN_VERSIONS_METHODS)[number]
-> & {
-  /**
-   * @experimental A subject's content events (a document's or a release's),
-   * filtered by kind and part, newest first, as `{ items, meta }`; the next
-   * page passes the last item's id as `before`. Runs as the system unless
-   * `opts` names a user (`as: "user"`), who is then judged as REST judges them.
-   */
-  listEvents(
-    subject: ContentEventSubject,
-    query?: SubjectEventsQuery,
-    opts?: ServiceOpts
-  ): ReturnType<typeof readSubjectEvents>;
-};
+  (typeof PLUGIN_VERSIONS_READS)[number]
+> &
+  PluginVersionWrites & {
+    /**
+     * @experimental A subject's content events (a document's or a release's),
+     * filtered by kind and part, newest first, as `{ items, meta }`; the next
+     * page passes the last item's id as `before`. Runs as the system unless
+     * `opts` names a user (`as: "user"`), who is then judged as REST judges them.
+     */
+    listEvents(
+      subject: ContentEventSubject,
+      query?: SubjectEventsQuery,
+      opts?: ServiceOpts
+    ): ReturnType<typeof readSubjectEvents>;
+  };
 
 /**
  * The plugin path to a subject's events: the one read REST and the Direct API
@@ -988,8 +960,13 @@ export interface PluginAdminConfig {
  *   }
  * });
  * ```
+ *
+ * `W` is the plugin's dashboard widgets, which `definePlugin` infers from `contributes.dashboard`
+ * so a site's config, and the admin component map generated from it, can see each one's id,
+ * component path and props. It defaults to any widget, which is today's type: a plugin written
+ * as a plain object, or in JavaScript, means exactly what it meant.
  */
-export interface PluginDefinition {
+export interface PluginDefinition<W extends AnyWidget = AnyWidget> {
   /**
    * Unique plugin name.
    * Used for identification and error messages.
@@ -1109,7 +1086,7 @@ export interface PluginDefinition {
    * @public Declarative contributions — introspectable without running
    * the plugin. Consumed incrementally by later phases. See {@link PluginContributions}.
    */
-  contributes?: PluginContributions;
+  contributes?: PluginContributions<W>;
 
   /**
    * Collections provided by this plugin.
@@ -1203,7 +1180,7 @@ export interface PluginDefinition {
    * defineConfig({ plugins: [formBuilder().plugin.rename({ forms: "contact-forms" })] })
    * ```
    */
-  rename?: (map: Record<string, string>) => PluginDefinition;
+  rename?: (map: Record<string, string>) => PluginDefinition<W>;
 
   /**
    * @internal Accumulated declared-slug → new-slug map from `rename()`.
@@ -1248,12 +1225,19 @@ export type {
   PluginSummary,
 } from "./plugin-config-view";
 
-export function definePlugin(definition: PluginDefinition): PluginDefinition {
-  const withRename: PluginDefinition = {
+// Generic over the widgets only, inferred from `contributes.dashboard.widgets`, so each keeps its
+// id, component path and props for the site's config and the admin component map generated from
+// it. Not over the whole definition: inferring that would narrow every field of every plugin,
+// and a variable holding one plugin could no longer be given another. With no dashboard, `W`
+// has nothing to infer from and stays any widget, which is today's type.
+export function definePlugin<W extends AnyWidget = AnyWidget>(
+  definition: PluginDefinition<W>
+): PluginDefinition<W> {
+  const withRename: PluginDefinition<W> = {
     ...definition,
     // Framework remap: returns a NEW definition with the rename map
     // merged. The original is left untouched (pure); chainable.
-    rename(map: Record<string, string>): PluginDefinition {
+    rename(map: Record<string, string>): PluginDefinition<W> {
       return definePlugin({
         ...withRename,
         renameMap: { ...(withRename.renameMap ?? {}), ...map },
@@ -2091,7 +2075,7 @@ export function createPluginContext(
       get users() {
         return methodFacade(userService.forPlugins(), PLUGIN_USER_METHODS);
       },
-      media: methodFacade(mediaService, PLUGIN_MEDIA_METHODS),
+      media: mediaForPlugin(mediaService),
       // A plugin's keys are its own: scoped to its name, so two plugins, or a
       // plugin and the site, never name one send with the same key.
       email: methodFacade(
@@ -2103,11 +2087,10 @@ export function createPluginContext(
       // otherwise throw while building the context for callers that never
       // touch version history.
       get versions() {
+        const versions = getServiceFn("versionsService");
         return Object.freeze({
-          ...methodFacade(
-            getServiceFn("versionsService"),
-            PLUGIN_VERSIONS_METHODS
-          ),
+          ...methodFacade(versions, PLUGIN_VERSIONS_READS),
+          ...pluginVersionWrites(() => versions),
           listEvents: readEventsForPlugin,
         });
       },

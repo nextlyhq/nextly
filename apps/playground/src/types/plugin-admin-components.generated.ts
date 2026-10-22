@@ -5,4 +5,5 @@
 
 export const registeredComponentPaths = [
   "@nextlyhq/plugin-page-builder/admin#BlocksField",
+  "@nextlyhq/plugin-page-builder/admin#PageBuilderView",
 ] as const;

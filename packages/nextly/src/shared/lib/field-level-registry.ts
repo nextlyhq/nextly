@@ -50,6 +50,7 @@ import {
   listRoleSlugsForUser,
 } from "../../services/lib/permissions";
 import { addressableFields } from "../addressable-fields";
+import { FIELD_ACCESS_KEYS } from "../base-validator";
 import { consoleLogger } from "../types";
 import type { AccessRuleContext, AccessRuleTarget } from "../types/access";
 
@@ -183,6 +184,39 @@ function key(kind: EntityKind, slug: string): string {
   return `${kind}:${slug}`;
 }
 
+/**
+ * The answer of each rule written as `true` or `false`, keyed by the function
+ * that stands for it, so a rule run can answer one without resolving the
+ * caller's grants: a literal asks nothing of the caller.
+ */
+const literalRules = new WeakMap<FieldAccessFn, boolean>();
+
+/** A function standing for a literal rule, answering it. */
+function literalRule(answer: boolean): FieldAccessFn {
+  const rule: FieldAccessFn = () => answer;
+  literalRules.set(rule, answer);
+  return rule;
+}
+
+/**
+ * A field's access rules as the registry runs them: each a function.
+ *
+ * A rule written as `true` or `false` becomes a function answering itself,
+ * so every read and write that redacts asks it the way it asks a function;
+ * kept as a boolean, it would not be called, and `read: false` would withhold
+ * nothing. Undefined when the field declares no rule.
+ */
+function fieldRules(access: unknown): FieldFunctions["access"] | undefined {
+  if (!access || typeof access !== "object") return undefined;
+  const rules: NonNullable<FieldFunctions["access"]> = {};
+  for (const operation of FIELD_ACCESS_KEYS) {
+    const rule = (access as Record<string, unknown>)[operation];
+    if (typeof rule === "function") rules[operation] = rule as FieldAccessFn;
+    else if (typeof rule === "boolean") rules[operation] = literalRule(rule);
+  }
+  return Object.keys(rules).length > 0 ? rules : undefined;
+}
+
 /** Extract the function-bearing subset of one field config. */
 function extractFieldFunctions(
   field: Record<string, unknown>
@@ -198,13 +232,8 @@ function extractFieldFunctions(
     out.validate = field.validate as FieldFunctions["validate"];
     hasAny = true;
   }
-  const access = field.access as FieldFunctions["access"] | undefined;
-  if (
-    access &&
-    (typeof access.create === "function" ||
-      typeof access.read === "function" ||
-      typeof access.update === "function")
-  ) {
+  const access = fieldRules(field.access);
+  if (access) {
     out.access = access;
     hasAny = true;
   }
@@ -530,6 +559,10 @@ async function runFieldRule(
   ctx: Omit<FieldRuleCaller, "id">,
   entry: Pick<AccessRuleContext, "id" | "data">
 ): Promise<boolean> {
+  // A literal answers before the grants are resolved: it reads neither them
+  // nor the entry, so resolving them would be a lookup with no question.
+  const literal = literalRules.get(fn);
+  if (literal !== undefined) return literal;
   try {
     const { permissions, roles } = await ctx.grants();
     const userId = ctx.user?.id;

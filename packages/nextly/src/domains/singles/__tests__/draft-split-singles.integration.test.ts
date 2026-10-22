@@ -19,6 +19,10 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import {
+  asCaller,
+  sessionCaller,
+} from "../../../dispatcher/__tests__/request-caller";
 import { discardWorkingDraftForDocument } from "../../../dispatcher/handlers/versions-methods";
 import type { SingleEntryService } from "../services/single-entry-service";
 
@@ -471,13 +475,17 @@ describe("discarding a Single's pending change (integration)", () => {
     // are satisfied by a Single that never stored one.
     expect(await pendingLocales(t)).toEqual(["(none)"]);
 
-    const discarded = await discardWorkingDraftForDocument({
-      scopeKind: "single",
-      slug: SLUG,
-      entryId: await liveId(t),
-      user: { id: "editor-1" },
-      params: { slug: SLUG, _authenticatedUserId: "editor-1" },
-    });
+    const discarded = await asCaller(
+      sessionCaller({ userId: "editor-1" }),
+      async () =>
+        discardWorkingDraftForDocument({
+          scopeKind: "single",
+          slug: SLUG,
+          entryId: await liveId(t),
+          user: { id: "editor-1" },
+          params: { slug: SLUG },
+        })
+    );
 
     expect(await pendingLocales(t)).toEqual([]);
     // The response is the LIVE document, not the edit just thrown away.
@@ -511,14 +519,18 @@ describe("discarding a Single's pending change (integration)", () => {
     );
     expect(await pendingLocales(t)).toEqual(["de", "en"]);
 
-    const discarded = await discardWorkingDraftForDocument({
-      scopeKind: "single",
-      slug: SLUG,
-      entryId: await liveId(t),
-      user: { id: "editor-1" },
-      locale: "de",
-      params: { slug: SLUG, _authenticatedUserId: "editor-1" },
-    });
+    const discarded = await asCaller(
+      sessionCaller({ userId: "editor-1" }),
+      async () =>
+        discardWorkingDraftForDocument({
+          scopeKind: "single",
+          slug: SLUG,
+          entryId: await liveId(t),
+          user: { id: "editor-1" },
+          locale: "de",
+          params: { slug: SLUG },
+        })
+    );
 
     // German goes; English survives, because it is work the author never opened.
     expect(await pendingLocales(t)).toEqual(["en"]);
@@ -537,13 +549,17 @@ describe("discarding a Single's pending change (integration)", () => {
     );
     expect(await pendingLocales(t)).toEqual([]);
 
-    const discarded = await discardWorkingDraftForDocument({
-      scopeKind: "single",
-      slug: SLUG,
-      entryId: await liveId(t),
-      user: { id: "editor-1" },
-      params: { slug: SLUG, _authenticatedUserId: "editor-1" },
-    });
+    const discarded = await asCaller(
+      sessionCaller({ userId: "editor-1" }),
+      async () =>
+        discardWorkingDraftForDocument({
+          scopeKind: "single",
+          slug: SLUG,
+          entryId: await liveId(t),
+          user: { id: "editor-1" },
+          params: { slug: SLUG },
+        })
+    );
 
     expect((discarded as { siteName?: string }).siteName).toBe("live");
     expect(await pendingLocales(t)).toEqual([]);

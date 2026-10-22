@@ -29,7 +29,7 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-The super-admin assignment rule now applies to every role change, on every route. Only a super-admin can assign the super-admin role or a role that inherits it, create or update a user with such a role, or make a role inherit one, whether by adding inheritance or through `childRoleIds` when a role is created or updated. An API key never can, whoever made it. Server code with no request caller, such as the Direct API, a seed or the CLI, is unaffected.
+The super-admin assignment rule now applies to every role change requested through Nextly's REST routes. There, only a super-admin can assign the super-admin role or a role that inherits it, create or update a user with such a role, or make a role inherit one, whether by adding inheritance or through `childRoleIds` when a role is created or updated, and an API key cannot, whoever made it. Server code such as a seed or the CLI is unaffected.
 
 A role created through `POST /api/roles` can no longer be marked `isSystem: true`. That request now answers 400. System roles are the ones Nextly seeds itself.
 

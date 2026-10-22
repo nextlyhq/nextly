@@ -11,7 +11,7 @@
 import { findFieldById, findParentContainerId } from "@admin/lib/builder";
 import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
 
-import type { BuilderConfig } from "./builder-config";
+import { pickerExcludedTypes, type BuilderConfig } from "./builder-config";
 import {
   BuilderSettingsModal,
   type BuilderSettingsValues,
@@ -160,7 +160,7 @@ export function BuilderOverlays({
                 }`
               : undefined
           }
-          excludedTypes={config.picker.excludedTypes ?? []}
+          excludedTypes={pickerExcludedTypes(config, active.parentFieldId)}
           onCancel={close}
           onSelect={type =>
             onActiveChange({

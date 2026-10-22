@@ -112,8 +112,7 @@ describe.each(getConfiguredTestDialects())(
     it("strips it from an ANONYMOUS write too", async () => {
       // The defect. A collection may legitimately allow anonymous creates, and
       // the REST path reaches this with no user at all: the dispatcher forwards
-      // `userId: p._authenticatedUserId`, which is undefined when nobody is
-      // signed in, and never passes `overrideAccess`.
+      // no user when nobody is signed in, and never passes `overrideAccess`.
       const t = await boot(dialect);
       const created = await (
         t.getService("collectionsHandler") as CollectionsHandler

@@ -67,6 +67,16 @@ export type PaginationMeta = {
     /** The scope's display names, singular and plural, where it has them. */
     labels?: { singular: string; plural: string };
   }>;
+  /**
+   * The `before` to pass for the next page of a read walked by cursor, when
+   * there is a next page.
+   *
+   * Optional, and sent only by those reads. The last item's id is not always
+   * the cursor: a page of a release's history can end on events its reader
+   * may not see, and a read that stops scanning those must still say where
+   * it stopped, or the walk could never move past them.
+   */
+  nextBefore?: string;
 };
 
 /**

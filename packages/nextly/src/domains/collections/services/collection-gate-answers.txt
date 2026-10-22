@@ -103,6 +103,13 @@ service none key-own-roles
   delete:A
   publish:A
   unpublish:A
+service none key-in-the-request
+  create:403 Access denied: insufficient permissions for create on posts
+  read:A
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service true visitor
   create:A
   read:A
@@ -208,6 +215,13 @@ service true key-own-roles
   delete:A
   publish:A
   unpublish:A
+service true key-in-the-request
+  create:403 Access denied: insufficient permissions for create on posts
+  read:A
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service false visitor
   create:403 Access denied: insufficient permissions for create on posts
   read:403 Access denied: insufficient permissions for read on posts
@@ -307,6 +321,13 @@ service false key-custom-slugs
   publish:403 Access denied: insufficient permissions for publish on posts
   unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service false key-own-roles
+  create:403 Access denied: insufficient permissions for create on posts
+  read:403 Access denied: insufficient permissions for read on posts
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service false key-in-the-request
   create:403 Access denied: insufficient permissions for create on posts
   read:403 Access denied: insufficient permissions for read on posts
   update:403 Access denied: insufficient permissions for update on posts
@@ -418,6 +439,13 @@ service returns-true key-own-roles
   delete:A
   publish:A
   unpublish:A
+service returns-true key-in-the-request
+  create:403 Access denied: insufficient permissions for create on posts
+  read:A
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service returns-false visitor
   create:403 Access denied: insufficient permissions for create on posts
   read:403 Access denied: insufficient permissions for read on posts
@@ -517,6 +545,13 @@ service returns-false key-custom-slugs
   publish:403 Access denied: insufficient permissions for publish on posts
   unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service returns-false key-own-roles
+  create:403 Access denied: insufficient permissions for create on posts
+  read:403 Access denied: insufficient permissions for read on posts
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service returns-false key-in-the-request
   create:403 Access denied: insufficient permissions for create on posts
   read:403 Access denied: insufficient permissions for read on posts
   update:403 Access denied: insufficient permissions for update on posts
@@ -628,6 +663,13 @@ service returns-null key-own-roles
   delete:403 Access denied: insufficient permissions for delete on posts
   publish:403 Access denied: insufficient permissions for publish on posts
   unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service returns-null key-in-the-request
+  create:403 Access denied: insufficient permissions for create on posts
+  read:403 Access denied: insufficient permissions for read on posts
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service returns-undefined visitor
   create:A
   read:A
@@ -727,6 +769,13 @@ service returns-undefined key-custom-slugs
   publish:403 Access denied: insufficient permissions for publish on posts
   unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service returns-undefined key-own-roles
+  create:403 Access denied: insufficient permissions for create on posts
+  read:403 Access denied: insufficient permissions for read on posts
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service returns-undefined key-in-the-request
   create:403 Access denied: insufficient permissions for create on posts
   read:403 Access denied: insufficient permissions for read on posts
   update:403 Access denied: insufficient permissions for update on posts
@@ -838,6 +887,13 @@ service returns-truthy key-own-roles
   delete:403 Access denied: insufficient permissions for delete on posts
   publish:403 Access denied: insufficient permissions for publish on posts
   unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service returns-truthy key-in-the-request
+  create:403 Access denied: insufficient permissions for create on posts
+  read:403 Access denied: insufficient permissions for read on posts
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service throws visitor
   create:403 Access denied: insufficient permissions for create on posts
   read:403 Access denied: insufficient permissions for read on posts
@@ -937,6 +993,13 @@ service throws key-custom-slugs
   publish:403 Access denied: insufficient permissions for publish on posts
   unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service throws key-own-roles
+  create:403 Access denied: insufficient permissions for create on posts
+  read:403 Access denied: insufficient permissions for read on posts
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service throws key-in-the-request
   create:403 Access denied: insufficient permissions for create on posts
   read:403 Access denied: insufficient permissions for read on posts
   update:403 Access denied: insufficient permissions for update on posts
@@ -1048,6 +1111,13 @@ service async-true key-own-roles
   delete:A
   publish:A
   unpublish:A
+service async-true key-in-the-request
+  create:403 Access denied: insufficient permissions for create on posts
+  read:A
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service role-name visitor
   create:403 Access denied: insufficient permissions for create on posts
   read:403 Access denied: insufficient permissions for read on posts
@@ -1149,6 +1219,13 @@ service role-name key-custom-slugs
 service role-name key-own-roles
   create:403 Access denied: insufficient permissions for create on posts
   read:403 Access denied: insufficient permissions for read on posts
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service role-name key-in-the-request
+  create:403 Access denied: insufficient permissions for create on posts
+  read:A
   update:403 Access denied: insufficient permissions for update on posts
   delete:403 Access denied: insufficient permissions for delete on posts
   publish:403 Access denied: insufficient permissions for publish on posts
@@ -1258,6 +1335,13 @@ service permission-spelling key-own-roles
   delete:A
   publish:A
   unpublish:A
+service permission-spelling key-in-the-request
+  create:403 Access denied: insufficient permissions for create on posts
+  read:A
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service signed-in visitor
   create:403 Access denied: insufficient permissions for create on posts
   read:403 Access denied: insufficient permissions for read on posts
@@ -1363,6 +1447,13 @@ service signed-in key-own-roles
   delete:A
   publish:A
   unpublish:A
+service signed-in key-in-the-request
+  create:403 Access denied: insufficient permissions for create on posts
+  read:A
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
 no-service none visitor
   create:A
   read:A
@@ -1468,6 +1559,13 @@ no-service none key-own-roles
   delete:A
   publish:A
   unpublish:A
+no-service none key-in-the-request
+  create:403 Access denied: insufficient permissions for create on posts
+  read:A
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
 route-authorized none visitor
   create:403 Access denied: create on posts requires an authenticated user
   read:403 Access denied: read on posts requires an authenticated user
@@ -1567,6 +1665,13 @@ route-authorized none key-custom-slugs
   publish:A
   unpublish:A
 route-authorized none key-own-roles
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
+route-authorized none key-in-the-request
   create:A
   read:A
   update:A
@@ -1678,6 +1783,13 @@ route-authorized true key-own-roles
   delete:A
   publish:A
   unpublish:A
+route-authorized true key-in-the-request
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
 route-authorized false visitor
   create:403 Access denied: create on posts requires an authenticated user
   read:403 Access denied: read on posts requires an authenticated user
@@ -1777,6 +1889,13 @@ route-authorized false key-custom-slugs
   publish:A
   unpublish:A
 route-authorized false key-own-roles
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
+route-authorized false key-in-the-request
   create:A
   read:A
   update:A
@@ -1888,6 +2007,13 @@ route-authorized returns-true key-own-roles
   delete:A
   publish:A
   unpublish:A
+route-authorized returns-true key-in-the-request
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
 route-authorized returns-false visitor
   create:403 Access denied: create on posts requires an authenticated user
   read:403 Access denied: read on posts requires an authenticated user
@@ -1987,6 +2113,13 @@ route-authorized returns-false key-custom-slugs
   publish:A
   unpublish:A
 route-authorized returns-false key-own-roles
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
+route-authorized returns-false key-in-the-request
   create:A
   read:A
   update:A
@@ -2098,6 +2231,13 @@ route-authorized returns-null key-own-roles
   delete:A
   publish:A
   unpublish:A
+route-authorized returns-null key-in-the-request
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
 route-authorized returns-undefined visitor
   create:403 Access denied: create on posts requires an authenticated user
   read:403 Access denied: read on posts requires an authenticated user
@@ -2197,6 +2337,13 @@ route-authorized returns-undefined key-custom-slugs
   publish:A
   unpublish:A
 route-authorized returns-undefined key-own-roles
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
+route-authorized returns-undefined key-in-the-request
   create:A
   read:A
   update:A
@@ -2308,6 +2455,13 @@ route-authorized returns-truthy key-own-roles
   delete:A
   publish:A
   unpublish:A
+route-authorized returns-truthy key-in-the-request
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
 route-authorized throws visitor
   create:403 Access denied: create on posts requires an authenticated user
   read:403 Access denied: read on posts requires an authenticated user
@@ -2407,6 +2561,13 @@ route-authorized throws key-custom-slugs
   publish:A
   unpublish:A
 route-authorized throws key-own-roles
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
+route-authorized throws key-in-the-request
   create:A
   read:A
   update:A
@@ -2518,6 +2679,13 @@ route-authorized async-true key-own-roles
   delete:A
   publish:A
   unpublish:A
+route-authorized async-true key-in-the-request
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
 route-authorized role-name visitor
   create:403 Access denied: create on posts requires an authenticated user
   read:403 Access denied: read on posts requires an authenticated user
@@ -2617,6 +2785,13 @@ route-authorized role-name key-custom-slugs
   publish:A
   unpublish:A
 route-authorized role-name key-own-roles
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
+route-authorized role-name key-in-the-request
   create:A
   read:A
   update:A
@@ -2728,6 +2903,13 @@ route-authorized permission-spelling key-own-roles
   delete:A
   publish:A
   unpublish:A
+route-authorized permission-spelling key-in-the-request
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
 route-authorized signed-in visitor
   create:403 Access denied: create on posts requires an authenticated user
   read:403 Access denied: read on posts requires an authenticated user
@@ -2827,6 +3009,13 @@ route-authorized signed-in key-custom-slugs
   publish:A
   unpublish:A
 route-authorized signed-in key-own-roles
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
+route-authorized signed-in key-in-the-request
   create:A
   read:A
   update:A

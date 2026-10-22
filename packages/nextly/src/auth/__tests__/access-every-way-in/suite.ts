@@ -107,15 +107,10 @@ import { boot, type World } from "./world";
  */
 const NOT_YET_ONE_ANSWER: ReadonlySet<Door> = new Set<Door>([
   "rest",
-  "direct",
-  "route",
   "can",
-  "entity",
   "schema",
   "population",
-  "system",
   "widget",
-  "lock",
 ]);
 
 /**
@@ -125,8 +120,13 @@ const NOT_YET_ONE_ANSWER: ReadonlySet<Door> = new Set<Door>([
  * when no listed cell remains at it.
  */
 const ASKS_THE_DECISION: ReadonlySet<Door> = new Set<Door>([
+  "direct",
   "service",
   "website",
+  "route",
+  "lock",
+  "system",
+  "entity",
 ]);
 
 const ANSWERS_FILE = join(__dirname, "answers-today.txt");

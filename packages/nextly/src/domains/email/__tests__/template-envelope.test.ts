@@ -250,6 +250,45 @@ describe("a send's Reply-To", () => {
     );
     expect(error.logContext).toMatchObject({ field: "replyTo" });
   });
+
+  it("refuses a value that renders to more than one address", () => {
+    const error = failure(() =>
+      renderTemplateReplyTo(
+        "{{ email }}",
+        { email: "a@x.example, b@evil.example" },
+        "t"
+      )
+    );
+    expect(error.logContext).toMatchObject({ field: "replyTo" });
+  });
+
+  it("refuses a display name that splits the address into two", () => {
+    const error = failure(() =>
+      renderTemplateReplyTo(
+        "{{ name }} <{{ email }}>",
+        { name: "b@evil.example, Bob", email: "bob@x.example" },
+        "t"
+      )
+    );
+    expect(error.logContext).toMatchObject({ field: "replyTo" });
+  });
+
+  it("accepts one address with a display name, a quoted comma included", () => {
+    expect(
+      renderTemplateReplyTo(
+        "{{ name }} <{{ email }}>",
+        { name: "Bob", email: "bob@x.example" },
+        "t"
+      )
+    ).toBe("Bob <bob@x.example>");
+    expect(
+      renderTemplateReplyTo(
+        "{{ name }} <{{ email }}>",
+        { name: '"Doe, Jane"', email: "jane@x.example" },
+        "t"
+      )
+    ).toBe('"Doe, Jane" <jane@x.example>');
+  });
 });
 
 describe("a send's copies", () => {

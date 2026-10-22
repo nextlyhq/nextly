@@ -29,7 +29,7 @@ import { z } from "zod";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import { scopedSender, SITE_KEY_SCOPE } from "../domains/email/send-claims";
+import { restKeyScope, scopedSender } from "../domains/email/send-claims";
 import { sendOutcomeMessage } from "../domains/email/send-outcome";
 import { sendRequestSchema } from "../domains/email/send-request";
 import { NextlyError } from "../errors/nextly-error";
@@ -62,7 +62,9 @@ const sendTemplateSchema = sendRequestSchema({
  * - `providerId` (string, optional)
  * - `attachments` (array, optional): `[{ mediaId, filename? }]`
  * - `idempotencyKey` (string, optional): send this message once for the key;
- *   a repeat answers `repeat: true` and sends nothing
+ *   a repeat answers `repeat: true` and sends nothing. The key is the
+ *   caller's own (its API key, or the signed-in person), so it never meets
+ *   the site's keys or another caller's.
  *
  * Response codes:
  * - 200 OK: `{ message, success, messageId?, templateId }` via `respondAction`.
@@ -105,21 +107,20 @@ export const POST = withErrorHandler(
     }
 
     const service = await getEmailService();
-    // A key sent here is the site's, as one from the Direct API is.
-    const result = await scopedSender(service, SITE_KEY_SCOPE).sendWithTemplate(
-      args.template,
-      args.to,
-      args.variables ?? {},
-      {
-        providerId: args.providerId,
-        from: args.from,
-        replyTo: args.replyTo,
-        cc: args.cc,
-        bcc: args.bcc,
-        attachments: args.attachments,
-        idempotencyKey: args.idempotencyKey,
-      }
-    );
+    // A key sent here is this caller's own: it never meets a key the site's
+    // code sends with, nor another caller's.
+    const result = await scopedSender(
+      service,
+      restKeyScope(authResult)
+    ).sendWithTemplate(args.template, args.to, args.variables ?? {}, {
+      providerId: args.providerId,
+      from: args.from,
+      replyTo: args.replyTo,
+      cc: args.cc,
+      bcc: args.bcc,
+      attachments: args.attachments,
+      idempotencyKey: args.idempotencyKey,
+    });
     // Spread the service result and surface the resolved template slug so
     // callers can correlate the message back to the request without storing
     // the original payload. The message says what happened, as on the raw

@@ -23,50 +23,48 @@ import type {
 } from "./access";
 
 // One context: what a collection or Single rule is handed, and what a field
-// rule is handed, are the same type.
-expectTypeOf<AccessControlContext>().toEqualTypeOf<AccessRuleContext>();
-expectTypeOf<
-  Parameters<AccessControlFunction>[0]
->().toEqualTypeOf<AccessRuleContext>();
-expectTypeOf<
-  Parameters<AccessFunction>[0]
->().toEqualTypeOf<AccessRuleContext>();
-expectTypeOf<
-  Parameters<NonNullable<FieldAccess["read"]>>[0]
->().toEqualTypeOf<AccessRuleContext>();
-expectTypeOf<
-  Parameters<Extract<CollectionAccessControl["read"], AccessControlFunction>>[0]
->().toEqualTypeOf<AccessRuleContext>();
-expectTypeOf<
-  Parameters<Extract<SingleAccessControl["update"], AccessControlFunction>>[0]
->().toEqualTypeOf<AccessRuleContext>();
-
-// The caller, its permissions, the operation and the target.
-expectTypeOf<AccessRuleContext["user"]>().toEqualTypeOf<MinimalUser | null>();
-expectTypeOf<AccessRuleContext["roles"]>().toEqualTypeOf<string[]>();
-expectTypeOf<AccessRuleContext["permissions"]>().toEqualTypeOf<string[]>();
-expectTypeOf<
-  AccessRuleContext["principal"]
->().toEqualTypeOf<Principal | null>();
-expectTypeOf<AccessRuleContext["operation"]>().toEqualTypeOf<
-  "create" | "read" | "update" | "delete" | "publish" | "unpublish"
+// rule is handed, are the same type, however each is reached. A rule may also
+// be `true` or `false`, so the function form is taken out of each.
+type HandedContexts = [
+  AccessControlContext,
+  Parameters<AccessControlFunction>[0],
+  Parameters<AccessFunction>[0],
+  Parameters<Extract<FieldAccess["read"], AccessFunction>>[0],
+  Parameters<
+    Extract<CollectionAccessControl["read"], AccessControlFunction>
+  >[0],
+  Parameters<Extract<SingleAccessControl["update"], AccessControlFunction>>[0],
+];
+expectTypeOf<HandedContexts>().toEqualTypeOf<
+  [
+    AccessRuleContext,
+    AccessRuleContext,
+    AccessRuleContext,
+    AccessRuleContext,
+    AccessRuleContext,
+    AccessRuleContext,
+  ]
 >();
-expectTypeOf<AccessRuleContext["target"]>().toEqualTypeOf<{
-  kind: "collection" | "single" | "component";
-  slug: string;
+
+// Its whole shape, so a property lost, retyped or added fails here: the
+// caller, its permissions, the operation and the target; what a collection
+// rule read before (`collection`); what a field rule read before (`req`, and
+// the entry where known); and the language judged with every language the
+// operation involves.
+expectTypeOf<AccessRuleContext>().toEqualTypeOf<{
+  user: MinimalUser | null;
+  req: RequestContext;
+  roles: string[];
+  permissions: string[];
+  principal: Principal | null;
+  operation: "create" | "read" | "update" | "delete" | "publish" | "unpublish";
+  target: { kind: "collection" | "single" | "component"; slug: string };
+  collection: string;
+  id?: string;
+  data?: Record<string, unknown>;
+  locale?: string;
+  locales: string[];
 }>();
-
-// What a collection rule read before: kept, so such a rule still compiles.
-expectTypeOf<AccessRuleContext["collection"]>().toEqualTypeOf<string>();
-
-// What a field rule read before: the request, and the entry where known.
-expectTypeOf<AccessRuleContext["req"]>().toEqualTypeOf<RequestContext>();
-expectTypeOf<AccessRuleContext>()
-  .toHaveProperty("id")
-  .toEqualTypeOf<string | undefined>();
-expectTypeOf<AccessRuleContext>()
-  .toHaveProperty("data")
-  .toEqualTypeOf<Record<string, unknown> | undefined>();
 
 // A rule written against either earlier shape is still a rule of each kind.
 type TodaysCollectionRule = (ctx: {

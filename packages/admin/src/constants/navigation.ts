@@ -17,6 +17,7 @@ import {
 } from "../components/icons";
 import { apiKeyGrantsFor } from "../lib/permissions/api-key-actions";
 
+import { EMAIL_HUB_PERMISSIONS } from "./email-hub";
 import { ROUTES } from "./routes";
 
 /**
@@ -40,6 +41,7 @@ export type NavigationCategory =
   | "media"
   | "releases"
   | "translations"
+  | "email"
   | "plugins"
   | "settings"
   | "builder";
@@ -184,6 +186,17 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     category: "translations",
   },
 
+  // === EMAIL ===
+  // One hub for every email the site sends, how they look and how they're
+  // sent. Any grant that shows one of its tabs shows the entry.
+  {
+    title: "Email",
+    href: ROUTES.EMAIL,
+    icon: Mail,
+    category: "email",
+    requiredPermission: [...EMAIL_HUB_PERMISSIONS],
+  },
+
   // === USERS (now filed under the settings section — no standalone Users icon) ===
   {
     title: "Users",
@@ -233,22 +246,6 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     // Any webhook grant reveals the item and the list route accepts them all —
     // read/update view the list, create reaches the create form from there.
     requiredPermission: ["read-webhooks", "update-webhooks", "create-webhooks"],
-  },
-  {
-    title: "Email Providers",
-    href: ROUTES.SETTINGS_EMAIL_PROVIDERS,
-    icon: Mail,
-    category: "settings",
-    subGroup: "email",
-    requiredPermission: "manage-settings",
-  },
-  {
-    title: "Email Templates",
-    href: ROUTES.SETTINGS_EMAIL_TEMPLATES,
-    icon: FileText,
-    category: "settings",
-    subGroup: "email",
-    requiredPermission: "manage-settings",
   },
 
   // === BUILDER (IS) ===
