@@ -68,16 +68,22 @@ describe("the email editor", () => {
     expect(field.getAttribute("aria-readonly")).toBeNull();
   });
 
-  it("refuses edits when read-only", () => {
-    const { view, onChange } = mountEditor({
-      readOnly: true,
-      value: "Welcome",
-    });
+  it("refuses edits when read-only, and still takes focus", () => {
+    // Focusable so an owner's text can be read, selected and scrolled from
+    // the keyboard; the read-only state is what refuses the typing.
+    const { view } = mountEditor({ readOnly: true, value: "Welcome" });
+    const field = screen.getByRole("textbox", { name: "Subject" });
+    expect(field.getAttribute("aria-readonly")).toBe("true");
+    expect(field.getAttribute("contenteditable")).toBe("true");
+    expect(field.getAttribute("tabindex")).toBe("0");
+    expect(view().state.readOnly).toBe(true);
+  });
+
+  it("takes no focus while a save is pending", () => {
+    mountEditor({ disabled: true, value: "Welcome" });
     const field = screen.getByRole("textbox", { name: "Subject" });
     expect(field.getAttribute("contenteditable")).toBe("false");
-    expect(field.getAttribute("aria-readonly")).toBe("true");
-    expect(view().state.readOnly).toBe(true);
-    expect(onChange).not.toHaveBeenCalled();
+    expect(field.getAttribute("tabindex")).toBeNull();
   });
 
   it("reports what the author types", () => {

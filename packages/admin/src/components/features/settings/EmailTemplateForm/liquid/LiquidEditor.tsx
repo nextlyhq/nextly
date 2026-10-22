@@ -115,12 +115,18 @@ export function LiquidEditor({
         },
         { delay: 300 }
       ),
-      EditorView.contentAttributes.of({ "aria-label": label }),
+      EditorView.contentAttributes.of({
+        "aria-label": label,
+        // Stated, though an editable element takes focus anyway: assistive
+        // checks that ask whether a scrolling region holds anything focusable
+        // count a tab stop, not `contenteditable`.
+        ...(disabled ? {} : { tabindex: "0" }),
+      }),
       nextlyHighlighting,
       nextlyEditorChrome({ fontSize: 13, dark: resolvedTheme === "dark" }),
       ...(singleLine ? [oneLine, inputLike] : [EditorView.lineWrapping]),
     ],
-    [mode, label, singleLine, resolvedTheme]
+    [mode, label, singleLine, disabled, resolvedTheme]
   );
 
   return (
@@ -133,7 +139,10 @@ export function LiquidEditor({
       // Colours come from `--nx-code-*`, which the theme redeclares in dark
       // mode, as for every other code field in the admin.
       theme="none"
-      editable={!disabled && !readOnly}
+      // Read-only still takes focus: an owner's body is read, selected and
+      // scrolled from the keyboard. `readOnly` refuses the edits, and marks
+      // the field aria-readonly. Only a pending save takes the focus away.
+      editable={!disabled}
       readOnly={disabled || readOnly}
       basicSetup={{
         lineNumbers: !singleLine,
