@@ -115,6 +115,37 @@ describe("applyComponentReadAccess", () => {
     expect(entry.blocks[3].secret).toBe("kept");
   });
 
+  it("judges the instances a container holds as JSON text, and keeps it text", async () => {
+    // A hook may hand a group, a repeater or a field group back as JSON text,
+    // the shape SQLite stores them in.
+    registerFieldFunctions("fieldGroup", "card", [
+      { name: "title", type: "text" },
+      { name: "secret", type: "text", access: denied },
+    ]);
+    const entry: Record<string, unknown> = {
+      meta: JSON.stringify({ hero: { title: "a", secret: "S-1" } }),
+      rows: JSON.stringify([{ hero: { title: "b", secret: "S-2" } }]),
+      hero: JSON.stringify({ title: "c", secret: "S-3" }),
+    };
+    const hero = { name: "hero", type: "component", component: "card" };
+
+    await applyComponentReadAccess(
+      entry,
+      fields(
+        { name: "meta", type: "group", fields: [hero] },
+        { name: "rows", type: "repeater", fields: [hero] },
+        hero
+      ),
+      new Map(),
+      { ...caller, declaredComponentDecides: true }
+    );
+
+    expect(JSON.stringify(entry)).not.toMatch(/S-\d/);
+    expect(typeof entry.meta).toBe("string");
+    expect(JSON.parse(entry.meta as string)).toEqual({ hero: { title: "a" } });
+    expect(JSON.parse(entry.hero as string)).toEqual({ title: "c" });
+  });
+
   it("judges a version's single component by the type it was captured under", async () => {
     // The field now names `plain`; the snapshot was captured under `card`,
     // whose rule still withholds what the snapshot holds.
