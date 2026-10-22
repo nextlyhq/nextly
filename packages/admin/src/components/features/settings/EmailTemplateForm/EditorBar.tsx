@@ -19,7 +19,6 @@ import {
   FormMessage,
 } from "@admin/components/ui/form";
 import { Link } from "@admin/components/ui/link";
-import { ROUTES } from "@admin/constants/routes";
 
 import type { TemplateFormValues } from "./schema";
 
@@ -33,6 +32,7 @@ export function EditorBar({
   onNameChange,
   onSendTest,
   onOpenSettings,
+  listHref,
 }: {
   control: ReturnType<typeof useForm<TemplateFormValues>>["control"];
   isEdit: boolean;
@@ -43,6 +43,8 @@ export function EditorBar({
   onNameChange: (value: string, onChange: (v: string) => void) => void;
   onSendTest: () => void;
   onOpenSettings: () => void;
+  /** The hub tab this email or layout is listed on, where Cancel returns. */
+  listHref: string;
 }) {
   return (
     /* Wraps rather than overflowing. Unwrapped, the six controls exceed the
@@ -112,7 +114,7 @@ export function EditorBar({
           Send test
         </Button>
       )}
-      <Link href={ROUTES.SETTINGS_EMAIL_TEMPLATES}>
+      <Link href={listHref}>
         <Button type="button" variant="outline" disabled={isPending}>
           Cancel
         </Button>

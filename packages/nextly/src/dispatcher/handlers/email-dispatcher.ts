@@ -172,9 +172,17 @@ const EMAIL_TEMPLATE_METHODS: Record<
   MethodHandler<EmailTemplateServices>
 > = {
   listTemplates: {
-    // Plain array, no pagination; same rationale as listProviders.
+    // Plain array, no pagination; same rationale as listProviders. Each row
+    // says whether it is kept on the previous engine, so the admin's list can
+    // name those emails without asking once per row; the service answers for
+    // the whole list in one pass.
     execute: async svc => {
-      const templates = await svc.templateService.listTemplates();
+      const records = await svc.templateService.listTemplates();
+      const kept = await svc.templateService.keptOnOldEngineIds(records);
+      const templates = records.map(record => ({
+        ...record,
+        keptOnOldEngine: kept.has(record.id),
+      }));
       return respondData({ templates });
     },
   },

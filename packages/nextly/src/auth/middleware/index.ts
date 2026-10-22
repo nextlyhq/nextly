@@ -2,25 +2,16 @@ import { container } from "@nextly/di/container";
 import type { ApiKeyService } from "@nextly/domains/auth/services/api-key-service";
 import type { RBACAccessControlService } from "@nextly/domains/auth/services/rbac-access-control-service";
 import { env } from "@nextly/lib/env";
-import { permissionSlug } from "@nextly/schemas/_zod/rbac";
-import {
-  ACCESS_OPERATIONS,
-  type AccessOperation,
-} from "@nextly/services/access/types";
-import {
-  hasPermission,
-  hasAnyPermission,
-} from "@nextly/services/lib/permissions";
 
 import { presentedApiKey } from "../../middleware/rest-callers";
 import { currentRestLimitGate } from "../../middleware/rest-limit-gate";
 // getSession from ../session is a backward-compat wrapper that delegates
 // to the new jose-based session/get-session.ts module internally.
 import {
-  apiKeyScopeFrom,
-  apiKeyWriteAllowed,
-  type GrantedPermission,
-} from "../authenticated-scope";
+  anyPermissionVerdict,
+  routeGateVerdict,
+} from "../access/route-gate-adapters";
+import { type GrantedPermission } from "../authenticated-scope";
 import { getSession } from "../session";
 
 import { apiKeyRateLimitRefusal } from "./api-key-budget";
@@ -333,14 +324,14 @@ export async function requireAuthentication(
 /**
  * Permission-based authorization middleware.
  *
- * Delegates to `RBACAccessControlService.checkAccess()` when the DI
- * container is initialized, which evaluates:
- * 1. Super-admin bypass
- * 2. Code-defined access functions (from `defineCollection()` / `defineSingle()`)
- * 3. Database RBAC permission check
+ * Authenticates the request, then asks the one access decision through the
+ * route gate's adapter (`auth/access/route-gate-adapters`): a session as the
+ * access-control service has always judged it (super-admin, then the entity's
+ * code rule where one names the action, then the database permission), an
+ * API key on its own grants and the entity's rule. Where today's answer
+ * differs from the decision's, it is kept through a named deviation.
  *
- * Falls back to direct `hasPermission()` when the RBAC service is not
- * yet available (early bootstrap).
+ * Without the access-control service (early bootstrap), the permission alone.
  */
 export async function requirePermission(
   req: Request,
@@ -370,54 +361,34 @@ export async function authorizeCaller(
   action: string,
   resource: string
 ): Promise<AuthContext | ErrorResponse> {
-  // API key auth: use pre-resolved permissions instead of DB lookup.
-  // The permissions were already resolved by resolveApiKeyPermissions()
-  // based on the key's token type (read-only → only read-* slugs, etc.).
-  if (authResult.authMethod === "api-key") {
-    const slug = permissionSlug(action, resource);
-    if (!authResult.permissions.includes(slug)) {
-      return createErrorResponse(
-        403,
-        "Forbidden",
-        `You do not have permission to ${action} ${resource}`
-      );
-    }
-    // The grant is necessary, not sufficient. Plugin routes declare entity
-    // grants here, and a key the entity's own `access` rule refuses is refused
-    // on this gate exactly as `requireCollectionAccess` refuses it.
-    const ruleRefusal = await apiKeyEntityRuleRefusal(
-      action,
-      resource,
-      authResult
-    );
-    if (ruleRefusal) return ruleRefusal;
-    return authResult;
-  }
-
-  // Session auth: existing RBAC flow (super-admin bypass → code access → DB check)
-  const rbac = getRBACService();
-  const hasAccess = rbac
-    ? await rbac.checkAccess({
-        userId: authResult.userId,
-        operation: action as "create" | "read" | "update" | "delete",
-        resource,
-      })
-    : await hasPermission(authResult.userId, action, resource);
-
-  if (!hasAccess) {
+  // The route gate's answer, asked of the one decision: a key on its own
+  // grants and the entity's rule, a session through the access-control
+  // service's rules and its permissions, as this gate has always judged them.
+  const verdict = await routeGateVerdict(
+    authResult,
+    action,
+    resource,
+    getRBACService()
+  );
+  // A caller whose access could not be read is not a caller without the
+  // permission: the read's error goes to the route's error handling, as it
+  // always has, rather than being answered as a refusal.
+  if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
+  if (!verdict.allowed) {
     return createErrorResponse(
       403,
       "Forbidden",
       `You do not have permission to ${action} ${resource}`
     );
   }
-
   return authResult;
 }
 
 /**
- * Permission-based authorization middleware (any of multiple permissions)
- * Checks if authenticated user has at least one of the specified permissions
+ * Permission-based authorization middleware (any of multiple permissions).
+ * Checks the authenticated caller holds at least one of them, a key by its
+ * stored slugs and a session by its permissions. No code rule is read, which
+ * is where it still differs from the one decision.
  */
 export async function requireAnyPermission(
   req: Request,
@@ -440,32 +411,20 @@ export async function authorizeCallerForAny(
   authResult: AuthContext,
   permissions: Array<{ action: string; resource: string }>
 ): Promise<AuthContext | ErrorResponse> {
-  // API key auth: check against pre-resolved permissions
-  if (authResult.authMethod === "api-key") {
-    const hasAny = permissions.some(({ action, resource }) =>
-      authResult.permissions.includes(permissionSlug(action, resource))
-    );
-    if (!hasAny) {
-      return createErrorResponse(
-        403,
-        "Forbidden",
-        `You do not have the required permissions to access this resource`
-      );
-    }
-    return authResult;
-  }
-
-  // Session auth: existing DB lookup
-  const hasAccess = await hasAnyPermission(authResult.userId, permissions);
-
-  if (!hasAccess) {
+  // Any one of the permissions will do, judged on the key's own grants or the
+  // session's permissions, asked of the one decision.
+  const verdict = await anyPermissionVerdict(
+    authResult,
+    permissions,
+    getRBACService()
+  );
+  if (!verdict.allowed) {
     return createErrorResponse(
       403,
       "Forbidden",
       `You do not have the required permissions to access this resource`
     );
   }
-
   return authResult;
 }
 
@@ -490,88 +449,9 @@ export async function requireCollectionAccess(
     return authResult;
   }
 
-  // API key auth: use pre-resolved permissions, then evaluate code-defined access
-  if (authResult.authMethod === "api-key") {
-    const slug = permissionSlug(action, collectionSlug);
-    if (!authResult.permissions.includes(slug)) {
-      return createErrorResponse(
-        403,
-        "Forbidden",
-        `You do not have permission to ${action} ${collectionSlug}`
-      );
-    }
-
-    // Permission slug matched — also check code-defined access functions
-    // (e.g. defineCollection({ access: { create: ({ roles }) => ... } }))
-    const ruleRefusal = await apiKeyEntityRuleRefusal(
-      action,
-      collectionSlug,
-      authResult
-    );
-    if (ruleRefusal) return ruleRefusal;
-
-    return authResult;
-  }
-
-  // Session auth: existing RBAC flow (super-admin bypass → code access → DB check)
-  const rbac = getRBACService();
-  const hasAccess = rbac
-    ? await rbac.checkAccess({
-        userId: authResult.userId,
-        operation: action as "create" | "read" | "update" | "delete",
-        resource: collectionSlug,
-      })
-    : await hasPermission(authResult.userId, action, collectionSlug);
-
-  if (!hasAccess) {
-    return createErrorResponse(
-      403,
-      "Forbidden",
-      `You do not have permission to ${action} ${collectionSlug}`
-    );
-  }
-
-  return authResult;
-}
-
-/**
- * Whether an entity's code-defined rule refuses a scoped API key an operation
- * its grant already admitted.
- *
- * Both API-key branches ask this, and it asks `apiKeyWriteAllowed`, the
- * decision the service gates use for a scoped key — so a route and a service
- * read cannot answer differently, including for a rule that returns something
- * other than `true`, which that decision refuses. A grant says the key may
- * attempt the operation; the entity's own `access` rule still decides, as it
- * does for every other caller. Only operations a rule can name are judged:
- * `export-submissions` or `manage-settings` name no rule, so they stay decided
- * by the grant alone. With no RBAC service registered, no rule is judged.
- */
-async function apiKeyEntityRuleRefusal(
-  action: string,
-  resource: string,
-  authResult: AuthContext
-): Promise<ErrorResponse | null> {
-  if (!isAccessOperation(action)) return null;
-  const allowed = await apiKeyWriteAllowed(
-    apiKeyScopeFrom(authResult),
-    action,
-    resource,
-    { id: authResult.userId },
-    getRBACService()
-  );
-  return allowed === false
-    ? createErrorResponse(
-        403,
-        "Forbidden",
-        `You do not have permission to ${action} ${resource}`
-      )
-    : null;
-}
-
-/** Whether an action names an operation an entity access rule can declare. */
-function isAccessOperation(action: string): action is AccessOperation {
-  return ACCESS_OPERATIONS.some(operation => operation === action);
+  // The same question `requirePermission` asks, about the collection or
+  // Single the URL names.
+  return authorizeCaller(authResult, action, collectionSlug);
 }
 
 /**

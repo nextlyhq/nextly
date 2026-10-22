@@ -38,6 +38,12 @@ export const DEVIATIONS = [
   // A key's permission is matched on its stored slug, so a scope carrying
   // slugs without grant rows is judged on the slugs.
   "key-slug-string-match",
+  // A route that accepts any of several permissions asks no rule, for people
+  // or keys, even where the target declares one.
+  "any-of-skips-rules",
+  // A route asking one permission on a system resource does not count that
+  // resource's `manage-` permission as read, create, update or delete on it.
+  "manage-not-counted",
 ] as const;
 
 export type Deviation = (typeof DEVIATIONS)[number];

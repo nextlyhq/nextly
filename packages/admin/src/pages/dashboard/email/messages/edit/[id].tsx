@@ -30,8 +30,8 @@ function EditStateMessage({ message }: { message: string }) {
         <Alert variant="destructive">
           <AlertDescription>{message}</AlertDescription>
         </Alert>
-        <Link href={ROUTES.SETTINGS_EMAIL_TEMPLATES}>
-          <Button variant="outline">Back to Templates</Button>
+        <Link href={ROUTES.EMAIL}>
+          <Button variant="outline">Back to Email</Button>
         </Link>
       </div>
     </div>
@@ -55,6 +55,10 @@ export default function EditEmailTemplatePage() {
 
   const { mutate: updateTemplate, isPending } = useUpdateEmailTemplate();
 
+  // Layouts and partials are listed under Design, so a save returns there. Read once here
+  // so the save handler depends on this value rather than on the whole template object.
+  const listedUnderDesign = Boolean(template) && template?.kind !== "template";
+
   const handleSubmit = useCallback(
     (values: TemplateFormValues) => {
       if (!templateId) return;
@@ -65,7 +69,7 @@ export default function EditEmailTemplatePage() {
             toast.success("Template updated", {
               description: `${values.name} has been saved.`,
             });
-            navigateTo(ROUTES.SETTINGS_EMAIL_TEMPLATES);
+            navigateTo(listedUnderDesign ? ROUTES.EMAIL_DESIGN : ROUTES.EMAIL);
           },
           onError: (error: Error) => {
             toast.error("Failed to update template", {
@@ -78,7 +82,7 @@ export default function EditEmailTemplatePage() {
         }
       );
     },
-    [templateId, updateTemplate]
+    [templateId, updateTemplate, listedUnderDesign]
   );
 
   if (!templateId) {

@@ -106,6 +106,18 @@ export const ROUTES = {
   USERS_FIELDS: "/admin/users/fields",
   USERS_FIELDS_CREATE: "/admin/users/fields/create",
   USERS_FIELDS_EDIT: "/admin/users/fields/edit/[id]",
+  // The Email hub: Messages (the hub's landing page), Design, Sending and
+  // Activity, each a tab, with the editors under the tab they belong to.
+  EMAIL: "/admin/email",
+  EMAIL_DESIGN: "/admin/email/design",
+  EMAIL_SENDING: "/admin/email/sending",
+  EMAIL_ACTIVITY: "/admin/email/activity",
+  EMAIL_MESSAGES_CREATE: "/admin/email/messages/create",
+  EMAIL_MESSAGES_EDIT: "/admin/email/messages/edit/[id]",
+  EMAIL_SENDING_CREATE: "/admin/email/sending/create",
+  EMAIL_SENDING_EDIT: "/admin/email/sending/edit/[id]",
+  // Where email lived under Settings before the hub. Each redirects to its
+  // place in the hub, so bookmarks and links keep working.
   SETTINGS_EMAIL_PROVIDERS: "/admin/settings/email-providers",
   SETTINGS_EMAIL_PROVIDERS_CREATE: "/admin/settings/email-providers/create",
   SETTINGS_EMAIL_PROVIDERS_EDIT: "/admin/settings/email-providers/edit/[id]",
