@@ -70,6 +70,29 @@ const templateVariableSchema = z.object({
   required: z.boolean(),
 });
 
+/**
+ * One copied address, as the server takes it: `ops@example.com` or
+ * `Ops <ops@example.com>`, one mailbox, no line breaks. The server stays the
+ * authority (it checks again); this keeps a sendable address from being
+ * refused before it gets there.
+ */
+const COPY_ADDRESS =
+  /^(?:[^<>,]*<\s*[^\s@<>,]+@[^\s@<>,]+\s*>|[^\s@<>,]+@[^\s@<>,]+)$/;
+/** Whether `value` holds a C0 control character (line breaks included) or DEL. */
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+const copyAddress = z
+  .string()
+  .refine(
+    value => !hasControlCharacter(value) && COPY_ADDRESS.test(value.trim()),
+    "Enter an address, or a name and an address in angle brackets"
+  );
+
 const templateAttachmentSchema = z.object({
   mediaId: z.string().min(1),
   filename: z.string().optional(),
@@ -117,9 +140,11 @@ const templateSchema = z.object({
   replyTo: z.string().max(320).optional().or(z.literal("")),
   variables: z.array(templateVariableSchema),
   attachments: z.array(templateAttachmentSchema),
-  description: z.string().max(500).optional().or(z.literal("")),
-  cc: z.array(z.string().email("Enter an email address")),
-  bcc: z.array(z.string().email("Enter an email address")),
+  // No length cap here: the description is the owner's on an owner's email,
+  // where it's locked, and the server keeps the rule for it.
+  description: z.string().optional().or(z.literal("")),
+  cc: z.array(copyAddress),
+  bcc: z.array(copyAddress),
 });
 
 export const DEFAULT_VALUES: TemplateFormValues = {

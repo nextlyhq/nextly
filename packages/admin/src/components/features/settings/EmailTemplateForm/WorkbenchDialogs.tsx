@@ -34,6 +34,7 @@ export function WorkbenchDialogs({
       />
       <OwnershipConfirm
         act="reset"
+        undoable={!template.ownerChanged}
         open={dialog === "reset"}
         onOpenChange={openIf("reset")}
         name={template.name}

@@ -36,7 +36,11 @@ import { VariableChips } from "./VariablesRail";
 import { ownsContent } from "./workbench-model";
 import { WorkbenchDialogs } from "./WorkbenchDialogs";
 import { PhoneActions, WorkbenchHeader } from "./WorkbenchHeader";
-import { WorkbenchLayout, type SheetPanel } from "./WorkbenchLayout";
+import {
+  WorkbenchLayout,
+  type RevealRequest,
+  type SheetPanel,
+} from "./WorkbenchLayout";
 
 // ============================================================
 // EmailTemplateForm — the template workbench
@@ -139,7 +143,12 @@ export function EmailTemplateForm({
 
   const [editorTab, setEditorTab] = useState<"html" | "text">("html");
   const [sheet, setSheet] = useState<SheetPanel | null>(null);
-  const [detailsRequest, setDetailsRequest] = useState(0);
+  const [revealRequest, setRevealRequest] = useState<RevealRequest>({
+    panel: "edit",
+    seq: 0,
+  });
+  const reveal = (panel: RevealRequest["panel"]) =>
+    setRevealRequest(previous => ({ panel, seq: previous.seq + 1 }));
   const [sampleOverride, setSampleOverride] = useState<string | null>(null);
   const [sendTestOpen, setSendTestOpen] = useState(false);
 
@@ -263,9 +272,13 @@ export function EmailTemplateForm({
            * does nothing.
            */
           void form.handleSubmit(onSubmit, errors => {
-            if (regionsForRefusal(Object.keys(errors)).details) {
+            // The editor's own fields first: they're the content itself.
+            const regions = regionsForRefusal(Object.keys(errors));
+            if (regions.content) {
+              reveal("edit");
+            } else if (regions.details) {
               setSheet("details");
-              setDetailsRequest(count => count + 1);
+              reveal("details");
             }
           })(e);
         }}
@@ -276,7 +289,7 @@ export function EmailTemplateForm({
           splitLabel="Editor and preview"
           sheet={sheet}
           onSheetChange={setSheet}
-          detailsRequest={detailsRequest}
+          revealRequest={revealRequest}
           header={tier => (
             <WorkbenchHeader
               tier={tier}

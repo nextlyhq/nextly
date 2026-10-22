@@ -70,11 +70,19 @@ export interface WorkbenchLayoutProps {
   /** Accessible name for the resize handle between content and preview. */
   splitLabel: string;
   /**
-   * Raised each time something must be shown in Details (a refused save whose
-   * message is there). The sheet opens through `sheet`; a phone, which has no
-   * sheet, switches to its Details tab, even when it was already asked once.
+   * Where a refused save's message is, raised (`seq`) on each refusal so a
+   * repeat refusal shows it again. A phone switches to that tab. A tablet
+   * closes its sheet for the editor's fields, since an open sheet takes the
+   * editor's pane. Details on a tablet or desktop opens through `sheet`.
    */
-  detailsRequest: number;
+  revealRequest: RevealRequest;
+}
+
+/** A request to show the panel where a refused save's message is. */
+export interface RevealRequest {
+  panel: "edit" | "details";
+  /** Raised on each request; 0 is none yet. */
+  seq: number;
 }
 
 /** The side sheet: Data and Details behind one strip of tabs, and a close. */
@@ -145,15 +153,15 @@ function PhoneLayout({
   data,
   details,
   phoneBar,
-  detailsRequest,
+  revealRequest,
 }: Pick<
   WorkbenchLayoutProps,
-  "content" | "preview" | "data" | "details" | "phoneBar" | "detailsRequest"
+  "content" | "preview" | "data" | "details" | "phoneBar" | "revealRequest"
 >) {
   const [tab, setTab] = useState<PhoneTab>("edit");
   useEffect(() => {
-    if (detailsRequest > 0) setTab("details");
-  }, [detailsRequest]);
+    if (revealRequest.seq > 0) setTab(revealRequest.panel);
+  }, [revealRequest]);
   const tabs: PhoneTab[] = data
     ? ["edit", "preview", "data", "details"]
     : ["edit", "preview", "details"];
@@ -208,7 +216,7 @@ function PhoneLayout({
 
 type BodyProps = Omit<
   WorkbenchLayoutProps,
-  "header" | "phoneBar" | "detailsRequest"
+  "header" | "phoneBar" | "revealRequest"
 >;
 
 /** Two equal panes; an open sheet takes the content's, beside the preview. */
@@ -299,7 +307,7 @@ function DesktopBody({
 export function WorkbenchLayout({
   header,
   phoneBar,
-  detailsRequest,
+  revealRequest,
   ...body
 }: WorkbenchLayoutProps) {
   // The settings navigation and the page's padding: a full-width workbench
@@ -312,6 +320,12 @@ export function WorkbenchLayout({
 
   const rootRef = useRef<HTMLDivElement>(null);
   const tier = tierFor(useMeasuredWidth(rootRef));
+  const { onSheetChange } = body;
+  // A tablet's open sheet takes the editor's pane: an editor refusal closes it.
+  useEffect(() => {
+    if (tier !== "tablet" || revealRequest.seq === 0) return;
+    if (revealRequest.panel === "edit") onSheetChange(null);
+  }, [revealRequest, tier, onSheetChange]);
 
   return (
     <div
@@ -324,7 +338,7 @@ export function WorkbenchLayout({
         <PhoneLayout
           {...body}
           phoneBar={phoneBar}
-          detailsRequest={detailsRequest}
+          revealRequest={revealRequest}
         />
       ) : tier === "tablet" ? (
         <TabletBody {...body} />

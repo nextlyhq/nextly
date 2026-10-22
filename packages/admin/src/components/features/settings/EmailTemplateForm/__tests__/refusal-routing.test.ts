@@ -34,6 +34,14 @@ describe("regionsForRefusal", () => {
     expect(regionsForRefusal(["description"]).details).toBe(true);
   });
 
+  it("names the editor for the envelope and body fields", () => {
+    for (const field of ["subject", "preheader", "htmlContent", "replyTo"]) {
+      expect(regionsForRefusal([field]).content).toBe(true);
+    }
+    // The control: a Details field isn't the editor's.
+    expect(regionsForRefusal(["cc"]).content).toBe(false);
+  });
+
   it("opens nothing when nothing was rejected", () => {
     expect(regionsForRefusal([]).details).toBe(false);
   });

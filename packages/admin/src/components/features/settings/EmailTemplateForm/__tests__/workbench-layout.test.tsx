@@ -8,7 +8,11 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { WorkbenchLayout, type SheetPanel } from "../WorkbenchLayout";
+import {
+  WorkbenchLayout,
+  type RevealRequest,
+  type SheetPanel,
+} from "../WorkbenchLayout";
 
 afterEach(() => {
   cleanup();
@@ -38,9 +42,9 @@ function mount({
 }) {
   const onSheetChange = vi.fn();
   const header = vi.fn(tier => <h1>header at {tier}</h1>);
-  const layout = (detailsRequest: number) => (
+  const layout = (revealRequest: RevealRequest) => (
     <WorkbenchLayout
-      detailsRequest={detailsRequest}
+      revealRequest={revealRequest}
       splitLabel="Editor and preview"
       header={header}
       content={<p>the content</p>}
@@ -52,11 +56,12 @@ function mount({
       phoneBar={<button type="button">Save</button>}
     />
   );
-  const { rerender } = render(layout(0));
+  const { rerender } = render(layout({ panel: "edit", seq: 0 }));
   return {
     onSheetChange,
     header,
-    requestDetails: (count: number) => rerender(layout(count)),
+    reveal: (panel: RevealRequest["panel"], seq: number) =>
+      rerender(layout({ panel, seq })),
   };
 }
 
@@ -107,6 +112,14 @@ describe("on a tablet", () => {
     expect(screen.queryByRole("separator")).toBeNull();
   });
 
+  it("closes its sheet when a refused save's message is in the editor", () => {
+    atWidth(768);
+    const { onSheetChange, reveal } = mount({ sheet: "details" });
+    expect(onSheetChange).not.toHaveBeenCalled();
+    reveal("edit", 1);
+    expect(onSheetChange).toHaveBeenCalledWith(null);
+  });
+
   it("shows content and preview side by side with the sheet closed", () => {
     atWidth(1024);
     mount({ sheet: null });
@@ -135,9 +148,9 @@ describe("on a phone", () => {
 
   it("switches to Details when a refused save's message is there", () => {
     atWidth(390);
-    const { requestDetails } = mount({});
+    const { reveal } = mount({});
     expect(screen.getByText("the content")).toBeDefined();
-    requestDetails(1);
+    reveal("details", 1);
     expect(
       screen.getByRole("tab", { name: "Details" }).getAttribute("aria-selected")
     ).toBe("true");
@@ -145,8 +158,17 @@ describe("on a phone", () => {
 
     // Asked again after the person went back to Edit: it switches again.
     fireEvent.click(screen.getByRole("tab", { name: "Edit" }));
-    requestDetails(2);
+    reveal("details", 2);
     expect(screen.getByText("the details")).toBeDefined();
+  });
+
+  it("switches back to Edit when a refused save's message is in the editor", () => {
+    atWidth(390);
+    const { reveal } = mount({});
+    fireEvent.click(screen.getByRole("tab", { name: "Preview" }));
+    expect(screen.queryByText("the content")).toBeNull();
+    reveal("edit", 1);
+    expect(screen.getByText("the content")).toBeDefined();
   });
 
   it("has no Data tab where there's no test data (a layout)", () => {

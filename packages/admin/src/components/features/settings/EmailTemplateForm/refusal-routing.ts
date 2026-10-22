@@ -24,6 +24,16 @@ const DETAILS_FIELDS = new Set([
   "bcc",
 ]);
 
+/** Fields whose message lives in the content column: the envelope and body. */
+const CONTENT_FIELDS = new Set([
+  "subject",
+  "preheader",
+  "htmlContent",
+  "plainTextContent",
+  "fromOverride",
+  "replyTo",
+]);
+
 /**
  * Which panels a refusal must open, given the names react-hook-form rejected.
  *
@@ -34,8 +44,10 @@ const DETAILS_FIELDS = new Set([
  */
 export function regionsForRefusal(errorKeys: readonly string[]): {
   details: boolean;
+  content: boolean;
 } {
   return {
     details: errorKeys.some(key => DETAILS_FIELDS.has(key)),
+    content: errorKeys.some(key => CONTENT_FIELDS.has(key)),
   };
 }

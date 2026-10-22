@@ -105,13 +105,15 @@ const CONFIRM_COPY = {
     pendingLabel: "Overriding…",
     destructive: false,
   }),
-  reset: (name: string, owner: string) => ({
+  reset: (name: string, owner: string, undoable: boolean) => ({
     title: `Reset ${name} to ${owner}'s version?`,
     description: `Your site's version is replaced by ${owner}'s current one.`,
     bullets: [
       `The subject, preview text and both bodies become ${owner}'s again, and ${owner} keeps them up to date.`,
       "Your settings stay as they are: name, layout, provider, sending, From, Reply-To, copies and attachments.",
-      "You can undo it until you leave this email.",
+      undoable
+        ? "You can undo it until you leave this email."
+        : `It can't be undone: ${owner}'s update waiting for your review is part of the version it returns to.`,
     ],
     confirmLabel: "Reset",
     pendingLabel: "Resetting…",
@@ -124,9 +126,12 @@ export function OwnershipConfirm({
   act,
   name,
   owner,
+  undoable = true,
   ...rest
 }: {
   act: keyof typeof CONFIRM_COPY;
+  /** Whether the act can be undone afterwards (a Reset, while no update waits). */
+  undoable?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   name: string;
@@ -134,7 +139,7 @@ export function OwnershipConfirm({
   isPending: boolean;
   onConfirm: () => void;
 }) {
-  return <Confirm {...rest} {...CONFIRM_COPY[act](name, owner)} />;
+  return <Confirm {...rest} {...CONFIRM_COPY[act](name, owner, undoable)} />;
 }
 
 /**

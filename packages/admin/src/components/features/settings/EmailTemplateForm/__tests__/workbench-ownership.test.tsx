@@ -194,6 +194,35 @@ describe("a customised email", () => {
     );
   });
 
+  it("offers no Undo for a Reset made while an owner update waits", async () => {
+    // Undo overrides again, basing the override on the owner's version now:
+    // with an update waiting, that would drop the update from review.
+    const record = template({
+      owner: { kind: "core" },
+      overridden: true,
+      ownerChanged: true,
+    });
+    api.resetTemplate.mockResolvedValue({
+      ...record,
+      overridden: false,
+      ownerChanged: false,
+    });
+    mount(record);
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "More actions" }), {
+      key: "Enter",
+    });
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Reset to Nextly's version" })
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/It can't be undone/)).toBeDefined();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Reset" }));
+    await waitFor(() => expect(api.resetTemplate).toHaveBeenCalledWith("t1"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+  });
+
   it("asks before Override or Reset drop unsaved settings", async () => {
     mount(template({ owner: { kind: "core" }, overridden: true }));
     fireEvent.change(screen.getByRole("textbox", { name: "From" }), {

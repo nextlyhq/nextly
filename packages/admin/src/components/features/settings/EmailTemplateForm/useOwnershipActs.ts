@@ -172,7 +172,13 @@ export function useOwnershipActs({
     reset.mutate(template.id, {
       onSuccess: () => {
         setDialog(null);
-        setUndoable({ kind: "reset", version, details });
+        // Undone by overriding again, which bases the override on the
+        // owner's version now. That is the base the email had only when no
+        // owner update was waiting; with one waiting, an undo would quietly
+        // drop it from review, so none is offered.
+        if (!template.ownerChanged) {
+          setUndoable({ kind: "reset", version, details });
+        }
       },
       onError: failed("It couldn't be reset"),
     });
