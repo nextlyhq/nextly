@@ -528,6 +528,32 @@ describe.each(getConfiguredTestDialects())(
         expect(await versions.getAutosave(ref, editorId)).toBeDefined();
       });
 
+      it("is refused to an API key, keeping the owner's own recovery point", async () => {
+        // A recovery point is one row per document and author. A plugin does
+        // not know a key's own id, so filing the key's under its owner would
+        // overwrite the owner's unsaved work; the call is refused instead.
+        const ref = refOf(NOTES, await published(NOTES, "v"));
+        await versions.autosave(
+          { ref, status: "draft", snapshot: { title: "owner's work" } },
+          asUser(editorId)
+        );
+        await expect(
+          versions.autosave(
+            { ref, status: "draft", snapshot: { title: "by a key" } },
+            {
+              ...asUser(editorId),
+              authenticatedScope: {
+                actorType: "apiKey",
+                permissions: [`read-${NOTES}`, `update-${NOTES}`],
+              },
+            }
+          )
+        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+        expect((await versions.getAutosave(ref, editorId))?.snapshot).toEqual({
+          title: "owner's work",
+        });
+      });
+
       it("takes any snapshot the store takes, a function or toJSON included", async () => {
         // The store keeps a snapshot as JSON, so a value JSON can write is
         // accepted, as it always was: a function is left out, and toJSON is
