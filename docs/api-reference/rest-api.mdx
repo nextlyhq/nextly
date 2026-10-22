@@ -671,16 +671,17 @@ Two reserved conditions keep a collection's entries by where they stand in publi
 
 | Condition | Keeps | Query string example |
 |---|---|---|
-| `_pendingChange: true` | Entries whose draft holds changes not yet published, in any language. | `where[_pendingChange]=true` |
+| `_pendingChange: true` | Entries whose draft holds changes not yet published. | `where[_pendingChange]=true` |
 | `_inRelease: { scheduledBefore }` | Entries a scheduled release will **publish** after now and no later than `scheduledBefore`, an instant with its zone. | `where[_inRelease][scheduledBefore]=2026-10-28T09:00:00Z` |
 | `_inRelease: true` | The same, with no upper bound. | `where[_inRelease]=true` |
 
 - An entry is kept once, however many of its languages or releases hold it.
+- Only the languages the read is judged for count: the `locale` it reads and its fallbacks, or every language with `locale=all`. A draft or a release member in another language does not keep the entry.
 - A release's member that it will **unpublish** is not counted.
 - A release whose time has passed is left out, even while it waits to run.
 - Each condition is accepted only at the top level of a filter, beside other conditions there: `{ "_pendingChange": true, "status": { "equals": "draft" } }`. Inside `and` or `or` it is refused with `FILTER_MISPLACED_KEY`.
 - Any other value is refused with `FILTER_INVALID_OPERAND`: `false`, an empty object, an extra key, or a time without a zone.
-- `_inRelease` needs the right to read content releases as well as the collection. A caller without it is refused exactly as if the condition did not exist (`FILTER_UNKNOWN_FIELD`), so the filter says nothing about what releases hold.
+- `_inRelease` needs the right to read content releases as well as the collection. A caller without it is refused exactly as if the condition did not exist (`FILTER_UNKNOWN_FIELD`), so the filter says nothing about what releases hold. A bulk update or delete selected by `_inRelease` is refused the same way, before any entry is written.
 
 ### sort
 
