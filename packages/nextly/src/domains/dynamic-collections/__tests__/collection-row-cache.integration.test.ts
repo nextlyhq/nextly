@@ -4,7 +4,8 @@
  * - reads are the same with the cache warm as with it cold;
  * - a warm read sends the database 4 statements for an entry and 5 for a page,
  *   where the same read without the cache sends 11 and 13;
- * - every registry write a registry service makes is seen at once;
+ * - every registry write a registry service makes is seen at once, and so is
+ *   a Builder schema save's own write, past a read made during the save;
  * - a change made elsewhere is seen once the cached row's second is up, and
  *   not before;
  * - a read inside a transaction never comes from the cache.
@@ -40,12 +41,14 @@ import {
   textarea,
 } from "../../../config";
 import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
+import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { ServiceContainer } from "../../../services";
 import { consoleLogger } from "../../../shared/types";
 import {
   clearCollectionRowCache,
@@ -60,6 +63,7 @@ let current: TestNextly | undefined;
 
 afterEach(async () => {
   bypass.on = false;
+  vi.restoreAllMocks();
   vi.useRealTimers();
   await current?.destroy();
   current = undefined;
@@ -250,6 +254,65 @@ describe.each(getConfiguredTestDialects())(
         labels: { singular: "Entry", plural: "Entries" },
       } as unknown as CollectionMetadata);
       expect(await singularOf(registry)).toBe("Entry");
+    });
+
+    it("sees a Builder schema save's own registry write at once, past a read made during the save", async () => {
+      const { t } = await bootSite(dialect);
+      const handler = t.getService("collectionsHandler") as unknown as {
+        createCollection(
+          data: Record<string, unknown>
+        ): Promise<{ success: boolean }>;
+      };
+      const created = await handler.createCollection({
+        name: "notes",
+        label: "Note",
+        fields: [{ name: "heading", type: "text" }],
+      });
+      expect(created.success, JSON.stringify(created)).toBe(true);
+      const registry = registryOf(t);
+      const fieldNames = async () => {
+        const row = (await registry.getCollection("notes")) as {
+          fields: Array<{ name: string }> | string;
+        };
+        const fields =
+          typeof row.fields === "string"
+            ? (JSON.parse(row.fields) as Array<{ name: string }>)
+            : row.fields;
+        return fields.map(field => field.name);
+      };
+      expect(await fieldNames()).toEqual(["heading"]);
+      const { schemaVersion } = (await registry.getCollection("notes")) as {
+        schemaVersion?: number;
+      };
+
+      // A read lands just before each registry write the save makes past the
+      // registry services, caching the row as it was.
+      const update = t.adapter.update.bind(t.adapter);
+      vi.spyOn(t.adapter, "update").mockImplementation((async (
+        table: string,
+        ...rest: unknown[]
+      ) => {
+        if (table === "dynamic_collections") {
+          await registry.getCollection("notes");
+        }
+        return update(table, ...(rest as [never, never]));
+      }) as never);
+
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "notes" },
+        {
+          fields: [
+            { name: "heading", type: "text" },
+            { name: "summary", type: "text" },
+          ],
+          confirmed: true,
+          schemaVersion: schemaVersion ?? 1,
+        }
+      );
+
+      expect(await fieldNames()).toEqual(["heading", "summary"]);
     });
 
     it("sees a change made elsewhere once the cached row's second is up, and not before", async () => {
