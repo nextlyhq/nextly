@@ -90,7 +90,9 @@ export function companionUniqueIndexStatements(args: {
       const ifNotExists = dialect === "mysql" ? "" : "IF NOT EXISTS ";
       return `CREATE UNIQUE INDEX ${ifNotExists}${name} ON ${table} (${key}, ${q("_locale", dialect)})`;
     });
-  const drops = args.translatedColumns
+  // Each column once: a caller may list a column the change keeps under both its old and new
+  // fields, and MySQL refuses a second DROP of the same index.
+  const drops = [...new Set(args.translatedColumns)]
     .filter(column => !wanted.has(column))
     .map(column => companionUniqueIndexName(companionTable, column))
     .filter(name => liveIndexNames.has(name))

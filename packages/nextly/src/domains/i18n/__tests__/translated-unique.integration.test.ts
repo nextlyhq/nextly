@@ -44,7 +44,8 @@ describeEachDialect("a translated unique field", dialect => {
       fields: [
         { name: "handle", type: "text", unique: true },
         { name: "note", type: "text" },
-        { name: "code", type: "text", unique: true, localized: false },
+        // A number, not text: MySQL cannot key a shared unique TEXT column.
+        { name: "code", type: "number", unique: true, localized: false },
       ],
     });
     expect(created.success, JSON.stringify(created)).toBe(true);
@@ -78,8 +79,8 @@ describeEachDialect("a translated unique field", dialect => {
     const second = await write("en", { handle: "about" });
     expect(second.success).toBe(false);
     // Refused exactly as a duplicate of a shared unique field is.
-    await write("en", { code: "c1" });
-    const shared = await write("en", { code: "c1" });
+    await write("en", { code: 1 });
+    const shared = await write("en", { code: 1 });
     expect(second).toMatchObject({ statusCode: 409, code: "DUPLICATE" });
     expect({
       statusCode: second.statusCode,
@@ -115,5 +116,55 @@ describeEachDialect("a translated unique field", dialect => {
       });
     const data = read.data as Record<string, unknown>;
     expect(data.handle).toEqual(data.note);
+  });
+
+  /** The collection as it is before `handle` is unique, holding two English "about"s. */
+  async function seedNotYetUnique(): Promise<string[]> {
+    const created = await handler().createCollection({
+      name: "pages",
+      label: "Page",
+      localized: true,
+      fields: [{ name: "handle", type: "text" }],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const a = await write("en", { handle: "about" });
+    const b = await write("en", { handle: "about" });
+    await write("en", { handle: "" });
+    await write("en", { handle: "" });
+    return [idOf(a), idOf(b)];
+  }
+
+  const makeUnique = (unique: boolean) =>
+    handler().updateCollection(
+      { collectionName: "pages" },
+      { fields: [{ name: "handle", type: "text", unique }] }
+    );
+
+  it("refuses to make a field unique over values already held twice in a language, naming the documents", async () => {
+    const [a, b] = await seedNotYetUnique();
+
+    const refused = await makeUnique(true);
+
+    expect(refused.success).toBe(false);
+    const said = JSON.stringify(refused);
+    expect(said).toMatch(/TRANSLATED_UNIQUE_OVER_DUPLICATES/);
+    expect(said).toContain(a);
+    expect(said).toContain(b);
+    expect(said).not.toContain("about");
+    // Nothing changed: the duplicate can still be written.
+    expect((await write("en", { handle: "about" })).success).toBe(true);
+  });
+
+  it("makes the field unique once the duplicates are gone, and lets them back when the rule goes", async () => {
+    const [, b] = await seedNotYetUnique();
+    await write("en", { handle: "about-us" }, b);
+
+    const made = await makeUnique(true);
+    expect(made.success, JSON.stringify(made)).toBe(true);
+    expect((await write("en", { handle: "about" })).success).toBe(false);
+
+    const unmade = await makeUnique(false);
+    expect(unmade.success, JSON.stringify(unmade)).toBe(true);
+    expect((await write("en", { handle: "about" })).success).toBe(true);
   });
 });

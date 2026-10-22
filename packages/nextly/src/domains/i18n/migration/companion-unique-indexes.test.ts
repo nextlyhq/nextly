@@ -80,6 +80,19 @@ describe("a translated field's uniqueness within each language", () => {
     ).toEqual([`DROP INDEX \`${name}\` ON \`dc_posts_locales\``]);
   });
 
+  it("drops an index once, however many times its column is listed", () => {
+    const name = companionUniqueIndexName("dc_posts_locales", "slug");
+    expect(
+      companionUniqueIndexStatements({
+        dialect: "mysql",
+        companionTable: "dc_posts_locales",
+        wanted: [],
+        translatedColumns: ["slug", "slug"],
+        liveIndexNames: new Set([name]),
+      })
+    ).toHaveLength(1);
+  });
+
   it("names the index within every dialect's limit, whatever the table and field are called", () => {
     const name = companionUniqueIndexName(
       `dc_${"a".repeat(55)}_locales`,
