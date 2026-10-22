@@ -34,8 +34,10 @@ Every access rule is told the languages it judges.
 A collection's, a Single's and a field's rule now get `locale`, the one
 language the operation is in, and `locales`, every language it involves:
 
-- a read or a write in one language gets that language, an unknown or
-  missing `?locale=` being judged as the default it resolves to; a read's
+- a read or a write in one language gets that language; a read with an
+  unknown or missing `?locale=` is judged as the default it resolves to, and
+  a write naming an unknown language is judged as the default and then
+  refused with 400; a read's
   `locales` also lists each language a missing value falls back to, in the
   order it tries them; a bulk or transactional create or update writes the
   default language, and gets it; a duplicate gets the default language and
@@ -62,7 +64,9 @@ Write language rules as restrictions like that one, not as admissions by
 inclusion (`locales.includes("fr")`): where the languages an operation
 involves can't be known exactly, such as an operation that names none or a
 collection built in the admin, the rule is told every configured language,
-which a restriction refuses and an admission would allow.
+which a restriction refuses and an admission would allow. Restrict with
+`locales`, not `locale`: `locale` is absent for an operation on every
+language, and leaves out the languages a read falls back to.
 
 The REST route gate is told the same languages as the service gate, from the
 request's `?locale=` for an operation on one language's content (a history
