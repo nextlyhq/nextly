@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { getCoreSchema } from "../../../schemas";
+import { entityPermissionSpelling } from "../../auth/services/entity-permission-spelling";
 import {
   SLUG_COLUMNS,
   renamedSlugColumns,
@@ -83,7 +84,7 @@ function scopeNames(column: RenamedSlugColumn): string[] {
 function namedBy(column: SlugColumn): string[] {
   if (column.onRename === "keep") return [column.slugColumn];
   if (column.onRename === "follow-json") {
-    return [column.jsonColumn, column.rowId];
+    return [column.jsonColumn, column.rowId, ...(column.onlyWhereNull ?? [])];
   }
   if (column.onRename === "end") return scopeNames(column);
   return [...scopeNames(column), ...derivedNames(column)];
@@ -137,5 +138,73 @@ describe.each(DIALECTS)("slug-keyed core tables (%s)", dialect => {
       expect(column.kind.values.collection.length).toBeGreaterThan(0);
       expect(column.kind.values.single.length).toBeGreaterThan(0);
     }
+  });
+});
+
+/** The declaration of `table`'s rows that follow a rename. */
+function following(table: string): FollowingSlugColumn {
+  const found = SLUG_COLUMNS.find(
+    (column): column is FollowingSlugColumn =>
+      column.table === table && column.onRename === "follow"
+  );
+  if (found?.derived === undefined) throw new Error(`no derived ${table}`);
+  return found;
+}
+
+describe("what a rename writes again from the new slug", () => {
+  it("respells only the permission values the framework spelled for the old slug", () => {
+    const derive = following("permissions").derived?.derive;
+    const old = entityPermissionSpelling("read", "notes");
+    expect(derive?.({ action: "read", ...old }, "journal", "notes")).toEqual(
+      entityPermissionSpelling("read", "journal")
+    );
+    // An application's own slug and an administrator's name are kept: they
+    // are left out of what is written.
+    expect(
+      derive?.(
+        {
+          action: "approve",
+          slug: "approve-editorial",
+          name: "Approve Editorial",
+          description: null,
+        },
+        "journal",
+        "notes"
+      )
+    ).toEqual({});
+    expect(
+      derive?.(
+        { action: "read", ...old, name: "Read the notebook" },
+        "journal",
+        "notes"
+      )
+    ).toEqual({
+      slug: "read-journal",
+      description: entityPermissionSpelling("read", "journal").description,
+    });
+  });
+
+  it("renames the resource a waiting event's envelope names, in either stored form", () => {
+    const derive = following("nextly_events").derived?.derive;
+    const entry = {
+      id: "e1",
+      resource: { kind: "entry", collection: "notes", id: "1" },
+    };
+    const single = { id: "e2", resource: { kind: "single", slug: "notes" } };
+    const renamed = (payload: unknown) =>
+      derive?.({ payload }, "journal", "notes").payload;
+    expect(renamed(entry)).toEqual({
+      ...entry,
+      resource: { ...entry.resource, collection: "journal" },
+    });
+    expect(renamed(JSON.stringify(single))).toEqual({
+      ...single,
+      resource: { ...single.resource, slug: "journal" },
+    });
+    // An envelope about something else, or one that does not parse, is
+    // written back as it was.
+    const other = { resource: { kind: "entry", collection: "posts" } };
+    expect(renamed(other)).toBe(other);
+    expect(renamed("{not json")).toBe("{not json");
   });
 });

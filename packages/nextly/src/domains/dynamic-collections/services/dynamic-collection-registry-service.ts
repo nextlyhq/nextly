@@ -13,6 +13,7 @@ import type {
 } from "../../../schemas/dynamic-collections/types";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
 import { BaseService } from "../../../shared/base-service";
+import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import type { Logger } from "../../../shared/types";
 import type { DatabaseAdapter } from "../../../shared/types/database-adapter";
 import {
@@ -353,18 +354,27 @@ export class DynamicCollectionRegistryService extends BaseService {
       // together or neither does; otherwise the renamed collection would lose
       // them and the next collection created under the old slug would inherit
       // them.
-      await renameEntity(this.adapter, {
+      const renamed = await renameEntity(this.adapter, {
         dialect: this.dialect,
         move,
         writeRegistry: async tx => {
-          await writeRow(
+          const written = await writeRow(
             tx.drizzleWithRelations<DatabaseAdapter["db"]>(
               resolveRelations(this.dialect)
             )
           );
-          return move;
+          // No row under the old slug any more (deleted, or renamed by
+          // another request, since the lookup above): nothing is moved, so
+          // no history follows a registry row that did not move.
+          return affectedRowCount(written, this.dialect) === 0 ? null : move;
         },
       });
+      if (renamed === null) {
+        throw NextlyError.notFound({
+          message: `Collection "${collectionSlug}" not found`,
+          logContext: { collection: collectionSlug },
+        });
+      }
     }
 
     // A rename carries the live recording decision to the new slug and drops

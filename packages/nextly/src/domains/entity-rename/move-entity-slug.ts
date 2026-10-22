@@ -18,7 +18,7 @@ import type {
   WhereClause,
   WhereCondition,
 } from "@nextlyhq/adapter-drizzle/types";
-import { getTableColumns, getTableName, is, Table } from "drizzle-orm";
+import { getColumns, getTableName, is, Table } from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
 import { NextlyError } from "../../errors";
@@ -130,7 +130,7 @@ function propertiesOf(
   for (const value of Object.values(bundle)) {
     if (is(value, Table) && getTableName(value) === column.table) {
       return new Map(
-        Object.entries(getTableColumns(value)).map(([property, sqlColumn]) => [
+        Object.entries(getColumns(value)).map(([property, sqlColumn]) => [
           sqlColumn.name,
           property,
         ])
@@ -277,16 +277,17 @@ async function followRename(
       const row: SlugKeyedRow = Object.fromEntries(
         read.map(name => [name, raw[property(properties, column, name)]])
       );
-      const values = derived.derive(row, move.to);
+      const values = derived.derive(row, move.to, move.from);
       await tx.update(
         column.table,
         {
           [slugProperty]: move.to,
+          // Only the columns the declaration derived again: one it left out
+          // holds a value someone chose, and keeps it.
           ...Object.fromEntries(
-            derived.columns.map(name => [
-              property(properties, column, name),
-              values[name],
-            ])
+            derived.columns
+              .filter(name => name in values)
+              .map(name => [property(properties, column, name), values[name]])
           ),
         },
         {
@@ -308,20 +309,31 @@ async function followRename(
   );
 }
 
-/** Delete one table's rows for the old slug. */
+/**
+ * Delete one table's rows for the old slug and for the new one. The new
+ * slug names no live entity of this kind (the registry refuses a rename onto
+ * one), so rows under it are an earlier entity's: a lease, a link or a kept
+ * answer that would otherwise apply to the renamed entity the moment it takes
+ * the name.
+ */
 async function endOnRename(
   tx: TransactionContext,
   column: EndingSlugColumn,
   properties: ColumnProperties,
   move: EntitySlugMove
 ): Promise<void> {
-  await tx.delete(
-    column.table,
-    entityWhere(properties, column, move.kind, move.from)
-  );
+  for (const slug of [move.from, move.to]) {
+    await tx.delete(
+      column.table,
+      entityWhere(properties, column, move.kind, slug)
+    );
+  }
 }
 
-/** Every row's id and JSON value, for a table declared small enough to read. */
+/**
+ * Every row's id and JSON value, for a table declared small enough to read,
+ * leaving out the rows its declaration excludes.
+ */
 async function jsonRows(
   tx: TransactionContext,
   column: JsonSlugColumn,
@@ -329,8 +341,13 @@ async function jsonRows(
 ): Promise<{ id: SqlParam; value: unknown }[]> {
   const idProperty = property(properties, column, column.rowId);
   const valueProperty = property(properties, column, column.jsonColumn);
+  const excluded = (column.onlyWhereNull ?? []).map(name => ({
+    column: property(properties, column, name),
+    op: "IS NULL" as const,
+  }));
   const rows = await tx.select<Record<string, unknown>>(column.table, {
     columns: [idProperty, valueProperty],
+    ...(excluded.length > 0 ? { where: { and: excluded } } : {}),
   });
   return rows.map(row => ({
     id: rowIdOf(column, row[idProperty]),

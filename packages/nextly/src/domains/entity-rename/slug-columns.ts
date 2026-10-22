@@ -18,9 +18,11 @@
  *
  * - `follow`: the rows move to the new slug in the rename's transaction, and a
  *   key column digested from the slug is computed again for each row.
- * - `end`: the rows are deleted in the rename's transaction. For leases and
- *   links addressed to the old name, which cannot be honoured under the new
- *   one: keeping them would hand them to a later entity under the old slug.
+ * - `end`: the rows are deleted in the rename's transaction, under the old
+ *   slug and under the new one. For leases and links addressed to a name,
+ *   which cannot be honoured under another: kept under the old slug, they
+ *   would pass to a later entity of that name, and any an earlier entity left
+ *   under the new slug would pass to the renamed one.
  * - `keep`: the column holds a slug that is not an entity's, or a record that
  *   must read as it was written. The reason is part of the declaration.
  * - `follow-json`: a JSON value names the slug inside it (a webhook filter's
@@ -48,9 +50,9 @@ export type SlugKeyedRow = Readonly<Record<string, unknown>>;
 
 /**
  * Columns whose values are made from the slug: a digest of the row's identity,
- * or a permission's slug and name. Each moved row gets them written again from
- * its own columns and the new slug, by the function every writer of the table
- * uses.
+ * a permission's slug and name, or a stored message naming it. Each moved row
+ * gets them written again from its own columns and the new slug, by the
+ * function every writer of the table uses.
  */
 export interface SlugDerivedColumns {
   /** The column a row is addressed by when its new values are written. */
@@ -64,8 +66,16 @@ export interface SlugDerivedColumns {
    * and move with the others. Only a working draft carries a `draft_key`.
    */
   onlyWhereSet?: string;
-  /** The derived columns of `row` under `slug`, by SQL column name. */
-  derive(row: SlugKeyedRow, slug: string): Readonly<Record<string, string>>;
+  /**
+   * The derived columns of `row` moving from `from` to `slug`, by SQL column
+   * name. A column left out of the answer keeps its stored value: a value
+   * someone chose, rather than one made from the old slug.
+   */
+  derive(
+    row: SlugKeyedRow,
+    slug: string,
+    from: string
+  ): Readonly<Record<string, unknown>>;
 }
 
 /** Where a row says which kind of entity it belongs to. */
@@ -122,6 +132,11 @@ export interface JsonSlugColumn {
   table: string;
   jsonColumn: string;
   rowId: string;
+  /**
+   * Columns that must be NULL for a row to be read at all. A row outside them
+   * neither refuses a rename nor is rewritten by one.
+   */
+  onlyWhereNull?: readonly string[];
   /** The kinds whose slugs the value can name. */
   renames: readonly RenamedEntityKind[];
   onRename: "follow-json";
@@ -201,6 +216,36 @@ function withCollectionRenamed(
     ...value,
     collections: renamed.filter((entry, at) => renamed.indexOf(entry) === at),
   };
+}
+
+/** A JSON column's value as an object, from either form a driver returns. */
+function parsedJson(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether a value is an object whose keys can be read. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * A stored webhook envelope naming `to` wherever its resource named `from`:
+ * an entry's `collection`, a Single's `slug`. Read as the column returns it,
+ * an object or its JSON text; one that does not parse is left as it is, for
+ * fan-out to skip as it skips any unreadable event.
+ */
+function envelopeRenamed(payload: unknown, from: string, to: string): unknown {
+  const envelope = parsedJson(payload);
+  if (!isRecord(envelope) || !isRecord(envelope.resource)) return payload;
+  const resource = envelope.resource;
+  const named = ["collection", "slug"].find(key => resource[key] === from);
+  if (named === undefined) return payload;
+  return { ...envelope, resource: { ...resource, [named]: to } };
 }
 
 /** How every history table spells the two kinds a rename moves. */
@@ -361,8 +406,9 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
       "A preview link's signed token names the old slug and is only honoured while its row names the same document. Moved, the row would be listed as live under the new slug while its token could never open; kept, it would open whatever is next created under the old slug.",
   },
   {
-    // The permissions the framework creates for the entity, `read-<slug>` and
-    // its siblings. Grants reference a permission by id, so every role keeps
+    // The entity's permissions with no plugin owner: the ones the framework
+    // creates, `read-<slug>` and its siblings, and any an application made
+    // for it. Grants reference a permission by id, so every role keeps
     // exactly what it held, now for the new slug, and no other role's access
     // changes. A plugin's own permissions (`owner` set) are declared by the
     // plugin under the slug its code names, and stay with that declaration.
@@ -373,14 +419,23 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     derived: {
       rowId: "id",
       columns: ["slug", "name", "description"],
-      sources: ["action"],
-      derive: (row, slug) => {
-        const spelled = entityPermissionSpelling(textOf(row, "action"), slug);
-        return {
-          slug: spelled.slug,
-          name: spelled.name,
-          description: spelled.description,
-        };
+      sources: ["action", "slug", "name", "description"],
+      // Each value still spelled as the framework spells it for the old slug
+      // is spelled again for the new one, so checks keep finding it. A value
+      // spelled any other way was chosen by someone, an application's own
+      // slug or an administrator's name, and access rules and key scopes
+      // that name it must keep matching.
+      derive: (row, slug, from) => {
+        const action = textOf(row, "action");
+        const before = entityPermissionSpelling(action, from);
+        const after = entityPermissionSpelling(action, slug);
+        const respelled: Record<string, string> = {};
+        for (const column of ["slug", "name", "description"] as const) {
+          if (textOrNullOf(row, column) === before[column]) {
+            respelled[column] = after[column];
+          }
+        }
+        return respelled;
       },
     },
   },
@@ -397,6 +452,9 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     table: "nextly_webhooks",
     jsonColumn: "filter",
     rowId: "id",
+    // A deleted endpoint is kept only to attribute its past deliveries, and
+    // never delivers again: its filter neither holds a name nor follows one.
+    onlyWhereNull: ["deleted_at"],
     renames: ["collection"],
     onRename: "follow-json",
     names: (value, slug) => filterCollections(value)?.includes(slug) ?? false,
@@ -415,11 +473,29 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     reason: "The id of the resource an event is about, not a slug.",
   },
   {
+    // Events in the outbox not yet fanned out to endpoints. Fan-out matches
+    // an endpoint's filter against the envelope, and the rename rewrites the
+    // filters, so an event still naming the old slug would match none of
+    // them and be marked fanned out with no delivery. Such an event moves,
+    // envelope and all, and reaches its receivers under the new slug, as an
+    // event written now would. One already fanned out is a message receivers
+    // have been given, and keeps the slug it was sent under.
     table: "nextly_events",
     slugColumn: "resource_collection",
-    onRename: "keep",
-    reason:
-      "An event in the outbox is a message as it was sent: its payload names the slug it was sent under, and receivers have already been given that slug.",
+    kind: {
+      column: "resource_kind",
+      values: { collection: ["entry"], single: ["single"] },
+    },
+    onlyWhereNull: ["fanned_out_at"],
+    onRename: "follow",
+    derived: {
+      rowId: "id",
+      columns: ["payload"],
+      sources: ["payload"],
+      derive: (row, slug, from) => ({
+        payload: envelopeRenamed(row.payload, from, slug),
+      }),
+    },
   },
   {
     table: "dynamic_collections",

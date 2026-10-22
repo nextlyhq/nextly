@@ -373,6 +373,49 @@ async function seedHistory(
   return { releaseId: release.id };
 }
 
+/**
+ * A document lock, a preview link and a kept permission answer under `slug`,
+ * as an entity of that name leaves them when it is deleted.
+ */
+async function seedEphemeral(
+  kind: RenamedEntityKind,
+  slug: string
+): Promise<{ lockId: string; linkId: string }> {
+  const adapter = t().adapter;
+  const now = new Date();
+  const entryId = randomUUID();
+  const lockId = documentLockKey(kind, slug, entryId);
+  await adapter.insert("nextly_document_lock", {
+    id: lockId,
+    scopeKind: kind,
+    slug,
+    entryId,
+    ownerId: ANA.id,
+    claimToken: randomUUID(),
+    acquiredAt: now,
+    expiresAt: new Date(now.getTime() + 60_000),
+  });
+  const linkId = randomUUID().replace(/-/g, "");
+  await adapter.insert("nextly_preview_links", {
+    id: linkId,
+    documentKind: kind === "collection" ? "entry" : "single",
+    documentSlug: slug,
+    entryId: kind === "collection" ? entryId : null,
+    createdBy: ANA.id,
+    createdAt: now,
+    expiresAt: new Date(now.getTime() + 60_000),
+    generation: 0,
+  });
+  await new PermissionCacheService(adapter, silentLogger).setCachedPermission(
+    ANA.id,
+    "read",
+    slug,
+    true,
+    []
+  );
+  return { lockId, linkId };
+}
+
 /** Rename through the Builder's registry services. */
 function rename(kind: RenamedEntityKind, from: string, to: string) {
   if (kind === "collection") {
@@ -981,6 +1024,229 @@ describe.each(getConfiguredTestDialects())(
       ]) {
         expect([table, history[table]]).toEqual([table, 0]);
       }
+    }, 120_000);
+
+    it("delivers an event recorded before the rename and not yet fanned out, and leaves fanned-out events as they were sent", async () => {
+      await boot(dialect);
+      const endpointId = await endpointFiltering(["notes"]);
+      // An endpoint receives only events after it was created; MySQL keeps
+      // this column to the second, rounding up.
+      await t().adapter.update(
+        "nextly_webhooks",
+        { createdAt: new Date(Date.now() - 60_000) },
+        { and: [{ column: "id", op: "=", value: endpointId }] }
+      );
+      const endpoints = container.get<WebhookEndpointRegistry>(
+        "webhookEndpointRegistry"
+      );
+      endpoints.invalidate();
+      const fanOut = () =>
+        fanOutDueEvents({
+          db: container.get<FanOutDatabase>("adapter"),
+          loadEndpoints: () => endpoints.getEnabledEndpoints(),
+        });
+      const handler = t().getService("collectionsHandler");
+      await handler.createEntry(
+        { collectionName: "notes", overrideAccess: true },
+        { title: "sent before the rename" }
+      );
+      await fanOut();
+      const sent = new Set(
+        (await rowsOf("nextly_events")).map(row => String(row.id))
+      );
+      expect(sent.size).toBeGreaterThan(0);
+      await handler.createEntry(
+        { collectionName: "notes", overrideAccess: true },
+        { title: "waiting when the rename happens" }
+      );
+      const waiting = (await rowsOf("nextly_events")).filter(
+        row => !sent.has(String(row.id))
+      );
+      expect(waiting.length).toBeGreaterThan(0);
+      expect(waiting.every(row => row.fannedOutAt == null)).toBe(true);
+
+      await rename("collection", "notes", "journal");
+      await fanOut();
+
+      // The waiting events reach the endpoint whose filter the rename moved,
+      // and say the collection's new name, as an event written now would.
+      const deliveries = (await rowsOf("nextly_webhook_deliveries")).filter(
+        row => row.webhookId === endpointId
+      );
+      for (const event of waiting) {
+        expect([
+          event.id,
+          deliveries.some(row => row.eventId === event.id),
+        ]).toEqual([event.id, true]);
+      }
+      const events = new Map(
+        (await rowsOf("nextly_events")).map(row => [String(row.id), row])
+      );
+      const collectionOf = (row: Row | undefined) => {
+        const payload: unknown =
+          typeof row?.payload === "string"
+            ? JSON.parse(row.payload)
+            : row?.payload;
+        return (payload as { resource: { collection?: string } }).resource
+          .collection;
+      };
+      for (const event of waiting) {
+        const row = events.get(String(event.id));
+        expect([row?.resourceCollection, collectionOf(row)]).toEqual([
+          "journal",
+          "journal",
+        ]);
+      }
+      // An event already fanned out is a message receivers were given: it
+      // keeps the name it was sent under.
+      for (const id of sent) {
+        const row = events.get(id);
+        expect([row?.resourceCollection, collectionOf(row)]).toEqual([
+          "notes",
+          "notes",
+        ]);
+      }
+    }, 120_000);
+
+    it("ends locks, preview links and kept answers an earlier entity left under the new name", async () => {
+      await bootForAccess(dialect);
+      for (const [kind, from, to] of [
+        ["collection", "notes", "journal"],
+        ["single", "masthead", "header"],
+      ] as const) {
+        // What a deleted entity under the new name leaves behind: a lease on
+        // one of its documents, a preview link to it, a kept "yes".
+        const earlier = await seedEphemeral(kind, to);
+
+        await rename(kind, from, to);
+
+        expect(
+          (await rowsOf("nextly_document_lock")).filter(
+            row => row.id === earlier.lockId
+          )
+        ).toEqual([]);
+        expect(
+          (await rowsOf("nextly_preview_links")).filter(
+            row => row.id === earlier.linkId
+          )
+        ).toEqual([]);
+        expect(
+          (await rowsOf("user_permission_cache")).filter(
+            row => row.resource === to
+          )
+        ).toEqual([]);
+      }
+    }, 120_000);
+
+    it("refuses a collection rename whose registry row is gone by the time it is written, moving nothing", async () => {
+      await boot(dialect);
+      const entryId = await writeNote();
+      await seedHistory("collection", "notes", entryId);
+      const before = await rowsNaming("collection", "notes");
+      // The collection is deleted after the rename has looked it up and
+      // before its transaction writes the row.
+      const adapter = t().adapter;
+      const original = adapter.transaction.bind(adapter);
+      vi.spyOn(adapter, "transaction").mockImplementationOnce(
+        <T>(
+          work: (tx: TransactionContext) => Promise<T>,
+          options?: TransactionOptions
+        ) =>
+          original(async tx => {
+            await tx.delete(REGISTRY.collection, {
+              and: [{ column: "slug", op: "=", value: "notes" }],
+            });
+            return work(tx);
+          }, options)
+      );
+
+      await expect(
+        rename("collection", "notes", "journal")
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+      vi.restoreAllMocks();
+      expect(await rowsNaming("collection", "notes")).toEqual(before);
+      expect(
+        Object.values(await rowsNaming("collection", "journal")).every(
+          count => count === 0
+        )
+      ).toBe(true);
+    }, 120_000);
+
+    it("moves a custom permission's resource without respelling it, and keeps a name an administrator chose", async () => {
+      await boot(dialect);
+      const now = new Date();
+      // A permission an application created for the collection, with no
+      // plugin owner and a spelling of its own.
+      await t().adapter.insert("permissions", {
+        id: "perm-approve-editorial",
+        name: "Approve Editorial",
+        slug: "approve-editorial",
+        description: "May approve editorial copy",
+        action: "approve",
+        resource: "notes",
+        owner: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+      const read = (await rowsOf("permissions")).find(
+        row =>
+          row.action === "read" && row.resource === "notes" && row.owner == null
+      );
+      expect(read).toBeDefined();
+      await t().adapter.update(
+        "permissions",
+        { name: "Read the notebook" },
+        { and: [{ column: "id", op: "=", value: read?.id as string }] }
+      );
+
+      await rename("collection", "notes", "journal");
+
+      const rows = new Map(
+        (await rowsOf("permissions")).map(row => [String(row.id), row])
+      );
+      expect(rows.get("perm-approve-editorial")).toMatchObject({
+        resource: "journal",
+        slug: "approve-editorial",
+        name: "Approve Editorial",
+        description: "May approve editorial copy",
+      });
+      // The framework's own slug and description follow the new name, which
+      // every check spells; the name an administrator gave it stays.
+      const spelled = entityPermissionSpelling("read", "journal");
+      expect(rows.get(String(read?.id))).toMatchObject({
+        resource: "journal",
+        slug: spelled.slug,
+        name: "Read the notebook",
+        description: spelled.description,
+      });
+    }, 120_000);
+
+    it("ignores deleted webhook endpoints, neither refusing on their filters nor rewriting them", async () => {
+      await boot(dialect);
+      const naming = await endpointFiltering(["journal"]);
+      const listing = await endpointFiltering(["notes"]);
+      const live = await endpointFiltering(["notes"]);
+      for (const id of [naming, listing]) {
+        await t().adapter.update(
+          "nextly_webhooks",
+          { deletedAt: new Date() },
+          { and: [{ column: "id", op: "=", value: id }] }
+        );
+      }
+
+      await rename("collection", "notes", "journal");
+
+      const after = await filters();
+      expect(after.get(live)).toEqual({ version: 1, collections: ["journal"] });
+      expect(after.get(listing)).toEqual({
+        version: 1,
+        collections: ["notes"],
+      });
+      expect(after.get(naming)).toEqual({
+        version: 1,
+        collections: ["journal"],
+      });
     }, 120_000);
 
     it("fails the whole rename when any table's move fails, collection or Single", async () => {
