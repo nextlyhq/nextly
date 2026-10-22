@@ -7,7 +7,8 @@
  * `''`, and two blanks are not the same value. Inside the index a blank becomes NULL, and NULLs
  * never collide, so untranslated documents are never duplicates of one another, while what is
  * stored, and what every read returns, stays exactly as it was. PostgreSQL and SQLite key an index
- * on an expression; MySQL does from 8.0.13 (a functional key part, in its own parentheses).
+ * on an expression; MySQL does from 8.0.13 (a functional key part, in its own parentheses), on
+ * the value's SHA-256 since it cannot key an expression returning TEXT.
  *
  * @module domains/i18n/migration/companion-unique-indexes
  */
@@ -81,8 +82,11 @@ export function companionUniqueIndexStatements(args: {
         dialect
       );
       const value = `NULLIF(${q(w.column, dialect)}, '')`;
-      // MySQL takes an expression only as a functional key part, in parentheses of its own.
-      const key = dialect === "mysql" ? `(${value})` : value;
+      // MySQL takes an expression only as a functional key part, in parentheses of its own, and
+      // cannot key one that returns TEXT, which a companion's text column is. It keys the value's
+      // SHA-256 instead: any length, a blank still NULL, and values compared exactly, as
+      // PostgreSQL and SQLite compare them.
+      const key = dialect === "mysql" ? `(SHA2(${value}, 256))` : value;
       const ifNotExists = dialect === "mysql" ? "" : "IF NOT EXISTS ";
       return `CREATE UNIQUE INDEX ${ifNotExists}${name} ON ${table} (${key}, ${q("_locale", dialect)})`;
     });

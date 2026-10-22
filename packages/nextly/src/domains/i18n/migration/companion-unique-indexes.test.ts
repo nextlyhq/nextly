@@ -45,7 +45,7 @@ describe("a translated field's uniqueness within each language", () => {
     );
   });
 
-  it("writes MySQL's functional key part in its own parentheses, with no IF NOT EXISTS", () => {
+  it("keys MySQL's functional key part on the value's hash, with no IF NOT EXISTS", () => {
     const [create] = companionUniqueIndexStatements({
       dialect: "mysql",
       companionTable: "dc_posts_locales",
@@ -54,7 +54,7 @@ describe("a translated field's uniqueness within each language", () => {
       liveIndexNames: new Set(),
     });
     expect(create).toMatch(
-      /^CREATE UNIQUE INDEX `[^`]+` ON `dc_posts_locales` \(\(NULLIF\(`slug`, ''\)\), `_locale`\)$/
+      /^CREATE UNIQUE INDEX `[^`]+` ON `dc_posts_locales` \(\(SHA2\(NULLIF\(`slug`, ''\), 256\)\), `_locale`\)$/
     );
   });
 
