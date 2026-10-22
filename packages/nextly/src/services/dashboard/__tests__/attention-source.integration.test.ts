@@ -26,6 +26,7 @@ import {
   RELEASES_TABLE,
 } from "../../../domains/releases/release-tables";
 import { releaseMemberKey } from "../../../domains/releases/release-member-key";
+import { refreshContentSources } from "../../../domains/widgets/collection-widgets";
 import type { WidgetQuery } from "../../../domains/widgets/query";
 import { sourceResolver } from "../../../domains/widgets/resolved-sources";
 import { isUnavailableSourceRefusal } from "../../../domains/widgets/sources";
@@ -158,6 +159,10 @@ describe.each(getConfiguredTestDialects())(
         data: { heading: "Live", status: "published" },
       });
       await trusted.updateSingle({ slug: HOME, data: { heading: "Edited" } });
+      // Every dashboard request rebuilds the content sources before it resolves
+      // a card, and boot publishes none; these tests call the resolver
+      // directly, so they rebuild them as a request would.
+      await refreshContentSources();
       return { t, ids };
     }
 
@@ -243,7 +248,9 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(buckets.get("overdue")).toEqual({ count: 1, atLeast: false });
       // A collection the caller may not read is never counted.
-      expect([...buckets.keys()].some(key => key.includes(SECRET))).toBe(false);
+      expect(
+        [...buckets.keys()].some(key => key !== null && key.includes(SECRET))
+      ).toBe(false);
     });
 
     it("counts exactly twenty readable collections whole, an unreadable one adding nothing to the bound", async () => {
