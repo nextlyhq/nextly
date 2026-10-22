@@ -31,6 +31,7 @@ import {
 } from "../../domains/field-groups/services/field-group-table-provisioning";
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
+import { appLocalization } from "../../domains/i18n/configured-locales";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { movedOnto } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -67,7 +68,6 @@ import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
-  getConfigFromDI,
   getFieldGroupMetadataServiceFromDI,
   getLoggerFromDI,
   getMigrationJournalFromDI,
@@ -521,8 +521,7 @@ export const COMPONENTS_METHODS: Record<
             // This builder made the table, which decides the column bounds compared.
             builtBy: "fieldGroup",
             tableName: tableName,
-            defaultLocale:
-              getConfigFromDI()?.localization?.defaultLocale ?? "en",
+            defaultLocale: appLocalization()?.defaultLocale ?? "en",
             adapter,
             entity: slug,
             kind: "fieldGroup",
@@ -594,8 +593,7 @@ export const COMPONENTS_METHODS: Record<
             uiTargetKind: "component" as const,
             // A field becoming translated keeps its value as this language's; the apply moves it
             // after its prompts and refusals, before it drops the main column.
-            defaultLocale:
-              getConfigFromDI()?.localization?.defaultLocale ?? "en",
+            defaultLocale: appLocalization()?.defaultLocale ?? "en",
           });
 
           if (!result.success) {

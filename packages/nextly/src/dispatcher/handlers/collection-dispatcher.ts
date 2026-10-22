@@ -32,6 +32,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
+import { appLocalization } from "../../domains/i18n/configured-locales";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
@@ -89,7 +90,6 @@ import {
   getAdapterFromDI,
   getCollectionRegistryFromDI,
   getCollectionsHandlerFromDI,
-  getConfigFromDI,
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
@@ -852,8 +852,7 @@ const COLLECTIONS_METHODS: Record<
             uiTargetKind: "collection" as const,
             // A field becoming translated keeps its value as this language's; the apply moves it
             // after its prompts and refusals, before it drops the main column.
-            defaultLocale:
-              getConfigFromDI()?.localization?.defaultLocale ?? "en",
+            defaultLocale: appLocalization()?.defaultLocale ?? "en",
           });
         },
         // The optimistic-lock check now runs up front via
@@ -879,7 +878,7 @@ const COLLECTIONS_METHODS: Record<
         // This builder made the table, which decides the column bounds compared.
         builtBy: "collection",
         tableName,
-        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        defaultLocale: appLocalization()?.defaultLocale ?? "en",
         adapter,
         entity: String(p.collectionName),
         kind: "collection",
@@ -913,8 +912,7 @@ const COLLECTIONS_METHODS: Record<
           const oldFields = (collection.fields ??
             []) as unknown as FieldDefinition[];
           const newFields = fields as unknown as FieldDefinition[];
-          const defaultLocale =
-            getConfigFromDI()?.localization?.defaultLocale ?? "en";
+          const defaultLocale = appLocalization()?.defaultLocale ?? "en";
           const companionExists = await adapter.tableExists(
             `${tableName}_locales`
           );

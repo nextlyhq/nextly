@@ -37,6 +37,7 @@ import {
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
+import { appLocalization } from "../../domains/i18n/configured-locales";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { movedOnto } from "../../domains/schema/pipeline/apply";
@@ -95,7 +96,6 @@ import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
-  getConfigFromDI,
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
   getSingleEntryServiceFromDI,
@@ -1234,7 +1234,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // This builder made the table, which decides the column bounds compared.
         builtBy: "collection",
         tableName: single.tableName,
-        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        defaultLocale: appLocalization()?.defaultLocale ?? "en",
         adapter,
         entity: slug,
         kind: "single",
@@ -1298,7 +1298,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         uiTargetKind: "single" as const,
         // A field becoming translated keeps its value as this language's; the apply moves it after
         // its prompts and refusals, before it drops the main column.
-        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        defaultLocale: appLocalization()?.defaultLocale ?? "en",
       });
 
       if (!result.success) {
