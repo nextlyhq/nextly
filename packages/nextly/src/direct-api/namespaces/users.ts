@@ -8,7 +8,10 @@
  * @packageDocumentation
  */
 
-import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../../domains/auth/system-write-policy";
 import { NextlyError } from "../../errors/nextly-error";
 import type { User } from "../../services/users/user-service";
 import type {
@@ -24,6 +27,7 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
+  checkRead,
   checkedRoleChange,
   createRequestContext,
   isNotFoundError,
@@ -52,6 +56,8 @@ export interface UsersNamespace {
 export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
   return {
     async find(args: FindUsersArgs = {}): Promise<ListResult<User>> {
+      // Checked as REST's user list is, before anything is read.
+      await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.users.read);
       const limit = args.limit ?? 10;
       const page = args.page ?? 1;
 
@@ -74,6 +80,8 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
     },
 
     async findOne(args: FindOneUserArgs = {}): Promise<User | null> {
+      // A search of the list, so it asks what the list asks.
+      await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.users.read);
       const result = await ctx.userService.listUsers(
         {
           pagination: { limit: 1, page: 1 },
@@ -88,6 +96,9 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
     },
 
     async findByID(args: FindUserByIDArgs): Promise<User | null> {
+      // Refused before the lookup, so `disableErrors` answers a refusal as a
+      // refusal, never as a missing user.
+      await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.users.read);
       const config = mergeConfig(ctx.defaultConfig, args);
 
       try {

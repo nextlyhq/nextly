@@ -1,8 +1,11 @@
 /**
- * The REST route gates ask exactly what the system write policy says.
+ * The REST route gates ask exactly what the system write and read policies
+ * say.
  *
  * The Direct API reads `SYSTEM_WRITE_POLICY` for its checked role, permission,
- * field-group and media writes, and a plugin's media service reads it too.
+ * field-group and media writes, and a plugin's media service reads it too;
+ * it reads `SYSTEM_READ_POLICY` for its checked user, role, permission and
+ * media reads.
  * REST picks its own grants today, in the route gate (`resolveAuthorization`),
  * in the field-group route files and in the media routes' gate, so this holds
  * each of those, route by route, to the policy: a grant changed on one side
@@ -15,7 +18,11 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SYSTEM_WRITE_POLICY, type RouteGrant } from "../system-write-policy";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+  type RouteGrant,
+} from "../system-write-policy";
 
 /** What a gate asked, in the policy's own shape. */
 const asked = vi.hoisted(() => ({ grants: [] as unknown[] }));
@@ -76,6 +83,7 @@ vi.mock("../../../di", async importOriginal => ({
 import * as fieldGroupsDetailRoute from "../../../api/field-groups-detail";
 import * as fieldGroupsRoute from "../../../api/field-groups";
 import { createMediaHandlers } from "../../../api/media-handlers";
+import { requiresAuthOnly } from "../../../route-handler/route-parser";
 import { _resolveAuthorizationForTest } from "../../../routeHandler";
 
 /** The policy entry as a gate asks it: the single form, or the any-of list. */
@@ -249,5 +257,41 @@ describe("the media routes ask what the system write policy says", () => {
   ] as const)("%s", async (_route, call, grant) => {
     await call();
     expect(asked.grants).toEqual([expected(grant)]);
+  });
+});
+
+describe("the REST route gate asks what the system read policy says", () => {
+  it.each([
+    ["users", "listUsers", SYSTEM_READ_POLICY.users.read],
+    ["users", "getUserById", SYSTEM_READ_POLICY.users.read],
+    ["rbac", "listRoles", SYSTEM_READ_POLICY.roles.read],
+    ["rbac", "getRoleById", SYSTEM_READ_POLICY.roles.read],
+    ["rbac", "listRolePermissions", SYSTEM_READ_POLICY.roles.readPermissions],
+    ["rbac", "listPermissions", SYSTEM_READ_POLICY.permissions.list],
+    ["rbac", "getPermissionById", SYSTEM_READ_POLICY.permissions.read],
+  ] as const)("%s %s (GET)", async (service, method, grant) => {
+    expect(await gateAsks(service, method, "GET")).toEqual([expected(grant)]);
+  });
+
+  it("serves field groups to any signed-in caller, with no grant", () => {
+    // Which is why a checked Direct API read of them asks only for a user.
+    expect(requiresAuthOnly("field-groups", "listComponents")).toBe(true);
+    expect(requiresAuthOnly("field-groups", "getComponent")).toBe(true);
+  });
+});
+
+describe("the media routes ask what the system read policy says", () => {
+  // The admin mount, which a checked read is judged as.
+  const media = createMediaHandlers({ requireAuth: true });
+  const at = (...path: string[]) => ({ params: Promise.resolve({ path }) });
+  const get = () => new Request("http://localhost/api/media");
+
+  it.each([
+    ["GET /media", () => media.GET(get(), at())],
+    ["GET /media/:id", () => media.GET(get(), at("m1"))],
+    ["GET /media/folders", () => media.GET(get(), at("folders"))],
+  ] as const)("%s", async (_route, call) => {
+    await call();
+    expect(asked.grants).toEqual([expected(SYSTEM_READ_POLICY.media.read)]);
   });
 });
