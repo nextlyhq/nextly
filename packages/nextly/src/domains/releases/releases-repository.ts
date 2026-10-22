@@ -747,21 +747,23 @@ export function draftReleaseRow(input: NewRelease): ReleaseRow {
  * The id is generated before the insert and the insert asks for nothing
  * back, because MySQL has no RETURNING: a repository that read the inserted
  * row from the insert result would work on SQLite and Postgres and hand back
- * `undefined` on MySQL.
+ * `undefined` on MySQL. `server` is this database's row-lock facts, which
+ * the event needs to read a person's name under lock.
  */
 async function insertRelease(
   tx: ReleasesTxApi,
   row: ReleaseRow,
-  by: ReleaseEventActor
+  by: ReleaseEventActor,
+  server: RowLockServer
 ): Promise<void> {
   await tx.insert(RELEASES, { ...row }, { returning: [] });
-  await recordReleaseEvent(tx, row.id, { kind: "created", actor: by });
+  await recordReleaseEvent(tx, row.id, { kind: "created", actor: by }, server);
 }
 
 /**
  * Write one member of a release, and its `release-document-added` event, by
  * `by`, on `tx`. `kind` is the release's stored kind, read under its lock by
- * the caller.
+ * the caller, and `server` the row-lock facts, as for `insertRelease`.
  *
  * The one write of a member, for adding one document and for adding several
  * in one step, so the two cannot come to store a member differently.
@@ -770,7 +772,8 @@ async function insertMember(
   tx: ReleasesTxApi,
   input: NewReleaseMember,
   kind: ReleaseKind,
-  by: ReleaseEventActor
+  by: ReleaseEventActor,
+  server: RowLockServer
 ): Promise<ReleaseMemberRow> {
   const member: ReleaseMemberRow = {
     // Time-ordered, so members added within one second — one stored
@@ -794,11 +797,16 @@ async function insertMember(
   };
   // Client-side id and no RETURNING, for the reason `insertRelease` gives.
   await tx.insert(MEMBERS, { ...member }, { returning: [] });
-  await recordReleaseEvent(tx, input.releaseId, {
-    kind: "documentAdded",
-    actor: by,
-    payload: documentEventPayload(member),
-  });
+  await recordReleaseEvent(
+    tx,
+    input.releaseId,
+    {
+      kind: "documentAdded",
+      actor: by,
+      payload: documentEventPayload(member),
+    },
+    server
+  );
   return member;
 }
 
@@ -1129,7 +1137,9 @@ export class ReleasesRepository {
     by: ReleaseEventActor = SYSTEM_RELEASE_EVENT_ACTOR
   ): Promise<ReleaseRow> {
     const row = draftReleaseRow(input);
-    await this.db.transaction(tx => insertRelease(tx, row, by));
+    await this.db.transaction(tx =>
+      insertRelease(tx, row, by, this.lockServer)
+    );
     return row;
   }
 
@@ -1213,7 +1223,7 @@ export class ReleasesRepository {
     ) {
       return false;
     }
-    await recordReleaseEvent(tx, id, {
+    await this.recordEvent(tx, id, {
       ...scheduleEvent(before, at, timezone, intent),
       actor: by,
     });
@@ -2450,7 +2460,7 @@ export class ReleasesRepository {
             if (limit.refused !== null) throw limit.refused;
           }
         }
-        return insertMember(tx, input, release.kind, by);
+        return insertMember(tx, input, release.kind, by, this.lockServer);
       });
     } catch (error) {
       if (fenceMissed) {
@@ -2499,7 +2509,7 @@ export class ReleasesRepository {
     try {
       written = await this.db.transaction(async tx => {
         if (write.create !== undefined) {
-          await insertRelease(tx, write.create, by);
+          await insertRelease(tx, write.create, by, this.lockServer);
         }
         const release = await this.advanceRevision(
           tx,
@@ -2526,7 +2536,9 @@ export class ReleasesRepository {
         }
         const members: ReleaseMemberRow[] = [];
         for (const member of write.members) {
-          members.push(await insertMember(tx, member, release.kind, by));
+          members.push(
+            await insertMember(tx, member, release.kind, by, this.lockServer)
+          );
         }
         if (write.schedule !== undefined) {
           const { at, timezone, from } = write.schedule;
