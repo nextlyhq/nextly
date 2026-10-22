@@ -1382,10 +1382,18 @@ export class FieldGroupMutationService extends BaseService {
         // localized, so a default filled in, a relationship normalized or a
         // password hashed after the split stays on the instance and never
         // reaches the rows this write stores.
+        // An update only of a block stored as the type it claims: the id of
+        // one stored as another type names a row this block's rules and
+        // schema do not describe, so it is a new block of the type it claims.
+        const storedAs = instanceId
+          ? globalExistingMap.get(instanceId)
+          : undefined;
+        const existingEntry =
+          storedAs?.tableName === tableName ? storedAs : undefined;
         await this.prepareInstanceForWrite(
           instance,
           componentFields,
-          instanceId && globalExistingMap.has(instanceId) ? "update" : "create",
+          existingEntry ? "update" : "create",
           req,
           meta.slug
         );
@@ -1397,14 +1405,13 @@ export class FieldGroupMutationService extends BaseService {
           locale
         );
 
-        if (instanceId && globalExistingMap.has(instanceId)) {
+        if (instanceId && existingEntry) {
           incomingIds.add(instanceId);
           const updateData = this.serializeComponentRow(main, componentFields);
           updateData[STORAGE_FORMAT.columns.order] = i;
           updateData[STORAGE_FORMAT.columns.type] = componentType;
           updateData.updated_at = this.formatDateForDb();
 
-          const existingEntry = globalExistingMap.get(instanceId)!;
           await this.adapter.update(
             existingEntry.tableName,
             updateData,
@@ -1553,10 +1560,18 @@ export class FieldGroupMutationService extends BaseService {
         // localized, so a default filled in, a relationship normalized or a
         // password hashed after the split stays on the instance and never
         // reaches the rows this write stores.
+        // An update only of a block stored as the type it claims: the id of
+        // one stored as another type names a row this block's rules and
+        // schema do not describe, so it is a new block of the type it claims.
+        const storedAs = instanceId
+          ? globalExistingMap.get(instanceId)
+          : undefined;
+        const existingEntry =
+          storedAs?.tableName === tableName ? storedAs : undefined;
         await this.prepareInstanceForWrite(
           instance,
           componentFields,
-          instanceId && globalExistingMap.has(instanceId) ? "update" : "create",
+          existingEntry ? "update" : "create",
           req,
           meta.slug
         );
@@ -1574,14 +1589,13 @@ export class FieldGroupMutationService extends BaseService {
           { adapter: this.txWriteAdapter(tx) }
         );
 
-        if (instanceId && globalExistingMap.has(instanceId)) {
+        if (instanceId && existingEntry) {
           incomingIds.add(instanceId);
           const updateData = this.serializeComponentRow(main, componentFields);
           updateData[STORAGE_FORMAT.columns.order] = i;
           updateData[STORAGE_FORMAT.columns.type] = componentType;
           updateData.updated_at = this.formatDateForDb();
 
-          const existingEntry = globalExistingMap.get(instanceId)!;
           await tx.update(
             existingEntry.tableName,
             updateData,
@@ -1833,6 +1847,9 @@ export class FieldGroupMutationService extends BaseService {
         componentFields,
         slug ? getFieldFunctions("fieldGroup", slug) : undefined
       );
+      // Judged again: a default is a value like any other, so a field the
+      // writer may not create does not take one, as an entry's does not.
+      await this.applyInstanceWriteRules(instance, mode, slug);
     }
     // Reduced in place, and before validation, because both halves of the write
     // depend on it. A validator is written against a field's public value, the
@@ -1900,7 +1917,12 @@ export class FieldGroupMutationService extends BaseService {
       user: access.user,
       authenticatedScope: access.authenticatedScope,
       overrideAccess: false,
-      id: typeof instance.id === "string" ? instance.id : undefined,
+      // The stored instance's id. A new instance is stored under an id of its
+      // own, so the one it was sent with is the client's and no rule sees it.
+      id:
+        mode === "update" && typeof instance.id === "string"
+          ? instance.id
+          : undefined,
       grants: access.grants,
     });
   }
