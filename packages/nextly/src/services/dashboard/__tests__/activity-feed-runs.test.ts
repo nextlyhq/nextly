@@ -43,7 +43,8 @@ function trail(
     entryId: entry.entryId,
     entryTitle: entry.entryId,
     subjectKind: "collection",
-    metadata: null,
+    // A save that changed the title: an entry's update records what it changed.
+    metadata: JSON.stringify({ changedFields: ["title", "updatedAt"] }),
     createdAt: new Date(T0 - entry.minutes * 60_000),
     identityErasedAt: null,
   }));
@@ -157,5 +158,79 @@ describe("the feed's runs", () => {
       createdAt: (rows[2]?.createdAt as Date).toISOString(),
       id: rows[2]?.id,
     });
+  });
+});
+
+describe("a run the walk's bound cut", () => {
+  /** One note saved `n` times a few seconds apart, then an older note saved once. */
+  const longRunThenOther = (n: number) =>
+    trail([
+      ...Array.from({ length: n }, (_, i) => ({
+        entryId: "n1",
+        minutes: i * 0.01,
+      })),
+      { entryId: "n2", minutes: 120 },
+    ]);
+
+  it("is never shown again in part: the next page leaves out its tail", async () => {
+    const rows = longRunThenOther(1_050);
+    const { service } = serviceOver(rows);
+
+    const first = await feed(service, 5);
+    expect(
+      first.activities.map(a => [a.entryId, a.count, a.countAtLeast])
+    ).toEqual([["n1", 1_000, true]]);
+    // The position carries the cut run, so the next page can leave out the rest of it.
+    expect(first.next?.run).toBeDefined();
+
+    // Read from where the first page stopped, as a next request would.
+    const rest = rows.slice(1_000);
+    const second = await serviceOver(rest).service.getRecentActivity({
+      limit: 5,
+      scope: someResources(["notes"]),
+      caller: { user: { id: "reader", roles: [] } },
+      before: first.next,
+    });
+    // The fifty saves left of n1's run are not a row of their own: the next row is n2.
+    expect(second.activities.map(a => a.entryId)).toEqual(["n2"]);
+  });
+
+  it("passes a run longer than the bound in steps, each page moving on, until it ends", async () => {
+    const rows = longRunThenOther(2_500);
+    let position = (await feed(serviceOver(rows).service, 5)).next;
+    let read = 1_000;
+    const pages: string[][] = [];
+    // Each page reads at most the bound, so this ends; the guard only stops a defect looping.
+    for (let page = 0; page < 5 && position; page++) {
+      const answer = await serviceOver(
+        rows.slice(read)
+      ).service.getRecentActivity({
+        limit: 5,
+        scope: someResources(["notes"]),
+        caller: { user: { id: "reader", roles: [] } },
+        before: position,
+      });
+      pages.push(answer.activities.map(a => String(a.entryId)));
+      position = answer.next;
+      read += 1_000;
+    }
+    // The rest of n1's run is left out page after page, and n2 is reached.
+    expect(pages.flat()).toEqual(["n2"]);
+  });
+
+  it("refuses a position it did not write", async () => {
+    const { service } = serviceOver(longRunThenOther(3));
+    await expect(
+      service.getRecentActivity({
+        limit: 5,
+        scope: someResources(["notes"]),
+        caller: { user: { id: "reader", roles: [] } },
+        before: {
+          createdAt: new Date(T0).toISOString(),
+          id: "r1",
+          run: "not a run",
+        },
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
   });
 });

@@ -126,6 +126,44 @@ describe("RecentActivity", () => {
     expect(rows[2]?.textContent).not.toMatch(/times/);
   });
 
+  it("draws a floor even at one save, and nothing for an activity built without a count", () => {
+    // The walk can stop inside a run it has read one save of: "1+", not "1".
+    const floorOfOne: Activity = {
+      ...mockActivities[1]!,
+      id: "5",
+      target: "Site style",
+      entryTitle: "Site style",
+      count: 1,
+      countAtLeast: true,
+    };
+    // Built elsewhere, a sign-in say, with neither count field.
+    const built: Activity = {
+      id: "6",
+      user: mockActivities[0]!.user,
+      type: "login",
+      action: "signed in",
+      target: "the admin",
+      category: "info",
+      timestamp: hoursBefore(READ_AT, 4),
+    };
+    mockUseRecentActivity.mockReturnValue({
+      data: { activities: [floorOfOne, built], hasMore: false },
+      isLoading: false,
+      error: null,
+      isError: false,
+      isSuccess: true,
+      status: "success",
+    } as ReturnType<typeof useRecentActivity>);
+
+    render(<RecentActivity />);
+
+    const rows = screen
+      .getAllByText(/Jane Smith|John Doe/)
+      .map(name => name.closest("p"));
+    expect(rows[0]?.textContent).toContain("1+ times");
+    expect(rows[1]?.textContent).not.toMatch(/times/);
+  });
+
   it("renders loading state", () => {
     mockUseRecentActivity.mockReturnValue({
       data: undefined,
