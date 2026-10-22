@@ -36,6 +36,7 @@ import type { AuthContext } from "../middleware";
 
 import {
   holdsPermission,
+  isSuperAdmin,
   manageCounts,
   type Actor,
   type KeyActor,
@@ -498,8 +499,16 @@ export async function schemaListed<T extends ListedCollection>(
   // role read keeps the grants that were read, as each collection's own
   // permission check did when it failed closed.
   const actor = await actorForUserFailingClosed(caller.userId);
+  // The super-admin authority the actor's roles carry counts too: it is what
+  // each collection's permission check passed first, and it holds when the
+  // cached check above failed but the roles were read.
   return keptWhere(collections, slug =>
-    readByPermission(actor, slug, rules, holdsPermission(actor, "read", slug))
+    readByPermission(
+      actor,
+      slug,
+      rules,
+      isSuperAdmin(actor) || holdsPermission(actor, "read", slug)
+    )
   );
 }
 

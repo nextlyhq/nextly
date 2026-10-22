@@ -81,6 +81,9 @@ const STORED: Record<string, { roles: string[]; grants: GrantedPermission[] }> =
     owner: { roles: ["editor"], grants: [...POST_GRANTS, ...SYSTEM_GRANTS] },
     // Holds read on posts, but their roles cannot be read.
     "roles-unreadable": { roles: ["editor"], grants: [grant("read", POSTS)] },
+    // A super-admin whose cached super-admin check failed, answering no, and
+    // whose grants cannot be read.
+    "admin-unconfirmed": { roles: ["super-admin"], grants: [] },
   };
 
 const stored = (userId: string) => STORED[userId] ?? { roles: [], grants: [] };
@@ -96,8 +99,10 @@ vi.mock("../services/lib/permissions", async importOriginal => {
     await importOriginal<typeof import("../services/lib/permissions")>();
   return {
     ...real,
-    isSuperAdmin: vi.fn(async (userId: string) =>
-      stored(userId).roles.includes("super-admin")
+    isSuperAdmin: vi.fn(
+      async (userId: string) =>
+        userId !== "admin-unconfirmed" &&
+        stored(userId).roles.includes("super-admin")
     ),
     // The real check answers no for a resource named by nothing.
     hasPermission: vi.fn(async (userId: string, action: string, r: string) =>
@@ -115,9 +120,10 @@ vi.mock("../services/lib/permissions", async importOriginal => {
         .grants.map(g => `${g.resource}:${g.action}`)
         .sort()
     ),
-    listEffectiveGrants: vi.fn(async (userId: string) => [
-      ...stored(userId).grants,
-    ]),
+    listEffectiveGrants: vi.fn(async (userId: string) => {
+      if (userId === "admin-unconfirmed") throw new Error("grants unreadable");
+      return [...stored(userId).grants];
+    }),
   };
 });
 
@@ -376,5 +382,22 @@ describe("the schema list for a session whose roles cannot be read", () => {
     );
     // The grant to read posts was read; nothing grants pages.
     expect(listed.map(c => c.slug)).toEqual([POSTS]);
+  });
+
+  it("shows every collection to a super-admin whose role it read, whatever else failed", async () => {
+    registered.rbac = new RBACAccessControlService();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const auth: AuthContext = {
+      userId: "admin-unconfirmed",
+      permissions: [],
+      roles: [],
+      authMethod: "session",
+    };
+    const listed = await schemaListed(
+      auth,
+      [{ slug: POSTS }, { slug: "pages" }],
+      registered.rbac
+    );
+    expect(listed.map(c => c.slug)).toEqual([POSTS, "pages"]);
   });
 });
