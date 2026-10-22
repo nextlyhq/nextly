@@ -28,6 +28,7 @@ vi.mock("../../../api/versions-access", () => ({
   assertVersionDocumentReadable: readableSpy,
   assertDocumentUpdatable: updatableSpy,
   assertHistoryLocalesReadable: () => Promise.resolve(),
+  assertVersionLanguageReadable: () => Promise.resolve(null),
   redactSnapshotForUser: vi.fn(),
   resolveSingleDocumentId: vi.fn(),
 }));
