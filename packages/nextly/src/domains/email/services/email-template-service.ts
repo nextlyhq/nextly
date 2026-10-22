@@ -452,6 +452,8 @@ export class EmailTemplateService extends BaseService {
    * write this instance made.
    */
   private engineGeneration = 0;
+  /** The reload of an expired copy in flight, which sends arriving meanwhile join. */
+  private engineReload: Promise<void> | null = null;
   /** The site's brand settings, which every layout reads as `brand`. */
   private readonly brandStore: EmailBrandStore;
 
@@ -756,9 +758,23 @@ export class EmailTemplateService extends BaseService {
     const state = this.engineState;
     if (transactionOpenInFlow(this.adapter)) return state;
     if (!state || Date.now() - state.readAt > SNAPSHOT_MAX_AGE_MS) {
-      await this.loadEngineState();
+      await this.reloadEngineState();
     }
     return this.engineState;
+  }
+
+  /**
+   * Read the engine state again for an expired copy. Sends arriving while the
+   * read is in flight share it, so a burst after the copy expires makes one
+   * read of the meta table, not one each.
+   */
+  private reloadEngineState(): Promise<void> {
+    if (this.engineReload) return this.engineReload;
+    const reload = this.loadEngineState().finally(() => {
+      if (this.engineReload === reload) this.engineReload = null;
+    });
+    this.engineReload = reload;
+    return reload;
   }
 
   /**
@@ -2453,7 +2469,7 @@ export class EmailTemplateService extends BaseService {
    */
   async getBrand(): Promise<BrandOverview> {
     return {
-      settings: await this.brandStore.read(),
+      settings: await this.brandStore.readCurrent(),
       starting: resolveBrand(null),
       fonts: EMAIL_SAFE_FONTS.map(({ key, label, stack }) => ({
         key,

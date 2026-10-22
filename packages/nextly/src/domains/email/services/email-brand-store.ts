@@ -53,6 +53,14 @@ export class EmailBrandStore extends BaseService {
    * and a save keeps its read-back only if no later save has started.
    */
   private generation = 0;
+  /** The read of the table in flight, which every caller arriving meanwhile joins. */
+  private refreshing: Promise<BrandSettings> | null = null;
+  /**
+   * The end of the last save queued. Saves on one instance run one after
+   * another, so the order they write in is the order they started in, and the
+   * copy always holds what the table last received from this instance.
+   */
+  private saving: Promise<unknown> = Promise.resolve();
 
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
@@ -77,13 +85,33 @@ export class EmailBrandStore extends BaseService {
     await this.refresh();
   }
 
-  /** Read the table, keeping the result as the snapshot unless a save overtook the read. */
-  private async refresh(): Promise<BrandSettings> {
+  /**
+   * The settings as the table holds them now, for an editor: never answered
+   * from the copy, so a save another instance made is seen at once.
+   */
+  async readCurrent(): Promise<BrandSettings> {
+    return this.refresh();
+  }
+
+  /**
+   * Read the table, keeping the result as the snapshot unless a save overtook
+   * the read. Callers arriving while a read is in flight share it, so a burst
+   * of sends after the copy expires makes one read, not one each.
+   */
+  private refresh(): Promise<BrandSettings> {
+    if (this.refreshing) return this.refreshing;
     const started = this.generation;
     const readAt = Date.now();
-    const settings = await this.readTable();
-    if (this.generation === started) this.snapshot = { settings, readAt };
-    return settings;
+    const read = this.readTable()
+      .then(settings => {
+        if (this.generation === started) this.snapshot = { settings, readAt };
+        return settings;
+      })
+      .finally(() => {
+        if (this.refreshing === read) this.refreshing = null;
+      });
+    this.refreshing = read;
+    return read;
   }
 
   private async readTable(): Promise<BrandSettings> {
@@ -112,6 +140,13 @@ export class EmailBrandStore extends BaseService {
    * returns to its starting value.
    */
   async update(change: BrandSettingsUpdate): Promise<BrandSettings> {
+    const run = this.saving.then(() => this.write(change));
+    // The queue moves on whether this save succeeds or fails.
+    this.saving = run.catch(() => undefined);
+    return run;
+  }
+
+  private async write(change: BrandSettingsUpdate): Promise<BrandSettings> {
     const mine = ++this.generation;
     const set: Record<string, unknown> = { updatedAt: new Date() };
     for (const [key, value] of Object.entries(change)) {

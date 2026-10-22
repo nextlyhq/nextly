@@ -137,6 +137,16 @@ describe("the template engine state", () => {
     expect(reads()).toBe(0);
   });
 
+  it("makes one read of the meta table for a burst of sends after the copy expires", async () => {
+    const site = await boot();
+    clock += SNAPSHOT_MAX_AGE_MS + 1;
+    const getAll = vi.spyOn(MetaService.prototype, "getAll");
+    await Promise.all(
+      Array.from({ length: 5 }, () => site.renderStored(kept, DATA))
+    );
+    expect(getAll).toHaveBeenCalledTimes(1);
+  });
+
   it("reads nothing from the meta table inside an open transaction, however old its copy", async () => {
     const site = await boot();
     clock += SNAPSHOT_MAX_AGE_MS * 10;

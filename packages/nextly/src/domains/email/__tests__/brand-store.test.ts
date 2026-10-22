@@ -88,12 +88,12 @@ describe("the copy of the settings a render inside a transaction reads", () => {
     expect((await store.read()).accentColor).toBe("#ff0066");
   });
 
-  it("holds the later of two saves made at once", async () => {
+  it("runs two saves made at once one after the other, and holds the later", async () => {
     const store = new EmailBrandStore(adapter, silentLogger);
     await store.load();
 
-    // The first save's read-back comes back only after the second save has
-    // landed, carrying the settings as the first save left them.
+    // The first save's read-back is held back; the second save waits for it
+    // rather than writing in between.
     let release: (settings: BrandSettings) => void = () => {};
     const slow = new Promise<BrandSettings>(resolve => {
       release = resolve;
@@ -105,13 +105,42 @@ describe("the copy of the settings a render inside a transaction reads", () => {
       .mockImplementation(original);
 
     const first = store.update({ accentColor: "#111111" });
+    const second = store.update({ accentColor: "#222222" });
     await new Promise(resolve => setTimeout(resolve, 0));
-    await store.update({ accentColor: "#222222" });
+    expect((await store.readCurrent()).accentColor).toBe("#111111");
+
     release({ ...STARTING_BRAND, footerLinks: [], accentColor: "#111111" });
     await first;
+    await second;
 
+    // The table and the copy agree, on the save that started last.
+    expect((await store.readCurrent()).accentColor).toBe("#222222");
     transactionOpen = true;
     expect((await store.read()).accentColor).toBe("#222222");
+  });
+
+  it("makes one read of the table for a burst of sends after the copy expires", async () => {
+    const store = new EmailBrandStore(adapter, silentLogger);
+    await store.load();
+    const spy = vi.spyOn(store as unknown as TableReader, "readTable");
+
+    clock += SNAPSHOT_MAX_AGE_MS + 1;
+    await Promise.all(Array.from({ length: 5 }, () => store.read()));
+
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the table for an editor, whatever the copy's age", async () => {
+    const store = new EmailBrandStore(adapter, silentLogger);
+    await store.load();
+    await new EmailBrandStore(adapter, silentLogger).update({
+      backgroundColor: "#102030",
+    });
+    // A render still answers from the copy; the editor sees the save.
+    expect((await store.read()).backgroundColor).toBe(
+      STARTING_BRAND.backgroundColor
+    );
+    expect((await store.readCurrent()).backgroundColor).toBe("#102030");
   });
 
   it("is answered on every send within the window, with no read of the table", async () => {
