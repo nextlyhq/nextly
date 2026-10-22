@@ -1,4 +1,4 @@
-import { hasServerStartRegisterRun } from "../init";
+import { isServerStartRegisterRunning } from "../init";
 import { consoleLogger } from "../shared/types";
 
 /**
@@ -11,8 +11,8 @@ import { consoleLogger } from "../shared/types";
  * request began is request-time `getNextly({ config })`, which folds nothing:
  * only a start whose origin is the project's instrumentation
  * (`createRegister`) counts as a server-start boot. A project whose
- * instrumentation start has begun pays nothing extra: the request simply
- * arrived inside it, the same race the health route waits out.
+ * instrumentation start is actively under way pays nothing extra: the request
+ * simply arrived inside it, the same race the health route waits out.
  *
  * The notice therefore reports what this process observed, never an absence
  * it inferred: no filesystem check says whether `instrumentation.ts` exists,
@@ -35,7 +35,7 @@ export function warnColdBootNotice(): void {
     return;
   }
 
-  if (hasServerStartRegisterRun()) {
+  if (isServerStartRegisterRunning()) {
     consoleLogger.warn(
       "[nextly] Cold-boot triggered by an incoming request that arrived " +
         "before Nextly finished starting — a start was observed under way " +

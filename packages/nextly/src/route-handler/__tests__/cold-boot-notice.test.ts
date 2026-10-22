@@ -17,9 +17,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 
 const warn = vi.fn();
-const hasServerStartRegisterRun = vi.fn(() => false);
+const isServerStartRegisterRunning = vi.fn(() => false);
 
-vi.mock("../../init", () => ({ hasServerStartRegisterRun }));
+vi.mock("../../init", () => ({ isServerStartRegisterRunning }));
 vi.mock("../../shared/types", async importOriginal => ({
   ...(await importOriginal<typeof import("../../shared/types")>()),
   consoleLogger: { warn },
@@ -30,13 +30,13 @@ const { warnColdBootNotice } = await import("../cold-boot-notice");
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.clearAllMocks();
-  hasServerStartRegisterRun.mockReturnValue(false);
+  isServerStartRegisterRunning.mockReturnValue(false);
 });
 
 it("says no start was observed, with the file advice conditional, when no server-start start ran", () => {
   vi.stubEnv("NODE_ENV", "development");
   delete process.env.NEXTLY_DISABLE_INSTRUMENTATION_WARNING;
-  hasServerStartRegisterRun.mockReturnValue(false);
+  isServerStartRegisterRunning.mockReturnValue(false);
 
   warnColdBootNotice();
 
@@ -58,7 +58,7 @@ it("keeps the conditional guidance when the only boot in flight is one another r
   delete process.env.NEXTLY_DISABLE_INSTRUMENTATION_WARNING;
   // Request-time getNextly({ config }): in flight, but no server-start
   // register ever ran in this process.
-  hasServerStartRegisterRun.mockReturnValue(false);
+  isServerStartRegisterRunning.mockReturnValue(false);
 
   warnColdBootNotice();
 
@@ -69,10 +69,10 @@ it("keeps the conditional guidance when the only boot in flight is one another r
   expect(message).not.toContain("before Nextly finished starting");
 });
 
-it("says the request arrived before Nextly finished starting once the project's instrumentation start ran, claiming nothing further", () => {
+it("says the request arrived before Nextly finished starting once the project's instrumentation start is running, claiming nothing further", () => {
   vi.stubEnv("NODE_ENV", "development");
   delete process.env.NEXTLY_DISABLE_INSTRUMENTATION_WARNING;
-  hasServerStartRegisterRun.mockReturnValue(true);
+  isServerStartRegisterRunning.mockReturnValue(true);
 
   warnColdBootNotice();
 
@@ -94,7 +94,7 @@ it("logs neither variant under the suppression variable", () => {
   process.env.NEXTLY_DISABLE_INSTRUMENTATION_WARNING = "1";
 
   warnColdBootNotice();
-  hasServerStartRegisterRun.mockReturnValue(true);
+  isServerStartRegisterRunning.mockReturnValue(true);
   warnColdBootNotice();
 
   expect(warn).not.toHaveBeenCalled();
@@ -105,7 +105,7 @@ it("logs neither variant outside development", () => {
   vi.stubEnv("NODE_ENV", "production");
 
   warnColdBootNotice();
-  hasServerStartRegisterRun.mockReturnValue(true);
+  isServerStartRegisterRunning.mockReturnValue(true);
   warnColdBootNotice();
 
   expect(warn).not.toHaveBeenCalled();

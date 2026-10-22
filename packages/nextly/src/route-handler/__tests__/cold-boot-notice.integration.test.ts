@@ -28,7 +28,12 @@ import {
   openBootMigrationsGate,
   _resetBootMigrationsGateForTest,
 } from "../../init/boot-migrations-gate";
-import { createRegister, getNextly, shutdownNextly } from "../../init";
+import {
+  createRegister,
+  getNextly,
+  isServerStartRegisterRunning,
+  shutdownNextly,
+} from "../../init";
 
 import { ensureServicesInitialized, setHandlerConfig } from "../auth-handler";
 
@@ -52,8 +57,8 @@ async function resetBootState(): Promise<void> {
     .__nextly_cachedInstance;
   delete (globalThis as { __nextly_initPromise?: unknown })
     .__nextly_initPromise;
-  delete (globalThis as { __nextly_serverStartRegisterObserved?: unknown })
-    .__nextly_serverStartRegisterObserved;
+  delete (globalThis as { __nextly_serverStartRegisterRunning?: unknown })
+    .__nextly_serverStartRegisterRunning;
 }
 
 afterEach(async () => {
@@ -167,5 +172,28 @@ describe("the cold-boot notice against real boots", () => {
       "fulfilled",
       "fulfilled",
     ]);
+  });
+
+  it("keeps the conditional guidance when a previous server-start registration has already completed", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("NEXTLY_DISABLE_HMR", "1");
+    delete process.env.NEXTLY_DISABLE_INSTRUMENTATION_WARNING;
+    const config = defineConfig({});
+
+    // Server-start register runs and settles first.
+    const register = createRegister(config);
+    await register();
+    expect(isServerStartRegisterRunning()).toBe(false);
+
+    // Simulate services being shut down (e.g. dev re-registration after config edit).
+    await shutdownServices();
+
+    const lines = captureWarn();
+    setHandlerConfig(config);
+    await ensureServicesInitialized();
+
+    expect(lines.join("\n")).toContain("no start was observed in this process");
+    expect(lines.join("\n")).not.toContain("before Nextly finished starting");
+    expect(lines.join("\n")).not.toContain("instrumentation.ts detected");
   });
 });
