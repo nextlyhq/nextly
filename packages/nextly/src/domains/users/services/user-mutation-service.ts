@@ -1546,6 +1546,20 @@ export class UserMutationService extends BaseService {
         : [];
       const insertRequestedRoles = async (txDb: DrizzleTransactionLike) => {
         if (requestedRoleIds.length === 0) return;
+        // Asked again here, in the account's transaction, so the roles are
+        // judged as they stand when they are written. It takes the
+        // `super-admin` row's lock, which comes before the roles' own rows
+        // below, the order every change to who is a super-admin takes them
+        // in: deleting a role takes that lock first and the role's row last,
+        // so taken the other way round here the two would deadlock.
+        if (caller === "app") {
+          await refuseGrantingSuperAdmin(
+            txDb as unknown as LastSuperAdminTx,
+            this.dialect,
+            requestedRoleIds,
+            { email }
+          );
+        }
         // RE-READ here, holding what exists: a role deleted since the early
         // lookup would otherwise be assigned as a dangling row on MySQL,
         // whose `user_roles` carries no foreign key, and the account would
@@ -1562,16 +1576,6 @@ export class UserMutationService extends BaseService {
             ],
             logContext: { email },
           });
-        }
-        // Asked again here, under the lock and in the account's transaction,
-        // so the roles are judged as they stand when they are written.
-        if (caller === "app") {
-          await refuseGrantingSuperAdmin(
-            txDb as unknown as LastSuperAdminTx,
-            this.dialect,
-            requestedRoleIds,
-            { email }
-          );
         }
         await txDb.insert(this.tables.userRoles).values(
           requestedRoleIds.map(roleId => ({
