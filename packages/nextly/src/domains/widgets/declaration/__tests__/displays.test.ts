@@ -33,6 +33,7 @@ const SAMPLES: { [D in CoreDisplay]: Canonical<D> } = {
   bars: {
     buckets: [{ value: "paid", count: 1 }],
     truncated: false,
+    asOf: "2026-10-01T00:00:00.000Z",
     field: {
       name: "status",
       label: "Status",

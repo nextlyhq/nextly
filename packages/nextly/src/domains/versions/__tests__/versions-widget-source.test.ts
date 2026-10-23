@@ -8,6 +8,7 @@ const has = vi.fn();
 const readable = vi.fn();
 const registeredSlugs = vi.fn();
 const scopeDegraded = vi.fn();
+const singleSlugs = vi.fn();
 const visible = vi.fn();
 
 vi.mock("../../../di/container", () => ({
@@ -47,7 +48,10 @@ vi.mock("../pending-edit-visibility", async importOriginal => ({
     // The registry snapshot the source bounds the query with. Its keys ARE the
     // candidate slugs, which is the property under test in the block below.
     kinds: new Map(
-      ((await registeredSlugs()) as string[]).map(slug => [slug, "collection"])
+      ((await registeredSlugs()) as string[]).map(slug => [
+        slug,
+        (singleSlugs() as string[]).includes(slug) ? "single" : "collection",
+      ])
     ),
     locales: null,
     degraded: (scopeDegraded() as boolean) ?? false,
@@ -61,6 +65,7 @@ import { clearSystemResolvers } from "../../widgets/system-sources";
 import {
   VERSIONS_SOURCE_ID,
   registerVersionsWidgetSource,
+  singlesWithPendingChanges,
 } from "../versions-widget-source";
 
 const caller = { user: { id: "user-1", roles: ["editor"] } };
@@ -88,6 +93,7 @@ beforeEach(() => {
   readable.mockResolvedValue(new Set(["posts"]));
   registeredSlugs.mockResolvedValue(["posts", "secrets"]);
   scopeDegraded.mockReturnValue(false);
+  singleSlugs.mockReturnValue([]);
   visible.mockImplementation((rows: unknown) => Promise.resolve(rows));
   clearSources();
   clearSystemResolvers();
@@ -462,5 +468,59 @@ describe("what it answers with", () => {
       )
     ).rejects.toThrow(/unavailable source or unsupported op/);
     expect(pendingEditRows).not.toHaveBeenCalled();
+  });
+});
+
+describe("which language a Single's pending change opens in", () => {
+  /** One language's working draft of a Single, in the order the walk meets it. */
+  const single = (slug: string, locale: string | null, updatedAt: string) => ({
+    ...row,
+    id: `${slug}-${locale ?? "none"}`,
+    scopeKind: "single",
+    scopeSlug: slug,
+    entryId: `${slug}-doc`,
+    locale,
+    updatedAt: new Date(updatedAt),
+  });
+
+  beforeEach(() => {
+    registeredSlugs.mockResolvedValue(["home", "about", "posts"]);
+    singleSlugs.mockReturnValue(["home", "about"]);
+    readable.mockResolvedValue(new Set(["home", "about", "posts"]));
+  });
+
+  it("opens no language where one is unlocalized, else the latest change, whichever row the walk met first", async () => {
+    // The walk pages by row id, so each Single's FIRST row here is not the one
+    // to open: the older French draft before the newer German one, and a
+    // Spanish draft before the unlocalized one.
+    pendingEditRows.mockResolvedValue([
+      single("home", "fr", "2026-01-01T00:00:00Z"),
+      single("home", "de", "2026-02-01T00:00:00Z"),
+      single("about", "es", "2026-03-01T00:00:00Z"),
+      single("about", null, "2026-01-01T00:00:00Z"),
+    ]);
+
+    expect(await singlesWithPendingChanges(caller)).toEqual({
+      singles: [
+        { slug: "about", locale: null },
+        { slug: "home", locale: "de" },
+      ],
+      atLeast: false,
+      anyReadable: true,
+    });
+  });
+
+  it("opens only a language the reader may see", async () => {
+    const french = single("home", "fr", "2026-01-01T00:00:00Z");
+    pendingEditRows.mockResolvedValue([
+      french,
+      single("home", "de", "2026-02-01T00:00:00Z"),
+    ]);
+    // The newer German draft is refused, so the link opens the French one.
+    visible.mockResolvedValue([french]);
+
+    expect((await singlesWithPendingChanges(caller)).singles).toEqual([
+      { slug: "home", locale: "fr" },
+    ]);
   });
 });

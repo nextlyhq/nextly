@@ -187,6 +187,39 @@ describe("the Collections card's tiles", () => {
     expect(screen.getByText(/more exist/i)).toBeInTheDocument();
   });
 
+  it("draws a counted collection the list lacks, after the listed ones", () => {
+    // 🔴 Joined on the list, a count for a collection outside the list's page was dropped.
+    given({
+      list: LIST,
+      counts: [
+        { slug: "posts", label: "Posts", group: null, count: 13 },
+        { slug: "zines", label: "Zines", group: null, count: 2 },
+        { slug: "tags", label: "Tags", group: null, count: 3 },
+      ],
+    });
+    expect(tileLabels()).toEqual(["Posts", "Tags", "Zines"]);
+  });
+
+  it("draws the most it draws when the list's page and the counts' page differ", () => {
+    // Past a hundred collections the list is its first hundred and the counts are their own
+    // fifty: here thirty of the fifty are listed and twenty are not.
+    const names = Array.from(
+      { length: 120 },
+      (_, i) => `n${String(i).padStart(3, "0")}`
+    );
+    given({
+      list: names.slice(0, 100).map(name => ({ name, label: name })),
+      counts: names.slice(70).map(name => ({
+        slug: name,
+        label: name,
+        group: null,
+        count: 1,
+      })),
+    });
+    expect(screen.getAllByRole("link")).toHaveLength(49);
+    expect(screen.getByText(/more exist/i)).toBeInTheDocument();
+  });
+
   it("names a collection's drafts beside its entries, and says nothing of none", () => {
     given({
       list: LIST,

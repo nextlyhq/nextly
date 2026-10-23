@@ -84,9 +84,10 @@ function getGroupDefaultIcon(group: string | null) {
 /**
  * The tiles to draw, in the collections list's order.
  *
- * - **Both known:** the collections that have a count, each with its count. The list holds
- *   every collection this reader may see, and core counts those it may read and keeps on the
- *   dashboard, so a count names a listed collection and never one the list lacks.
+ * - **Both known:** every counted collection, each with its count: first those the list holds, in
+ *   its order, then any it lacks, in the counts' order. The two are different pages past the
+ *   list's first hundred and the counts' first fifty, so a count is never dropped for missing
+ *   from the list; on an install small enough for both to be whole, the list holds them all.
  * - **The list only:** every listed collection, its count still on its way. Once the counts
  *   land, a tile with no count goes, so the card can only close up, never grow.
  * - **The list still on its way:** nothing yet, whatever the counts say. Drawn from the counts
@@ -104,16 +105,21 @@ function collectionTiles(
 ): CollectionTile[] | undefined {
   if (list === undefined && listPending) return undefined;
   if (list === undefined || list.length === 0) return counts?.slice();
-  const counted = new Map(counts?.map(count => [count.slug, count]));
   // Kept off the dashboard by the admin's one rule for it, as the counts already are: drawn
   // first, a hidden collection's tile would show until the counts took it away again.
-  return list
-    .filter(collection => !keptOffDashboard(collection))
-    .flatMap(collection => {
+  const listed = list.filter(collection => !keptOffDashboard(collection));
+  if (counts === undefined) {
+    return listed.map(collection => tileOf(collection, undefined));
+  }
+  const counted = new Map(counts.map(count => [count.slug, count]));
+  const inList = new Set(listed.map(collection => collection.name));
+  return [
+    ...listed.flatMap(collection => {
       const count = counted.get(collection.name);
-      if (counts !== undefined && count === undefined) return [];
-      return [tileOf(collection, count)];
-    });
+      return count === undefined ? [] : [tileOf(collection, count)];
+    }),
+    ...counts.filter(count => !inList.has(count.slug)),
+  ];
 }
 
 /**
