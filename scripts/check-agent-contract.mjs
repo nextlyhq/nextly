@@ -110,7 +110,7 @@ export const PNPM_BUILTINS = new Set([
   "rebuild", "recursive", "remove", "rm", "root", "run", "server", "setup",
   "start", "store", "unlink", "update", "why",
   // Binaries reached through the workspace rather than through a script.
-  "turbo", "vitest", "eslint", "prettier", "tsc", "changeset", "sherif",
+  "turbo", "vitest", "eslint", "oxlint", "prettier", "tsc", "changeset", "sherif",
   "playwright", "fallow",
 ]);
 

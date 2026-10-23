@@ -15,6 +15,7 @@
 import { expectTypeOf } from "vitest";
 
 import type { WidgetResultField } from "../../result";
+import type { WidgetScope } from "../../resolved-sources";
 import type { QueryAnswer } from "../displays";
 import {
   defineWidget,
@@ -176,4 +177,20 @@ defineWidget({
   width: "full",
   data: async () => ({ items: rows }),
   display: "list",
+});
+
+// A data function is handed the batch's scope, as core's own sources are, so two cards needing
+// one scan can share it.
+defineWidget({
+  id: "test/shares-a-scan",
+  title: "Orders",
+  description: "A data function reading the batch's scope",
+  category: "Test",
+  widths: ["full"],
+  width: "full",
+  data: async ({ scope }) => {
+    expectTypeOf(scope).toEqualTypeOf<WidgetScope>();
+    return { total: await scope.getOrCompute("orders", async () => 3) };
+  },
+  display: "metric",
 });

@@ -7,7 +7,7 @@ import type { NextConfig } from "next";
 //   - In DEV: workspace packages are NOT in serverExternalPackages → Next.js bundles
 //     them via Turbopack from the source aliases below → editing source files in
 //     packages/nextly, packages/adapter-*, packages/storage-* triggers HMR. No
-//     `tsup --watch` is required for the dev loop.
+//     `tsdown --watch` is required for the dev loop.
 //   - In PROD: workspace packages ARE in serverExternalPackages → smaller bundle,
 //     no duplicate-install risk, dist/ output ships as-is.
 //   - Native / third-party Node-only deps (pg, mysql2, sharp, esbuild, etc.) are
@@ -15,7 +15,7 @@ import type { NextConfig } from "next";
 //     stay as Node `require()` at runtime.
 //
 // This replaces the prior bimodal architecture (workspace packages always external,
-// HMR via tsup --watch + Node module-cache invalidation) which never reliably picked
+// HMR via a bundler watcher + Node module-cache invalidation) which never reliably picked
 // up server-side source edits because `serverExternalPackages` opts modules out of
 // Next.js's HMR machinery entirely.
 
@@ -62,14 +62,14 @@ const nextConfig: NextConfig = {
   // Source-mode pulls admin/ui/nextly source through next build's tsc;
   // without this flag, any type error anywhere in those packages blocks
   // the playground build even though admin itself can build cleanly via
-  // tsup (which doesn't type-check). Same pattern Payload uses for the
+  // tsdown (which doesn't type-check). Same pattern Payload uses for the
   // same reason.
   typescript: {
     ignoreBuildErrors: true,
   },
   // Source-mode for client UI packages (admin, ui, plugin-form-builder) is
   // always on — they're transpiled from source via the resolveAlias entries
-  // below in both dev and prod. (Their tsup builds produce dist outputs the
+  // below in both dev and prod. (Their tsdown builds produce dist outputs the
   // playground doesn't actually consume because the aliases redirect to src.)
   //
   // Server-side workspace packages (nextly, adapters, storage) flip between
@@ -112,13 +112,21 @@ const nextConfig: NextConfig = {
     ...(isDev ? [] : NEXTLY_HMR_PACKAGES),
   ],
   experimental: {
-    esmExternals: true,
     // Page data is collected by a pool of one worker per CPU unless this is
     // set, and that pool runs inside one turbo task: a local run bounded to
     // two workers still started seven, and ran out of memory. The local
     // worker limit (scripts/bounded.mjs) sets it; unset, as in CI, Next keeps
     // its own default.
     cpus: localWorkerLimit(),
+    // Next.js type-checks and loads its config through the project's own
+    // TypeScript CLI rather than TypeScript's library API. That is the 16.4
+    // default, stated here so it cannot change underneath: a TypeScript with no
+    // library API (7.0) works only this way.
+    useTypeScriptCli: true,
+    // Turbopack's garbage collector removes cache entries nothing reaches any
+    // more, so `.next` stops growing across dev sessions and builds. Off by
+    // default in 16.4.
+    turbopackGc: true,
   },
   turbopack: {
     resolveAlias: {
@@ -177,7 +185,7 @@ const nextConfig: NextConfig = {
       // exports and miss our source aliases.
       "nextly/*": ["../../packages/nextly/src/*"],
       // Internal path aliases used INSIDE nextly's source (mirror of the
-      // "paths" block in packages/nextly/tsconfig.json). When tsup builds
+      // "paths" block in packages/nextly/tsconfig.json). When tsdown builds
       // dist these get resolved away; in source-mode Turbopack reads .ts
       // directly and needs to know about these aliases too. Without them,
       // imports like `import { hashPassword } from "@nextly/auth/password"`
