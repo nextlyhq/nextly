@@ -698,7 +698,7 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
          */
         if (route.type === "serve-media-bytes") {
           await ensureInitialized();
-          return await handleServeMediaBytes(route.mediaId!);
+          return await handleServeMediaBytes(route.mediaId!, request);
         }
         const gate = await gateMediaRoute(
           request,

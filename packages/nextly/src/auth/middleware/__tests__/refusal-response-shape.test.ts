@@ -84,8 +84,10 @@ describe("a refusal is answered in the one error body", () => {
   });
 
   it("from the exported guard helpers too", async () => {
+    // As `requireApiKey` builds it: what the caller should read, then the
+    // HTTP reason.
     const res = guardResponse(
-      guardRefusal(401, "Unauthorized", "Missing API key")
+      guardRefusal(401, "Missing API key", "Unauthorized")
     );
     expect(res.status).toBe(401);
     expect(res.headers.get("content-type")).toBe("application/problem+json");

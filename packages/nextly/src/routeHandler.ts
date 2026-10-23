@@ -2197,7 +2197,7 @@ async function handleAdminMetaWorkspaceRequest(
 ): Promise<Response> {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) {
-    return withSessionCacheHeaders(createJsonErrorResponse(auth));
+    return withSessionCacheHeaders(createJsonErrorResponse(auth, req));
   }
 
   // After the authentication precondition, never before it. Service
@@ -2246,7 +2246,9 @@ async function handleAdminMetaWorkspaceRequest(
 async function handleAdminMetaSidebarGroups(req: Request): Promise<Response> {
   try {
     const authResult = await requirePermission(req, "manage", "settings");
-    if (isErrorResponse(authResult)) return createJsonErrorResponse(authResult);
+    if (isErrorResponse(authResult)) {
+      return createJsonErrorResponse(authResult, req);
+    }
 
     const text = await req.text();
     const body = text ? JSON.parse(text) : {};

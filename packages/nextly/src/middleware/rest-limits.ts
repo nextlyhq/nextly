@@ -333,7 +333,7 @@ class RestLimits implements RestLimitDecider {
       const resolved = await this.readers.lookupKey(rawKey);
       if (resolved) {
         keys.remember(rawKey, { resolved, debited: true });
-        return await this.readers.debitKey(resolved.id);
+        return await this.readers.debitKey(resolved.id, request);
       }
       // A key that does not resolve is answered without a second lookup; one
       // nothing could ask about is left for authentication to ask again.

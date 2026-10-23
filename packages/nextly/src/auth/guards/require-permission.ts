@@ -25,9 +25,13 @@ export function createErrorResponse(
 /**
  * Create a JSON Response from an ErrorResponse: the one error body every
  * refusal is answered with, as the auth middleware answers it.
+ *
+ * These guards put what a caller should read in `message` and the HTTP
+ * reason in `error` (`"Missing API key"`, `"Unauthorized"`), the other way
+ * round from the middleware, so `message` is the one answered.
  */
 export function createJsonErrorResponse(errResp: ErrorResponse): Response {
-  return answerRefusal(errResp);
+  return answerRefusal({ ...errResp, error: errResp.message });
 }
 
 /**
