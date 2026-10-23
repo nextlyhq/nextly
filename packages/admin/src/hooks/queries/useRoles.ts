@@ -19,7 +19,10 @@ import {
 import type { Role } from "@admin/types/entities";
 import type { UseBulkMutationReturn } from "@admin/types/hooks/bulk-mutation";
 
-import { invalidateCurrentUserAccess } from "../current-user-access";
+import {
+  invalidateCurrentUserAccess,
+  withAccessRefresh,
+} from "../current-user-access";
 import { useBulkMutation } from "../useBulkMutation";
 
 /**
@@ -519,17 +522,19 @@ export function useBulkDeleteRoles(): UseBulkMutationReturn<
 > {
   const queryClient = useQueryClient();
 
-  return useBulkMutation<string, void, Error, void>({
-    mutationFn: async (roleId: string) => {
-      await deleteRole(roleId);
-    },
-    defaultOptions: {
-      onComplete: () => {
-        void queryClient.invalidateQueries({ queryKey: ["roles"] });
-        invalidateCurrentUserAccess(queryClient);
+  return withAccessRefresh(
+    useBulkMutation<string, void, Error, void>({
+      mutationFn: async (roleId: string) => {
+        await deleteRole(roleId);
       },
-    },
-  });
+      defaultOptions: {
+        onComplete: () => {
+          void queryClient.invalidateQueries({ queryKey: ["roles"] });
+        },
+      },
+    }),
+    queryClient
+  );
 }
 
 /**
@@ -662,15 +667,17 @@ export function useBulkUpdateRoles(): UseBulkMutationReturn<
 > {
   const queryClient = useQueryClient();
 
-  return useBulkMutation<string, void, Error, Partial<Role>>({
-    mutationFn: async (roleId: string, updates: Partial<Role>) => {
-      await updateRole(roleId, updates);
-    },
-    defaultOptions: {
-      onComplete: () => {
-        void queryClient.invalidateQueries({ queryKey: ["roles"] });
-        invalidateCurrentUserAccess(queryClient);
+  return withAccessRefresh(
+    useBulkMutation<string, void, Error, Partial<Role>>({
+      mutationFn: async (roleId: string, updates: Partial<Role>) => {
+        await updateRole(roleId, updates);
       },
-    },
-  });
+      defaultOptions: {
+        onComplete: () => {
+          void queryClient.invalidateQueries({ queryKey: ["roles"] });
+        },
+      },
+    }),
+    queryClient
+  );
 }

@@ -10,6 +10,11 @@
  */
 import type { QueryClient } from "@tanstack/react-query";
 
+import type {
+  BulkMutationResult,
+  UseBulkMutationReturn,
+} from "../types/hooks/bulk-mutation";
+
 /** The query key of the user's permission slugs. */
 export const CURRENT_USER_PERMISSIONS_KEY = ["currentUserPermissions"] as const;
 
@@ -42,4 +47,28 @@ export function invalidateCurrentUserAccess(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({
     queryKey: CURRENT_USER_CAPABILITIES_KEY,
   });
+}
+
+/**
+ * A bulk edit that asks again what the user may do once a run has changed
+ * anything. The refresh rides on the run itself rather than on a default
+ * callback, which a caller's own `onComplete` replaces.
+ */
+export function withAccessRefresh<TId, TData, TError, TContext>(
+  bulk: UseBulkMutationReturn<TId, TData, TError, TContext>,
+  queryClient: QueryClient
+): UseBulkMutationReturn<TId, TData, TError, TContext> {
+  const afterRun = (
+    result: BulkMutationResult<TData, TError>
+  ): BulkMutationResult<TData, TError> => {
+    if (result.succeeded > 0) invalidateCurrentUserAccess(queryClient);
+    return result;
+  };
+  return {
+    ...bulk,
+    mutate: (ids, context, options) =>
+      bulk.mutate(ids, context, options).then(afterRun),
+    mutateAsync: (ids, context, options) =>
+      bulk.mutateAsync(ids, context, options).then(afterRun),
+  };
 }
