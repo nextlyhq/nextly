@@ -55,6 +55,8 @@ import {
 } from "../../plugins/dashboard-declarations";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { contributedWidgetSummaries } from "../../plugins/validate-admin-widgets";
+import { registerActivityWidgetSource } from "../../services/dashboard/activity-widget-source";
+import { registerAttentionWidgetSource } from "../../services/dashboard/attention-source";
 
 export function resetWidgetRegistries(
   plugins: readonly PluginDefinition[] = []
@@ -116,6 +118,10 @@ export function resetWidgetRegistries(
   // most of the codebase in order to offer a card.
   registerReleasesWidgetSource();
   registerVersionsWidgetSource();
+  registerActivityWidgetSource();
+  // Needs attention's source, which combines the releases' and versions' reads
+  // with the entry list's counts and so belongs to no one domain.
+  registerAttentionWidgetSource();
 
   // 🔴 A plugin's sources are NOT registered here, and the reason is a hard
   // ordering fact rather than a preference: this runs before any plugin

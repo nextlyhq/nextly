@@ -18,8 +18,9 @@ import {
   type WidgetLifecycle,
 } from "./lifecycle";
 import type { WidgetQuery, WidgetQuerySpec } from "./query";
-import { validateWidgetSettings, type WidgetSetting } from "./settings";
+import { validateWidgetSettings, type AnyWidgetSetting } from "./settings";
 import type { WidgetOp } from "./sources";
+import { WIDGET_WIDTHS, type WidgetWidth } from "./widths";
 
 /*
  * Re-exported from the contract's home so a caller reading a definition finds
@@ -295,9 +296,43 @@ export interface WidgetDefinition {
    * already has and a plugin author needs no new vocabulary. The stored values
    * live on the placement, not here: this is the offer, and the placement is
    * one reader's answer to it.
+   *
+   * Any of the eight setting types. A content setting (a collection, and the
+   * filter, sort and grouping over it) is admitted only where core builds the
+   * query from it, `serverData`; see `widgetSettingsProblem`.
    */
-  settings?: WidgetSetting[];
+  settings?: AnyWidgetSetting[];
   defaultSize: WidgetSize;
+  /**
+   * The widths a card of this widget may take, stated in the arrangement's
+   * own words. Gaps are allowed: `["quarter", "full"]` is two widths, not a
+   * range. When stated, it is the widget's widths, and `minSize`/`maxSize`
+   * no longer bound them (`widthFacts` reads one or the other, never both).
+   */
+  allowedWidths?: readonly WidgetWidth[];
+  /** The width a new card starts at. One of `allowedWidths` when both are stated. */
+  defaultWidth?: WidgetWidth;
+  /** Whether one dashboard may hold more than one card of this widget. */
+  allowsSeveral?: boolean;
+  /**
+   * Which of core's displays the add panel sketches this widget's row with,
+   * when it is not its archetype: a widget drawn by its own component says
+   * what it most looks like.
+   */
+  sketch?: DataWidgetArchetype;
+  /**
+   * What a declared widget's empty state says and offers in place of the
+   * frame's own: one line, and one action, a path relative to the admin,
+   * offered only to a reader holding its `requiredPermission`.
+   *
+   * 🔴 Published by core for a declared widget alone (with `serverData`), from
+   * a declaration startup already held to the empty state's rules. Whether
+   * the card is empty is decided on the server, so no test travels here.
+   */
+  empty?: {
+    message?: string;
+    action?: { label: string; link: string; requiredPermission?: string };
+  };
   /**
    * Where this widget sits by default, ascending. Omitted means "after
    * everything that states one".
@@ -357,6 +392,22 @@ export interface WidgetDefinition {
    * content with no heading and nothing to report its own loading.
    */
   chrome?: WidgetChrome;
+  /**
+   * Whether the host sizes this `custom` widget's list query to the card, as it
+   * sizes the lists it draws itself: it asks the rows the card's size draws, at
+   * most the reader's "Number of items", and one more, the row that says more
+   * exist.
+   *
+   * Only for a `custom` widget whose query is a `list`. Unstated, a custom
+   * widget is asked exactly its declared query, because its component draws the
+   * raw answer and would draw the extra row as an ordinary one. A component that
+   * opts in draws `rowsDrawn(tier, query.limit)` rows of the answer and says
+   * more exist when the answer holds more, from the `query` it is handed.
+   *
+   * @experimental The shape may change while custom cards adopt the host's
+   * sizing.
+   */
+  sizedQuery?: boolean;
   /** Bounds what a user may resize to. Omitted means unconstrained. */
   minSize?: WidgetSize;
   maxSize?: WidgetSize;
@@ -388,13 +439,26 @@ export interface WidgetDefinition {
    */
   requiredPermission?: string | readonly string[];
   /**
-   * Required for every data archetype; forbidden for `text` and `actions`.
+   * Required for every data archetype unless `serverData` is set; forbidden
+   * for `text` and `actions`.
    *
    * Typed as {@link WidgetQuerySpec} so a declaration pairing `groupBy` with an
    * op that ignores it, or a `groupBy` op carrying no key, fails to compile
    * rather than booting and failing on every request the card makes.
    */
   query?: WidgetQuerySpec;
+  /**
+   * The card's data is built on the server from the widget's declaration (a
+   * data function, or a query written from its settings), so the definition
+   * carries no query of its own and the browser never holds the code that
+   * builds one.
+   *
+   * 🔴 Set by core when it publishes a declared widget, never by hand: the
+   * public registration doors refuse it, because a definition claiming its
+   * data is built on the server, with no declaration to build it from, is a
+   * card that can never be answered.
+   */
+  serverData?: true;
   /** Required for `custom`; forbidden otherwise. */
   component?: string;
   /** Required for `actions`; forbidden otherwise. */
@@ -491,6 +555,36 @@ type ArchetypeStanding =
   /** Not a string at all, which no version of this contract permits. */
   | { kind: "invalid" };
 
+/**
+ * Why this widget cannot ask the host to size its query, or `undefined`.
+ *
+ * A BOOLEAN in every version, so anything else is a mistake rather than version
+ * skew. Only a `custom` widget may ask, since core already sizes the lists it
+ * draws, and only for a `list` query, the one kind with rows to size: asked of
+ * anything else it would be a validated option that changes nothing. Asked of
+ * the archetype only where this core knows it, as `chromeProblem` asks, so a
+ * newer core's archetype is not judged here.
+ */
+function sizedQueryProblem(
+  widget: Record<string, unknown>
+): string | undefined {
+  const sized = widget.sizedQuery;
+  if (sized === undefined) return undefined;
+  if (typeof sized !== "boolean") {
+    return "sizedQuery, when given, must be a boolean";
+  }
+  if (!sized) return undefined;
+  const standing = archetypeStanding(widget.archetype);
+  if (standing.kind === "known" && standing.name !== "custom") {
+    return `sizedQuery is only valid for archetype "custom", not "${standing.name}" -- core already sizes the lists it draws`;
+  }
+  const query = widget.query as { op?: unknown } | undefined;
+  if (query?.op !== "list") {
+    return "sizedQuery needs a list query: only a list has rows to size";
+  }
+  return undefined;
+}
+
 function archetypeStanding(value: unknown): ArchetypeStanding {
   if (value === undefined) return { kind: "resolved-custom" };
   if (typeof value !== "string") return { kind: "invalid" };
@@ -572,6 +666,9 @@ export function widgetValueProblem(
   ) {
     return "dismissible, when given, must be a boolean";
   }
+
+  const sized = sizedQueryProblem(widget);
+  if (sized !== undefined) return sized;
 
   const geometry = geometryShapeProblem(widget);
   if (geometry !== undefined) return geometry;
@@ -1333,11 +1430,126 @@ export function archetypeResultProblem(
   );
 }
 
-function validateQuery(d: Partial<WidgetDefinition>): void {
+/**
+ * Confirms the width terms, when stated, name real widths and agree.
+ *
+ * Registry-only vocabulary, as the sizes are ({@link validateSizeValues}). A
+ * stated list must hold at least one width and none twice, since an empty
+ * list would be read as "unstated" and a repeated one says nothing more. A
+ * default must be one of the stated widths: a card that starts at a width the
+ * reader may not return it to is the size range's own failure, in other words.
+ */
+function validateWidths(d: Partial<WidgetDefinition>): void {
+  validateAllowedWidths(d);
+  validateDefaultWidth(d);
+  if (d.allowsSeveral !== undefined && typeof d.allowsSeveral !== "boolean") {
+    fail(`${d.id}: allowsSeveral must be true or false`);
+  }
+  if (d.sketch !== undefined && !DATA_ARCHETYPE_SET.has(d.sketch)) {
+    fail(`${d.id}: sketch must be one of ${DATA_ARCHETYPES.join(", ")}`);
+  }
+}
+
+/** Whether a value is one of the widths a placement and the admin use. */
+const isWidgetWidth = (value: unknown) =>
+  (WIDGET_WIDTHS as readonly unknown[]).includes(value);
+
+/** `allowedWidths`, when stated: at least one width, only real ones, none twice. */
+function validateAllowedWidths(d: Partial<WidgetDefinition>): void {
+  const allowed: readonly unknown[] | undefined = d.allowedWidths;
+  if (allowed === undefined) return;
+  if (!Array.isArray(allowed) || allowed.length === 0) {
+    fail(`${d.id}: allowedWidths must list at least one width`);
+  }
+  if (!allowed.every(isWidgetWidth)) {
+    fail(`${d.id}: allowedWidths must hold only ${WIDGET_WIDTHS.join(", ")}`);
+  }
+  if (new Set(allowed).size !== allowed.length) {
+    fail(`${d.id}: allowedWidths names a width twice`);
+  }
+}
+
+/** `defaultWidth`, when stated: a real width, and one of `allowedWidths` when those are stated. */
+function validateDefaultWidth(d: Partial<WidgetDefinition>): void {
+  if (d.defaultWidth === undefined) return;
+  if (!isWidgetWidth(d.defaultWidth)) {
+    fail(`${d.id}: defaultWidth must be one of ${WIDGET_WIDTHS.join(", ")}`);
+  }
+  const allowed: readonly unknown[] | undefined = d.allowedWidths;
+  if (allowed !== undefined && !allowed.includes(d.defaultWidth)) {
+    fail(
+      `${d.id}: defaultWidth "${d.defaultWidth}" is not one of its allowedWidths`
+    );
+  }
+}
+
+/**
+ * Confirms `empty`, when stated, comes with `serverData` and has its shape.
+ *
+ * Only a declared widget's empty state is published, and its words and link
+ * were judged at startup by the empty state's own rules. A registered widget
+ * stating one would bypass them, so it is refused; the shape is still checked,
+ * as a guard over values already in hand.
+ */
+function validateEmpty(d: Partial<WidgetDefinition>): void {
+  const empty: unknown = d.empty;
+  if (empty === undefined) return;
+  if (d.serverData !== true) {
+    fail(`${d.id}: empty is published by core for a declared widget only`);
+  }
+  const { message, action } = empty as { message?: unknown; action?: unknown };
+  if (
+    (message !== undefined && !isText(message)) ||
+    !emptyActionIsText(action)
+  ) {
+    fail(`${d.id}: empty has a message or an action that is not text`);
+  }
+}
+
+/** Words a person reads: a string with something in it. */
+const isText = (value: unknown) =>
+  typeof value === "string" && value.trim() !== "";
+
+/** An empty state's action, when stated: a label and a link, each of them text. */
+function emptyActionIsText(action: unknown): boolean {
+  if (action === undefined) return true;
+  if (typeof action !== "object" || action === null) return false;
+  const { label, link } = action as { label?: unknown; link?: unknown };
+  return isText(label) && isText(link);
+}
+
+/**
+ * Why a definition's query, or its want of one, does not fit its archetype:
+ * the ONE reading of that question, for every way a data archetype's card can
+ * be answered.
+ *
+ * A data archetype is answered by a query it carries, or, marked `serverData`,
+ * by core from the widget's declaration, with no query. The mark may only be
+ * `true`, and a query beside it would leave two answers to what the card
+ * shows: the one the definition carries and the one core builds.
+ */
+export function widgetQueryShapeProblem(
+  d: Partial<WidgetDefinition>
+): string | undefined {
+  const marked: unknown = d.serverData;
+  if (marked !== undefined) {
+    if (marked !== true) return "serverData may only be true";
+    if (d.query !== undefined) {
+      return "a widget whose data is built on the server takes no query";
+    }
+    return undefined;
+  }
   const archetype = d.archetype as WidgetArchetype;
   if (DATA_ARCHETYPE_SET.has(archetype) && !d.query) {
-    fail(`${d.id}: archetype "${d.archetype}" requires a query`);
+    return `archetype "${d.archetype}" requires a query`;
   }
+  return undefined;
+}
+
+function validateQuery(d: Partial<WidgetDefinition>): void {
+  const archetype = d.archetype as WidgetArchetype;
+  const shape = widgetQueryShapeProblem(d);
+  if (shape !== undefined) fail(`${d.id}: ${shape}`);
   // Refused with its OWN reason rather than the queryless one, which would say
   // this archetype takes no data -- the opposite of true. Its numbers come from
   // `cells`, and an author who wrote `query` needs to be told where to move it.
@@ -1372,14 +1584,17 @@ export function validateWidgetDefinition(
   validateActions(d);
   validateText(d);
   validateQuery(d);
+  validateWidths(d);
+  validateEmpty(d);
   validateCells(d);
   validateDefaultOrder(d);
   validateChrome(d);
-  // Judged on the widget's own source: a content setting is admitted where a
-  // knob drives it on that source.
+  // Judged on the widget's own source: a content setting is admitted where
+  // core builds the query, or where a knob drives it on that source.
   validateWidgetSettings(
     d.settings,
     d.id ?? "widget",
+    d.serverData === true,
     typeof d.query?.source === "string" ? { id: d.query.source } : undefined
   );
 }

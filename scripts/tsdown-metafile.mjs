@@ -7,11 +7,16 @@
 // modules bundled into it. Declaration chunks are left out: the record
 // describes the JavaScript a consumer runs.
 //
-// Written from `writeBundle`, after the files are on disk, so an output newer
-// than the record means the record is stale. Named in the build inputs of each
-// package that uses it, so editing it changes their turbo hashes.
+// Written from `writeBundle`, after the files are on disk, and each output's
+// record carries the sha256 of the file as it was written there. A file whose
+// bytes no longer match was rebuilt or rewritten by something that did not
+// write this record. A hash rather than a timestamp: Windows can stamp an
+// output a millisecond or two after the record written behind it. Named in the
+// build inputs of each package that uses it, so editing it changes their turbo
+// hashes.
 
-import { writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 /** A path from the package being built, with forward slashes on every platform. */
@@ -25,6 +30,9 @@ function describeChunk(chunk, bundle, dir) {
       : { path, kind, external: true };
   return {
     bytes: Buffer.byteLength(chunk.code),
+    sha256: createHash("sha256")
+      .update(readFileSync(join(dir, chunk.fileName)))
+      .digest("hex"),
     imports: [
       ...chunk.imports.map(path => edge(path, "import-statement")),
       ...chunk.dynamicImports.map(path => edge(path, "dynamic-import")),

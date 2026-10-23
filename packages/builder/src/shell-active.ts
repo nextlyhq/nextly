@@ -20,7 +20,8 @@ import * as React from "react";
  * server render, where the width is unknowable — the same assumption the shell's
  * own width hook makes and for the same reason.
  */
-export const ShellActiveContext = React.createContext(true);
+export const ShellActiveContext: React.Context<boolean> =
+  React.createContext(true);
 
 /**
  * Whether the surrounding shell is interactive, for content that has to answer for itself.

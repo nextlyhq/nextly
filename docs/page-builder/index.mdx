@@ -172,7 +172,9 @@ const isLoopCollection = (
   (loopCollections as readonly string[]).includes(name);
 
 const { ContentPage, generateMetadata } = createBlocksPage({
-  // ...the options above...
+  collections: ["pages"],
+  field: "content",
+  // ...and the rest of the options above...
   data: {
     find: async ({ collection, limit, sort, locale }) => {
       if (!isLoopCollection(collection)) return { items: [], total: 0 };

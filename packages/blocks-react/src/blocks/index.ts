@@ -129,7 +129,38 @@ export type { CollectionLoopProps } from "./collection-loop";
 export { CORE_CATEGORIES } from "./categories";
 export type { CoreCategory } from "./categories";
 
-export const coreBlocks = [
+/**
+ * {@link coreBlocks}, block by block in its order, each by its own type.
+ *
+ * The one list the published type is read from. The array is checked against
+ * it with `satisfies`, and a tuple only accepts an array of exactly its
+ * length and element types, so a block added to or removed from either side
+ * alone fails to compile.
+ */
+type CoreBlockList = [
+  typeof section,
+  typeof box,
+  typeof columns,
+  typeof column,
+  typeof card,
+  typeof accordion,
+  typeof accordionItem,
+  typeof spacer,
+  typeof heading,
+  typeof paragraph,
+  typeof richText,
+  typeof list,
+  typeof image,
+  typeof button,
+  typeof form,
+  typeof gallery,
+  typeof divider,
+  typeof quote,
+  typeof embed,
+  typeof collectionLoop,
+];
+
+export const coreBlocks: CoreBlockList[number][] = [
   // The comments below record ORDER, which is load-bearing: a resolver built by
   // iterating this list must meet a container before the child whose slot names
   // it. How the library is GROUPED is declared on the blocks themselves, as
@@ -161,4 +192,4 @@ export const coreBlocks = [
   quote,
   embed,
   collectionLoop,
-];
+] satisfies CoreBlockList;

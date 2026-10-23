@@ -24,7 +24,10 @@ import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
 import { container } from "../di/container";
 import type { FieldGroupDataService } from "../domains/field-groups/services/field-group-data-service";
-import { configuredLocales } from "../domains/i18n/configured-locales";
+import {
+  appLocalization,
+  configuredLocales,
+} from "../domains/i18n/configured-locales";
 import {
   resolveSingleDocumentId,
   singleDocumentEditable,
@@ -291,8 +294,7 @@ export async function historyLanguagesOf(
   if ((entity as { localized?: boolean } | null)?.localized === true) {
     return configured;
   }
-  const defaultLocale =
-    getService("config").localization?.defaultLocale ?? null;
+  const defaultLocale = appLocalization()?.defaultLocale ?? null;
   return new Set(
     defaultLocale !== null && configured.has(defaultLocale)
       ? [defaultLocale]
@@ -1314,8 +1316,7 @@ async function onePart(
   if ((entity as { localized?: boolean } | null)?.localized === true) {
     return false;
   }
-  const defaultLocale =
-    getService("config").localization?.defaultLocale ?? null;
+  const defaultLocale = appLocalization()?.defaultLocale ?? null;
   return [a, b].every(tag => tag === null || tag === defaultLocale);
 }
 
@@ -1343,7 +1344,7 @@ async function partIsLiveNow(
     entity,
     entryId,
     part,
-    defaultLocale: getService("config").localization?.defaultLocale ?? null,
+    defaultLocale: appLocalization()?.defaultLocale ?? null,
   });
 }
 

@@ -174,8 +174,24 @@ export interface WidgetRetirement {
 /** Retired widget ids, each with what its cards become. */
 export type WidgetRetirements = ReadonlyMap<string, WidgetRetirement>;
 
-/** The widgets this release has retired. None yet. */
-export const RETIRED_WIDGETS: WidgetRetirements = new Map();
+/**
+ * The widgets this release has retired.
+ *
+ * - "Unpublished changes" became one kind of Needs attention. It had no
+ *   settings and one card per dashboard, so its card becomes the Needs
+ *   attention card, merging into one the layout already holds. Needs attention
+ *   draws from a third to the full width, so a quarter-width card is drawn at a
+ *   third.
+ */
+export const RETIRED_WIDGETS: WidgetRetirements = new Map([
+  [
+    "core/pending-edits",
+    {
+      successor: "core/needs-attention",
+      allowedWidths: ["third", "half", "twoThirds", "full"],
+    },
+  ],
+]);
 
 function isUsableText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;

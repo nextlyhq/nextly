@@ -3207,6 +3207,13 @@ export function parseRestRoute(
     if (result) return result;
   }
 
+  // The site's content languages, for Settings.
+  if (resource === "languages") {
+    const method = httpMethod === "GET" ? "getLanguages" : "changeLanguages";
+    const operation = httpMethod === "GET" ? "list" : "update";
+    return { service: "languages", operation, method, routeParams };
+  }
+
   // Handle General Settings endpoint
   if (resource === "general-settings") {
     const method =

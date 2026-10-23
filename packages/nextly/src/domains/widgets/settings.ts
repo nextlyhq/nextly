@@ -371,14 +371,18 @@ function fail(message: string): never {
  */
 export function widgetSettingsProblem(
   settings: unknown,
+  queryBuiltByCore = false,
   source?: KnobSource
 ): string | undefined {
   const [problem] = widgetSettingsProblems(settings);
   if (problem !== undefined) return problem;
-  // Every setting is now known to be well formed, so each has a type. A
-  // content setting is admitted exactly when a knob drives it on the widget's
-  // own source, so a setting that would change nothing the card asks is never
-  // offered.
+  // A widget whose query core builds from its declaration reads its content
+  // settings there, so they reach the data it shows: nothing to refuse.
+  if (queryBuiltByCore) return undefined;
+  // Every setting is now known to be well formed, so each has a type. Any
+  // other widget's content setting is admitted exactly when a knob drives it
+  // on the widget's own source, so a setting that would change nothing the
+  // card asks is never offered.
   const content = (settings as readonly AnyWidgetSetting[] | undefined)?.find(
     (setting): setting is ContentSetting =>
       isContentSetting(setting) && knobFor(setting, source) === undefined
@@ -646,9 +650,10 @@ function defaultProblem(
 export function validateWidgetSettings(
   settings: unknown,
   widgetId: string,
+  queryBuiltByCore = false,
   source?: KnobSource
-): asserts settings is WidgetSetting[] | undefined {
-  const problem = widgetSettingsProblem(settings, source);
+): asserts settings is AnyWidgetSetting[] | undefined {
+  const problem = widgetSettingsProblem(settings, queryBuiltByCore, source);
   if (problem !== undefined) fail(`${widgetId}: ${problem}`);
 }
 

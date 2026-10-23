@@ -120,3 +120,4 @@ export {
 // Recorded preview links; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.
 export { nextlyPreviewLinksMysql as nextlyPreviewLinks } from "../preview-links/mysql";
+export { nextlyLanguagesMysql as nextlyLanguages } from "../languages/mysql";

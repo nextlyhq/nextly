@@ -621,7 +621,7 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
     // changes what the card shows and is drawn rather than refused.
     expect(widgetSettingsProblem([content[0]])).toBeUndefined();
     expect(
-      widgetSettingsProblem([content[0]], { id: "collection:posts" })
+      widgetSettingsProblem([content[0]], false, { id: "collection:posts" })
     ).toBeUndefined();
     expect(() => validateWidgetSettings([content[0]], "core/x")).not.toThrow();
   });
@@ -630,10 +630,12 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
     // On a system source the knob does not apply, so the setting would be
     // drawn and saved and change nothing: refused with the mark.
     expect(
-      widgetSettingsProblem([content[0]], { id: "system:releases" })
+      widgetSettingsProblem([content[0]], false, { id: "system:releases" })
     ).toContain(CONTENT_SETTING_NOT_DRAWN);
     expect(() =>
-      validateWidgetSettings([content[0]], "core/x", { id: "system:releases" })
+      validateWidgetSettings([content[0]], "core/x", false, {
+        id: "system:releases",
+      })
     ).toThrow(CONTENT_SETTING_NOT_DRAWN);
   });
 
@@ -654,6 +656,25 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
     );
     // The control: the field settings beside it register as before.
     expect(widgetSettingsProblem([limit, compact])).toBeUndefined();
+  });
+
+  it("is admitted where core builds the card's query from it, and still judged by every other rule", () => {
+    // A declared widget's query is built from these settings on the server, so they reach the
+    // data it shows: there is nothing to refuse.
+    expect(widgetSettingsProblem(content, true)).toBeUndefined();
+    expect(() => validateWidgetSettings(content, "core/x", true)).not.toThrow();
+    // Admitted is not unchecked: a dependent setting naming no Collection setting is still
+    // refused for what it is.
+    const orphan = {
+      name: "where",
+      label: "Where",
+      type: "filter",
+      of: "nothing",
+    };
+    expect(widgetSettingsProblem([orphan], true)).toBeDefined();
+    expect(widgetSettingsProblem([orphan], true)).not.toContain(
+      CONTENT_SETTING_NOT_DRAWN
+    );
   });
 
   it("reads a stored value its type can hold, and the starting value otherwise", () => {

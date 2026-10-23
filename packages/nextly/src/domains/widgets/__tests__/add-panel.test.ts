@@ -32,7 +32,7 @@ describe("the group each widget is listed in", () => {
       "core/singles": "overview",
       "core/quick-create": "overview",
       "core/team": "team",
-      "core/pending-edits": "overview",
+      "core/needs-attention": "overview",
       "core/recently-edited": "overview",
       "core/upcoming-releases": "overview",
       "core/recent-activity": "team",
@@ -93,6 +93,14 @@ describe("the group each widget is listed in", () => {
     });
     // A widget that names no kind is drawn as a component's sketch.
     expect(addPanelFacts(core("site/x"))?.sketch).toBe("custom");
+  });
+
+  it("draws a widget's own sketch where it names one in place of its archetype's", () => {
+    // A declared widget drawn by its own component says what it most looks like.
+    expect(
+      addPanelFacts({ id: "acme/orders", archetype: "custom", sketch: "bars" })
+        ?.sketch
+    ).toBe("bars");
   });
 });
 

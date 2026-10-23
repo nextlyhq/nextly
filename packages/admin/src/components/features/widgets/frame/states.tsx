@@ -245,6 +245,9 @@ export interface CardEmptyContent {
   action?: { label: string; href: string };
 }
 
+/** The frame's own empty state, for a card whose body says nothing more particular. */
+export const EMPTY_DEFAULT: CardEmptyContent = { title: "Nothing to show yet" };
+
 export function CardEmpty({ title, detail, action }: CardEmptyContent) {
   return (
     <div className="grid justify-items-start gap-1" data-testid="card-empty">

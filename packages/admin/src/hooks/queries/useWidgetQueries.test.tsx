@@ -767,6 +767,36 @@ describe("useWidgetQueries", () => {
       });
     });
 
+    it("carries a bucket's own floor through, and only a true one", async () => {
+      // A bucket's floor is its own claim: dropped, the card would draw "12"
+      // where the source said "12 or more".
+      expect(
+        await slotFor({
+          ok: true,
+          result: {
+            op: "groupBy",
+            buckets: [
+              { value: "unpublished", count: 12, atLeast: true },
+              { value: "overdue", count: 2, atLeast: false },
+              { value: "scheduled", count: 1, atLeast: "yes" },
+            ],
+            atLeast: true,
+          },
+        })
+      ).toEqual({
+        ok: true,
+        result: {
+          op: "groupBy",
+          buckets: [
+            { value: "unpublished", count: 12, atLeast: true },
+            { value: "overdue", count: 2 },
+            { value: "scheduled", count: 1 },
+          ],
+          atLeast: true,
+        },
+      });
+    });
+
     it("keeps the buckets when the grouped field is malformed", async () => {
       expect(
         await slotFor({

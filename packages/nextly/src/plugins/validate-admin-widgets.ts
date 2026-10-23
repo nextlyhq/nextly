@@ -340,7 +340,8 @@ const FIELD_RULES: ReadonlyArray<
   // grid was rendering -- taking the whole dashboard down rather than the one
   // install that declared it.
   // Judged on the widget's own source, as registration judges it.
-  widget => widgetSettingsProblem(widget.settings, declaredSourceOf(widget)),
+  widget =>
+    widgetSettingsProblem(widget.settings, false, declaredSourceOf(widget)),
 
   // Through the SAME rule the registry applies. Without it a contributed
   // `{ archetype: "metric", chrome: "none" }` passed boot while the registry

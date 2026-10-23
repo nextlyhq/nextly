@@ -172,6 +172,11 @@ const clientEntries = [
   // client reaching the list through it would take more than the list, and one
   // writing its own copy would drift from the server.
   "src/domains/collections/query/reserved-filter-keys.ts",
+  // Needs attention's kinds and keys, as their own entry. The card reads the
+  // keys the `system:attention` source writes, and the source's module imports
+  // every domain it counts -- so the card reaching the vocabulary through it
+  // would take all of them, and one writing its own copy would drift.
+  "src/domains/widgets/attention-keys.ts",
   // The query-parameter formats, so a caller writes one with the same code the
   // server reads it with. Imported by the admin's API Playground and by plugin
   // admin components, which is why it is a leaf rather than a root export.

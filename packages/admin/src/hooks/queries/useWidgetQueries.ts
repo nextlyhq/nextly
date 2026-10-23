@@ -46,7 +46,9 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import { fetchWidgetBatch } from "./widget-query-stream";
+import { fetchWidgetBatch, type CardAsk } from "./widget-query-stream";
+
+export type { CardAsk } from "./widget-query-stream";
 
 /** One card's request: the id to key the answer back to, and what to ask. */
 export interface WidgetQueryRequest {
@@ -73,7 +75,23 @@ export interface WidgetQueryRequest {
    * the bare placement id and only a `stats` card is nested.
    */
   cellKey?: string;
-  query: WidgetQuery;
+  /**
+   * The question the card asks. Absent exactly when `card` is present: a
+   * widget whose data core builds on the server has no query, and is asked for
+   * as a card instead.
+   */
+  query?: WidgetQuery;
+  /**
+   * A card core answers on the server from its widget's declaration: by its id
+   * while it is stored, or with the settings it is drawn with while those may be
+   * unsaved. Present exactly when `query` is absent.
+   */
+  card?: CardAsk;
+  /**
+   * The stored settings a card asked for by id was asked with: what its answer
+   * is filed under, so a saved change of them asks this card again alone.
+   */
+  config?: Record<string, unknown>;
   /**
    * How many times this card's Retry has been pressed, for a retried card only.
    *
@@ -107,11 +125,26 @@ export interface WidgetQueryRequest {
 }
 
 /**
- * The query a request asks with, before sizing, as one comparable string: what an answer is
+ * The question a request asks with, before sizing, as one comparable string: what an answer is
  * filed as having been asked with, and what a card compares against when its settings change.
+ *
+ * A card's is its ask with the stored settings it was asked with, so a saved change of them is
+ * a different question, and a preview's ask, which carries its own settings, never reads as the
+ * stored card's.
  */
 export function appliedKey(request: WidgetQueryRequest): string {
-  return JSON.stringify(request.applied ?? request.query);
+  return request.card === undefined
+    ? JSON.stringify(request.applied ?? request.query)
+    : JSON.stringify({ card: request.card, config: request.config ?? null });
+}
+
+/** What one request sends as its entry of the batch: its card, or its query as sized and applied. */
+export function sentEntry(
+  request: WidgetQueryRequest
+): WidgetQuery | CardAsk | undefined {
+  return (
+    request.card ?? request.sized?.query ?? request.applied ?? request.query
+  );
 }
 
 /** One card's cell answers, keyed by cell key. */
@@ -309,6 +342,7 @@ function asSlot(value: unknown): WidgetSlot {
     error?: unknown;
     code?: unknown;
     result?: unknown;
+    empty?: unknown;
   };
 
   if (slot.ok === false) return refusal(slot.error, slot.code);
@@ -317,7 +351,12 @@ function asSlot(value: unknown): WidgetSlot {
   const result = asResult(slot.result);
   if (result === undefined) return malformed();
 
-  return { ok: true, result };
+  // The verdict of a declared widget's empty test, carried with the answer it
+  // was made about. Read from this slot alone, so an answer that is no longer
+  // empty arrives without it and the card leaves its empty state.
+  return slot.empty === true
+    ? { ok: true, result, empty: true }
+    : { ok: true, result };
 }
 
 /**
@@ -495,23 +534,37 @@ function asCount(total: unknown, atLeast: unknown): WidgetResult | undefined {
  * A null `value` is KEPT. It is the bucket of rows whose column is empty --
  * "how many have no region" is a real answer, and dropping it would silently
  * remove rows from a chart that claims to account for all of them.
+ *
+ * A bucket's own `atLeast` is carried when it is `true`: it says that one
+ * count is a floor, where the result's flag says only that some count is, so
+ * a reader that drew from the result's flag alone would put "N+" on whole
+ * counts beside it.
  */
 function asBuckets(
   value: unknown
-): { value: string | null; count: number }[] | undefined {
+): { value: string | null; count: number; atLeast?: boolean }[] | undefined {
   if (!Array.isArray(value)) return undefined;
 
-  const buckets: { value: string | null; count: number }[] = [];
+  const buckets: { value: string | null; count: number; atLeast?: boolean }[] =
+    [];
   for (const raw of value) {
     if (!isObject(raw)) return undefined;
-    const bucket = raw as { value?: unknown; count?: unknown };
+    const bucket = raw as {
+      value?: unknown;
+      count?: unknown;
+      atLeast?: unknown;
+    };
     if (bucket.value !== null && typeof bucket.value !== "string") {
       return undefined;
     }
     if (typeof bucket.count !== "number" || !Number.isFinite(bucket.count)) {
       return undefined;
     }
-    buckets.push({ value: bucket.value, count: bucket.count });
+    buckets.push({
+      value: bucket.value,
+      count: bucket.count,
+      ...(bucket.atLeast === true ? { atLeast: true } : {}),
+    });
   }
   return buckets;
 }
@@ -632,16 +685,7 @@ function asResult(value: unknown): WidgetResult | undefined {
 
   if (result.op === "count") return asCount(result.total, result.atLeast);
 
-  if (result.op === "list") {
-    // The MEMBERS as well as the array, because a row is dereferenced per field
-    // by whatever draws it, and `[null]` is an array that fails there rather
-    // than here -- the same shape as the `total` above, one level down.
-    if (!Array.isArray(result.items)) return undefined;
-    const items: unknown[] = result.items;
-    if (!items.every(isObject)) return undefined;
-    const fields = asResultFields(result.fields);
-    return { op: "list", items, ...(fields && { fields }) };
-  }
+  if (result.op === "list") return asList(result.items, result.fields);
 
   if (result.op === "groupBy") {
     return asGrouped(
@@ -656,7 +700,38 @@ function asResult(value: unknown): WidgetResult | undefined {
     return asTimeline(result.points, result.interval);
   }
 
+  if (result.op === "data") return asData(result);
+
   return undefined;
+}
+
+/**
+ * A list answer: the MEMBERS as well as the array, because a row is
+ * dereferenced per field by whatever draws it, and `[null]` is an array that
+ * fails there rather than here -- the same shape as a count's `total`, one
+ * level down.
+ */
+function asList(items: unknown, fields: unknown): WidgetResult | undefined {
+  if (!Array.isArray(items)) return undefined;
+  const rows: unknown[] = items;
+  if (!rows.every(isObject)) return undefined;
+  const described = asResultFields(fields);
+  return { op: "list", items: rows, ...(described && { fields: described }) };
+}
+
+/**
+ * A declared widget's own data, for the component it draws itself with. Any
+ * value JSON carries is one: the server held it to the transport rule before
+ * it was sent, and the component is what reads its shape.
+ */
+function asData(result: object): WidgetResult | undefined {
+  if (!("data" in result)) return undefined;
+  // JSON.parse answers only JSON values, and every JSON value is data a
+  // component may be handed, so the parsed value is that type as it is.
+  return {
+    op: "data",
+    data: result.data as Extract<WidgetResult, { op: "data" }>["data"],
+  };
 }
 
 /**
@@ -768,19 +843,16 @@ async function askPartition(
       { updatedAt: heldAt }
     );
 
-  const answered = await fetchWidgetBatch(
-    partition.map(entry => entry.sized?.query ?? entry.applied ?? entry.query),
-    {
-      signal,
-      onSlots: arrived => {
-        for (const { index, slot } of arrived) {
-          slots[index] = slot;
-          settled[index] = true;
-        }
-        write();
-      },
-    }
-  );
+  const answered = await fetchWidgetBatch(partition.map(sentEntry), {
+    signal,
+    onSlots: arrived => {
+      for (const { index, slot } of arrived) {
+        slots[index] = slot;
+        settled[index] = true;
+      }
+      write();
+    },
+  });
   // Whole: a slot the answer never carried is missing now, whatever was held for it before.
   return {
     slots: partition.map((_, position) => answered[position]),
@@ -1046,6 +1118,7 @@ function unsized(
     placementId: request.placementId,
     cellKey: request.cellKey,
     query: request.query,
+    card: request.card,
     attempt: request.attempt,
   };
 }
