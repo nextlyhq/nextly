@@ -13,14 +13,17 @@
  *   those tests (the GUARDS) always run;
  * - a workspace dependency arrives through its built `dist`, which no diff
  *   names: a package whose workspace dependency also changed runs in full;
- * - a change to what every test compiles against (the lockfile, a tsconfig, the
- *   shared tsconfig package) touches no recorded module: the package runs in
- *   full. Vitest already reruns everything for its own config, setup files,
- *   `.env` and `package.json`.
+ * - a change to what every test compiles against (the lockfile, `.nvmrc`, a
+ *   root tsconfig, the shared tsconfig package) touches no recorded module, and
+ *   gate-scope scopes it to no package that has tests: EVERY package runs in
+ *   full. A package's own tsconfig runs that package in full. Vitest already
+ *   reruns everything for its own config, setup files, `.env` and
+ *   `package.json`.
  *
  * Anything this cannot decide runs the package in full, never nothing: a test
  * file without a record always runs, a failed selection falls back to the whole
- * suite, and an empty selection is reported, not assumed.
+ * suite, and an empty selection stands only while Vitest still discovers tests
+ * in the package; otherwise the package's own `test` script decides.
  *
  * Usage (from the pre-push, after the build):
  *   node scripts/test-changed.mjs [base] [--max-workers=N]   # base defaults to origin/main
@@ -71,18 +74,61 @@ export function readsOutsideTheGraph(source) {
 }
 
 /**
- * Whether a change reaches the root `scripts/` tests: a script itself, the
- * turbo config, or any Vitest config. `turbo run test` never runs those tests,
- * and they are what hold the task graph, the hooks and the configs to what
- * these gates assume.
+ * Whether a change reaches the root `scripts/` tests: any path outside every
+ * workspace, or any Vitest config. `turbo run test` never runs those tests, and
+ * they read the root's files directly — the hooks, the workflows, the lockfile,
+ * the turbo config, the docs — with `fs`, which no dependency record names. So
+ * a root path is not matched against a list of the ones they read, which would
+ * drift behind the tests; every one of them runs the suite.
+ *
+ * `workspaceDirs` are the workspaces' directories relative to the root.
  */
-export function scriptTestsNeeded(paths) {
+export function scriptTestsNeeded(paths, workspaceDirs) {
+  const inWorkspace = path => workspaceDirs.some(dir => path.startsWith(`${dir}/`));
   return paths.some(
-    path =>
-      path.startsWith("scripts/") ||
-      /^turbo\.jsonc?$/.test(path) ||
-      /(^|\/)vitest[^/]*\.config\.[cm]?[jt]s$/.test(path)
+    path => !inWorkspace(path) || /(^|\/)vitest[^/]*\.config\.[cm]?[jt]s$/.test(path)
   );
+}
+
+/** Whether a changed path is one every package's tests compile or resolve against. */
+function isGlobalInput(path) {
+  return ROOT_GLOBAL_INPUTS.some(input => input.test(path));
+}
+
+/**
+ * The workspaces a push tests: the ones gate-scope scoped it to, or EVERY
+ * workspace when a global input changed. Gate-scope scopes `.nvmrc` and a root
+ * `tsconfig` to no package and `packages/tsconfig/` to itself, so without the
+ * widening the packages that compile against them are never reached at all.
+ *
+ * `testScriptOf` answers a workspace's `test` script. A workspace without one
+ * has nothing to run, and is returned under `untestable` so the run can say so.
+ */
+export function workspacesToTest({ workspaces, filters, paths, testScriptOf }) {
+  const every = paths.some(isGlobalInput);
+  const scoped = workspaces.filter(workspace => every || filters.includes(workspace.name));
+  return {
+    testable: scoped.filter(workspace => typeof testScriptOf(workspace) === "string"),
+    untestable: scoped.filter(workspace => typeof testScriptOf(workspace) !== "string"),
+  };
+}
+
+/**
+ * Why a selection that came back empty must run the package in full, or null
+ * when the empty selection stands. `discoverable` is every unit test file Vitest
+ * finds in the package, or null when it could not say.
+ *
+ * An empty selection over a suite that still exists means the change reaches
+ * no test. Over a suite that has disappeared — a config edit that excludes
+ * everything, a deleted directory — it means the opposite, and the package's
+ * own `test` script is what decides whether no tests is a pass.
+ */
+export function emptySelectionReason(discoverable) {
+  if (discoverable === null) return "`vitest list` could not say which tests the package has";
+  if (discoverable.length === 0) {
+    return "Vitest discovers no test file in it, so its own test script decides whether that passes";
+  }
+  return null;
 }
 
 /** Whether a repository path is a unit test file, as the packages' Vitest configs name them. */
@@ -97,7 +143,7 @@ export function isUnitTestFile(path) {
  * the names of every workspace this push touches; `manifest` the package's own.
  */
 export function fullRunReason({ dir, manifest, changed, changedPackages }) {
-  const root = changed.find(path => ROOT_GLOBAL_INPUTS.some(input => input.test(path)));
+  const root = changed.find(isGlobalInput);
   if (root) return `${root} changed, which every test compiles or resolves against`;
   const prefix = `${dir}/`;
   const own = changed
@@ -189,14 +235,16 @@ function guardsIn(root, dir) {
     .map(path => path.slice(dir.length + 1));
 }
 
-/** The files `--changed` selects in a package, or null when it could not say. */
-function changedSelection(root, dir, mergeBase) {
+/**
+ * The test files `vitest list` prints for a package, with `extra` arguments
+ * (`--changed <base>` to select), or null when it could not say.
+ */
+function vitestList(root, dir, extra) {
   const { command, args, shell } = pnpmInvocation([
     "exec",
     "vitest",
     "list",
-    "--changed",
-    mergeBase,
+    ...extra,
     "--filesOnly",
     "--json",
   ]);
@@ -214,18 +262,12 @@ function changedSelection(root, dir, mergeBase) {
  * The pnpm arguments that run one package's `test` script on `files` (all of
  * them when empty). No `--` after the script name: pnpm would hand it to
  * Vitest, which then ignores every file and flag after it and runs the whole
- * suite with no worker limit.
+ * suite with no worker limit. No `--passWithNoTests` either: a full run that
+ * finds no tests is the package script's verdict to give, and a file list that
+ * matches nothing is a selection gone wrong, not a pass.
  */
 export function testArgs(name, files, workers) {
-  return [
-    "--filter",
-    name,
-    "run",
-    "test",
-    ...files,
-    `--maxWorkers=${workers}`,
-    "--passWithNoTests",
-  ];
+  return ["--filter", name, "run", "test", ...files, `--maxWorkers=${workers}`];
 }
 
 /** Runs one package's tests: in full, or on the selected files. Returns the exit status. */
@@ -244,16 +286,27 @@ function testPackage(root, workspace, plan, workers) {
   return run(testArgs(workspace.name, plan.files, workers), root);
 }
 
+/** A workspace's own manifest. */
+function manifestOf(root, workspace) {
+  return JSON.parse(readFileSync(join(root, workspace.dir, "package.json"), "utf8"));
+}
+
 /** What to run for one package. */
 function planFor(root, workspace, paths, changedPackages, mergeBase) {
-  const manifest = JSON.parse(readFileSync(join(root, workspace.dir, "package.json"), "utf8"));
+  const manifest = manifestOf(root, workspace);
   const reason = fullRunReason({ dir: workspace.dir, manifest, changed: paths, changedPackages });
-  if (reason) return { full: true, reason };
-  const selection = changedSelection(root, workspace.dir, mergeBase);
+  return reason ? { full: true, reason } : selectionPlan(root, workspace.dir, mergeBase);
+}
+
+/** The selected files for a package that need not run in full, or the reason it must after all. */
+function selectionPlan(root, dir, mergeBase) {
+  const selection = vitestList(root, dir, ["--changed", mergeBase]);
   if (selection === null) {
     return { full: true, reason: "`vitest list --changed` could not say which tests the change affects" };
   }
-  const guards = guardsIn(root, workspace.dir);
+  const guards = guardsIn(root, dir);
+  const empty = selection.length + guards.length === 0 && emptySelectionReason(vitestList(root, dir, []));
+  if (empty) return { full: true, reason: empty };
   return {
     full: false,
     files: selectedFiles(selection, guards),
@@ -273,8 +326,17 @@ function testTouchedPackages(root, base, paths, workers) {
   const mergeBase = git(root, ["merge-base", base, "HEAD"]).trim();
   const workspaces = workspacesFrom(pnpmWorkspaces(root), root);
   const { filters } = filtersFor(paths, workspaces, new Set(deletedPaths(root, base)));
+  const { testable, untestable } = workspacesToTest({
+    workspaces,
+    filters,
+    paths,
+    testScriptOf: workspace => manifestOf(root, workspace)?.scripts?.test,
+  });
+  for (const workspace of untestable) {
+    console.log(`test-changed: ${workspace.name}: no test script, nothing to run`);
+  }
   let failed = 0;
-  for (const workspace of workspaces.filter(candidate => filters.includes(candidate.name))) {
+  for (const workspace of testable) {
     const plan = planFor(root, workspace, paths, filters, mergeBase);
     if (testPackage(root, workspace, plan, workers) !== 0) failed += 1;
   }
@@ -283,8 +345,9 @@ function testTouchedPackages(root, base, paths, workers) {
 
 /** Runs the root scripts tests when the change reaches them, and returns how many failed. */
 function testScripts(root, paths) {
-  if (!scriptTestsNeeded(paths)) return 0;
-  console.log("test-changed: the root scripts tests, because a script, the turbo config or a Vitest config changed");
+  const dirs = workspacesFrom(pnpmWorkspaces(root), root).map(workspace => workspace.dir);
+  if (!scriptTestsNeeded(paths, dirs)) return 0;
+  console.log("test-changed: the root scripts tests, because a root file or a Vitest config changed");
   return run(["test:scripts"], root) === 0 ? 0 : 1;
 }
 

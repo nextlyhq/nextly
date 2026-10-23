@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  emptySelectionReason,
   fullRunReason,
   isUnitTestFile,
   listedFiles,
@@ -14,6 +15,7 @@ import {
   scriptTestsNeeded,
   selectedFiles,
   testArgs,
+  workspacesToTest,
 } from "./test-changed.mjs";
 
 const nextly = {
@@ -121,7 +123,6 @@ describe("the command one package's tests run with", () => {
       "src/a.test.ts",
       "src/b.test.ts",
       "--maxWorkers=2",
-      "--passWithNoTests",
     ]);
   });
 
@@ -132,30 +133,53 @@ describe("the command one package's tests run with", () => {
       "run",
       "test",
       "--maxWorkers=3",
-      "--passWithNoTests",
     ]);
+  });
+
+  // A full run that finds no tests is the package script's verdict, and a file
+  // list that matches nothing is a selection gone wrong: neither is a pass.
+  it("never passes with no tests on the gate's behalf", () => {
+    expect(testArgs("nextly", [], "2")).not.toContain("--passWithNoTests");
+    expect(testArgs("nextly", ["src/a.test.ts"], "2")).not.toContain("--passWithNoTests");
   });
 });
 
 describe("when the root scripts tests run too", () => {
   // `turbo run test` never reaches them, and they are what hold the task graph,
   // the hooks and every Vitest config to what the gates assume.
-  it("does for a change to a script, the turbo config or any Vitest config", () => {
+  // They read the root's files with `fs`, so every root path counts, not a
+  // list of the ones they are known to read today.
+  const dirs = ["packages/nextly", "packages/ui", "packages/admin-css", "e2e"];
+
+  it("does for any path outside every workspace", () => {
     for (const path of [
       "scripts/gate-scope.mjs",
       "turbo.jsonc",
-      "turbo.json",
       "vitest.config.ts",
+      ".husky/pre-push",
+      ".github/workflows/ci.yml",
+      "pnpm-lock.yaml",
+      "docs/a.mdx",
+      "packages/nextly-extra/a.ts",
+    ]) {
+      expect(scriptTestsNeeded([path], dirs), path).toBe(true);
+    }
+  });
+
+  it("does for a Vitest config inside a workspace", () => {
+    for (const path of [
       "packages/nextly/vitest.config.ts",
       "packages/admin-css/vitest.config.mjs",
       "packages/nextly/vitest.integration.config.ts",
     ]) {
-      expect(scriptTestsNeeded([path]), path).toBe(true);
+      expect(scriptTestsNeeded([path], dirs), path).toBe(true);
     }
   });
 
-  it("does not for product code or docs", () => {
-    expect(scriptTestsNeeded(["packages/nextly/src/a.ts", "docs/a.mdx", "packages/ui/scripts/build.mjs"])).toBe(false);
+  it("does not for code inside a workspace", () => {
+    expect(
+      scriptTestsNeeded(["packages/nextly/src/a.ts", "packages/ui/scripts/build.mjs", "e2e/a.spec.ts"], dirs)
+    ).toBe(false);
   });
 });
 
@@ -180,5 +204,57 @@ describe("what `vitest list --changed` printed", () => {
     expect(listedFiles("Error: no config", dir)).toBeNull();
     expect(listedFiles('{"files":[]}', dir)).toBeNull();
     expect(listedFiles('[{"name":"x"}]', dir)).toBeNull();
+  });
+});
+
+describe("which workspaces a push tests", () => {
+  const workspaces = [
+    { name: "nextly", dir: "packages/nextly" },
+    { name: "@nextlyhq/ui", dir: "packages/ui" },
+    { name: "@nextlyhq/tsconfig", dir: "packages/tsconfig" },
+    { name: "@nextlyhq/e2e", dir: "e2e" },
+  ];
+  const scripts = { nextly: "vitest run", "@nextlyhq/ui": "vitest run" };
+  const plan = (paths, filters) =>
+    workspacesToTest({ workspaces, filters, paths, testScriptOf: w => scripts[w.name] });
+  const names = list => list.map(w => w.name);
+
+  it("are the ones gate-scope scoped it to", () => {
+    expect(names(plan(["packages/ui/src/a.tsx"], ["@nextlyhq/ui"]).testable)).toEqual(["@nextlyhq/ui"]);
+  });
+
+  // Gate-scope scopes these to no package, or to the config package alone,
+  // which has no tests: without the widening nothing that compiles against
+  // them would run.
+  it("are every testable workspace when a global input changes", () => {
+    for (const [path, filters] of [
+      [".nvmrc", []],
+      ["tsconfig.base.json", []],
+      ["packages/tsconfig/base.json", ["@nextlyhq/tsconfig"]],
+    ]) {
+      expect(names(plan([path], filters).testable), path).toEqual(["nextly", "@nextlyhq/ui"]);
+    }
+  });
+
+  it("leave out a workspace with no test script, and say which", () => {
+    const { testable, untestable } = plan(["e2e/a.spec.ts", "packages/nextly/src/a.ts"], ["@nextlyhq/e2e", "nextly"]);
+    expect(names(testable)).toEqual(["nextly"]);
+    expect(names(untestable)).toEqual(["@nextlyhq/e2e"]);
+  });
+});
+
+describe("a selection that came back empty", () => {
+  it("stands while the package still has tests to discover", () => {
+    expect(emptySelectionReason(["src/a.test.ts"])).toBeNull();
+  });
+
+  // A config that now excludes everything, or a deleted test directory, also
+  // selects nothing: the package's own script decides whether that passes.
+  it("runs the package in full when Vitest discovers no test file at all", () => {
+    expect(emptySelectionReason([])).toMatch(/discovers no test file/);
+  });
+
+  it("runs the package in full when Vitest could not say", () => {
+    expect(emptySelectionReason(null)).toMatch(/could not say/);
   });
 });

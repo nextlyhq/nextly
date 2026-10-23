@@ -203,9 +203,10 @@ set -e
 # Inside each package the change touches, only the test FILES it can affect run:
 # `scripts/test-changed.mjs` asks Vitest's `--changed` over the dependency records
 # each test left on its last run, always adds the tests that read files or spawn
-# processes (which no record names), runs the whole package for a change every
-# test compiles against or a workspace dependency changed beside it, and runs the
-# root scripts tests when a script, the turbo config or a Vitest config changed.
+# processes (which no record names), runs the whole package when its tsconfig or
+# a workspace dependency changed beside it, runs EVERY package for a change every
+# test compiles against (the lockfile, `.nvmrc`, a root or shared tsconfig), and
+# runs the root scripts tests when any root file or a Vitest config changed.
 # NEXTLY_PREPUSH_ALL_TESTS=1 runs every test of the touched packages instead.
 if [ "$GATE_STATUS" -eq 2 ]; then
   echo "pre-push: the diff redefines the workspace or task graph — testing every workspace."
