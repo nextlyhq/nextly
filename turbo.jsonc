@@ -66,25 +66,51 @@
   //   thing covering them — it remains because that edge is a property of the
   //   task graph rather than of the configs, and it does not reach tasks with
   //   no such edge or consumers that read these files by relative path.
-  // - `scripts/**`: root scripts sit in no package at all, so no edge of any
-  //   kind can reach them. `apps/playground` compiles `scripts/dev-doctor.mjs`
-  //   through a test, and before this entry, editing that file left
-  //   `playground#check-types` on the identical hash `62b43e8dbf627e65`.
+  // - The root scripts a package's build, type-check or tests read. Root
+  //   scripts sit in no package at all, so no edge of any kind can reach them.
+  //   `apps/playground` compiles `scripts/dev-doctor.mjs` through a test, and
+  //   before it was listed here, editing that file left `playground#check-types`
+  //   on the identical hash `62b43e8dbf627e65`.
   //
   // Both are deliberately coarse, invalidating every task rather than the
   // type-aware ones, because a compiler setting or a shared script reaches
   // builds and type-aware lint too. The cost of an unnecessary re-run is
   // minutes; the cost of a missed one is a green nobody can see through.
   //
-  // `scripts/**` is the wide answer to a narrow fact: exactly ONE tracked file
-  // needs it today. Listing that file instead would be the enumeration this
-  // task's `inputs` were changed to stop doing, and the guard in
+  // The scripts are listed by file, not as `scripts/**`. The whole tree made
+  // every one of the ~200 root scripts (CI checks, release tooling, gates, and
+  // their tests) a global input, so editing any of them re-ran every build,
+  // lint, type-check and test in the workspace, about seven minutes cold on a
+  // local machine, to protect seven files. Five are every root script
+  // read from a package, an app or `e2e/`, plus the two root scripts they import
+  // (`agent-skills` imports `agent-instructions`, which imports
+  // `check-instruction-size`), traced through every relative import. The guard in
   // `scripts/turbo-inputs.test.mjs` reports any tracked program input that no
-  // hash covers — so a future one fails CI rather than passing quietly.
-  "globalDependencies": ["packages/tsconfig/*.json", "scripts/**"],
+  // hash covers, so a sixth read of a root script fails CI rather than passing
+  // quietly.
+  "globalDependencies": [
+    "packages/tsconfig/*.json",
+    "scripts/agent-instructions.mjs",
+    "scripts/agent-skills.mjs",
+    "scripts/check-instruction-size.mjs",
+    "scripts/cli-entry.mjs",
+    "scripts/dev-doctor.mjs",
+    "scripts/pnpm-invocation.mjs",
+    "scripts/vitest-dom-setup.ts"
+  ],
 
   // Runtime env vars referenced from package source (not build-time inputs).
   // Listed here so eslint-plugin-turbo's no-undeclared-env-vars rule passes.
+  // Every artifact turbo uploads to the shared remote cache is signed with
+  // TURBO_REMOTE_CACHE_SIGNATURE_KEY (HMAC-SHA256) and verified on download;
+  // one that fails verification, truncated or altered, counts as a miss. The
+  // remote cache is used only where a token is set (CI, see ci.yml), so a
+  // machine without one builds from its local cache as before. A key's length
+  // is not made fatal (`futureFlags.longerSignatureKey`): a contributor who
+  // has run `turbo link` holds no key, and would otherwise be unable to run
+  // turbo at all; what such a machine signs, CI's key rejects as a miss.
+  "remoteCache": { "signature": true },
+
   "globalPassThroughEnv": [
     "npm_config_user_agent", // create-nextly-app reads this to detect the invoking PM
     "BLOB_READ_WRITE_TOKEN", // @nextlyhq/storage-vercel-blob runtime config
@@ -541,11 +567,13 @@
         "tsconfig.json",
         // Scripts and build configs are read BY tests, not only by builds: the ui suite derives
         // its entry-point guards from `scripts/published-entries.ts`, which the tsup configs
-        // also consume. Without these, retargeting a source barrel or changing an entry's
-        // client/server classification leaves the cache key untouched, so CI replays the previous
-        // pass precisely when the source of truth those guards read has changed.
+        // also consume, and nextly's suites read the client entries out of its tsdown config.
+        // Without these, retargeting a source barrel or changing an entry's client/server
+        // classification leaves the cache key untouched, so CI replays the previous pass
+        // precisely when the source of truth those guards read has changed.
         "scripts/**",
-        "tsup*.config.ts"
+        "tsup*.config.ts",
+        "tsdown*.config.ts"
       ],
       "outputs": ["coverage/**"], // Coverage reports
       "cache": true // Cache test results (only re-run if inputs change)

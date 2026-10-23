@@ -111,7 +111,7 @@ s3Storage({
 
 | Tool     | Version                                           |
 | -------- | ------------------------------------------------- |
-| Node.js  | 20.19+, 22.12+ or 24+                             |
+| Node.js  | 22.12+ or 24+                                     |
 | `nextly` | 0.0.x                                             |
 | Stores   | AWS S3, Cloudflare R2, MinIO, DigitalOcean Spaces |
 

@@ -104,11 +104,11 @@ See the [Field types reference](https://nextlyhq.com/docs/plugins/form-builder#f
 
 ## Compatibility
 
-| Tool              | Version               |
-| ----------------- | --------------------- |
-| Node.js           | 20.19+, 22.12+ or 24+ |
-| `nextly`          | 0.0.x                 |
-| `@nextlyhq/admin` | 0.0.x                 |
+| Tool              | Version       |
+| ----------------- | ------------- |
+| Node.js           | 22.12+ or 24+ |
+| `nextly`          | 0.0.x         |
+| `@nextlyhq/admin` | 0.0.x         |
 
 Plugins can break across minor versions during alpha. Pin exact versions of `nextly`, `@nextlyhq/admin`, and this plugin together.
 
