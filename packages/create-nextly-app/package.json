@@ -27,8 +27,6 @@
     "build": "tsdown --config-loader tsx",
     "dev": "tsdown --config-loader tsx --watch",
     "check-types": "tsc --noEmit",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "clean": "rimraf dist"
@@ -47,7 +45,6 @@
   },
   "devDependencies": {
     "@babel/types": "^7.29.7",
-    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/eslint-plugin": "workspace:*",
     "@nextlyhq/telemetry": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
@@ -61,8 +58,8 @@
     "@vitest/ui": "^5.0.5",
     "eslint": "^9.39.1",
     "jsdom": "^27.1.0",
-    "react": "19.2.0",
-    "react-dom": "19.2.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",

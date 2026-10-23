@@ -40,6 +40,11 @@ export interface CardSettingsWriteCallbacks {
   onLanded?: () => void;
   /** The write did not land; the message says why, for the control that made it. */
   onFailed?: (message: string) => void;
+  /**
+   * The control that made the write shows a failure itself, in place, so it is not also put in a
+   * toast: the settings sheet says why beside the form it kept open.
+   */
+  showsFailure?: boolean;
 }
 
 export interface CardSettingsWrite {
@@ -65,6 +70,10 @@ const FAILED = (title: string, reason: string) =>
   `Could not save ${title}'s settings: ${reason}`;
 const REFRESH_FAILED = (title: string) =>
   `${title} was saved, but the dashboard could not be refreshed. Reload the page to see it.`;
+const BUSY =
+  "Another change to your dashboard is still saving. Try again in a moment.";
+const GONE = (title: string) =>
+  `${title} is no longer on your dashboard, so its settings were not saved.`;
 
 /** Why a card's settings cannot be written from this layout, or `undefined` when they can. */
 function unavailableFor(layout: UseDashboardLayoutResult): string | undefined {
@@ -85,8 +94,10 @@ export function useCardSettingsWrite(
       // The CACHED copy, which is the arrangement after the last write landed and carries the
       // version it produced: the hook's own snapshot can be a render old.
       const stored = layout.cached() ?? layout.layout;
+      // Every way this ends answers the caller: a control waiting on its save, the sheet's Done,
+      // would otherwise wait for good.
       const fail = (message: string) => {
-        toast.error(message);
+        if (!callbacks?.showsFailure) toast.error(message);
         callbacks?.onFailed?.(message);
       };
       if (!stored || layout.isUnreadable) {
@@ -95,8 +106,14 @@ export function useCardSettingsWrite(
       }
       // One at a time: two writes in flight carry the same version guard, and the server can
       // honour only one.
-      if (layout.isWriting) return;
-      if (!stored.placements.some(p => p.id === input.placementId)) return;
+      if (layout.isWriting) {
+        fail(BUSY);
+        return;
+      }
+      if (!stored.placements.some(p => p.id === input.placementId)) {
+        fail(GONE(input.title));
+        return;
+      }
 
       // Cleared before the attempt, so a retry that succeeds does not leave a failure reported.
       layout.cardSettings.reset();

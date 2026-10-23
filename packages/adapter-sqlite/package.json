@@ -21,8 +21,6 @@
     "build": "tsdown",
     "dev": "tsdown --watch",
     "check-types": "tsc --noEmit",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix",
     "test": "vitest run --passWithNoTests --config vitest.config.ts",
     "test:integration": "vitest run --passWithNoTests --config vitest.integration.config.ts",
     "test:watch": "vitest",
@@ -39,13 +37,11 @@
     "drizzle-orm": "1.0.0-rc.4"
   },
   "devDependencies": {
-    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@types/better-sqlite3": "^7.6.13",
     "@vitest/coverage-v8": "^5.0.5",
     "@vitest/ui": "^5.0.5",
     "better-sqlite3": "^12.10.0",
-    "eslint": "^9.39.1",
     "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",

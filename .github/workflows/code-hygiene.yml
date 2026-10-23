@@ -3,7 +3,7 @@ name: Code hygiene
 # Two jobs, because the two questions have different answers and only one of
 # them can be enforced honestly.
 #
-# ESLint reads one file at a time, so nothing in CI could see an export with no
+# A lint rule reads one file at a time, so nothing in CI could see an export with no
 # consumers, a `vi.mock` pointing at a module that no longer exists, or a
 # package listed in a manifest that no code imports. Fallow reads the whole
 # module graph, which is what makes those visible.

@@ -21,8 +21,6 @@
     "build": "tsdown",
     "dev": "tsdown --watch",
     "check-types": "tsc --noEmit",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "clean": "rimraf dist"
@@ -34,11 +32,9 @@
     "posthog-node": "^5.8.0"
   },
   "devDependencies": {
-    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@types/node": "^22.20.5",
     "@vitest/coverage-v8": "^5.0.5",
-    "eslint": "^9.39.1",
     "rimraf": "^6.1.3",
     "tsdown": "^0.23.1",
     "typescript": "^5.9.3",

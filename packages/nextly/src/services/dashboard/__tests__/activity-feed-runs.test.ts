@@ -168,6 +168,24 @@ describe("the feed's runs", () => {
   });
 });
 
+describe("the feed's row limit", () => {
+  it("holds every door to one clamp: at most 50 rows, and 5 when none is asked", async () => {
+    // Sixty different notes, so each is a row of its own.
+    const rows = trail(
+      Array.from({ length: 60 }, (_, i) => ({ entryId: `n${i}`, minutes: i }))
+    );
+
+    const many = await feed(serviceOver(rows).service, 500);
+    expect(many.activities).toHaveLength(50);
+
+    const unasked = await serviceOver(rows).service.getRecentActivity({
+      scope: someResources(["notes"]),
+      caller: { user: { id: "reader", roles: [] } },
+    });
+    expect(unasked.activities).toHaveLength(5);
+  });
+});
+
 describe("a page the walk's bound ended", () => {
   /** `n` rows no reader may see, each a different document a minute apart, newest first. */
   const unreadable = (n: number) =>
@@ -296,5 +314,43 @@ describe("a run the walk's bound cut", () => {
         },
       })
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+});
+
+describe("collections kept off the dashboard", () => {
+  const ask = (
+    service: ActivityLogService,
+    keptOffCollections: { slugs: Set<string>; complete: boolean }
+  ) =>
+    service.getRecentActivity({
+      limit: 5,
+      scope: someResources(["notes", "pb_patterns"]),
+      caller: { user: { id: "reader", roles: [] } },
+      keptOffCollections,
+    });
+
+  it("asks the trail without them, by the clause the activity count applies", async () => {
+    const { service, select } = serviceOver(
+      trail([{ entryId: "n1", minutes: 0 }])
+    );
+
+    await ask(service, { slugs: new Set(["pb_patterns"]), complete: true });
+
+    const where = JSON.stringify(
+      (select.mock.calls[0]?.[1] as { where?: unknown } | undefined)?.where
+    );
+    expect(where).toContain('"op":"NOT IN","value":["pb_patterns"]');
+  });
+
+  it("answers no rows, without asking, when they could not be read", async () => {
+    const { service, select } = serviceOver(
+      trail([{ entryId: "n1", minutes: 0 }])
+    );
+
+    const page = await ask(service, { slugs: new Set(), complete: false });
+
+    // Which collections are hidden is unknown, so no row can be shown as not hidden.
+    expect(page).toEqual({ activities: [], hasMore: false });
+    expect(select).not.toHaveBeenCalled();
   });
 });

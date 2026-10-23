@@ -4,7 +4,6 @@
     "allowImportingTsExtensions": true,
     "rootDir": "src",
     "outDir": "dist",
-    "baseUrl": ".",
     "paths": {
       "@nextly/actions": ["./src/actions/index.ts"],
       "@nextly/api/*": ["./src/api/*"],
