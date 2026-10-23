@@ -9,18 +9,13 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
-import {
-  NAV_COLLECTIONS_PARAMS,
-  useCollections,
-  useDashboardStats,
-} from "@admin/hooks/queries";
+import { NAV_COLLECTIONS_PARAMS, useCollections } from "@admin/hooks/queries";
 
 import { CollectionQuickLinks } from "./CollectionQuickLinks";
 
 vi.mock("@admin/hooks/queries", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/hooks/queries")>()),
   useCollections: vi.fn(),
-  useDashboardStats: vi.fn(),
 }));
 
 const LIST = ["authors", "posts", "tags"].map(name => ({
@@ -28,26 +23,43 @@ const LIST = ["authors", "posts", "tags"].map(name => ({
   label: name[0].toUpperCase() + name.slice(1),
 }));
 
+/** The list the sidebar shares, and the card's `system:content` answer, as the batch hands it. */
 function given({
   list,
   counts,
-  statsError = null,
+  failed,
+  onRetry,
 }: {
   list?: typeof LIST;
-  counts?: { slug: string; label: string; group: null; count: number }[];
-  statsError?: Error | null;
+  counts?: {
+    slug: string;
+    label: string;
+    group: null;
+    count: number;
+    draft?: number;
+  }[];
+  failed?: { error: string; code?: "unavailable" };
+  onRetry?: () => void;
 }) {
   vi.mocked(useCollections).mockReturnValue({
     data: list ? { items: list } : undefined,
     isLoading: list === undefined,
   } as unknown as ReturnType<typeof useCollections>);
-  vi.mocked(useDashboardStats).mockReturnValue({
-    data: counts ? { collectionCounts: counts } : undefined,
-    isLoading: counts === undefined && statsError === null,
-    error: statsError,
-    refetch: vi.fn(),
-  } as unknown as ReturnType<typeof useDashboardStats>);
-  render(<CollectionQuickLinks />);
+  const slot = failed
+    ? { ok: false as const, ...failed }
+    : counts
+      ? { ok: true as const, result: { op: "list" as const, items: counts } }
+      : undefined;
+  render(
+    <CollectionQuickLinks
+      widgetId="core/collections"
+      placementId="core/collections"
+      settings={{}}
+      slot={slot}
+      isFetching={slot === undefined}
+      {...(onRetry ? { onRetry } : {})}
+    />
+  );
 }
 
 /** The tiles' labels, in the order drawn. */
@@ -129,9 +141,36 @@ describe("the Collections card's tiles", () => {
     expect(useCollections).toHaveBeenCalledWith(NAV_COLLECTIONS_PARAMS);
   });
 
-  it("still says the counts failed, rather than holding their places forever", () => {
-    given({ list: LIST, statsError: new Error("boom") });
+  it("still says the counts failed, rather than holding their places forever, and offers Retry", () => {
+    const onRetry = vi.fn();
+    given({ list: LIST, failed: { error: "boom" }, onRetry });
     expect(screen.getByTestId("widget-card-error")).toBeInTheDocument();
+    screen.getByRole("button", { name: /retry/i }).click();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("says it is not available when its source refused this reader", () => {
+    given({
+      list: LIST,
+      failed: { error: "Not available", code: "unavailable" },
+    });
+    expect(screen.getByTestId("card-unavailable")).toBeInTheDocument();
+  });
+
+  it("names a collection's drafts beside its entries, and says nothing of none", () => {
+    given({
+      list: LIST,
+      counts: [
+        { slug: "authors", label: "Authors", group: null, count: 4, draft: 0 },
+        { slug: "posts", label: "Posts", group: null, count: 13, draft: 2 },
+      ],
+    });
+    expect(screen.getByRole("link", { name: /Posts/ })).toHaveTextContent(
+      "2 drafts"
+    );
+    expect(screen.getByRole("link", { name: /Authors/ })).not.toHaveTextContent(
+      /draft/
+    );
   });
 
   it("draws the frame's placeholder only while neither answer is known", () => {

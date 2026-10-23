@@ -24,6 +24,7 @@ import { RecentActivityCard } from "@admin/components/features/dashboard/RecentA
 import { SeedDemoContentCard } from "@admin/components/features/dashboard/SeedDemoContentCard";
 import { SinglesQuickLinks } from "@admin/components/features/dashboard/SinglesQuickLinks";
 import { TeamSummary } from "@admin/components/features/dashboard/TeamSummary";
+import { UpcomingReleasesCard } from "@admin/components/features/dashboard/UpcomingReleases";
 import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
 
 /**
@@ -42,4 +43,5 @@ export function registerCoreWidgetComponents(): void {
   registerCoreComponent("core#QuickCreate", QuickCreate);
   registerCoreComponent("core#TeamSummary", TeamSummary);
   registerCoreComponent("core#RecentActivity", RecentActivityCard);
+  registerCoreComponent("core#UpcomingReleases", UpcomingReleasesCard);
 }

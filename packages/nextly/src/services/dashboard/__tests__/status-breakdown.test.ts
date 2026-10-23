@@ -149,6 +149,28 @@ describe("the status breakdown honours the caller's row-level access", () => {
     );
   });
 
+  it("is the sum of the per-collection rows the Content card reads", async () => {
+    // One reading, two consumers: the summary's breakdown is derived from the
+    // rows `system:content` answers, never counted beside them.
+    const service = makeService(adapter);
+    const options = { scope: someResources(["posts"]), caller: CALLER };
+    const rows = await service.getContentByCollection(options);
+    const stats = await service.getStats(options);
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        slug: "posts",
+        count: ALICE_VISIBLE_TOTAL,
+        published: ALICE_VISIBLE_PUBLISHED,
+        draft: ALICE_VISIBLE_DRAFT,
+      }),
+    ]);
+    expect(stats.status).toEqual({
+      published: rows.reduce((sum, row) => sum + row.published, 0),
+      draft: rows.reduce((sum, row) => sum + row.draft, 0),
+    });
+  });
+
   it("asks for published and draft through the access-enforced count, per collection", async () => {
     await makeService(adapter).getStats({
       scope: someResources(["posts"]),

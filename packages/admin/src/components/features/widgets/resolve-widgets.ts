@@ -21,7 +21,7 @@ import type {
   WidgetChrome,
   AnyWidgetSetting,
 } from "nextly/config";
-import { widgetGateHolds } from "nextly/widget-gate";
+import { widgetGateHolds, type WidgetPermissionGate } from "nextly/widget-gate";
 
 import type {
   PluginMetadata,
@@ -87,7 +87,7 @@ export interface ReadableWidgetDeclaration {
   settings?: AnyWidgetSetting[];
   id: string;
   size?: "full" | "half";
-  requiredPermission?: string | readonly string[];
+  requiredPermission?: WidgetPermissionGate;
   title?: string;
   description?: string;
   icon?: string;

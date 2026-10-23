@@ -17,6 +17,8 @@ import {
   requiredPermissionSlugs,
   validateWidgetDefinition,
 } from "../definition";
+import { TEAM_SOURCE_ID } from "../system-source-ids";
+import { TEAM_GATE } from "../team-gate";
 
 function card(id: string) {
   const found = CORE_WIDGETS.find(widget => widget.id === id);
@@ -161,12 +163,20 @@ describe("core widget definitions", () => {
     ]);
   });
 
-  it("gates no card that predates the grid", () => {
+  it("gates only the team card among those that predate the grid, and the releases card", () => {
     const gated = CORE_WIDGETS.filter(
       widget => widget.requiredPermission !== undefined
     ).map(widget => widget.id);
 
-    expect(gated).toEqual(["core/upcoming-releases"]);
+    expect(gated).toEqual(["core/team", "core/upcoming-releases"]);
+  });
+
+  it("offers the team card on the gate its source asks", () => {
+    // The same constant, not an equal copy: the declaration and the resolver
+    // cannot come to name different grants.
+    const team = card("core/team");
+    expect(team.requiredPermission).toBe(TEAM_GATE);
+    expect(team.query).toEqual({ source: TEAM_SOURCE_ID, op: "list" });
   });
 
   /*

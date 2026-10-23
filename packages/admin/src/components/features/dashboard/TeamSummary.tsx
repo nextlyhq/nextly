@@ -2,11 +2,11 @@
 
 import { Card, CardContent } from "@nextlyhq/ui";
 import { ShieldCheck, Users as UsersIcon } from "lucide-react";
+import type { WidgetComponentProps } from "nextly/widget-result";
 import type React from "react";
 
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
-import { useDashboardStats } from "@admin/hooks/queries";
 
 import { CardFigure } from "../widgets/frame/figure";
 import {
@@ -65,25 +65,44 @@ function TeamCard({ label, count, href, Icon }: TeamCardProps) {
   );
 }
 
-export const TeamSummary: React.FC = () => {
-  const { data, isLoading, error, refetch } = useDashboardStats();
+/** The count a `system:team` row carries for `figure`, or `undefined` when the source sent none. */
+function figureOf(
+  rows: readonly Record<string, unknown>[],
+  figure: "users" | "roles"
+): number | undefined {
+  const row = rows.find(candidate => candidate.figure === figure);
+  return typeof row?.count === "number" ? row.count : undefined;
+}
 
-  // The card's frame draws its title, so this is only its body: the two counts, or the
-  // frame's own skeleton and error while they are not there.
-  if (isLoading) return <CardSkeleton shape="figure" />;
-  if (error) {
-    return (
+/**
+ * The dashboard's Team card, answered by `system:team` in the dashboard's batch.
+ *
+ * The source asks the card's gate itself, so a reader it refuses gets the
+ * frame's one "not available" state, and it sends the roles figure only to a
+ * reader who may see roles: a figure it did not send is not drawn, rather than
+ * drawn as 0.
+ */
+export const TeamSummary: React.FC<WidgetComponentProps> = ({
+  slot,
+  isFetching,
+  onRetry,
+}) => {
+  if (!slot) return isFetching ? <CardSkeleton shape="figure" /> : null;
+  if (!slot.ok) {
+    return slot.code === "unavailable" ? (
+      <CardUnavailable />
+    ) : (
       <CardError
         title="Team"
-        message="The team summary couldn't be loaded."
-        onRetry={() => void refetch()}
+        message={slot.error}
+        {...(onRetry ? { onRetry } : {})}
       />
     );
   }
-  const users = data?.users;
-  const roles = data?.roles;
-  // Neither count is this reader's to see: the frame's one unavailable state,
-  // rather than an empty body.
+  const rows = slot.result.op === "list" ? slot.result.items : [];
+  const users = figureOf(rows, "users");
+  const roles = figureOf(rows, "roles");
+  // Neither figure came: the frame's one unavailable state, rather than an empty body.
   if (users === undefined && roles === undefined) return <CardUnavailable />;
   return <TeamTiles users={users} roles={roles} />;
 };

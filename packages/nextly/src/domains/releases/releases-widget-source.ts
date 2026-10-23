@@ -26,6 +26,7 @@ import { refuseUnconsumedQueryFields } from "../widgets/sources";
 import { RELEASES_SOURCE_ID } from "../widgets/system-source-ids";
 import { registerSystemSource } from "../widgets/system-sources";
 
+import { RELEASE_ATTENTION_REASONS } from "./release-tabs";
 import type { ReleaseRow } from "./releases-repository";
 import type {
   ReleaseActor,
@@ -55,7 +56,28 @@ const RELEASE_FIELDS = [
   { name: "title", type: "string" as const, label: "Release" },
   { name: "state", type: "string" as const, label: "State" },
   { name: "scheduledAt", type: "date" as const, label: "Scheduled" },
+  // What a row is: `"release"`, or `"attention"` for a reason releases need
+  // attention, with that reason and how many of the reader's releases it holds.
+  { name: "kind", type: "string" as const, label: "Kind" },
+  /*
+   * 🔴 SELECTING this field is what asks for the attention rows: a query whose
+   * `select` names `reason` gets one row per reason this reader's releases need
+   * attention for (`stopped`, `overdue`), each with its `count`, before the
+   * upcoming releases. Every other query, including one with no `select` at
+   * all, gets the upcoming releases alone, exactly as before these rows existed.
+   * Selecting a field adds rows here and nowhere else, so the rule is stated
+   * on the field it hangs on.
+   */
+  { name: "reason", type: "string" as const, label: "Needs attention" },
+  { name: "count", type: "number" as const, label: "Releases" },
 ];
+
+/**
+ * The fields a release row carries when the query selects none: the three it
+ * has always carried, so a query that never asked for the attention fields is
+ * answered with exactly the rows it was answered with before they existed.
+ */
+const DEFAULT_RELEASE_NAMES = ["title", "state", "scheduledAt"];
 
 /**
  * The service, resolved at CALL time rather than at registration.
@@ -104,6 +126,7 @@ function actorFor(caller: ReadCaller): ReleaseActor {
 /** A release row reduced to the fields this source declares. */
 function projected(row: ReleaseRow, names: readonly string[]) {
   const full: Record<string, unknown> = {
+    kind: "release",
     title: row.title,
     state: row.state,
     scheduledAt: row.scheduledAt,
@@ -210,15 +233,55 @@ async function resolveReleases(
 
   const names = query.select?.length
     ? query.select.filter(name => RELEASE_FIELDS.some(f => f.name === name))
-    : RELEASE_FIELDS.map(f => f.name);
+    : DEFAULT_RELEASE_NAMES;
 
   return {
     op: "list",
-    items: rows.map(row => projected(row, names)),
+    items: [
+      ...(await attentionRows(query, caller, names)),
+      ...rows.map(row => projected(row, names)),
+    ],
     ...(describeFields(query.select) && {
       fields: describeFields(query.select),
     }),
   };
+}
+
+/**
+ * The reasons this reader's releases need attention, each with how many it
+ * holds, as rows before the upcoming ones -- only for a query that SELECTS
+ * `reason`.
+ *
+ * Opt-in, so every query that does not ask is answered exactly as it was before
+ * these rows existed. Counted by the releases service's own `count` with
+ * `tab: "attention"`, the count the Releases list shows for that reason, so the
+ * card and the list cannot disagree; a reason holding none is absent rather
+ * than a row reading 0. Not limited: `limit` sizes the upcoming releases, and
+ * there is one row per reason at most.
+ */
+async function attentionRows(
+  query: WidgetQuery,
+  caller: ReadCaller,
+  names: readonly string[]
+): Promise<Record<string, unknown>[]> {
+  if (!query.select?.includes("reason")) return [];
+  const counted = await Promise.all(
+    RELEASE_ATTENTION_REASONS.map(async reason => ({
+      kind: "attention",
+      reason,
+      count: await service().count(
+        { tab: "attention", reason },
+        actorFor(caller)
+      ),
+    }))
+  );
+  return counted
+    .filter(row => row.count > 0)
+    .map(row =>
+      Object.fromEntries(
+        names.map(name => [name, (row as Record<string, unknown>)[name]])
+      )
+    );
 }
 
 /**

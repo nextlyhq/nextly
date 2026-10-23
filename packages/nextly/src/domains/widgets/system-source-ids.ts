@@ -24,3 +24,9 @@ export const VERSIONS_SOURCE_ID = "system:versions";
 
 /** Who changed what, most recent first: the activity this caller may see. */
 export const ACTIVITY_SOURCE_ID = "system:activity";
+
+/** The Team card's figures: the number of people, and of roles for a reader who may see them. */
+export const TEAM_SOURCE_ID = "system:team";
+
+/** The Content card's collections, each with its entries and how many are drafts. */
+export const CONTENT_SOURCE_ID = "system:content";

@@ -56,6 +56,7 @@ import {
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { contributedWidgetSummaries } from "../../plugins/validate-admin-widgets";
 import { registerActivityWidgetSource } from "../../services/dashboard/activity-widget-source";
+import { registerSummaryWidgetSources } from "../../services/dashboard/summary-widget-sources";
 
 export function resetWidgetRegistries(
   plugins: readonly PluginDefinition[] = []
@@ -118,6 +119,7 @@ export function resetWidgetRegistries(
   registerReleasesWidgetSource();
   registerVersionsWidgetSource();
   registerActivityWidgetSource();
+  registerSummaryWidgetSources();
 
   // 🔴 A plugin's sources are NOT registered here, and the reason is a hard
   // ordering fact rather than a preference: this runs before any plugin
