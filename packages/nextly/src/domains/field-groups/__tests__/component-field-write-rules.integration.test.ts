@@ -819,6 +819,40 @@ describe.each(getConfiguredTestDialects())(
         expect(one.locked).toBe((live.one as Doc).locked);
       });
 
+      it("keeps another author's pending edit inside a group a later save touches", async () => {
+        const id = await publishedPage("hg");
+        const live = await stored("drafted", id);
+        const box = live.box as Doc;
+        const inBox = box.inBox as Doc;
+        // The allowed person's pending change to `locked`, which they may
+        // write, held in the draft.
+        await checkedAs("allowed").update({
+          collection: "drafted",
+          id,
+          data: {
+            box: { ...box, inBox: { ...inBox, locked: "locked-hg-pending" } },
+          },
+        } as never);
+        // The editor, who may not write `locked`, then saves the same group.
+        await checkedAs("editor").update({
+          collection: "drafted",
+          id,
+          data: { box: { ...box, inBox: { ...inBox, heading: "h-hg" } } },
+        } as never);
+
+        const draft = (await trusted.findByID({
+          collection: "drafted",
+          id,
+          depth: 1,
+          draft: true,
+        } as never)) as Doc;
+        const held = (draft.box as Doc).inBox as Doc;
+        expect([held.heading, held.locked]).toEqual([
+          "h-hg",
+          "locked-hg-pending",
+        ]);
+      });
+
       it("is refused when it adds an instance with a field no create may set", async () => {
         const id = await publishedPage("hn");
         const live = await stored("drafted", id);
@@ -949,6 +983,25 @@ describe.each(getConfiguredTestDialects())(
         // A dynamic zone reads back as a list, whatever it holds.
         const after = list((await stored("pages", id)).oneZone);
         expect(after.map(block => block.locked)).toEqual(["locked-rmz"]);
+      });
+
+      it("keeps a single dynamic-zone block another block would replace", async () => {
+        const { item } = await trusted.create({
+          collection: "pages",
+          data: {
+            title: "rpz",
+            oneZone: typed("note", { heading: "h", ...guardedValues("rpz") }),
+          },
+        } as never);
+        const id = String(item.id);
+        // A block of another type, which the save would add in place of the
+        // stored one, deleting it.
+        await updateAs("direct", "editor", id, {
+          oneZone: typed("quote", { line: "q" }),
+        });
+
+        const after = list((await stored("pages", id)).oneZone);
+        expect(after.map(block => block.locked)).toEqual(["locked-rpz"]);
       });
 
       it("removes it for an updater who may change everything it holds", async () => {
