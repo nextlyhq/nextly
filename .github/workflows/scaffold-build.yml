@@ -159,6 +159,20 @@ jobs:
             source: local
             core: workspace
 
+          # Not a scaffold: an EXISTING app, as `create-next-app` makes it with its defaults,
+          # which since 16.4 turn Cache Components on (`cacheComponents: true` and
+          # `partialPrefetching: true`). Nextly does not support Cache Components yet, so
+          # adding Nextly to such an app must turn it off. The leg asserts that on the config
+          # create-nextly-app leaves, then builds the app and boots it, so the user path
+          # through the existing-app installer is exercised end to end: until this leg, no
+          # job ran that installer at all.
+          - name: existing-create-next-app
+            template: blank
+            pm: npm
+            source: local
+            core: workspace
+            existing: create-next-app
+
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -503,10 +517,48 @@ jobs:
             args="$args --local-template $GITHUB_WORKSPACE/templates"
           fi
 
+          # The existing-app leg: the app comes from `create-next-app`, at the release that
+          # matches the Next.js this workspace builds with, and Nextly is added INTO it. With
+          # `--yes` it takes create-next-app's defaults, the ones a user gets; `--src-dir` only
+          # puts the app where the checks below look for it.
+          if [ "${{ matrix.existing }}" = "create-next-app" ]; then
+            next_version=$(node -p "require('$GITHUB_WORKSPACE/apps/playground/node_modules/next/package.json').version")
+            npx --yes "create-next-app@$next_version" scaffolded-app --yes --use-npm --src-dir
+            cd scaffolded-app
+            # The fixture, checked before it is relied on: if create-next-app stops turning
+            # Cache Components on, this leg would pass while testing nothing.
+            grep -q 'cacheComponents: true' next.config.ts || {
+              echo "create-next-app $next_version did not turn Cache Components on; nothing here tests turning it off"
+              cat next.config.ts
+              exit 1
+            }
+            npm exec --yes --package="$tarball" -- create-nextly-app . --yes --database sqlite \
+              --local-template "$GITHUB_WORKSPACE/templates"
+            exit 0
+          fi
+
           if [ "${{ matrix.pm }}" = "pnpm" ]; then
             pnpm dlx "$tarball" scaffolded-app $args
           else
             npm exec --yes --package="$tarball" -- create-nextly-app scaffolded-app $args
+          fi
+
+      # What the existing-app leg exists for: create-nextly-app left the app's config with
+      # Cache Components off, and without `partialPrefetching`, which Next.js refuses once
+      # Cache Components is off. Red on a create-nextly-app that leaves the config alone.
+      - name: Check create-nextly-app turned Cache Components off
+        if: matrix.existing == 'create-next-app'
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          cat next.config.ts
+          grep -q 'cacheComponents: false' next.config.ts || {
+            echo "next.config.ts still has Cache Components on after create-nextly-app"
+            exit 1
+          }
+          if grep -q 'partialPrefetching' next.config.ts; then
+            echo "next.config.ts still sets partialPrefetching, which Next.js refuses without Cache Components"
+            exit 1
           fi
 
       # The controls, before the build's verdict is worth anything. A job that scaffolded
@@ -680,8 +732,48 @@ jobs:
           # Nothing may have been fetched from Google at build time. Asserted on the
           # OUTPUT rather than on the log: Next emits these modules only when the
           # `next/font/google` loader actually runs, so their absence is structural.
-          if grep -rq "internal/font/google" .next; then
+          # Not on the existing-app leg: there the font is create-next-app's own layout,
+          # which is the user's code, not anything Nextly wrote.
+          if [ -z "${{ matrix.existing }}" ] && grep -rq "internal/font/google" .next; then
             echo "the build ran the Google font loader, which needs the network"
+            exit 1
+          fi
+
+      # A build proves the app compiles; this proves it serves. The existing-app installer
+      # writes the routes, the instrumentation hook and the config Nextly starts from, so the
+      # health route answering with a connected database is Nextly running in the user's
+      # app, and the admin's setup page loading is its admin mounted there. The log must not
+      # carry Nextly's Cache Components warning: the config this app ended with has it off.
+      - name: Boot the existing app and reach Nextly
+        if: matrix.existing == 'create-next-app'
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          PORT=3100 NEXT_TELEMETRY_DISABLED=1 NEXTLY_TELEMETRY_DISABLED=1 npm start > /tmp/existing-app-start.log 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          health=""
+          for _ in $(seq 1 60); do
+            health=$(curl -sf http://localhost:3100/api/health || true)
+            [ -n "$health" ] && break
+            sleep 1
+          done
+          echo "health: $health"
+          echo "$health" | node -e '
+            let d = "";
+            process.stdin.on("data", c => (d += c)).on("end", () => {
+              const body = JSON.parse(d || "{}");
+              if (body.ok !== true || body.database?.connected !== true) {
+                console.error("Nextly did not report healthy with a connected database");
+                process.exit(1);
+              }
+            });
+          ' || { tail -40 /tmp/existing-app-start.log; exit 1; }
+          status=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3100/admin/setup)
+          echo "admin setup page: $status"
+          [ "$status" = 200 ] || { tail -40 /tmp/existing-app-start.log; exit 1; }
+          if grep -q "Cache Components isn't supported" /tmp/existing-app-start.log; then
+            echo "Nextly warned about Cache Components in an app whose config has it off"
             exit 1
           fi
 
