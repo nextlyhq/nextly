@@ -159,6 +159,9 @@ export const config = [
       // `tsup.preset.config.ts` for a bundle built with different options.
       "**/tsup.config.{js,ts,mjs,cjs}",
       "**/tsup.*.config.{js,ts,mjs,cjs}",
+      // The same for tsdown, which most packages build with.
+      "**/tsdown.config.{js,ts,mjs,cjs}",
+      "**/tsdown.*.config.{js,ts,mjs,cjs}",
       "**/next.config.{js,ts,mjs,cjs}",
       "**/vitest.config.{js,ts,mjs,cjs}",
       // The same for a variant config, matching the `tsup.*.config` line above:

@@ -2,7 +2,7 @@ import { cpSync, existsSync, rmSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { defineConfig } from "tsup";
+import { defineConfig } from "tsdown";
 
 // The repository's own skill check, so the build bundles exactly the skills
 // it holds to be for people building with Nextly.
@@ -73,7 +73,8 @@ function copyBundledSkillsFromRepository(): void {
 export default defineConfig({
   entry: ["src/index.ts", "src/cli.ts"],
   format: ["esm", "cjs"],
-  dts: true,
+  // Declarations without a type check: `check-types` is the type check.
+  dts: { sourcemap: false, compilerOptions: { noCheck: true } },
   clean: true,
   sourcemap: true,
   treeshake: true,
@@ -81,17 +82,17 @@ export default defineConfig({
   platform: "node",
   // Bundle all dependencies so the CLI is self-contained and works
   // without needing to install dependencies (e.g. via npx or yalc).
-  noExternal: [/(.*)/],
+  deps: { alwaysBundle: [/(.*)/] },
   // Inject createRequire so CJS deps (fs-extra, graceful-fs) that use
   // require("fs") work correctly when bundled into ESM output.
-  banner: {
-    js: 'import { createRequire } from "module"; const require = createRequire(import.meta.url);',
+  // Keep the file names the exports map already publishes.
+  outExtensions({ format }) {
+    return format === "cjs"
+      ? { js: ".cjs", dts: ".d.cts" }
+      : { js: ".mjs", dts: ".d.ts" };
   },
-  outExtension({ format }) {
-    return {
-      js: format === "cjs" ? ".cjs" : ".mjs",
-    };
-  },
+  checks: { legacyCjs: false },
+  cjsDefault: false,
   async onSuccess() {
     copyBundledTemplates();
     copyBundledSkillsFromRepository();
