@@ -30,7 +30,14 @@ const T0 = Date.parse("2026-10-22T12:00:00Z");
 
 /** The trail, newest first, as the walk reads it: `minutes` before T0 each. */
 function trail(
-  entries: Array<{ entryId: string; minutes: number; userId?: string }>
+  entries: Array<{
+    entryId: string;
+    minutes: number;
+    userId?: string;
+    /** Another collection than `notes`: one the registry does not hold, so no reader may see it. */
+    collection?: string;
+    action?: string;
+  }>
 ): Record<string, unknown>[] {
   return entries.map((entry, index) => ({
     id: `r${String(10_000 - index).padStart(5, "0")}`,
@@ -38,8 +45,8 @@ function trail(
     userId: entry.userId ?? "ana",
     userName: "Ana",
     userEmail: "ana@example.test",
-    action: "update",
-    collection: "notes",
+    action: entry.action ?? "update",
+    collection: entry.collection ?? "notes",
     entryId: entry.entryId,
     entryTitle: entry.entryId,
     subjectKind: "collection",
@@ -176,6 +183,63 @@ describe("the feed's row limit", () => {
       caller: { user: { id: "reader", roles: [] } },
     });
     expect(unasked.activities).toHaveLength(5);
+  });
+});
+
+describe("a page the walk's bound ended", () => {
+  /** `n` rows no reader may see, each a different document a minute apart, newest first. */
+  const unreadable = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      entryId: `gone-${i}`,
+      collection: "gone",
+      minutes: i,
+    }));
+
+  it("hands a position past what it read when nothing it read could be shown", async () => {
+    // The whole bound is unreadable; the readable save lies past it.
+    const rows = trail([
+      ...unreadable(1_000),
+      { entryId: "n1", minutes: 2_000 },
+    ]);
+    const { service } = serviceOver(rows);
+
+    const first = await feed(service, 5);
+
+    expect(first.activities).toEqual([]);
+    expect(first.hasMore).toBe(true);
+    // After the last row the walk read, and carrying no run: nothing was shown.
+    expect(first.next).toEqual({
+      createdAt: (rows[999]?.createdAt as Date).toISOString(),
+      id: rows[999]?.id,
+    });
+
+    const second = await serviceOver(
+      rows.slice(1_000)
+    ).service.getRecentActivity({
+      limit: 5,
+      scope: someResources(["notes"]),
+      caller: { user: { id: "reader", roles: [] } },
+      before: first.next,
+    });
+    expect(second.activities.map(a => a.entryId)).toEqual(["n1"]);
+  });
+
+  it("calls no count a floor when the last row shown could never be one of a run", async () => {
+    // The bound ends on a deletion: no later read could add a save to it.
+    const rows = trail([
+      ...unreadable(999),
+      { entryId: "n1", minutes: 1_500, action: "delete" },
+      { entryId: "n1", minutes: 1_501 },
+    ]);
+    const { service } = serviceOver(rows);
+
+    const page = await feed(service, 5);
+
+    expect(
+      page.activities.map(a => [a.action, a.count, a.countAtLeast])
+    ).toEqual([["delete", 1, false]]);
+    expect(page.hasMore).toBe(true);
+    expect(page.next?.run).toBeUndefined();
   });
 });
 

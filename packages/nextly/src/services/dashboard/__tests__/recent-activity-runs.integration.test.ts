@@ -279,6 +279,47 @@ describe.each(getConfiguredTestDialects())(
       expect(second.activities.map(row => row.id)).toEqual([olderSave.id]);
     });
 
+    it("passes a stretch its reader may not see that is longer than the walk's bound", async () => {
+      const t = await boot(dialect);
+      const note = await entry(t, NOTES);
+      const secret = await entry(t, SECRET);
+      // Ten rounds of a hundred, every one a save Ana may not read, then
+      // an older save she may.
+      const hidden = Array.from({ length: 1_000 }, (_, i) => ({
+        id: randomUUID(),
+        actor_type: "user",
+        user_id: BEN.id,
+        user_name: BEN.name,
+        user_email: BEN.email,
+        action: "update",
+        collection: SECRET,
+        entry_id: secret,
+        entry_title: "Secret",
+        subject_kind: "collection",
+        metadata: JSON.stringify({ changedFields: ["title", "updatedAt"] }),
+        created_at: new Date(T0 - i * 1_000),
+      }));
+      await t.adapter.insertMany("activity_log", hidden);
+      const readable = await written(t, at(120), () =>
+        logSave(t, ANA, NOTES, note)
+      );
+      const scope = someResources([NOTES, SECRET]);
+
+      const first = await feed(t, as(ANA), { limit: 5, scope });
+      expect(first.activities).toEqual([]);
+      expect(first.hasMore).toBe(true);
+      // Past the stretch, carrying no run: nothing was shown that a save could join.
+      expect(first.next).toBeDefined();
+      expect(first.next?.run).toBeUndefined();
+
+      const second = await feed(t, as(ANA), {
+        limit: 5,
+        scope,
+        before: first.next,
+      });
+      expect(second.activities.map(row => row.id)).toEqual([readable.id]);
+    });
+
     it("does not split a run on a save its reader may not see, and does for one who may", async () => {
       const t = await boot(dialect);
       const note = await entry(t, NOTES);
