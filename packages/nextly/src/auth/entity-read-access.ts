@@ -196,6 +196,53 @@ export function authorizationGroups(
 }
 
 /**
+ * The same order as {@link authorizationGroups}, for decisions that arrive one
+ * at a time rather than as a list known in advance: the first runs alone, as
+ * the warm-up, and then at most `AUTHORIZATION_CONCURRENCY` run at once, each
+ * waiting turn starting as one finishes.
+ *
+ * For a caller that learns what to authorize while it runs, such as a declared
+ * widget's data function reading collections nobody named beforehand, where
+ * grouping a list cannot apply. Each call hands back the decision's own
+ * promise, so a rejection still reaches only the caller that asked.
+ */
+export function authorizationScheduler(
+  concurrency: number = AUTHORIZATION_CONCURRENCY
+): <T>(decide: () => Promise<T>) => Promise<T> {
+  // The same guard as the grouping's, for the same reason.
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw NextlyError.internal({
+      logContext: {
+        concurrency,
+        reason: "authorization concurrency must be a positive integer",
+      },
+    });
+  }
+  let running = 0;
+  let warmed = false;
+  const waiting: Array<() => void> = [];
+  const startWaiting = () => {
+    while (running < (warmed ? concurrency : 1) && waiting.length > 0) {
+      running += 1;
+      waiting.shift()?.();
+    }
+  };
+  return <T>(decide: () => Promise<T>) =>
+    new Promise<T>((resolve, reject) => {
+      waiting.push(() => {
+        decide()
+          .then(resolve, reject)
+          .finally(() => {
+            running -= 1;
+            warmed = true;
+            startWaiting();
+          });
+      });
+      startWaiting();
+    });
+}
+
+/**
  * Which of `slugs` this caller may read, decided one entity at a time.
  *
  * The decision is {@link canReadEntity}'s, taken per entity, because that is
