@@ -49,7 +49,10 @@ interface PluginMenuItemsProps {
  * (super-admin-aware, closed-until-loaded — the `useCan` semantics, D36) and
  * ordered/nested by `resolveVisibleMenuItems`.
  */
-export function PluginMenuItems({ isActive, section }: PluginMenuItemsProps) {
+export function PluginMenuItems({
+  isActive,
+  section,
+}: PluginMenuItemsProps): React.JSX.Element | null {
   const branding = useBranding();
   const { hasPermission } = useCurrentUserPermissions();
   const items = resolveVisibleMenuItems(

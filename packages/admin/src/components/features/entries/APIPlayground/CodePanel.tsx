@@ -12,6 +12,7 @@
  */
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import type { CodeBlockLanguage } from "./CodeBlock";
 import { CodeBlock } from "./CodeBlock";
@@ -57,7 +58,11 @@ export interface CodePanelProps {
   onFlavourChange: (flavour: keyof CodeSnippets) => void;
 }
 
-export function CodePanel({ code, flavour, onFlavourChange }: CodePanelProps) {
+export function CodePanel({
+  code,
+  flavour,
+  onFlavourChange,
+}: CodePanelProps): JSX.Element {
   return (
     <Tabs
       value={flavour}

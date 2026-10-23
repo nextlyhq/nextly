@@ -1,5 +1,6 @@
 "use client";
 
+import type { JSX } from "react";
 import { useMemo, useRef, useState } from "react";
 
 import { Monitor, Moon, Smartphone, Sun } from "@admin/components/icons";
@@ -182,7 +183,7 @@ export function PreviewPane({
   isPending?: boolean;
   /** The server refused or was unreachable. */
   error?: string | null;
-}) {
+}): JSX.Element {
   const [device, setDevice] = useState<PreviewDevice>("desktop");
   const [theme, setTheme] = useState<PreviewTheme>("light");
   const viewport = useRef<HTMLDivElement>(null);

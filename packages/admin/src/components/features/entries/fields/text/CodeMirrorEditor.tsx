@@ -14,6 +14,7 @@ import { linter, type Diagnostic } from "@codemirror/lint";
 import { EditorView } from "@codemirror/view";
 import CodeMirror, { type ReactCodeMirrorProps } from "@uiw/react-codemirror";
 import type { CodeLanguage } from "nextly/config";
+import type { JSX } from "react";
 import { useMemo } from "react";
 
 import { useTheme } from "@admin/context/providers/ThemeProvider";
@@ -262,7 +263,7 @@ export function CodeMirrorEditor({
   editorOptions,
   placeholder,
   onCreateEditor,
-}: CodeMirrorEditorProps) {
+}: CodeMirrorEditorProps): JSX.Element {
   // Not a colour: see `EditorChromeOptions.dark`.
   const { resolvedTheme } = useTheme();
 

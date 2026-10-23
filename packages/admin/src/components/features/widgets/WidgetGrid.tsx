@@ -24,7 +24,13 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
-import { useMemo, useRef, type ComponentProps, type ReactNode } from "react";
+import {
+  useMemo,
+  useRef,
+  type ComponentProps,
+  type ReactNode,
+  type JSX,
+} from "react";
 
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import {
@@ -332,7 +338,7 @@ function holdingBody({
   return awaitingArrangement ? <ArrangementLoading /> : null;
 }
 
-export function WidgetGrid() {
+export function WidgetGrid(): JSX.Element {
   const branding = useBranding();
   const { isPending, isUnavailable } = useBrandingStatus();
   const { hasPermission } = useCurrentUserPermissions();

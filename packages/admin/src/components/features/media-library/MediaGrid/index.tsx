@@ -72,6 +72,7 @@
  */
 
 import { Alert, AlertDescription, AlertTitle, Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { AlertTriangle, Folder } from "@admin/components/icons";
 import {
@@ -130,7 +131,7 @@ export function MediaGrid({
   onRetry,
   className = "",
   emptyStateMessage,
-}: MediaGridProps) {
+}: MediaGridProps): JSX.Element {
   // Loading state: Show skeleton cards
   if (isLoading) {
     return (

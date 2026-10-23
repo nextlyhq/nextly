@@ -1,6 +1,7 @@
 "use client";
 
 import { Alert, AlertDescription, Badge, Skeleton } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useMemo } from "react";
 
 import { Link } from "@admin/components/ui/link";
@@ -14,7 +15,7 @@ import { editRouteFor, useTemplateActions } from "../useTemplateActions";
  * The layouts every email is wrapped in, and the partials they share, each
  * with who owns it and the actions the reader may take on it.
  */
-export function LayoutsList() {
+export function LayoutsList(): JSX.Element {
   const {
     data: templates = [],
     isLoading,

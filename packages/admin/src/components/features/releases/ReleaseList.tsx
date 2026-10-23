@@ -20,7 +20,14 @@
  * @module components/features/releases/ReleaseList
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type JSX,
+} from "react";
 
 import {
   CalendarClock,
@@ -676,7 +683,7 @@ function ReleaseTabStrip({
   );
 }
 
-export function ReleaseList({ onCreate }: ReleaseListProps) {
+export function ReleaseList({ onCreate }: ReleaseListProps): JSX.Element {
   const q = useReleaseListQuestion();
   const data = useReleaseListData(q);
   const { counts, list, rows, total, anyRelease, failure } = data;

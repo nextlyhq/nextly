@@ -33,6 +33,7 @@ import {
   extractFieldGroupReferences,
   readFieldGroupType,
 } from "nextly/field-group-type";
+import type { JSX } from "react";
 import { useCallback, useMemo, useState } from "react";
 import {
   useFieldArray,
@@ -915,7 +916,7 @@ export function ComponentInput<TFieldValues extends FieldValues = FieldValues>({
   disabled = false,
   readOnly = false,
   className,
-}: ComponentInputProps<TFieldValues>) {
+}: ComponentInputProps<TFieldValues>): JSX.Element {
   // Get control from context if not provided
   const formContext = useFormContext<TFieldValues>();
   const control = controlProp ?? formContext?.control;

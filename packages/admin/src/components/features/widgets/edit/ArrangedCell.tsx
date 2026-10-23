@@ -12,7 +12,13 @@
 
 import type { SizeTier } from "@nextlyhq/ui/format";
 import { resolveWidgetSettings } from "nextly/config";
-import { useMemo, useState, type ComponentProps, type ReactNode } from "react";
+import {
+  useMemo,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+  type JSX,
+} from "react";
 
 import { cn } from "@admin/lib/utils";
 import type {
@@ -490,7 +496,7 @@ function CellSettings({
   );
 }
 
-export function ArrangedCell(props: ArrangedCellProps) {
+export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   const { row, isEditing, data } = props;
   /*
    * Open state lives with the CELL rather than with the grid: the sheet belongs

@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { Database, FileText, Plus } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
@@ -17,7 +18,9 @@ interface EmptyEntitiesStateProps {
  * with a guided empty state that points the user at the visual
  * builder so they can create their first entity in one click.
  */
-export function EmptyEntitiesState({ type }: EmptyEntitiesStateProps) {
+export function EmptyEntitiesState({
+  type,
+}: EmptyEntitiesStateProps): JSX.Element {
   const isCollection = type === "collection";
   const Icon = isCollection ? Database : FileText;
   const heading = isCollection ? "No collections yet" : "No singles yet";

@@ -42,6 +42,7 @@ import {
   useRef,
   lazy,
   Suspense,
+  type JSX,
 } from "react";
 
 import { RotateCcw } from "@admin/components/icons";
@@ -251,7 +252,7 @@ export function APIPlayground({
   isSingle = false,
   fields,
   hasStatus = false,
-}: APIPlaygroundProps) {
+}: APIPlaygroundProps): JSX.Element {
   // Structured endpoint state
   const [action, setAction] = useState<EndpointAction>(
     isSingle ? "get" : "list"

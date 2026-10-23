@@ -110,7 +110,44 @@ const templateAttachmentSchema = z.object({
  * which kind it is editing, and a `superRefine` that reads a `kind` field the
  * form does not carry would be inventing one to interrogate.
  */
-export function templateSchemaFor(isLayoutRow: boolean) {
+export function templateSchemaFor(isLayoutRow: boolean): z.ZodObject<{
+  name: z.ZodString;
+  slug: z.ZodString;
+  preheader: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  htmlContent: z.ZodString;
+  plainTextContent: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  useLayout: z.ZodBoolean;
+  isActive: z.ZodBoolean;
+  providerId: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  layoutId: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  fromOverride: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  replyTo: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  variables: z.ZodArray<
+    z.ZodObject<
+      {
+        name: z.ZodString;
+        description: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+        required: z.ZodBoolean;
+      },
+      z.core.$strip
+    >
+  >;
+  attachments: z.ZodArray<
+    z.ZodObject<
+      {
+        mediaId: z.ZodString;
+        filename: z.ZodOptional<z.ZodString>;
+        displayName: z.ZodString;
+        mimeType: z.ZodOptional<z.ZodString>;
+      },
+      z.core.$strip
+    >
+  >;
+  description: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  cc: z.ZodArray<z.ZodString>;
+  bcc: z.ZodArray<z.ZodString>;
+  subject: z.ZodString;
+}> {
   return templateSchema.extend({
     subject: isLayoutRow
       ? z.string().max(500)

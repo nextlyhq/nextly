@@ -26,7 +26,7 @@
  * @module components/features/entries/EntryForm/toolbar-density
  */
 
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { cn } from "@admin/lib/utils";
 
@@ -103,7 +103,7 @@ export function ToolbarLabel({
   priority,
   children,
   className,
-}: ToolbarLabelProps) {
+}: ToolbarLabelProps): JSX.Element {
   return (
     <span className={cn(COLLAPSE_AT[priority], className)}>{children}</span>
   );

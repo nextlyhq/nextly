@@ -28,6 +28,7 @@ import {
   type LexicalCommand,
 } from "lexical";
 import { useState, useCallback, useEffect } from "react";
+import type { JSX } from "react";
 
 import { Table } from "@admin/components/icons";
 
@@ -54,7 +55,7 @@ export interface RichTextTablePluginProps {
 
 export function RichTextTablePlugin({
   disabled = false,
-}: RichTextTablePluginProps) {
+}: RichTextTablePluginProps): JSX.Element {
   const [editor] = useLexicalComposerContext();
   const [rows, setRows] = useState("3");
   const [columns, setColumns] = useState("3");

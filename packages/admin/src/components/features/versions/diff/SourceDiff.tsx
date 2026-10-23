@@ -25,6 +25,7 @@
  * @module components/features/versions/diff/SourceDiff
  */
 
+import type { JSX } from "react";
 import { useEffect, useMemo, useState } from "react";
 
 import { codeClass } from "@admin/lib/code-palette";
@@ -277,7 +278,7 @@ function Line({
   );
 }
 
-export function SourceDiff({ node }: { node: SourceFieldDiff }) {
+export function SourceDiff({ node }: { node: SourceFieldDiff }): JSX.Element {
   const spans = useSourceSpans(node);
   return (
     <FieldRow node={node} status={node.status}>

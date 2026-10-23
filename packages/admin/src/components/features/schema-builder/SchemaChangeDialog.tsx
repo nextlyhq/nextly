@@ -23,6 +23,7 @@ import {
   Label,
 } from "@nextlyhq/ui";
 import { AlertTriangle } from "lucide-react";
+import type { JSX } from "react";
 import { useMemo, useState } from "react";
 
 import type {
@@ -70,7 +71,7 @@ export function SchemaChangeDialog({
   leavingTranslation = [],
   onConfirm,
   isApplying,
-}: SchemaChangeDialogProps) {
+}: SchemaChangeDialogProps): JSX.Element {
   // Track user resolutions for interactive fields
   const [resolutions, setResolutions] = useState<
     Record<string, FieldResolution>
