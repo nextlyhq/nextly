@@ -240,9 +240,10 @@ function snapshot(group: DeclaredWidgetGroup): DeclaredWidgetGroup {
 
 const WARNED_LEGACY_IDS = new Set<string>();
 
-/** Forgets which shared old-shape ids were warned about, for tests. */
+/** Forgets which shared old-shape ids, and which held widgets, were warned about, for tests. */
 export function resetLegacyIdWarnings(): void {
   WARNED_LEGACY_IDS.clear();
+  WARNED_HELD_COMPONENT_WIDGETS.clear();
 }
 
 /**
@@ -299,12 +300,49 @@ export function registerWidgetDeclarations(
         declaration,
         ...(collections === undefined ? {} : { collections }),
       });
-      // Published as it is kept, so the registry and this store hold the same
-      // declared widgets: every one the admin is offered has a declaration here
-      // to answer its cards from.
+      // Published as it is kept, so every declared widget the admin is offered
+      // has a declaration here to answer its cards from. One drawn by its own
+      // component is kept and checked but not published: the admin does not
+      // yet hand a widget's own component the props its declaration types
+      // (`WidgetProps`), and a component reading them would throw in the card.
+      if (drawnByOwnComponent(declaration)) {
+        warnComponentWidgetHeld(declaration, owner);
+        continue;
+      }
       registerDeclaredDefinition(toDefinition(declaration), owner);
     }
   }
+}
+
+/** Whether a declaration is drawn by its own component rather than a core display. */
+function drawnByOwnComponent(declaration: DeclaredWidgetShape): boolean {
+  return typeof declaration.display !== "string";
+}
+
+const WARNED_HELD_COMPONENT_WIDGETS = new Set<string>();
+
+/**
+ * Says, once per process for each widget and only in development, that a
+ * widget drawn by its own component is not offered yet, so its author is not
+ * left looking for a card that never appears.
+ */
+function warnComponentWidgetHeld(
+  declaration: DeclaredWidgetShape,
+  owner: string
+): void {
+  if (process.env.NODE_ENV === "production") return;
+  if (WARNED_HELD_COMPONENT_WIDGETS.has(declaration.id)) return;
+  WARNED_HELD_COMPONENT_WIDGETS.add(declaration.id);
+  getNextlyLogger().warn({
+    kind: "widget-component-display-held",
+    widget: declaration.id,
+    plugin: owner,
+    message:
+      `"${declaration.id}" (${owner}) declares display.component. Widgets ` +
+      `drawn by their own component are not offered on the dashboard yet, ` +
+      `so it is left out of the add panel until they are; widgets with a ` +
+      `core display are offered as declared.`,
+  });
 }
 
 /** Every declared widget, in the order startup kept them. */
