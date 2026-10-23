@@ -60,7 +60,9 @@ Paginated reads return `{ items, meta }`:
 
 ```json
 {
-  "items": [ /* T[] */ ],
+  "items": [
+    /* T[] */
+  ],
   "meta": {
     "total": 42,
     "page": 1,
@@ -120,7 +122,7 @@ Bulk-by-id and bulk-upload responses return `{ message, items, errors }`. The HT
 ```json
 {
   "message": "Bulk delete completed.",
-  "items": [ { "id": "post-1" }, { "id": "post-2" } ],
+  "items": [{ "id": "post-1" }, { "id": "post-2" }],
   "errors": [
     { "id": "post-3", "code": "NOT_FOUND", "message": "Resource not found." }
   ]
@@ -151,7 +153,11 @@ When the failure is a validation error, `error.data` carries field-level details
     "requestId": "req_xxx",
     "data": {
       "errors": [
-        { "path": "email", "code": "INVALID_EMAIL", "message": "Email is invalid." }
+        {
+          "path": "email",
+          "code": "INVALID_EMAIL",
+          "message": "Email is invalid."
+        }
       ]
     }
   }
@@ -160,149 +166,149 @@ When the failure is a validation error, `error.data` carries field-level details
 
 When an error carries `error.data.retryAfterSeconds` the runtime also sets `Retry-After` from it: rate-limited responses (`RATE_LIMITED`, 429) and a busy database (`DATABASE_BUSY`, 503).
 
-| Status | Common codes | When |
-|---|---|---|
-| `400` | `VALIDATION_ERROR` | Body or query failed validation. |
-| `401` | `AUTH_REQUIRED`, `AUTH_INVALID_CREDENTIALS` | Missing or bad credentials. |
-| `403` | `FORBIDDEN` | Authenticated but lacks permission. |
-| `403` | `EMAIL_NOT_VERIFIED` | Login with the correct password for an address not yet verified. |
-| `403` | `API_KEY_ROLE_ABOVE_CREATOR` | Creating an API key (or its summary) with a role that allows more than you can. |
-| `404` | `NOT_FOUND` | Resource does not exist. |
-| `409` | `CONFLICT`, `DUPLICATE` | Concurrent edit, duplicate email, etc. |
-| `413` | `PAYLOAD_TOO_LARGE` | Upload bigger than configured cap. |
-| `415` | `UNSUPPORTED_MEDIA_TYPE` | Wrong `Content-Type`. |
-| `422` | `INVALID_INPUT` | Semantic validation failed. |
-| `429` | `RATE_LIMITED` | Per-IP or per-key rate limit. `Retry-After` is set. |
-| `500` | `INTERNAL_ERROR`, `DATABASE_ERROR` | Server-side failure. |
-| `503` | `SERVICE_UNAVAILABLE` | Health probe / dependency outage. |
-| `503` | `DATABASE_BUSY` | The request waited `pool.connectionTimeoutMs` for a database connection and none was free, or a SQLite file stayed locked past `busyTimeout`. The statement or transaction that waited did not run; anything the request committed before it stays committed. `Retry-After` is set. |
+| Status | Common codes                                | When                                                                                                                                                                                                                                                                                |
+| ------ | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | `VALIDATION_ERROR`                          | Body or query failed validation.                                                                                                                                                                                                                                                    |
+| `401`  | `AUTH_REQUIRED`, `AUTH_INVALID_CREDENTIALS` | Missing or bad credentials.                                                                                                                                                                                                                                                         |
+| `403`  | `FORBIDDEN`                                 | Authenticated but lacks permission.                                                                                                                                                                                                                                                 |
+| `403`  | `EMAIL_NOT_VERIFIED`                        | Login with the correct password for an address not yet verified.                                                                                                                                                                                                                    |
+| `403`  | `API_KEY_ROLE_ABOVE_CREATOR`                | Creating an API key (or its summary) with a role that allows more than you can.                                                                                                                                                                                                     |
+| `404`  | `NOT_FOUND`                                 | Resource does not exist.                                                                                                                                                                                                                                                            |
+| `409`  | `CONFLICT`, `DUPLICATE`                     | Concurrent edit, duplicate email, etc.                                                                                                                                                                                                                                              |
+| `413`  | `PAYLOAD_TOO_LARGE`                         | Upload bigger than configured cap.                                                                                                                                                                                                                                                  |
+| `415`  | `UNSUPPORTED_MEDIA_TYPE`                    | Wrong `Content-Type`.                                                                                                                                                                                                                                                               |
+| `422`  | `INVALID_INPUT`                             | Semantic validation failed.                                                                                                                                                                                                                                                         |
+| `429`  | `RATE_LIMITED`                              | Per-IP or per-key rate limit. `Retry-After` is set.                                                                                                                                                                                                                                 |
+| `500`  | `INTERNAL_ERROR`, `DATABASE_ERROR`          | Server-side failure.                                                                                                                                                                                                                                                                |
+| `503`  | `SERVICE_UNAVAILABLE`                       | Health probe / dependency outage.                                                                                                                                                                                                                                                   |
+| `503`  | `DATABASE_BUSY`                             | The request waited `pool.connectionTimeoutMs` for a database connection and none was free, or a SQLite file stayed locked past `busyTimeout`. The statement or transaction that waited did not run; anything the request committed before it stays committed. `Retry-After` is set. |
 
 ## Endpoint inventory
 
 The catch-all dispatches every URL under `/admin/api/` to one of these endpoint groups; the health route is its own route at `/api/health`. Auth column shows whether a session cookie or API key is required.
 
-| Method | Path | Description | Auth |
-|---|---|---|---|
-| `GET` / `HEAD` | `/api/health` | Liveness + DB probe. | Public |
-| `GET` | `/admin/api/auth/setup-status` | Whether the setup wizard has run. | Public |
-| `POST` | `/admin/api/auth/setup` | Run the first-boot setup wizard (creates super admin). | Public, one-shot |
-| `GET` | `/admin/api/auth/session` | Current session info from the cookie. | Cookie |
-| `GET` | `/admin/api/auth/csrf` | CSRF token (when applicable). | Public |
-| `GET` | `/admin/api/auth/ui` | Login page UI: provider buttons, challenge views, slots. | Public |
-| `GET` | `/admin/api/auth/pending` | Which second factor an interrupted sign-in left outstanding; 204 when none is, or its attempt budget is spent. | Public |
-| `POST` | `/admin/api/auth/login` | Email + password login. Sets cookies. | Public |
-| `POST` | `/admin/api/auth/challenge/resolve` | Answer a second factor with the pending token. Sets cookies. | Pending token |
-| `POST` | `/admin/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in. Sets cookies. | Pending token |
-| `POST` | `/admin/api/auth/logout` | Delete the session's refresh token and clear cookies. | Cookie |
-| `POST` | `/admin/api/auth/refresh` | Rotate the access token. | Cookie |
-| `POST` | `/admin/api/auth/register` | Public registration. | Public |
-| `POST` | `/admin/api/auth/forgot-password` | Send password-reset email. | Public |
-| `POST` | `/admin/api/auth/reset-password` | Consume reset token and set new password. | Public |
-| `POST` | `/admin/api/auth/accept-invite` | Consume invite token and set a password. | Public |
-| `POST` | `/admin/api/auth/verify-email` | Consume email-verification token. | Public |
-| `POST` | `/admin/api/auth/verify-email/resend` | Resend the verification email. | Public |
-| `PATCH` | `/admin/api/auth/change-password` | Change current user's password. | Cookie |
-| `GET` | `/admin/api/me` | Current user profile. | Cookie / Bearer |
-| `PATCH` | `/admin/api/me` | Update current user profile. | Cookie / Bearer |
-| `GET` | `/admin/api/me/permissions` | Resolved permissions for current user. | Cookie / Bearer |
-| `GET` | `/admin/api/users` | List users. | `read-users` |
-| `POST` | `/admin/api/users` | Create user. | `create-users` |
-| `GET` | `/admin/api/users/{id}` | Get user. | `read-users` |
-| `PATCH` | `/admin/api/users/{id}` | Update user. | `update-users` |
-| `DELETE` | `/admin/api/users/{id}` | Delete user. Erases their email delivery records ([Email](/docs/guides/email#when-a-staff-user-is-deleted)); an email the provider already accepted may still be delivered. | `delete-users` |
-| `PATCH` | `/admin/api/users/{id}/password` | Set password hash directly. | `update-users` |
-| `GET` | `/admin/api/users/{id}/roles` | List user roles. | `read-roles` |
-| `POST` | `/admin/api/users/{id}/roles` | Assign role to user. | `update-users` |
-| `DELETE` | `/admin/api/users/{id}/roles/{roleId}` | Unassign role. | `update-users` |
-| `GET` | `/admin/api/roles` | List roles. | `read-roles` |
-| `POST` | `/admin/api/roles` | Create role. | `create-roles` |
-| `GET` | `/admin/api/roles/{id}` | Get role. | `read-roles` |
-| `PATCH` | `/admin/api/roles/{id}` | Update role. | `update-roles` |
-| `DELETE` | `/admin/api/roles/{id}` | Delete role. | `delete-roles` |
-| `GET` | `/admin/api/roles/{id}/permissions` | List role permissions. | `read-roles` or `read-permissions` |
-| `POST` | `/admin/api/roles/{id}/permissions` | Add permission to role. | `update-roles` |
-| `PATCH` | `/admin/api/roles/{id}/permissions` | Replace all role permissions. | `update-roles` |
-| `DELETE` | `/admin/api/roles/{id}/permissions/{permissionId}` | Remove permission from role. | `update-roles` |
-| `GET` | `/admin/api/roles/{id}/children` | List child roles (inheritance). | `read-roles` |
-| `POST` | `/admin/api/roles/{id}/children` | Add child role. | `update-roles` |
-| `DELETE` | `/admin/api/roles/{id}/children/{childId}` | Remove child role. | `update-roles` |
-| `GET` | `/admin/api/roles/{id}/parents` | List ancestor roles. | `read-roles` |
-| `GET` | `/admin/api/permissions` | List permissions. | `read-permissions` (or `read-roles`) |
-| `POST` | `/admin/api/permissions` | Create permission. | `create-permissions` |
-| `GET` | `/admin/api/permissions/{id}` | Get permission. | `read-permissions` (or `read-roles`) |
-| `PATCH` | `/admin/api/permissions/{id}` | Update permission. | `update-permissions` |
-| `DELETE` | `/admin/api/permissions/{id}` | Delete permission. | `delete-permissions` |
-| `GET` | `/admin/api/collections` | List collection definitions. | Authenticated |
-| `POST` | `/admin/api/collections` | Create collection (Schema Builder). | `manage-settings` |
-| `GET` | `/admin/api/collections/{slug}` | Get collection definition. | `read-{slug}` |
-| `PATCH` | `/admin/api/collections/{slug}` | Update collection definition. | `manage-settings` |
-| `DELETE` | `/admin/api/collections/{slug}` | Delete collection. | `manage-settings` |
-| `GET` | `/admin/api/collections/schema/{slug}` | Get enriched schema (with component fields). | `read-{slug}` |
-| `POST` | `/admin/api/collections/schema/{slug}/preview` | Dry-run schema diff. | `manage-settings` |
-| `POST` | `/admin/api/collections/schema/{slug}/apply` | Apply confirmed schema changes. | `manage-settings` |
-| `GET` | `/admin/api/collections/{slug}/entries` | List entries. | `read-{slug}` |
-| `POST` | `/admin/api/collections/{slug}/entries` | Create entry. | `create-{slug}` |
-| `GET` | `/admin/api/collections/{slug}/entries/{id}` | Get entry by ID. | `read-{slug}` |
-| `PATCH` | `/admin/api/collections/{slug}/entries/{id}` | Update entry. | `update-{slug}` |
-| `DELETE` | `/admin/api/collections/{slug}/entries/{id}` | Delete entry. | `delete-{slug}` |
-| `GET` | `/admin/api/collections/{slug}/entries/count` | Count entries matching a query. | `read-{slug}` |
-| `POST` | `/admin/api/collections/{slug}/entries/{id}/duplicate` | Duplicate entry. | `create-{slug}` |
-| `POST` | `/admin/api/collections/{slug}/entries/bulk-delete` | Bulk delete by IDs. | `delete-{slug}` |
-| `POST` | `/admin/api/collections/{slug}/entries/bulk-update` | Bulk update by IDs. | `update-{slug}` |
-| `PATCH` | `/admin/api/collections/{slug}/entries` | Bulk update by query. | `update-{slug}` |
-| `GET` | `/admin/api/singles` | List singles. | Authenticated |
-| `POST` | `/admin/api/singles` | Create single (Schema Builder). | `manage-settings` |
-| `GET` | `/admin/api/singles/{slug}` | Get single content. | `read-{slug}` |
-| `PATCH` | `/admin/api/singles/{slug}` | Update single content. | `update-{slug}` |
-| `DELETE` | `/admin/api/singles/{slug}` | Delete UI-created single. | `manage-settings` |
-| `GET` | `/admin/api/singles/{slug}/schema` | Get single schema. | `read-{slug}` |
-| `PATCH` | `/admin/api/singles/{slug}/schema` | Update single schema (Schema Builder). | `manage-settings` |
-| `POST` | `/admin/api/singles/schema/{slug}/preview` | Dry-run single schema diff. | `manage-settings` |
-| `POST` | `/admin/api/singles/schema/{slug}/apply` | Apply single schema changes. | `manage-settings` |
-| `GET` | `/admin/api/field-groups` | List field group definitions. | Authenticated |
-| `POST` | `/admin/api/field-groups` | Create field group. | `manage-settings` |
-| `GET` | `/admin/api/field-groups/{slug}` | Get field group. | Authenticated |
-| `PATCH` | `/admin/api/field-groups/{slug}` | Update field group. | `manage-settings` |
-| `DELETE` | `/admin/api/field-groups/{slug}` | Delete field group. | `manage-settings` |
-| `POST` | `/admin/api/field-groups/schema/{slug}/preview` | Dry-run field group schema diff. | `manage-settings` |
-| `POST` | `/admin/api/field-groups/schema/{slug}/apply` | Apply field group schema changes. | `manage-settings` |
-| `GET` | `/admin/api/email-providers` | List providers. | `read-email-providers` |
-| `POST` | `/admin/api/email-providers` | Create provider. | `create-email-providers` |
-| `GET` | `/admin/api/email-providers/{id}` | Get provider. | `read-email-providers` |
-| `PATCH` | `/admin/api/email-providers/{id}` | Update provider. | `update-email-providers` |
-| `DELETE` | `/admin/api/email-providers/{id}` | Delete provider. | `delete-email-providers` |
-| `PATCH` | `/admin/api/email-providers/{id}/default` | Set default provider. | `update-email-providers` |
-| `POST` | `/admin/api/email-providers/{id}/test` | Send a test email. | `read-email-providers` |
-| `GET` | `/admin/api/email-templates` | List templates. | `read-email-templates` |
-| `POST` | `/admin/api/email-templates` | Create template. | `create-email-templates` |
-| `GET` | `/admin/api/email-templates/layout` | Get shared header/footer. | `read-email-templates` |
-| `PATCH` | `/admin/api/email-templates/layout` | Update shared header/footer. | `update-email-templates` |
-| `GET` | `/admin/api/email-templates/{id}` | Get template. | `read-email-templates` |
-| `PATCH` | `/admin/api/email-templates/{id}` | Update template. | `update-email-templates` |
-| `DELETE` | `/admin/api/email-templates/{id}` | Delete template. | `delete-email-templates` |
-| `POST` | `/admin/api/email-templates/{id}/preview` | Render template with sample data. | `read-email-templates` |
-| `PATCH` | `/admin/api/email-templates/{id}/send-test` | Send the saved template to the signed-in user's own address. | `update-email-templates` |
-| `GET` | `/admin/api/user-fields` | List user field definitions. | `read-settings` |
-| `POST` | `/admin/api/user-fields` | Create user field. | `create-settings` |
-| `PATCH` | `/admin/api/user-fields/reorder` | Reorder user fields. | `update-settings` |
-| `GET` | `/admin/api/user-fields/{id}` | Get user field. | `read-settings` |
-| `PATCH` | `/admin/api/user-fields/{id}` | Update user field. | `update-settings` |
-| `DELETE` | `/admin/api/user-fields/{id}` | Delete user field. | `delete-settings` |
-| `GET` | `/admin/api/api-keys` | List every API key, to anyone who may read keys. | Cookie, or an API key with `read-api-keys` or `update-api-keys` |
-| `POST` | `/admin/api/api-keys` | Create API key. | Cookie (session-only) |
-| `GET` | `/admin/api/api-keys/abilities?tokenType=…&roleId=…` | **Experimental.** What a key you create now, of this type (and role, for `role-based`), would be able to do: `{ items: [{ slug, action, resource }], meta }`. Refused as creating that key would be. | Cookie (session-only) |
-| `GET` | `/admin/api/api-keys/{id}` | Get API key metadata. | Cookie, or an API key with `read-api-keys` or `update-api-keys` |
-| `PATCH` | `/admin/api/api-keys/{id}` | Update any key's name/description. | Cookie (session-only) |
-| `DELETE` | `/admin/api/api-keys/{id}` | Revoke any API key. | Cookie (session-only) |
-| `GET` | `/admin/api/dashboard/stats` | Admin dashboard stats. | Cookie |
-| `GET` | `/admin/api/dashboard/recent-entries` | Recent activity. | Cookie |
-| `GET` | `/admin/api/dashboard/activity` | Activity feed. | Cookie |
-| `GET` | `/admin/api/schema/journal` | Schema migration journal (super-admin only). | Cookie + super admin |
-| `GET` / `PATCH` | `/admin/api/general-settings` | Project-wide settings. | `manage-settings` |
-| `GET` | `/admin/api/image-sizes` | List image-size presets. | Cookie |
-| `POST` | `/admin/api/image-sizes` | Create image-size preset. | `manage-settings` |
-| `PATCH` | `/admin/api/image-sizes/{id}` | Update preset. | `manage-settings` |
-| `DELETE` | `/admin/api/image-sizes/{id}` | Delete preset. | `manage-settings` |
+| Method          | Path                                                   | Description                                                                                                                                                                                          | Auth                                                            |
+| --------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `GET` / `HEAD`  | `/api/health`                                          | Liveness + DB probe.                                                                                                                                                                                 | Public                                                          |
+| `GET`           | `/admin/api/auth/setup-status`                         | Whether the setup wizard has run.                                                                                                                                                                    | Public                                                          |
+| `POST`          | `/admin/api/auth/setup`                                | Run the first-boot setup wizard (creates super admin).                                                                                                                                               | Public, one-shot                                                |
+| `GET`           | `/admin/api/auth/session`                              | Current session info from the cookie.                                                                                                                                                                | Cookie                                                          |
+| `GET`           | `/admin/api/auth/csrf`                                 | CSRF token (when applicable).                                                                                                                                                                        | Public                                                          |
+| `GET`           | `/admin/api/auth/ui`                                   | Login page UI: provider buttons, challenge views, slots.                                                                                                                                             | Public                                                          |
+| `GET`           | `/admin/api/auth/pending`                              | Which second factor an interrupted sign-in left outstanding; 204 when none is, or its attempt budget is spent.                                                                                       | Public                                                          |
+| `POST`          | `/admin/api/auth/login`                                | Email + password login. Sets cookies.                                                                                                                                                                | Public                                                          |
+| `POST`          | `/admin/api/auth/challenge/resolve`                    | Answer a second factor with the pending token. Sets cookies.                                                                                                                                         | Pending token                                                   |
+| `POST`          | `/admin/api/auth/set-initial-password`                 | Replace an administrator-set password at first sign-in. Sets cookies.                                                                                                                                | Pending token                                                   |
+| `POST`          | `/admin/api/auth/logout`                               | Delete the session's refresh token and clear cookies.                                                                                                                                                | Cookie                                                          |
+| `POST`          | `/admin/api/auth/refresh`                              | Rotate the access token.                                                                                                                                                                             | Cookie                                                          |
+| `POST`          | `/admin/api/auth/register`                             | Public registration.                                                                                                                                                                                 | Public                                                          |
+| `POST`          | `/admin/api/auth/forgot-password`                      | Send password-reset email.                                                                                                                                                                           | Public                                                          |
+| `POST`          | `/admin/api/auth/reset-password`                       | Consume reset token and set new password.                                                                                                                                                            | Public                                                          |
+| `POST`          | `/admin/api/auth/accept-invite`                        | Consume invite token and set a password.                                                                                                                                                             | Public                                                          |
+| `POST`          | `/admin/api/auth/verify-email`                         | Consume email-verification token.                                                                                                                                                                    | Public                                                          |
+| `POST`          | `/admin/api/auth/verify-email/resend`                  | Resend the verification email.                                                                                                                                                                       | Public                                                          |
+| `PATCH`         | `/admin/api/auth/change-password`                      | Change current user's password.                                                                                                                                                                      | Cookie                                                          |
+| `GET`           | `/admin/api/me`                                        | Current user profile.                                                                                                                                                                                | Cookie / Bearer                                                 |
+| `PATCH`         | `/admin/api/me`                                        | Update current user profile.                                                                                                                                                                         | Cookie / Bearer                                                 |
+| `GET`           | `/admin/api/me/permissions`                            | Resolved permissions for current user.                                                                                                                                                               | Cookie / Bearer                                                 |
+| `GET`           | `/admin/api/users`                                     | List users.                                                                                                                                                                                          | `read-users`                                                    |
+| `POST`          | `/admin/api/users`                                     | Create user.                                                                                                                                                                                         | `create-users`                                                  |
+| `GET`           | `/admin/api/users/{id}`                                | Get user.                                                                                                                                                                                            | `read-users`                                                    |
+| `PATCH`         | `/admin/api/users/{id}`                                | Update user.                                                                                                                                                                                         | `update-users`                                                  |
+| `DELETE`        | `/admin/api/users/{id}`                                | Delete user. Erases their email delivery records ([Email](/docs/guides/email#when-a-staff-user-is-deleted)); an email the provider already accepted may still be delivered.                          | `delete-users`                                                  |
+| `PATCH`         | `/admin/api/users/{id}/password`                       | Set password hash directly.                                                                                                                                                                          | `update-users`                                                  |
+| `GET`           | `/admin/api/users/{id}/roles`                          | List user roles.                                                                                                                                                                                     | `read-roles`                                                    |
+| `POST`          | `/admin/api/users/{id}/roles`                          | Assign role to user.                                                                                                                                                                                 | `update-users`                                                  |
+| `DELETE`        | `/admin/api/users/{id}/roles/{roleId}`                 | Unassign role.                                                                                                                                                                                       | `update-users`                                                  |
+| `GET`           | `/admin/api/roles`                                     | List roles.                                                                                                                                                                                          | `read-roles`                                                    |
+| `POST`          | `/admin/api/roles`                                     | Create role.                                                                                                                                                                                         | `create-roles`                                                  |
+| `GET`           | `/admin/api/roles/{id}`                                | Get role.                                                                                                                                                                                            | `read-roles`                                                    |
+| `PATCH`         | `/admin/api/roles/{id}`                                | Update role.                                                                                                                                                                                         | `update-roles`                                                  |
+| `DELETE`        | `/admin/api/roles/{id}`                                | Delete role.                                                                                                                                                                                         | `delete-roles`                                                  |
+| `GET`           | `/admin/api/roles/{id}/permissions`                    | List role permissions.                                                                                                                                                                               | `read-roles` or `read-permissions`                              |
+| `POST`          | `/admin/api/roles/{id}/permissions`                    | Add permission to role.                                                                                                                                                                              | `update-roles`                                                  |
+| `PATCH`         | `/admin/api/roles/{id}/permissions`                    | Replace all role permissions.                                                                                                                                                                        | `update-roles`                                                  |
+| `DELETE`        | `/admin/api/roles/{id}/permissions/{permissionId}`     | Remove permission from role.                                                                                                                                                                         | `update-roles`                                                  |
+| `GET`           | `/admin/api/roles/{id}/children`                       | List child roles (inheritance).                                                                                                                                                                      | `read-roles`                                                    |
+| `POST`          | `/admin/api/roles/{id}/children`                       | Add child role.                                                                                                                                                                                      | `update-roles`                                                  |
+| `DELETE`        | `/admin/api/roles/{id}/children/{childId}`             | Remove child role.                                                                                                                                                                                   | `update-roles`                                                  |
+| `GET`           | `/admin/api/roles/{id}/parents`                        | List ancestor roles.                                                                                                                                                                                 | `read-roles`                                                    |
+| `GET`           | `/admin/api/permissions`                               | List permissions.                                                                                                                                                                                    | `read-permissions` (or `read-roles`)                            |
+| `POST`          | `/admin/api/permissions`                               | Create permission.                                                                                                                                                                                   | `create-permissions`                                            |
+| `GET`           | `/admin/api/permissions/{id}`                          | Get permission.                                                                                                                                                                                      | `read-permissions` (or `read-roles`)                            |
+| `PATCH`         | `/admin/api/permissions/{id}`                          | Update permission.                                                                                                                                                                                   | `update-permissions`                                            |
+| `DELETE`        | `/admin/api/permissions/{id}`                          | Delete permission.                                                                                                                                                                                   | `delete-permissions`                                            |
+| `GET`           | `/admin/api/collections`                               | List collection definitions.                                                                                                                                                                         | Authenticated                                                   |
+| `POST`          | `/admin/api/collections`                               | Create collection (Schema Builder).                                                                                                                                                                  | `manage-settings`                                               |
+| `GET`           | `/admin/api/collections/{slug}`                        | Get collection definition.                                                                                                                                                                           | `read-{slug}`                                                   |
+| `PATCH`         | `/admin/api/collections/{slug}`                        | Update collection definition.                                                                                                                                                                        | `manage-settings`                                               |
+| `DELETE`        | `/admin/api/collections/{slug}`                        | Delete collection.                                                                                                                                                                                   | `manage-settings`                                               |
+| `GET`           | `/admin/api/collections/schema/{slug}`                 | Get enriched schema (with component fields).                                                                                                                                                         | `read-{slug}`                                                   |
+| `POST`          | `/admin/api/collections/schema/{slug}/preview`         | Dry-run schema diff.                                                                                                                                                                                 | `manage-settings`                                               |
+| `POST`          | `/admin/api/collections/schema/{slug}/apply`           | Apply confirmed schema changes.                                                                                                                                                                      | `manage-settings`                                               |
+| `GET`           | `/admin/api/collections/{slug}/entries`                | List entries.                                                                                                                                                                                        | `read-{slug}`                                                   |
+| `POST`          | `/admin/api/collections/{slug}/entries`                | Create entry.                                                                                                                                                                                        | `create-{slug}`                                                 |
+| `GET`           | `/admin/api/collections/{slug}/entries/{id}`           | Get entry by ID.                                                                                                                                                                                     | `read-{slug}`                                                   |
+| `PATCH`         | `/admin/api/collections/{slug}/entries/{id}`           | Update entry.                                                                                                                                                                                        | `update-{slug}`                                                 |
+| `DELETE`        | `/admin/api/collections/{slug}/entries/{id}`           | Delete entry.                                                                                                                                                                                        | `delete-{slug}`                                                 |
+| `GET`           | `/admin/api/collections/{slug}/entries/count`          | Count entries matching a query.                                                                                                                                                                      | `read-{slug}`                                                   |
+| `POST`          | `/admin/api/collections/{slug}/entries/{id}/duplicate` | Duplicate entry.                                                                                                                                                                                     | `create-{slug}`                                                 |
+| `POST`          | `/admin/api/collections/{slug}/entries/bulk-delete`    | Bulk delete by IDs.                                                                                                                                                                                  | `delete-{slug}`                                                 |
+| `POST`          | `/admin/api/collections/{slug}/entries/bulk-update`    | Bulk update by IDs.                                                                                                                                                                                  | `update-{slug}`                                                 |
+| `PATCH`         | `/admin/api/collections/{slug}/entries`                | Bulk update by query.                                                                                                                                                                                | `update-{slug}`                                                 |
+| `GET`           | `/admin/api/singles`                                   | List singles.                                                                                                                                                                                        | Authenticated                                                   |
+| `POST`          | `/admin/api/singles`                                   | Create single (Schema Builder).                                                                                                                                                                      | `manage-settings`                                               |
+| `GET`           | `/admin/api/singles/{slug}`                            | Get single content.                                                                                                                                                                                  | `read-{slug}`                                                   |
+| `PATCH`         | `/admin/api/singles/{slug}`                            | Update single content.                                                                                                                                                                               | `update-{slug}`                                                 |
+| `DELETE`        | `/admin/api/singles/{slug}`                            | Delete UI-created single.                                                                                                                                                                            | `manage-settings`                                               |
+| `GET`           | `/admin/api/singles/{slug}/schema`                     | Get single schema.                                                                                                                                                                                   | `read-{slug}`                                                   |
+| `PATCH`         | `/admin/api/singles/{slug}/schema`                     | Update single schema (Schema Builder).                                                                                                                                                               | `manage-settings`                                               |
+| `POST`          | `/admin/api/singles/schema/{slug}/preview`             | Dry-run single schema diff.                                                                                                                                                                          | `manage-settings`                                               |
+| `POST`          | `/admin/api/singles/schema/{slug}/apply`               | Apply single schema changes.                                                                                                                                                                         | `manage-settings`                                               |
+| `GET`           | `/admin/api/field-groups`                              | List field group definitions.                                                                                                                                                                        | Authenticated                                                   |
+| `POST`          | `/admin/api/field-groups`                              | Create field group.                                                                                                                                                                                  | `manage-settings`                                               |
+| `GET`           | `/admin/api/field-groups/{slug}`                       | Get field group.                                                                                                                                                                                     | Authenticated                                                   |
+| `PATCH`         | `/admin/api/field-groups/{slug}`                       | Update field group.                                                                                                                                                                                  | `manage-settings`                                               |
+| `DELETE`        | `/admin/api/field-groups/{slug}`                       | Delete field group.                                                                                                                                                                                  | `manage-settings`                                               |
+| `POST`          | `/admin/api/field-groups/schema/{slug}/preview`        | Dry-run field group schema diff.                                                                                                                                                                     | `manage-settings`                                               |
+| `POST`          | `/admin/api/field-groups/schema/{slug}/apply`          | Apply field group schema changes.                                                                                                                                                                    | `manage-settings`                                               |
+| `GET`           | `/admin/api/email-providers`                           | List providers.                                                                                                                                                                                      | `read-email-providers`                                          |
+| `POST`          | `/admin/api/email-providers`                           | Create provider.                                                                                                                                                                                     | `create-email-providers`                                        |
+| `GET`           | `/admin/api/email-providers/{id}`                      | Get provider.                                                                                                                                                                                        | `read-email-providers`                                          |
+| `PATCH`         | `/admin/api/email-providers/{id}`                      | Update provider.                                                                                                                                                                                     | `update-email-providers`                                        |
+| `DELETE`        | `/admin/api/email-providers/{id}`                      | Delete provider.                                                                                                                                                                                     | `delete-email-providers`                                        |
+| `PATCH`         | `/admin/api/email-providers/{id}/default`              | Set default provider.                                                                                                                                                                                | `update-email-providers`                                        |
+| `POST`          | `/admin/api/email-providers/{id}/test`                 | Send a test email.                                                                                                                                                                                   | `read-email-providers`                                          |
+| `GET`           | `/admin/api/email-templates`                           | List templates.                                                                                                                                                                                      | `read-email-templates`                                          |
+| `POST`          | `/admin/api/email-templates`                           | Create template.                                                                                                                                                                                     | `create-email-templates`                                        |
+| `GET`           | `/admin/api/email-templates/layout`                    | Get shared header/footer.                                                                                                                                                                            | `read-email-templates`                                          |
+| `PATCH`         | `/admin/api/email-templates/layout`                    | Update shared header/footer.                                                                                                                                                                         | `update-email-templates`                                        |
+| `GET`           | `/admin/api/email-templates/{id}`                      | Get template.                                                                                                                                                                                        | `read-email-templates`                                          |
+| `PATCH`         | `/admin/api/email-templates/{id}`                      | Update template.                                                                                                                                                                                     | `update-email-templates`                                        |
+| `DELETE`        | `/admin/api/email-templates/{id}`                      | Delete template.                                                                                                                                                                                     | `delete-email-templates`                                        |
+| `POST`          | `/admin/api/email-templates/{id}/preview`              | Render template with sample data.                                                                                                                                                                    | `read-email-templates`                                          |
+| `PATCH`         | `/admin/api/email-templates/{id}/send-test`            | Send the saved template to the signed-in user's own address.                                                                                                                                         | `update-email-templates`                                        |
+| `GET`           | `/admin/api/user-fields`                               | List user field definitions.                                                                                                                                                                         | `read-settings`                                                 |
+| `POST`          | `/admin/api/user-fields`                               | Create user field.                                                                                                                                                                                   | `create-settings`                                               |
+| `PATCH`         | `/admin/api/user-fields/reorder`                       | Reorder user fields.                                                                                                                                                                                 | `update-settings`                                               |
+| `GET`           | `/admin/api/user-fields/{id}`                          | Get user field.                                                                                                                                                                                      | `read-settings`                                                 |
+| `PATCH`         | `/admin/api/user-fields/{id}`                          | Update user field.                                                                                                                                                                                   | `update-settings`                                               |
+| `DELETE`        | `/admin/api/user-fields/{id}`                          | Delete user field.                                                                                                                                                                                   | `delete-settings`                                               |
+| `GET`           | `/admin/api/api-keys`                                  | List every API key, to anyone who may read keys.                                                                                                                                                     | Cookie, or an API key with `read-api-keys` or `update-api-keys` |
+| `POST`          | `/admin/api/api-keys`                                  | Create API key.                                                                                                                                                                                      | Cookie (session-only)                                           |
+| `GET`           | `/admin/api/api-keys/abilities?tokenType=…&roleId=…`   | **Experimental.** What a key you create now, of this type (and role, for `role-based`), would be able to do: `{ items: [{ slug, action, resource }], meta }`. Refused as creating that key would be. | Cookie (session-only)                                           |
+| `GET`           | `/admin/api/api-keys/{id}`                             | Get API key metadata.                                                                                                                                                                                | Cookie, or an API key with `read-api-keys` or `update-api-keys` |
+| `PATCH`         | `/admin/api/api-keys/{id}`                             | Update any key's name/description.                                                                                                                                                                   | Cookie (session-only)                                           |
+| `DELETE`        | `/admin/api/api-keys/{id}`                             | Revoke any API key.                                                                                                                                                                                  | Cookie (session-only)                                           |
+| `GET`           | `/admin/api/dashboard/stats`                           | Admin dashboard stats.                                                                                                                                                                               | Cookie                                                          |
+| `GET`           | `/admin/api/dashboard/recent-entries`                  | Recent activity.                                                                                                                                                                                     | Cookie                                                          |
+| `GET`           | `/admin/api/dashboard/activity`                        | Activity feed.                                                                                                                                                                                       | Cookie                                                          |
+| `GET`           | `/admin/api/schema/journal`                            | Schema migration journal (super-admin only).                                                                                                                                                         | Cookie + super admin                                            |
+| `GET` / `PATCH` | `/admin/api/general-settings`                          | Project-wide settings.                                                                                                                                                                               | `manage-settings`                                               |
+| `GET`           | `/admin/api/image-sizes`                               | List image-size presets.                                                                                                                                                                             | Cookie                                                          |
+| `POST`          | `/admin/api/image-sizes`                               | Create image-size preset.                                                                                                                                                                            | `manage-settings`                                               |
+| `PATCH`         | `/admin/api/image-sizes/{id}`                          | Update preset.                                                                                                                                                                                       | `manage-settings`                                               |
+| `DELETE`        | `/admin/api/image-sizes/{id}`                          | Delete preset.                                                                                                                                                                                       | `manage-settings`                                               |
 
 The slug-based permissions use the pattern `{action}-{slug}` so a `posts` collection requires `read-posts`, `create-posts`, etc.
 
@@ -419,9 +425,7 @@ curl "http://localhost:3000/admin/api/collections/posts/entries?limit=10&page=1&
 
 ```json
 {
-  "items": [
-    { "id": "abc-123", "title": "Hello world", "status": "published" }
-  ],
+  "items": [{ "id": "abc-123", "title": "Hello world", "status": "published" }],
   "meta": {
     "total": 42,
     "page": 1,
@@ -598,12 +602,12 @@ These parameters are accepted by every list endpoint that delegates to the colle
 
 For Draft/Published collections and singles, `?status=` controls which lifecycle states a read returns.
 
-| Value | Returns |
-|---|---|
+| Value       | Returns                                                                      |
+| ----------- | ---------------------------------------------------------------------------- |
 | _(omitted)_ | Published only — the safe default. Drafts are never returned unless you ask. |
-| `published` | Published only (explicit). |
-| `draft` | Drafts only. |
-| `all` | Every entry regardless of status. |
+| `published` | Published only (explicit).                                                   |
+| `draft`     | Drafts only.                                                                 |
+| `all`       | Every entry regardless of status.                                            |
 
 ```
 ?status=all
@@ -625,20 +629,26 @@ Filter rows using bracket notation:
 
 Operators (verified against `packages/nextly/src/domains/collections/query/query-operators.ts`):
 
-| Operator | Description | Query string example |
-|---|---|---|
-| `equals` | Exact match. | `where[status][equals]=published` |
-| `not_equals` | Not equal. | `where[status][not_equals]=draft` |
-| `greater_than` | `>` | `where[price][greater_than]=100` |
-| `greater_than_equal` | `>=` | `where[price][greater_than_equal]=100` |
-| `less_than` | `<` | `where[price][less_than]=50` |
-| `less_than_equal` | `<=` | `where[price][less_than_equal]=50` |
-| `like` | SQL `LIKE` (case-sensitive). | `where[title][like]=%hello%` |
-| `contains` | Case-insensitive substring (`ILIKE`). | `where[title][contains]=hello` |
-| `search` | Alias for `contains`. | `where[title][search]=hello` |
-| `in` | Value in comma-separated list. | `where[status][in]=draft,published` |
-| `not_in` | Value not in comma-separated list. | `where[status][not_in]=archived` |
-| `exists` | Field is non-null when `true`, null when `false`. | `where[image][exists]=true` |
+| Operator             | Description                                       | Query string example                   |
+| -------------------- | ------------------------------------------------- | -------------------------------------- |
+| `equals`             | Exact match.                                      | `where[status][equals]=published`      |
+| `not_equals`         | Not equal.                                        | `where[status][not_equals]=draft`      |
+| `greater_than`       | `>`                                               | `where[price][greater_than]=100`       |
+| `greater_than_equal` | `>=`                                              | `where[price][greater_than_equal]=100` |
+| `less_than`          | `<`                                               | `where[price][less_than]=50`           |
+| `less_than_equal`    | `<=`                                              | `where[price][less_than_equal]=50`     |
+| `like`               | SQL `LIKE` (case-sensitive).                      | `where[title][like]=%hello%`           |
+| `contains`           | Case-insensitive substring (`ILIKE`).             | `where[title][contains]=hello`         |
+| `search`             | Alias for `contains`.                             | `where[title][search]=hello`           |
+| `in`                 | Value in comma-separated list.                    | `where[status][in]=draft,published`    |
+| `not_in`             | Value not in comma-separated list.                | `where[status][not_in]=archived`       |
+| `exists`             | Field is non-null when `true`, null when `false`. | `where[image][exists]=true`            |
+
+A date (`createdAt`, `updatedAt`, or a `date` field) is compared with an ISO 8601 value: an instant with its offset, such as `2026-09-01T09:00:00Z` or `2026-09-01T11:00:00+02:00`, or a calendar date, such as `2026-09-01`, which means the start of that day in UTC. Any other value, including a time with no offset, is refused with `400 FILTER_INVALID_OPERAND`.
+
+```
+?where[createdAt][greater_than_equal]=2026-09-01&where[createdAt][less_than]=2026-10-01
+```
 
 For nested AND / OR you can either pass URL-encoded JSON via `where=...`, or use the index syntax:
 
@@ -711,9 +721,12 @@ async function fetchPosts(page = 1) {
     depth: "1",
   });
 
-  const response = await fetch(`/admin/api/collections/posts/entries?${params}`, {
-    credentials: "include",
-  });
+  const response = await fetch(
+    `/admin/api/collections/posts/entries?${params}`,
+    {
+      credentials: "include",
+    }
+  );
   const json = await response.json();
   return json; // { items, meta }
 }

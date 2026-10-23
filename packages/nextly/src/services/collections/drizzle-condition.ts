@@ -39,6 +39,7 @@ import type { LocalizedFieldRef } from "../../domains/i18n/companion-join";
 import { buildCompanionExists } from "../../domains/i18n/companion-join";
 import { NextlyError } from "../../errors/nextly-error";
 import { toSnakeCase } from "../../shared/lib/case-conversion";
+import { readIsoDateOrInstant } from "../../shared/lib/iso-instant";
 
 import type { buildWhereClause } from "./query-operators";
 
@@ -214,6 +215,53 @@ function resolveColumn(schema: object, column: string): Column {
   );
 }
 
+/** The operators that compare a column with a value of the column's own kind. */
+const COMPARISONS = new Set(["=", "!=", ">", ">=", "<", "<=", "IN", "NOT IN"]);
+
+/**
+ * One value a date column is compared with, as the instant it names.
+ *
+ * A Date passes as it is; a string must be ISO 8601, a calendar date or an
+ * instant with its offset (`2026-09-01`, `2026-09-01T09:00:00Z`), read by the
+ * one strict reader the release schedule uses too. Anything else is refused
+ * before a query runs: a value no date can be read from has no rows to match,
+ * and passing it on let each dialect decide alone what it meant.
+ */
+function dateOperand(key: string, value: unknown): Date {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  if (typeof value === "string") {
+    const reading = readIsoDateOrInstant(value);
+    if (reading.ok) return reading.at;
+  }
+  return refuseKey(
+    key,
+    "FILTER_INVALID_OPERAND",
+    `"${key}" is compared with a date: write one as ISO 8601, such as 2026-09-01 or 2026-09-01T09:00:00Z.`
+  );
+}
+
+/**
+ * A comparison's value as the column compares it.
+ *
+ * Decided by the COLUMN, not by the field's declared type, so every column
+ * Drizzle reads and writes as a `Date` (its "object date" columns: the system
+ * `createdAt` and `updatedAt`, and every date field) takes the same path on
+ * every dialect. Such a column maps its operand with its own driver mapping,
+ * which on SQLite reads `getTime()`: a filter written the way rows read, with
+ * an ISO string, threw there and answered 500, while PostgreSQL and MySQL
+ * handed the same string to the database to interpret.
+ */
+function comparisonOperand(
+  schemaColumn: Column,
+  key: string,
+  value: unknown
+): unknown {
+  if (schemaColumn.dataType !== "object date") return value;
+  return Array.isArray(value)
+    ? value.map(item => dateOperand(key, item))
+    : dateOperand(key, value);
+}
+
 export function buildDrizzleCondition(
   whereClause: ReturnType<typeof buildWhereClause>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
@@ -280,20 +328,25 @@ export function buildDrizzleCondition(
     }
 
     const schemaColumn = resolveColumn(schema, columnParts[0]);
+    // Read once, for every comparison, so a date column's operand is the same
+    // instant whichever operator compares it.
+    const operand = COMPARISONS.has(op)
+      ? comparisonOperand(schemaColumn, column, value)
+      : value;
 
     switch (op) {
       case "=":
-        return eq(schemaColumn, value);
+        return eq(schemaColumn, operand);
       case "!=":
-        return ne(schemaColumn, value);
+        return ne(schemaColumn, operand);
       case ">":
-        return gt(schemaColumn, value);
+        return gt(schemaColumn, operand);
       case ">=":
-        return gte(schemaColumn, value);
+        return gte(schemaColumn, operand);
       case "<":
-        return lt(schemaColumn, value);
+        return lt(schemaColumn, operand);
       case "<=":
-        return lte(schemaColumn, value);
+        return lte(schemaColumn, operand);
       case "LIKE":
         return like(schemaColumn, value);
       case "ILIKE":
@@ -306,8 +359,8 @@ export function buildDrizzleCondition(
         // The filter shape refuses an empty `in` and drops an empty
         // `not_in` before this point; refused again here rather than skipped,
         // because a skipped `in` matched every row.
-        if (Array.isArray(value) && value.length > 0) {
-          return inArray(schemaColumn, value);
+        if (Array.isArray(operand) && operand.length > 0) {
+          return inArray(schemaColumn, operand);
         }
         return refuseKey(
           column,
@@ -315,8 +368,8 @@ export function buildDrizzleCondition(
           `"in" on "${column}" needs a list with at least one value.`
         );
       case "NOT IN":
-        if (Array.isArray(value) && value.length > 0) {
-          return notInArray(schemaColumn, value);
+        if (Array.isArray(operand) && operand.length > 0) {
+          return notInArray(schemaColumn, operand);
         }
         // An empty list excludes nothing. Rendered as true rather than left
         // out, so it reaches here and its column is resolved first, and so an
