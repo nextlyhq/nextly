@@ -53,6 +53,7 @@ import {
   releaseLock,
   renewLock,
 } from "./api/document-lock";
+import { buildErrorResponse } from "./api/error-response";
 import {
   getGeneralSettings,
   updateGeneralSettings,
@@ -142,6 +143,7 @@ import {
   widgetAudience,
   type WidgetAudience,
 } from "./domains/widgets/visibility";
+import { genericPublicMessage } from "./errors/error-codes";
 import { NextlyError } from "./errors/nextly-error";
 import { retryAfterHeader } from "./errors/retry-after";
 import {
@@ -438,11 +440,28 @@ async function handleLanguagesRequest(
     case "POST":
       return changeLanguages(req);
     default:
-      return new Response(JSON.stringify({ error: "Method not allowed" }), {
-        status: 405,
-        headers: { "Content-Type": "application/json" },
-      });
+      return methodNotAllowed(req, ["GET", "POST"]);
   }
+}
+
+/**
+ * The canonical refusal for a verb a route does not serve, with the `Allow` header HTTP requires.
+ *
+ * Built and RETURNED rather than thrown, for the reason the builder gate is: this runs outside
+ * the dispatcher's NextlyError-to-response mapping, so a throw would surface as a 500. Serialized
+ * by the same `buildErrorResponse` every error boundary uses, so the body carries the code, the
+ * sentence and the request id Nextly's own error parser reads.
+ */
+function methodNotAllowed(req: Request, allowed: readonly string[]): Response {
+  const response = buildErrorResponse(
+    new NextlyError({
+      code: "METHOD_NOT_ALLOWED",
+      publicMessage: genericPublicMessage("METHOD_NOT_ALLOWED"),
+    }),
+    { requestId: readOrGenerateRequestId(req) }
+  );
+  response.headers.set("allow", allowed.join(", "));
+  return response;
 }
 
 /**
