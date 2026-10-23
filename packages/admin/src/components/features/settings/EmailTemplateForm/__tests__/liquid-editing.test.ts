@@ -54,9 +54,27 @@ describe("completion", () => {
     expect(offered("{{ customer.address.")).toEqual(["city"]);
   });
 
-  it("offers a list's item properties, as a loop variable holds them", () => {
+  it("offers a list's item properties", () => {
     expect(
       propertyCompletions(data.sample, ["order", "lines"]).map(c => c.label)
+    ).toEqual(["title", "quantity"]);
+  });
+
+  it("offers a loop variable's properties from the list it loops over", () => {
+    // As the author meets it: the language hands over `["line"]`, which only
+    // the open loop says is an item of `order.lines`.
+    expect(offered("{% for line in order.lines %}{{ line.")).toEqual([
+      "title",
+      "quantity",
+    ]);
+  });
+
+  it("forgets a loop variable once its loop closes, and lets an inner one shadow it", () => {
+    expect(
+      offered("{% for line in order.lines %}{% endfor %}{{ line.")
+    ).toEqual([]);
+    expect(
+      offered("{% for line in customer %}{% for line in order.lines %}{{ line.")
     ).toEqual(["title", "quantity"]);
   });
 
@@ -64,6 +82,8 @@ describe("completion", () => {
     const labels = offered("{{ customer.name | ");
     expect(labels).toContain("upcase");
     expect(labels).toContain("default");
+    // Marked `raw`, so the engine removes it: it would skip the escaping.
+    expect(labels).not.toContain("raw");
   });
 
   it("offers tags after {%, without the ones the engine removes", () => {

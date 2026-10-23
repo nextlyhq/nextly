@@ -23,6 +23,7 @@ import {
   FormMessage,
 } from "@admin/components/ui/form";
 
+import { fromAddressProblem } from "./from-address";
 import { LazyLiquidEditor } from "./liquid/LazyLiquidEditor";
 import type { CompletionData } from "./liquid/liquid-completion";
 import type { LiquidProblem } from "./liquid/liquid-problems";
@@ -63,6 +64,19 @@ const FIELDS: {
   },
 ];
 
+/**
+ * What is wrong with a field as typed: Liquid that doesn't parse, or, for
+ * From, a variable in the address, which only the name before it may use.
+ */
+function problemOf(
+  name: EnvelopeField,
+  value: string,
+  liquid: LiquidProblem | null
+): string | null {
+  if (liquid) return liquid.message;
+  return name === "fromOverride" ? fromAddressProblem(value) : null;
+}
+
 /** One labelled line, with its problem (or a refused save's message) under it. */
 function EnvelopeRow({
   control,
@@ -70,14 +84,18 @@ function EnvelopeRow({
   isPending,
   readOnly,
   completion,
+  liquid,
 }: {
   control: ReturnType<typeof useForm<TemplateFormValues>>["control"];
   field: (typeof FIELDS)[number];
   isPending: boolean;
   readOnly: boolean;
   completion: CompletionData;
+  liquid: boolean;
 }) {
-  const [problem, setProblem] = useState<LiquidProblem | null>(null);
+  const [liquidProblem, setLiquidProblem] = useState<LiquidProblem | null>(
+    null
+  );
   return (
     <FormField
       control={control}
@@ -88,32 +106,43 @@ function EnvelopeRow({
             {spec.label}
           </span>
           <div className="min-w-0 space-y-1">
+            {/* The editor takes the control's id and aria attributes onto its
+                text area, where focus lands. */}
             <FormControl>
-              <div>
-                <LazyLiquidEditor
-                  singleLine
-                  mode="text"
-                  label={spec.label}
-                  value={field.value ?? ""}
-                  onChange={field.onChange}
-                  readOnly={readOnly}
-                  disabled={isPending}
-                  placeholder={spec.placeholder}
-                  completion={completion}
-                  onProblems={problems => setProblem(problems[0] ?? null)}
-                />
-              </div>
+              <LazyLiquidEditor
+                singleLine
+                mode="text"
+                label={spec.label}
+                value={field.value ?? ""}
+                onChange={field.onChange}
+                onCreateEditor={view =>
+                  field.ref({ focus: () => view.focus() })
+                }
+                readOnly={readOnly}
+                disabled={isPending}
+                placeholder={spec.placeholder}
+                completion={completion}
+                liquid={liquid}
+                onProblems={problems => setLiquidProblem(problems[0] ?? null)}
+              />
             </FormControl>
-            {problem ? (
-              <p className="text-xs text-destructive" role="alert">
-                {problem.message}
-              </p>
-            ) : null}
+            <EnvelopeProblem
+              message={problemOf(spec.name, field.value ?? "", liquidProblem)}
+            />
             <FormMessage />
           </div>
         </FormItem>
       )}
     />
+  );
+}
+
+function EnvelopeProblem({ message }: { message: string | null }) {
+  if (!message) return null;
+  return (
+    <p className="text-xs text-destructive" role="alert">
+      {message}
+    </p>
   );
 }
 
@@ -123,6 +152,7 @@ export function EnvelopeBar({
   isLayoutRow,
   ownsContent,
   completion,
+  liquid,
 }: {
   control: ReturnType<typeof useForm<TemplateFormValues>>["control"];
   isPending: boolean;
@@ -134,6 +164,8 @@ export function EnvelopeBar({
   ownsContent: boolean;
   /** What the fields complete: the template's variables and test data. */
   completion: CompletionData;
+  /** False for a template kept on the previous engine, sent without Liquid. */
+  liquid: boolean;
 }): JSX.Element {
   if (isLayoutRow) {
     return (
@@ -157,6 +189,7 @@ export function EnvelopeBar({
           isPending={isPending}
           readOnly={field.owners && !ownsContent}
           completion={completion}
+          liquid={liquid}
         />
       ))}
     </div>

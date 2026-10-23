@@ -16,6 +16,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { Form } from "@admin/components/ui/form";
 
 import { BodyEditor } from "../BodyEditor";
+import { EnvelopeBar } from "../EnvelopeBar";
 import type { CompletionData } from "../liquid/liquid-completion";
 import { LiquidEditor, type LiquidEditorProps } from "../liquid/LiquidEditor";
 import { DEFAULT_VALUES, type TemplateFormValues } from "../schema";
@@ -133,6 +134,103 @@ describe("the email editor", () => {
     type(view(), "Hi {{ userName }}");
     await waitFor(() => expect(onProblems).toHaveBeenLastCalledWith([]));
   });
+
+  it("offers no Liquid for a template kept on the previous engine", async () => {
+    // That engine sends `{{ userName | nope }}` as written: a problem or a
+    // completion would describe an engine the email doesn't use.
+    const onProblems = vi.fn();
+    const { view } = mountEditor({ onProblems, liquid: false });
+    type(view(), "Hi {{ us");
+    act(() => {
+      startCompletion(view());
+    });
+    type(view(), "Hi {{ userName | nope }}");
+    await new Promise(resolve => setTimeout(resolve, 500));
+    expect(currentCompletions(view().state)).toEqual([]);
+    expect(onProblems).not.toHaveBeenCalledWith([
+      expect.objectContaining({ message: expect.stringMatching(/nope/) }),
+    ]);
+  });
+
+  it("puts the form control's attributes on its text area", () => {
+    mountEditor({
+      id: "subject-control",
+      "aria-describedby": "subject-message",
+      "aria-invalid": "true",
+    });
+    const field = screen.getByRole("textbox", { name: "Subject" });
+    expect(field.id).toBe("subject-control");
+    expect(field.getAttribute("aria-describedby")).toBe("subject-message");
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+  });
+});
+
+/** The envelope, with one field already refused, as a failed save leaves it. */
+function EnvelopeWithError({
+  field,
+  message,
+  values = {},
+}: {
+  field?: keyof TemplateFormValues;
+  message?: string;
+  values?: Partial<TemplateFormValues>;
+}) {
+  const form = useForm<TemplateFormValues>({
+    defaultValues: { ...DEFAULT_VALUES, ...values },
+  });
+  if (field && message && !form.getFieldState(field).error) {
+    form.setError(field, { type: "manual", message });
+  }
+  return (
+    <Form {...form}>
+      <EnvelopeBar
+        control={form.control}
+        isPending={false}
+        isLayoutRow={false}
+        ownsContent
+        completion={COMPLETION}
+        liquid
+      />
+    </Form>
+  );
+}
+
+describe("the envelope", () => {
+  it("names a refused field's message on the text area focus reaches", async () => {
+    render(<EnvelopeWithError field="subject" message="Subject is required" />);
+    const subject = await screen.findByRole(
+      "textbox",
+      { name: "Subject" },
+      { timeout: 5000 }
+    );
+    expect(subject.getAttribute("aria-invalid")).toBe("true");
+    const describedBy = subject.getAttribute("aria-describedby") ?? "";
+    const messages = describedBy
+      .split(" ")
+      .map(id => document.getElementById(id)?.textContent);
+    expect(messages).toContain("Subject is required");
+  });
+
+  it("says From's address can't use a variable, as a save would", async () => {
+    render(
+      <EnvelopeWithError values={{ fromOverride: "Shop <{{ userEmail }}>" }} />
+    );
+    expect(
+      await screen.findByText(/The From address can't use variables/)
+    ).toBeDefined();
+  });
+
+  it("lets From's name use one", async () => {
+    render(
+      <EnvelopeWithError
+        values={{ fromOverride: "{{ appName }} <shop@example.com>" }}
+      />
+    );
+    await screen.findByRole("textbox", { name: "From" }, { timeout: 5000 });
+    expect(
+      screen.queryByText(/The From address can't use variables/)
+    ).toBeNull();
+  });
 });
 
 /** The body editor beside a chip that inserts `{{userName}}`. */
@@ -156,6 +254,7 @@ function BodyWithChip({ tab }: { tab: "html" | "text" }) {
         readOnly={false}
         bodyViewRef={bodyViewRef}
         completion={COMPLETION}
+        liquid
         chips={
           <button type="button" onClick={() => insert("userName")}>
             userName

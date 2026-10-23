@@ -79,7 +79,7 @@ function ProblemList({ problems }: { problems: LiquidProblem[] }) {
     <div
       role="alert"
       data-testid="body-problems"
-      className="shrink-0 border-t border-destructive/40 bg-destructive/5 px-3 py-2 text-xs"
+      className="shrink-0 border-t border-destructive bg-destructive/5 px-3 py-2 text-xs"
     >
       {problems.map(problem => (
         <p
@@ -103,6 +103,7 @@ export function BodyEditor({
   chips,
   readOnly,
   completion,
+  liquid,
 }: {
   control: ReturnType<typeof useForm<TemplateFormValues>>["control"];
   editorTab: "html" | "text";
@@ -116,6 +117,8 @@ export function BodyEditor({
   readOnly: boolean;
   /** What the editor completes: the template's variables and test data. */
   completion: CompletionData;
+  /** False for a template kept on the previous engine, sent without Liquid. */
+  liquid: boolean;
 }): JSX.Element {
   const [problems, setProblems] = useState<LiquidProblem[]>([]);
   return (
@@ -173,11 +176,14 @@ export function BodyEditor({
               }}
               onCreateEditor={view => {
                 bodyViewRef.current = view;
+                // So a refused save can put the author in the body.
+                field.ref({ focus: () => view.focus() });
               }}
               onProblems={setProblems}
               readOnly={readOnly}
               disabled={isPending}
               completion={completion}
+              liquid={liquid}
               placeholder={
                 editorTab === "html"
                   ? "<h1>Hello {{userName}}</h1>\n<p>Welcome to {{appName}}.</p>"

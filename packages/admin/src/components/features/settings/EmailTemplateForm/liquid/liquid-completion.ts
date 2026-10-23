@@ -5,12 +5,13 @@
  * Variables come from the template's declarations, the built-ins every email
  * gets, and the keys of the test data, so a value the author can see in the
  * Data panel is one they can complete. Properties come from the test data's
- * shape: `order.` completes `order`'s keys, and a list completes the keys of
- * its first item, which is what a `for` loop's variable holds.
+ * shape: `order.` completes `order`'s keys, a list completes the keys of its
+ * first item, and a `for` loop's variable completes as an item of the list
+ * it loops over.
  *
- * Tags and filters are the language's, less what Nextly's engine removes
- * (`nextly/src/domains/email/services/liquid-engine.ts`): offering one would
- * suggest something every save of it refuses.
+ * Tags and filters are the ones the email engine registers (`liquid-problems`,
+ * pinned to the server's): offering any other would suggest something every
+ * save of it refuses.
  *
  * @module components/features/settings/EmailTemplateForm/liquid/liquid-completion
  */
@@ -24,22 +25,10 @@ import { liquidCompletionSource } from "@codemirror/lang-liquid";
 import { BUILT_IN_VARIABLES } from "../sample-data";
 import type { TemplateFormVariable } from "../schema";
 
-/**
- * The tags Nextly's engine removes: they load files, or write a value without
- * escaping it. Mirrors `REMOVED_TAGS` in the server's engine.
- */
-export const REMOVED_TAGS: ReadonlySet<string> = new Set([
-  "include",
-  "render",
-  "layout",
-  "block",
-  "echo",
-  "liquid",
-  "cycle",
-]);
+import { liquidFilterNames, liquidTagNames } from "./liquid-problems";
 
-/** The filter the engine removes: it would skip the output's escaping. */
-export const REMOVED_FILTERS: ReadonlySet<string> = new Set(["raw"]);
+const TAGS: ReadonlySet<string> = new Set(liquidTagNames());
+const FILTERS: ReadonlySet<string> = new Set(liquidFilterNames());
 
 /** What completion knows about the template being edited. */
 export interface CompletionData {
@@ -81,8 +70,7 @@ export function variableCompletions(data: CompletionData): Completion[] {
 
 /**
  * The properties under `path` in the test data. A list stands for its items,
- * so `order.lines.` and a loop over `order.lines` both complete an item's
- * keys.
+ * so `order.lines.` completes an item's keys.
  */
 export function propertyCompletions(
   sample: Record<string, unknown>,
@@ -102,14 +90,56 @@ export function propertyCompletions(
   }));
 }
 
+/** A loop tag, opening (with its variable and list) or closing. */
+const LOOP_TAG =
+  /\{%-?\s*(for|tablerow|endfor|endtablerow)\b(?:\s+(\w+)\s+in\s+([\w.]+))?/g;
+
 /**
- * Whether a completion names a tag or filter the engine has removed. The
- * language offers tags as keywords and filters as functions; a variable that
- * happens to share a removed tag's name is the author's, and stays.
+ * The loops open at the end of `text`, as each one's variable and the path
+ * of the list it loops over. An inner loop's variable shadows an outer one's.
  */
-function isRemoved(option: Completion): boolean {
-  if (option.type === "keyword") return REMOVED_TAGS.has(option.label);
-  if (option.type === "function") return REMOVED_FILTERS.has(option.label);
+export function openLoops(text: string): Map<string, string[]> {
+  const stack: [string, string[]][] = [];
+  for (const [, tag, name, list] of text.matchAll(LOOP_TAG)) {
+    if (tag.startsWith("end")) stack.pop();
+    else if (name && list) stack.push([name, list.split(".")]);
+  }
+  return new Map(stack);
+}
+
+/**
+ * `path` with a loop variable at its head replaced by the list it loops
+ * over: `line.sku` inside `{% for line in order.lines %}` is
+ * `order.lines.sku`, which completes from an item of `order.lines`.
+ */
+export function throughLoops(
+  path: readonly string[],
+  loops: ReadonlyMap<string, string[]>
+): string[] {
+  let resolved = [...path];
+  // Bounded: a loop over its own variable would otherwise never stop.
+  for (let depth = 0; depth < 8; depth++) {
+    const list = loops.get(resolved[0] ?? "");
+    if (!list) break;
+    resolved = [...list, ...resolved.slice(1)];
+  }
+  return resolved;
+}
+
+/** Whether completion at `from` names a tag: the first word after `{%`. */
+function atTagName(context: CompletionContext, from: number): boolean {
+  const before = context.state.sliceDoc(Math.max(0, from - 40), from);
+  return /\{%-?\s*$/.test(before);
+}
+
+/**
+ * Whether the engine would refuse what a completion names. The language
+ * offers a tag as a keyword where a tag's name goes, and a filter as a
+ * function; anything else (a variable, `in`, `forloop`) stays.
+ */
+function isUnavailable(option: Completion, tagName: boolean): boolean {
+  if (option.type === "function") return !FILTERS.has(option.label);
+  if (option.type === "keyword" && tagName) return !TAGS.has(option.label);
   return false;
 }
 
@@ -122,14 +152,19 @@ export function emailCompletionSource(
 ): (context: CompletionContext) => CompletionResult | null {
   const source = liquidCompletionSource({
     variables: variableCompletions(data),
-    properties: path => propertyCompletions(data.sample, path),
+    properties: (path, state, context) =>
+      propertyCompletions(
+        data.sample,
+        throughLoops(path, openLoops(state.sliceDoc(0, context.pos)))
+      ),
   });
   return context => {
     const result = source(context);
     if (!result) return null;
+    const tagName = atTagName(context, result.from);
     return {
       ...result,
-      options: result.options.filter(option => !isRemoved(option)),
+      options: result.options.filter(option => !isUnavailable(option, tagName)),
     };
   };
 }

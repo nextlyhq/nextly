@@ -79,6 +79,7 @@ describe("a refusal is visible where the field is", () => {
             isPending={false}
             bodyViewRef={{ current: null }}
             completion={NO_COMPLETION}
+            liquid
             readOnly={false}
           />
         )}
@@ -102,6 +103,7 @@ describe("a refusal is visible where the field is", () => {
             isPending={false}
             bodyViewRef={{ current: null }}
             completion={NO_COMPLETION}
+            liquid
             readOnly={false}
           />
         )}
@@ -132,6 +134,7 @@ describe("a refusal is visible where the field is", () => {
             isPending={false}
             bodyViewRef={{ current: null }}
             completion={NO_COMPLETION}
+            liquid
             readOnly={false}
             chips={<span>{"{{appName}}"}</span>}
           />
@@ -159,6 +162,7 @@ describe("a refusal is visible where the field is", () => {
             isPending={false}
             bodyViewRef={{ current: null }}
             completion={NO_COMPLETION}
+            liquid
             readOnly={false}
           />
         )}

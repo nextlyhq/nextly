@@ -79,7 +79,7 @@ function ContentColumn({
   previewSubject: string;
   editor: Omit<
     React.ComponentProps<typeof BodyEditor>,
-    "control" | "isPending" | "readOnly"
+    "control" | "isPending" | "readOnly" | "liquid"
   >;
 }) {
   const [subject, preheader, fromOverride] = form.watch([
@@ -117,6 +117,7 @@ function ContentColumn({
           isLayoutRow={isLayoutRow}
           ownsContent={owns}
           completion={editor.completion}
+          liquid={!keptOnOldEngine}
         />
       </div>
       <div className="flex min-h-105 flex-1 flex-col overflow-hidden rounded-lg border border-border">
@@ -124,6 +125,7 @@ function ContentColumn({
           control={form.control}
           isPending={isPending}
           readOnly={!owns}
+          liquid={!keptOnOldEngine}
           {...editor}
         />
       </div>

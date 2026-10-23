@@ -7,14 +7,17 @@
  * tags and filters removed. A problem here is the one a save would be refused
  * for, at the same line.
  *
+ * It is also the admin's one answer to which tags and filters an email can
+ * use: completion offers what this engine registers. A test pins that to the
+ * server engine's own answer, so a policy change on either side fails there
+ * instead of drifting.
+ *
  * This module imports LiquidJS, so only the editor (which loads on demand)
  * imports it: the admin's startup never pays for the parser.
  *
  * @module components/features/settings/EmailTemplateForm/liquid/liquid-problems
  */
 import { Liquid } from "liquidjs";
-
-import { REMOVED_FILTERS, REMOVED_TAGS } from "./liquid-completion";
 
 /** A problem in a template, where it is. */
 export interface LiquidProblem {
@@ -30,6 +33,20 @@ export interface LiquidProblem {
 /** The server's template-size limit, in characters. */
 const PARSE_LIMIT = 500_000;
 
+/**
+ * The tags the server's engine removes: they load files, or write a value
+ * without escaping it. Every filter marked `raw` goes too.
+ */
+const REMOVED_TAGS = [
+  "include",
+  "render",
+  "layout",
+  "block",
+  "echo",
+  "liquid",
+  "cycle",
+];
+
 function makeParser(): Liquid {
   const liquid = new Liquid({
     strictFilters: true,
@@ -38,14 +55,26 @@ function makeParser(): Liquid {
     parseLimit: PARSE_LIMIT,
   });
   for (const tag of REMOVED_TAGS) delete liquid.tags[tag];
+  // A filter marked `raw` makes LiquidJS skip the output escape.
   for (const [name, filter] of Object.entries(liquid.filters)) {
-    const raw = typeof filter === "object" && filter !== null && filter.raw;
-    if (raw || REMOVED_FILTERS.has(name)) delete liquid.filters[name];
+    if (typeof filter === "object" && filter !== null && filter.raw) {
+      delete liquid.filters[name];
+    }
   }
   return liquid;
 }
 
 const parser = makeParser();
+
+/** The tags an author can use, by name, as the server's engine lists them. */
+export function liquidTagNames(): string[] {
+  return Object.keys(parser.tags).sort();
+}
+
+/** The filters an author can use, by name. */
+export function liquidFilterNames(): string[] {
+  return Object.keys(parser.filters).sort();
+}
 
 /** The line and column of an offset, both 1-based. */
 function positionOf(source: string, offset: number): [number, number] {
