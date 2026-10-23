@@ -701,15 +701,16 @@ export class SingleMetadataService {
   /**
    * The first step of a field leaving translation (`archiveFieldsLeavingTranslation`), for a
    * save whose flags were derived inside the exclusion. Nothing is asked when the save sends no
-   * fields or the Single is not translated before and after it.
+   * fields or the Single is translated neither before nor after it; a save that turns translation
+   * off or on is asked too, since a field renamed in it would be left under a name no field has
+   * (the preflight decides).
    */
   private async assertFieldsMayLeaveTranslation(
     input: UpdateSingleSchemaInput
   ): Promise<void> {
     if (
       input.fields === undefined ||
-      !input.wasLocalized ||
-      !input.isLocalized
+      (!input.wasLocalized && !input.isLocalized)
     ) {
       return;
     }
@@ -1350,6 +1351,170 @@ export class SingleMetadataService {
   }
 
   /**
+   * A translated field this save renames has its companion column renamed before the main table
+   * changes, outside the step below that records what it catches. A RENAME the database refuses
+   * then fails the save with the registry still recording the old field, so saving again retries
+   * it. Run with the rest of the companion reconcile instead, a refused RENAME would be recorded
+   * as a failed migration under the new field list, leaving nothing for a retry to rename from.
+   *
+   * Returns the statements that rename it back, for a save the main migration then refuses: the
+   * registry still records the old field, and so must the companion. Empty when nothing was
+   * renamed.
+   *
+   * @throws NextlyError `NEXTLY_MIGRATION_APPLY_FAILED` when the database refuses the RENAME
+   */
+  private async renameTranslatedColumnFirst(
+    adapter: DrizzleAdapter,
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan
+  ): Promise<string[]> {
+    const rename = await this.companionRenameFirst(adapter, input, plan);
+    if (!rename) return [];
+    try {
+      for (const statement of rename.forward) {
+        await adapter.executeQuery(statement);
+      }
+    } catch (error) {
+      throw new NextlyError({
+        code: "NEXTLY_MIGRATION_APPLY_FAILED",
+        publicMessage:
+          "The translations of a renamed field could not be moved to its new name, so nothing " +
+          "was changed. Saving again tries it again.",
+        logMessage: `companion rename refused: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        logContext: { slug: input.slug, ...rename.renamed },
+        cause: error instanceof Error ? error : undefined,
+      });
+    }
+    return rename.back;
+  }
+
+  /**
+   * The companion RENAME a save makes before its main migration, and the same rename the other
+   * way, decided by the same rule, for a save refused after it. Undefined when the save renames
+   * no translated column.
+   */
+  private async companionRenameFirst(
+    adapter: DrizzleAdapter,
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan
+  ): Promise<
+    | {
+        renamed: { from: string; to: string };
+        forward: string[];
+        back: string[];
+      }
+    | undefined
+  > {
+    if (!input.wasLocalized || !input.isLocalized) return undefined;
+    const renamed = await this.detectedFieldRename(
+      plan.previousFields,
+      plan.fields
+    );
+    const tableName = input.existing.tableName;
+    if (!renamed || !(await adapter.tableExists(`${tableName}_locales`))) {
+      return undefined;
+    }
+    const { buildCompanionRenameStatements } = await import(
+      "../../i18n/migration/reconcile-companion"
+    );
+    const { companionColumnNames } = await import(
+      "../../i18n/runtime/companion-io"
+    );
+    const common = {
+      tableName,
+      dialect: adapter.getCapabilities().dialect,
+      // A Single's table is built by the collection's generator.
+      builtBy: "collection" as const,
+      isLocalized: true,
+    };
+    const forward = buildCompanionRenameStatements({
+      ...common,
+      oldFields: plan.previousFields,
+      newFields: plan.fields,
+      renamed,
+      liveCompanionColumns: await companionColumnNames(adapter, tableName),
+    });
+    if (forward.length === 0) return undefined;
+    const back = buildCompanionRenameStatements({
+      ...common,
+      oldFields: plan.fields,
+      newFields: plan.previousFields,
+      renamed: { from: renamed.to, to: renamed.from },
+    });
+    return { renamed, forward, back };
+  }
+
+  /**
+   * Applies the save's main migration. The collection save's runner, so the two apply a migration
+   * the same way; MySQL passes over what an earlier refused save already applied, since this plan
+   * is drawn from the registry rather than the live table.
+   *
+   * When the database refuses it, the registry keeps the old field, so a companion column renamed
+   * first goes back to the old name with it, and the Single stays readable as it was.
+   */
+  private async applyMainMigrationOrUndo(
+    adapter: DrizzleAdapter,
+    slug: string,
+    plan: UpdateDdlPlan,
+    undoRename: readonly string[]
+  ): Promise<void> {
+    if (!plan.migrationSQL) return;
+    try {
+      await applyMigrationWhole({
+        db: adapter.getDrizzle(),
+        dialect: adapter.getCapabilities().dialect,
+        migrationSQL: plan.migrationSQL,
+        entity: "single",
+        tolerateApplied: true,
+      });
+    } catch (refusal) {
+      await this.undoCompanionRename(adapter, slug, undoRename);
+      throw refusal;
+    }
+  }
+
+  /**
+   * Renames a companion column back after the save that renamed it was refused. Logged, not
+   * thrown, when the database refuses this too: the save's own refusal is what the caller reports,
+   * and the next save finds the column renamed and finishes the change.
+   */
+  private async undoCompanionRename(
+    adapter: DrizzleAdapter,
+    slug: string,
+    statements: readonly string[]
+  ): Promise<void> {
+    try {
+      for (const statement of statements) {
+        await adapter.executeQuery(statement);
+      }
+    } catch (error) {
+      this.logger.error(
+        `[Singles] Could not rename the translations column of "${slug}" back after its save ` +
+          `was refused; saving again finishes the rename: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+      );
+    }
+  }
+
+  /** The field this save renames, by field name, decided as the main table's rename is. */
+  private async detectedFieldRename(
+    previousFields: FieldDefinition[],
+    fields: FieldDefinition[]
+  ): Promise<{ from: string; to: string } | undefined> {
+    const { DynamicCollectionSchemaService } = await import(
+      "../../dynamic-collections/services/dynamic-collection-schema-service"
+    );
+    const rename = new DynamicCollectionSchemaService(
+      undefined,
+      this.dialect
+    ).detectFieldRename(previousFields, fields);
+    return rename ? { from: rename.from.name, to: rename.to.name } : undefined;
+  }
+
+  /**
    * Run the plan, reporting how far it got.
    *
    * Returns undefined when the plan owns no status — a flag-only save with no adapter registered
@@ -1389,19 +1554,15 @@ export class SingleMetadataService {
       plan
     );
 
-    if (plan.migrationSQL) {
-      // Before the try below, which records what it catches: a refusal here has changed nothing
-      // the registry should describe, so it fails the save. The collection save's runner, so the
-      // two apply a migration the same way; MySQL passes over what an earlier refused save already
-      // applied, since this plan is drawn from the registry rather than the live table.
-      await applyMigrationWhole({
-        db: adapter.getDrizzle(),
-        dialect: adapter.getCapabilities().dialect,
-        migrationSQL: plan.migrationSQL,
-        entity: "single",
-        tolerateApplied: true,
-      });
-    }
+    const undoRename = await this.renameTranslatedColumnFirst(
+      adapter,
+      input,
+      plan
+    );
+
+    // Before the try below, which records what it catches: a refusal here has changed nothing
+    // the registry should describe, so it fails the save.
+    await this.applyMainMigrationOrUndo(adapter, input.slug, plan, undoRename);
 
     try {
       // Observed, not assumed, and it covers the rebuild case as well as the alter: a plan that
@@ -1436,6 +1597,11 @@ export class SingleMetadataService {
           wasStatus: input.wasStatus,
           adapter,
           joinedBefore,
+          // One rename rule for every column: the main table's decides a translated field's too.
+          renamed: await this.detectedFieldRename(
+            plan.previousFields,
+            plan.fields
+          ),
         });
       } catch (companionError) {
         // 🔴 The shape is RETRACTED here, never rebound, because nothing at this level knows what

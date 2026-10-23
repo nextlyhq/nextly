@@ -60,3 +60,9 @@ ui-schema.json
 # Theme lab screenshots (scripts/capture-themes.mjs) -- large regenerable
 # binaries, not source, so they stay out of history.
 .theme-captures/
+
+# Agent files `next dev` writes beside the app on every start. The repository's
+# own instruction files are checked to come in AGENTS.md/CLAUDE.md pairs that
+# match, which these generated ones do not, so they stay out of history.
+/AGENTS.md
+/CLAUDE.md

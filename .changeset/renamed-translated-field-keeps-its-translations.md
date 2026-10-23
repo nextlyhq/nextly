@@ -1,0 +1,42 @@
+---
+"@nextlyhq/adapter-drizzle": patch
+"@nextlyhq/plugin-accounts": patch
+"@nextlyhq/plugin-commerce": patch
+"@nextlyhq/adapter-mysql": patch
+"@nextlyhq/adapter-postgres": patch
+"@nextlyhq/adapter-sqlite": patch
+"@nextlyhq/admin": patch
+"@nextlyhq/admin-css": patch
+"@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
+"@nextlyhq/builder": patch
+"create-nextly-app": patch
+"@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
+"@nextlyhq/module-specifiers": patch
+"nextly": patch
+"@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-mcp": patch
+"@nextlyhq/plugin-page-builder": patch
+"@nextlyhq/plugin-sdk": patch
+"@nextlyhq/plugin-seo": patch
+"@nextlyhq/prettier-config": patch
+"@nextlyhq/storage-s3": patch
+"@nextlyhq/storage-uploadthing": patch
+"@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/telemetry": patch
+"@nextlyhq/tsconfig": patch
+"@nextlyhq/ui": patch
+---
+
+A translated field renamed in the Schema Builder keeps every language's value, for a collection, a Single or a field group.
+
+- Renamed while it stays translated, its values move with it when it is the only field removed and the only field added in the save, with a compatible type: the translations table renames its column, where it used to drop the old column and add an empty one.
+- Renamed and made shared in the same change, the default language's value becomes the shared value and the other languages are written to the localization archive under the new name, restorable with `nextly i18n:restore`.
+- The schema dialog lists the rename as one, on the translations table, and keeps the values when it is chosen.
+- A rename that also changes how the field is stored (its length, its precision, or its type to a compatible one) is refused before anything runs, naming the two saves that work: rename it and save, then change its storage. A change to an incompatible type is not a rename, and neither are several translated fields renamed in one save or a rename saved with another field added: a save that removes a translated field while it adds another is refused before anything changes, naming the two saves that work: rename or remove one translated field and save, then add or change the others. A schema dialog answer that chose to drop and add still drops the old column, with every language's value.
+- A translated field renamed in the same change that turns translation off is refused before anything runs: rename it and save, then turn translation off.
+- Renamed and made shared, the field is judged under its new name before anything runs: a Required or Unique setting is refused, and an archive that cannot take the other languages stops the change with nothing altered.
+- A save that stopped after renaming the column finishes when it is saved again, rather than failing on the column it already renamed, whether the field stays translated or becomes shared, and so does a save that moved a field to shared and stopped before it was recorded.
+- The schema dialog's answer is checked against the rename the server offered, before anything changes: a change that offers a rename but does not say whether the field was renamed or replaced is refused, naming the field, rather than read as a replacement that deletes its translations. An answer for a rename the server did not offer is ignored.
+- A translated field renamed in code is not carried over yet; its old column keeps its values rather than being dropped.

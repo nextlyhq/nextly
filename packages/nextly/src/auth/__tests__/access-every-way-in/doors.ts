@@ -65,7 +65,9 @@ function fromError(error: unknown): Answer {
   return typeof status === "number" ? String(status) : "E";
 }
 
-async function settle(work: () => Promise<Answer>): Promise<Answer> {
+async function settle(
+  work: () => Promise<Answer | Attributed>
+): Promise<Answer | Attributed> {
   try {
     return await work();
   } catch (error) {
@@ -260,9 +262,8 @@ async function restRead(
   return total > 0 ? "A" : "R";
 }
 
-/** The caller as a Direct API call names it. */
-function directCaller(who: CallerHandle) {
-  if (who.principal) return { principal: who.principal };
+/** The caller as a checked Direct API call names a person, a key or nobody. */
+function checkedCallerOf(who: CallerHandle) {
   return {
     overrideAccess: false as const,
     ...(who.user ? { user: who.user } : {}),
@@ -270,8 +271,15 @@ function directCaller(who: CallerHandle) {
   };
 }
 
+/** The caller as a Direct API call names it. */
+function directCaller(who: CallerHandle) {
+  if (who.principal) return { principal: who.principal };
+  return checkedCallerOf(who);
+}
+
 type Nextly = World["t"]["nextly"];
 type DirectCaller = ReturnType<typeof directCaller>;
+type CheckedCaller = ReturnType<typeof checkedCallerOf>;
 
 /** The Direct API call each collection action is, on `collection` and `id`. */
 const DIRECT_CALLS: Record<
@@ -302,9 +310,27 @@ const DIRECT_CALLS: Record<
     (await n.count({ collection, where: PROBE_WHERE, ...as })).total > 0,
 };
 
+/**
+ * The Direct API read of a target that is not an entry: a list of media, of
+ * users or of roles, as the REST door asks each.
+ */
+const DIRECT_SYSTEM_READS: Partial<
+  Record<Row["target"], (n: Nextly, as: CheckedCaller) => Promise<unknown>>
+> = {
+  media: (n, as) => n.media.find(as),
+  users: (n, as) => n.users.find(as),
+  roles: (n, as) => n.roles.find(as),
+};
+
 async function direct(world: World, row: Row, who: CallerHandle) {
   const nextly = world.t.nextly;
   const as = directCaller(who);
+  const systemRead = DIRECT_SYSTEM_READS[row.target];
+  if (systemRead) {
+    // Never a principal: the table asks these reads of the callers REST names.
+    await systemRead(nextly, checkedCallerOf(who));
+    return "A";
+  }
   const { slug, id } = addressOf(world, row, "direct");
   if (row.target === "single") {
     if (row.action === "read") await nextly.findSingle({ slug, ...as });
@@ -451,13 +477,42 @@ async function entity(_world: World, row: Row, who: CallerHandle) {
   return fromBoolean(await canReadEntity(targetSlug(row), caller));
 }
 
+/**
+ * What a door's one call for a caller answered, with the deviations recorded
+ * in deciding each subject of it (a collection, a permission).
+ */
+interface Observed<T> {
+  readonly answer: T;
+  readonly bySubject: ReadonlyMap<string, Deviation[]>;
+}
+
+/** A row's answer and the deviations its door recorded in deciding it. */
+interface Attributed {
+  readonly answer: Answer;
+  readonly deviations: readonly Deviation[];
+}
+
+/** Runs one call for many subjects, keeping what deviated for each. */
+async function observing<T>(work: () => Promise<T>): Promise<Observed<T>> {
+  const { result, bySubject } = await recordingDeviations(work);
+  return { answer: result, bySubject };
+}
+
 const schemaLists = new WeakMap<
   World,
-  Map<string, Promise<Answer | string[]>>
+  Map<string, Promise<Observed<Answer | string[]>>>
 >();
 
-/** The collections the schema builder lists for a caller, asked once. */
-async function schema(world: World, row: Row, who: CallerHandle) {
+/**
+ * Whether the schema builder lists the row's collection to the caller. The
+ * list is asked once per caller, as the builder asks it, and the row's
+ * deviations are the ones that request recorded in deciding its collection.
+ */
+async function schema(
+  world: World,
+  row: Row,
+  who: CallerHandle
+): Promise<Attributed | Answer> {
   let cache = schemaLists.get(world);
   if (!cache) {
     cache = new Map();
@@ -465,7 +520,7 @@ async function schema(world: World, row: Row, who: CallerHandle) {
   }
   let listed = cache.get(row.caller);
   if (!listed) {
-    listed = (async () => {
+    listed = observing(async (): Promise<Answer | string[]> => {
       const res = await listCollectionsSchema(
         new Request(`${ORIGIN}/api/collections/schema?limit=500`, {
           headers: who.headers,
@@ -474,12 +529,16 @@ async function schema(world: World, row: Row, who: CallerHandle) {
       if (res.status !== 200) return String(res.status);
       const body = (await res.json()) as { items: { slug: string }[] };
       return body.items.map(item => item.slug);
-    })();
+    });
     cache.set(row.caller, listed);
   }
-  const answer = await listed;
+  const { answer, bySubject } = await listed;
   if (typeof answer === "string") return answer;
-  return answer.includes(collectionOf(row.rule)) ? "A" : "R";
+  const slug = collectionOf(row.rule);
+  return {
+    answer: answer.includes(slug) ? "A" : "R",
+    deviations: bySubject.get(slug) ?? [],
+  };
 }
 
 /**
@@ -535,7 +594,7 @@ async function system(_world: World, row: Row, who: CallerHandle) {
 
 const audiences = new WeakMap<
   World,
-  Map<string, Promise<ReadonlySet<string>>>
+  Map<string, Promise<Observed<ReadonlySet<string>>>>
 >();
 
 /**
@@ -543,7 +602,11 @@ const audiences = new WeakMap<
  * permission. What a caller is offered is worked out once per caller and
  * setup, as the layout endpoint works it out once per request.
  */
-async function widget(world: World, row: Row, who: CallerHandle) {
+async function widget(
+  world: World,
+  row: Row,
+  who: CallerHandle
+): Promise<Attributed> {
   if (!who.user) throw new Error(`${row.caller} has no user to ask about`);
   let cache = audiences.get(world);
   if (!cache) {
@@ -551,19 +614,27 @@ async function widget(world: World, row: Row, who: CallerHandle) {
     audiences.set(world, cache);
   }
   const key = `${row.setup} ${row.caller}`;
+  const caller = readAccessCaller({
+    user: who.user,
+    ...(who.actor ? { authenticatedScope: who.actor } : {}),
+  });
   let offered = cache.get(key);
   if (!offered) {
-    const caller = readAccessCaller({
-      user: who.user,
-      ...(who.actor ? { authenticatedScope: who.actor } : {}),
-    });
-    offered = widgetAudience(caller).then(
-      ({ visible }) => new Set(visible.map(card => card.id))
+    // Every widget is decided at once, as the dashboard decides them, and
+    // each permission's deviations are kept apart.
+    offered = observing(() =>
+      widgetAudience(caller).then(
+        ({ visible }) => new Set(visible.map(card => card.id))
+      )
     );
     cache.set(key, offered);
   }
-  const id = widgetFor(targetSlug(row), row.action);
-  return (await offered).has(id) ? "A" : "R";
+  const slug = targetSlug(row);
+  const { answer, bySubject } = await offered;
+  return {
+    answer: answer.has(widgetFor(slug, row.action)) ? "A" : "R",
+    deviations: bySubject.get(`${row.action}-${slug}`) ?? [],
+  };
 }
 
 /** The id of a Single's one document, made by the reads that came before. */
@@ -616,7 +687,7 @@ async function lock(world: World, row: Row, who: CallerHandle) {
 
 const ADAPTERS: Record<
   Door,
-  (world: World, row: Row, who: CallerHandle) => Promise<Answer>
+  (world: World, row: Row, who: CallerHandle) => Promise<Answer | Attributed>
 > = {
   rest,
   direct,
@@ -669,7 +740,11 @@ async function answer(
   const { result, deviations } = await recordingDeviations(() =>
     row.setup === "no-service" ? withoutService(asked) : asked()
   );
-  return { answer: result, deviations };
+  // A door that decides many subjects in one call hands back the deviations
+  // that call recorded for this row's subject.
+  return typeof result === "string"
+    ? { answer: result, deviations }
+    : { answer: result.answer, deviations: [...result.deviations] };
 }
 
 /**

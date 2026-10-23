@@ -232,10 +232,15 @@ export interface Row {
   rule: Rule;
 }
 
-/** Which callers a door can name, and which actions it asks of each target. */
+/**
+ * Which callers a door can name, and which actions it asks of each target.
+ * `callersOf` narrows the callers for one target, where the door names fewer
+ * there than it does elsewhere.
+ */
 interface Reach {
   callers: readonly Caller[];
   targets: Partial<Record<Target, readonly Action[]>>;
+  callersOf?: Partial<Record<Target, readonly Caller[]>>;
 }
 
 const READ: readonly Action[] = ["read"];
@@ -278,12 +283,23 @@ const REACH: Record<Door, Reach> = {
       providers: CRUD,
     },
   },
+  // Media, users and roles are read by the namespaces a principal cannot call
+  // (only collection and Single operations can be made as one), so they are
+  // asked of the callers REST names there.
   direct: {
     callers: PRESENTED,
     targets: {
       collection: ACTIONS,
       single: READ_UPDATE,
+      media: READ,
+      users: READ,
       "single-pub": PUBLISHING,
+      roles: READ,
+    },
+    callersOf: {
+      media: NOT_PRINCIPAL,
+      users: NOT_PRINCIPAL,
+      roles: NOT_PRINCIPAL,
     },
   },
   website: { callers: ["visitor", ...USERS], targets: { collection: READ } },
@@ -379,7 +395,8 @@ const REACH_BY_SETUP: Record<Setup, Partial<Record<Door, Reach>>> = {
 /** Whether a door asks a case, so a row is never sent where it cannot be. */
 function asks(door: Door, row: Row): boolean {
   const reach = REACH_BY_SETUP[row.setup][door];
-  if (!reach || !reach.callers.includes(row.caller)) return false;
+  const callers = reach?.callersOf?.[row.target] ?? reach?.callers;
+  if (!reach || !callers?.includes(row.caller)) return false;
   return reach.targets[row.target]?.includes(row.action) ?? false;
 }
 
@@ -563,19 +580,31 @@ const SEEDED: Partial<Record<Target, readonly Action[]>> = {
 };
 
 /**
- * Resources whose routes accept the resource's `manage-` permission in place
- * of any action's own, as the email provider routes do. Only the
- * super-admin's full-access key, which carries the whole catalogue, holds a
- * `manage-` permission here; the super-admin sessions pass every gate anyway.
+ * The system resources among the targets whose `manage-` permission still
+ * counts as read, create, update and delete on that same resource, as the
+ * one decision counts it while installs move to plain permissions: media and
+ * email providers here (settings and email templates are not targets). Never
+ * publish or unpublish, and never on a collection. Only the super-admin's
+ * full-access key, which carries the whole catalogue, holds a `manage-`
+ * permission among the callers; the super-admin sessions pass every gate
+ * anyway.
  */
-const MANAGED: readonly Target[] = ["providers"];
+const MANAGED: readonly Target[] = ["providers", "media"];
+const MANAGE_COUNTS_AS: readonly Action[] = [
+  "read",
+  "create",
+  "update",
+  "delete",
+];
 
-const holdsManage = (caller: Caller, target: Target) =>
-  MANAGED.includes(target) && caller === "key-super-admin";
+const holdsManage = (caller: Caller, action: Action, target: Target) =>
+  MANAGED.includes(target) &&
+  MANAGE_COUNTS_AS.includes(action) &&
+  caller === "key-super-admin";
 
 /** Whether the role screen grants the caller this action on this target. */
 function holdsPermission(caller: Caller, action: Action, target: Target) {
-  if (holdsManage(caller, target)) return true;
+  if (holdsManage(caller, action, target)) return true;
   if (!(SEEDED[target]?.includes(action) ?? true)) return false;
   // A full-access key carries its maker's live permissions, and a
   // super-admin's are the whole catalogue, users included.

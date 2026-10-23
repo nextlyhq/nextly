@@ -61,6 +61,7 @@ export { siteSettingsMysql as siteSettings } from "../site-settings/mysql";
 export { userFieldDefinitionsMysql as userFieldDefinitions } from "../user-field-definitions/mysql";
 export { emailProvidersMysql as emailProviders } from "../email-providers/mysql";
 export { emailDeliveriesMysql as emailDeliveries } from "../email-deliveries/mysql";
+export { emailSendClaimsMysql as emailSendClaims } from "../email-send-claims/mysql";
 export { emailTemplatesMysql as emailTemplates } from "../email-templates/mysql";
 
 export { nextlySchemaEventsMysql as nextlySchemaEvents } from "../schema-events/mysql";
@@ -102,6 +103,10 @@ export { nextlyJobsMysql as nextlyJobs } from "../jobs/mysql";
 // Each person's own notices; in the bundle for the reason the releases note
 // above gives — this map is what the push creates.
 export { nextlyNoticesMysql as nextlyNotices } from "../notices/mysql";
+
+// The site's email brand settings; in the bundle for the reason the releases
+// note above gives — this map is what the push creates.
+export { nextlyEmailBrandMysql as nextlyEmailBrand } from "../email-brand/mysql";
 
 // Version view markers; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.

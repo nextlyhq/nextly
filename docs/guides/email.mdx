@@ -136,6 +136,8 @@ Nextly automatically creates three email templates on first startup:
 
 Templates are stored in the database and edited through the admin UI (**Settings -> Email Templates**) using a Lexical-based rich-text editor. They support `{{variable}}` placeholder syntax with HTML escaping.
 
+The editor's **Send test** sends the saved template, with its sample data, to the signed-in user's own address and nowhere else. It needs the `update-email-templates` permission.
+
 ### Template variables
 
 Templates receive context-appropriate variables.
@@ -209,6 +211,10 @@ Resolution order for templates: **database template** (if active) > **code-first
 
 The Direct API exposes `nextly.email.send()` and `nextly.email.sendWithTemplate()`.
 
+There is no REST route for sending email. To send from a browser or another
+service, add a route of your own that checks who may send, and to whom, and then
+calls `nextly.email.send()` or `nextly.email.sendWithTemplate()`.
+
 ### Using a template
 
 ```typescript
@@ -240,8 +246,8 @@ also `failure` and `error` (see [When a send fails](#when-a-send-fails)).
 
 ### Sending to several people
 
-`to` takes one address or a list, on the Direct API, a plugin's `ctx.services.email`
-and both REST send routes. Every address receives the email:
+`to` takes one address or a list, on the Direct API and a plugin's
+`ctx.services.email`. Every address receives the email:
 
 ```typescript
 await nextly.email.sendWithTemplate({
@@ -276,15 +282,10 @@ The `to` list is `@experimental` until the send contract is complete.
 The send's own value wins, then the template's, then the provider's default
 sender. `replyTo` is `@experimental`.
 
-The REST send routes answer `Email sent.` when the provider accepted the message,
-and `Email could not be sent.` when it did not, beside the `success` and
-`messageId` fields they have always returned.
-
 ### When a send fails
 
 A provider's refusal is returned, not thrown: `success` is `false`, and `failure`
-says what happened, on the Direct API, `ctx.services.email` and both REST send
-routes alike:
+says what happened, on the Direct API and `ctx.services.email` alike:
 
 - `failure.retryable`: whether sending again later can succeed. A refusal of the
   message itself (an HTTP 4xx other than 408 and 429, or an SMTP 5xx reply) is
@@ -309,6 +310,49 @@ an email address, or a Reply-To holding a line break, is thrown as a validation
 error: nothing was sent, and the same send would be refused again.
 
 `failure` and `refused` are `@experimental`.
+
+### Sending an email once
+
+Give a send an `idempotencyKey` and it goes out once, however often it is
+repeated: on the Direct API's `send` and `sendWithTemplate`, and the same two on
+`ctx.services.email`. A key is text of up to 256 characters that names the
+email, such as an order's confirmation.
+
+- Nextly claims the key before contacting the provider. A repeat of a send that
+  succeeded returns the first send's result with `repeat: true`, and sends
+  nothing.
+- A repeat while the first send is still going returns `success: false` with a
+  retryable `failure`, saying a send with the key is in progress. Retry it, and
+  it returns the result once there is one.
+- A repeat after the first send failed sends again.
+- The same key with a different message is refused with a conflict error. The
+  message is everything that reaches the provider:
+  every recipient, `from`, `replyTo`, the rendered subject and bodies, the
+  attachments and the person. A template edited between two sends with one key
+  is a different message.
+- Keys belong to their caller. The site's own code (the Direct API) has one
+  set; each plugin has its own; Nextly's own sends have theirs. The same key
+  from two of them names two different emails.
+- A provider that takes a key (Resend) is also handed one derived from yours, so
+  the provider itself sends the message once for 24 hours.
+
+Nextly keeps a keyed digest of the key, never the key itself, and no address. A
+successful send's key is remembered for as long as the delivery log keeps the
+send's records (90 days by default, following the retention setting). With a
+retention of zero nothing is kept, and a key protects only within the
+provider's own window. The digests are kept under the install's stored digest
+key, so a key keeps working across a rotation of `NEXTLY_SECRET`. Erasing a
+person clears the key's digest from every record of the sends they were on, and
+from those sends' claims.
+
+If the process stops while sending, the key is held for 15 minutes, after which
+a later send with it may send again. Through a provider without keys (SMTP,
+SendLayer) that can repeat the email once.
+
+A keyed send cannot run inside an open database transaction: send before
+opening it or after it has finished.
+
+`idempotencyKey` and `repeat` are `@experimental`.
 
 ### Changing a send before it goes out
 
@@ -497,7 +541,13 @@ provider takes a message but refuses some recipients, return `rejected` with
 their bare addresses, and optionally `refusals` with
 `{ address, retryable, status }` for each.
 
-`maxToPerMessage`, `toList`, `emailFailure` and `refusals` are `@experimental`.
+A provider that sends a message once per key can declare `acceptsIdempotencyKey:
+true`. For a send that carried a key, its adapter then receives
+`idempotencyKey`, a key derived from the caller's, the same on every retry of
+that message. Nextly claims the caller's key itself either way.
+
+`maxToPerMessage`, `toList`, `emailFailure`, `refusals`, `acceptsIdempotencyKey`
+and `idempotencyKey` are `@experimental`.
 
 ## Next steps
 

@@ -29,7 +29,14 @@ import {
   type Actor,
   type PermissionGrant,
 } from "./actor";
-import { askRule, askRules, decide, judge, type AccessTarget } from "./decide";
+import {
+  askRule,
+  askRules,
+  decide,
+  decidePermission,
+  judge,
+  type AccessTarget,
+} from "./decide";
 
 const ACTIONS: AccessAction[] = [
   "create",
@@ -650,5 +657,101 @@ describe("a rule that fails", () => {
     } finally {
       logged.mockRestore();
     }
+  });
+});
+
+describe("something no rule can name", () => {
+  // Settings is no entry, and `manage` no operation a rule declares, so the
+  // permission alone answers.
+  const settingsGrant = {
+    slug: "manage-settings",
+    action: "manage",
+    resource: "settings",
+  };
+  const manager = userActor({
+    userId: "u10",
+    roles: ["manager"],
+    permissions: [settingsGrant],
+  });
+
+  it("is allowed to whoever holds the permission, and refused to whoever does not", () => {
+    expect(decidePermission(manager, "manage", "settings").allowed).toBe(true);
+    // `export` is no action a `manage-` permission counts as.
+    expect(decidePermission(manager, "export", "settings")).toEqual({
+      allowed: false,
+      reason: "no-permission",
+    });
+  });
+
+  it("is allowed to trusted work and a super-admin, holding nothing", () => {
+    const admin = userActor({
+      userId: "u11",
+      roles: ["super-admin"],
+      permissions: [],
+    });
+    expect(decidePermission(systemActor(), "manage", "").allowed).toBe(true);
+    expect(decidePermission(admin, "manage", "").allowed).toBe(true);
+  });
+
+  it("is judged on a key's grants, and gives a key no super-admin authority", () => {
+    const key = keyActor({
+      keyId: "k3",
+      userId: "u11",
+      roles: ["super-admin"],
+      permissions: [settingsGrant],
+    });
+    expect(decidePermission(key, "manage", "settings").allowed).toBe(true);
+    expect(decidePermission(key, "export", "settings").allowed).toBe(false);
+  });
+
+  it("counts a system resource's manage permission as its read, create, update and delete, and nothing else", () => {
+    const holder = (resource: string) =>
+      userActor({
+        userId: "u12",
+        roles: ["holder"],
+        permissions: [
+          { slug: `manage-${resource}`, action: "manage", resource },
+        ],
+      });
+    for (const resource of [
+      "media",
+      "settings",
+      "email-providers",
+      "email-templates",
+    ]) {
+      for (const action of ["read", "create", "update", "delete"]) {
+        expect(
+          decidePermission(holder(resource), action, resource).allowed,
+          `${action} ${resource}`
+        ).toBe(true);
+      }
+      // Never a publish or an unpublish, nor another resource's actions.
+      expect(
+        decidePermission(holder(resource), "publish", resource).allowed
+      ).toBe(false);
+      expect(decidePermission(holder(resource), "read", "roles").allowed).toBe(
+        false
+      );
+    }
+    // A resource outside the four, and a collection, get nothing from it.
+    expect(
+      decidePermission(holder("background-jobs"), "read", "background-jobs")
+        .allowed
+    ).toBe(false);
+    expect(decidePermission(holder("posts"), "read", "posts").allowed).toBe(
+      false
+    );
+  });
+
+  it("is refused to a visitor and a plugin's person, who hold no permission", () => {
+    const person = principalActor(MEMBER);
+    expect(decidePermission(visitorActor(), "read", "settings")).toEqual({
+      allowed: false,
+      reason: "no-permission",
+    });
+    expect(decidePermission(person, "read", "settings")).toEqual({
+      allowed: false,
+      reason: "principal-without-rule",
+    });
   });
 });

@@ -37,16 +37,7 @@ vi.mock("../../../lib/env", () => ({
 
 const containerGet = vi.hoisted(() => vi.fn());
 vi.mock("../../../di", () => ({ container: { get: containerGet } }));
-vi.mock("../../../init", () => ({
-  getCachedNextly: vi.fn().mockResolvedValue(undefined),
-}));
-vi.mock("../../../auth/middleware", () => ({
-  requireAuthentication: vi.fn().mockResolvedValue({ userId: "user-1" }),
-  isErrorResponse: vi.fn().mockReturnValue(false),
-}));
 
-import { POST as postSend } from "../../../api/email-send";
-import { POST as postSendTemplate } from "../../../api/email-send-template";
 import type { NextlyContext } from "../../../direct-api/namespaces/context";
 import { createEmailNamespace } from "../../../direct-api/namespaces/email";
 
@@ -74,10 +65,13 @@ const TEMPLATE = {
   layoutId: null,
   fromOverride: null,
   replyTo: null,
+  cc: null,
+  bcc: null,
   createdAt: new Date(),
   updatedAt: new Date(),
   description: null,
   owner: { kind: "site" },
+  carriesSecret: false,
   overridden: false,
   ownerChanged: false,
   setInCode: false,
@@ -133,13 +127,6 @@ function build(
   };
 }
 
-function post(body: unknown): Request {
-  return new Request("http://x/api/email", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
 const REFUSED = {
   retryable: false,
   status: 422,
@@ -187,22 +174,6 @@ describe("every surface reports a failed send's kind", () => {
     expect(
       await direct.sendWithTemplate({ to: "a@example.com", template: "alert" })
     ).toEqual(expected);
-  });
-
-  it("POST /api/email/send and /send-with-template", async () => {
-    build(refusing());
-
-    const sent = await (await postSend(post(message))).json();
-    const templated = await (
-      await postSendTemplate(post({ to: "a@example.com", template: "alert" }))
-    ).json();
-
-    expect(sent).toEqual({
-      message: "Email could not be sent.",
-      success: false,
-      failure: REFUSED,
-    });
-    expect(templated).toMatchObject({ success: false, failure: REFUSED });
   });
 
   it("reports a plain thrown error as retryable", async () => {
@@ -410,27 +381,122 @@ describe("what a provider's own answer may and may not carry", () => {
     });
     expect(JSON.stringify(result)).not.toContain("451");
   });
+
+  it("withholds such a status from a refusal that gave no reason", async () => {
+    const provider = defineEmailProvider<{ pin: string }>({
+      type: "pin-refuser",
+      label: "PIN",
+      configFields: [
+        {
+          name: "pin",
+          label: "PIN",
+          kind: "password",
+          required: true,
+          secret: true,
+        },
+      ],
+      parseConfig: input => input as { pin: string },
+      createAdapter: config => ({
+        send: () =>
+          Promise.resolve({
+            success: true,
+            messageId: "m-1",
+            rejected: ["a@example.com"],
+            refusals: [
+              {
+                address: "a@example.com",
+                retryable: false,
+                status: Number(config.pin),
+              },
+            ],
+          }),
+      }),
+    });
+    const { plugin } = build(provider.createAdapterFrom({ pin: "451" }));
+
+    const result = await plugin.send(message);
+
+    expect(result.failure).toEqual({
+      retryable: false,
+      reason: "The email provider refused the message.",
+    });
+    expect(result.refused).toEqual([
+      { kind: "to", position: 0, retryable: false },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("451");
+  });
+
+  it("is retryable when any refused to recipient can still be sent to", async () => {
+    // A permanent refusal first, then a temporary one: the send can still
+    // reach the second recipient, so a caller must be told to retry.
+    const { plugin } = build({
+      maxToPerMessage: 10,
+      send: () =>
+        Promise.resolve({
+          success: true,
+          messageId: "m-1",
+          rejected: ["a@example.com", "b@example.com"],
+          refusals: [
+            { address: "a@example.com", retryable: false, status: 550 },
+            { address: "b@example.com", retryable: true, status: 450 },
+          ],
+        }),
+    });
+
+    const result = await plugin.send({
+      ...message,
+      to: ["a@example.com", "b@example.com"],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.failure).toEqual({
+      retryable: true,
+      status: 450,
+      reason:
+        "The email provider could not take the message right now (status 450).",
+    });
+  });
+
+  it.each([
+    [
+      "a refusal described as unreachable",
+      {
+        retryable: false,
+        reason: "The email provider could not be reached.",
+      },
+      {
+        retryable: false,
+        reason: "The email provider refused the message.",
+      },
+    ],
+    [
+      "a sentence naming another status",
+      {
+        retryable: false,
+        status: 401,
+        reason: "The email provider refused the message (status 500).",
+      },
+      {
+        retryable: false,
+        status: 401,
+        reason: "The email provider refused the message (status 401).",
+      },
+    ],
+  ])(
+    "replaces %s with the sentence its fields give",
+    async (_case, given, reported) => {
+      const { plugin } = build({
+        send: () =>
+          Promise.reject(withEmailFailure(new Error("x"), given as never)),
+      });
+
+      expect((await plugin.send(message)).failure).toEqual(reported);
+    }
+  );
 });
 
 describe("what the send path carried over from the recipient work", () => {
   const message = { to: "a@example.com", subject: "Hi", html: "<p>x</p>" };
-
-  it("accepts a comma-joined to on the REST routes, as the service does", async () => {
-    const send = vi
-      .fn<EmailProviderAdapter["send"]>()
-      .mockResolvedValue({ success: true, messageId: "m-1" });
-    build({ maxToPerMessage: 10, send });
-
-    const res = await postSend(
-      post({ ...message, to: "a@example.com, b@example.com" })
-    );
-
-    expect(res.status).toBe(200);
-    expect(send.mock.calls[0][0].toList).toEqual([
-      "a@example.com",
-      "b@example.com",
-    ]);
-  });
 
   it("refuses a Reply-To with a line break, the caller's or a filter's", async () => {
     // A Reply-To becomes a header; a line break would let it add another.

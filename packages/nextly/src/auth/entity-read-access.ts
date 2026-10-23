@@ -14,9 +14,10 @@
  */
 
 import { NextlyError } from "../errors/nextly-error";
-import { parsePermissionSlug } from "../plugins/routes/permission-slug";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
+import { readsEntity } from "./access/entity-read";
+import { holdsPermissionAnswer } from "./access/route-gate-adapters";
 import { scopeGrants } from "./authenticated-scope";
 import {
   codeAccessAllows,
@@ -100,32 +101,9 @@ export async function canReadEntity(
   caller: ReadAccessCaller
 ): Promise<boolean> {
   if (!caller.userId || !slug) return false;
-
-  const rbac = getRBACService();
-
-  if (caller.authMethod === "api-key") {
-    if (!caller.permissions.includes(`read-${slug}`)) return false;
-
-    const target = rbac?.getRegisteredTarget(slug);
-    if (!target) return true;
-    return codeAccessAllows(target, "read", caller);
-  }
-
-  // Session: `checkAccess` already composes super-admin, code-defined access
-  // and the stored grants, so reproducing any of it here would be a second
-  // implementation to keep in step.
-  if (rbac) {
-    return rbac.checkAccess({
-      userId: caller.userId,
-      operation: "read",
-      resource: slug,
-    });
-  }
-
-  // Before the container is up there is nothing to decide against. Denying is
-  // the safe direction; the route-level gate has already run for any real
-  // request that reaches a dispatcher handler.
-  return false;
+  // Before the container is up there is no service to read rules from; the
+  // reader answers as it does without one, which refuses a signed-in user.
+  return readsEntity(slug, caller, getRBACService());
 }
 
 /**
@@ -136,13 +114,11 @@ export async function canReadEntity(
  * question about the fixed slug `read-{entity}`. They live side by side so the
  * two branch structures cannot drift apart unnoticed.
  *
- * The session branch delegates WHOLE to `rbac.checkAccess`, which is the same
- * thing `requirePermission` does for a permission-gated route -- so a widget's
- * `requiredPermission` is decided by exactly the machinery that would decide a
- * route declaring the same slug. That includes the super-admin bypass and any
- * registered code-access rule for the named resource, neither of which is
- * reproduced here; a second implementation of either is a second thing to keep
- * in step.
+ * Asked of the one access decision, as a route gate asks it: a session is
+ * judged as `requirePermission` judges a route declaring the same slug, the
+ * super-admin bypass and any registered rule for the named resource
+ * included, and an API key on its own stamped slug alone. Where that differs
+ * from the decision, the answer is kept through a named deviation.
  *
  * Used to decide whether a dashboard widget declaring `requiredPermission` is
  * even mentioned to this caller. That field was previously gated in the admin
@@ -153,43 +129,11 @@ export async function canReadEntity(
  * caller id, an unparseable slug and an unreachable RBAC service each answer
  * false.
  */
-export async function callerHoldsPermission(
+export function callerHoldsPermission(
   slug: string,
   caller: ReadAccessCaller
 ): Promise<boolean> {
-  if (!caller.userId || !slug) return false;
-
-  // An API key is judged on its OWN stamped grant, never on the roles of
-  // whoever minted it -- and a super admin does not bypass that, for the same
-  // reason spelled out on `canReadEntity`: a read-only key issued by an
-  // administrator must not become equivalent to their full account.
-  if (caller.authMethod === "api-key") {
-    return caller.permissions.includes(slug);
-  }
-
-  const rbac = getRBACService();
-  if (!rbac) return false;
-
-  const { action, resource } = parsePermissionSlug(slug);
-  // A slug with no hyphen parses to an empty resource. `checkAccess` would be
-  // asked about a resource that cannot exist, so refuse it here where the
-  // reason is legible rather than letting it read as an ordinary denial.
-  if (!action || !resource) return false;
-
-  return rbac.checkAccess({
-    // `CheckAccessParams` types `operation` as the five CRUD verbs, and a
-    // permission slug's action is not bounded by them -- `export-submissions`
-    // and `manage-settings` are both real grants in this codebase. The
-    // implementation reads it as a plain string throughout (it indexes
-    // `codeAccess` by it and forwards it to `hasPermission`), so the value is
-    // carried correctly; the type is simply narrower than the function. This
-    // is the identical cast `requirePermission` makes for the identical reason,
-    // and widening the parameter is a change to the RBAC service's own contract
-    // rather than something to settle from a caller.
-    operation: action as "create" | "read" | "update" | "delete",
-    userId: caller.userId,
-    resource,
-  });
+  return holdsPermissionAnswer(slug, caller, getRBACService());
 }
 
 /**

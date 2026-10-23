@@ -28,9 +28,14 @@ vi.mock("../../../api/versions-access", () => ({
 }));
 
 import {
+  currentRequestCaller,
+  type RequestCaller,
+} from "../../../auth/caller-scope";
+import {
   COLLECTION_ENTRY_METHODS,
   SINGLE_DOCUMENT_METHODS,
 } from "../../../routeHandler";
+import { asCaller, sessionCaller } from "../../__tests__/request-caller";
 import { COLLECTION_VERSION_METHODS } from "../collection-dispatcher";
 import { SINGLE_VERSION_METHODS } from "../single-dispatcher";
 import { parseRestRoute } from "../../../route-handler/route-parser";
@@ -58,6 +63,9 @@ describe("version methods are registered", () => {
       "markEntryVersionSeen",
       "restoreEntryVersion",
       "setEntryVersionLabel",
+      // Brings one language's pending change up to date with the live
+      // shared values.
+      "takeLiveSharedValues",
     ]);
   });
 
@@ -74,6 +82,7 @@ describe("version methods are registered", () => {
       "markSingleVersionSeen",
       "restoreSingleVersion",
       "setSingleVersionLabel",
+      "takeLiveSingleSharedValues",
     ]);
   });
 
@@ -105,28 +114,29 @@ describe("version methods are registered", () => {
   });
 
   it("passes the collection slug, entry id and caller through", async () => {
-    await COLLECTION_VERSION_METHODS.listEntryVersions.execute(
-      {} as never,
-      {
-        collectionName: "posts",
-        entryId: "e1",
-        limit: "10",
-        _authenticatedUserId: "user-1",
-        _authenticatedUserRoles: JSON.stringify(["editor"]),
-      },
-      undefined
+    // The caller is read inside the helper from the request context it runs
+    // in; captured at the call, so a handler that left that context would hand
+    // the helper no one.
+    let seen: RequestCaller | undefined;
+    listSpy.mockImplementation(() => {
+      seen = currentRequestCaller();
+      return Promise.resolve({ items: [], meta: { total: 0 } });
+    });
+    const caller = sessionCaller({ userId: "user-1", roles: ["editor"] });
+
+    await asCaller(caller, () =>
+      COLLECTION_VERSION_METHODS.listEntryVersions.execute(
+        {} as never,
+        { collectionName: "posts", entryId: "e1", limit: "10" },
+        undefined
+      )
     );
 
-    // The caller is rebuilt from these params inside the helper; its own
-    // tests assert that.
     expect(listSpy).toHaveBeenCalledWith(
       { scopeKind: "collection", slug: "posts", entryId: "e1" },
-      expect.objectContaining({
-        limit: "10",
-        _authenticatedUserId: "user-1",
-        _authenticatedUserRoles: JSON.stringify(["editor"]),
-      })
+      expect.objectContaining({ limit: "10" })
     );
+    expect(seen).toBe(caller);
   });
 
   it("resolves a Single's entry id from the live row, not from params", async () => {
@@ -140,7 +150,6 @@ describe("version methods are registered", () => {
       {
         slug: "settings",
         entryId: "attacker-supplied",
-        _authenticatedUserId: "u",
       },
       undefined
     );
@@ -158,7 +167,7 @@ describe("version methods are registered", () => {
     await expect(
       SINGLE_VERSION_METHODS.listSingleVersions.execute(
         {} as never,
-        { slug: "settings", _authenticatedUserId: "u" },
+        { slug: "settings" },
         undefined
       )
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
@@ -228,6 +237,24 @@ describe("version methods reach the router", () => {
       verb: "POST",
     },
     {
+      method: "takeLiveSharedValues",
+      path: [
+        "collections",
+        "posts",
+        "entries",
+        "e1",
+        "versions",
+        "working-draft",
+        "take-live",
+      ],
+      verb: "POST",
+    },
+    {
+      method: "takeLiveSingleSharedValues",
+      path: ["singles", "settings", "versions", "working-draft", "take-live"],
+      verb: "POST",
+    },
+    {
       method: "setSingleVersionLabel",
       path: ["singles", "settings", "versions", "2"],
       verb: "PATCH",
@@ -248,6 +275,27 @@ describe("version methods reach the router", () => {
     ).toBe("update");
     expect(
       operationFor(["singles", "settings", "versions", "2"], "PATCH")
+    ).toBe("update");
+    // Taking the live values rewrites the pending change: a write.
+    expect(
+      operationFor(
+        [
+          "collections",
+          "posts",
+          "entries",
+          "e1",
+          "versions",
+          "working-draft",
+          "take-live",
+        ],
+        "POST"
+      )
+    ).toBe("update");
+    expect(
+      operationFor(
+        ["singles", "settings", "versions", "working-draft", "take-live"],
+        "POST"
+      )
     ).toBe("update");
     // A read of the same version must not be promoted to a write.
     expect(

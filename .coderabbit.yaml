@@ -6,6 +6,11 @@
 # limit and the meaningful source diff still gets a full review.
 language: en-US
 reviews:
+  # The high-level summary goes in the walkthrough comment, not the pull
+  # request's description. Written into the description it is text an AI tool
+  # added to it, which the "No AI credit" check reads and refuses, so every
+  # summarised pull request went red until someone deleted the block.
+  high_level_summary_in_walkthrough: true
   path_filters:
     - "!**/pnpm-lock.yaml"
     - "!.changeset/**"

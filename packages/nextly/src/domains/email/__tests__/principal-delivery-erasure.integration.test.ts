@@ -371,6 +371,70 @@ describe.each(getConfiguredTestDialects())(
       );
     }, 120_000);
 
+    it("clears a keyed send's key digest from every record of it when the person is erased", async () => {
+      // A key is the caller's text and may be built from the person's
+      // address, so its digest goes from the copies too, whose addresses stay.
+      const t = await boot(dialect);
+      const gone = await person("acc_keyed");
+
+      const written = await added(t, () =>
+        plugin().services.email.send({
+          to: "member@example.com",
+          cc: ["staff@example.com"],
+          subject: "Order placed",
+          html: "<p>hi</p>",
+          person: gone,
+          idempotencyKey: "order-1:member@example.com",
+        })
+      );
+      const keyOf = (row: DeliveryRow) =>
+        (row as DeliveryRow & { keyDigest: string | null }).keyDigest;
+      expect(written.map(keyOf).every(digest => digest !== null)).toBe(true);
+
+      await plugin().principals!.reportDeleted(gone);
+
+      const after = (await rows(t)).filter(row =>
+        written.some(before => before.id === row.id)
+      );
+      expect(after.map(keyOf)).toEqual([null, null]);
+      const copy = after.find(row => row.recipientKind === "cc")!;
+      expect(copy.recipientHash).toBe(recipientDigest("staff@example.com"));
+      // The send's claim keeps neither digest.
+      const claims = await t.adapter.select("email_send_claims");
+      expect(claims).toEqual([
+        expect.objectContaining({ keyDigest: null, messageDigest: null }),
+      ]);
+    }, 120_000);
+
+    it("writes a keyed send to a person already reported deleted with no key digest anywhere", async () => {
+      // The send was claimed before the report and recorded after it, so the
+      // report found nothing to clear: the records and the claim are written
+      // as the report would have left them.
+      const t = await boot(dialect);
+      const gone = await person("acc_keyed_late");
+      await plugin().principals!.reportDeleted(gone);
+
+      const written = await added(t, () =>
+        plugin().services.email.send({
+          to: "member@example.com",
+          cc: ["staff@example.com"],
+          subject: "Order placed",
+          html: "<p>hi</p>",
+          person: gone,
+          idempotencyKey: "order-2:member@example.com",
+        })
+      );
+
+      expect(
+        written.map(
+          row => (row as DeliveryRow & { keyDigest: string | null }).keyDigest
+        )
+      ).toEqual([null, null]);
+      expect(await t.adapter.select("email_send_claims")).toEqual([
+        expect.objectContaining({ keyDigest: null, messageDigest: null }),
+      ]);
+    }, 120_000);
+
     it("writes the deletion email erased when it is sent in the reporting transaction", async () => {
       const t = await boot(dialect);
       const gone = await person("acc_in_tx");

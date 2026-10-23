@@ -77,6 +77,7 @@ describe("kitRouteConstraintStatements", () => {
     expect(kitRouteConstraintStatements(rekey, [items], "sqlite")).toEqual({
       before: [],
       after: [],
+      liftRestores: [],
     });
   });
 
@@ -104,6 +105,32 @@ describe("kitRouteConstraintStatements", () => {
       expect(after).toEqual([
         expect.stringContaining("ADD CONSTRAINT `fk_cx__items_shelf_id`"),
       ]);
+    });
+
+    it("names the lifted key's restore apart, for a failed apply to put back", () => {
+      // Only a key this apply LIFTED is owed back when the apply fails part way: it existed before
+      // the apply dropped it. A key the apply ADDS is not, so it is not among them.
+      const { liftRestores } = kitRouteConstraintStatements(
+        [retype("cx__items", "shelf_id")],
+        [items, shelves],
+        "mysql"
+      );
+      expect(liftRestores).toEqual([
+        expect.stringContaining("ADD CONSTRAINT `fk_cx__items_shelf_id`"),
+      ]);
+      const added = kitRouteConstraintStatements(
+        [
+          retype("cx__items", "shelf_id"),
+          {
+            type: "add_foreign_key",
+            tableName: "cx__items",
+            foreignKey: shelfKey,
+          },
+        ],
+        [{ ...items, foreignKeys: [] }, shelves],
+        "mysql"
+      );
+      expect(added.liftRestores).toEqual([]);
     });
 
     it("never drops a key this apply adds, and adds it once", () => {
@@ -167,7 +194,7 @@ describe("kitRouteConstraintStatements", () => {
             [items, shelves],
             "mysql"
           )
-        ).toEqual({ before: [], after: [] });
+        ).toEqual({ before: [], after: [], liftRestores: [] });
       }
     });
 
@@ -178,7 +205,7 @@ describe("kitRouteConstraintStatements", () => {
           [items, shelves],
           "mysql"
         )
-      ).toEqual({ before: [], after: [] });
+      ).toEqual({ before: [], after: [], liftRestores: [] });
     });
 
     it("does not lift it on PostgreSQL, which changes the type in place", () => {
@@ -188,7 +215,7 @@ describe("kitRouteConstraintStatements", () => {
           [items, shelves],
           "postgresql"
         )
-      ).toEqual({ before: [], after: [] });
+      ).toEqual({ before: [], after: [], liftRestores: [] });
     });
   });
 });

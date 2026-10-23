@@ -76,6 +76,7 @@ describe("a pointer drag over a page that scrolls", () => {
         gridRef: { current: grid },
         say: () => undefined,
         drop: () => undefined,
+        requestFocus: () => undefined,
       })
     );
 

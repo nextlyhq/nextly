@@ -652,6 +652,12 @@ export {
   type WidgetRenderSize,
   type WidgetWidth,
 } from "./domains/widgets/declaration/public";
+// @experimental The check a site's generated admin component map applies, and what it reads:
+// the widgets a config declares, kept as types from `definePlugin` through `defineConfig`.
+export type {
+  DeclaredComponentMap,
+  WidgetsOf,
+} from "./plugins/declared-widgets";
 
 // The widget domain's public surface: the registry every core and
 // plugin-contributed widget shares, the source registry a query names, and

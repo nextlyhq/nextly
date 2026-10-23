@@ -50,6 +50,7 @@ import { READY_CHECKS } from "./helpers/ready-checks";
 import {
   ANY_EDITABLE_STATE,
   scheduleAsItStands,
+  lockServerOf,
 } from "./helpers/release-writes";
 
 const DAY = 86_400_000;
@@ -87,6 +88,19 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         },
         fields: [text({ name: "title" })],
       }),
+      // Read by nobody but a super-admin, whom every rule admits: a release
+      // reader's history must not name its documents.
+      defineCollection({
+        slug: "memos",
+        status: true,
+        access: {
+          read: () => false,
+          update: () => true,
+          publish: () => true,
+          unpublish: () => true,
+        },
+        fields: [text({ name: "title" })],
+      }),
     ],
   });
   await seedPermissionsAndRolePresets();
@@ -99,9 +113,9 @@ function inDays(days: number): Date {
   return new Date(Math.floor((Date.now() + days * DAY) / 1000) * 1000);
 }
 
-async function draft(t: TestNextly): Promise<string> {
+async function draft(t: TestNextly, collection = "posts"): Promise<string> {
   const created = (await t.nextly.create({
-    collection: "posts" as never,
+    collection: collection as never,
     data: { title: "Draft", status: "draft" } as never,
   })) as unknown as { item?: { id?: string }; id?: string };
   return String(created.item?.id ?? created.id);
@@ -157,10 +171,8 @@ async function userName(t: TestNextly, id: string): Promise<string | null> {
 
 let roleSeq = 0;
 
-/** A role-based API key holding every release permission, minted by the founder. */
-async function releaseKey(
-  t: TestNextly
-): Promise<{ key: string; id: string; name: string }> {
+/** A role holding exactly these permissions, by slug. */
+async function roleHolding(t: TestNextly, slugs: string[]): Promise<string> {
   const permissions = (await t.adapter.select<{ id: string; slug: string }>(
     "permissions",
     {}
@@ -169,10 +181,32 @@ async function releaseKey(
   const role = await new ServiceContainer(t.adapter).roles.createRole({
     name: `History role ${roleSeq}`,
     slug: `history-role-${roleSeq}`,
-    permissionIds: ALL_RELEASE_PERMISSIONS.map(slug =>
-      String(permissions.find(p => p.slug === slug)!.id)
-    ),
+    permissionIds: slugs.map(slug => {
+      const found = permissions.find(p => p.slug === slug);
+      // Asserted, so a refusal below cannot be for a permission never seeded.
+      expect(found, `${slug} is seeded`).toBeDefined();
+      return String(found!.id);
+    }),
   });
+  return role.id;
+}
+
+/** An active person, not the super-admin, whose only role holds these. */
+async function personHolding(t: TestNextly, slugs: string[]): Promise<string> {
+  const user = await seedLiveAuthor(t);
+  const assigned = await new ServiceContainer(
+    t.adapter
+  ).userRoles.assignRoleToUser(user, await roleHolding(t, slugs));
+  expect(assigned.success).toBe(true);
+  return user;
+}
+
+/** A role-based API key holding these permissions (every release one by default). */
+async function releaseKey(
+  t: TestNextly,
+  slugs: string[] = ALL_RELEASE_PERMISSIONS
+): Promise<{ key: string; id: string; name: string }> {
+  const roleId = await roleHolding(t, slugs);
   const name = `history key ${roleSeq}`;
   const apiKeys = t.getService("apiKeyService") as unknown as {
     createApiKey: (
@@ -188,7 +222,7 @@ async function releaseKey(
   const { key } = await apiKeys.createApiKey(founder!, {
     name,
     tokenType: "role-based",
-    roleId: role.id,
+    roleId,
     expiresIn: "unlimited",
   });
   const [row] = await t.adapter.select<{ id: string }>("api_keys", {
@@ -201,13 +235,14 @@ async function releaseKey(
 /** One REST call to `/api/<path>` as the key, answered as status and body. */
 async function rest(
   key: string,
-  method: "POST" | "PATCH" | "DELETE",
+  method: "GET" | "POST" | "PATCH" | "DELETE",
   path: string[],
-  body?: unknown
+  body?: unknown,
+  query = ""
 ): Promise<{ status: number; json: Record<string, unknown> }> {
   const handlers = createDynamicHandlers();
   const res = await handlers[method](
-    new Request(`http://localhost/api/${path.join("/")}`, {
+    new Request(`http://localhost/api/${path.join("/")}${query}`, {
       method,
       headers: {
         authorization: `Bearer ${key}`,
@@ -264,7 +299,10 @@ async function until(condition: () => boolean): Promise<void> {
  * every write before that one has committed.
  */
 async function passEndedAfter(t: TestNextly, writes: number): Promise<void> {
-  const real = createReleaseMutations({ contentApi: t.nextly });
+  const real = createReleaseMutations({
+    contentApi: t.nextly,
+    lockServer: lockServerOf(t),
+  });
   let started = 0;
   const cut =
     (write: ReleaseMutations["publish"]): ReleaseMutations["publish"] =>
@@ -332,6 +370,87 @@ function serviceWithoutEvents(t: TestNextly): ReleasesService {
       new Set(members.map(member => member.id)),
     checks: READY_CHECKS,
   });
+}
+
+/** A document's stored status, read from its row. */
+async function storedStatus(
+  t: TestNextly,
+  collection: string,
+  id: string
+): Promise<string | undefined> {
+  const row = await t.adapter.selectOne<{ status?: string }>(
+    `dc_${collection}`,
+    { where: { and: [{ column: "id", op: "=", value: id }] } }
+  );
+  return row?.status;
+}
+
+/**
+ * A release service over the real database whose release transactions run
+ * `before` once, just before writing their first content event, so a case
+ * can act while one is open.
+ */
+function serviceWithPause(
+  t: TestNextly,
+  before: () => Promise<void>
+): ReleasesService {
+  const base = t.adapter as unknown as ReleasesDbApi;
+  let paused = false;
+  const pausingTx = (tx: ReleasesTxApi): ReleasesTxApi =>
+    new Proxy(tx, {
+      get(target, prop) {
+        if (prop === "insert") {
+          return async (table: string, ...rest: unknown[]) => {
+            if (table === CONTENT_EVENTS_TABLE && !paused) {
+              paused = true;
+              await before();
+            }
+            return (target.insert as (...a: unknown[]) => unknown)(
+              table,
+              ...rest
+            );
+          };
+        }
+        const value: unknown = Reflect.get(target, prop, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  const db = new Proxy(base, {
+    get(target, prop) {
+      if (prop === "transaction") {
+        return (work: (tx: ReleasesTxApi) => Promise<unknown>) =>
+          target.transaction(tx => work(pausingTx(tx)));
+      }
+      const value: unknown = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return new ReleasesService({
+    repository: new ReleasesRepository(db),
+    targets: {
+      readDocument: async () => null,
+      declaresLifecycle: async () => false,
+    },
+    canManageReleases: async () => true,
+    canActOnDocument: async () => true,
+    runDrainNow: async () => undefined,
+    readableMembers: async (members: readonly { id: string }[]) =>
+      new Set(members.map(member => member.id)),
+    checks: READY_CHECKS,
+  });
+}
+
+/** Wait until `condition` holds, or `ms` have passed; whether it held. */
+async function within(
+  ms: number,
+  condition: () => Promise<boolean>
+): Promise<boolean> {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (await condition()) return true;
+    await new Promise(r => setTimeout(r, 25));
+  }
+  return condition();
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -701,5 +820,384 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.releases.delete({ id: draftOnly.id, ...me });
       expect(await t.nextly.releases.findByID({ id: draftOnly.id })).toBeNull();
     });
+
+    it("lists in a release's history only the documents the reader may read", async () => {
+      const t = await boot(dialect);
+      const [post, memo] = [await draft(t), await draft(t, "memos")];
+      const release = await t.nextly.releases.create({ title: "Mixed" });
+      for (const [scopeSlug, entryId] of [
+        ["posts", post],
+        ["memos", memo],
+      ] as const) {
+        await t.nextly.releases.addMember({
+          releaseId: release.id,
+          scopeKind: "collection",
+          scopeSlug,
+          entryId,
+          locale: null,
+          action: "publish",
+          userId: founder!,
+        });
+      }
+      const subject = { kind: "release" as const, id: release.id };
+
+      // A trusted read is the control: it names both documents, so the
+      // reads below leave the memo out because it is hidden, not missing.
+      const all = JSON.stringify(
+        (await t.nextly.contentEvents.list({ subject })).items
+      );
+      expect(all).toContain(memo);
+      expect(all).toContain(post);
+
+      // A person who may read releases and posts, but not memos.
+      const reader = await personHolding(t, [
+        "read-content-releases",
+        "read-posts",
+      ]);
+      const asReader = (
+        await t.nextly.contentEvents.list({
+          subject,
+          user: { id: reader },
+          overrideAccess: false,
+        })
+      ).items;
+      expect(asReader.map(event => event.kind)).toEqual([
+        "release-document-added",
+        "release-created",
+      ]);
+      expect(JSON.stringify(asReader)).toContain(post);
+      expect(JSON.stringify(asReader)).not.toContain(memo);
+      expect(JSON.stringify(asReader)).not.toContain("memos");
+
+      // REST, as a key with the same grants, answers the same.
+      const key = await releaseKey(t, ["read-content-releases", "read-posts"]);
+      const res = await rest(
+        key.key,
+        "GET",
+        ["content-events"],
+        undefined,
+        `?subject=release&id=${release.id}`
+      );
+      expect(res.status).toBe(200);
+      const body = JSON.stringify(res.json);
+      expect(body).toContain(post);
+      expect(body).not.toContain(memo);
+      expect(body).not.toContain("memos");
+    });
+
+    it("leaves a document as it was when its release is deleted between the run's read and its write", async () => {
+      // The run has planned the release and is about to write its one
+      // document. Before the write, the release is cancelled and, its history
+      // showing no run yet, deleted. The write must then not happen.
+      const t = await boot(dialect);
+      const post = await draft(t);
+      const id = await dueRelease(t, [post]);
+      const real = createReleaseMutations({
+        contentApi: t.nextly,
+        lockServer: lockServerOf(t),
+      });
+      let deleted = false;
+      const afterDelete =
+        (write: ReleaseMutations["publish"]): ReleaseMutations["publish"] =>
+        async input => {
+          if (!deleted) {
+            deleted = true;
+            await t.nextly.releases.cancel({ id });
+            await t.nextly.releases.delete({ id });
+          }
+          return write(input);
+        };
+      await applyDueReleases({
+        repository: new ReleasesRepository(t.adapter),
+        mutations: {
+          publish: afterDelete(input => real.publish(input)),
+          unpublish: afterDelete(input => real.unpublish(input)),
+        },
+        runAs: {
+          findUser: async userId => ({ id: userId, isActive: true }),
+          listRoleSlugs: async () => [],
+        },
+      });
+
+      expect(deleted).toBe(true);
+      expect(await t.nextly.releases.findByID({ id })).toBeNull();
+      expect(await storedStatus(t, "posts", post)).toBe("draft");
+    });
+
+    it("leaves a document as it was when it is taken out of its release just before the run writes it", async () => {
+      // The release stays scheduled and runs; only the document taken out
+      // between the run's plan and its write must not take the action.
+      const t = await boot(dialect);
+      const [kept, taken] = [await draft(t), await draft(t)];
+      const id = await dueRelease(t, [kept, taken]);
+      const members = await new ReleasesRepository(t.adapter).listMembers(id);
+      const takenMember = members.find(member => member.entryId === taken)!;
+      const real = createReleaseMutations({
+        contentApi: t.nextly,
+        lockServer: lockServerOf(t),
+      });
+      let removed = false;
+      const publish: ReleaseMutations["publish"] = async input => {
+        if (input.ref.entryId === taken && !removed) {
+          removed = true;
+          await t.nextly.releases.removeMember({
+            releaseId: id,
+            memberId: takenMember.id,
+          });
+        }
+        return real.publish(input);
+      };
+      await applyDueReleases({
+        repository: new ReleasesRepository(t.adapter),
+        mutations: { publish, unpublish: input => real.unpublish(input) },
+        runAs: {
+          findUser: async userId => ({ id: userId, isActive: true }),
+          listRoleSlugs: async () => [],
+        },
+      });
+
+      expect(removed).toBe(true);
+      expect(await storedStatus(t, "posts", taken)).toBe("draft");
+      // The control: the document still in the release was written.
+      expect(await storedStatus(t, "posts", kept)).toBe("published");
+    });
+
+    it("leaves a document as it was when its release is cancelled between the run's plan and its write", async () => {
+      // The release still exists and still holds the document, but it has
+      // moved on: cancelled, its revision raised. The write must not happen.
+      const t = await boot(dialect);
+      const post = await draft(t);
+      const id = await dueRelease(t, [post]);
+      const real = createReleaseMutations({
+        contentApi: t.nextly,
+        lockServer: lockServerOf(t),
+      });
+      let cancelled = false;
+      const afterCancel =
+        (write: ReleaseMutations["publish"]): ReleaseMutations["publish"] =>
+        async input => {
+          if (!cancelled) {
+            cancelled = true;
+            await t.nextly.releases.cancel({ id });
+          }
+          return write(input);
+        };
+      await applyDueReleases({
+        repository: new ReleasesRepository(t.adapter),
+        mutations: {
+          publish: afterCancel(input => real.publish(input)),
+          unpublish: afterCancel(input => real.unpublish(input)),
+        },
+        runAs: {
+          findUser: async userId => ({ id: userId, isActive: true }),
+          listRoleSlugs: async () => [],
+        },
+      });
+
+      expect(cancelled).toBe(true);
+      expect((await t.nextly.releases.findByID({ id }))?.state).toBe(
+        "cancelled"
+      );
+      expect(await storedStatus(t, "posts", post)).toBe("draft");
+    });
+
+    it("pages a release's history so a page of events the reader may not see never stops the walk", async () => {
+      // Newest first, the two newest events are about a memo the reader may
+      // not read: a raw page of two holds nothing for them, and the walk must
+      // still reach the post and the release's creation.
+      const t = await boot(dialect);
+      const [post, memo] = [await draft(t), await draft(t, "memos")];
+      const release = await t.nextly.releases.create({ title: "Paged" });
+      const add = (scopeSlug: string, entryId: string) =>
+        t.nextly.releases.addMember({
+          releaseId: release.id,
+          scopeKind: "collection",
+          scopeSlug,
+          entryId,
+          locale: null,
+          action: "publish",
+          userId: founder!,
+        });
+      await add("posts", post);
+      const memoMember = await add("memos", memo);
+      await t.nextly.releases.changeMemberAction({
+        releaseId: release.id,
+        memberId: memoMember.id,
+        action: "unpublish",
+      });
+      const reader = await personHolding(t, [
+        "read-content-releases",
+        "read-posts",
+      ]);
+      const page = await t.nextly.contentEvents.list({
+        subject: { kind: "release", id: release.id },
+        limit: 2,
+        user: { id: reader },
+        overrideAccess: false,
+      });
+      expect(page.items.map(event => event.kind)).toEqual([
+        "release-document-added",
+        "release-created",
+      ]);
+      expect(JSON.stringify(page.items)).toContain(post);
+      expect(page.meta.hasNext).toBe(false);
+    });
+
+    it("stops scanning hidden history after a bounded number of reads, and says where it stopped", async () => {
+      // Newest first, fifteen events about a memo the reader may not read
+      // stand before the post's. A page of one scans its first read and ten
+      // more, finds nothing to show, and answers where the scan stopped; the
+      // walk goes on from there and reaches the post.
+      const t = await boot(dialect);
+      const [post, memo] = [await draft(t), await draft(t, "memos")];
+      const release = await t.nextly.releases.create({
+        title: "Mostly hidden",
+      });
+      const add = (scopeSlug: string, entryId: string) =>
+        t.nextly.releases.addMember({
+          releaseId: release.id,
+          scopeKind: "collection",
+          scopeSlug,
+          entryId,
+          locale: null,
+          action: "publish",
+          userId: founder!,
+        });
+      await add("posts", post);
+      const memoMember = await add("memos", memo);
+      for (let i = 0; i < 14; i += 1) {
+        await t.nextly.releases.changeMemberAction({
+          releaseId: release.id,
+          memberId: memoMember.id,
+          action: i % 2 === 0 ? "unpublish" : "publish",
+        });
+      }
+      const reader = await personHolding(t, [
+        "read-content-releases",
+        "read-posts",
+      ]);
+      const read = (before?: string) =>
+        t.nextly.contentEvents.list({
+          subject: { kind: "release", id: release.id },
+          limit: 1,
+          ...(before === undefined ? {} : { before }),
+          user: { id: reader },
+          overrideAccess: false,
+        });
+
+      const first = await read();
+      expect(first.items).toEqual([]);
+      expect(first.meta.hasNext).toBe(true);
+      const cursor = first.meta.nextBefore;
+      expect(typeof cursor).toBe("string");
+
+      const second = await read(cursor);
+      expect(second.items.map(event => event.kind)).toEqual([
+        "release-document-added",
+      ]);
+      expect(JSON.stringify(second.items)).toContain(post);
+    });
+
+    it("refuses to record Publish now on a release that moved since it was judged due", async () => {
+      const t = await boot(dialect);
+      const id = await dueRelease(t, [await draft(t)]);
+      const repo = new ReleasesRepository(t.adapter);
+      const [due] = await repo.findReleases({ ids: [id] });
+      // Rescheduled after it was judged: its revision moved on.
+      expect(await scheduleAsItStands(repo, id, inDays(7), "UTC")).toBe(true);
+      expect(
+        await repo.recordPublishNow(
+          id,
+          { kind: "person", userId: founder! },
+          due!.revision
+        )
+      ).toBe(false);
+      expect((await eventsOf(t, id)).map(event => event.kind)).not.toContain(
+        "release-publish-now"
+      );
+    });
+
+    it("records Publish now on a release already due, and refuses a key that does not say which it is", async () => {
+      const t = await boot(dialect);
+      const me = { userId: founder!, overrideAccess: false } as const;
+      const id = await dueRelease(t, [await draft(t)]);
+
+      // A key's scope without its id: refused before anything runs.
+      await expect(
+        t.nextly.releases.publishNow({
+          id,
+          userId: founder!,
+          overrideAccess: false,
+          authenticatedScope: {
+            actorType: "apiKey",
+            permissions: ["publish-content-releases"],
+          },
+        })
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      expect((await t.nextly.releases.findByID({ id }))?.state).toBe(
+        "scheduled"
+      );
+
+      // Due already, so it is not moved, but the history names who asked.
+      await t.nextly.releases.publishNow({ id, ...me });
+      const events = await eventsOf(t, id);
+      expect(only(events, "release-publish-now")).toMatchObject({
+        actorKind: "person",
+        actorId: founder,
+      });
+      // Not moved: the one schedule is the fixture's, and none follows it.
+      expect(
+        events.filter(event =>
+          ["release-scheduled", "release-rescheduled"].includes(event.kind)
+        )
+      ).toHaveLength(1);
+    });
+
+    it.skipIf(dialect === "sqlite")(
+      "keeps no name for a person whose account is deleted while their release change is being written",
+      async () => {
+        // SQLite has one writer, so a deletion cannot run inside the change's
+        // transaction at all. Elsewhere the deletion is asked for while the
+        // change's transaction is open and has read the person's name, and
+        // given time to finish before the change writes its event. Read under
+        // the account's lock, the deletion waits for the change and then
+        // erases the name with the rest of the person's events.
+        const t = await boot(dialect);
+        const person = await seedLiveAuthor(t);
+        // The change's transaction stops just before its event, says so, and
+        // waits; the deletion runs from here, as another request would, on a
+        // flow of its own rather than the change's.
+        let reached!: () => void;
+        const atEvent = new Promise<void>(resolve => (reached = resolve));
+        let proceed!: () => void;
+        const goOn = new Promise<void>(resolve => (proceed = resolve));
+        const svc = serviceWithPause(t, async () => {
+          reached();
+          await goOn;
+        });
+        const creating = svc.create(
+          { title: "Named" },
+          { userId: person, overrideAccess: true }
+        );
+        await atEvent;
+        const deletion = t.nextly.users.delete({ id: person });
+        // Time for an unhindered deletion to finish, sweep included; one held
+        // by the change's lock is still waiting when this ends.
+        await within(1500, async () => {
+          const rows = await t.adapter.select<{ id: string }>("users", {
+            columns: ["id"],
+            where: { and: [{ column: "id", op: "=", value: person }] },
+          });
+          return rows.length === 0;
+        });
+        proceed();
+        const release = await creating;
+        await deletion;
+
+        const created = only(await eventsOf(t, release.id), "release-created");
+        expect(created.actorId).toBe(person);
+        expect(created.actorName).toBeNull();
+      }
+    );
   }
 );

@@ -8,6 +8,7 @@
  *
  * @module schemas/email-deliveries/mysql
  */
+// fallow-ignore-file code-duplication
 
 import {
   mysqlTable,
@@ -72,6 +73,9 @@ export const emailDeliveriesMysql = mysqlTable(
     // The person a plugin's email went to: see the PostgreSQL definition.
     principalKind: varchar("principal_kind", { length: 191 }),
     principalId: varchar("principal_id", { length: 191 }),
+    // The keyed digest of the idempotency key the send carried, on every
+    // record of that send; cleared on all of them when any one is erased.
+    keyDigest: varchar("key_digest", { length: 64 }),
 
     /**
      * `fsp: 3` — milliseconds, not whole seconds.
@@ -97,6 +101,8 @@ export const emailDeliveriesMysql = mysqlTable(
     index("email_deliveries_retention_idx").on(t.retentionClass, t.createdAt),
     // Erasure finds a person's rows by kind and id.
     index("email_deliveries_principal_idx").on(t.principalKind, t.principalId),
+    // Erasure clears a send's key digest from all its records.
+    index("email_deliveries_key_idx").on(t.keyDigest),
   ]
 );
 

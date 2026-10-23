@@ -115,7 +115,7 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
         },
         // Attribute the account creation to the authenticated admin so the
         // emitted `user.created` event is not anonymous.
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondMutation("User created.", user, { status: 201 });
     },
@@ -137,7 +137,7 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
         requireParam(p, "userId", "UserId"),
         // Attribute the deletion to the authenticated admin so the emitted
         // `user.deleted` event is not anonymous.
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondMutation("User deleted.", user);
     },

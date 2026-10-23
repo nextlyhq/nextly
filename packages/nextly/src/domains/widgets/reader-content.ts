@@ -27,8 +27,9 @@
  * @module domains/widgets/reader-content
  */
 
-import { callerMayPerform } from "../../auth/authenticated-scope";
+import { callerMayPerform } from "../../auth/access/route-gate-adapters";
 import {
+  AUTHORIZATION_CONCURRENCY,
   authorizationGroups,
   readAccessCaller,
 } from "../../auth/entity-read-access";
@@ -164,12 +165,30 @@ function queryableCollectionSlugs(readable: readonly string[]): string[] {
 }
 
 /**
+ * How long the content check may take before it answers "unknown".
+ *
+ * Five seconds: long enough for a few rounds of counts on a slow database, and
+ * short enough that a dashboard waiting on it is not mistaken for a hung one.
+ * Past it the answer is honestly not known, and "not known" must never read as
+ * "empty" -- telling a reader with content that their install is empty is the
+ * onboarding equivalent of losing their work.
+ */
+export const CONTENT_CHECK_BUDGET_MS = 5_000;
+
+/** What the content check can say: found some, found none, or ran out of time to know. */
+export type ContentAnswer = boolean | "unknown";
+
+/**
  * Whether this reader can see any content at all.
  *
- * SHORT-CIRCUITS on the first collection holding a row, so the expensive shape
- * — many collections — is the one that returns soonest, and the exhaustive walk
- * happens only on an install that is genuinely empty, where every count is
- * against an empty table.
+ * Counted CONCURRENTLY, at most {@link AUTHORIZATION_CONCURRENCY} collections at
+ * once (the bound the read decisions before it keep), and stops starting counts
+ * at the first collection holding a row. On an install with content that is the
+ * first round; only a genuinely empty install counts every collection, and then
+ * against empty tables. All inside {@link CONTENT_CHECK_BUDGET_MS}: an answer
+ * not reached by then is "unknown", which every reader of this treats as not
+ * empty. A Direct API count takes no signal, so a count already running when
+ * the check stops cannot be cancelled: it finishes, and its answer is ignored.
  *
  * Asked per collection through the ordinary counted read rather than through
  * one unscoped total, because "any content" has to mean "any content THIS
@@ -179,6 +198,10 @@ function queryableCollectionSlugs(readable: readonly string[]): string[] {
  * `status: "all"` because a draft is content. A reader who has written one post
  * and not published it is not looking at an empty install, and telling them
  * they are is the onboarding equivalent of losing their work.
+ *
+ * A count that FAILS fails the check, as it did when the counts ran one after
+ * another: nothing is known about that collection, and guessing either way
+ * would be wrong.
  */
 export async function readerHasContent(
   caller: ReadCaller,
@@ -190,19 +213,80 @@ export async function readerHasContent(
    * permissions against every collection ONCE rather than per condition.
    */
   resolved?: readonly string[]
-): Promise<boolean> {
+): Promise<ContentAnswer> {
   const slugs = queryableCollectionSlugs(
     resolved ?? (await readableCollectionSlugs(caller))
   );
-
-  for (const slug of slugs) {
+  return anyHoldsEntry(slugs, async slug => {
     const { total } = await requireNextly().count({
       collection: slug,
       status: "all",
       ...readArgs(caller),
     });
-    if (total > 0) return true;
-  }
+    return total;
+  });
+}
 
-  return false;
+/**
+ * Whether any of `slugs` holds an entry, by `count`, with at most `limit`
+ * counts in flight, answering "unknown" once `budgetMs` has passed.
+ *
+ * Answers as soon as it knows: the first non-zero count answers `true` without
+ * waiting for the counts still in flight, and no count starts after an answer.
+ * Its own function so the pool's bound and its stopping can be watched with a
+ * count the test controls.
+ */
+export function anyHoldsEntry(
+  slugs: readonly string[],
+  count: (slug: string) => Promise<number>,
+  limit: number = AUTHORIZATION_CONCURRENCY,
+  budgetMs: number = CONTENT_CHECK_BUDGET_MS
+): Promise<ContentAnswer> {
+  if (slugs.length === 0) return Promise.resolve(false);
+  return new Promise<ContentAnswer>((resolve, reject) => {
+    let next = 0;
+    let inFlight = 0;
+    let answered = false;
+    const timer = setTimeout(() => answer("unknown"), budgetMs);
+    // A check that answered in a millisecond must not hold the process open
+    // for the rest of its budget.
+    timer.unref?.();
+
+    function answer(value: ContentAnswer): void {
+      if (answered) return;
+      answered = true;
+      clearTimeout(timer);
+      resolve(value);
+    }
+
+    function fail(error: unknown): void {
+      if (answered) return;
+      answered = true;
+      clearTimeout(timer);
+      // The count's own failure, passed on as it came; a thrown non-Error is
+      // wrapped so the caller always rejects with one.
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
+
+    function launch(): void {
+      while (!answered && inFlight < limit && next < slugs.length) {
+        const slug = slugs[next];
+        next += 1;
+        if (slug === undefined) continue;
+        inFlight += 1;
+        // Through a resolved promise, so a count that throws as it is called
+        // fails the check rather than escaping this loop.
+        Promise.resolve()
+          .then(() => count(slug))
+          .then(total => {
+            inFlight -= 1;
+            if (total > 0) answer(true);
+            else launch();
+          }, fail);
+      }
+      if (!answered && inFlight === 0 && next >= slugs.length) answer(false);
+    }
+
+    launch();
+  });
 }

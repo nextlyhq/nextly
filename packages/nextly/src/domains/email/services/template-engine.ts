@@ -112,6 +112,12 @@ export interface InterpolateOptions {
    * @default true
    */
   escapeHtml?: boolean;
+  /**
+   * How to write a value the calling code vouches for, or undefined for an
+   * ordinary value, which is written (and escaped) as usual. Lets the render
+   * write pre-built markup, such as the brand settings', as Liquid does.
+   */
+  trusted?: (value: unknown) => string | undefined;
 }
 
 /**
@@ -154,6 +160,8 @@ export function interpolateTemplate(
     if (value === undefined || value === null) {
       return "";
     }
+    const trusted = options?.trusted?.(value);
+    if (trusted !== undefined) return trusted;
 
     // eslint-disable-next-line @typescript-eslint/no-base-to-string
     const stringValue = String(value);

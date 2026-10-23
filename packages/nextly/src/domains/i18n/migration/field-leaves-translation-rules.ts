@@ -31,7 +31,11 @@ export interface LeavingTranslationRefusal {
   code:
     | "RESHAPED_FIELD_LEAVES_TRANSLATION"
     | "CONSTRAINED_FIELD_LEAVES_TRANSLATION"
-    | "RESHAPED_FIELD_JOINS_TRANSLATION";
+    | "RESHAPED_FIELD_JOINS_TRANSLATION"
+    | "RESHAPED_TRANSLATED_FIELD_RENAMED"
+    | "TRANSLATED_FIELD_RENAMED_AS_TRANSLATION_ENDS"
+    | "TRANSLATED_FIELD_RENAME_UNANSWERED"
+    | "TRANSLATED_FIELD_REMOVED_BESIDE_ADDED";
   /** Why the field cannot leave or join translation in this change, as one sentence. */
   reason: string;
   /** The changes that get there instead, in order, each one sentence. */
@@ -244,4 +248,112 @@ export function refusalsForFieldsJoiningTranslation(args: {
   surface: Surface;
 }): LeavingTranslationRefusal[] {
   return args.reshaped.map(name => reshapedJoiningRefusal(name, args.surface));
+}
+
+/**
+ * A translated field the schema dialog offers as renamed, in a change that does not say whether it
+ * was renamed or replaced. Taking either would guess about every language's value: a rename keeps
+ * them under the new name, a replacement deletes them. Refused, so the admin decides.
+ */
+export function refusalsForTranslatedFieldRenameUnanswered(args: {
+  /** The field's new name. */
+  renamed: string;
+}): LeavingTranslationRefusal[] {
+  return [
+    refusal(
+      `fields.${args.renamed}`,
+      "TRANSLATED_FIELD_RENAME_UNANSWERED",
+      "It looks renamed, but the change does not say whether to keep its translations under the new name.",
+      [
+        "Review the change again and choose whether the field was renamed, which keeps its translations, or replaced, which deletes them.",
+        "Save.",
+      ]
+    ),
+  ];
+}
+
+/**
+ * A translated field renamed in the same change that turns translation off for the whole entity.
+ * The disable restores each field from the companion under the name it had, so the value would
+ * land under a name no field has any more. Refused, naming the two saves that work.
+ */
+export function refusalsForTranslatedFieldRenamedAsTranslationEnds(args: {
+  /** The renamed field's new name, when translation ends in the same change. */
+  renamed: string | undefined;
+}): LeavingTranslationRefusal[] {
+  if (args.renamed === undefined) return [];
+  return [
+    refusal(
+      `fields.${args.renamed}`,
+      "TRANSLATED_FIELD_RENAMED_AS_TRANSLATION_ENDS",
+      "It is renamed in the same change that turns translation off.",
+      ["Rename it and save.", "Turn translation off and save."]
+    ),
+  ];
+}
+
+/**
+ * The refusal for a translated field renamed in the same change that changes how it is stored.
+ * Its values move with its column when it is renamed, and a rename keeps the column's type, so
+ * the two together would leave every language's value behind. The Builder's paths only: a code
+ * rename is not yet decided as one.
+ */
+export function refusalsForTranslatedFieldRenamedAndReshaped(args: {
+  /** The renamed field's new name, when the rename changes its storage too. */
+  reshaped: string | undefined;
+}): LeavingTranslationRefusal[] {
+  if (args.reshaped === undefined) return [];
+  return [
+    refusal(
+      `fields.${args.reshaped}`,
+      "RESHAPED_TRANSLATED_FIELD_RENAMED",
+      "Its type, length or precision changes in the same change that renames it.",
+      ["Rename it and save.", "Change its type, length or precision and save."]
+    ),
+  ];
+}
+
+/**
+ * The refusal for translated fields a change removes while it adds other fields, when no rename was
+ * decided for them. Read by name, each removed field's companion column is dropped with every
+ * language's value, and the change cannot tell that from a rename the rule could not pick (two
+ * renames, a rename beside a new field, a rename to another type), so nothing asked the admin
+ * about the column. A removal on its own, or an addition on its own, is not refused.
+ *
+ * The change that turns translation on is refused the same way for the fields that become
+ * translated: it moves each one's main column under a name the field keeps, so it follows no
+ * rename at all, and its refusal names turning translation on as the first save.
+ */
+export function refusalsForTranslatedFieldsRemovedBesideAdded(args: {
+  /** The translated fields the change removes, each of which has a companion column. */
+  removed: readonly string[];
+  /** The fields the change adds that get a column, translated or shared. */
+  added: readonly string[];
+  /** Whether this change turns translation on, so the removed fields become translated in it. */
+  translationStarts?: boolean;
+}): LeavingTranslationRefusal[] {
+  if (args.removed.length === 0 || args.added.length === 0) return [];
+  const added = args.added.map(name => `"${name}"`).join(", ");
+  const steps = [
+    "Rename or remove one translated field and save.",
+    "Then add or change the other fields and save.",
+  ];
+  return args.removed.map(name =>
+    refusal(
+      `fields.${name}`,
+      "TRANSLATED_FIELD_REMOVED_BESIDE_ADDED",
+      args.translationStarts
+        ? `"${name}" becomes translated, and this change removes it while adding ${added}. ` +
+            `Turning translation on keeps a field's value only under the name it already has, ` +
+            `so its value would be deleted, and in one change that cannot be told from a rename.`
+        : `"${name}" is translated, and this change removes it while adding ${added}. Removing it ` +
+            `deletes every language's value, and in one change that cannot be told from a rename.`,
+      args.translationStarts
+        ? [
+            "Turn translation on with the fields as they are and save.",
+            ...steps,
+          ]
+        : steps
+    )
+  );
 }

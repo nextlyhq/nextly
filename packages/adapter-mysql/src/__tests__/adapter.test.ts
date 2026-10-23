@@ -656,6 +656,44 @@ describe("@nextly/adapter-mysql", () => {
       }
     });
 
+    it("puts back the lock wait timeout when strict-mode setup fails after it was set", async () => {
+      // Each session change is recorded as it lands: a failure part way through the setup must
+      // still restore what had already been changed, or the connection is pooled carrying it.
+      const answer = mockConnection.query.getMockImplementation();
+      mockConnection.query.mockImplementation((statement: string) =>
+        statement.startsWith("SELECT @@SESSION.innodb_lock_wait_timeout")
+          ? Promise.resolve([[{ timeout: 50 }], []])
+          : statement.startsWith("SELECT @@SESSION.sql_mode")
+            ? Promise.reject(new Error("lost the read"))
+            : answer?.(statement)
+      );
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      mockConnection.query.mockClear();
+      mockConnection.release.mockClear();
+      mockConnection.destroy.mockClear();
+
+      // The setup must reach the strict-mode read and fail on it: a transaction that ignored the
+      // option would commit, and restoring the timeout alone would prove nothing about this path.
+      await expect(
+        adapter.transaction(async () => "done", {
+          timeoutMs: 5000,
+          strictSqlMode: true,
+        })
+      ).rejects.toThrow(/lost the read/);
+
+      const statements = mockConnection.query.mock.calls.map(
+        call => call[0] as string
+      );
+      expect(statements).toContain("SELECT @@SESSION.sql_mode AS mode");
+      expect(statements).not.toContain("COMMIT");
+      expect(statements).toContain("SET SESSION innodb_lock_wait_timeout = 50");
+      expect(mockConnection.release).toHaveBeenCalledTimes(1);
+      mockConnection.query.mockImplementation(answer);
+    });
+
     it("destroys a connection whose ROLLBACK failed instead of pooling it", async () => {
       // A connection the ROLLBACK did not reach may still be inside the
       // transaction; pooled, it would put the next request's statements in it.

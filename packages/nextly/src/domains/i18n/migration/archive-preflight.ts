@@ -13,8 +13,12 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { isVirtualField } from "../../../collections/fields/virtual";
 import { NextlyError } from "../../../errors/nextly-error";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
+import { isFieldLocalized } from "../classify-fields";
+import { companionColumnNames } from "../runtime/companion-io";
 
 import { ensureI18nArchive } from "./ensure-archive";
 import { fieldsJoiningTranslation } from "./field-joins-translation";
@@ -22,11 +26,15 @@ import {
   type LeavingFieldLike,
   refusalsForFieldsJoiningTranslation,
   refusalsForFieldsLeavingTranslation,
+  refusalsForTranslatedFieldRenamedAndReshaped,
+  refusalsForTranslatedFieldRenamedAsTranslationEnds,
+  refusalsForTranslatedFieldsRemovedBesideAdded,
   storageDiffers,
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import {
   buildLeavingFieldsArchiveStatements,
+  type FieldRename,
   fieldsLeavingTranslation,
 } from "./reconcile-companion";
 import type { I18nTransitionKind } from "./transition-state";
@@ -90,6 +98,8 @@ async function writeArchiveFirst(
  *
  * Nothing is asked when no field leaves translation, or when the entity is not translated before
  * and after the change (turning translation off for the whole entity archives by its own path).
+ * Turning translation off or on still refuses a field that is or becomes translated removed beside
+ * an added one, as neither move can follow it to its new name.
  *
  * @throws NextlyError `VALIDATION_ERROR` naming each reshaped or constrained field and the order
  *   that works, leaving or joining, or `NEXTLY_MIGRATION_APPLY_FAILED` when the archive refuses the values
@@ -110,28 +120,74 @@ export async function archiveFieldsLeavingTranslation(args: {
   newFields: readonly LeavingFieldLike[];
   wasLocalized: boolean;
   isLocalized: boolean;
+  /**
+   * The rename the schema dialog's answer decided (`resolveCompanionRename`): a field renamed,
+   * or `null` when the admin chose to drop and add. Left out by a save with no dialog, which
+   * decides by the main table's rule (`detectFieldRename`) instead.
+   */
+  renamed?: FieldRename | null;
+  /**
+   * Set by the schema dialogs, whose push refuses a main-table column drop the admin did not
+   * confirm (`BrowserPromptDispatcher`). Before translation is on, every field is a main-table
+   * column, so that refusal already asks about each one the change takes away.
+   */
+  mainDropsConfirmed?: boolean;
 }): Promise<void> {
-  if (!args.wasLocalized || !args.isLocalized) return;
-  const leaving = new Set(
-    fieldsLeavingTranslation(args.oldFields, args.newFields)
-  );
-  const joining = fieldsJoiningTranslation(args.oldFields, args.newFields);
-  // Nothing to judge or archive when no field changes whether it is translated.
-  if (leaving.size === 0 && joining.length === 0) return;
-
+  if (!args.wasLocalized) {
+    // Turning translation on moves a field's main column to the companion only under a name the
+    // field has before and after the change (`buildCompanionTransitionStatements`), so one that
+    // becomes translated and is removed beside an added field, a rename included, would lose its
+    // value with its main column. A rename is not carried by that move, so only an explicit
+    // drop-and-add answer passes, or a save whose main-table drops are confirmed on their own.
+    if (args.isLocalized && !args.mainDropsConfirmed) {
+      refuseTranslatedFieldsRemovedBesideAdded(args, args.oldFields, {
+        translationStarts: true,
+      });
+    }
+    return;
+  }
+  if (!args.isLocalized) {
+    await refuseRenameAsTranslationEnds(args);
+    // Turning translation off restores each field from the companion under the name it had, so
+    // a translated field removed beside an added one is restored under a name no field has.
+    refuseTranslatedFieldsRemovedBesideAdded(args, args.oldFields);
+    return;
+  }
+  // A translated field renamed in this change is judged under its new name, as the companion
+  // transition will move it: renamed and made shared, it leaves translation, and its archive,
+  // its refusals and its settings are asked for here, before the main table changes.
+  const rename = await renameInChange(args);
+  const oldFields = rename
+    ? args.oldFields.map(f =>
+        f === rename.from ? { ...f, name: rename.to.name } : f
+      )
+    : args.oldFields;
+  const leaving = new Set(fieldsLeavingTranslation(oldFields, args.newFields));
+  const joining = fieldsJoiningTranslation(oldFields, args.newFields);
+  // Before the early return below: a change that only removes and adds translated fields changes
+  // no field's translation, and is exactly the one that would drop a column unasked.
+  refuseTranslatedFieldsRemovedBesideAdded(args, oldFields);
+  // Nothing to judge or archive when no field changes whether it is translated, or its name.
+  if (leaving.size === 0 && joining.length === 0 && !rename) {
+    return;
+  }
   const dialect = args.adapter.getCapabilities().dialect;
+
   const refusals = [
     ...refusalsForFieldsLeavingTranslation({
       leaving,
       newFields: args.newFields,
-      oldFields: args.oldFields,
+      oldFields,
       dialect,
       builtBy: args.builtBy,
       surface: "builder",
     }),
     ...refusalsForFieldsJoiningTranslation({
-      reshaped: reshapedJoiningFields(joining, args, dialect),
+      reshaped: reshapedJoiningFields(joining, { ...args, oldFields }, dialect),
       surface: "builder",
+    }),
+    ...refusalsForTranslatedFieldRenamedAndReshaped({
+      reshaped: rename && reshaped(rename, args.builtBy, dialect),
     }),
   ];
   if (refusals.length > 0) {
@@ -145,6 +201,14 @@ export async function archiveFieldsLeavingTranslation(args: {
   }
   if (leaving.size === 0) return;
 
+  // Where a renamed field's values are now: in the column it had, until an earlier apply renamed
+  // it; and nowhere on the companion once an earlier apply finished moving them and stopped before
+  // the registry recorded it, so its archive rows are already written.
+  const source = await renamedSource(
+    args.adapter,
+    args.tableName,
+    renamedColumn(rename, args.builtBy, dialect)
+  );
   await writeArchiveFirst(
     args.adapter,
     args.entity,
@@ -155,10 +219,125 @@ export async function archiveFieldsLeavingTranslation(args: {
       dialect,
       builtBy: args.builtBy,
       defaultLocale: args.defaultLocale,
-      oldFields: args.oldFields,
+      oldFields: source.moved
+        ? oldFields.filter(f => f.name !== rename?.to.name)
+        : oldFields,
       newFields: args.newFields,
+      renamedFrom: source.renamedFrom,
     })
   );
+}
+
+/**
+ * Refuses a change that removes translated fields while it adds others with no rename decided
+ * for them (`refusalsForTranslatedFieldsRemovedBesideAdded`), before anything runs. An explicit
+ * drop-and-add answer from the schema dialog is the admin choosing the drop, so it passes.
+ *
+ * @throws NextlyError `VALIDATION_ERROR` naming each removed field and the two saves that work
+ */
+function refuseTranslatedFieldsRemovedBesideAdded(
+  args: Parameters<typeof archiveFieldsLeavingTranslation>[0],
+  oldFields: readonly LeavingFieldLike[],
+  /** Set for the change that turns translation on, whose refusal names that save first. */
+  options: { translationStarts?: boolean } = {}
+): void {
+  if (args.renamed === null) return;
+  const before = new Set(oldFields.map(f => f.name));
+  const after = new Set(args.newFields.map(f => f.name));
+  // Any new field that stores something, translated or shared, wherever it stores it: a column
+  // on the main table or the companion, a junction table, a field group's own table. A translated
+  // field renamed to a type that is shared by default reads as one removed and one shared field
+  // added. Only a virtual field stores nothing.
+  const storesSomething = (
+    f: LeavingFieldLike & { virtual?: unknown; options?: unknown }
+  ) => !isVirtualField(f);
+  const added = args.newFields
+    .filter(f => !before.has(f.name) && storesSomething(f))
+    .map(f => f.name);
+  const removed = oldFields.filter(
+    f => !after.has(f.name) && isFieldLocalized(f, true)
+  );
+  // Judged by name first, so a change that does not both remove and add asks the adapter nothing.
+  if (added.length === 0 || removed.length === 0) return;
+  const dialect = args.adapter.getCapabilities().dialect;
+  const refusals = refusalsForTranslatedFieldsRemovedBesideAdded({
+    removed: removed
+      .filter(
+        f => fieldToLocalizedColumnSpec(f, dialect, args.builtBy) !== null
+      )
+      .map(f => f.name),
+    added,
+    translationStarts: options.translationStarts,
+  });
+  if (refusals.length === 0) return;
+  throw NextlyError.validation({
+    errors: refusals,
+    logContext: { entity: args.entity, fields: refusals.map(r => r.path) },
+  });
+}
+
+/**
+ * Refuses a translated field renamed in the change that turns translation off
+ * (`refusalsForTranslatedFieldRenamedAsTranslationEnds`), before anything runs.
+ *
+ * @throws NextlyError `VALIDATION_ERROR` naming the field and the two saves that work
+ */
+async function refuseRenameAsTranslationEnds(
+  args: Parameters<typeof archiveFieldsLeavingTranslation>[0]
+): Promise<void> {
+  if (!oneTranslatedFieldReplaced(args)) return;
+  const rename = await translatedFieldRename(
+    args,
+    args.adapter.getCapabilities().dialect
+  );
+  const refusals = refusalsForTranslatedFieldRenamedAsTranslationEnds({
+    renamed: rename?.to.name,
+  });
+  if (refusals.length === 0) return;
+  throw NextlyError.validation({
+    errors: refusals,
+    logContext: { entity: args.entity, fields: refusals.map(r => r.path) },
+  });
+}
+
+/**
+ * The renamed field's values as this database has them (`renamed` maps its new column to its old
+ * one): read from the old column while it is there; from the new one once an earlier apply renamed
+ * it; and `moved` when neither is left, because an earlier apply copied them out, archived them and
+ * dropped the column, then stopped before the registry recorded the change.
+ */
+async function renamedSource(
+  adapter: DrizzleAdapter,
+  tableName: string,
+  renamed: ReadonlyMap<string, string> | undefined
+): Promise<{ renamedFrom?: ReadonlyMap<string, string>; moved: boolean }> {
+  if (!renamed) return { moved: false };
+  const live = new Set(await companionColumnNames(adapter, tableName));
+  const [[to, from]] = [...renamed];
+  if (live.has(from)) return { renamedFrom: renamed, moved: false };
+  return { moved: !live.has(to) };
+}
+
+/**
+ * The rename in this change: the one the dialog's answer decided, when the caller has one, else
+ * the one the main table's rule finds for a translated field replaced by a new one.
+ */
+async function renameInChange(args: {
+  adapter: DrizzleAdapter;
+  oldFields: readonly LeavingFieldLike[];
+  newFields: readonly LeavingFieldLike[];
+  renamed?: FieldRename | null;
+}): Promise<TranslatedFieldRename | undefined> {
+  const decided = args.renamed;
+  if (decided === null) return undefined;
+  if (decided !== undefined) {
+    const from = args.oldFields.find(f => f.name === decided.from);
+    const to = args.newFields.find(f => f.name === decided.to);
+    return from && to ? { from, to } : undefined;
+  }
+  return oneTranslatedFieldReplaced(args)
+    ? translatedFieldRename(args, args.adapter.getCapabilities().dialect)
+    : undefined;
 }
 
 /**
@@ -183,4 +362,92 @@ function reshapedJoiningFields(
   return joining.filter(name =>
     storageDiffers(columnOf(before.get(name)), columnOf(after.get(name)))
   );
+}
+
+/**
+ * Whether the change takes away exactly one translated field and adds exactly one field, the only
+ * shape the rename rule reads as a rename. Asked of the names alone, so a save that renames
+ * nothing translated asks the adapter nothing.
+ */
+function oneTranslatedFieldReplaced(args: {
+  oldFields: readonly LeavingFieldLike[];
+  newFields: readonly LeavingFieldLike[];
+}): boolean {
+  const after = new Set(args.newFields.map(f => f.name));
+  const before = new Set(args.oldFields.map(f => f.name));
+  const removed = args.oldFields.filter(f => !after.has(f.name));
+  const added = args.newFields.filter(f => !before.has(f.name));
+  return (
+    removed.length === 1 &&
+    added.length === 1 &&
+    isFieldLocalized(removed[0], true)
+  );
+}
+
+/** A translated field this change renames: its definition before and after. */
+interface TranslatedFieldRename {
+  from: LeavingFieldLike;
+  to: LeavingFieldLike;
+}
+
+/**
+ * The translated field this change renames, by the main table's rule (`detectFieldRename`), which
+ * the companion transition follows too; undefined when no translated field is renamed.
+ */
+async function translatedFieldRename(
+  args: {
+    oldFields: readonly LeavingFieldLike[];
+    newFields: readonly LeavingFieldLike[];
+  },
+  dialect: SupportedDialect
+): Promise<TranslatedFieldRename | undefined> {
+  const { DynamicCollectionSchemaService } = await import(
+    "../../dynamic-collections/services/dynamic-collection-schema-service"
+  );
+  const rename = new DynamicCollectionSchemaService(
+    undefined,
+    dialect
+  ).detectFieldRename(
+    args.oldFields as unknown as FieldDefinition[],
+    args.newFields as unknown as FieldDefinition[]
+  );
+  if (!rename || !isFieldLocalized(rename.from, true)) return undefined;
+  // The same objects as the change's own lists, so the caller can find the renamed field by
+  // identity.
+  const from = args.oldFields.find(f => f.name === rename.from.name);
+  const to = args.newFields.find(f => f.name === rename.to.name);
+  return from && to ? { from, to } : undefined;
+}
+
+/** The renamed field's new name when its storage changes too; undefined otherwise. */
+function reshaped(
+  rename: TranslatedFieldRename,
+  builtBy: ColumnOrigin,
+  dialect: SupportedDialect
+): string | undefined {
+  return storageDiffers(
+    fieldToLocalizedColumnSpec(rename.from, dialect, builtBy),
+    fieldToLocalizedColumnSpec(rename.to, dialect, builtBy)
+  )
+    ? rename.to.name
+    : undefined;
+}
+
+/**
+ * The renamed field's column under its new name, mapped to the column it has now, for the archive
+ * writes made before the rename runs.
+ */
+function renamedColumn(
+  rename: TranslatedFieldRename | undefined,
+  builtBy: ColumnOrigin,
+  dialect: SupportedDialect
+): ReadonlyMap<string, string> | undefined {
+  if (!rename) return undefined;
+  const from = fieldToLocalizedColumnSpec(rename.from, dialect, builtBy)?.name;
+  const to = fieldToLocalizedColumnSpec(
+    { ...rename.from, name: rename.to.name },
+    dialect,
+    builtBy
+  )?.name;
+  return from && to ? new Map([[to, from]]) : undefined;
 }

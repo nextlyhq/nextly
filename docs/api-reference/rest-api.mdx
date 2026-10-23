@@ -266,8 +266,6 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `DELETE` | `/admin/api/field-groups/{slug}` | Delete field group. | `manage-settings` |
 | `POST` | `/admin/api/field-groups/schema/{slug}/preview` | Dry-run field group schema diff. | `manage-settings` |
 | `POST` | `/admin/api/field-groups/schema/{slug}/apply` | Apply field group schema changes. | `manage-settings` |
-| `POST` | `/admin/api/email/send` | Send a raw email. | Authenticated |
-| `POST` | `/admin/api/email/send-with-template` | Send a templated email. | Authenticated |
 | `GET` | `/admin/api/email-providers` | List providers. | `read-email-providers` |
 | `POST` | `/admin/api/email-providers` | Create provider. | `create-email-providers` |
 | `GET` | `/admin/api/email-providers/{id}` | Get provider. | `read-email-providers` |
@@ -283,6 +281,7 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `PATCH` | `/admin/api/email-templates/{id}` | Update template. | `update-email-templates` |
 | `DELETE` | `/admin/api/email-templates/{id}` | Delete template. | `delete-email-templates` |
 | `POST` | `/admin/api/email-templates/{id}/preview` | Render template with sample data. | `read-email-templates` |
+| `PATCH` | `/admin/api/email-templates/{id}/send-test` | Send the saved template to the signed-in user's own address. | `update-email-templates` |
 | `GET` | `/admin/api/user-fields` | List user field definitions. | `read-settings` |
 | `POST` | `/admin/api/user-fields` | Create user field. | `create-settings` |
 | `PATCH` | `/admin/api/user-fields/reorder` | Reorder user fields. | `update-settings` |
@@ -558,27 +557,9 @@ curl -X PATCH http://localhost:3000/admin/api/singles/site-settings \
 
 ### Email send
 
-Both endpoints accept an authenticated request (cookie or API key). The body matches the Direct API arguments documented in [Direct API → Email](/docs/api-reference/direct-api#email).
+There is no REST route for sending email: a route that let any signed-in caller or API key pick the recipient would let anyone with access send as the site. Send from server code with `nextly.email.send()` or `nextly.email.sendWithTemplate()` (see [Direct API → Email](/docs/api-reference/direct-api#email)), or add a route of your own that checks who may send, and to whom, before it calls them.
 
-```bash
-curl -X POST http://localhost:3000/admin/api/email/send \
-  -H "Authorization: Bearer nx_live_..." \
-  -H "Content-Type: application/json" \
-  -d '{
-    "to": "user@example.com",
-    "subject": "Hello",
-    "html": "<p>Welcome to Nextly</p>"
-  }'
-
-curl -X POST http://localhost:3000/admin/api/email/send-with-template \
-  -H "Authorization: Bearer nx_live_..." \
-  -H "Content-Type: application/json" \
-  -d '{
-    "to": "user@example.com",
-    "template": "welcome-email",
-    "variables": { "name": "Alice" }
-  }'
-```
+The admin's test send, `PATCH /admin/api/email-templates/{id}/send-test`, sends the saved template only to the signed-in user's own address. It takes `variables` in the body and ignores any recipient, and it refuses API keys.
 
 ### Media
 
@@ -745,7 +726,7 @@ The route handler ships with built-in defences:
 - **Rate limiting** on auth write endpoints (per IP) and global per-IP / per-key limits configured in `nextly.config.ts`.
 - **CORS** controlled by `NEXTLY_ALLOWED_ORIGINS` and the `security` config.
 - **Cache headers** (`no-store`) on every `/admin/api/auth/*` response to keep tokens out of caches.
-- **Super-admin protection** so non-super-admins cannot grant the super-admin role.
+- **Super-admin protection**: only a super-admin can give super-admin authority, whether by assigning the role or a role that inherits it, or by making a role inherit one. An API key can't, whoever made it.
 - **Trusted proxy / forwarded-for** filtering when `trustProxy` is on.
 
 See [Configuration](/docs/configuration/nextly-config) and [Authentication](/docs/guides/authentication) for the configurable surface.

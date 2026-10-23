@@ -19,6 +19,8 @@
 
 import { z } from "zod";
 
+import { schemaListed } from "../auth/access/route-gate-adapters";
+import { getRBACService } from "../auth/code-access";
 import {
   COLLECTION_DEFINITION_ACTION,
   COLLECTION_DEFINITION_RESOURCE,
@@ -31,7 +33,6 @@ import { getFilterRegistry, FilterSeams } from "../filters";
 import { getCachedNextly } from "../init";
 import { resolveBuilderRevalidate } from "../revalidation/builder-revalidate";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
-import { hasPermission, isSuperAdmin } from "../services/lib/permissions";
 import { requireBuilderEnabled } from "../shared/builder-access";
 import { simplePluralize } from "../shared/lib/pluralization";
 
@@ -172,66 +173,59 @@ export const GET = withErrorHandler(async (request: Request) => {
     ? parseInt(searchParams.get("offset")!, 10)
     : 0;
 
+  // Every matching collection, in the registry's stable order: the page is
+  // cut only after the list is narrowed to what the caller may see, so every
+  // page but the last is full and `total` counts the whole visible list. A
+  // page cut first, then filtered, comes back short and its total stops at it.
   const result = await registry.listCollections({
     source: source || undefined,
     search,
-    limit,
-    offset,
   });
 
-  // Filter to the collections the caller may read. The authorization
-  // MUST honor the authentication method: an API key carries its own
-  // pre-resolved, possibly-narrowed permission set, so authorizing it via
-  // the owner's session RBAC (`hasPermission`/`isSuperAdmin` by user id)
-  // would let a restricted key list collections outside its scope. This
-  // mirrors how `requirePermission` branches on `authMethod`.
-  let filteredCollections = result.data;
-
-  if (auth.authMethod === "api-key") {
-    // The key's resolved permission set is the source of truth (no
-    // super-admin bypass — that is already reflected in the resolved set).
-    filteredCollections = result.data.filter(collection =>
-      auth.permissions.includes(`read-${collection.slug}`)
-    );
-  } else {
-    // Session auth: super-admins see everything; others need explicit
-    // read-{slug} permission via their RBAC roles.
-    const isAdmin = await isSuperAdmin(auth.userId);
-    if (!isAdmin) {
-      const permittedCollections = [];
-      for (const collection of result.data) {
-        const canRead = await hasPermission(
-          auth.userId,
-          "read",
-          collection.slug
-        );
-        if (canRead) {
-          permittedCollections.push(collection);
-        }
-      }
-      filteredCollections = permittedCollections;
-    }
-  }
+  // Narrowed to the collections the caller may read, judged on how it
+  // authenticated: a key on its own scope, never its owner's grants, so a
+  // restricted key lists nothing outside it. The caller's access is read once
+  // for the whole list.
+  const filteredCollections = await schemaListed(
+    auth,
+    result.data,
+    getRBACService()
+  );
 
   // D63 seam: let plugins transform the admin nav collection list.
   const navItems = await applyAdminNavFilter(filteredCollections, auth.userId);
 
-  // Translate offset-based pagination to the canonical page/limit meta. The
-  // total reflects the post-permission-filter count so non-admins see a
-  // total consistent with what they can paginate through.
-  const safeLimit = Math.max(1, limit);
-  const page = Math.floor(offset / safeLimit) + 1;
-  const total = navItems.length;
-  const totalPages = Math.ceil(total / safeLimit);
-  return respondList(navItems, {
-    total,
-    page,
-    limit: safeLimit,
-    totalPages,
-    hasNext: page < totalPages,
-    hasPrev: page > 1,
-  });
+  const { items, meta } = pageOf(navItems, limit, offset);
+  return respondList(items, meta);
 });
+
+/**
+ * One page of the list the caller is shown, and the canonical page/limit meta
+ * for it: `total` is everything the caller can page through.
+ *
+ * A limit or offset that is not a number takes its default: the page is cut
+ * here, and a `NaN` limit would return an empty one.
+ */
+function pageOf<T>(all: T[], limit: number, offset: number) {
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, limit) : 50;
+  const safeOffset = Number.isFinite(offset) ? Math.max(0, offset) : 0;
+  const total = all.length;
+  const items = all.slice(safeOffset, safeOffset + safeLimit);
+  return {
+    items,
+    meta: {
+      total,
+      page: Math.floor(safeOffset / safeLimit) + 1,
+      limit: safeLimit,
+      totalPages: Math.ceil(total / safeLimit),
+      // From the offset asked, not a page number: an offset that is not a
+      // multiple of the limit still says truly whether anything follows it or
+      // comes before it.
+      hasNext: safeOffset + items.length < total,
+      hasPrev: safeOffset > 0,
+    },
+  };
+}
 
 /**
  * POST handler for creating a new UI collection.

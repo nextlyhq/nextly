@@ -8,6 +8,10 @@
  * @packageDocumentation
  */
 
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../../domains/auth/system-write-policy";
 import { NextlyError } from "../../errors/nextly-error";
 import type { User } from "../../services/users/user-service";
 import type {
@@ -23,6 +27,8 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
+  checkRead,
+  checkedRoleChange,
   createRequestContext,
   isNotFoundError,
   mergeConfig,
@@ -50,6 +56,8 @@ export interface UsersNamespace {
 export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
   return {
     async find(args: FindUsersArgs = {}): Promise<ListResult<User>> {
+      // Checked as REST's user list is, before anything is read.
+      await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.users.read);
       const limit = args.limit ?? 10;
       const page = args.page ?? 1;
 
@@ -72,6 +80,8 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
     },
 
     async findOne(args: FindOneUserArgs = {}): Promise<User | null> {
+      // A search of the list, so it asks what the list asks.
+      await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.users.read);
       const result = await ctx.userService.listUsers(
         {
           pagination: { limit: 1, page: 1 },
@@ -86,6 +96,9 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
     },
 
     async findByID(args: FindUserByIDArgs): Promise<User | null> {
+      // Refused before the lookup, so `disableErrors` answers a refusal as a
+      // refusal, never as a missing user.
+      await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.users.read);
       const config = mergeConfig(ctx.defaultConfig, args);
 
       try {
@@ -105,17 +118,23 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
     async create(args: CreateUserArgs): Promise<MutationResult<User>> {
       const data = args.data ?? {};
       const { name, image, roles, isActive, ...customFields } = data;
-      const user = await ctx.userService.create(
-        {
-          email: args.email,
-          name: (name as string) ?? "",
-          password: args.password,
-          image: image as string | undefined,
-          roles: roles as string[] | undefined,
-          isActive: isActive as boolean | undefined,
-          ...customFields,
-        },
-        createRequestContext(args)
+      const user = await checkedRoleChange(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.users.create,
+        () =>
+          ctx.userService.create(
+            {
+              email: args.email,
+              name: (name as string) ?? "",
+              password: args.password,
+              image: image as string | undefined,
+              roles: roles as string[] | undefined,
+              isActive: isActive as boolean | undefined,
+              ...customFields,
+            },
+            createRequestContext(args)
+          )
       );
       // matching the wire API. Hardcoded noun ("User") since this is the
       // users-specific namespace.
@@ -137,17 +156,24 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
       const data = args.data ?? {};
       const { email, name, image, emailVerified, isActive, ...customFields } =
         data;
-      const user = await ctx.userService.update(
-        args.id,
-        {
-          email: email as string | undefined,
-          name: name as string | undefined,
-          image: image as string | undefined,
-          emailVerified: emailVerified as Date | null | undefined,
-          isActive: isActive as boolean | undefined,
-          ...customFields,
-        },
-        createRequestContext(args)
+      const id = args.id;
+      const user = await checkedRoleChange(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.users.update,
+        () =>
+          ctx.userService.update(
+            id,
+            {
+              email: email as string | undefined,
+              name: name as string | undefined,
+              image: image as string | undefined,
+              emailVerified: emailVerified as Date | null | undefined,
+              isActive: isActive as boolean | undefined,
+              ...customFields,
+            },
+            createRequestContext(args)
+          )
       );
       return {
         message: "User updated.",
@@ -166,7 +192,13 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
         });
       }
 
-      await ctx.userService.delete(args.id, createRequestContext(args));
+      const id = args.id;
+      await checkedRoleChange(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.users.delete,
+        () => ctx.userService.delete(id, createRequestContext(args))
+      );
       // For deletes the `item` is just the deleted id so callers can still
       // chain on something concrete (matches the wire API's `{ id }` shape
       // returned by delete handlers under `respondMutation`).

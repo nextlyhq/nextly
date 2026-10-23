@@ -1,6 +1,15 @@
 
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
 import {
+  EMAIL_HUB_PERMISSIONS,
+  EMAIL_PROVIDER_CREATE_PERMISSIONS,
+  EMAIL_PROVIDER_READ_PERMISSIONS,
+  EMAIL_PROVIDER_UPDATE_PERMISSIONS,
+  EMAIL_TEMPLATE_CREATE_PERMISSIONS,
+  EMAIL_TEMPLATE_READ_PERMISSIONS,
+  EMAIL_TEMPLATE_UPDATE_PERMISSIONS,
+} from "../constants/email-hub";
+import {
   API_KEYS_LIST_PERMISSIONS,
   RELEASE_SECTION_PERMISSIONS,
 } from "../constants/navigation";
@@ -22,7 +31,6 @@ import "../hooks/useUnsavedChanges";
 // the point: the import pulls no page code with it.
 import { lazyRoute } from "./lazy-route";
 
-
 // Every non-builder page loads through the same wrapper as the builders:
 // its chunk is fetched when its route renders, so opening one screen does
 // not download the other 58.
@@ -34,6 +42,13 @@ const ResetPasswordPage = lazyRoute(() => import("./(auth)/reset-password"));
 const SetupPage = lazyRoute(() => import("./(auth)/setup"));
 const VerifyEmailPage = lazyRoute(() => import("./(auth)/verify-email"));
 const CollectionsPage = lazyRoute(() => import("./dashboard/collection/index"));
+const EmailDesignPage = lazyRoute(() => import("./dashboard/email/design"));
+const EmailMessagesPage = lazyRoute(() => import("./dashboard/email/index"));
+const CreateEmailTemplatePage = lazyRoute(() => import("./dashboard/email/messages/create"));
+const EditEmailTemplatePage = lazyRoute(() => import("./dashboard/email/messages/edit/[id]"));
+const CreateEmailProviderPage = lazyRoute(() => import("./dashboard/email/sending/create"));
+const EditEmailProviderPage = lazyRoute(() => import("./dashboard/email/sending/edit/[id]"));
+const EmailProvidersPage = lazyRoute(() => import("./dashboard/email/sending/index"));
 const EditEntryPage = lazyRoute(() => import("./dashboard/entries/[slug]/[id]/index"));
 const EntryVersionsPage = lazyRoute(() => import("./dashboard/entries/[slug]/[id]/versions"));
 const APIPlaygroundPage = lazyRoute(() => import("./dashboard/entries/[slug]/api"));
@@ -47,6 +62,7 @@ const PluginSettingsPage = lazyRoute(() => import("./dashboard/plugins/[slug]/se
 const PluginBrowsePage = lazyRoute(() => import("./dashboard/plugins/browse"));
 const PluginsOverviewPage = lazyRoute(() => import("./dashboard/plugins/index"));
 const CollectionsLandingRedirect = lazyRoute(() => import("./dashboard/redirects/CollectionsLandingRedirect"));
+const EmailSettingsRedirect = lazyRoute(() => import("./dashboard/redirects/EmailSettingsRedirect"));
 const FieldGroupsLandingRedirect = lazyRoute(() => import("./dashboard/redirects/FieldGroupsLandingRedirect"));
 const SinglesLandingRedirect = lazyRoute(() => import("./dashboard/redirects/SinglesLandingRedirect"));
 const ReleaseDetailPage = lazyRoute(() => import("./dashboard/releases/[id]"));
@@ -58,12 +74,6 @@ const CreateApiKeyPage = lazyRoute(() => import("./dashboard/settings/api-keys/c
 const EditApiKeyPage = lazyRoute(() => import("./dashboard/settings/api-keys/edit/[id]"));
 const ApiKeysPage = lazyRoute(() => import("./dashboard/settings/api-keys/index"));
 const BackgroundJobsPage = lazyRoute(() => import("./dashboard/settings/background-jobs/index"));
-const CreateEmailProviderPage = lazyRoute(() => import("./dashboard/settings/email-providers/create"));
-const EditEmailProviderPage = lazyRoute(() => import("./dashboard/settings/email-providers/edit/[id]"));
-const EmailProvidersPage = lazyRoute(() => import("./dashboard/settings/email-providers/index"));
-const CreateEmailTemplatePage = lazyRoute(() => import("./dashboard/settings/email-templates/create"));
-const EditEmailTemplatePage = lazyRoute(() => import("./dashboard/settings/email-templates/edit/[id]"));
-const EmailTemplatesPage = lazyRoute(() => import("./dashboard/settings/email-templates/index"));
 const CreateImageSizePage = lazyRoute(() => import("./dashboard/settings/image-sizes/create"));
 const EditImageSizePage = lazyRoute(() => import("./dashboard/settings/image-sizes/edit/[id]"));
 const ImageSizesSettingsPage = lazyRoute(() => import("./dashboard/settings/image-sizes/index"));
@@ -86,7 +96,7 @@ const EditUserFieldPage = lazyRoute(() => import("./dashboard/users/fields/edit/
 const UserFieldsPage = lazyRoute(() => import("./dashboard/users/fields/index"));
 const DashboardUsersPage = lazyRoute(() => import("./dashboard/users/index"));
 
-// Builder pages too: their heavy dependencies (@dnd-kit, Lexical, CodeMirror,
+// Heavy builder dependencies (@dnd-kit, Lexical, CodeMirror,
 // schema-builder components) stay in chunks fetched when a builder opens, and
 // the wrapper gives them the same retry a failed fetch gets anywhere else.
 const CollectionBuilderPage = lazyRoute(() => import("./dashboard/collections/builder/index"));
@@ -95,9 +105,6 @@ const FieldGroupBuilderPage = lazyRoute(() => import("./dashboard/field-group/bu
 const FieldGroupBuilderEditPage = lazyRoute(() => import("./dashboard/field-group/builder/[slug]"));
 const SingleBuilderPage = lazyRoute(() => import("./dashboard/singles/builder/index"));
 const SingleBuilderEditPage = lazyRoute(() => import("./dashboard/singles/builder/[slug]"));
-
-// CodeMirror, schema-builder components) are split into separate chunks and
-// only fetched when navigating to builder routes.
 
 interface RouteConfigBase {
   component: React.ComponentType<PageProps>;
@@ -426,47 +433,95 @@ export const routeConfig: Record<string, RouteConfig> = {
   // picks the first destination in the panel they can actually open, and every
   // grant in `settingsPanelSlugs()` opens one, so the fallthrough to
   // `/admin/settings` is unreachable for anyone this guard admits.
+  // ============================================================
+  // The Email hub. Each tab is guarded by the grants that read what it shows,
+  // and each editor by the grant its save needs; the server checks the same
+  // grants again on every request. The landing page admits any hub grant and
+  // moves a reader who may not see Messages on to a tab they may see.
+  // Literal paths are registered before the [id] ones they would match.
+  // ============================================================
+  [ROUTES.EMAIL]: {
+    component: EmailMessagesPage,
+    type: "private",
+    requiredPermission: [...EMAIL_HUB_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_DESIGN]: {
+    component: EmailDesignPage,
+    type: "private",
+    requiredPermission: [...EMAIL_TEMPLATE_READ_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_SENDING]: {
+    component: EmailProvidersPage,
+    type: "private",
+    requiredPermission: [...EMAIL_PROVIDER_READ_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_MESSAGES_CREATE]: {
+    component: CreateEmailTemplatePage,
+    type: "private",
+    requiredPermission: [...EMAIL_TEMPLATE_CREATE_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_MESSAGES_EDIT]: {
+    component: EditEmailTemplatePage,
+    type: "private",
+    requiredPermission: [...EMAIL_TEMPLATE_UPDATE_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_SENDING_CREATE]: {
+    component: CreateEmailProviderPage,
+    type: "private",
+    requiredPermission: [...EMAIL_PROVIDER_CREATE_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_SENDING_EDIT]: {
+    component: EditEmailProviderPage,
+    type: "private",
+    requiredPermission: [...EMAIL_PROVIDER_UPDATE_PERMISSIONS],
+    section: "email",
+  },
+
   [ROUTES.SETTINGS]: {
     component: SettingsPage,
     type: "private",
     requiredPermission: settingsPanelSlugs(),
     section: overridableBy("settings"),
   },
+  // Where email lived before the hub. Each redirects to its place there, and
+  // carries no permission of its own: the page it lands on is guarded, and a
+  // refusal here would leave the reader on a URL that no longer means
+  // anything.
   [ROUTES.SETTINGS_EMAIL_PROVIDERS]: {
-    component: EmailProvidersPage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-providers",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS_CREATE]: {
-    component: CreateEmailProviderPage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-providers",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS_EDIT]: {
-    component: EditEmailProviderPage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-providers",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES]: {
-    component: EmailTemplatesPage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-templates",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES_CREATE]: {
-    component: CreateEmailTemplatePage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-templates",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES_EDIT]: {
-    component: EditEmailTemplatePage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-templates",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_PERMISSIONS]: {
     component: SettingsPermissionsPage,

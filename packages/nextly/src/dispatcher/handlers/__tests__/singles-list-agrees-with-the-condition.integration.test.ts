@@ -19,8 +19,11 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { apiKeyScope } from "../../../auth/authenticated-scope";
-import { runWithCallerScope } from "../../../auth/caller-scope";
+import {
+  apiKeyScope,
+  type AuthenticatedScope,
+} from "../../../auth/authenticated-scope";
+import type { RequestCaller } from "../../../auth/caller-scope";
 import { defineSingle, text } from "../../../config";
 import { refreshCollectionWidgets } from "../../../domains/widgets/collection-widgets";
 import { evaluateConditions } from "../../../domains/widgets/conditions";
@@ -30,6 +33,11 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import { dispatchSingles } from "../single-dispatcher";
+import {
+  asCaller,
+  keyCaller,
+  sessionCaller,
+} from "../../__tests__/request-caller";
 
 /** A reader with no roles and no stored grant. Everything it may read, code says. */
 const READER_ID = "reader-with-no-grants";
@@ -101,13 +109,15 @@ async function conditionHolds(): Promise<boolean> {
   return verdicts.get("singles:present") === true;
 }
 
+/** The listing as the route handler serves `caller`: as the request's caller. */
 async function listedSlugs(
-  params: Record<string, string> = { _authenticatedUserId: READER_ID }
+  caller: RequestCaller = sessionCaller({ userId: READER_ID }),
+  scope?: AuthenticatedScope
 ): Promise<string[]> {
-  const response = (await dispatchSingles(
-    "listSingles",
-    params,
-    undefined
+  const response = (await asCaller(
+    caller,
+    () => dispatchSingles("listSingles", {}, undefined),
+    scope
   )) as Response;
   expect(response.status).toBe(200);
   const body = (await response.json()) as { items: Array<{ slug: string }> };
@@ -116,12 +126,7 @@ async function listedSlugs(
 
 /** The listing as the route handler serves an API key: scope pinned for the dispatch. */
 function listedForKey(scope = keyScope()): Promise<string[]> {
-  return runWithCallerScope(scope, () =>
-    listedSlugs({
-      _authenticatedUserId: KEY_OWNER,
-      _authenticatedActorType: "apiKey",
-    })
-  );
+  return listedSlugs(keyCaller("key-1", { userId: KEY_OWNER }), scope);
 }
 
 async function conditionHoldsForKey(scope = keyScope()): Promise<boolean> {
