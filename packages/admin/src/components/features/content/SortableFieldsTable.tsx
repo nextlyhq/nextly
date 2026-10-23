@@ -8,6 +8,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Badge, Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import {
   positionInList,
@@ -123,7 +124,7 @@ export function SortableFieldsTable({
   onReorder,
   onEdit,
   onDeleteRequest,
-}: SortableFieldsTableProps) {
+}: SortableFieldsTableProps): JSX.Element {
   // Pointer AND keyboard, from the one hook every sortable surface shares. A
   // pointer-only `useSensors` here is what left this table unreachable from
   // the keyboard.

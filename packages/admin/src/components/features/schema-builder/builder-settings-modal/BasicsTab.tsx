@@ -14,6 +14,7 @@
 // validators. This is the one place the shared modal needs a per-kind branch
 // because the slug-case decision is genuinely kind-specific.
 import { Input, Label, Textarea } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { usePluginFieldTypeEntries } from "@admin/components/field-ui";
 import { toKebabName, toSnakeName } from "@admin/lib/builder";
@@ -46,7 +47,7 @@ export function BasicsTab({
   values,
   onChange,
   slugEditable = true,
-}: Props) {
+}: Props): JSX.Element {
   // Singles' entry-form slug field validates as kebab-case only, so the
   // auto-derived default in the create popup must also be kebab. Collections
   // and components keep snake_case to match their respective backend rules.

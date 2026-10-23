@@ -17,6 +17,7 @@ import type {
   PublishedContentSource,
   SelectFieldConfig,
 } from "nextly/config";
+import type { JSX } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useController, useWatch } from "react-hook-form";
 
@@ -66,7 +67,7 @@ function selectOf(
 export function ContentSettingControl({
   setting,
   sources,
-}: ContentSettingControlProps) {
+}: ContentSettingControlProps): JSX.Element {
   // The collection a dependent setting works over, as the form holds it now,
   // so its choices follow a change made in the same sheet.
   const collection = useWatch({

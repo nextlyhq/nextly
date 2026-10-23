@@ -11,6 +11,7 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Badge, Button, Switch } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
@@ -42,7 +43,7 @@ export function SortableHookCard({
   onDelete,
   onConfigChange,
   fieldNames,
-}: SortableHookCardProps) {
+}: SortableHookCardProps): JSX.Element | null {
   const {
     attributes,
     listeners,

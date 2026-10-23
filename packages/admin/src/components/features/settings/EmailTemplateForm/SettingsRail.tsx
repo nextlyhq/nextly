@@ -10,6 +10,7 @@ import {
   SelectValue,
   Switch,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useCallback, useMemo, useState } from "react";
 import type { useForm } from "react-hook-form";
 import { useFieldArray } from "react-hook-form";
@@ -151,7 +152,7 @@ export function SettingsRail({
   isLayoutRow,
   providers,
   layouts,
-}: TemplateSettingsProps) {
+}: TemplateSettingsProps): JSX.Element {
   return (
     <div className="space-y-5">
       {isLayoutRow && (

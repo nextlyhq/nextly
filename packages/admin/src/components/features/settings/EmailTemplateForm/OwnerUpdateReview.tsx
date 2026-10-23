@@ -23,6 +23,7 @@ import {
   DialogTitle,
   Textarea,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useEffect, useState } from "react";
 
 import { Loader2 } from "@admin/components/icons";
@@ -409,7 +410,7 @@ export function OwnerUpdateReview({
   owner: string;
   /** Called with what Undo needs once the review is applied. */
   onApplied: (undo: OwnerUpdateUndo) => void;
-}) {
+}): JSX.Element {
   const comparison = useEmailTemplateComparison(templateId, open);
   const apply = useApplyOwnerUpdate();
   const [choices, setChoices] = useState<Record<string, OwnerChangeChoice>>({});

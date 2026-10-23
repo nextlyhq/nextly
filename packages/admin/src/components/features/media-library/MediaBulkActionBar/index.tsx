@@ -17,6 +17,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { FolderInput, Trash2, X } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
@@ -66,7 +67,7 @@ export function MediaBulkActionBar({
   onClear,
   isDeleting = false,
   className,
-}: MediaBulkActionBarProps) {
+}: MediaBulkActionBarProps): JSX.Element {
   const itemLabel = selectedCount === 1 ? "item" : "items";
 
   return (

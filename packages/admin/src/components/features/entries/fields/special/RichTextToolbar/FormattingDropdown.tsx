@@ -20,6 +20,7 @@ import {
   TooltipTrigger,
 } from "@nextlyhq/ui";
 import type { TextFormatType } from "lexical";
+import type { JSX } from "react";
 
 import {
   ALargeSmall,
@@ -56,7 +57,7 @@ export function FormattingDropdown({
   isHighlight,
   formatText,
   insertHorizontalRule,
-}: FormattingDropdownProps) {
+}: FormattingDropdownProps): JSX.Element {
   return (
     <DropdownMenu modal={false}>
       <Tooltip>

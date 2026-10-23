@@ -20,6 +20,7 @@ import {
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import { Settings } from "lucide-react";
+import type { JSX } from "react";
 import { useRef } from "react";
 
 import * as Icons from "@admin/components/icons";
@@ -41,7 +42,7 @@ export function CardMenu({
   quick,
   onOpenSettings,
   disabled,
-}: CardMenuProps) {
+}: CardMenuProps): JSX.Element {
   // Set by Settings, which sends focus into its sheet: the menu's own close would otherwise
   // return focus to its trigger a tick later and take it back out.
   const focusIsHandled = useRef(false);

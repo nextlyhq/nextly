@@ -168,7 +168,92 @@ export const RICH_TEXT_NODES: ReadonlyArray<Klass<LexicalNode>> = [
 ];
 
 /** The class names an editor's output is styled with. */
-export const RICH_TEXT_THEME = editorTheme;
+export const RICH_TEXT_THEME: {
+  // Root element
+  root: string;
+  // Text formatting
+  text: {
+    bold: string;
+    italic: string;
+    underline: string;
+    strikethrough: string;
+    code: string;
+    // Its own token rather than a status one: a marker drawn over text is not
+    // a warning, and it carries its own foreground so the text stays readable
+    // when the page's own flips to white.
+    highlight: string;
+    subscript: string;
+    superscript: string;
+  };
+  // Headings
+  heading: {
+    h1: string;
+    h2: string;
+    h3: string;
+    h4: string;
+    h5: string;
+    h6: string;
+  };
+  // Paragraphs
+  paragraph: string;
+  // Lists
+  list: {
+    ul: string;
+    ol: string;
+    listitem: string;
+    listitemChecked: string;
+    listitemUnchecked: string;
+    nested: {
+      listitem: string;
+    };
+  };
+  // Blockquote
+  quote: string;
+  // Links
+  link: string;
+  // Code blocks. The tokenizer names what each token is; the construct table
+  // decides what that is worth, so a colour is never chosen here and cannot
+  // disagree with the CodeMirror surfaces that read the same table.
+  code: string;
+  codeHighlight: {
+    atrule: string;
+    attr: string;
+    boolean: string;
+    builtin: string;
+    cdata: string;
+    char: string;
+    class: string;
+    "class-name": string;
+    comment: string;
+    constant: string;
+    deleted: string;
+    doctype: string;
+    entity: string;
+    function: string;
+    important: string;
+    inserted: string;
+    keyword: string;
+    namespace: string;
+    number: string;
+    operator: string;
+    prolog: string;
+    property: string;
+    punctuation: string;
+    regex: string;
+    selector: string;
+    string: string;
+    symbol: string;
+    tag: string;
+    url: string;
+    variable: string;
+  };
+  // Tables
+  table: string;
+  tableCell: string;
+  tableCellHeader: string;
+  tableRow: string;
+  tableRowStriping: string;
+} = editorTheme;
 
 /** What a host needs to build an editor that reads this site's rich text. */
 export interface RichTextEditorKit {

@@ -12,6 +12,7 @@
 
 import type { CodeFieldConfig } from "nextly/config";
 import { useCallback, useState, useEffect, lazy, Suspense } from "react";
+import type { JSX } from "react";
 import {
   useController,
   type Control,
@@ -156,7 +157,7 @@ export function CodeInput<TFieldValues extends FieldValues = FieldValues>({
   disabled = false,
   readOnly = false,
   className,
-}: CodeInputProps<TFieldValues>) {
+}: CodeInputProps<TFieldValues>): JSX.Element {
   // SSR guard - only render CodeMirror on the client
   const [isMounted, setIsMounted] = useState(false);
 

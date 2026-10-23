@@ -43,6 +43,7 @@
  */
 
 import type { FieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import { useId } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 
@@ -78,7 +79,7 @@ export function ReadOnlyDocumentForm({
   values,
   mode = "edit",
   className,
-}: ReadOnlyDocumentFormProps) {
+}: ReadOnlyDocumentFormProps): JSX.Element {
   // `values`, not `defaultValues`. `defaultValues` is read once per mounted
   // form, so changing which document this shows — a second version, a different
   // source language — while it stays mounted would leave the previous one's

@@ -11,6 +11,7 @@
  */
 
 import { FilePenLine, Globe } from "lucide-react";
+import type { JSX } from "react";
 
 import { useVersionDiff } from "@admin/hooks/queries/useVersions";
 import { formatDateTime } from "@admin/lib/dates/format";
@@ -152,7 +153,7 @@ export function HistoryPins({
   partsLabel,
   selected,
   onSelect,
-}: HistoryPinsProps) {
+}: HistoryPinsProps): JSX.Element | null {
   if (drafts.length === 0 && published.length === 0) return null;
   const draftActive = drafts.some(d => d.version.versionNo === selected);
   const publishedActive = published.some(

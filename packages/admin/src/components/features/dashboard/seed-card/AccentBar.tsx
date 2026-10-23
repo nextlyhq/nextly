@@ -1,3 +1,5 @@
+import type { JSX } from "react";
+
 import { cn } from "@admin/lib/utils";
 
 export type AccentBarState = "idle" | "seeding" | "success" | "error";
@@ -21,7 +23,7 @@ const WIDTH_CLASS: Record<AccentBarState, string> = {
  * Matches the OnboardingChecklist progress bar visually but encodes
  * card state, not progress percentage.
  */
-export function AccentBar({ state }: { state: AccentBarState }) {
+export function AccentBar({ state }: { state: AccentBarState }): JSX.Element {
   return (
     <div
       aria-hidden="true"
