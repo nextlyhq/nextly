@@ -1253,6 +1253,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         newFields: fields as unknown as FieldDefinition[],
         wasLocalized,
         isLocalized,
+        renamed: companionRename,
       });
 
       const desired = await buildFullDesiredSchema();

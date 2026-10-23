@@ -569,6 +569,7 @@ export const COMPONENTS_METHODS: Record<
             newFields: fields as unknown as FieldDefinition[],
             wasLocalized,
             isLocalized,
+            renamed: companionRename,
           });
 
           const desired = await buildFullDesiredSchema();
