@@ -101,6 +101,34 @@ describe("validateLocalizationConfig", () => {
     ).toThrow(/itself as a fallbackLocale/i);
   });
 
+  it("rejects fallback lists that loop through other languages", () => {
+    expect(() =>
+      validateLocalizationConfig({
+        locales: [
+          "en",
+          { code: "fr", fallbackLocale: "es" },
+          { code: "es", fallbackLocale: ["de"] },
+          { code: "de", fallbackLocale: "fr" },
+        ],
+        defaultLocale: "en",
+      })
+    ).toThrow(/fallback lists loop: fr → es → de → fr/i);
+  });
+
+  it("accepts fallback lists that share a language without looping", () => {
+    expect(() =>
+      validateLocalizationConfig({
+        locales: [
+          "en",
+          { code: "fr", fallbackLocale: ["es", "en"] },
+          { code: "es", fallbackLocale: "en" },
+          { code: "ca", fallbackLocale: ["es", "fr"] },
+        ],
+        defaultLocale: "en",
+      })
+    ).not.toThrow();
+  });
+
   // L19: a missing/non-array locales yields the descriptive error, not a TypeError.
   it("gives a descriptive error when locales is missing", () => {
     expect(() =>

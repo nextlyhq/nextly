@@ -3,7 +3,6 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "bundler",
-    "baseUrl": ".",
     "declaration": true,
     "declarationMap": true,
     "composite": true,
@@ -12,8 +11,8 @@
     "esModuleInterop": false,
     "forceConsistentCasingInFileNames": true,
     "paths": {
-      "@nextly/*": ["packages/*/src"],
-      "nextly": ["packages/nextly/src"]
+      "@nextly/*": ["./packages/*/src"],
+      "nextly": ["./packages/nextly/src"]
     }
   }
 }

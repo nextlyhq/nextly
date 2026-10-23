@@ -249,7 +249,7 @@ Plugins are declared with `definePlugin` and registered in `nextly.config.ts`:
   pickers render from the field-type catalog. The field-UI kit
   (`src/components/field-ui/`) is the shared, plugin-facing set of field
   editors, re-exported through the plugin SDK.
-- Heavy dependencies listed in the tsup externals (React Query, Lexical,
+- Heavy dependencies listed in the tsdown externals (React Query, Lexical,
   CodeMirror, ...) are excluded from the bundle and resolve from the
   consumer's node_modules.
 

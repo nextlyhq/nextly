@@ -194,7 +194,10 @@ function hasAccessibleName(value: string | undefined): boolean {
  *
  * @experimental
  */
-const Slider = React.forwardRef<
+const Slider: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<SliderProps> &
+    React.RefAttributes<React.ElementRef<typeof SliderPrimitive.Root>>
+> = React.forwardRef<
   React.ElementRef<typeof SliderPrimitive.Root>,
   SliderProps
 >(

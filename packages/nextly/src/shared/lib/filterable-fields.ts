@@ -25,7 +25,7 @@ import {
   type FieldFunctions,
 } from "./field-level-registry";
 
-type EntityKind = "collection" | "single";
+type EntityKind = "collection" | "single" | "fieldGroup";
 
 /** Keys that structure a filter rather than naming a field. */
 const STRUCTURAL_KEYS = new Set(["and", "or"]);
@@ -155,13 +155,15 @@ async function unreadableFields(
   kind: EntityKind,
   slug: string,
   names: Iterable<string>,
-  caller: QueryCaller
+  caller: QueryCaller,
+  /** A resolver shared across several calls, so the caller is read once. */
+  grants = callerAccessGrants(caller.user, caller.authenticatedScope)
 ): Promise<string[]> {
   const fns = getFieldFunctions(kind, slug);
   if (!fns) return [];
   const ruleCaller = {
     user: caller.user,
-    grants: callerAccessGrants(caller.user, caller.authenticatedScope),
+    grants,
     target: fieldRuleTarget(kind, slug),
   };
   const denied: string[] = [];
@@ -296,6 +298,54 @@ export async function assertFilterableFields(
   );
   const refused = keys.filter(key => denied.has(ownerOf(key))).sort();
   if (refused.length > 0) refuse(refused, "where");
+}
+
+/**
+ * Refuse a filter on a field inside a field group that this caller may not
+ * read, by that field group's own rule.
+ *
+ * A filter like `one.secret` reaches the field group's table, so its rule is
+ * registered under the field group, not the collection the filter is made on:
+ * judged by the collection's registration alone it is ruleless and passes,
+ * and which rows match answers the hidden value one guess at a time. Each
+ * target names every field group its field can hold; a path any of them hides
+ * is refused, judged and named as `assertFilterableFields` does.
+ */
+export async function assertFieldGroupPathsFilterable(
+  targets: readonly {
+    key: string;
+    componentSlugs: readonly string[];
+    componentFieldPath: string;
+  }[],
+  opts: {
+    overrideAccess?: boolean;
+    frameworkFilter?: boolean;
+    caller?: QueryCaller;
+  } = {}
+): Promise<void> {
+  // The same two exemptions, for the same reasons, as `assertFilterableFields`.
+  if (opts.overrideAccess || opts.frameworkFilter) return;
+  const caller = opts.caller ?? {};
+  // One resolver for every target and field group judged, so the caller's
+  // roles are read once however many paths the filter names.
+  const grants = callerAccessGrants(caller.user, caller.authenticatedScope);
+  const refused: string[] = [];
+  for (const target of targets) {
+    for (const slug of target.componentSlugs) {
+      const denied = await unreadableFields(
+        "fieldGroup",
+        slug,
+        [ownerOf(target.componentFieldPath)],
+        caller,
+        grants
+      );
+      if (denied.length > 0) {
+        refused.push(target.key);
+        break;
+      }
+    }
+  }
+  if (refused.length > 0) refuse(refused.sort(), "where");
 }
 
 /**

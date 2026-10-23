@@ -12,7 +12,6 @@
  * integration suites in this package boot a real Nextly instance and have no
  * use for a DOM.
  */
-import "@testing-library/jest-dom/vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";

@@ -1,0 +1,297 @@
+import { cpSync, existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { defineConfig, type Rolldown } from "tsdown";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Inject the package version so `getCoreVersion()` (plugins/core-version.ts)
+// can supply the resolver a concrete `coreVersion` without reading a file at
+// runtime (D6).
+const require = createRequire(import.meta.url);
+const { version: coreVersion } = require("./package.json") as {
+  version: string;
+};
+
+/**
+ * Drops `import "node:…";` lines that bind nothing.
+ *
+ * The bundler's shared runtime chunk keeps a bare `import "node:module"` even
+ * when nothing in it uses `createRequire`. Every client-safe entry that shares
+ * that chunk then reaches a Node built-in, and a browser bundler refuses it
+ * (Turbopack: "does not support external modules (request: node:module)").
+ * Importing a built-in has no side effects, so an import that binds nothing
+ * does nothing, and removing it changes no behaviour. postbuild.cjs checks
+ * that no client-safe entry reaches a built-in.
+ */
+const dropUnboundBuiltinImports: Rolldown.Plugin = {
+  name: "nextly:drop-unbound-builtin-imports",
+  // On the finished chunks: the import is added after `renderChunk`.
+  generateBundle(_options, bundle) {
+    for (const file of Object.values(bundle)) {
+      if (file.type === "chunk") {
+        file.code = file.code.replace(/^import "node:[\w/]+";\n/gm, "");
+      }
+    }
+  },
+};
+
+// Server-only entry points that need Node.js shims (__dirname, import.meta.url, etc.)
+const serverEntries = [
+  "src/index.ts",
+  // Testing subpath: createTestNextly harness (D46). Server-only.
+  "src/testing.ts",
+  // Runtime subpath: aggregates everything that
+  // (transitively) imports next/navigation, next/cache, next/headers.
+  // Templates' catch-all admin route imports from
+  // `nextly/runtime`. The root `.` entry must NOT pull this.
+  "src/runtime.ts",
+  "src/scripts/load-env.ts",
+  "src/api/auth-state.ts",
+  "src/api/health.ts",
+  "src/api/media-handlers.ts",
+  "src/api/collections-schema.ts",
+  "src/api/collections-schema-detail.ts",
+  "src/api/collections-schema-export.ts",
+  "src/api/field-groups.ts",
+  "src/api/field-groups-detail.ts",
+  "src/api/singles.ts",
+  "src/api/singles-detail.ts",
+  "src/api/singles-schema-detail.ts",
+  "src/api/versions.ts",
+  "src/api/versions-detail.ts",
+  "src/api/versions-diff.ts",
+  "src/api/email-providers.ts",
+  "src/api/email-provider-types.ts",
+  "src/api/email-template-preview-types.ts",
+  "src/api/jobs-list-types.ts",
+  "src/api/auth-ui-types.ts",
+  "src/api/email-providers-detail.ts",
+  "src/api/email-providers-test.ts",
+  "src/api/email-providers-default.ts",
+  "src/api/email-templates.ts",
+  "src/api/email-templates-detail.ts",
+  "src/api/email-templates-preview.ts",
+  "src/api/email-templates-draft-preview.ts",
+  "src/api/storage-upload-url.ts",
+  "src/actions/index.ts",
+  "src/cli/nextly.ts",
+  "src/cli/utils/index.ts",
+  "src/storage/index.ts",
+  // Unified error system entry points
+  "src/errors/index.ts",
+  "src/observability/index.ts",
+  "src/database/index.ts",
+  // Bootstrap seeders subpath. Internal docs at database/index.ts:23
+  // pointed callers at `nextly/database/seeders` for years; finally
+  // exported here so tooling/scripts (playground seed, custom CLIs)
+  // can call seedPermissions / seedSuperAdmin without reaching into
+  // dist internals.
+  "src/database/seeders/index.ts",
+  "src/api/index.ts",
+  // Auth subpath: exposes session/getSession + role guards so user-facing
+  // route handlers (e.g. the template's seed POST route) can validate
+  // sessions without reaching into private internals.
+  "src/auth/index.ts",
+  // Schemas subpath: exposes getCoreSchema(dialect), CORE_TABLE_NAMES, and
+  // the canonical per-feature Drizzle tables that the pipeline / boot-apply
+  // path drives. Power users reach this directly when extending the
+  // framework (e.g. defining additional tables via the host app and
+  // merging via @nextly/scripts/merge-schemas). Consolidated under
+  // src/schemas/ by Plan A.
+  "src/schemas/index.ts",
+  // Small server-side surfaces with entries of their own. Each reaches
+  // server-only code by design (Drizzle for the operators, `node:crypto` for
+  // the schema DSL's migrations, `node:http` and `node:dns` for fetching
+  // stored bytes), and plugins and storage adapters import them only in server
+  // code, so they are not on the client-safe list below.
+  // Re-exports of Drizzle's query operators, so a plugin uses CORE's instance
+  // rather than a second copy whose internal symbols do not match.
+  "src/db-operators.ts",
+  // The DSL a plugin's server entry declares tables with.
+  "src/schema-extension.ts",
+  // The one helper an out-of-tree storage adapter needs, as its OWN entry.
+  //
+  // Reaching it through `nextly/storage` instead makes a bundler traverse that
+  // whole barrel — the local adapter and its `fs/promises` and `path`, the
+  // env-config and its dotenv chunks — into a package that depends on neither.
+  // Measured on `@nextlyhq/storage-vercel-blob`: 240K over 6 files became 1.3M
+  // over 16 the moment the barrel import landed, and every install pays it.
+  "src/storage/fetch-stored-bytes.ts",
+];
+
+// Client-safe entry points that should NOT have Node.js shims
+// These are imported in browser contexts (admin UI, client components)
+// Entry points a browser bundle may reach. Membership here has no build effect — every entry is
+// concatenated into one `entry` under one config with `shims: false`. What makes the list a
+// contract is `packages/admin/src/client-bundle-boundary.test.ts`, which reads it from this file
+// and fails when any entry's runtime import closure reaches a Node built-in, a database package,
+// or a module marked with the `server-only` package. Keep it a plain array of path strings: the
+// check reads it as written, and refuses a shape it cannot read.
+const clientEntries = [
+  "src/config.ts",
+  "src/next.ts",
+  "src/field-group-type.ts",
+  // Types only, consumed by the admin's reconcile surface. Contributes no runtime code.
+  "src/field-group-reconcile.ts",
+  // Pure serializable data, consumed by the admin's field pickers and by plugins.
+  "src/collections/fields/catalog.ts",
+  // The widget permission gate, as its OWN entry and with no imports of its
+  // own. The layout endpoint and the browser both decide whether a reader may
+  // be told a card exists, and a second implementation of that answer splits
+  // them apart silently -- a card the server sends and the browser hides
+  // reports nothing anywhere. Reaching it through `nextly/config` instead would
+  // make a bundler traverse the whole config surface for two pure functions.
+  "src/domains/widgets/gate.ts",
+  // What a widget query ANSWERS with, as its own entry: the result shapes, the
+  // per-widget slot and the batch body. The server produces them, the admin
+  // draws them and a plugin's widget component receives them, and until this
+  // entry existed each of those three declared its own copy -- the admin's
+  // being STRICTER than the server's, so it promised readers a guarantee the
+  // producer had never made. Reached through `nextly/config` instead, a
+  // consumer would pull the widget barrel and with it `executeWidgetQuery` and
+  // the Direct API graph, which is what that entry point is shaped to keep out.
+  "src/domains/widgets/result.ts",
+  // The lease timings and wire types a client needs to HOLD a lock, as their
+  // own entry. The admin maps `nextly` to this package's source, so reaching
+  // these through the root entry pulls the DI container and the auth
+  // middleware into its typecheck: measured at 112 errors, none of them about
+  // the importing code. The repository stays out — it takes an adapter and
+  // belongs to the server; a client reaches locks through the route.
+  "src/domains/document-lock/contract.ts",
+  // The translation states a filter may name, as their own entry. The admin
+  // puts them on the wire and offers a tab for each, and the module the server
+  // uses them from builds SQL — so a client reaching the list through it would
+  // reach the ORM, and one writing its own copy would drift from the server.
+  "src/domains/i18n/translation-filter-states.ts",
+  // The keys a filter may carry only at its top level, as their own entry. The
+  // admin keeps exactly these at the top level beside its own filters, and the
+  // module the server judges them in imports the shape check's graph -- so a
+  // client reaching the list through it would take more than the list, and one
+  // writing its own copy would drift from the server.
+  "src/domains/collections/query/reserved-filter-keys.ts",
+  // The query-parameter formats, so a caller writes one with the same code the
+  // server reads it with. Imported by the admin's API Playground and by plugin
+  // admin components, which is why it is a leaf rather than a root export.
+  "src/query/index.ts",
+  // The rule that maps a stored slug to the path a route serves, as its own
+  // entry. A sitemap, a canonical and a static-params build all have to agree
+  // with the route about which paths exist, so three packages call this one
+  // function rather than re-deriving it.
+  //
+  // 🔴 A leaf MODULE is not enough on its own, and this entry is the half that
+  // makes the split reach a consumer. Reached through `nextly/runtime`, the
+  // built artifact has already inlined it beside the route's eager Direct API
+  // chunk imports: measured through package resolution, `nextly/runtime` pulls
+  // 3,251 inputs and 21.3 MB, while this entry pulls 2 and 1.4 KB.
+  "src/runtime/routing/slug-param.ts",
+  // The over-cap refusal, reachable by an adapter without the barrel for the
+  // same reason as the helper above.
+  "src/storage/read-errors.ts",
+  // `nextly/zod`: the Zod generated schema files import, so they compile in an
+  // app that depends on `nextly` and not on `zod`. Pure, so browser-safe.
+  "src/zod.ts",
+];
+
+// Packages this build never bundles: each name and its subpaths.
+const NEVER_BUNDLE = [
+  // Database drivers — kept external (CJS native modules can't be bundled into ESM)
+  "better-sqlite3",
+  "pg",
+  "mysql2",
+  "mysql2/promise",
+  "drizzle-orm",
+  "drizzle-orm/better-sqlite3",
+  "drizzle-orm/node-postgres",
+  "drizzle-orm/mysql2",
+  // drizzle-kit — dev/CLI tool, must not be bundled into production Next.js builds.
+  // It imports esbuild and @libsql native binaries that Turbopack cannot parse.
+  // v1 split the programmatic API into per-dialect payload/* entrypoints.
+  "drizzle-kit",
+  "drizzle-kit/payload/postgres",
+  "drizzle-kit/payload/mysql",
+  "drizzle-kit/payload/sqlite",
+  // Next.js - keep external to match user's version
+  "next",
+  "next/server",
+  // React - keep external to match user's version
+  "react",
+  "react-dom",
+  // Native binaries that can't be bundled
+  "sharp",
+  "esbuild",
+  // Database adapter packages - installed separately based on user's DB choice
+  "@nextlyhq/adapter-drizzle",
+  "@nextlyhq/adapter-mysql",
+  "@nextlyhq/adapter-postgres",
+  "@nextlyhq/adapter-sqlite",
+];
+
+// Combine all entries into a single build to avoid race conditions
+// with parallel builds and the clean option
+const allEntries = [...serverEntries, ...clientEntries];
+
+export default defineConfig({
+  entry: allEntries,
+  format: ["esm"],
+  outDir: "dist",
+  sourcemap: false,
+  tsconfig: "tsconfig.json",
+  define: {
+    __NEXTLY_CORE_VERSION__: JSON.stringify(coreVersion),
+  },
+  deps: {
+    neverBundle: id =>
+      NEVER_BUNDLE.some(name => id === name || id.startsWith(`${name}/`)),
+  },
+  // One bundled `.d.ts` per entry, beside its `.mjs`, emitted from the same
+  // build without type-checking: `check-types` is the type check.
+  dts: { sourcemap: false, compilerOptions: { noCheck: true } },
+  outExtensions() {
+    return { js: ".mjs", dts: ".d.mts" };
+  },
+  clean: true,
+  plugins: [dropUnboundBuiltinImports],
+  // No shims — output is native ESM (.mjs). A `require` shim throws "Dynamic
+  // require of X is not supported" for Node builtins (events, net, etc.) when
+  // loaded by Turbopack on Vercel. Code that needs __dirname already has ESM
+  // fallbacks via import.meta.url.
+  shims: false,
+  onSuccess() {
+    // Copy migration files to dist after build
+    console.log("\nCopying migration files to dist...");
+    try {
+      const postgresqlSrc = join(
+        __dirname,
+        "src/database/migrations/postgresql"
+      );
+      const mysqlSrc = join(__dirname, "src/database/migrations/mysql");
+      const sqliteSrc = join(__dirname, "src/database/migrations/sqlite");
+      const postgresqlDest = join(__dirname, "dist/migrations/postgresql");
+      const mysqlDest = join(__dirname, "dist/migrations/mysql");
+      const sqliteDest = join(__dirname, "dist/migrations/sqlite");
+
+      if (existsSync(postgresqlSrc)) {
+        cpSync(postgresqlSrc, postgresqlDest, { recursive: true });
+        console.log("PostgreSQL migrations copied");
+      }
+
+      if (existsSync(mysqlSrc)) {
+        cpSync(mysqlSrc, mysqlDest, { recursive: true });
+        console.log("MySQL migrations copied");
+      }
+
+      if (existsSync(sqliteSrc)) {
+        cpSync(sqliteSrc, sqliteDest, { recursive: true });
+        console.log("SQLite migrations copied");
+      }
+
+      console.log("Migration files copied successfully\n");
+    } catch (error) {
+      console.error("Failed to copy migration files:", error);
+      throw error;
+    }
+  },
+});

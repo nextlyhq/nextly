@@ -1,4 +1,5 @@
 import { Search, Loader2, X } from "lucide-react";
+import type { JSX } from "react";
 
 /**
  * Props for TableSearch component
@@ -47,7 +48,7 @@ export function TableSearch({
   placeholder = "Filter records...",
   isLoading = false,
   inputRef,
-}: TableSearchProps) {
+}: TableSearchProps): JSX.Element {
   return (
     <div className="relative w-full max-w-lg">
       <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />

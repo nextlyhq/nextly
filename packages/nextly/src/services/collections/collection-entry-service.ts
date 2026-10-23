@@ -48,6 +48,10 @@ import type {
 } from "../../domains/collections/services/collection-types";
 import type { DynamicCollectionService } from "../../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
+import {
+  type LocalizationSource,
+  localizationNow,
+} from "../../domains/i18n/localization-source";
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import type { RetentionRunner } from "../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
@@ -153,6 +157,11 @@ export class CollectionEntryService extends BaseService {
   private readonly mutationService: CollectionMutationService;
   private readonly bulkService: CollectionBulkService;
 
+  /** The site's languages as they are now: the source may be the language registry. */
+  private get localization(): SanitizedLocalizationConfig | undefined {
+    return localizationNow(this.localizationSource);
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -171,7 +180,7 @@ export class CollectionEntryService extends BaseService {
      * languages its source read falls back to), and an operation on the whole
      * entry every language.
      */
-    private readonly localization?: SanitizedLocalizationConfig,
+    private readonly localizationSource?: LocalizationSource,
     /**
      * Offers a retention pass after a write — both of them: the webhook event
      * ledger and the audit trails, each on its own window and its own gate. The
@@ -226,7 +235,7 @@ export class CollectionEntryService extends BaseService {
       this.accessService,
       this.hookService,
       fieldGroupDataService,
-      localization,
+      localizationSource,
       releaseVisibility
     );
     this.mutationService = new CollectionMutationService(
@@ -238,7 +247,7 @@ export class CollectionEntryService extends BaseService {
       this.accessService,
       this.hookService,
       fieldGroupDataService,
-      localization
+      localizationSource
     );
     this.bulkService = new CollectionBulkService(
       adapter,

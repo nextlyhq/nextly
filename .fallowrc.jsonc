@@ -3,8 +3,8 @@
   //
   // Fallow reads the whole module graph at once and reports what nothing
   // reaches: unused files, exports and dependencies, unresolved imports,
-  // import cycles, duplication and complexity. It answers questions ESLint
-  // cannot, because ESLint sees one file at a time.
+  // import cycles, duplication and complexity. It answers questions lint
+  // cannot, because a lint rule sees one file at a time.
   //
   // Commands:
   //   - pnpm fallow       = full-repo report, apps/playground included.
@@ -155,12 +155,12 @@
   //   packages/admin — the Radix, lexical, cmdk, tailwind-variants and
   //     tailwindcss-animate entries are never imported by admin/src. They
   //     arrive through @nextlyhq/ui and are inlined by the NO_EXTERNAL_DEPS
-  //     list in packages/admin/tsup.config.ts, so a consumer installs
+  //     list in packages/admin/tsdown.config.ts, so a consumer installs
   //     @nextlyhq/admin rather than two dozen UI libraries. Remove one and the
   //     bundle loses the component that needed it.
   //   packages/ui — @tailwindcss/cli is run as a shell command by
   //     scripts/build-css.mjs, which is how the theme is compiled.
-  //   packages/telemetry — its tsup config sets noExternal: [/(.*)/], so every
+  //   packages/telemetry — its tsdown config sets deps.alwaysBundle: [/(.*)/], so every
   //     dependency is inlined. env-paths arrives through `conf`, which uses it
   //     to pick the OS-appropriate config directory.
   //   packages/plugin-page-builder — @tanstack/react-query is a peerDependency
@@ -229,6 +229,18 @@
       // `updateEntryWrite` and `deleteEntryWrite`, each of which the
       // transaction API and the batch worker both delegate to.
       "dup:c77b3abb6f87acd9-2:2",
+
+      // packages/{adapter-mysql,adapter-postgres,adapter-sqlite,storage-s3,
+      // storage-uploadthing,storage-vercel-blob}/tsdown.config.ts — the same
+      // 17-line build config: one ESM and CommonJS entry, the published file
+      // names, declarations without a type check.
+      //
+      // tsdown reads a config from each package's own directory, and turbo
+      // hashes a package's build by that directory's files. A shared module
+      // outside it would change all six builds without changing their hashes,
+      // so a cached build would survive an edit to how it is built. Six small
+      // copies that turbo can see are the safer repetition.
+      "dup:aecdfbd0:6",
     ],
   },
 }

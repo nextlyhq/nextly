@@ -629,6 +629,71 @@ describe("relationship expansion secret redaction", () => {
     });
   });
 
+  describe("field-group rules on a related row", () => {
+    const PAGE_FIELDS = [
+      { name: "title", type: "text" },
+      { name: "one", type: "component", component: "note" },
+    ];
+    const pageRow = () => ({
+      id: "p1",
+      title: "T",
+      one: { heading: "h", secret: "S-1" },
+    });
+    const read = (service: CollectionRelationshipService) =>
+      service.fetchRelatedEntry("pages", "p1", {
+        trusted: TRUSTS_EVERY_COLLECTION,
+        enforceFieldAccess: true,
+        user: { id: "u1", roles: ["editor"] },
+      });
+
+    beforeEach(() => {
+      clearFieldFunctions();
+      registerFieldFunctions("fieldGroup", "note", [
+        { name: "heading", type: "text" },
+        { name: "secret", type: "text", access: { read: () => false } },
+      ]);
+    });
+
+    afterEach(() => {
+      clearFieldFunctions();
+    });
+
+    it("withholds a denied field-group field once the schema resolves", async () => {
+      // The control: the field-group pass reaches the instance here.
+      const service = new CollectionRelationshipService(
+        adapterReturning(pageRow()),
+        silentLogger(),
+        { loadDynamicSchema: vi.fn().mockResolvedValue({ id: {} }) } as never,
+        {
+          getCollection: vi.fn().mockResolvedValue({ fields: PAGE_FIELDS }),
+        } as never
+      );
+
+      const related = await read(service);
+      expect(related).toMatchObject({ id: "p1", one: { heading: "h" } });
+      expect(JSON.stringify(related)).not.toContain("S-1");
+    });
+
+    it("fails closed to identity when its field groups' schema cannot be read again", async () => {
+      // The row's own schema resolves, then the read its field groups are
+      // judged by fails: what they hold cannot be judged, so it is withheld.
+      const getCollection = vi
+        .fn()
+        .mockResolvedValueOnce({ fields: PAGE_FIELDS })
+        .mockRejectedValue(new Error("registry unavailable"));
+      const service = new CollectionRelationshipService(
+        adapterReturning(pageRow()),
+        silentLogger(),
+        { loadDynamicSchema: vi.fn().mockResolvedValue({ id: {} }) } as never,
+        { getCollection } as never
+      );
+
+      const related = await read(service);
+      expect(getCollection).toHaveBeenCalledTimes(2);
+      expect(related).toEqual({ id: "p1" });
+    });
+  });
+
   describe("label field never resolves to a secret", () => {
     function labelService(getCollection: () => unknown) {
       return new CollectionRelationshipService(

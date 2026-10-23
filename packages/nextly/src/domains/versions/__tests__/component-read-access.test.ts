@@ -52,6 +52,185 @@ describe("applyComponentReadAccess", () => {
     expect(JSON.stringify(entry)).not.toMatch(/S-\d/);
     expect(JSON.stringify(entry)).toContain('"b"');
   });
+
+  it("judges a live single component by its declared component, whatever type it claims", async () => {
+    registerFieldFunctions("fieldGroup", "card", [
+      { name: "title", type: "text" },
+      { name: "secret", type: "text", access: denied },
+    ]);
+    // `plain` declares no rule: a value retagged as it must not escape `card`.
+    registerFieldFunctions("fieldGroup", "plain", [
+      { name: "title", type: "text" },
+    ]);
+    const entry = {
+      hero: { _componentType: "plain", title: "a", secret: "S-1" },
+    };
+
+    await applyComponentReadAccess(
+      entry,
+      fields({ name: "hero", type: "component", component: "card" }),
+      new Map(),
+      { ...caller, declaredComponentDecides: true }
+    );
+
+    expect(entry.hero).not.toHaveProperty("secret");
+    expect(entry.hero.title).toBe("a");
+  });
+
+  it("withholds a live dynamic-zone block whose type the zone does not allow", async () => {
+    registerFieldFunctions("fieldGroup", "card", [
+      { name: "title", type: "text" },
+      { name: "secret", type: "text", access: denied },
+    ]);
+    // Readable only while the block holds no `secret`: judged after `card`
+    // removed it, it would allow what the block as stored denies.
+    registerFieldFunctions("fieldGroup", "quote", [
+      { name: "secret", type: "text" },
+      {
+        name: "label",
+        type: "text",
+        access: {
+          read: ({ data }: { data?: Record<string, unknown> }) =>
+            !(data !== undefined && "secret" in data),
+        },
+      },
+    ]);
+    // `plain` declares no rule and the zone does not allow it.
+    registerFieldFunctions("fieldGroup", "plain", [
+      { name: "secret", type: "text" },
+    ]);
+    const entry = {
+      blocks: [
+        { title: "untagged", secret: "S-1", label: "L-1" },
+        { _componentType: "ghost", secret: "S-2" },
+        { _componentType: "plain", secret: "S-3" },
+        // A type the zone allows is still judged by its own rules alone.
+        { _componentType: "quote", secret: "kept" },
+      ],
+    };
+
+    await applyComponentReadAccess(
+      entry,
+      fields({
+        name: "blocks",
+        type: "component",
+        components: ["card", "quote"],
+      }),
+      new Map(),
+      { ...caller, declaredComponentDecides: true }
+    );
+
+    expect(entry.blocks.slice(0, 3)).toEqual([{}, {}, {}]);
+    expect(entry.blocks[3]).toEqual({
+      _componentType: "quote",
+      secret: "kept",
+    });
+  });
+
+  it("judges the instances a container holds as JSON text, and keeps it text", async () => {
+    // A hook may hand a group, a repeater or a field group back as JSON text,
+    // the shape SQLite stores them in.
+    registerFieldFunctions("fieldGroup", "card", [
+      { name: "title", type: "text" },
+      { name: "secret", type: "text", access: denied },
+    ]);
+    const entry: Record<string, unknown> = {
+      meta: JSON.stringify({ hero: { title: "a", secret: "S-1" } }),
+      rows: JSON.stringify([{ hero: { title: "b", secret: "S-2" } }]),
+      hero: JSON.stringify({ title: "c", secret: "S-3" }),
+    };
+    const hero = { name: "hero", type: "component", component: "card" };
+
+    await applyComponentReadAccess(
+      entry,
+      fields(
+        { name: "meta", type: "group", fields: [hero] },
+        { name: "rows", type: "repeater", fields: [hero] },
+        hero
+      ),
+      new Map(),
+      { ...caller, declaredComponentDecides: true }
+    );
+
+    expect(JSON.stringify(entry)).not.toMatch(/S-\d/);
+    expect(typeof entry.meta).toBe("string");
+    expect(JSON.parse(entry.meta as string)).toEqual({ hero: { title: "a" } });
+    expect(JSON.parse(entry.hero as string)).toEqual({ title: "c" });
+  });
+
+  it("judges a version's single component by the type it was captured under", async () => {
+    // The field now names `plain`; the snapshot was captured under `card`,
+    // whose rule still withholds what the snapshot holds.
+    registerFieldFunctions("fieldGroup", "card", [
+      { name: "title", type: "text" },
+      { name: "secret", type: "text", access: denied },
+    ]);
+    registerFieldFunctions("fieldGroup", "plain", [
+      { name: "title", type: "text" },
+    ]);
+    const snapshot = {
+      hero: { _componentType: "card", title: "a", secret: "S-1" },
+    };
+
+    await applyComponentReadAccess(
+      snapshot,
+      fields({ name: "hero", type: "component", component: "plain" }),
+      new Map(),
+      caller
+    );
+
+    expect(snapshot.hero).not.toHaveProperty("secret");
+    expect(snapshot.hero.title).toBe("a");
+  });
+});
+
+describe("malformed and serialized values", () => {
+  const card = { name: "hero", type: "component", component: "card" };
+
+  it("withholds a live field-group value that is not an instance", async () => {
+    // A hook may replace a field-group value, or one instance of a list, with
+    // a value that is not an instance at all, such as a denied field copied
+    // out of it. No field group's rules can judge that, so it is withheld.
+    registerFieldFunctions("fieldGroup", "card", [
+      { name: "title", type: "text" },
+      { name: "secret", type: "text", access: denied },
+    ]);
+    const entry: Record<string, unknown> = {
+      hero: "S-1",
+      list: [{ title: "a", secret: "S-2" }, "S-3"],
+      text: JSON.stringify("S-4"),
+    };
+
+    await applyComponentReadAccess(
+      entry,
+      fields(
+        card,
+        { ...card, name: "list", repeatable: true },
+        { ...card, name: "text" }
+      ),
+      new Map(),
+      { ...caller, declaredComponentDecides: true }
+    );
+
+    expect(JSON.stringify(entry)).not.toMatch(/S-\d/);
+    expect(entry.list).toEqual([{ title: "a" }]);
+  });
+
+  it("reports a withheld path inside a container held as JSON text", () => {
+    const before = {
+      meta: JSON.stringify({ hero: { title: "a", secret: "S-1" } }),
+    };
+    const after = { meta: JSON.stringify({ hero: { title: "a" } }) };
+
+    const paths = nestedWithheldPaths(
+      before,
+      after,
+      fields({ name: "meta", type: "group", fields: [card] }),
+      new Map([["card", fields({ name: "title" }, { name: "secret" })]])
+    );
+
+    expect([...paths]).toEqual(["meta.hero.secret"]);
+  });
 });
 
 describe("fieldsCarryingReadRules", () => {

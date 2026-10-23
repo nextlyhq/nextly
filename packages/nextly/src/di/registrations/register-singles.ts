@@ -12,19 +12,13 @@
 
 import type { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
-import { MetaRetentionGate } from "../../domains/retention/gate";
-import {
-  buildRetentionRunner,
-  retentionPoliciesFrom,
-} from "../../domains/retention/passes";
 import { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
 import { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
-import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
-import type { CacheRevalidator } from "../../revalidation/types";
 import type { FieldGroupDataService } from "../../services/field-groups";
 import { container } from "../container";
 
+import { contentWriteSeams } from "./content-write-seams";
 import { createNoOpHookRegistry } from "./no-op-hook-registry";
 import type { RegistrationContext } from "./types";
 
@@ -86,29 +80,8 @@ export function registerSingleServices(ctx: RegistrationContext): void {
       rbacAccessControlService,
       // i18n: forward the normalized localization config so localized singles resolve
       // and write translatable fields via their companion table (mirrors collections).
-      ctx.config.localization,
-      // The single write path appends outbox events through this service, so it
-      // gets its own retention runner (the handler's is not on this path),
-      // matching the collection write path.
-      buildRetentionRunner({
-        adapter,
-        ...retentionPoliciesFrom(ctx.config),
-        gate: new MetaRetentionGate(adapter),
-        logger,
-      }),
-      // Shared post-response drain fast path (registered by the webhook
-      // services). Absent only when webhooks were never registered.
-      container.has("webhookFastDrainScheduler")
-        ? container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler")
-        : undefined,
-      // Cache revalidator that flushes each single write's intent post-commit.
-      // Resolved lazily at flush time (not captured here) because this service
-      // is constructed during boot, before a Next cache adapter registers — an
-      // eager capture would memoize the no-op and ignore the real adapter.
-      () =>
-        container.has("cacheRevalidator")
-          ? container.get<CacheRevalidator>("cacheRevalidator")
-          : undefined
+      ctx.languages,
+      ...contentWriteSeams(ctx)
     );
   });
 }

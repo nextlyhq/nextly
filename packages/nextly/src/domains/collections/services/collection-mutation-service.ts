@@ -126,6 +126,10 @@ import {
   type WriteEventInput,
 } from "../../content-events/write-event";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import {
+  liveFieldGroupReadPass,
+  sharedPerTransaction,
+} from "../../field-groups/live-read-access";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
@@ -146,6 +150,10 @@ import {
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { EVERY_LOCALE } from "../../i18n/locale-selector";
+import {
+  type LocalizationSource,
+  localizationNow,
+} from "../../i18n/localization-source";
 import { COMPANION_DEFAULT_STATUS } from "../../i18n/migration/generate-up";
 import {
   isValidLocale,
@@ -770,6 +778,11 @@ interface WorkingDraftWriteResult {
 }
 
 export class CollectionMutationService extends BaseService {
+  /** The site's languages as they are now: the source may be the language registry. */
+  private get localization(): SanitizedLocalizationConfig | undefined {
+    return localizationNow(this.localizationSource);
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -784,7 +797,7 @@ export class CollectionMutationService extends BaseService {
      * route translatable field values to the companion `_locales` row for the write's locale.
      * Absent → non-localized behavior (unchanged).
      */
-    private readonly localization?: SanitizedLocalizationConfig
+    private readonly localizationSource?: LocalizationSource
   ) {
     super(adapter, logger);
   }
@@ -2359,7 +2372,7 @@ export class CollectionMutationService extends BaseService {
     );
     if (params.entryIds.length === 0) return issues;
     const collection = await this.releaseCollection(params.collectionName);
-    if ((collection as { status?: boolean } | null)?.status !== true) {
+    if (!this.keepsStatus(collection)) {
       return issues;
     }
     // A translation table without its per-language status cannot be read for
@@ -2498,7 +2511,7 @@ export class CollectionMutationService extends BaseService {
     const documents = new Map<string, Record<string, unknown>>();
     if (params.entryIds.length === 0) return documents;
     const collection = await this.releaseCollection(params.collectionName);
-    if ((collection as { status?: boolean } | null)?.status !== true) {
+    if (!this.keepsStatus(collection)) {
       return documents;
     }
     if (await this.companionLacksStatus(params.collectionName)) {
@@ -2653,6 +2666,19 @@ export class CollectionMutationService extends BaseService {
       );
     }
     return held;
+  }
+
+  /**
+   * Whether a release's collection has the draft/published status turned on.
+   * The collection arrives as an `object`, so `in` narrows it to the field
+   * rather than a cast asserting a shape.
+   */
+  private keepsStatus(collection: object | null): boolean {
+    return (
+      collection !== null &&
+      "status" in collection &&
+      collection.status === true
+    );
   }
 
   /**
@@ -4145,6 +4171,8 @@ export class CollectionMutationService extends BaseService {
       user?: Record<string, unknown>;
       overrideAccess?: boolean;
       routeAuthorized?: boolean;
+      /** A scoped API key's own grants, which its rules are judged by. */
+      authenticatedScope?: AuthenticatedScope;
     },
     slug: string,
     /**
@@ -4152,7 +4180,13 @@ export class CollectionMutationService extends BaseService {
      * because a `dbName` collection's table is not `dc_<slug>`, and the
      * hidden columns contributed to it are keyed by the physical name.
      */
-    tableName: string
+    tableName: string,
+    /**
+     * The transaction-bound executor when the response is redacted while the
+     * write still holds its connection, so the rules' lookups read on it
+     * rather than wait on the pool for the connection it holds.
+     */
+    executor?: unknown
   ): Promise<void> {
     // Deserialize JSON-stored containers (group/repeater/json/chips/hasMany)
     // before redaction so the read-access walker descends into them — SQLite
@@ -4178,13 +4212,49 @@ export class CollectionMutationService extends BaseService {
     // role-based updater) does not echo the row creator's user id. Owner-only
     // access reads it from SQL, never from the returned row.
     stripServerOnlyColumns(entry, tableName);
+    const trusted = params.overrideAccess && !params.routeAuthorized;
+    // One resolver for both passes: one authority, and one lookup, shared by
+    // every item a bulk write redacts inside its transaction. A key's grants
+    // travel on its scope and are read from nowhere, so they are not shared.
+    const userId = typeof params.user?.id === "string" ? params.user.id : "";
+    const makeGrants = () =>
+      callerAccessGrants(params.user, params.authenticatedScope, executor);
+    const grants =
+      params.authenticatedScope?.actorType === "apiKey"
+        ? makeGrants()
+        : sharedPerTransaction(executor, `grants:${userId}`, makeGrants);
     await applyFieldReadAccess({
       kind: "collection",
       slug,
       entry,
       user: params.user,
-      overrideAccess: params.overrideAccess && !params.routeAuthorized,
+      overrideAccess: trusted,
+      grants,
     });
+    // The fields inside the field groups the entry holds, by their own rules,
+    // as a read of the document would judge them: a response never echoes a
+    // field-group value the writer may not read.
+    // The schemas are resolved once per transaction for each collection.
+    const service = this.fieldGroupDataService;
+    if (!trusted) {
+      const fieldGroupPass = await sharedPerTransaction(
+        executor,
+        `fieldGroupReadPass:${slug}`,
+        () =>
+          liveFieldGroupReadPass(
+            fields as FieldConfig[],
+            service && {
+              getComponentFields: componentSlug =>
+                service.getComponentFields(componentSlug, executor),
+            }
+          )
+      );
+      await fieldGroupPass?.(entry, {
+        user: params.user,
+        authenticatedScope: params.authenticatedScope,
+        grants,
+      });
+    }
   }
 
   /**
@@ -5459,6 +5529,7 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
+          authenticatedScope: params.authenticatedScope,
         },
         params.collectionName,
         tableName
@@ -7251,6 +7322,8 @@ export class CollectionMutationService extends BaseService {
      * document's edit rather than key it under the wrong slot.
      */
     requestLocale?: string | null;
+    /** The caller's transaction, whose connection the schemas are read on. */
+    executor?: unknown;
   }): Promise<{
     hold: boolean;
     componentSchemas: ComponentSchemas | null;
@@ -7268,7 +7341,10 @@ export class CollectionMutationService extends BaseService {
       collectionHasStatus &&
       versionsConfig?.drafts?.enabled === true &&
       !hasPasswordField(args.fields)
-        ? await resolveComponentSchemas(args.fields as unknown as FieldConfig[])
+        ? await resolveComponentSchemas(
+            args.fields as unknown as FieldConfig[],
+            args.executor
+          )
         : null;
     const { hold, draftLocale } = resolveDraftHold({
       collectionHasStatus,
@@ -10116,6 +10192,7 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
+          authenticatedScope: params.authenticatedScope,
         },
         params.collectionName,
         tableName
@@ -11125,9 +11202,12 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
+          authenticatedScope: params.authenticatedScope,
         },
         params.collectionName,
-        tableName
+        tableName,
+        // Still inside the caller-owned transaction.
+        tx.getDrizzle()
       );
 
       return {
@@ -11590,6 +11670,8 @@ export class CollectionMutationService extends BaseService {
         fields,
         namedStatus: finalData.status,
         liveStatus: existingEntry.status,
+        // Inside the caller-owned transaction.
+        executor: tx.getDrizzle(),
       });
 
       // The same split the single-entry update performs, for the same reason
@@ -12237,24 +12319,33 @@ export class CollectionMutationService extends BaseService {
         });
       }
 
+      // A held edit answers with the pending document, not the live row, so
+      // that is the document redacted: it carries the edited values, field
+      // groups included, which the live row does not.
+      const response = (workingDraftDocument ?? updated) as Record<
+        string,
+        unknown
+      >;
       await this.redactResponseFields(
-        updated as Record<string, unknown>,
+        response,
         fields,
         {
           user: params.user,
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
+          authenticatedScope: params.authenticatedScope,
         },
         params.collectionName,
-        tableName
+        tableName,
+        // Still inside the caller-owned transaction.
+        tx.getDrizzle()
       );
 
       return {
         success: true,
         statusCode: 200,
         message: "Entry updated successfully",
-        // A held edit answers with the pending document, not the live row.
-        data: workingDraftDocument ?? updated,
+        data: response,
         eventRecorded,
         revalidationIntent,
       };

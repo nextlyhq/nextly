@@ -70,6 +70,7 @@
 
 import { GripVertical } from "lucide-react";
 import type * as React from "react";
+import type { JSX } from "react";
 import * as ResizablePrimitive from "react-resizable-panels";
 
 import { cn } from "../lib/utils";
@@ -100,7 +101,7 @@ type SplitterName =
 const ResizablePanelGroup = ({
   className,
   ...props
-}: React.ComponentProps<typeof ResizablePrimitive.Group>) => (
+}: React.ComponentProps<typeof ResizablePrimitive.Group>): JSX.Element => (
   <ResizablePrimitive.Group
     className={cn("h-full w-full", className)}
     {...props}
@@ -112,7 +113,8 @@ const ResizablePanelGroup = ({
  *
  * @experimental
  */
-const ResizablePanel = ResizablePrimitive.Panel;
+const ResizablePanel: typeof ResizablePrimitive.Panel =
+  ResizablePrimitive.Panel;
 
 /**
  * The draggable divider between two panels.
@@ -134,7 +136,7 @@ const ResizableHandle = ({
 > &
   SplitterName & {
     withGrip?: boolean;
-  }) => (
+  }): JSX.Element => (
   <ResizablePrimitive.Separator
     className={cn(
       // The drawn line is 1px; the element around it is wider and transparent, so the pointer

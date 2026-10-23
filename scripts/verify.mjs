@@ -41,7 +41,11 @@ export function phasesFor(scope, limits) {
   const workers = `--maxWorkers=${limits.maxWorkers}`;
   const pr = [
     { name: "build", argv: ["turbo", "run", "build"] },
-    { name: "lint + types", argv: ["turbo", "run", "lint", "check-types", "--continue"] },
+    // Lint is the root script, one oxlint run in passes rather than a turbo
+    // task, so it is its own phase. It runs after the build, because its
+    // type-aware rules read the siblings' `dist`.
+    { name: "lint", argv: ["run", "lint"] },
+    { name: "types", argv: ["turbo", "run", "check-types", "--continue"] },
     { name: "unit tests", argv: ["turbo", "run", "test", "--continue", "--", workers] },
     // `turbo run test` does not reach `scripts/` — gate-scope.mjs records that
     // explicitly — so without this a change confined to the repository's own

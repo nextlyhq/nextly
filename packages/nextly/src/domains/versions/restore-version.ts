@@ -140,7 +140,13 @@ async function describeEntity(
  * error propagates rather than being recorded as an absence.
  */
 export async function resolveComponentSchemas(
-  fields: FieldConfig[]
+  fields: FieldConfig[],
+  /**
+   * The transaction-bound executor, for a caller resolving these while its
+   * transaction holds a connection: the reads then run on it, rather than on a
+   * second pooled connection that cannot see its writes and can stall behind it.
+   */
+  executor?: unknown
 ): Promise<ComponentSchemas> {
   const slugs = new Set<string>();
 
@@ -178,7 +184,7 @@ export async function resolveComponentSchemas(
     await Promise.all(
       batch.map(async slug => {
         try {
-          const record = await registry.getComponentBySlug(slug);
+          const record = await registry.getComponentBySlug(slug, executor);
           // The component's OWN localization switch: its values live in its own
           // tables, so an unlocalized component inside a localized document
           // stores one copy of each value. A slug with no record behind it is

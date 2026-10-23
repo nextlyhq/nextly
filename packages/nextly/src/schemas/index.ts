@@ -62,6 +62,7 @@ import { emailTemplatesPg } from "./email-templates/postgres";
 import { emailTemplatesSqlite } from "./email-templates/sqlite";
 import { fieldGroupLockTables } from "./field-group-lock";
 import { jobsTables } from "./jobs";
+import { languagesTables } from "./languages";
 import { LIMIT_STORE_TABLE, limitStoreTables } from "./limit-store";
 import { mediaTables } from "./media";
 import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
@@ -264,6 +265,9 @@ export function getCoreSchema(
     // mint finding it missing refuses with the migrate remedy, so
     // core-reconcile creating it is sufficient, as for `nextly_versions`.
     ...Object.values(previewLinksTables(dialect)),
+    // The site's content languages when Settings manages them. Created empty and read as "no
+    // stored languages" when missing, so a site that never adds a language is unchanged.
+    ...Object.values(languagesTables(dialect)),
     // The release tables are first-class managed system tables, declared here
     // for the same reason `nextly_versions` is: nothing records into them
     // before they exist, so core-reconcile creating them on fresh and existing
@@ -403,6 +407,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_content_events",
   "nextly_content_event_parts",
   "nextly_preview_links",
+  "nextly_languages",
   "nextly_releases",
   "nextly_release_members",
   "nextly_version_pins",
