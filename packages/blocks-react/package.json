@@ -75,7 +75,6 @@
     "@types/react-dom": "19.2.0",
     "eslint": "^9.39.1",
     "nextly": "workspace:*",
-    "oxc-parser": "^0.155.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "rimraf": "^6.1.3",

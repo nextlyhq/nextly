@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 
 import { parseSource } from "@nextlyhq/module-specifiers/parse-source";
 import { Visitor } from "oxc-parser";
-import type { MethodDefinition, Property } from "oxc-parser";
+import type { MethodDefinition, ObjectProperty } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 
 /** The package's whole source tree. */
@@ -58,7 +58,7 @@ function deliveryInserts(): string[] {
     // One entry per function or method the walk is inside, null for one with
     // no name, so the nearest named one is the last non-null entry.
     const enclosing: (string | null)[] = [];
-    const methodName = (node: MethodDefinition | Property): string =>
+    const methodName = (node: MethodDefinition | ObjectProperty): string =>
       text.slice(node.key.start, node.key.end);
     new Visitor({
       FunctionDeclaration: node => enclosing.push(node.id?.name ?? null),
@@ -82,8 +82,15 @@ function deliveryInserts(): string[] {
             /deliveries|email_deliveries/i.test(text.slice(arg.start, arg.end))
           )
         ) {
-          const name = enclosing.findLast(entry => entry !== null);
-          found.push(`${at}#${name ?? "(module)"}`);
+          let name = "(module)";
+          for (let i = enclosing.length - 1; i >= 0; i--) {
+            const entry = enclosing[i];
+            if (entry !== null) {
+              name = entry;
+              break;
+            }
+          }
+          found.push(`${at}#${name}`);
         }
       },
     }).visit(parseSource(text, file).program);

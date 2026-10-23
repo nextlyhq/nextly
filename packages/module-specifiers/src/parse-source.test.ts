@@ -59,6 +59,17 @@ describe("walk", () => {
     );
   });
 
+  it("walks a chain deeper than the call stack, as a minified chunk is", () => {
+    // 20,000 nested additions: a recursive walk overflows at about 5,000 here.
+    const code = `export const x = a${" + a".repeat(20_000)};`;
+    let identifiers = 0;
+    walk(parseSource(code, "chunk.mjs").program, node => {
+      if (node.type === "Identifier") identifiers++;
+    });
+    // `x` and the 20,001 operands.
+    expect(identifiers).toBe(20_002);
+  });
+
   it("skips a node's children when the visitor answers false", () => {
     const seen: string[] = [];
     let statements = 0;

@@ -34,7 +34,7 @@ import type {
   Program,
 } from "oxc-parser";
 
-import { parseSource } from "./parse-source.mjs";
+import { literalText, parseSource } from "./parse-source.mjs";
 
 /**
  * Stands in for a module call whose target is not a literal, such as
@@ -116,18 +116,6 @@ export interface ModuleSpecifierRef {
 /** A reference and where it starts, so references from the tree and from comments merge in source order. */
 interface PlacedRef extends ModuleSpecifierRef {
   readonly start: number;
-}
-
-/** The text of a string literal or a substitution-free template literal, or null for anything computed. */
-function literalText(node: Expression | null | undefined): string | null {
-  if (!node) return null;
-  if (node.type === "Literal" && typeof node.value === "string") {
-    return node.value;
-  }
-  if (node.type === "TemplateLiteral" && node.expressions.length === 0) {
-    return node.quasis[0]?.value.cooked ?? null;
-  }
-  return null;
 }
 
 /**

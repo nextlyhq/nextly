@@ -77,7 +77,6 @@
     "@types/react-dom": "19.2.0",
     "jsdom": "^27.1.0",
     "nextly": "workspace:*",
-    "oxc-parser": "^0.155.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "tsdown": "^0.23.1",

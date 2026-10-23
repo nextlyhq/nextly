@@ -38,7 +38,11 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
+import {
+  literalText,
+  parseSource,
+  walk,
+} from "@nextlyhq/module-specifiers/parse-source";
 import type { Node } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 import { collectModules } from "./source-modules";
@@ -132,13 +136,7 @@ function sourceFiles(dir: string): string[] {
  */
 function nameOf(node: Node, computed: boolean): string | null {
   if (node.type === "Identifier") return computed ? null : node.name;
-  if (node.type === "Literal" && typeof node.value === "string") {
-    return node.value;
-  }
-  if (node.type === "TemplateLiteral" && node.expressions.length === 0) {
-    return node.quasis[0]?.value.cooked ?? null;
-  }
-  return null;
+  return literalText(node);
 }
 
 /** The method name a node reads off an object, if it reads one. */
