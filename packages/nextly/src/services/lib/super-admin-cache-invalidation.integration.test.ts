@@ -781,12 +781,11 @@ describe("the order the two tiers are retired in", () => {
     await expect(service.invalidateAll()).resolves.toBeTypeOf("number");
   });
 
-  it("announces nothing when the stored rows could not be retired", async () => {
-    // The epoch means "everything filed before this is gone". A tombstone that
-    // failed leaves those rows live, so the sentence is false — and announcing
-    // it anyway is worse than silence: every other instance rejects its own
-    // in-memory answer BECAUSE the epoch moved, reads one of those rows, and
-    // files it under the new epoch where nothing left to happen can reach it.
+  it("announces even when the stored rows could not be retired", async () => {
+    // No read is answered from the stored rows any more, so a tombstone that
+    // failed leaves nothing an instance could promote, and the role version
+    // is what retires the access every instance keeps. Withholding it would
+    // leave every other instance serving what it kept.
     const proto = PermissionCacheService.prototype as unknown as Record<
       string,
       Tombstone
@@ -801,12 +800,11 @@ describe("the order the two tiers are retired in", () => {
       proto.invalidateAll = original;
     }
 
-    expect(rbacRevision()).toBe(before);
+    expect(rbacRevision()).not.toBe(before);
   });
 
-  it("announces when it CAN retire them, which is what makes silence a choice", async () => {
-    // The control. Without it, "announces nothing on failure" is equally
-    // satisfied by an epoch that never moves at all.
+  it("announces when it CAN retire them", async () => {
+    // The ordinary case, beside the failure above.
     const before = rbacRevision();
 
     await invalidateAllPermissionCaches();

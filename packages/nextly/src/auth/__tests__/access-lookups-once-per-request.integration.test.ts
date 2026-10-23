@@ -39,6 +39,7 @@ import { createDynamicHandlers } from "../../routeHandler";
 import { ServiceContainer } from "../../services/index";
 import type { AuthUserId } from "../../types/auth";
 import {
+  hasAnyPermission,
   hasPermission,
   invalidateAllPermissionCaches,
   isSuperAdmin,
@@ -325,6 +326,72 @@ describe.each(getConfiguredTestDialects())(
       expect(fifty.access.length).toBe(one.access.length);
     });
 
+    /**
+     * The access tables read by `ask`, run in one request, with every cache
+     * emptied first so the count is what the request itself asked.
+     */
+    async function inOneRequest<T>(ask: () => Promise<T>) {
+      await invalidateAllPermissionCaches();
+      const { result, tables } = await tablesRead(t, () =>
+        runWithAccessMemo(ask)
+      );
+      return {
+        result,
+        access: tables.filter(table => ACCESS_TABLES.has(table)),
+      };
+    }
+
+    /** Permissions the reader does not hold, beside the one it does. */
+    const NOT_HELD: Array<[string, string]> = [
+      ["update", "notes"],
+      ["delete", "notes"],
+      ["create", "notes"],
+      ["read", "users"],
+    ];
+
+    it("reads the same access rows for several permission questions as for one", async () => {
+      const one = await inOneRequest(() =>
+        hasPermission(userId, "read", "notes")
+      );
+      const several = await inOneRequest(async () => {
+        const answers: boolean[] = [];
+        for (const [action, resource] of [["read", "notes"], ...NOT_HELD]) {
+          answers.push(await hasPermission(userId, action, resource));
+        }
+        return answers;
+      });
+      // POPULATION CONTROL: the held permission allows, the others refuse,
+      // and the caller's access was read for both.
+      expect(one.result).toBe(true);
+      expect(several.result).toEqual([true, false, false, false, false]);
+      expect(one.access.length).toBeGreaterThan(0);
+      expect(several.access).toEqual(one.access);
+    });
+
+    it("reads the same access rows for any of several permissions as for one", async () => {
+      const one = await inOneRequest(() =>
+        hasPermission(userId, "read", "notes")
+      );
+      // The held permission last, so every other one is asked first.
+      const any = await inOneRequest(() =>
+        hasAnyPermission(userId, [
+          ...NOT_HELD.map(([action, resource]) => ({ action, resource })),
+          { action: "read", resource: "notes" },
+        ])
+      );
+      const none = await inOneRequest(() =>
+        hasAnyPermission(
+          userId,
+          NOT_HELD.map(([action, resource]) => ({ action, resource }))
+        )
+      );
+      expect(any.result).toBe(true);
+      expect(none.result).toBe(false);
+      expect(one.access.length).toBeGreaterThan(0);
+      expect(any.access).toEqual(one.access);
+      expect(none.access).toEqual(one.access);
+    });
+
     it("sees a role the same request assigns", async () => {
       // A request that changes someone's roles and then asks about them must
       // see the change, so a role write forgets what the request had kept.
@@ -385,7 +452,7 @@ describe.each(getConfiguredTestDialects())(
         (id: string) => isSuperAdmin(id),
       ],
     ] as const)(
-      "drops %s it took from the process cache when the role behind it expires",
+      "drops %s it took from the access kept between requests when the role behind it expires",
       async (_answer, role, asks) => {
         const holder = await newHolder(
           `cached-${role}`,
@@ -394,11 +461,12 @@ describe.each(getConfiguredTestDialects())(
         );
         const ask = () => asks(holder);
         await invalidateAllPermissionCaches();
-        // Asked outside the request, so the process cache holds the answer.
+        // Asked outside the request, so the user's access is kept between
+        // requests.
         expect(await ask()).toBe(true);
         await runWithAccessMemo(async () => {
           const cached = await tablesRead(t, ask);
-          // POPULATION CONTROL: served from the cache, not by a role walk.
+          // POPULATION CONTROL: served from what was kept, not by a role walk.
           expect(cached.result).toBe(true);
           expect(cached.tables).not.toContain("user_roles");
           expect(await pastTheLapse(ask)).toBe(false);
