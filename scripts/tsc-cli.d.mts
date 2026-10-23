@@ -11,6 +11,7 @@ export interface TscDiagnostic {
   message: string;
 }
 
+export function tscEntry(): string;
 export function tscMajor(): number;
 export function diagnosticsIn(output: string): TscDiagnostic[];
 export function compile(args: readonly string[], cwd: string): TscDiagnostic[];

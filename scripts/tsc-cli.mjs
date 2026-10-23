@@ -17,7 +17,7 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 
 /** The `tsc` entry script: `NEXTLY_TSC`, or the one the installed `typescript` declares. */
-function tscEntry() {
+export function tscEntry() {
   if (process.env.NEXTLY_TSC) return resolve(process.env.NEXTLY_TSC);
   const manifest = createRequire(import.meta.url).resolve(
     "typescript/package.json"
