@@ -289,8 +289,11 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
   });
 
   // Cursor-shaped read: `hasMore` sits beside `activities`, with no `total` --
-  // see `ActivityLogResult` for why a count is not published here.
-  // Spread into a fresh literal so the response-shape generic accepts the
-  // named `ActivityLogResult` interface (no implicit index signature).
-  return respondData({ ...result }, { headers: PRIVATE_NO_STORE_HEADERS });
+  // see `ActivityLogResult` for why a count is not published here. Named field
+  // by field: the service's `next` position is for a caller that can pass it
+  // back, and this endpoint takes no position to resume from.
+  return respondData(
+    { activities: result.activities, hasMore: result.hasMore },
+    { headers: PRIVATE_NO_STORE_HEADERS }
+  );
 });

@@ -111,6 +111,16 @@
   // turbo at all; what such a machine signs, CI's key rejects as a miss.
   "remoteCache": { "signature": true },
 
+  // The runner's operating system and architecture are part of every task's
+  // hash, so the shared cache never replays a Linux task's output on a
+  // Windows or macOS job. Those jobs exist to catch what differs between the
+  // platforms. GitHub sets both on every runner; on a machine without them
+  // they are empty, the same on every run. An environment variable rather
+  // than the generated file of Turborepo's platform guide, which every entry
+  // point would have to write before turbo starts: one that forgot would hash
+  // without it, silently.
+  "globalEnv": ["RUNNER_OS", "RUNNER_ARCH"],
+
   "globalPassThroughEnv": [
     "npm_config_user_agent", // create-nextly-app reads this to detect the invoking PM
     "BLOB_READ_WRITE_TOKEN", // @nextlyhq/storage-vercel-blob runtime config
