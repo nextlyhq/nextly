@@ -921,6 +921,8 @@ const COLLECTIONS_METHODS: Record<
         newFields: fields as unknown as FieldDefinition[],
         wasLocalized,
         isLocalized,
+        // This apply's push refuses a main-table column drop the admin did not confirm.
+        mainDropsConfirmed: true,
       });
 
       const result = await apply(desired, "ui", {

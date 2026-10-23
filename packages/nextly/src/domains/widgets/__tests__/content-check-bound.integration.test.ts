@@ -25,7 +25,7 @@ import {
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import { refreshCollectionSources } from "../collection-sources";
 import { evaluateConditions } from "../conditions";
-import { onboardingSteps } from "../onboarding";
+import { onboardingProgress } from "../onboarding";
 import { conditionProbe } from "../condition-probe";
 import { CONTENT_CHECK_BUDGET_MS } from "../reader-content";
 
@@ -104,7 +104,7 @@ describe("the content check, booted", () => {
       CONTENT_CHECK_BUDGET_MS - 50
     );
     // And the first-entry step stays open rather than being ticked on a guess.
-    const steps = await onboardingSteps(conditionProbe(admin));
+    const { steps } = await onboardingProgress(conditionProbe(admin));
     expect(steps.find(step => step.id === "entry")?.complete).toBe(false);
   }, 20_000);
 });
