@@ -19,8 +19,10 @@ import type { FieldConfig } from "../../collections/fields/types";
 import {
   applyFieldReadAccess,
   getFieldFunctions,
+  openNestedContainer,
   type CallerGrants,
   type FieldFunctions,
+  type ReadAccessRedactions,
 } from "../../shared/lib/field-level-registry";
 import {
   extractFieldGroupReferences,
@@ -33,6 +35,21 @@ export interface ComponentReadCaller {
   user?: Record<string, unknown>;
   authenticatedScope?: AuthenticatedScope;
   grants: () => Promise<CallerGrants>;
+  /**
+   * The store shared by the passes one read makes over a document, so a pass
+   * after the hooks restores what an earlier one removed as evidence and
+   * re-judges each instance against it, as the entity's own passes do. Keyed
+   * by object, so it can be the entity's own store. A read judged once has
+   * no use for one.
+   */
+  redactions?: ReadAccessRedactions;
+  /**
+   * Set for a live document: a field declared with one component judges its
+   * value by that component, whatever type the value claims, since a hook may
+   * retag it. Unset for a version, whose snapshot keeps the component it was
+   * captured under, which is the one its values were written against.
+   */
+  declaredComponentDecides?: boolean;
 }
 
 /** Component field schemas, keyed by component slug. */
@@ -61,17 +78,55 @@ function nameOf(field: FieldConfig): string | undefined {
  * The component instances a field-group field's value holds, each with the
  * component it is judged by: a block's own type (under either stored key), or
  * the field's single component.
+ *
+ * In a live document (`declaredComponentDecides`), a field declared with one
+ * component holds only that one, so its instances are judged by it whatever
+ * type they claim: a value a hook retagged as a component with no rules is
+ * still judged by the rules it was declared under. A block of a live dynamic
+ * zone is judged by its own type only when the zone allows that type; one
+ * with no type, or one the zone does not allow, has no rules that can judge
+ * it, so its `slug` is `null` and it is withheld whole. A version keeps the
+ * type it was captured under, so there the type decides.
  */
 function componentInstances(
   field: FieldConfig,
-  value: unknown
-): { slug: string; instance: Record<string, unknown> }[] {
-  const { single } = extractFieldGroupReferences(field);
-  return rowsOf(value).flatMap(instance => {
-    const own = readFieldGroupType(instance);
-    const slug = own !== undefined && own !== "" ? own : single;
-    return slug ? [{ slug, instance }] : [];
-  });
+  value: unknown,
+  declaredComponentDecides: boolean
+): { slug: string | null; instance: Record<string, unknown> }[] {
+  const { single, many } = extractFieldGroupReferences(field);
+  const allowed = fieldGroupSlugList(field);
+  return rowsOf(value).flatMap(instance =>
+    judgingSlugs(readFieldGroupType(instance), {
+      single,
+      zone: declaredComponentDecides && many !== undefined ? allowed : null,
+      declaredComponentDecides,
+    }).map(slug => ({ slug, instance }))
+  );
+}
+
+/**
+ * The components one instance is judged by, given the type it claims
+ * (`own`); see {@link componentInstances}. `zone` is the live dynamic zone's
+ * allowed types, or `null` where the claimed type decides. `[null]` withholds
+ * the instance whole.
+ */
+function judgingSlugs(
+  own: string | undefined,
+  declared: {
+    single: string | undefined;
+    zone: readonly string[] | null;
+    declaredComponentDecides: boolean;
+  }
+): readonly (string | null)[] {
+  const { single, zone } = declared;
+  if (zone !== null) {
+    return [own !== undefined && zone.includes(own) ? own : null];
+  }
+  if (declared.declaredComponentDecides && single !== undefined) {
+    return [single];
+  }
+  const slug = own !== undefined && own !== "" ? own : single;
+  return slug ? [slug] : [];
 }
 
 /**
@@ -114,16 +169,91 @@ async function judgeField(
     open.delete(field);
     return;
   }
+  if (!isFieldGroupField(field) && !sub) return;
+  if (isFieldGroupField(field) && caller.declaredComponentDecides === true) {
+    withholdMalformed(entry, name);
+  }
+  // A value held as JSON text (SQLite's shape, or what a hook returned) is
+  // parsed, judged, and written back as text, as the entity's own pass does.
+  const container = openNestedContainer(entry[name]);
+  if (container === null) return;
+  await judgeRows(container.rows, field, componentFields, caller);
+  entry[name] = container.serialize();
+}
+
+/**
+ * The rows a named field holds: as instances of its field groups, or as the
+ * rows of a group or repeater whose fields may reach more.
+ */
+async function judgeRows(
+  rows: Record<string, unknown>[],
+  field: FieldConfig,
+  componentFields: ComponentFieldMap,
+  caller: ComponentReadCaller
+): Promise<void> {
   if (isFieldGroupField(field)) {
-    for (const { slug, instance } of componentInstances(field, entry[name])) {
-      await judgeInstance(instance, slug, componentFields, caller);
+    for (const { slug, instance } of componentInstances(
+      field,
+      rows,
+      caller.declaredComponentDecides === true
+    )) {
+      if (slug === null) withholdWhole(instance);
+      else await judgeInstance(instance, slug, componentFields, caller);
     }
     return;
   }
-  if (!sub) return;
-  for (const row of rowsOf(entry[name])) {
+  const sub = subFieldsOf(field) ?? [];
+  for (const row of rows) {
     await applyComponentReadAccess(row, sub, componentFields, caller);
   }
+}
+
+/**
+ * Withhold, from a live document, a field-group value that is not an instance:
+ * a primitive, text that does not parse, or a list entry that is not a
+ * record. No field group's rules can judge one, and a hook may have copied a
+ * denied value into it. A version keeps what was captured.
+ */
+function withholdMalformed(entry: Record<string, unknown>, name: string): void {
+  const value = entry[name];
+  if (value === null || value === undefined) return;
+  if (typeof value !== "string") {
+    if (instancesOnly(value) === undefined) delete entry[name];
+    return;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    delete entry[name];
+    return;
+  }
+  const kept = instancesOnly(parsed);
+  if (kept === undefined) delete entry[name];
+  else entry[name] = JSON.stringify(kept);
+}
+
+/**
+ * `value` with every entry that is not an instance removed, in place for a
+ * list, or `undefined` when it is not an instance or a list at all.
+ */
+function instancesOnly(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    for (let i = value.length - 1; i >= 0; i--) {
+      if (!isRecord(value[i])) value.splice(i, 1);
+    }
+    return value;
+  }
+  return isRecord(value) ? value : undefined;
+}
+
+/**
+ * Remove every field of an instance no rules can judge, in place: judged by
+ * several types in turn, one's removals would hide from the next the stored
+ * value its rule reads.
+ */
+function withholdWhole(instance: Record<string, unknown>): void {
+  for (const key of Object.keys(instance)) delete instance[key];
 }
 
 /** One component instance, by its component's own rules, then what it holds. */
@@ -133,19 +263,30 @@ async function judgeInstance(
   componentFields: ComponentFieldMap,
   caller: ComponentReadCaller
 ): Promise<void> {
-  await applyFieldReadAccess({
-    kind: "fieldGroup",
-    slug,
-    entry: instance,
-    user: caller.user,
-    authenticatedScope: caller.authenticatedScope,
-    grants: caller.grants,
-    overrideAccess: false,
-  });
+  await applyFieldReadAccess(
+    {
+      kind: "fieldGroup",
+      slug,
+      entry: instance,
+      user: caller.user,
+      authenticatedScope: caller.authenticatedScope,
+      grants: caller.grants,
+      overrideAccess: false,
+    },
+    caller.redactions
+  );
   const inner = componentFields.get(slug);
   if (inner) {
     await applyComponentReadAccess(instance, inner, componentFields, caller);
   }
+}
+
+/**
+ * The rows a container value holds, through the same parse the redaction
+ * used, so a container held as JSON text reports what was withheld inside it.
+ */
+function containerRows(value: unknown): Record<string, unknown>[] {
+  return openNestedContainer(value)?.rows ?? [];
 }
 
 /**
@@ -188,8 +329,8 @@ export function nestedWithheldPaths(
         paths.add(path);
         continue;
       }
-      const beforeRows = rowsOf(beforeObj[name]);
-      const afterRows = rowsOf(afterObj[name]);
+      const beforeRows = containerRows(beforeObj[name]);
+      const afterRows = containerRows(afterObj[name]);
       beforeRows.forEach((row, index) => {
         const afterRow = afterRows[index];
         if (!afterRow) return;

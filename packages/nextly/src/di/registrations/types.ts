@@ -9,6 +9,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { LanguageRegistry } from "../../domains/i18n/language-registry";
 import type { HookRegistry } from "../../hooks/hook-registry";
 import type { Logger } from "../../services/shared";
 import type { ImageProcessor } from "../../storage/image-processor";
@@ -39,6 +40,13 @@ export interface RegistrationContext {
 
   /** Resolved base path for collection file operations. */
   basePath: string;
+
+  /**
+   * The site's content languages: the configuration's block when it declares one, otherwise the
+   * list Settings stores. Content services read it when they need the languages, so a list
+   * changed in Settings reaches services built before the change.
+   */
+  languages: LanguageRegistry;
 
   /** Optional override for the dynamic schemas directory. */
   schemasDir?: string;

@@ -30,6 +30,7 @@ import {
 } from "../../domains/field-groups/services/field-group-table-provisioning";
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
+import { appLocalization } from "../../domains/i18n/configured-locales";
 import {
   archiveFieldsLeavingTranslation,
   fieldsWithLeavingSettingsDeferred,
@@ -61,7 +62,6 @@ import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
-  getConfigFromDI,
   getFieldGroupMetadataServiceFromDI,
   getLoggerFromDI,
 } from "../helpers/di";
@@ -533,8 +533,7 @@ export const COMPONENTS_METHODS: Record<
             // what it must.
             renamed: companionRename,
             tableName: tableName,
-            defaultLocale:
-              getConfigFromDI()?.localization?.defaultLocale ?? "en",
+            defaultLocale: appLocalization()?.defaultLocale ?? "en",
             adapter,
             entity: slug,
             kind: "fieldGroup",

@@ -7,6 +7,7 @@ import { runAsPrincipal } from "../auth/principal-scope";
 import { buildUserContext } from "../auth/user-context";
 import { buildMutationMessage } from "../direct-api/namespaces/helpers";
 import type { MutationResult } from "../direct-api/types/shared";
+import { withCurrentLanguages } from "../domains/i18n/configured-locales";
 import { isLocaleSelector } from "../domains/i18n/locale-selector";
 import { NextlyError } from "../errors/nextly-error";
 import { collectingWarnings } from "../hooks/side-effect-warnings";
@@ -703,10 +704,19 @@ function translateServiceOpts(
         // caller reaches a collection's public default where a person must be
         // refused. A call naming no person runs as none, so it never inherits
         // the person of an operation that set it going.
+        //
+        // And one language list for the whole call, as a Direct API call has: a
+        // plugin's write may run at boot, in a job or on a timer, with no request
+        // to have chosen one.
         const call = () =>
-          runAsPrincipal(opts.principal ?? null, () =>
-            runWithCallerScope(resolved.authenticatedScope, () =>
-              (fn as (...a: unknown[]) => Promise<unknown>).apply(target, next)
+          withCurrentLanguages(() =>
+            runAsPrincipal(opts.principal ?? null, () =>
+              runWithCallerScope(resolved.authenticatedScope, () =>
+                (fn as (...a: unknown[]) => Promise<unknown>).apply(
+                  target,
+                  next
+                )
+              )
             )
           );
 

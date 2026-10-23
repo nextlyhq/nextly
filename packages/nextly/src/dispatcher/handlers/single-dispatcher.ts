@@ -37,6 +37,7 @@ import {
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
+import { appLocalization } from "../../domains/i18n/configured-locales";
 import {
   archiveFieldsLeavingTranslation,
   fieldsWithLeavingSettingsDeferred,
@@ -91,7 +92,6 @@ import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
-  getConfigFromDI,
   getSchemaRegistryFromDI,
   getSingleEntryServiceFromDI,
   getSingleMetadataServiceFromDI,
@@ -1229,7 +1229,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // or no single candidate), the preflight finds it from the fields and refuses what it must.
         renamed: companionRename,
         tableName: single.tableName,
-        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        defaultLocale: appLocalization()?.defaultLocale ?? "en",
         adapter,
         entity: slug,
         kind: "single",

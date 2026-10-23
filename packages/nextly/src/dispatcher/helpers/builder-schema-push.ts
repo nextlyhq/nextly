@@ -9,6 +9,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { appLocalization } from "../../domains/i18n/configured-locales";
 import type { FieldRename } from "../../domains/i18n/migration/reconcile-companion";
 import { movedOnto } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -29,7 +30,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 
-import { getConfigFromDI, getMigrationJournalFromDI } from "./di";
+import { getMigrationJournalFromDI } from "./di";
 
 /**
  * A push of a desired schema for the entity `slug`, as its schema dialog applies it.
@@ -71,7 +72,7 @@ export function builderSchemaPush(args: {
       uiTargetKind: args.kind,
       // A field becoming translated keeps its value as this language's; the apply moves it after
       // its prompts and refusals, before it drops the main column.
-      defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+      defaultLocale: appLocalization()?.defaultLocale ?? "en",
     });
 }
 
