@@ -36,9 +36,10 @@ import type { Logger } from "../shared";
 
 import {
   bumpEpoch,
-  currentEpoch,
   duringRetirement,
+  publishedEpoch,
   refreshEpoch,
+  retireHereOnly,
   stampIsCurrent,
 } from "./rbac-epoch";
 import {
@@ -806,7 +807,7 @@ async function grantsOf(
 
 /** The current count; see {@link invalidatePermissionCache}. */
 export function rbacRevision(): string {
-  return currentEpoch();
+  return publishedEpoch();
 }
 
 /**
@@ -1012,8 +1013,10 @@ export async function writingPermissions<TTable, T>(
  * the version would tell such an instance to drop its in-memory answer and read
  * a stored row the failed retirement left live, filing it under the new
  * version where nothing left to happen can reach it. Withheld, those rows are
- * served until their own expiry, as they would have been, and this process
- * has already forgotten what it kept about the change.
+ * served until their own expiry, as they would have been. This process still
+ * retires what it kept: its actors were dropped before this ran, and
+ * everything else it filed under the role version, an API key's copied grants
+ * among them, stops being current here.
  *
  * The depth is held across both steps, so nothing this process resolves while
  * they run is kept as current; see {@link resolvedUnderCurrentRevision}.
@@ -1038,6 +1041,7 @@ async function retireSharedThenPublish(
         ...logContext,
         error: String(error),
       });
+      retireHereOnly();
       return;
     }
     await bumpEpoch();

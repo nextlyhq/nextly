@@ -288,21 +288,23 @@ These env vars are read by middleware and security helpers. None are part of the
 
 ---
 
-## Performance — permission cache
+## Performance — access cache
 
-Nextly's RBAC layer ships a hybrid (in-memory LRU + database) permission cache. These env vars tune it; none are part of the central env schema — they are read directly by the permission service.
+Each server instance keeps a user's access in memory once it has read it: their roles, inherited ones included, and the permissions those roles grant. The cache is fixed and has nothing to tune.
 
-| Variable | Required | Default | Description | Read by |
-|---|---|---|---|---|
-| `PERMISSION_CACHE_ENABLED` | No | `true` | Set to `false` or `0` to disable the hybrid permission cache. | `packages/nextly/src/services/lib/permissions.ts` |
-| `PERMISSION_CACHE_TTL_SECONDS` | No | `300` | Time-to-live for database cache entries (seconds). This tier is shared between instances and the signal that retires it is held in memory, so until that signal is stored beside the rows this value is also the longest a revoked grant can survive on an instance that did not handle the change. | `packages/nextly/src/services/lib/permissions.ts` |
-| `PERMISSION_CACHE_MEMORY_SIZE` | No | `10000` | In-memory LRU cache size (number of entries). | `packages/nextly/src/services/lib/permissions.ts` |
+- A role or permission change made through any instance retires it on every instance. Each instance checks the shared role version at most once a second.
+- A kept entry ends at the user's soonest role-assignment expiry, and after one minute at most.
+- Each instance keeps at most 10,000 users.
 
-The database permission cache benefits from periodic cleanup. A typical daily cron:
+The variables below configured the permission cache this replaced. They no longer change anything, and Nextly logs a warning once, the first time it checks access, when one is set. They are removed in a later release; remove them from your environment.
 
-```bash
-0 2 * * * curl -X POST http://localhost:3000/admin/api/auth/cache/cleanup
-```
+| Variable | Status |
+|---|---|
+| `PERMISSION_CACHE_ENABLED` | No longer read. The access cache cannot be turned off. |
+| `PERMISSION_CACHE_TTL_SECONDS` | No longer read. |
+| `PERMISSION_CACHE_MEMORY_SIZE` | No longer read. |
+
+Nothing is written to the stored permission cache any more, so it needs no scheduled cleanup.
 
 ---
 

@@ -366,6 +366,34 @@ describe("an API key's grants are retired when the roles behind them change", ()
     expect(insideBatch).not.toContain(ONLY_IN_THE_CATALOGUE);
   });
 
+  it("loses it here when the stored rows could not be retired, though nothing is announced", async () => {
+    // A failed retirement withholds the epoch from every other instance, so
+    // the epoch alone would let this process's own copy of the key's grants
+    // stand for the rest of their life. This process knows the roles changed
+    // whatever the stored tier did.
+    await seedDeputy();
+    expect(await grants()).toContain(ONLY_IN_THE_CATALOGUE);
+    await revokeInheritance();
+
+    const proto = PermissionCacheService.prototype as unknown as Record<
+      string,
+      () => Promise<unknown>
+    >;
+    const original = proto.invalidateAll;
+    const before = rbacRevision();
+    proto.invalidateAll = () =>
+      Promise.reject(new Error("the stored tier is unreachable"));
+    try {
+      await invalidateAllPermissionCaches();
+    } finally {
+      proto.invalidateAll = original;
+    }
+
+    // POPULATION CONTROL: the failure path ran, so nothing was announced.
+    expect(rbacRevision()).toBe(before);
+    expect(await grants()).not.toContain(ONLY_IN_THE_CATALOGUE);
+  });
+
   it("loses it when a PERMISSION row changes, which names neither", async () => {
     // A permission belongs to no user and no role, so neither hint above can
     // express it, and `PermissionService`'s own update and delete called
