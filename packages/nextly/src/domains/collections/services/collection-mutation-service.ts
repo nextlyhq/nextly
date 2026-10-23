@@ -2097,6 +2097,43 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The stored entry an update's field rules are judged against, in the
+   * update's representation: the main row, with the write language's
+   * translated values where the collection keeps them on a companion row. A
+   * translated group or repeater is written there whole, so without its
+   * stored value a denied child of it would be erased rather than kept.
+   *
+   * The companion is read only where a field rule of the collection can ask,
+   * so an update with no such rule pays nothing more.
+   */
+  private async storedForCarryForward(args: {
+    row: Record<string, unknown>;
+    fields: FieldDefinition[];
+    tableName: string;
+    collectionName: string;
+    entryId: string;
+    locale?: string;
+    /** The caller's transaction, when the update runs inside one. */
+    tx?: { getDrizzle<T = unknown>(): T };
+  }): Promise<Record<string, unknown>> {
+    const translated =
+      this.localization &&
+      hasFieldAccessRule("collection", args.collectionName, "update")
+        ? await this.readCompanionLocalizedValues(
+            args.tx ?? { getDrizzle: <T = unknown>() => this.db as T },
+            args.collectionName,
+            args.entryId,
+            resolveRequestedLocale(this.localization, args.locale)
+          )
+        : {};
+    return this.readShapeEventDocument(
+      { ...args.row, ...translated },
+      args.fields,
+      args.tableName
+    );
+  }
+
+  /**
    * The field rules an update applies beyond the entry's own fields, with
    * every denied value inside a container kept as the row holds it, in place;
    * see `keepDeniedAtStoredOnUpdate`.
@@ -8238,11 +8275,14 @@ export class CollectionMutationService extends BaseService {
         data: finalData,
         entryId: params.entryId,
         collectionName: params.collectionName,
-        stored: this.readShapeEventDocument(
-          existingEntry as Record<string, unknown>,
+        stored: await this.storedForCarryForward({
+          row: existingEntry as Record<string, unknown>,
           fields,
-          tableName
-        ),
+          tableName,
+          collectionName: params.collectionName,
+          entryId: params.entryId,
+          locale: params.locale,
+        }),
         tableName,
         fields,
         params,
@@ -11701,7 +11741,15 @@ export class CollectionMutationService extends BaseService {
         data: finalData,
         entryId: entryId,
         collectionName: params.collectionName,
-        stored: this.readShapeEventDocument(existingEntry, fields, tableName),
+        stored: await this.storedForCarryForward({
+          row: existingEntry,
+          fields,
+          tableName,
+          collectionName: params.collectionName,
+          entryId,
+          // A transactional update writes the default language.
+          tx,
+        }),
         tableName,
         fields,
         params,
