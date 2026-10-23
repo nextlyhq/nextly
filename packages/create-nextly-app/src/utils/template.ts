@@ -1556,6 +1556,9 @@ async function generatePluginPackageJson(
     typescript: PINNED_VERSIONS.typescript,
     tsup: "^8.5.0",
     vitest: "^5.0.5",
+    // Vitest's peer, declared because Yarn installs no peers: without it a
+    // Yarn-scaffolded plugin installs, and then `yarn test` cannot load Vite.
+    vite: "^7.3.5",
     eslint: PINNED_VERSIONS.eslint,
     "@eslint/js": PINNED_VERSIONS.eslint,
     "typescript-eslint": "^8.0.0",
@@ -1586,6 +1589,9 @@ async function generatePluginPackageJson(
     // Only the built library ships. The dev/ playground is never published.
     files: ["dist"],
     keywords: ["nextly", "nextly-plugin"],
+    // The Node versions the test runner installed below supports, so a plugin
+    // never promises one its own `test` script refuses.
+    engines: { node: "^22.12.0 || ^24.0.0 || >=26.0.0" },
     scripts: {
       build: "tsup",
       // Runs the embedded playground (next dev with dev/ as the project root).
