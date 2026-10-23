@@ -30,7 +30,7 @@ import * as csstree from "css-tree";
  * ones means an unlisted function is refused, which costs a false positive and
  * a message. A security control should fail toward the annoyance.
  */
-export const TEXT_ARGUMENT_FUNCTIONS = new Set([
+export const TEXT_ARGUMENT_FUNCTIONS: Set<string> = new Set([
   "counter",
   "counters",
   "format",
@@ -58,7 +58,11 @@ export function functionName(raw: string): string {
   return asciiLower(decodeIdentifier(raw));
 }
 
-export const SUBSTITUTION_FUNCTIONS = new Set(["var", "env", "attr"]);
+export const SUBSTITUTION_FUNCTIONS: Set<string> = new Set([
+  "var",
+  "env",
+  "attr",
+]);
 
 /**
  * An `attr()` standing where the value would be FETCHED rather than read.
