@@ -1117,7 +1117,27 @@ export class EmailService extends BaseService {
       })
     );
     if (await settlesWithin(sending, CALL_DEADLINE_MS)) {
-      return this.recordAnswer(message, context, sending, startedAt);
+      const answered = await this.recordAnswer(
+        message,
+        context,
+        sending,
+        startedAt
+      );
+      // An unknown answer, such as a connection lost after the request went
+      // out, may still be delivered by the provider: a keyed call's claim is
+      // held to the lease limit, as a late call's is, so a retry with the key
+      // is told the send is in progress rather than sending it again.
+      if (context.keyed && answered.outcome.failure?.unknown) {
+        const heldUntil = startedAt + LEASE_LIMIT_MS;
+        return {
+          ...answered,
+          late: async () => {
+            await untilTime(heldUntil);
+            return answered;
+          },
+        };
+      }
+      return answered;
     }
     // No answer yet: the caller is told so now, the adapter is told to stop,
     // and the call is finished later with whatever it answers, by its own

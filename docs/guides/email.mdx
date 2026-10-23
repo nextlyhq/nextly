@@ -360,7 +360,10 @@ A failure with `unknown: true` means delivery cannot be known: the request may
 have reached the provider, but no definite answer came back (a connection lost
 mid-request, a timeout after sending, or the call deadline below). It is
 retryable; through a provider that takes a key, a retry is deduplicated there. A
-provider that could not be reached at all sent nothing, and has no such mark.
+keyed send that ends unknown keeps its claim held to the lease limit below,
+however soon the answer was lost, so a repeat with the key in that time is told
+the send is in progress rather than sending it again. A provider that could not
+be reached at all sent nothing, and has no such mark.
 
 Every provider call has a deadline of 2 minutes. A call that has not answered by
 then is reported as `"The email provider did not answer in time."`, unknown and

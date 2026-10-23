@@ -102,6 +102,26 @@ const slowMailer = definePlugin({
         }),
       }),
       defineEmailProvider<Record<string, never>>({
+        type: "losing-keyless",
+        label: "Losing",
+        configFields: [],
+        parseConfig: () => ({}),
+        createAdapter: () => ({
+          // Takes no key, and loses its answer at once, well within the
+          // deadline: the request went out, and may still be delivered.
+          send: (options: SentOptions) => {
+            calls.push(options);
+            return Promise.reject(
+              withEmailFailure(new Error("connection reset"), {
+                retryable: true,
+                unknown: true,
+                reason: "The email provider's answer was lost.",
+              })
+            );
+          },
+        }),
+      }),
+      defineEmailProvider<Record<string, never>>({
         type: "stopping-keyless",
         label: "Stopping",
         configFields: [],
@@ -151,10 +171,20 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     },
   });
   stoppingProvider = stopping.item.id;
+  const losing = await t.nextly.emailProviders.create({
+    data: {
+      name: "Losing",
+      type: "losing-keyless",
+      fromEmail: "provider@example.com",
+      configuration: {},
+    },
+  });
+  losingProvider = losing.item.id;
   return t;
 }
 
 let stoppingProvider = "";
+let losingProvider = "";
 
 const keyed = {
   to: [A],
@@ -331,6 +361,29 @@ describe.each(getConfiguredTestDialects())(
         failure: { retryable: true },
       });
       expect(calls).toHaveLength(1);
+    }, 120_000);
+
+    it("holds the claim of a call whose answer was lost at once, as unknown, to the lease limit", async () => {
+      const t = await boot(dialect);
+      const send = () =>
+        t.nextly.email.send({ ...keyed, providerId: losingProvider });
+
+      const first = await send();
+      expect(first).toMatchObject({ failure: { unknown: true } });
+      // At once, and past the takeover period, before the lease limit: held,
+      // so nothing is sent again.
+      await expect(send()).resolves.toMatchObject({
+        success: false,
+        failure: { retryable: true },
+      });
+      await wait(800);
+      await send();
+      expect(calls).toHaveLength(1);
+
+      // Past the lease limit the claim is settled, and a retry may send.
+      await wait(1_000);
+      await send();
+      expect(calls).toHaveLength(2);
     }, 120_000);
 
     it("lets a later send take over a call that never answers, after the lease limit, with the same provider key", async () => {
