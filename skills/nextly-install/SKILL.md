@@ -23,10 +23,9 @@ Checked against `nextly` 0.0.2-alpha.67 with Next.js 16.4. Run
 
 ## Before you start
 
-- Next.js 14, 15 or 16 with the App Router (`app/` or `src/app/`). On
-  Next.js 14 the generator leaves the Next config alone and prints the
-  `experimental` block to add instead (`serverComponentsExternalPackages` and
-  `instrumentationHook`).
+- Next.js 16.4.1 or later, or 15.5.28 or later on the 15 line, with the App
+  Router (`app/` or `src/app/`). Earlier versions carry the October 2026
+  security advisories these releases fix.
 - Node.js `^22.12.0 || >=24.0.0`. Node 20 and Node 23 are not supported.
 - A clean git working tree, so every change below is visible in one diff.
 
@@ -82,7 +81,7 @@ Without a `src/` folder the same files go under `app/`, and `instrumentation.ts`
 sits at the project root.
 
 If it reports that it left the Next config alone (a config it cannot change
-safely, or Next.js 14), add what it prints. The list it needs holds `nextly`,
+safely), add what it prints. The list it needs holds `nextly`,
 `@nextlyhq/adapter-drizzle`, `drizzle-orm`, `drizzle-kit`, `bcryptjs`,
 `sharp`, `esbuild`, and your adapter and driver: `@nextlyhq/adapter-sqlite`
 and `better-sqlite3`, `@nextlyhq/adapter-postgres` and `pg`, or
