@@ -1,4 +1,4 @@
-import { defineConfig } from "tsup";
+import { defineConfig } from "tsdown";
 
 import { clientBuildEntries } from "./scripts/published-entries.js";
 
@@ -6,44 +6,45 @@ import { clientBuildEntries } from "./scripts/published-entries.js";
 // state and portals in module-level stores, so a second copy inside this
 // bundle would not share that state with the host app's copy. lucide-react,
 // sonner and cmdk are declared dependencies the consumer resolves once.
-const external = [
-  "react",
-  "react-dom",
-  "lucide-react",
-  "sonner",
-  "cmdk",
-  /^@radix-ui\//,
-];
+const NEVER_BUNDLE = ["react", "react-dom", "lucide-react", "sonner", "cmdk"];
 
 export default defineConfig({
   // The component surface. Bundling collapses per-file `"use client"`
-  // directives — they are a per-module property that esbuild drops from
+  // directives — they are a per-module property a bundler drops from
   // non-entry modules — so the directive is applied to the bundle here. That is
   // accurate rather than a blunt instrument: all but a couple of these modules
   // use hooks, context, `forwardRef` or Radix, none of which a Server Component
-  // can render. Build-time-only exports are built by tsup.preset.config.ts so
-  // they stay importable from server code.
+  // can render. Build-time-only exports are built by tsdown.server-safe.config.ts
+  // so they stay importable from server code.
   // Read from the same map the server-safe build and the surface snapshot use, so retargeting
   // the barrel moves all three together rather than leaving the snapshot describing a file the
   // build no longer produces.
   entry: clientBuildEntries(),
   format: ["esm", "cjs"],
-  dts: true,
+  // Declarations without a type check: `check-types` is the type check.
+  dts: { sourcemap: false, compilerOptions: { noCheck: true } },
   // Cleaning is done once by the build script, not per-config: the two configs
   // also run as concurrent watchers in dev, where a clean here would wipe the
   // server-safe entries and leave them missing until their sources changed.
   clean: false,
   sourcemap: true,
-  // Rollup runs the treeshaking pass and drops directives from the bundle,
-  // including one declared in the entry source, so treeshaking here is mutually
-  // exclusive with shipping `"use client"`. Correctness wins: the directive is
-  // required for any Server Component import to work, while the bytes it costs
-  // are recovered by consumers, whose own bundlers treeshake this package now
-  // that `sideEffects` is declared.
+  // Off, as before. The banner below is added after treeshaking, so the
+  // directive does not depend on this; consumers' bundlers treeshake this
+  // package anyway, since `sideEffects` is declared.
   treeshake: false,
-  external,
-  outExtension({ format }) {
-    return { js: format === "cjs" ? ".cjs" : ".mjs" };
+  deps: {
+    neverBundle: id =>
+      NEVER_BUNDLE.some(name => id === name || id.startsWith(`${name}/`)) ||
+      id.startsWith("@radix-ui/"),
   },
+  // Keep the file names the exports map already publishes.
+  outExtensions({ format }) {
+    return format === "cjs"
+      ? { js: ".cjs", dts: ".d.cts" }
+      : { js: ".mjs", dts: ".d.ts" };
+  },
+  // CommonJS stays published beside ESM; tsdown's hint to drop it is noise here.
+  checks: { legacyCjs: false },
+  cjsDefault: false,
   banner: { js: '"use client";' },
 });

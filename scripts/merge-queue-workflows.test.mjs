@@ -1692,7 +1692,7 @@ function ownersOf(rules, path) {
 }
 
 /** Manifests, task graphs, and the test, compiler, lint and build configuration the lanes run with. */
-const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|oxlint|tsup|tsdown|rollup)[^/]*\.config\.[^/]+)$/;
+const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|oxlint|tsdown|rollup)[^/]*\.config\.[^/]+)$/;
 
 /** A workspace package's manifest, whose scripts Turbo runs. */
 const WORKSPACE_MANIFEST = /^(?:packages|apps)\/[^/]+\/package\.json$|^e2e\/package\.json$/;

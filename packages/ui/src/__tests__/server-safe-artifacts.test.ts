@@ -294,7 +294,7 @@ describe("comparing against the allow-list", () => {
   });
 
   it("follows a split build's chunks, where the entry names nothing", () => {
-    // With code splitting on — tsup's default for ESM — an entry can be a re-export and nothing
+    // With code splitting on — the bundler's default for ESM — an entry can be a re-export and nothing
     // else, with the real dependency in the chunk beside it. Scanning only the named entry exempts
     // exactly the file holding what this looks for, and the evaluation misses it too, because
     // importing React under Node succeeds.

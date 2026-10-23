@@ -56,7 +56,7 @@ describe("which side of the React boundary an entry point sits on", () => {
   });
 });
 
-describe("which tsup config builds what", () => {
+describe("which tsdown config builds what", () => {
   it("builds every client entry, not only the first", () => {
     // Selecting one client entry left a second emitted by NEITHER config — the server-safe build
     // excludes all client entries — while the directive guard still required its banner, so the

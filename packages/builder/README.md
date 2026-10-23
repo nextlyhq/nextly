@@ -313,7 +313,7 @@ pnpm run test          # vitest, including the layering guard
 pnpm run check-types   # tsc --noEmit; unlike some packages here, this DOES
                        # cover the test files (tsconfig has no test exclude)
 pnpm -w lint           # oxlint over the whole repository; a warning fails
-pnpm run build         # tsup; this package ONLY, so its dependencies must
+pnpm run build         # tsdown; this package ONLY, so its dependencies must
                        # already be built — see below
 ```
 

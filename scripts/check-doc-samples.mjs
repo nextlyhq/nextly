@@ -1681,7 +1681,7 @@ function buildConfigEntries(packageDir) {
     return [];
   }
   const queue = names
-    .filter(name => /^(tsdown|tsup)(\..+)?\.config\.[cm]?[jt]s$/.test(name))
+    .filter(name => /^tsdown(\..+)?\.config\.[cm]?[jt]s$/.test(name))
     .map(name => join(packageDir, name));
   const seen = new Set();
   const found = new Set();
