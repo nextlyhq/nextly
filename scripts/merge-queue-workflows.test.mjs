@@ -172,6 +172,9 @@ describe("the Windows and macOS legs", () => {
       "packages/ui/vitest.config.ts",
       "vitest.config.ts",
       "eslint.config.mjs",
+      "apps/playground/vitest.config.ts",
+      "apps/playground/next.config.ts",
+      "packages/telemetry/src/environment.ts",
     ];
     for (const file of sensitive) expect(running([file]), file).toEqual([file]);
     const neutral = [

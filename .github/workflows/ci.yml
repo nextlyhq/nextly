@@ -217,11 +217,18 @@ jobs:
       # platforms behave differently: the scaffolder and its templates, the
       # CLI and its entry points, the scripts and hooks (the root's and each
       # package's and app's, where the platform checks outside the CLI live),
-      # the build, test and lint configs, every manifest, line endings
-      # (`.gitattributes`) and this repository's workflows. Every other run,
-      # `main` and the merge queue included, runs them all, so nothing reaches
-      # `main` untested on them. Every path is inert here except those, which
-      # is what reading `ALWAYS_RUN_PATHS` against an inert-everything pattern
+      # the source files that branch on the operating system (telemetry's
+      # `environment.ts`; the CLI's are under `src/cli/`), the build, test and
+      # lint configs of the root, each package and each app, every manifest,
+      # line endings (`.gitattributes`) and this repository's workflows.
+      #
+      # The legs stay advisory, as before: `CI gate` does not need them. The
+      # merge queue and `main` run them on every commit, so a Windows-only
+      # regression in a path not listed here is first seen in the queue's or
+      # `main`'s run and is fixed forward.
+      #
+      # Every path is inert here except those, which is what reading
+      # `ALWAYS_RUN_PATHS` against an inert-everything pattern
       # answers through the same script as the scope above. It runs on every
       # event, the queue's included, so no step a required check stands on is
       # skipped there; the `all-os` output reads its answer for pull requests
@@ -231,7 +238,7 @@ jobs:
         env:
           SCOPE_TITLE: Operating-system scope
           INERT_PATHS: "."
-          ALWAYS_RUN_PATHS: '^(packages/create-nextly-app/|templates/|packages/nextly/src/cli/|packages/[^/]+/bin/|scripts/|(packages|apps)/[^/]+/scripts/|\.husky/|\.github/|(.*/)?package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|turbo\.jsonc$|\.npmrc$|\.nvmrc$|\.gitattributes$|(packages/[^/]+/)?[^/]+\.config\.[cm]?[jt]s$)'
+          ALWAYS_RUN_PATHS: '^(packages/create-nextly-app/|templates/|packages/nextly/src/cli/|packages/[^/]+/bin/|scripts/|(packages|apps)/[^/]+/scripts/|\.husky/|\.github/|(.*/)?package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|turbo\.jsonc$|\.npmrc$|\.nvmrc$|\.gitattributes$|packages/telemetry/src/environment\.ts$|((packages|apps)/[^/]+/)?[^/]+\.config\.[cm]?[jt]s$)'
         run: node scripts/change-scope.mjs
 
   comments:
