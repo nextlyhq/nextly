@@ -60,6 +60,15 @@ describe("a data function's answer as its card's slot carries it", () => {
     ).toEqual({ op: "list", items: [{ id: "a" }] });
   });
 
+  it("keeps core's op when the authored data carries one of its own", () => {
+    // A display's schema checks the fields it reads and lets others through,
+    // so an `op` in the data reaches the result. Core's must win: a metric's
+    // answer read as a list has no items, and the card would draw it unreadable.
+    expect(
+      cardAnswerResult("metric", { total: 3, op: "list" }, "acme/orders")
+    ).toEqual({ op: "count", total: 3 });
+  });
+
   it("is core's data result for a widget's own component, carrying the value as it is", () => {
     const value = { anything: ["goes", 1, null] };
     expect(

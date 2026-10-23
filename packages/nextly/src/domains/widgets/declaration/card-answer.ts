@@ -92,8 +92,11 @@ export function cardAnswerResult(
     // Known to travel as itself by the rule above.
     return { op: "data", data: value as TransportableValue };
   }
+  // The discriminator is core's, so it is written after the authored value: a
+  // display's schema checks the fields it reads and lets others through, and
+  // an authored `op` would otherwise turn a metric's answer into a list's.
   return {
-    op: ARCHETYPE_OPS[display][0],
     ...(value as object),
+    op: ARCHETYPE_OPS[display][0],
   } as WidgetResult;
 }

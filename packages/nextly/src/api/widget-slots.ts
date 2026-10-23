@@ -357,6 +357,9 @@ async function answerOne(ready: ReadyQuery, run: SlotRun): Promise<void> {
         executeWidgetQuery(ready.query, run.caller, {
           signal,
           scope: run.scope.forSource(source),
+          // The batch's one instant, this query's own copy, so every card
+          // asking for a window measures it from the same moment.
+          now: new Date(run.now),
         }),
       () => slotTimedOut({ source }),
       run.signal
@@ -429,6 +432,8 @@ async function answerMany(
         resolveMany(queries, run.caller, {
           signal,
           scope: run.scope.forSource(source),
+          // The batch's one instant, as each query on its own gets it.
+          now: new Date(run.now),
         }),
       () => slotTimedOut({ source }),
       run.signal

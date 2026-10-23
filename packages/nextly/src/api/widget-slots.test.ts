@@ -5,12 +5,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createBatchScope } from "../domains/widgets/batch-scope";
+import {
+  resolveExecutableSource,
+  type ExecutableSource,
+} from "../domains/widgets/executable-source";
+import { executeWidgetQuery } from "../domains/widgets/execute";
+import type { WidgetQuery } from "../domains/widgets/query";
+import type { ResolverOptions } from "../domains/widgets/resolved-sources";
 import type { WidgetResult } from "../domains/widgets/result";
+import type { WidgetSource } from "../domains/widgets/sources";
 
 import {
   answerReadyQueries,
   SLOT_TIMEOUT_MS,
   type ReadyCardData,
+  type ReadyQuery,
 } from "./widget-slots";
 
 const caller = { user: { id: "u1" } } as never;
@@ -28,6 +37,14 @@ function card(
 // reaches the query executor, so it is stood in for, and the database stays out of these tests.
 vi.mock("../domains/widgets/execute", () => ({
   executeWidgetQuery: vi.fn(),
+}));
+// What answers a source when the batch runs, stood in for the same way: the
+// runner looks it up live, and these tests say what it finds.
+vi.mock("../domains/widgets/executable-source", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../domains/widgets/executable-source")
+  >()),
+  resolveExecutableSource: vi.fn(),
 }));
 
 afterEach(() => {
@@ -187,5 +204,74 @@ describe("a declared card's own data in the batch", () => {
     const slots = await answering;
     expect(slots.size).toBe(0);
     expect(settled).not.toHaveBeenCalled();
+  });
+});
+
+describe("a source's queries in the batch", () => {
+  const source = { id: "plugin:acme/orders" } as WidgetSource;
+  const query = { source: source.id, op: "count" } as WidgetQuery;
+  const ready = (index: number, executable: ExecutableSource): ReadyQuery => ({
+    index,
+    query,
+    executable,
+  });
+
+  /** Fakes only the clock, starting the batch at a minute to midnight. */
+  function batchStartingAtMidnight(): number {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.UTC(2026, 9, 22, 23, 59, 59);
+    vi.setSystemTime(start);
+    return start;
+  }
+
+  it("hands a query answered on its own the batch's one instant, its own copy", async () => {
+    const start = batchStartingAtMidnight();
+    const seen: Date[] = [];
+    vi.mocked(executeWidgetQuery).mockImplementation(
+      async (_query, _caller, opts?: ResolverOptions) => {
+        seen.push(opts?.now as Date);
+        vi.setSystemTime(start + 60_000);
+        return count(1);
+      }
+    );
+    const collection: ExecutableSource = { kind: "collection", source };
+    await answerReadyQueries(
+      [ready(0, collection), ready(1, collection)],
+      caller,
+      createBatchScope()
+    );
+    // 🔴 Each query measures its window from the batch's instant, not from
+    // whenever it happened to run, and from a Date no other query shares.
+    expect(seen.map(now => now?.getTime())).toEqual([start, start]);
+    expect(seen[0]).not.toBe(seen[1]);
+  });
+
+  it("hands a many-query resolver the batch's one instant", async () => {
+    const start = batchStartingAtMidnight();
+    let seen: Date | undefined;
+    const resolveMany = vi.fn(
+      async (
+        queries: readonly WidgetQuery[],
+        _caller: unknown,
+        opts?: ResolverOptions
+      ) => {
+        seen = opts?.now;
+        return queries.map(() => count(1));
+      }
+    );
+    const plugin: ExecutableSource = {
+      kind: "plugin",
+      source,
+      resolve: vi.fn(),
+      resolveMany,
+    };
+    vi.mocked(resolveExecutableSource).mockReturnValue(plugin);
+    await answerReadyQueries(
+      [ready(0, plugin), ready(1, plugin)],
+      caller,
+      createBatchScope()
+    );
+    expect(resolveMany).toHaveBeenCalledTimes(1);
+    expect(seen?.getTime()).toBe(start);
   });
 });
