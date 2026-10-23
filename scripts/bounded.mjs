@@ -492,27 +492,6 @@ export function tryAcquire(dir, count, record, now = Date.now()) {
   return { holders };
 }
 
-/**
- * The runs holding a slot in `dir` right now, read without reclaiming any, so
- * another tool can ask what heavy job is running where. A record still being
- * written is returned as one with no `cwd`: a run is starting, and where is
- * not known yet.
- */
-export function heldRecords(dir = slotDir()) {
-  let names;
-  try {
-    names = readdirSync(dir);
-  } catch (error) {
-    if (error.code === "ENOENT") return [];
-    throw error;
-  }
-  return names
-    .filter(name => /^slot-\d+\.json$/.test(name))
-    .map(name => readRecord(join(dir, name)))
-    .filter(seen => !seen.missing && (seen.record === null || holdsSlot(seen.record)))
-    .map(seen => seen.record ?? { pid: null, cwd: null });
-}
-
 /** Gives a slot back, if it is still this process's. */
 export function release(path, pid = process.pid) {
   const seen = readRecord(path);
