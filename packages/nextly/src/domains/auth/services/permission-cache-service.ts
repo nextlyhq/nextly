@@ -1,5 +1,5 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq, gt, lt, sql } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 
 // Phase 4 note: relative path; vitest path-alias resolution is order-
 // dependent for this file (see services/lib/permissions.ts header).
@@ -190,7 +190,6 @@ export class PermissionCacheService extends BaseService {
             // bypassed that conversion and SQLite drivers refused to bind
             // a Date object — `TypeError: SQLite3 can only bind numbers,
             // strings, bigints, buffers, and null` on every authed request.
-            // Mirrors the same-file `cleanupExpired` pattern at line 481.
             gt(userPermissionCache.expiresAt, now)
           )
         )
@@ -474,45 +473,6 @@ export class PermissionCacheService extends BaseService {
       }
 
       return invalidatedCount;
-    }
-  }
-
-  /**
-   * Remove expired cache entries (background maintenance).
-   *
-   * Should run periodically via cron job (recommended: daily).
-   *
-   * Performance: <100ms for 10k entries, uses indexed scan on expiresAt
-   *
-   * @returns Promise resolving to number of entries deleted
-   */
-  async cleanupExpired(): Promise<number> {
-    try {
-      const { userPermissionCache } = this.tables;
-      const now = new Date();
-
-      const result = await this.db
-        .delete(userPermissionCache)
-        .where(lt(userPermissionCache.expiresAt, now));
-
-      const deletedCount = affectedRowCount(result, this.dialect);
-
-      if (process.env.DEBUG_CACHE === "1" || deletedCount > 0) {
-        this.logger.info("[cache][info] cleanupExpired", {
-          deletedCount,
-          timestamp: now.toISOString(),
-        });
-      }
-
-      return deletedCount;
-    } catch (error) {
-      getAuthLogger()?.log?.("error", {
-        category: "auth",
-        op: "cache",
-        message: "cleanupExpired failed",
-        error: String(error),
-      });
-      return 0;
     }
   }
 }

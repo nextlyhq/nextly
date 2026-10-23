@@ -126,6 +126,80 @@ function shared(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// A widget answer's rows
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ACTIONS: ReadonlySet<string> = new Set(["create", "update", "delete"]);
+const ACTOR_TYPES: ReadonlySet<string> = new Set(["user", "apiKey", "system"]);
+const SUBJECT_KINDS: ReadonlySet<string> = new Set([
+  "collection",
+  "single",
+  "settings",
+]);
+
+/** `value` when it is a string, or `null`, so a driver's number or an absent key cannot pass. */
+function textOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+/** `value` when it is one of `allowed`, so an unknown spelling is read as absent. */
+function oneOf<T extends string>(
+  value: unknown,
+  allowed: ReadonlySet<string>
+): T | undefined {
+  return typeof value === "string" && allowed.has(value)
+    ? (value as T)
+    : undefined;
+}
+
+/**
+ * One row of the Recent activity card's answer, from `system:activity`, as the
+ * card draws it, or `undefined` for a row this build cannot read.
+ *
+ * Read at the boundary, field by field, because a widget answer is JSON and its
+ * type says nothing at runtime. Then drawn through `mapEntry`, the mapping the
+ * activity endpoint's answer goes through, so the card and this hook cannot
+ * come to head one row two ways.
+ */
+export function activityFromRow(
+  row: Record<string, unknown>
+): Activity | undefined {
+  const id = textOrNull(row.id);
+  const userId = textOrNull(row.userId);
+  const collection = textOrNull(row.collection);
+  const createdAt = textOrNull(row.createdAt);
+  const action = oneOf<ActivityLogEntry["action"]>(row.action, ACTIONS);
+  if (!id || !userId || !collection || !createdAt || !action) return undefined;
+  const actorType = oneOf<NonNullable<ActivityLogEntry["actorType"]>>(
+    row.actorType,
+    ACTOR_TYPES
+  );
+  const subjectKind = oneOf<NonNullable<ActivityLogEntry["subjectKind"]>>(
+    row.subjectKind,
+    SUBJECT_KINDS
+  );
+  return mapEntry({
+    id,
+    userId,
+    action,
+    collection,
+    createdAt,
+    ...(actorType ? { actorType } : {}),
+    userName: textOrNull(row.userName),
+    userEmail: textOrNull(row.userEmail),
+    entryId: textOrNull(row.entryId),
+    entryTitle: textOrNull(row.entryTitle),
+    subjectKind: subjectKind ?? null,
+    metadata: null,
+    identityErasedAt: textOrNull(row.identityErasedAt),
+    ...(typeof row.count === "number" ? { count: row.count } : {}),
+    ...(typeof row.countAtLeast === "boolean"
+      ? { countAtLeast: row.countAtLeast }
+      : {}),
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Hook
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -133,6 +207,10 @@ function shared(
  * useRecentActivity Hook
  *
  * Fetches and caches recent activity feed using TanStack Query.
+ *
+ * @deprecated The dashboard's Recent activity card is answered by the
+ * `system:activity` widget source through the dashboard's batch; this hook
+ * reads the older `GET /api/dashboard/activity`, kept for compatibility.
  *
  * **Query Configuration**:
  * - `queryKey`: `["dashboard", "activity", limit]`

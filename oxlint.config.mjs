@@ -68,6 +68,42 @@ const REQUEST_PATH_RESTRICTED = [
   },
 ];
 
+/**
+ * The React Compiler rules of eslint-plugin-react-hooks 7's recommended
+ * preset that oxlint implements, under its `react` plugin. The preset's
+ * `config` and `gating` rules check the compiler's own configuration and have
+ * no port; `rules-of-hooks` and `exhaustive-deps` are on for every React
+ * package already.
+ */
+const REACT_COMPILER_RULES = [
+  "error-boundaries",
+  "globals",
+  "immutability",
+  "incompatible-library",
+  "preserve-manual-memoization",
+  "purity",
+  "refs",
+  "set-state-in-effect",
+  "set-state-in-render",
+  "static-components",
+  "unsupported-syntax",
+  "use-memo",
+];
+
+/**
+ * The accessibility rules of Next.js's core-web-vitals preset, which is what
+ * the playground was linted with: `alt-text` for `<img>` and next/image's
+ * `Image`, and the ARIA attribute and role checks.
+ */
+const NEXT_A11Y_RULES = {
+  "jsx-a11y/alt-text": ["error", { elements: ["img"], img: ["Image"] }],
+  "jsx-a11y/aria-props": "error",
+  "jsx-a11y/aria-proptypes": "error",
+  "jsx-a11y/aria-unsupported-elements": "error",
+  "jsx-a11y/role-has-required-aria-props": "error",
+  "jsx-a11y/role-supports-aria-props": "error",
+};
+
 /** Every rule oxlint implements from Next.js's own lint preset. */
 const NEXT_RULES = [
   "google-font-display",
@@ -445,14 +481,21 @@ export default defineConfig({
     },
     {
       // The playground is a Next.js app, linted with every rule of Next's
-      // preset at error, as its lint ran with no warning allowed. It reads
-      // runtime harness flags no turbo task builds against, and Next's async
-      // page components need no `await`.
+      // preset at error, as its lint ran with no warning allowed: Next's own
+      // rules, the React Compiler rules and the accessibility rules its
+      // core-web-vitals preset turns on. It reads runtime harness flags no
+      // turbo task builds against, and Next's async page components need no
+      // `await`.
       files: ["apps/playground/**/*.{ts,tsx,js,jsx}"],
+      plugins: ["jsx-a11y"],
       rules: {
         ...Object.fromEntries(
           NEXT_RULES.map(rule => [`nextjs/${rule}`, "error"])
         ),
+        ...Object.fromEntries(
+          REACT_COMPILER_RULES.map(rule => [`react/${rule}`, "error"])
+        ),
+        ...NEXT_A11Y_RULES,
         "turbo/no-undeclared-env-vars": "off",
         "typescript/require-await": "off",
         "import-order/order": "off",

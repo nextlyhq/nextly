@@ -192,6 +192,22 @@ describe("core widget definitions", () => {
   });
 });
 
+describe("the recent activity card", () => {
+  it("is asked like core's own lists, so it can say more exist at every size", () => {
+    // Its component draws the rows its size allows and says more exist from
+    // the one row more; asked exactly its "Number of items", that row never
+    // comes at medium or large and the card can never say it.
+    const card = CORE_WIDGETS.find(
+      widget => widget.id === "core/recent-activity"
+    );
+    expect(card).toMatchObject({
+      archetype: "custom",
+      sizedQuery: true,
+      query: { op: "list" },
+    });
+  });
+});
+
 describe("the team card's description", () => {
   it("names no figure the card may leave out", () => {
     // A small card draws the people alone, and a reader may be allowed to see only one of the

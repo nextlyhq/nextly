@@ -125,9 +125,14 @@ function questionsFor(card: BatchCard): WidgetQueryRequest[] {
     }));
   }
   if (!widget.query) return [];
-  // Sized only for a card the host draws, whose body slices to its tier. A custom card's own
-  // component draws the raw answer with no tier, so it is asked exactly as declared.
-  const tier = widget.archetype === "custom" ? undefined : card.tier;
+  // Sized for a card the host draws, whose body slices to its tier, and for a custom card
+  // that asked to be (`sizedQuery`), whose component draws by the same rule. Any other
+  // custom card's component draws the raw answer with no tier, so it is asked exactly as
+  // declared: sized, it would draw the extra row as an ordinary one.
+  const tier =
+    widget.archetype === "custom" && widget.sizedQuery !== true
+      ? undefined
+      : card.tier;
   // Keyed by the declared question and sent as the settings ask it; see `declaredQuery`.
   const declared = card.declaredQuery ?? widget.query;
   return [

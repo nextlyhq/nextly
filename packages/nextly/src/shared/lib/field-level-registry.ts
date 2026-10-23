@@ -88,7 +88,8 @@ export interface CallerGrants {
  */
 function grantsResolver(
   userId: string | undefined,
-  scope?: AuthenticatedScope
+  scope?: AuthenticatedScope,
+  executor?: unknown
 ): () => Promise<CallerGrants> {
   let pending: Promise<CallerGrants> | undefined;
   return () => {
@@ -120,8 +121,8 @@ function grantsResolver(
       return pending;
     }
     pending = Promise.all([
-      listEffectiveGrants(userId),
-      listRoleSlugsForUser(userId),
+      listEffectiveGrants(userId, executor),
+      listRoleSlugsForUser(userId, executor),
     ])
       // A lookup that fails rejects, and every rule awaiting it is denied by
       // its own guard (`runFieldRule`). Not an empty grant set: that denies
@@ -444,7 +445,7 @@ function nestedRows(value: unknown): Record<string, unknown>[] {
  * container back in the shape it arrived in, so a string column stays a string.
  * Returns null when there is nothing to descend into.
  */
-function openNestedContainer(
+export function openNestedContainer(
   value: unknown
 ): { rows: Record<string, unknown>[]; serialize: () => unknown } | null {
   if (typeof value !== "string") {
@@ -486,6 +487,30 @@ export function hasFieldAccessRule(
 ): boolean {
   const fns = getFieldFunctions(kind, slug);
   return fns ? nestedHasAccessCallback(fns, operation) : false;
+}
+
+/**
+ * Whether any field group declares an access rule for one operation, at any
+ * depth.
+ *
+ * The question a read asks before paying to resolve the field groups its
+ * fields reach: their rules live in their own registrations, so an
+ * application whose field groups declare none has nothing to judge inside
+ * them, and the schema lookups would be pure cost on every read.
+ */
+export function anyFieldGroupHasAccessRule(
+  operation: "create" | "update" | "read"
+): boolean {
+  const prefix = key("fieldGroup", "");
+  for (const [registered, fns] of store()) {
+    if (
+      registered.startsWith(prefix) &&
+      nestedHasAccessCallback(fns, operation)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function nestedHasAccessCallback(
@@ -960,11 +985,18 @@ export async function resolvedCallerGrants(
  */
 export function callerAccessGrants(
   user: Record<string, unknown> | undefined,
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  /**
+   * The transaction-bound executor, for a pass that runs while a write holds
+   * its connection: the lookups then read on it, rather than waiting on the
+   * pool for the connection the transaction itself is holding.
+   */
+  executor?: unknown
 ): () => Promise<CallerGrants> {
   return grantsResolver(
     typeof user?.id === "string" ? user.id : undefined,
-    authenticatedScope
+    authenticatedScope,
+    executor
   );
 }
 

@@ -13,8 +13,15 @@
 //
 // What each rule matches is lint-guards.test.mjs's question.
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -68,32 +75,51 @@ function lint(config, files) {
     root,
     `.oxlint-test-${process.pid}-${Math.random().toString(36).slice(2)}.config.mjs`
   );
-  const syntactic = {
-    ...config,
-    options: { ...config.options, typeAware: false },
-  };
-  writeFileSync(path, `export default ${JSON.stringify(syntactic)};\n`);
+  writeFileSync(
+    path,
+    `export default ${JSON.stringify(syntacticOnly(config))};\n`
+  );
   try {
-    let stdout;
-    try {
-      stdout = execFileSync(
-        node,
-        [oxlint, "-c", path, "-f", "json", ...files],
-        {
-          cwd: root,
-          encoding: "utf8",
-          maxBuffer: 64 * 1024 * 1024,
-        }
-      );
-    } catch (error) {
-      // Exit 1 means it found something, which is an answer, not a failure.
-      if (error.status !== 1 || !error.stdout) throw error;
-      stdout = error.stdout;
-    }
-    const report = JSON.parse(stdout);
+    const report = runOxlint(["-c", path, "-f", "json", ...files], root);
     return { diagnostics: report.diagnostics, files: report.number_of_files };
   } finally {
     rmSync(path, { force: true });
+  }
+}
+
+/** `config` with the type-aware rules off, as every run here lints. */
+function syntacticOnly(config) {
+  return { ...config, options: { ...config.options, typeAware: false } };
+}
+
+/** `config` with each plugin a relative path names given its absolute one here. */
+function withRootPlugins(config) {
+  const absolute = specifier =>
+    specifier.startsWith(".") ? join(root, specifier) : specifier;
+  return {
+    ...config,
+    jsPlugins: config.jsPlugins.map(plugin =>
+      typeof plugin === "string"
+        ? absolute(plugin)
+        : { ...plugin, specifier: absolute(plugin.specifier) }
+    ),
+  };
+}
+
+/** Runs oxlint from `cwd` and returns its JSON report. */
+function runOxlint(args, cwd) {
+  try {
+    return JSON.parse(
+      execFileSync(node, [oxlint, ...args], {
+        cwd,
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+      })
+    );
+  } catch (error) {
+    // Exit 1 means it found something, which is an answer, not a failure.
+    if (error.status !== 1 || !error.stdout) throw error;
+    return JSON.parse(error.stdout);
   }
 }
 
@@ -105,6 +131,44 @@ function withoutExemptions(rule) {
     pattern => !pattern.startsWith("packages/nextly/src/") || /\*/.test(pattern)
   );
   return config;
+}
+
+/**
+ * Lints each probe with the committed configuration, in a directory of its own
+ * laid out like the repository, so the `files` globs reach a probe exactly as
+ * they would the same path here. The directory is under the repository's
+ * `.turbo`, which git and every scan of the tree ignore, so no other suite
+ * sees a probe come and go; and the plugins a package name names resolve
+ * upwards from it as they do here. (Not under `node_modules`: oxlint lints a
+ * file there without its React rules.) A plugin named by a relative path is
+ * given its absolute one. The directory is the only thing removed.
+ */
+function lintProbes(probes) {
+  const parent = join(root, ".turbo");
+  mkdirSync(parent, { recursive: true });
+  const dir = mkdtempSync(join(parent, "lint-probes-"));
+  try {
+    for (const [path, source] of Object.entries(probes)) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), source, { flag: "wx" });
+    }
+    const config = join(dir, "oxlint.config.mjs");
+    writeFileSync(
+      config,
+      `export default ${JSON.stringify(withRootPlugins(syntacticOnly(committed)))};\n`,
+      { flag: "wx" }
+    );
+    const report = runOxlint(
+      ["-c", config, "-f", "json", ...Object.keys(probes)],
+      dir
+    );
+    expect(report.number_of_files, "every probe is a file lint reads").toBe(
+      Object.keys(probes).length
+    );
+    return report.diagnostics;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** Diagnostics from `rule`, counted per repository-relative file. */
@@ -258,4 +322,127 @@ describe("the API-key scope guard's allowlist", () => {
       );
     }
   });
+});
+
+// Each guard above is shown live at a path no allowlist names: a probe doing
+// what the guard forbids, written where the committed `files` reach, must be
+// reported there. The checks above remove exemptions from allowlisted files;
+// these hold the guard to new code, where it matters most. The static-only
+// imports rule has no such path: its `files` are exactly the two boot modules.
+describe("each guard, at a path no allowlist names", () => {
+  const src = "packages/nextly/src";
+  const probes = {
+    "nextly(no-bare-error)": [
+      `${src}/lint-probe-bare-error.ts`,
+      'export function probe(): never {\n  throw new Error("probe");\n}\n',
+    ],
+    "nextly(api-key-scope)": [
+      `${src}/lint-probe-api-key-scope.ts`,
+      'export const scope = { actorType: "apiKey", permissions: [] };\n',
+    ],
+    "eslint(no-console)": [
+      `${src}/lint-probe-console-call.ts`,
+      'export function probe(): void {\n  console.log("probe");\n}\n',
+    ],
+    "eslint(no-restricted-globals)": [
+      `${src}/lint-probe-console-value.ts`,
+      "export const sink = console;\n",
+    ],
+    "eslint(no-restricted-imports)": [
+      `${src}/api/lint-probe-migrate-import.ts`,
+      'export { runMigrate } from "../cli/commands/migrate";\n',
+    ],
+  };
+
+  it("reports each forbidden construct in the file it was written to", () => {
+    const diagnostics = lintProbes(Object.fromEntries(Object.values(probes)));
+    for (const [rule, [path]] of Object.entries(probes)) {
+      expect(
+        countsPerFile(diagnostics, rule)[path] ?? 0,
+        `${rule} at ${path}`
+      ).toBeGreaterThan(0);
+    }
+  }, 120_000);
+});
+
+// The playground's React Compiler and accessibility rules, each shown to report
+// on a construct it exists to catch. The rules come from the playground's own
+// override, so a rule turned on there without a probe here, or a probe whose
+// rule is off, fails the first test.
+describe("the playground's React Compiler and accessibility rules", () => {
+  const PROBES = {
+    "react/error-boundaries":
+      "function Child() {\n  return <div />;\n}\nexport function Probe() {\n  try {\n    return <Child />;\n  } catch {\n    return null;\n  }\n}\n",
+    "react/globals":
+      "let renders = 0;\nexport function Probe() {\n  renders = renders + 1;\n  return <div>{renders}</div>;\n}\n",
+    "react/immutability":
+      'import { useState } from "react";\nexport function Probe() {\n  const [state] = useState({ count: 0 });\n  state.count = 1;\n  return <div>{state.count}</div>;\n}\n',
+    "react/incompatible-library":
+      'import { useForm } from "react-hook-form";\nexport function Probe() {\n  const { watch } = useForm();\n  return <div>{String(watch("x"))}</div>;\n}\n',
+    "react/preserve-manual-memoization":
+      'import { useMemo } from "react";\nexport function useProbe() {\n  const { data } = useStats();\n  return useMemo(() => {\n    const map = new Map<string, number>();\n    if (!data?.items) return map;\n    for (const item of data.items) map.set(String(item), item);\n    return map;\n  }, [data?.items]);\n}\nfunction useStats(): { data?: { items?: number[] } } {\n  return {};\n}\n',
+    "react/purity":
+      "export function Probe() {\n  const now = Date.now();\n  return <div>{now}</div>;\n}\n",
+    "react/refs":
+      'import { useRef } from "react";\nexport function Probe() {\n  const ref = useRef(0);\n  return <div>{ref.current}</div>;\n}\n',
+    "react/set-state-in-effect":
+      'import { useEffect, useState } from "react";\nexport function Probe() {\n  const [value, setValue] = useState(0);\n  useEffect(() => {\n    setValue(1);\n  }, []);\n  return <div>{value}</div>;\n}\n',
+    "react/set-state-in-render":
+      'import { useState } from "react";\nexport function Probe() {\n  const [value, setValue] = useState(0);\n  setValue(1);\n  return <div>{value}</div>;\n}\n',
+    "react/static-components":
+      "export function Probe() {\n  const Inner = () => <span />;\n  return <Inner />;\n}\n",
+    "react/unsupported-syntax":
+      'export function Probe() {\n  const value = eval("1");\n  return <div>{value}</div>;\n}\n',
+    "react/use-memo":
+      'import { useMemo } from "react";\nexport function Probe({ n }: { n: Promise<number> }) {\n  const value = useMemo(async () => {\n    await n;\n  }, [n]);\n  return <div>{String(value)}</div>;\n}\n',
+    // Both elements: `Image` is reported only through the rule's options.
+    "jsx-a11y/alt-text":
+      'import Image from "next/image";\nexport function Probe() {\n  return (\n    <>\n      <img src="/x.png" />\n      <Image src="/x.png" width={1} height={1} />\n    </>\n  );\n}\n',
+    "jsx-a11y/aria-props":
+      'export function Probe() {\n  return <div aria-labeledby="x" />;\n}\n',
+    "jsx-a11y/aria-proptypes":
+      'export function Probe() {\n  return <div aria-hidden="maybe" />;\n}\n',
+    "jsx-a11y/aria-unsupported-elements":
+      'export function Probe() {\n  return <meta aria-hidden="true" />;\n}\n',
+    "jsx-a11y/role-has-required-aria-props":
+      'export function Probe() {\n  return <div role="checkbox" />;\n}\n',
+    "jsx-a11y/role-supports-aria-props":
+      'export function Probe() {\n  return <li aria-required="true" />;\n}\n',
+  };
+  // How many reports each probe must produce, where it is more than one.
+  const EXPECTED_REPORTS = { "jsx-a11y/alt-text": 2 };
+
+  // The override that turns the accessibility rules on is the playground's.
+  const playground = overrideFor("jsx-a11y/alt-text");
+
+  // The playground's own React and accessibility rules: every other React
+  // rule is turned on for all React packages, in an override of its own.
+  const rulesOn = Object.keys(playground.rules).filter(rule =>
+    /^(react|jsx-a11y)\//.test(rule)
+  );
+
+  it("has a probe for exactly the React and accessibility rules the playground turns on", () => {
+    expect([...rulesOn].sort()).toEqual(Object.keys(PROBES).sort());
+  });
+
+  it("reports each probe's construct, in its own file, through its own rule", () => {
+    const paths = Object.fromEntries(
+      Object.keys(PROBES).map(rule => [
+        rule,
+        `apps/playground/src/lint-probe-${rule.replace("/", "-")}.tsx`,
+      ])
+    );
+    const diagnostics = lintProbes(
+      Object.fromEntries(
+        Object.entries(PROBES).map(([rule, source]) => [paths[rule], source])
+      )
+    );
+    for (const [rule, path] of Object.entries(paths)) {
+      const [plugin, name] = rule.split("/");
+      expect(
+        countsPerFile(diagnostics, `${plugin}(${name})`)[path] ?? 0,
+        `${rule} at ${path}`
+      ).toBe(EXPECTED_REPORTS[rule] ?? 1);
+    }
+  }, 120_000);
 });

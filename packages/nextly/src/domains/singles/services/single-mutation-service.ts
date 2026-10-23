@@ -103,6 +103,10 @@ import {
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { EVERY_LOCALE } from "../../i18n/locale-selector";
 import {
+  type LocalizationSource,
+  localizationNow,
+} from "../../i18n/localization-source";
+import {
   isValidLocale,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
@@ -278,6 +282,11 @@ export class SingleMutationService extends BaseService {
    */
   private readonly versionCapture = new VersionCaptureService();
 
+  /** The site's languages as they are now: the source may be the language registry. */
+  private get localization(): SanitizedLocalizationConfig | undefined {
+    return localizationNow(this.localizationSource);
+  }
+
   /**
    * The Single as it stands live in this transaction, and the fields every
    * language shares in it; see `liveSharedSingle`. Read under the row lock
@@ -318,7 +327,7 @@ export class SingleMutationService extends BaseService {
     private readonly rbacAccessControlService?: RBACAccessControlService,
     // i18n: when set and the single is localized, writes route translatable field
     // values to the companion `single_<slug>_locales` row for the write's locale.
-    private readonly localization?: SanitizedLocalizationConfig
+    private readonly localizationSource?: LocalizationSource
   ) {
     super(adapter, logger);
     this.queryService = new SingleQueryService(
@@ -328,7 +337,7 @@ export class SingleMutationService extends BaseService {
       hookRegistry,
       fieldGroupDataService,
       rbacAccessControlService,
-      localization
+      localizationSource
     );
   }
 

@@ -19,12 +19,10 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import {
-  getConfigFromDI,
-  getSchemaRegistryFromDI,
-} from "../../../dispatcher/helpers/di";
+import { getSchemaRegistryFromDI } from "../../../dispatcher/helpers/di";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { consoleLogger } from "../../../shared/types";
+import { appLocalization } from "../../i18n/configured-locales";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import {
   buildCompanionTransitionStatements,
@@ -95,7 +93,7 @@ export async function reconcileSingleCompanion(
 
   // The seed (enable) and restore (disable) copy the default-locale value to/from the companion;
   // read the configured default locale (falls back to "en" when localization isn't configured).
-  const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
+  const defaultLocale = appLocalization()?.defaultLocale ?? "en";
 
   // A translated field made unique is refused before any DDL on a server that cannot key its index.
   refuseUnindexableTranslatedUnique(adapter, {
