@@ -496,16 +496,47 @@ describe.each(getConfiguredTestDialects())(
       expect(result[0]).toEqual({ status: "fulfilled", value: ["reader"] });
     });
 
+    it("keeps a super-admin's authority when reading the grants fails", async () => {
+      // Super-admin authority rests on the roles alone, and is decided before
+      // any grant is consulted, so a failed grants read must not refuse it.
+      const holder = await newHolder("partial-admin", superAdminId);
+      await invalidateAllPermissionCaches();
+      const { result, failed } = await failingFirstRead(
+        t,
+        "role_permissions",
+        () =>
+          runWithAccessMemo(() =>
+            Promise.all([
+              isSuperAdmin(holder),
+              hasPermission(holder, "read", "notes"),
+            ])
+          )
+      );
+      // POPULATION CONTROL: the grants read failed.
+      expect(failed).toBe(true);
+      expect(result).toEqual([true, true]);
+    });
+
     it("reads a caller's access again in a request that outlives what it kept", async () => {
-      // No role the caller holds expires, so only the kept access's own life
-      // bounds how long one request may go on answering from it.
+      // No role the caller holds expires, so only the kept access's own life,
+      // one minute, bounds how long one request may go on answering from it.
       const holder = await newHolder("long-request", readerId);
       await invalidateAllPermissionCaches();
       await runWithAccessMemo(async () => {
+        const start = Date.now();
         expect(await hasPermission(holder, "read", "notes")).toBe(true);
         vi.useFakeTimers({ toFake: ["Date"] });
-        vi.setSystemTime(Date.now() + 6 * 60_000);
         try {
+          // The control: inside the minute, the request answers from what it
+          // kept, so the re-read below is the minute ending and nothing else.
+          vi.setSystemTime(start + 55_000);
+          const within = await tablesRead(t, () =>
+            hasPermission(holder, "read", "notes")
+          );
+          expect(within.result).toBe(true);
+          expect(within.tables).not.toContain("user_roles");
+
+          vi.setSystemTime(start + 65_000);
           const later = await tablesRead(t, () =>
             hasPermission(holder, "read", "notes")
           );

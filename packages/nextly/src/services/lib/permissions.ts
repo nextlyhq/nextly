@@ -412,7 +412,7 @@ async function loadActor(userId: string): Promise<ResolvedActor> {
     roleIds,
     roleSlugs,
     grants,
-    superAdmin: roleSlugs.includes("super-admin"),
+    superAdmin: holdsSuperAdmin(roleSlugs),
     validUntil,
   };
 }
@@ -571,7 +571,8 @@ export async function resolveUserRoles(
  * check computes from the same rows, so a request that asks several
  * permissions walks the user's roles once.
  *
- * @throws when the grants cannot be read; each caller fails closed.
+ * @throws when the grants cannot be read and the user is not a super-admin;
+ * each caller fails closed.
  */
 async function heldThisRequest(
   userId: string,
@@ -579,9 +580,16 @@ async function heldThisRequest(
   resource: string
 ): Promise<boolean> {
   if (!userId || !action || !resource) return false;
-  // One resolution answers both halves, so a read that fails refuses the
-  // check rather than answering from whichever half could be read.
-  const actor = await actorThisRequest(userId);
+  let actor: ResolvedActor;
+  try {
+    actor = await actorThisRequest(userId);
+  } catch (error) {
+    // Super-admin authority rests on the roles alone and is decided before
+    // any grant is consulted, so a failed grants read does not refuse it.
+    // Anyone else is refused: their answer needs the grants.
+    if (holdsSuperAdmin(await roleSlugsOnTheirOwn(userId))) return true;
+    throw error;
+  }
   return (
     actor.superAdmin ||
     actor.grants.some(
@@ -1153,11 +1161,17 @@ export async function isSuperAdminOrRefuse(userId: string): Promise<boolean> {
 
 /**
  * The pooled decision, from the actor resolved once per request: the one read
- * `isSuperAdmin` and `isSuperAdminOrRefuse` both answer from. Throws on a
- * failed read; each caller decides what that means.
+ * `isSuperAdmin` and `isSuperAdminOrRefuse` both answer from. Throws when the
+ * roles cannot be read; each caller decides what that means.
  */
 async function superAdminForRequest(userId: string): Promise<boolean> {
-  return (await actorThisRequest(userId)).superAdmin;
+  try {
+    return (await actorThisRequest(userId)).superAdmin;
+  } catch {
+    // Decided from the roles alone, as it needs nothing else, so a failed
+    // grants read does not refuse a super-admin.
+    return holdsSuperAdmin(await roleSlugsOnTheirOwn(userId));
+  }
 }
 
 /**
@@ -1372,9 +1386,23 @@ export async function listRoleSlugsForUserStrict(
   } catch {
     // Read on their own when the actor cannot be read whole, so a failed
     // grants read leaves the roles a reader could read standing.
-    const { roleIds } = await new PermissionChecker().walkRoles(userId);
-    return roleSlugsOf(roleIds);
+    return roleSlugsOnTheirOwn(userId);
   }
+}
+
+/**
+ * A user's role slugs, inherited ones included, read without their grants:
+ * what still answers the questions that rest on roles alone when the actor
+ * cannot be read whole. Throws on a failed read.
+ */
+async function roleSlugsOnTheirOwn(userId: string): Promise<string[]> {
+  const { roleIds } = await new PermissionChecker().walkRoles(userId);
+  return roleSlugsOf(roleIds);
+}
+
+/** Whether these role slugs carry super-admin authority. */
+function holdsSuperAdmin(roleSlugs: readonly string[]): boolean {
+  return roleSlugs.includes("super-admin");
 }
 
 /** The lookup behind {@link listRoleSlugsForUserStrict}; throws on failure. */
