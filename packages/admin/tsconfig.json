@@ -28,6 +28,10 @@
       "nextly/translation-filter-states": [
         "../nextly/src/domains/i18n/translation-filter-states.ts"
       ],
+      // Same reason: the keys a linked filter keeps at its top level.
+      "nextly/reserved-filter-keys": [
+        "../nextly/src/domains/collections/query/reserved-filter-keys.ts"
+      ],
       "@admin/*": ["./src/*"]
     }
   },

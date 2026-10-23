@@ -101,7 +101,7 @@ body:
     attributes:
       label: Node.js version
       description: Output of `node -v`. Only LTS versions are supported.
-      placeholder: "20.11.1"
+      placeholder: "24.22.1"
     validations:
       required: true
 

@@ -142,6 +142,7 @@ function cleanEnv(extra = {}) {
     "CI",
     "NEXTLY_BOUNDED",
     "NEXTLY_BOUNDED_PS",
+    "NEXTLY_HEAVY_SLOTS",
     "NEXTLY_LOCAL_CONCURRENCY",
     "NEXTLY_LOCAL_MAX_WORKERS",
     "TURBO_CONCURRENCY",

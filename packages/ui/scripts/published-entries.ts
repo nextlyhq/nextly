@@ -252,7 +252,7 @@ export function derivePublishedEntries(
       value.replace(/^\.\//, "").replace(/^dist\//, "");
 
     // Every target must carry the extension its condition requires, and all four must be the SAME
-    // build entry under those extensions. tsup names its output after the entry, so that is the
+    // build entry under those extensions. tsdown names its output after the entry, so that is the
     // only shape it can produce — and requiring it is what makes the collision check below
     // complete. Derived from `import.default` alone, a map whose `require` targets borrowed
     // ANOTHER entry's basename passed every guard while `require("./a")` resolved to `./b`'s API
@@ -387,7 +387,7 @@ export function serverSafeArtifacts(entries = publishedEntries()) {
 }
 
 /**
- * The build entries for the server-safe subpaths, as tsup expects them.
+ * The build entries for the server-safe subpaths, as tsdown expects them.
  *
  * @returns {Record<string, string>}
  */
@@ -411,14 +411,14 @@ export function sourcesBySubpath(entries = publishedEntries()) {
 }
 
 /**
- * The build entries for the client subpaths, as tsup expects them.
+ * The build entries for the client subpaths, as tsdown expects them.
  *
  * EVERY client entry, not the first one found. Once a subpath can declare itself client code,
  * selecting one means a second is emitted by neither config — the server-safe build excludes all
  * client entries — while `clientArtifacts()` still requires its banner, so the build fails on a
  * file nothing was asked to produce.
  *
- * Keyed by artifact name rather than given as bare paths, because tsup names its output after the
+ * Keyed by artifact name rather than given as bare paths, because tsdown names its output after the
  * entry: an unnamed entry pointed at a differently named barrel emits files called after that
  * barrel, while the export map still points at `dist/index.*`.
  *

@@ -222,7 +222,7 @@ function writeReadme(entries, byRuleGlobal, totalErr, totalWarn) {
 
   out += "\n## Excluded from lint (by design)\n\n";
   out += "- Test files (`**/*.{test,spec}.{ts,tsx,js,jsx}`, `**/__tests__/**`, `**/__mocks__/**`) — quality enforced by vitest\n";
-  out += "- Config files (`tsup.config.*`, `next.config.*`, `vitest.config.*`, `eslint.config.*`, `postcss.config.*`, `tailwind.config.*`, `drizzle.config.*`, `rollup.*.config.*`) — hand-maintained\n";
+  out += "- Config files (`tsdown.config.*`, `next.config.*`, `vitest.config.*`, `eslint.config.*`, `postcss.config.*`, `tailwind.config.*`, `drizzle.config.*`, `rollup.*.config.*`) — hand-maintained\n";
   out += "- Build scripts + CLI binaries (`**/scripts/**`, `**/bin/**`, `**/run-*.{ts,js,mjs}`) — dev tooling\n";
   out += "- `packages/eslint-config/**` — shared config package's own source\n";
   out += "- `packages/create-nextly-app/templates/**` — end-user scaffolding\n";

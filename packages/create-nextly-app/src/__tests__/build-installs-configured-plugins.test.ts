@@ -35,7 +35,7 @@ const sqlite: DatabaseConfig = {
 /**
  * Each config a template can copy into a project as its `nextly.config.ts`:
  * the template's own, and one per approach in its `configs/`. The plugin
- * template is a library whose build is `tsup`, with no production boot.
+ * template is a library whose build is `tsdown`, with no production boot.
  */
 async function templateConfigs(): Promise<
   { template: string; file: string }[]
