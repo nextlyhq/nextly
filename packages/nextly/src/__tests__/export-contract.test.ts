@@ -302,7 +302,10 @@ interface Module {
 
 function readModule(file: string): Module {
   const text = readFileSync(file, "utf8");
-  return { file, text, ...parseSource(text, file) };
+  // Named rather than spread: the parse result declares these as accessors,
+  // which a spread does not carry.
+  const { program, comments } = parseSource(text, file);
+  return { file, text, program, comments };
 }
 
 function declaredAt(module: Module, statement: Statement): Declared {
