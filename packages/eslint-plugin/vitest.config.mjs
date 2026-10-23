@@ -6,6 +6,7 @@ import { defineConfig } from "vitest/config";
  * had found the repository root's.
  *
  * The budgets are the root config's, which these tests ran under before.
+ * JavaScript, like the rest of this package, which has no TypeScript to check.
  */
 export default defineConfig({
   test: {
