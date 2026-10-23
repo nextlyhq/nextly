@@ -9,7 +9,6 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
-
 import {
   createRole,
   deleteRole,
@@ -335,10 +334,15 @@ export function useUpdateRole(): UseMutationResult<
         queryClient.setQueryData(["roles", roleId], context.previousRole);
       }
     },
+    // What the signed-in user may do is asked again only once the change has
+    // landed: a failed edit changed nothing, and invalidating would leave the
+    // admin without an answer if that refresh then failed too.
+    onSuccess: () => {
+      invalidateCurrentUserAccess(queryClient);
+    },
     onSettled: (_, __, { roleId }) => {
       // Always refetch after mutation (success or error) to ensure cache is up-to-date
       void queryClient.invalidateQueries({ queryKey: ["roles"] });
-      invalidateCurrentUserAccess(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["roles", roleId] });
     },
   });
