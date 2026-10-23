@@ -242,6 +242,14 @@ describe("CREATE TABLE IF NOT EXISTS where a table of the name may stand, on pos
       ["INSERT INTO fx__notes (id) SELECT id FROM legacy_orders"],
     ],
     [
+      "a CREATE running a query, which may create any name",
+      ["CREATE TABLE fx__scratch AS SELECT make_shadow() AS id"],
+    ],
+    [
+      "a materialized view running a query, which may create any name",
+      ["CREATE MATERIALIZED VIEW fx__mv AS SELECT make_shadow() AS id"],
+    ],
+    [
       "a routine that may create it",
       ["DO $$ BEGIN CREATE TEMP TABLE legacy_orders (id int); END $$"],
     ],
@@ -315,6 +323,21 @@ describe("CREATE TABLE IF NOT EXISTS where a table of the name may stand, on pos
         )
       )
     ).toMatch(vacated);
+  });
+
+  it("fills the name after an unrelated CREATE that runs no query", () => {
+    expect(() =>
+      guard(
+        [
+          "CREATE TABLE app_other (id INT)",
+          "DROP TABLE legacy_orders",
+          "CREATE TABLE IF NOT EXISTS legacy_orders (id INT)",
+          "ALTER TABLE legacy_orders ADD COLUMN note INT",
+        ],
+        "app",
+        "postgresql"
+      )
+    ).not.toThrow();
   });
 
   it("is the control: a plain CREATE fills the name", () => {

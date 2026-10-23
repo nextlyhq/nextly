@@ -637,10 +637,23 @@ const POSTGRES_MAY_RUN_CODE = new Set([
 ]);
 
 /**
+ * Words that run a query or code wherever they stand in a PostgreSQL
+ * statement, such as `CREATE TABLE ... AS SELECT`: the query may call a
+ * function that runs DDL under any name.
+ */
+const POSTGRES_RUNS_A_QUERY = new Set([
+  "SELECT",
+  "VALUES",
+  "EXECUTE",
+  "CALL",
+  "PERFORM",
+]);
+
+/**
  * Whether a statement may put a relation under a name: under any name
- * (`MAY_PLACE_ANY_NAME`, or on PostgreSQL `POSTGRES_MAY_RUN_CODE`), under
- * the names it spells (`MAY_PLACE_A_NAME`, or an `ALTER ... RENAME`), or
- * under none.
+ * (`MAY_PLACE_ANY_NAME`, or on PostgreSQL one that may run code,
+ * `postgresMayRunCode`), under the names it spells (`MAY_PLACE_A_NAME`, or
+ * an `ALTER ... RENAME`), or under none.
  */
 function placesNames(
   tokens: readonly Token[],
@@ -649,13 +662,27 @@ function placesNames(
   const first = tokens.find(token => token.kind === "word");
   const opener = first?.kind === "word" ? first.upper : "";
   if (MAY_PLACE_ANY_NAME.has(opener)) return "any";
-  if (dialect === "postgresql" && POSTGRES_MAY_RUN_CODE.has(opener)) {
+  if (dialect === "postgresql" && postgresMayRunCode(opener, tokens)) {
     return "any";
   }
   if (MAY_PLACE_A_NAME.has(opener)) return "spelled";
   const renames =
     opener === "ALTER" && tokens.some(token => isWord(token, "RENAME"));
   return renames ? "spelled" : undefined;
+}
+
+/**
+ * Whether a PostgreSQL statement may run code: it opens with a data
+ * statement (`POSTGRES_MAY_RUN_CODE`), or runs a query anywhere in it
+ * (`POSTGRES_RUNS_A_QUERY`). A function called from a column's default,
+ * a check or a `USING` expression is not counted, as everywhere else in this
+ * guard.
+ */
+function postgresMayRunCode(opener: string, tokens: readonly Token[]): boolean {
+  if (POSTGRES_MAY_RUN_CODE.has(opener)) return true;
+  return tokens.some(
+    token => token.kind === "word" && POSTGRES_RUNS_A_QUERY.has(token.upper)
+  );
 }
 
 /**
