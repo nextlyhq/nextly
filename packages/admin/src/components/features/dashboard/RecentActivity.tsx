@@ -227,6 +227,7 @@ export const RecentActivityCard: React.FC<WidgetComponentProps> = ({
   slot,
   isFetching,
   query,
+  onRetry,
 }) => {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
@@ -243,7 +244,11 @@ export const RecentActivityCard: React.FC<WidgetComponentProps> = ({
     return slot.code === "unavailable" ? (
       <CardUnavailable />
     ) : (
-      <CardError message={slot.error} title="Recent activity" />
+      <CardError
+        message={slot.error}
+        title="Recent activity"
+        {...(onRetry ? { onRetry } : {})}
+      />
     );
   }
   if (slot.result.op !== "list") {

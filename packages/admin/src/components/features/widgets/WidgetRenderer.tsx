@@ -262,14 +262,17 @@ function componentPropsFor(
   definition: WidgetRendererProps["definition"],
   slot: WidgetRendererProps["slot"],
   placement: WidgetRendererProps["placement"],
-  isFetching: boolean
+  live: { isFetching: boolean; onRetry?: () => void }
 ): WidgetComponentProps {
   return {
     widgetId: definition.id,
     placementId: placement?.id ?? definition.id,
     settings: placement?.settings ?? {},
     slot,
-    isFetching,
+    isFetching: live.isFetching,
+    // The Retry a framed card's error offers: a self-drawn card draws its own error, so it is
+    // handed the same callback rather than left with nothing to offer.
+    ...(live.onRetry ? { onRetry: live.onRetry } : {}),
     // The query as asked, which `definition` already is: the grid draws each card
     // from the same declaration the batch sent.
     ...(definition.query ? { query: definition.query } : {}),
@@ -302,12 +305,10 @@ export function WidgetRenderer({
 
   // Built once, so the two `chrome` branches below cannot drift into handing a
   // component different props depending on whether its card is framed.
-  const componentProps = componentPropsFor(
-    definition,
-    slot,
-    placement,
-    isFetching
-  );
+  const componentProps = componentPropsFor(definition, slot, placement, {
+    isFetching,
+    onRetry,
+  });
 
   // The escape hatch. A plugin component draws its own body, so the card
   // asserts nothing about its loading or empty states -- the component knows

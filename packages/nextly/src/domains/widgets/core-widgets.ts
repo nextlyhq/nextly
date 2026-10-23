@@ -353,6 +353,9 @@ const CORE_WIDGET_LITERALS = [
     defaultOrder: 45,
     component: "core#RecentActivity",
     query: { source: ACTIVITY_SOURCE_ID, op: "list" },
+    // Asked like core's own lists: the rows its size draws and one more, so the
+    // card can say more exist at every size.
+    sizedQuery: true,
     settings: [RECENT_ACTIVITY_ITEMS],
   },
 ] as const satisfies readonly WidgetDefinition[];

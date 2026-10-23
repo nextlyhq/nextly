@@ -350,6 +350,35 @@ describe("WidgetRenderer — custom", () => {
     expect(screen.getByText("no query")).toBeInTheDocument();
   });
 
+  it("hands the plugin component the card's Retry, which a framed card's error would offer", () => {
+    // A self-drawn card draws its own error, so without the callback it has no
+    // Retry to offer and stays failed until something else refetches.
+    const onRetry = vi.fn();
+    registerComponent(
+      "@acme/admin#Panel",
+      ({ onRetry: retry }: { onRetry?: () => void }) =>
+        retry ? (
+          <button type="button" onClick={retry}>
+            again
+          </button>
+        ) : (
+          <div>no retry</div>
+        )
+    );
+    render(
+      <WidgetRenderer
+        definition={{
+          ...custom,
+          query: { source: "collection:posts", op: "count" },
+        }}
+        slot={{ ok: false, error: "down" }}
+        onRetry={onRetry}
+      />
+    );
+    screen.getByRole("button", { name: "again" }).click();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
   it("marks a QUERIED custom card busy during a background refetch", () => {
     // The card keeps the plugin's body through a window-focus refetch, exactly
     // as an archetype keeps its number, so the only thing telling a screen

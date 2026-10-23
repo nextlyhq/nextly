@@ -5,7 +5,7 @@
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetComponentProps } from "nextly/widget-result";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 import { CardTierContext } from "@admin/components/features/widgets/frame/tier";
@@ -77,6 +77,16 @@ describe("the Recent activity card", () => {
     expect(screen.getByTestId("widget-card-error")).toHaveTextContent(
       "The database did not answer."
     );
+  });
+
+  it("offers Retry on its error, asking the card's question again", () => {
+    const onRetry = vi.fn();
+    draw({
+      slot: { ok: false, error: "The database did not answer." },
+      onRetry,
+    });
+    screen.getByRole("button", { name: /retry/i }).click();
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
   it("uses the standard empty state when there is nothing to show", () => {
