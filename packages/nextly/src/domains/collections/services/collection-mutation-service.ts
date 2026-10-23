@@ -2114,6 +2114,8 @@ export class CollectionMutationService extends BaseService {
       user?: UserContext;
       overrideAccess?: boolean;
       authenticatedScope?: AuthenticatedScope;
+      /** The language the write is made in. */
+      locale?: string;
     };
     executor?: unknown;
   }): Promise<void> {
@@ -2126,18 +2128,26 @@ export class CollectionMutationService extends BaseService {
       args.executor
     );
     const access = { ...fieldGroupWriteAccessOf(args.params), grants };
-    await keepDeniedAtStoredOnUpdate({
-      data: args.data,
-      // The parent row alone carries no field-group instance, so what an
-      // update removes is read here or judged against nothing.
-      stored: await withStoredFieldGroups({
+    // The parent row alone carries no field-group instance, so what an update
+    // removes is read here or judged against nothing: in the write's own
+    // language, and in each other one, since a removal removes them all.
+    const storedFieldGroupsIn = (locale?: string) =>
+      withStoredFieldGroups({
         stored: args.stored,
         parentTable: args.tableName,
         fields: args.fields as unknown as FieldConfig[],
         source: this.fieldGroupDataService,
         access,
         executor: args.executor,
-      }),
+        locale,
+      });
+    await keepDeniedAtStoredOnUpdate({
+      data: args.data,
+      stored: await storedFieldGroupsIn(args.params.locale),
+      storedIn: {
+        locales: this.localization?.locales.map(l => l.code) ?? [],
+        read: storedFieldGroupsIn,
+      },
       fields: args.fields as unknown as FieldConfig[],
       source: this.fieldGroupDataService,
       access,
@@ -2454,6 +2464,22 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Whether a promotion of this collection's entries can ask a field rule, and
+   * so needs the caller's grants: the collection's own update rules, or any
+   * field group's create or update rules, since a promotion judges every
+   * instance its document holds by its field group's own rules. The one
+   * answer both a publish and a release's readiness give before resolving
+   * grants, so a release is judged by the rules its publish runs.
+   */
+  private promotionRulesCanAsk(collectionName: string): boolean {
+    return (
+      hasFieldAccessRule("collection", collectionName, "update") ||
+      anyFieldGroupHasAccessRule("update") ||
+      anyFieldGroupHasAccessRule("create")
+    );
+  }
+
+  /**
    * What the release's write of each of these entries would be refused with
    * by validation and field rules, keyed by entry id, judged now and without
    * writing: the release's own write — the status `action` names, every
@@ -2505,11 +2531,7 @@ export class CollectionMutationService extends BaseService {
     );
     // The author's grants, once for the batch, where a field rule could ask:
     // as the write resolves them, and only where it would.
-    const grants = hasFieldAccessRule(
-      "collection",
-      params.collectionName,
-      "update"
-    )
+    const grants = this.promotionRulesCanAsk(params.collectionName)
       ? await resolvedCallerGrants(params.user, undefined)
       : null;
     const reads = await this.goingLiveReadsOf(params.collectionName, [
@@ -7650,6 +7672,39 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The held field-group values in `draftDocument`, judged by their own rules
+   * before anything is recorded, in place, each denied one kept at what the
+   * draft replaces: no save judges a held instance, and a later publisher
+   * allowed to write a value would otherwise promote one its author was not.
+   */
+  private async judgeHeldFieldGroups(
+    tx: TransactionContext,
+    ctx: WorkingDraftWriteContext,
+    draftDocument: Record<string, unknown>,
+    replaces: Record<string, unknown>
+  ): Promise<void> {
+    const { params, splitComponentSchemas } = ctx;
+    await keepDeniedFieldGroupsInDraft({
+      draft: draftDocument,
+      replaces,
+      names: Object.keys(ctx.componentFieldData ?? {}),
+      fields: ctx.fields as unknown as FieldConfig[],
+      fieldGroupFields: {
+        get: slug => splitComponentSchemas?.get(slug)?.fields,
+      },
+      access: {
+        ...fieldGroupWriteAccessOf(params),
+        // Still inside the write's transaction.
+        grants: callerAccessGrants(
+          params.user,
+          params.authenticatedScope,
+          tx.getDrizzle()
+        ),
+      },
+    });
+  }
+
+  /**
    * Store the pending edit as this document's working draft, on the caller's
    * transaction.
    *
@@ -7697,29 +7752,7 @@ export class CollectionMutationService extends BaseService {
       ctx,
       existingDraft
     );
-    // The held field-group values, judged by their own rules before anything
-    // is recorded, each denied one kept at what this draft replaces: no save
-    // judges a held instance, and a later publisher allowed to write a value
-    // would otherwise promote one its author was not.
-    const heldNames = Object.keys(ctx.componentFieldData ?? {});
-    await keepDeniedFieldGroupsInDraft({
-      draft: draftDocument,
-      replaces,
-      names: heldNames,
-      fields: fields as unknown as FieldConfig[],
-      fieldGroupFields: {
-        get: slug => splitComponentSchemas?.get(slug)?.fields,
-      },
-      access: {
-        ...fieldGroupWriteAccessOf(params),
-        // Still inside the write's transaction.
-        grants: callerAccessGrants(
-          params.user,
-          params.authenticatedScope,
-          tx.getDrizzle()
-        ),
-      },
-    });
+    await this.judgeHeldFieldGroups(tx, ctx, draftDocument, replaces);
     // The held component values are judged as the publish would judge them:
     // merged into the draft, since a save carries only the sub-fields it
     // changed, and without the type tags the draft holds, which no ordinary
@@ -8553,14 +8586,10 @@ export class CollectionMutationService extends BaseService {
       // every publish, unpublish and republish on a draft-enabled collection
       // would pay for the roles and permissions queries to answer a question
       // nothing asks. Both tests are map reads.
-      // A field group's update rule asks too: the promotion judges every
-      // instance the document holds by its own rules.
       const promoteRulesCouldRun =
         promotePossible &&
         params.overrideAccess !== true &&
-        (hasFieldAccessRule("collection", params.collectionName, "update") ||
-          anyFieldGroupHasAccessRule("update") ||
-          anyFieldGroupHasAccessRule("create"));
+        this.promotionRulesCanAsk(params.collectionName);
       const promoteGrants = promoteRulesCouldRun
         ? await resolvedCallerGrants(params.user, params.authenticatedScope)
         : undefined;

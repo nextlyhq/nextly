@@ -1231,17 +1231,25 @@ export class SingleMutationService extends BaseService {
         ...fieldGroupWriteAccessOf(options),
         grants: writeGrants,
       };
-      await keepDeniedAtStoredOnUpdate({
-        data: currentData,
-        // The Single's row alone carries no field-group instance, so what an
-        // update removes is read here or judged against nothing.
-        stored: await withStoredFieldGroups({
+      // The Single's row alone carries no field-group instance, so what an
+      // update removes is read here or judged against nothing: in the write's
+      // own language, and in each other one, since a removal removes all.
+      const storedFieldGroupsIn = (locale?: string) =>
+        withStoredFieldGroups({
           stored: existingDeserialized,
           parentTable: singleMeta.tableName,
           fields: fieldConfigs,
           source: this.fieldGroupDataService,
           access: singleWriteAccess,
-        }),
+          locale,
+        });
+      await keepDeniedAtStoredOnUpdate({
+        data: currentData,
+        stored: await storedFieldGroupsIn(options.locale),
+        storedIn: {
+          locales: this.localization?.locales.map(l => l.code) ?? [],
+          read: storedFieldGroupsIn,
+        },
         fields: fieldConfigs,
         source: this.fieldGroupDataService,
         access: singleWriteAccess,

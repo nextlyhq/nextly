@@ -59,6 +59,11 @@ export async function keepDeniedAtStoredOnUpdate(params: {
    * for the field groups inside it.
    */
   ownRules: (document: Record<string, unknown>) => Promise<void>;
+  /**
+   * The stored instances in each of the entity's languages, so a removal is
+   * judged in every language it removes; `stored` is the write's own.
+   */
+  storedIn?: StoredFieldGroupsInLanguages;
 }): Promise<void> {
   if (params.access.overrideAccess) return;
   if (anyFieldGroupHasAccessRule("update")) {
@@ -72,6 +77,9 @@ export async function keepDeniedAtStoredOnUpdate(params: {
         params.executor
       ),
       access: withGrants(params.access, params.executor),
+      translations: params.storedIn
+        ? translationsOf(params.storedIn, params.fields)
+        : undefined,
     });
   }
   const kept = await keepDeniedAtStored({
@@ -161,6 +169,7 @@ export interface StoredFieldGroupSource {
     depth?: number;
     strict?: boolean;
     executor?: unknown;
+    locale?: string;
   }): Promise<Record<string, unknown>>;
 }
 
@@ -184,6 +193,8 @@ export async function withStoredFieldGroups(params: {
   source: StoredFieldGroupSource | undefined;
   access: FieldGroupWriteAccess;
   executor?: unknown;
+  /** The language to read them in: the write's own, or the default. */
+  locale?: string;
 }): Promise<Record<string, unknown>> {
   if (params.access.overrideAccess) return params.stored;
   if (!params.source) return params.stored;
@@ -195,6 +206,7 @@ export async function withStoredFieldGroups(params: {
     depth: 0,
     strict: true,
     executor: params.executor,
+    locale: params.locale,
   });
 }
 
@@ -366,6 +378,7 @@ async function keepProtectedStoredInstances(params: {
   fields: readonly FieldConfig[];
   fieldGroupFields: FieldGroupFieldsBySlug;
   access: FieldGroupWriteAccess;
+  translations?: (id: string) => Promise<Record<string, unknown>[]>;
 }): Promise<void> {
   for (const field of directFieldGroupFields(params.fields)) {
     const name = nameOf(field);
@@ -442,6 +455,51 @@ async function keptInstanceList(
 interface ProtectedInstanceParams {
   fieldGroupFields: FieldGroupFieldsBySlug;
   access: FieldGroupWriteAccess;
+  /**
+   * The same stored instance, by id, in each language it is stored in;
+   * absent where there is one language, or no way to read another.
+   */
+  translations?: (id: string) => Promise<Record<string, unknown>[]>;
+}
+
+/**
+ * Where an entity's stored field-group instances can be read in each of its
+ * languages: the languages, and a read of the stored document in one.
+ */
+export interface StoredFieldGroupsInLanguages {
+  locales: readonly string[];
+  read: (locale: string) => Promise<Record<string, unknown>>;
+}
+
+/**
+ * Each stored instance, by id, in every language `storedIn` names. Read on
+ * first ask and once per language, so an update that removes no instance
+ * reads nothing more.
+ */
+function translationsOf(
+  storedIn: StoredFieldGroupsInLanguages,
+  fields: readonly FieldConfig[]
+): (id: string) => Promise<Record<string, unknown>[]> {
+  let byId: Promise<Map<string, Record<string, unknown>[]>> | undefined;
+  const index = async () => {
+    const found = new Map<string, Record<string, unknown>[]>();
+    for (const locale of storedIn.locales) {
+      const view = await storedIn.read(locale);
+      for (const field of directFieldGroupFields(fields)) {
+        const name = nameOf(field);
+        if (name === undefined) continue;
+        for (const row of rowsOf(view[name])) {
+          if (typeof row.id !== "string") continue;
+          found.set(row.id, [...(found.get(row.id) ?? []), row]);
+        }
+      }
+    }
+    return found;
+  };
+  return async id => {
+    byId ??= index();
+    return (await byId).get(id) ?? [];
+  };
 }
 
 /**
@@ -449,6 +507,22 @@ interface ProtectedInstanceParams {
  * field group's update rules and those of the field groups it holds inline.
  */
 async function holdsProtectedValue(
+  row: Record<string, unknown>,
+  slug: string,
+  params: ProtectedInstanceParams
+): Promise<boolean> {
+  if (await holdsProtectedValueHere(row, slug, params)) return true;
+  // Removing an instance removes it in every language, so a value it holds
+  // only in another language counts as one it holds.
+  if (!params.translations || typeof row.id !== "string") return false;
+  for (const translated of await params.translations(row.id)) {
+    if (await holdsProtectedValueHere(translated, slug, params)) return true;
+  }
+  return false;
+}
+
+/** {@link holdsProtectedValue} for one language's view of the instance. */
+async function holdsProtectedValueHere(
   row: Record<string, unknown>,
   slug: string,
   params: ProtectedInstanceParams

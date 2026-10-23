@@ -822,7 +822,9 @@ export class FieldGroupMutationService extends BaseService {
         componentFields,
         existing.length > 0 ? "update" : "create",
         req,
-        componentMeta.slug
+        componentMeta.slug,
+        // The row this field's single instance is, whatever id is sent.
+        existing[0]?.id
       );
 
       // i18n: split translatable values out of the main comp_ write — they live on the
@@ -942,7 +944,9 @@ export class FieldGroupMutationService extends BaseService {
         componentFields,
         existing.length > 0 ? "update" : "create",
         req,
-        componentMeta.slug
+        componentMeta.slug,
+        // The row this field's single instance is, whatever id is sent.
+        existing[0]?.id
       );
       // Validation only: the instance has been judged as the write would
       // judge it, and nothing is stored.
@@ -1768,7 +1772,10 @@ export class FieldGroupMutationService extends BaseService {
    * Validation runs before hashing so length rules see the plaintext value,
    * matching the parent entry pipeline. `mode` is "update" for an instance
    * that already exists (so a write-only password left empty keeps the stored
-   * hash) and "create" for a new one.
+   * hash) and "create" for a new one. An update's rules are told the id of the
+   * row it updates: `storedId` where the save path names it, and otherwise the
+   * instance's own id, which the save path has matched to a stored row before
+   * choosing "update".
    *
    * `req` is the parent write's request context. It reaches the field
    * validators unchanged, so a rule on a component field sees the same `user`
@@ -1786,7 +1793,8 @@ export class FieldGroupMutationService extends BaseService {
      * read from the field-level registry. The fields above come from the
      * stored definition, which carries constants and cannot carry a function.
      */
-    slug?: string
+    slug?: string,
+    storedId?: string
   ): Promise<void> {
     // A component instance must be a plain object. A primitive (e.g. a bare
     // string sent for a non-repeatable component field) would make the field
@@ -1804,7 +1812,13 @@ export class FieldGroupMutationService extends BaseService {
         ],
       });
     }
-    await this.applyInstanceWriteRules(instance, mode, slug);
+    // The id an update's rules are told: the row the save updates.
+    const ruleId =
+      storedId ??
+      (mode === "update" && typeof instance.id === "string"
+        ? instance.id
+        : undefined);
+    await this.applyInstanceWriteRules(instance, mode, slug, ruleId);
     // A new instance takes its declared defaults before validation, as a new
     // entry does, so a required child with a default is not refused on an
     // instance the caller could not have completed. An existing instance is
@@ -1817,7 +1831,7 @@ export class FieldGroupMutationService extends BaseService {
       );
       // Judged again: a default is a value like any other, so a field the
       // writer may not create does not take one, as an entry's does not.
-      await this.applyInstanceWriteRules(instance, mode, slug);
+      await this.applyInstanceWriteRules(instance, mode, slug, ruleId);
     }
     // Reduced in place, and before validation, because both halves of the write
     // depend on it. A validator is written against a field's public value, the
@@ -1855,8 +1869,9 @@ export class FieldGroupMutationService extends BaseService {
    * The field group's own write rules on one instance, in place, before
    * anything else reads it: a field the writer may not set is removed, as the
    * parent entry's own fields are judged. `mode` is the instance's own: one
-   * that already exists is an update, so a field removed here keeps its stored
-   * value (an existing instance is written key by key); a new one is a create.
+   * that already exists is an update, judged with `storedId`, the id of the
+   * row the save updates, so a field removed here keeps its stored value (an
+   * existing instance is written key by key); a new one is a create.
    *
    * Every save binds who the write is made as on its scope, so an instance
    * reached without one, or without the field group's slug to look its rules
@@ -1865,7 +1880,8 @@ export class FieldGroupMutationService extends BaseService {
   private async applyInstanceWriteRules(
     instance: ComponentInstanceData,
     mode: "create" | "update",
-    slug: string | undefined
+    slug: string | undefined,
+    storedId: string | undefined
   ): Promise<void> {
     const access = writeScope.getStore()?.access;
     if (access === undefined || slug === undefined) {
@@ -1885,12 +1901,10 @@ export class FieldGroupMutationService extends BaseService {
       user: access.user,
       authenticatedScope: access.authenticatedScope,
       overrideAccess: false,
-      // The stored instance's id. A new instance is stored under an id of its
-      // own, so the one it was sent with is the client's and no rule sees it.
-      id:
-        mode === "update" && typeof instance.id === "string"
-          ? instance.id
-          : undefined,
+      // The id of the row the save updates, never the one the instance was
+      // sent with: a new instance is stored under an id of its own, and a
+      // single field group's row is updated whatever id is sent.
+      id: mode === "update" ? storedId : undefined,
       grants: access.grants,
     });
   }
