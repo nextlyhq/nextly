@@ -200,8 +200,9 @@ const clientEntries = [
   "src/zod.ts",
 ];
 
-// Packages this build never bundles: each name and its subpaths.
-const NEVER_BUNDLE = [
+// Packages this build never bundles: each name and its subpaths. Exported for
+// tsdown.dts.config.ts, whose declarations must leave the same packages out.
+export const NEVER_BUNDLE = [
   // Database drivers — kept external (CJS native modules can't be bundled into ESM)
   "better-sqlite3",
   "pg",
@@ -235,8 +236,9 @@ const NEVER_BUNDLE = [
 ];
 
 // Combine all entries into a single build to avoid race conditions
-// with parallel builds and the clean option
-const allEntries = [...serverEntries, ...clientEntries];
+// with parallel builds. Exported for tsdown.dts.config.ts, which names one
+// declaration entry per entry here.
+export const allEntries = [...serverEntries, ...clientEntries];
 
 export default defineConfig({
   entry: allEntries,
@@ -251,13 +253,17 @@ export default defineConfig({
     neverBundle: id =>
       NEVER_BUNDLE.some(name => id === name || id.startsWith(`${name}/`)),
   },
-  // One bundled `.d.ts` per entry, beside its `.mjs`, emitted from the same
-  // build without type-checking: `check-types` is the type check.
-  dts: { sourcemap: false, compilerOptions: { noCheck: true } },
+  // Declarations are not this build's: `tsc -p tsconfig.dts.json` writes them
+  // per file and tsdown.dts.config.ts bundles one `.d.mts` per entry beside
+  // its `.mjs`.
+  dts: false,
   outExtensions() {
     return { js: ".mjs", dts: ".d.mts" };
   },
-  clean: true,
+  // `build` empties `dist` before any producer runs. Cleaning here would
+  // delete the declarations the other producer writes into the same folder,
+  // on every rebuild under `dev`'s watch.
+  clean: false,
   plugins: [dropUnboundBuiltinImports],
   // No shims — output is native ESM (.mjs). A `require` shim throws "Dynamic
   // require of X is not supported" for Node builtins (events, net, etc.) when
