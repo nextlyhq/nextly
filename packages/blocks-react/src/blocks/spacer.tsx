@@ -12,7 +12,7 @@
  *
  * @module blocks/spacer
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
@@ -48,7 +48,7 @@ const SPACER_BASE_STYLES = {
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
 // published types is typed the same as one compiled here. See `./index.ts`.
-export const spacer = defineBlock<SpacerProps, PageContext>({
+export const spacer: BlockDefinition<SpacerProps, PageContext> = defineBlock({
   name: "core/spacer",
   version: 1,
   description:

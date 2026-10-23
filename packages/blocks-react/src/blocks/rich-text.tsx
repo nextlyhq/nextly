@@ -23,6 +23,7 @@
  * @module blocks/rich-text
  */
 import {
+  type BlockDefinition,
   defineBlock,
   isRichTextValue,
   RICH_TEXT_PROP_TYPE,
@@ -85,67 +86,68 @@ export function renderRichText({
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
 // published types is typed the same as one compiled here. See `./index.ts`.
-export const richText = defineBlock<RichTextBlockProps, PageContext>({
-  name: "core/rich-text",
-  version: 1,
-  description:
-    "A passage of formatted text: bold and links within a sentence, lists, and headings between paragraphs, all held as one value.",
-  // Palette metadata. The category is imported rather than spelled here so
-  // nineteen blocks cannot drift into nineteen headings; keywords are what
-  // let a search for a word the description never uses still find this.
-  editor: {
-    label: "Rich text",
-    icon: "text",
-    category: CONTENT,
-    keywords: ["rich text", "formatted", "prose", "wysiwyg", "editor"],
-  },
-  props: {
-    content: { role: "content", type: RICH_TEXT_PROP_TYPE, inline: true },
-  },
-  defaultProps: { content: EMPTY_PASSAGE },
-  /*
-   * The words, with the formatting dropped. Taken from the engine's own
-   * flattener rather than a walk written here: a description that disagreed
-   * with the page would be the one a crawler quotes, and nothing on the page
-   * would show the disagreement.
-   *
-   * Guarded because `props` is whatever the document stored, and the flattener
-   * takes a value already known to be rich text.
-   */
-  seo: props =>
-    isRichTextValue(props.content)
-      ? { description: richTextToPlainText(props.content) }
-      : undefined,
-  example: {
+export const richText: BlockDefinition<RichTextBlockProps, PageContext> =
+  defineBlock({
+    name: "core/rich-text",
+    version: 1,
+    description:
+      "A passage of formatted text: bold and links within a sentence, lists, and headings between paragraphs, all held as one value.",
+    // Palette metadata. The category is imported rather than spelled here so
+    // nineteen blocks cannot drift into nineteen headings; keywords are what
+    // let a search for a word the description never uses still find this.
+    editor: {
+      label: "Rich text",
+      icon: "text",
+      category: CONTENT,
+      keywords: ["rich text", "formatted", "prose", "wysiwyg", "editor"],
+    },
     props: {
-      content: {
-        root: {
-          type: "root",
-          children: [
-            {
-              type: "paragraph",
-              children: [
-                {
-                  type: "text",
-                  text: "A passage of formatted text.",
-                  format: 0,
-                },
-              ],
-            },
-          ],
+      content: { role: "content", type: RICH_TEXT_PROP_TYPE, inline: true },
+    },
+    defaultProps: { content: EMPTY_PASSAGE },
+    /*
+     * The words, with the formatting dropped. Taken from the engine's own
+     * flattener rather than a walk written here: a description that disagreed
+     * with the page would be the one a crawler quotes, and nothing on the page
+     * would show the disagreement.
+     *
+     * Guarded because `props` is whatever the document stored, and the flattener
+     * takes a value already known to be rich text.
+     */
+    seo: props =>
+      isRichTextValue(props.content)
+        ? { description: richTextToPlainText(props.content) }
+        : undefined,
+    example: {
+      props: {
+        content: {
+          root: {
+            type: "root",
+            children: [
+              {
+                type: "paragraph",
+                children: [
+                  {
+                    type: "text",
+                    text: "A passage of formatted text.",
+                    format: 0,
+                  },
+                ],
+              },
+            ],
+          },
         },
       },
     },
-  },
-  supports: {
-    typography: true,
-    color: true,
-    spacing: true,
-    dimensions: true,
-    background: true,
-    border: true,
-    effects: true,
-    position: true,
-  },
-  render: renderRichText,
-});
+    supports: {
+      typography: true,
+      color: true,
+      spacing: true,
+      dimensions: true,
+      background: true,
+      border: true,
+      effects: true,
+      position: true,
+    },
+    render: renderRichText,
+  });

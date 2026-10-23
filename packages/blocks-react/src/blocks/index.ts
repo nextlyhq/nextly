@@ -129,7 +129,24 @@ export type { CollectionLoopProps } from "./collection-loop";
 export { CORE_CATEGORIES } from "./categories";
 export type { CoreCategory } from "./categories";
 
-export const coreBlocks = [
+/** One of the blocks in {@link coreBlocks}, each by its own type. */
+type CoreBlock =
+  | typeof section
+  | typeof accordionItem
+  | typeof spacer
+  | typeof heading
+  | typeof paragraph
+  | typeof richText
+  | typeof list
+  | typeof image
+  | typeof button
+  | typeof form
+  | typeof divider
+  | typeof quote
+  | typeof embed
+  | typeof collectionLoop;
+
+export const coreBlocks: CoreBlock[] = [
   // The comments below record ORDER, which is load-bearing: a resolver built by
   // iterating this list must meet a container before the child whose slot names
   // it. How the library is GROUPED is declared on the blocks themselves, as
