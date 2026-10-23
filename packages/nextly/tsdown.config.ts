@@ -264,7 +264,7 @@ export default defineConfig({
   // loaded by Turbopack on Vercel. Code that needs __dirname already has ESM
   // fallbacks via import.meta.url.
   shims: false,
-  async onSuccess() {
+  onSuccess() {
     // Copy migration files to dist after build
     console.log("\nCopying migration files to dist...");
     try {

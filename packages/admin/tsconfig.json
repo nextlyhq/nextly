@@ -4,7 +4,6 @@
     "target": "ES2020",
     "emitDeclarationOnly": false,
     "outDir": "dist",
-    "baseUrl": ".",
     "paths": {
       "nextly": ["../nextly/src"],
       // The gate the layout endpoint and the browser BOTH decide with. Mapped

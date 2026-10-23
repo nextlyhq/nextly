@@ -120,10 +120,11 @@ echo "pre-push: $TURBO_CONCURRENCY package task(s) x $VITEST_WORKERS worker(s) o
 # push, and this runs under `set -e`.
 DIRTY="$(git status --porcelain 2>/dev/null || true)"
 
-# The two repo-wide lints CI gates on that `turbo lint` does not run. Both
-# finish in well under a second, and neither was reachable from any hook, so
-# knowing they existed was something each person carried privately: an `hsl()`
-# literal reached a theme file whose every other token is OKLCH, and an
+# The three lints CI gates on beside the main one, each reading what it does
+# not: design tokens, the workspace manifests and the dev-tooling scripts. Each
+# finishes in about a second. The first two were once reachable from no hook,
+# so knowing they existed was something each person carried privately: an
+# `hsl()` literal reached a theme file whose every other token is OKLCH, and an
 # out-of-order dependency key failed a build, each costing a CI round trip to
 # learn something a local prompt could have said immediately.
 pnpm lint:design
@@ -131,14 +132,16 @@ pnpm lint:workspace
 pnpm lint:scripts
 
 # The build BEFORE lint, for the reason the typecheck below follows it.
-# `import-x/no-unresolved` and every type-aware rule resolve a workspace import
-# through the sibling's `dist`, so lint on an unbuilt tree reports the missing
-# build rather than the diff. Linting first refused every push from a checkout
-# that had never been built — 16 of 23 lint tasks, all on unresolved imports —
-# and a new `pnpm worktree` checkout is exactly that.
+# Every type-aware rule resolves a workspace import through the sibling's
+# `dist`, so lint on an unbuilt tree reports the missing build rather than the
+# diff. Linting first refused every push from a checkout that had never been
+# built — 16 of 23 lint tasks, all on unresolved imports — and a new
+# `pnpm worktree` checkout is exactly that.
+#
+# One oxlint run over the whole repository: packages, `apps/*` and `e2e`
+# alike, where the per-package lint before it reached only `packages/*`.
 pnpm run build
-pnpm turbo lint --continue \
-  --filter='./packages/*'
+pnpm lint
 
 # Types AFTER the build, and over every package rather than the changed ones.
 #
@@ -169,7 +172,7 @@ set -e
 
 # The TESTS of the packages this branch actually changes.
 #
-# Two gaps this closes, and both were real. The lint above filters to
+# Two gaps this closes, and both were real. The lint here once filtered to
 # `./packages/*`, which excludes `apps/*` and `e2e` — workspaces this repo
 # declares and this hook could not reach. And nothing here ran tests at all, so
 # a guard that lives in a TEST was unreachable from any hook: a public-export

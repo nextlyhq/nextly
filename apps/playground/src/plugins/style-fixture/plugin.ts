@@ -46,6 +46,36 @@ export const styleFixturePlugin = definePlugin({
             "Do not [run this](javascript:alert%28document.cookie%29).",
           ].join("\n"),
         },
+        // A test fixture for e2e/tests/dashboard-card-settings.spec.ts: a card with settings,
+        // one of them quick, which no built-in widget offers yet. A `list` drawn by core, so it
+        // needs no component. Not placed by default (no `defaultOrder`): the spec places it.
+        {
+          id: "style-fixture/recent",
+          title: "Fixture recent posts",
+          archetype: "list",
+          defaultSize: "md",
+          query: {
+            source: "collection:posts",
+            op: "list",
+            select: ["title"],
+            sort: "-updatedAt",
+            limit: 3,
+          },
+          settings: [
+            { name: "limit", type: "number", label: "Rows", defaultValue: 3 },
+            {
+              name: "accent",
+              type: "select",
+              label: "Accent",
+              quick: true,
+              defaultValue: "plain",
+              options: [
+                { label: "Plain", value: "plain" },
+                { label: "Bold", value: "bold" },
+              ],
+            },
+          ],
+        },
       ],
     },
   },

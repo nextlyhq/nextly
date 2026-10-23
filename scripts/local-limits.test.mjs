@@ -9,6 +9,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  GIB_PER_PROCESS,
+  GIB_PER_VITEST_WORKER,
   MAX_CONCURRENCY,
   MAX_WORKERS,
   deriveLimits,
@@ -28,10 +30,49 @@ describe("budgeting a machine", () => {
    * formula has to reproduce that without having been told it, which is what
    * makes it evidence rather than a fitted constant.
    */
+  /*
+   * The 2 x 2 measurement predates workers that share their modules. The
+   * concurrency it measured still holds; the workers drop to 1, because two
+   * shared nextly workers beside two ordinary ones plan about 7.5 GiB against
+   * this profile's 6.8 usable.
+   */
   it("reproduces the measured-safe budget for a 9.7 GiB / 8-core profile", () => {
     const limits = machine(9.7, 8);
     expect(limits.concurrency).toBe(2);
+    expect(limits.maxWorkers).toBe(1);
+  });
+
+  /*
+   * A Vitest worker that shares its modules across files keeps nextly's
+   * service graph loaded: measured at about 2.3 GB resident under its 2 GB
+   * heap cap. Planned at the 1.5 GiB of an ordinary process, an 8 GiB laptop
+   * got 3 of them, about 6.9 GB against its 5.6 GiB usable.
+   */
+  it("gives an 8 GiB laptop the workers its memory holds at a shared worker's size", () => {
+    const limits = machine(8, 8);
     expect(limits.maxWorkers).toBe(2);
+    expect(limits.maxWorkers * GIB_PER_VITEST_WORKER).toBeLessThanOrEqual(
+      limits.usableGiB
+    );
+  });
+
+  it("never plans more test workers than usable memory holds, with every task running", () => {
+    for (const [gib, cpus] of [
+      [8, 4],
+      [9.7, 8],
+      [14.5, 22],
+      [16, 8],
+      [32, 12],
+      [48, 14],
+    ]) {
+      const limits = machine(gib, cpus);
+      // One task's workers at a shared worker's size, every other task's at an
+      // ordinary process's.
+      const planned =
+        limits.maxWorkers *
+        (GIB_PER_VITEST_WORKER + (limits.concurrency - 1) * GIB_PER_PROCESS);
+      expect(planned).toBeLessThanOrEqual(limits.usableGiB);
+    }
   });
 
   it("protects a small machine rather than assuming everyone has headroom", () => {

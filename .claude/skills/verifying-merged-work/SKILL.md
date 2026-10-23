@@ -621,16 +621,11 @@ Related, and cheap to get wrong:
 
 - **Run gates from the worktree ROOT.** From a package directory,
   `pnpm check-types --force` becomes a bare `tsc --force` and fails on the flag.
-- **Most packages fail lint on a WARNING**, because their script is
-  `eslint . --max-warnings 0`. Check by exit code, not by grepping output for
-  "error": the log reads "0 errors, 1 warning" and still exits 1.
-  Two qualifications worth knowing before you trust a green:
-  - The pre-push hook runs `pnpm lint:design`, `pnpm lint:workspace`,
-    `pnpm turbo lint --continue --filter='./packages/*'` and `pnpm run build`,
-    not the root `pnpm lint`. The turbo leg does not cover `apps/*` or `e2e/`,
-    and the whole hook exits early under CI (ci.yml re-runs the same gates).
-  - Not every package opts in. `packages/admin-css` runs a bare `eslint .`, so a
-    warning there exits 0 and the hook stays green.
+- **Lint fails on a WARNING**: `oxlint.config.mjs` sets `maxWarnings: 0`.
+  Check by exit code, not by grepping output for "error": the log reads
+  "Found 1 warning and 0 errors" and still exits 1. The pre-push hook runs the
+  same `pnpm lint` over the whole repository after its build, and exits early
+  under CI, where ci.yml runs the same gates.
 - **Never run a unit suite while an integration leg is in flight.** Unrelated
   files time out and read like a broad regression.
 - **Never work a PR branch in the shared checkout.** Use `git worktree add`;

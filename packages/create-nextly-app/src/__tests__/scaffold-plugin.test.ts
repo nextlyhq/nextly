@@ -326,6 +326,18 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     expect(disagreements, `tsdown: ${tools[0]}; vitest: ${tools[1]}`).toEqual(
       []
     );
+    // The Vite it needs is Vitest's peer, which Yarn does not install on its
+    // own. Read from the installed Vitest, so a Vitest upgrade that moves it
+    // fails here rather than in a plugin author's first `yarn test`.
+    const vitestManifest = requireFromHere("vitest/package.json") as {
+      peerDependencies: { vite: string };
+    };
+    const viteMajor = /^\^(\d+)\./.exec(pkg.devDependencies.vite)?.[1];
+    expect(
+      vitestManifest.peerDependencies.vite
+        .split("||")
+        .map(range => range.trim())
+    ).toContain(`^${viteMajor}.0.0`);
 
     /*
      * The scaffolded suite boots a real instance, so its budget is asserted
