@@ -40,6 +40,7 @@ import { RELEASES_SOURCE_ID } from "../../domains/releases/releases-widget-sourc
 import { VERSIONS_SOURCE_ID } from "../../domains/versions/versions-widget-source";
 import {
   ACTIVITY_SOURCE_ID,
+  ATTENTION_SOURCE_ID,
   CONTENT_SOURCE_ID,
   TEAM_SOURCE_ID,
 } from "../../domains/widgets/system-source-ids";
@@ -91,6 +92,7 @@ describe("resetWidgetRegistries", () => {
     ).toEqual(
       [
         ACTIVITY_SOURCE_ID,
+        ATTENTION_SOURCE_ID,
         CONTENT_SOURCE_ID,
         RELEASES_SOURCE_ID,
         TEAM_SOURCE_ID,

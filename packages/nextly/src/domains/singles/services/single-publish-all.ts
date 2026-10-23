@@ -43,6 +43,10 @@ import { readComponentSubtrees } from "../../field-groups/read-component-subtree
 import { readCompanionLocaleStatusAll } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
+  type LocalizationSource,
+  localizationNow,
+} from "../../i18n/localization-source";
+import {
   buildCompanionSchema,
   type CompanionSchema,
 } from "../../i18n/runtime/companion-io";
@@ -161,13 +165,18 @@ export class SinglePublishAllService extends BaseService {
   /** Stateless version-capture service, used inside the publish transaction. */
   private readonly versionCapture = new VersionCaptureService();
 
+  /** The site's languages as they are now: the source may be the language registry. */
+  private get localization(): SanitizedLocalizationConfig | undefined {
+    return localizationNow(this.localizationSource);
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
     private readonly singleRegistryService: SingleRegistryService,
     private readonly fieldGroupDataService?: FieldGroupDataService,
     private readonly rbacAccessControlService?: RBACAccessControlService,
-    private readonly localization?: SanitizedLocalizationConfig,
+    private readonly localizationSource?: LocalizationSource,
     /** Reads the promote gate needs: the logical shape, and the live document. */
     private readonly queryService?: SingleQueryService
   ) {

@@ -62,6 +62,7 @@ import { settings } from "./declaration/setting-builders";
 import type { WidgetDefinition, WidgetSetting } from "./definition";
 import {
   ACTIVITY_SOURCE_ID,
+  ATTENTION_SOURCE_ID,
   CONTENT_SOURCE_ID,
   RELEASES_SOURCE_ID,
   TEAM_SOURCE_ID,
@@ -238,13 +239,20 @@ const CORE_WIDGET_LITERALS = [
     query: { source: TEAM_SOURCE_ID, op: "list" },
   },
   {
-    id: "core/pending-edits",
-    title: "Unpublished changes",
-    description: "Documents holding edits that are not live yet",
-    archetype: "metric",
-    defaultSize: "sm",
+    id: "core/needs-attention",
+    title: "Needs attention",
+    description:
+      "What is waiting: unpublished changes, releases due this week, and overdue releases.",
+    archetype: "custom",
+    // Two thirds by default; from a third, where its small tier still names
+    // each kind, to the full width, where each kind breaks down per collection.
+    defaultSize: "xl",
+    minSize: "md",
     defaultOrder: 25,
-    query: { source: VERSIONS_SOURCE_ID, op: "count" },
+    // Ungated: each kind is answered by its own domain as the reader, and a
+    // kind they may not read is simply absent from the answer.
+    query: { source: ATTENTION_SOURCE_ID, op: "groupBy", groupBy: "item" },
+    component: "core#NeedsAttention",
   },
   {
     id: "core/recently-edited",

@@ -27,7 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
-import { useCallback, useMemo } from "react";
+import { type JSX, useCallback, useMemo } from "react";
 
 import type {
   AnyFormField,
@@ -197,7 +197,7 @@ export function ConditionalLogicEditor({
   field,
   allFields,
   onUpdate,
-}: ConditionalLogicEditorProps) {
+}: ConditionalLogicEditorProps): JSX.Element {
   // Get current conditional logic or create default.
   // Wrapped in useMemo so dependent useCallbacks don't re-create on every render.
   const logic: ConditionalLogic = useMemo(

@@ -92,6 +92,7 @@ describe("widget-registry reset at boot", () => {
         .sort()
     ).toEqual([
       "system:activity",
+      "system:attention",
       "system:content",
       "system:releases",
       "system:team",

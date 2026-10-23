@@ -151,9 +151,10 @@ expectTypeOf<WidgetData<typeof unpaidCount>>().toEqualTypeOf<
 // A widget drawn by a core display has that display's data, whatever its own
 // function's literal answer was.
 // `field` describes the grouped field (its label and value labels) when the source declares it;
-// `atLeast` says the bucket counts are floors, from a source that grouped under a work bound.
+// `atLeast` says the bucket counts are floors, from a source that grouped under a work bound,
+// and a bucket's own `atLeast` says that one bucket's count is.
 expectTypeOf<WidgetData<typeof ordersByState>>().toEqualTypeOf<{
-  buckets: { value: string | null; count: number }[];
+  buckets: { value: string | null; count: number; atLeast?: boolean }[];
   truncated?: boolean;
   field?: WidgetResultField;
   atLeast?: boolean;

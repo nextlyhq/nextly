@@ -147,6 +147,10 @@ import {
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { EVERY_TRANSLATION } from "../../i18n/locale-selector";
+import {
+  type LocalizationSource,
+  localizationNow,
+} from "../../i18n/localization-source";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   resolveCompanionColumn,
@@ -1004,6 +1008,11 @@ function toBuckets(
 type DynamicSchema = Record<string, SQLWrapper | undefined>;
 
 export class CollectionQueryService extends BaseService {
+  /** The site's languages as they are now: the source may be the language registry. */
+  private get localization(): SanitizedLocalizationConfig | undefined {
+    return localizationNow(this.localizationSource);
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -1018,7 +1027,7 @@ export class CollectionQueryService extends BaseService {
      * reads resolve translatable fields from the companion `_locales` table for the
      * requested locale with fallback. Absent → non-localized behavior (unchanged).
      */
-    private readonly localization?: SanitizedLocalizationConfig,
+    private readonly localizationSource?: LocalizationSource,
     /**
      * What a due release makes visible on this read.
      *
@@ -3915,20 +3924,11 @@ export class CollectionQueryService extends BaseService {
       if (!plan.allowed) return plan.denied;
       const { schema, whereConditions } = plan;
 
-      // Build the count query
-      let query = this.db.select({ count: sql<number>`count(*)` }).from(schema);
-
-      // Apply combined where conditions
-      if (whereConditions.length > 0) {
-        query = query.where(
-          whereConditions.length === 1
-            ? whereConditions[0]
-            : and(...whereConditions)
-        );
-      }
-
-      // Execute count query
-      const result = await query;
+      const result = await this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(schema)
+        // `and` of none is no filter, and of one is that condition alone.
+        .where(and(...whereConditions));
       const totalDocs = Number(result[0]?.count || 0);
 
       return {
@@ -3938,23 +3938,86 @@ export class CollectionQueryService extends BaseService {
         data: { totalDocs },
       };
     } catch (error: unknown) {
-      const message =
-        error instanceof Error ? error.message : "Failed to count entries";
-      this.logger.error("Error counting entries", {
-        collectionName: params.collectionName,
-        error: message,
-      });
+      return this.countFailed(params.collectionName, error);
+    }
+  }
+
+  /**
+   * A count that failed, as both counts report it: logged, and returned with
+   * the error's own status and code.
+   */
+  private countFailed(
+    collectionName: string,
+    error: unknown
+  ): CollectionServiceResult<never> {
+    const message =
+      error instanceof Error ? error.message : "Failed to count entries";
+    this.logger.error("Error counting entries", {
+      collectionName,
+      error: message,
+    });
+    return {
+      success: false,
+      // Mirrors listEntries: a refusal is a 403, not a server fault, and the
+      // count must report it the same way.
+      statusCode: NextlyError.is(error) ? error.statusCode : 500,
+      message,
+      data: null,
+      // Same reason as listEntries: without the code the boundary rebuilds a
+      // typed refusal as a generic internal error.
+      ...errorEnvelopeFields(error),
+    };
+  }
+
+  /**
+   * How many rows a `countEntries` with the same request would count, read no
+   * further than `cap`: the exact number up to the cap, or the cap with
+   * `atLeast` once there are more.
+   *
+   * The same plan as the count, so the same access, read rules, hooks and
+   * workflow conditions decide the rows; only the read differs. It selects ids
+   * and stops one row past the cap rather than counting the whole set, so a
+   * caller that shows "99+" never pays for counting a large table, and "there
+   * are more" is observed rather than assumed.
+   *
+   * @experimental
+   */
+  async countEntriesUpTo(
+    params: FilteredReadParams & { cap: number }
+  ): Promise<CollectionServiceResult<{ count: number; atLeast: boolean }>> {
+    try {
+      // A cap that is not a positive integer would reach the query builder as
+      // `.limit(NaN)` or a fraction, and fail the read rather than bound it.
+      if (!Number.isSafeInteger(params.cap) || params.cap < 1) {
+        throw NextlyError.internal({
+          logContext: { reason: "count-cap-not-a-positive-integer" },
+        });
+      }
+      const plan = await this.resolveReadPlan<{
+        count: number;
+        atLeast: boolean;
+      }>(params);
+      if (!plan.allowed) return plan.denied;
+      const { schema, whereConditions } = plan;
+
+      const rows = await this.db
+        .select({ id: schema.id })
+        .from(schema)
+        .where(and(...whereConditions))
+        .limit(params.cap + 1);
+
       return {
-        success: false,
-        // Mirrors listEntries: a refusal is a 403, not a server fault, and the
-        // count must report it the same way.
-        statusCode: NextlyError.is(error) ? error.statusCode : 500,
-        message,
-        data: null,
-        // Same reason as listEntries: without the code the boundary rebuilds a
-        // typed refusal as a generic internal error.
-        ...errorEnvelopeFields(error),
+        success: true,
+        statusCode: 200,
+        message: "Count retrieved successfully",
+        data: {
+          count: Math.min(rows.length, params.cap),
+          atLeast: rows.length > params.cap,
+        },
       };
+    } catch (error: unknown) {
+      // Reported as `countEntries` reports it, so a refusal stays a typed 403.
+      return this.countFailed(params.collectionName, error);
     }
   }
 

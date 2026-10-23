@@ -138,7 +138,7 @@ export function isUsableSlotName(name: string): boolean {
  * forward — registration refuses it rather than promise an upgrade path that
  * does not exist.
  */
-export const MAX_BLOCK_VERSION = 1 + MAX_MIGRATION_STEPS;
+export const MAX_BLOCK_VERSION: number = 1 + MAX_MIGRATION_STEPS;
 
 /**
  * Names the engine owns. They identify nodes resolved by the engine's own

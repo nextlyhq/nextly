@@ -105,4 +105,43 @@ export function validateLocalizationConfig(input: LocalizationConfig): void {
       }
     }
   }
+
+  const loop = fallbackLoop(locales);
+  if (loop) {
+    throw NextlyError.invalidInput({
+      message:
+        `localization fallback lists loop: ${loop.join(" → ")}. ` +
+        `A language may fall back through others, but never back to itself.`,
+      logContext: { reason: "localization-fallback-loop", loop },
+    });
+  }
+}
+
+/**
+ * A cycle through the fallback lists, as the codes it passes ending where it started, or
+ * `undefined` when there is none. Each list names the languages a language falls back to, so
+ * the lists form a graph; a cycle in it is a language that, through others, falls back to itself.
+ * A language several others fall back to is not a cycle.
+ */
+function fallbackLoop(
+  locales: ReadonlyArray<{ code: string; fallbackLocale: readonly string[] }>
+): string[] | undefined {
+  const next = new Map(locales.map(l => [l.code, l.fallbackLocale]));
+  const done = new Set<string>();
+  const visit = (code: string, path: string[]): string[] | undefined => {
+    const at = path.indexOf(code);
+    if (at !== -1) return [...path.slice(at), code];
+    if (done.has(code)) return undefined;
+    for (const fb of next.get(code) ?? []) {
+      const loop = visit(fb, [...path, code]);
+      if (loop) return loop;
+    }
+    done.add(code);
+    return undefined;
+  };
+  for (const { code } of locales) {
+    const loop = visit(code, []);
+    if (loop) return loop;
+  }
+  return undefined;
 }

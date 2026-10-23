@@ -20,7 +20,7 @@
  *
  * @module blocks/library/column
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
 
@@ -72,50 +72,52 @@ export const COLUMN_BASE_STYLES = {
   base: { base: { minWidth: 0 } },
 } as const;
 
-export const column = defineBlock<ContainerProps, PageContext>({
-  name: COLUMN_BLOCK,
-  version: COLUMN_VERSION,
-  description:
-    "One column of a core/columns row. A container with an identity, so it can be selected, styled and dropped into.",
-  // Palette metadata. The category is imported rather than spelled here so
-  // nineteen blocks cannot drift into nineteen headings; keywords are what
-  // let a search for a word the description never uses still find this.
-  editor: {
-    label: "Column",
-    icon: "column",
-    category: LAYOUT,
-    keywords: ["cell", "track"],
-  },
-  props: {
-    // Narrower than a box's list: a column is a layout child, and `aside` or
-    // `article` inside a row is nearly always a mistake the author meant to
-    // make one level up. Anything genuinely semantic belongs in the column
-    // rather than as the column.
-    as: { type: "select", options: ["div"] },
-    contained: { type: "checkbox" },
-  },
-  defaultProps: COLUMN_DEFAULT_PROPS,
-  example: { props: { as: "div" } },
-  /**
-   * The CHILD half of the nesting rule, stated here rather than inferred from
-   * `core/columns`' allow-list.
-   *
-   * `block.ts` is explicit that neither half implies the other, and this is the
-   * direction that matters for the editor: without it a column is insertable
-   * anywhere, and an author who drops one onto the page root gets a container
-   * that looks like a box, is styled like a box, and is silently governed by a
-   * row that is not there.
-   */
-  parent: [COLUMNS_BLOCK],
-  // An unrestricted slot: a column holds anything a page holds. The row
-  // restricts what may be a COLUMN; it says nothing about what a column holds.
-  slots: {
-    // No declared starting children, for the same reason the slot is
-    // unrestricted: a column holds anything, so no starting block is more
-    // correct than none.
-    children: {},
-  },
-  baseStyles: COLUMN_BASE_STYLES,
-  supports: CONTAINER_SUPPORTS,
-  render: renderContainer,
-});
+export const column: BlockDefinition<ContainerProps, PageContext> = defineBlock(
+  {
+    name: COLUMN_BLOCK,
+    version: COLUMN_VERSION,
+    description:
+      "One column of a core/columns row. A container with an identity, so it can be selected, styled and dropped into.",
+    // Palette metadata. The category is imported rather than spelled here so
+    // nineteen blocks cannot drift into nineteen headings; keywords are what
+    // let a search for a word the description never uses still find this.
+    editor: {
+      label: "Column",
+      icon: "column",
+      category: LAYOUT,
+      keywords: ["cell", "track"],
+    },
+    props: {
+      // Narrower than a box's list: a column is a layout child, and `aside` or
+      // `article` inside a row is nearly always a mistake the author meant to
+      // make one level up. Anything genuinely semantic belongs in the column
+      // rather than as the column.
+      as: { type: "select", options: ["div"] },
+      contained: { type: "checkbox" },
+    },
+    defaultProps: COLUMN_DEFAULT_PROPS,
+    example: { props: { as: "div" } },
+    /**
+     * The CHILD half of the nesting rule, stated here rather than inferred from
+     * `core/columns`' allow-list.
+     *
+     * `block.ts` is explicit that neither half implies the other, and this is the
+     * direction that matters for the editor: without it a column is insertable
+     * anywhere, and an author who drops one onto the page root gets a container
+     * that looks like a box, is styled like a box, and is silently governed by a
+     * row that is not there.
+     */
+    parent: [COLUMNS_BLOCK],
+    // An unrestricted slot: a column holds anything a page holds. The row
+    // restricts what may be a COLUMN; it says nothing about what a column holds.
+    slots: {
+      // No declared starting children, for the same reason the slot is
+      // unrestricted: a column holds anything, so no starting block is more
+      // correct than none.
+      children: {},
+    },
+    baseStyles: COLUMN_BASE_STYLES,
+    supports: CONTAINER_SUPPORTS,
+    render: renderContainer,
+  }
+);

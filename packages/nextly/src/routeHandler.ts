@@ -53,6 +53,7 @@ import {
   releaseLock,
   renewLock,
 } from "./api/document-lock";
+import { buildErrorResponse } from "./api/error-response";
 import {
   getGeneralSettings,
   updateGeneralSettings,
@@ -66,6 +67,7 @@ import {
 } from "./api/image-sizes";
 import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
+import { changeLanguages, getLanguages } from "./api/languages";
 import { getNoticeCount, getNotices, markNoticesRead } from "./api/notices";
 import {
   listPreviewLinks,
@@ -127,6 +129,10 @@ import {
   roleChangeCallerFor,
   runAsRoleChangeCaller,
 } from "./domains/auth/services/super-admin-grant";
+import {
+  appLocalization,
+  withCurrentLanguages,
+} from "./domains/i18n/configured-locales";
 import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
 import {
@@ -137,6 +143,7 @@ import {
   widgetAudience,
   type WidgetAudience,
 } from "./domains/widgets/visibility";
+import { genericPublicMessage } from "./errors/error-codes";
 import { NextlyError } from "./errors/nextly-error";
 import { retryAfterHeader } from "./errors/retry-after";
 import {
@@ -364,6 +371,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "notices",
   "jobs",
   "generalSettings",
+  "languages",
   "previewLinks",
   "previewUrl",
   "imageSizes",
@@ -419,6 +427,41 @@ async function handleWebhookRequest(
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
   }
+}
+
+/** Delegate a languages request to its handler, which manages its own auth and body. */
+async function handleLanguagesRequest(
+  req: Request,
+  httpMethod: string
+): Promise<Response> {
+  switch (httpMethod) {
+    case "GET":
+      return getLanguages(req);
+    case "POST":
+      return changeLanguages(req);
+    default:
+      return methodNotAllowed(req, ["GET", "POST"]);
+  }
+}
+
+/**
+ * The canonical refusal for a verb a route does not serve, with the `Allow` header HTTP requires.
+ *
+ * Built and RETURNED rather than thrown, for the reason the builder gate is: this runs outside
+ * the dispatcher's NextlyError-to-response mapping, so a throw would surface as a 500. Serialized
+ * by the same `buildErrorResponse` every error boundary uses, so the body carries the code, the
+ * sentence and the request id Nextly's own error parser reads.
+ */
+function methodNotAllowed(req: Request, allowed: readonly string[]): Response {
+  const response = buildErrorResponse(
+    new NextlyError({
+      code: "METHOD_NOT_ALLOWED",
+      publicMessage: genericPublicMessage("METHOD_NOT_ALLOWED"),
+    }),
+    { requestId: readOrGenerateRequestId(req) }
+  );
+  response.headers.set("allow", allowed.join(", "));
+  return response;
 }
 
 /**
@@ -1223,7 +1266,18 @@ async function withinBuiltInLimit(
   return refused ?? serve();
 }
 
-async function handleServiceRequest(
+/** Serves one REST request with one language list from start to end (`withCurrentLanguages`). */
+function handleServiceRequest(
+  req: Request,
+  params: string[],
+  httpMethod: string
+): Promise<Response> {
+  return withCurrentLanguages(() =>
+    serveServiceRequest(req, params, httpMethod)
+  );
+}
+
+async function serveServiceRequest(
   req: Request,
   params: string[],
   httpMethod: string
@@ -1416,6 +1470,11 @@ async function handleServiceRequest(
   // and the shared body read below would leave the stream empty.
   if (service === "previewUrl") {
     return resolveEntryPreviewUrl(req);
+  }
+
+  // ==================== LANGUAGES DIRECT DISPATCH ====================
+  if (service === "languages") {
+    return handleLanguagesRequest(req, httpMethod);
   }
 
   // ==================== GENERAL SETTINGS DIRECT DISPATCH ====================
@@ -1881,8 +1940,9 @@ async function buildAdminMeta(
   // would dial exists.
   workspace.devReload = isDevServerRuntime();
 
-  // Content-localization config for the admin (present only when i18n is enabled).
-  const localization = config?.localization;
+  // The site's languages for the admin (present only when i18n is enabled): the language list as
+  // it is now, so a language added in Settings shows without a restart.
+  const localization = appLocalization() ?? config?.localization;
   if (localization) {
     workspace.locales = {
       defaultLocale: localization.defaultLocale,
@@ -2138,7 +2198,12 @@ async function handleAdminMetaWorkspaceRequest(
   const caller = readAccessCaller(await readCaller(auth));
   const audience = await widgetAudience(caller);
 
-  const { workspace } = await buildAdminMeta(audience);
+  // Dispatched outside the content requests that bring the language list up to date, so it does
+  // so itself: a language added on another server reaches the admin within the registry's
+  // interval rather than whenever unrelated content traffic next arrives here.
+  const { workspace } = await withCurrentLanguages(() =>
+    buildAdminMeta(audience)
+  );
   return withSessionCacheHeaders(respondAdminMeta(workspace));
 }
 

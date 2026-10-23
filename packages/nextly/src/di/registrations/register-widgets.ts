@@ -56,6 +56,7 @@ import {
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { contributedWidgetSummaries } from "../../plugins/validate-admin-widgets";
 import { registerActivityWidgetSource } from "../../services/dashboard/activity-widget-source";
+import { registerAttentionWidgetSource } from "../../services/dashboard/attention-source";
 import { registerSummaryWidgetSources } from "../../services/dashboard/summary-widget-sources";
 
 export function resetWidgetRegistries(
@@ -119,6 +120,9 @@ export function resetWidgetRegistries(
   registerReleasesWidgetSource();
   registerVersionsWidgetSource();
   registerActivityWidgetSource();
+  // Needs attention's source, which combines the releases' and versions' reads
+  // with the entry list's counts and so belongs to no one domain.
+  registerAttentionWidgetSource();
   registerSummaryWidgetSources();
 
   // 🔴 A plugin's sources are NOT registered here, and the reason is a hard

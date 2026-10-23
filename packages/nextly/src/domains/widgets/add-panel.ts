@@ -43,7 +43,7 @@ const CORE_GROUPS = {
   "core/singles": "overview",
   "core/quick-create": "overview",
   "core/team": "team",
-  "core/pending-edits": "overview",
+  "core/needs-attention": "overview",
   "core/recently-edited": "overview",
   "core/upcoming-releases": "overview",
   "core/recent-activity": "team",

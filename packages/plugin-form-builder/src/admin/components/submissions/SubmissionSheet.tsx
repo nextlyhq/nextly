@@ -30,7 +30,7 @@ import {
   Textarea,
 } from "@nextlyhq/ui";
 import { ChevronLeft, ChevronRight, Pencil, TriangleAlert } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type JSX, useEffect, useState } from "react";
 
 import type { FormField } from "../../../types";
 import { formatExportValue } from "../../../utils/export-formats";
@@ -169,7 +169,7 @@ export function SubmissionSheet({
   onPrev,
   onNext,
   onSave,
-}: SubmissionSheetProps) {
+}: SubmissionSheetProps): JSX.Element {
   const [editing, setEditing] = useState(false);
   const [draftData, setDraftData] = useState<Record<string, unknown>>({});
   const [status, setStatus] = useState(submission.status);

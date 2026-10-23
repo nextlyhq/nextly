@@ -73,6 +73,9 @@ import {
   resolveTypeColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import { LanguageRegistry } from "../domains/i18n/language-registry";
+import { LanguageSettingsService } from "../domains/i18n/services/language-settings-service";
+import { storedLanguageReader } from "../domains/i18n/stored-language-reader";
 import type { AnyJobDefinition } from "../domains/jobs/job-registry";
 import { coreRateLimitStoreFor } from "../domains/limits/core-limit-store";
 import type { LimitStore } from "../domains/limits/limit-store";
@@ -551,6 +554,10 @@ export interface ServiceMap {
   dashboardService: DashboardService;
   metaService: MetaService;
   versionsService: VersionsService;
+  /** The site's content languages, configured or stored in Settings. */
+  languageRegistry: LanguageRegistry;
+  /** Settings' view of the languages, and the one path that changes them. */
+  languageSettingsService: LanguageSettingsService;
   // Registered by registerCollectionServices but previously untyped here, so
   // consumers had to reach past getService() to use it.
   collectionsHandler: CollectionsHandler;
@@ -1017,6 +1024,10 @@ async function registerServicesOnce(
     logger: resolvedLogger,
     config: transformedConfig,
     basePath: resolvedBasePath,
+    languages: new LanguageRegistry({
+      configured: transformedConfig.localization,
+      reader: storedLanguageReader(adapter),
+    }),
     schemasDir,
     migrationsDir,
     storage,
@@ -1025,6 +1036,17 @@ async function registerServicesOnce(
     hookRegistry,
     passwordHasher,
   };
+
+  // Reachable by name for the request path, which refreshes it, and for code that asks which
+  // languages the site has without a service of its own.
+  container.registerSingleton<LanguageRegistry>(
+    "languageRegistry",
+    () => ctx.languages
+  );
+  container.registerSingleton<LanguageSettingsService>(
+    "languageSettingsService",
+    () => new LanguageSettingsService(adapter, ctx.languages, ctx.logger)
+  );
 
   registerDomainServices(ctx);
 
@@ -1048,6 +1070,13 @@ async function registerServicesOnce(
     adapter,
     logger: resolvedLogger,
   });
+
+  // The stored language list is read before any plugin starts and before registration publishes:
+  // until its first read the registry knows no stored languages, and a plugin's `init` writing
+  // through the services, or a request served in that gap, would read a site with languages as
+  // one without, sending translated values to the main table. After the boot migrations, so the
+  // table exists; a read that fails for any other reason fails the boot.
+  await ctx.languages.refresh({ force: true });
 
   await assertBootPluginSchemaVersions(
     transformedConfig,

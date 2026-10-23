@@ -25,6 +25,9 @@ export const VERSIONS_SOURCE_ID = "system:versions";
 /** Who changed what, most recent first: the activity this caller may see. */
 export const ACTIVITY_SOURCE_ID = "system:activity";
 
+/** What is waiting for someone: pending changes, releases due soon and overdue. */
+export const ATTENTION_SOURCE_ID = "system:attention";
+
 /** The Team card's figures: the number of people, and of roles for a reader who may see them. */
 export const TEAM_SOURCE_ID = "system:team";
 

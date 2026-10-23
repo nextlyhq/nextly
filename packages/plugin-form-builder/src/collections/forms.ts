@@ -534,7 +534,7 @@ export async function assertRedirectTargetUsable(
   context: HookContext,
   patterns: RedirectRelationships,
   localization: Record<string, boolean>
-) {
+): Promise<void> {
   const write = redirectReferenceForWrite(context, patterns);
   if (!write) return;
   const { reference, field, chosen, configured } = write;
