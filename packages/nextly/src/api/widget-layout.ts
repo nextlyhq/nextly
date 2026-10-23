@@ -297,10 +297,21 @@ export async function askableCards(auth: AuthContext): Promise<{
         .map(placement => [placement.id, placement])
     ),
     // 🔴 The layout write's own gate (`putWidgetLayout` refuses a placement of
-    // any widget outside it), so a widget whose card may be previewed with
-    // settings of the reader's choosing is exactly one they could place.
-    placeable: view.visibleIds,
+    // any widget outside it, and `authenticateLayoutWrite` refuses an API key
+    // outright), so a widget whose card may be previewed with settings of the
+    // reader's choosing is exactly one they could place. A key has no admin
+    // screen to place a card on, so it may preview none.
+    placeable: mayWriteLayout(auth) ? view.visibleIds : new Set<string>(),
   };
+}
+
+/**
+ * Whether this caller may write a dashboard layout at all: a person signed in
+ * to the admin, never an API key. One rule for the write and for the previews
+ * that stand in for one.
+ */
+function mayWriteLayout(auth: AuthContext): boolean {
+  return auth.authMethod !== "api-key";
 }
 
 /**
@@ -474,7 +485,7 @@ async function authenticateLayoutWrite(
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
-  if (auth.authMethod === "api-key") {
+  if (!mayWriteLayout(auth)) {
     throw NextlyError.forbidden({
       logContext: { reason: `an api key may not ${intent} a dashboard layout` },
     });

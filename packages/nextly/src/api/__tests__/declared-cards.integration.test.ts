@@ -20,6 +20,8 @@ process.env.NEXTLY_SECRET =
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { buildClaims } from "../../auth/jwt/claims";
+import { signAccessToken } from "../../auth/jwt/sign";
 import { defineCollection, text } from "../../config";
 import { defineWidget } from "../../domains/widgets/declaration/define-widget";
 import { settings } from "../../domains/widgets/declaration/setting-builders";
@@ -276,8 +278,30 @@ async function placeFor(
   );
 }
 
-function queryRequest(
-  key: string,
+/**
+ * A signed-in person's session, as the admin's own requests carry it: the one
+ * caller that may preview a card, since only a person may place one.
+ */
+async function sessionOf(userId: string): Promise<{ session: string }> {
+  const token = await signAccessToken(
+    buildClaims({
+      userId,
+      email: `${userId}@example.com`,
+      name: userId,
+      image: null,
+      roleIds: [],
+      sessionEpoch: 0,
+    }),
+    process.env.NEXTLY_SECRET!
+  );
+  return { session: `nextly_session=${token}` };
+}
+
+/** Who asks: an API key's token, or a person's session cookie. */
+type Asker = string | { session: string };
+
+async function queryRequest(
+  asker: Asker,
   queries: unknown[],
   init: { stream?: boolean; signal?: AbortSignal } = {}
 ): Promise<Response> {
@@ -285,7 +309,9 @@ function queryRequest(
     new Request("http://localhost/api/dashboard/query", {
       method: "POST",
       headers: {
-        authorization: `Bearer ${key}`,
+        ...(typeof asker === "string"
+          ? { authorization: `Bearer ${asker}` }
+          : { cookie: asker.session }),
         "content-type": "application/json",
         ...(init.stream ? { accept: "application/x-ndjson" } : {}),
       },
@@ -297,8 +323,8 @@ function queryRequest(
 }
 
 /** The batch's slots, each as the bytes the JSON answer carries it in. */
-async function slotBytes(key: string, queries: unknown[]): Promise<string[]> {
-  const res = await queryRequest(key, queries);
+async function slotBytes(asker: Asker, queries: unknown[]): Promise<string[]> {
+  const res = await queryRequest(asker, queries);
   expect(res.status).toBe(200);
   const body = (await res.json()) as { results: unknown[] };
   return body.results.map(slot => JSON.stringify(slot));
@@ -346,15 +372,39 @@ describe("a declared widget's card through POST /api/dashboard/query", () => {
     await placeFor(ownerId!, [
       { id: "c-orders", widgetId: "acme/open-orders", config: { items: 2 } },
     ]);
-    const key = await keyOf(ownerId!, [`read-${ORDERS}`]);
 
-    const [preview, stored] = await slotBytes(key, [
+    const [preview, stored] = await slotBytes(await sessionOf(ownerId!), [
       { widget: "acme/open-orders", settings: { items: 3 } },
       { widget: "acme/open-orders", card: "c-orders" },
     ]);
     expect(JSON.parse(preview)).toMatchObject({ result: { total: 3 } });
     // The stored card is untouched by the preview beside it.
     expect(JSON.parse(stored)).toMatchObject({ result: { total: 2 } });
+  });
+
+  it("previews nothing for an API key, which may place no card", async () => {
+    // 🔴 A preview runs a data function with settings of the asker's choosing,
+    // which is allowed because it stands in for placing the card. A key may
+    // not write a layout at all, so it gets the one unavailable answer, with
+    // its own stored card still answered beside it.
+    await seedOrders();
+    await placeFor(ownerId!, [
+      { id: "c-orders", widgetId: "acme/open-orders", config: { items: 2 } },
+    ]);
+    const key = await keyOf(ownerId!, [`read-${ORDERS}`]);
+
+    const [preview, stored, unknown] = await slotBytes(key, [
+      { widget: "acme/open-orders", settings: { items: 3 } },
+      { widget: "acme/open-orders", card: "c-orders" },
+      { widget: "acme/open-orders", card: "c-nowhere" },
+    ]);
+    expect(JSON.parse(stored)).toMatchObject({ result: { total: 2 } });
+    expect(JSON.parse(preview)).toMatchObject({
+      ok: false,
+      code: "unavailable",
+    });
+    expect(preview).toBe(unknown);
+    expect(preview).not.toContain('"total"');
   });
 
   it("answers another person's card, an unknown card and a mismatched widget with the same bytes", async () => {

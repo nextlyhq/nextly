@@ -93,6 +93,10 @@ const oneLine = (text: string): boolean => !/[\r\n]/.test(text);
  * Whether a link is a path inside the admin: no scheme, no host, and not from
  * the root, where it would name the admin's own address. Core resolves it to
  * wherever the admin is served.
+ *
+ * 🔴 And no segment that climbs out of it. A browser resolves `.` and `..`
+ * before it navigates, percent-encoded ones included, so `../logout` under the
+ * admin's prefix lands outside the admin however the prefix was written.
  */
 function isAdminRelative(link: unknown): boolean {
   return (
@@ -100,8 +104,32 @@ function isAdminRelative(link: unknown): boolean {
     link.trim() !== "" &&
     !/^[a-z][a-z0-9+.-]*:/i.test(link) &&
     !link.startsWith("/") &&
-    !link.includes("\\")
+    !link.includes("\\") &&
+    !leavesItsDirectory(link)
   );
+}
+
+/**
+ * Whether a path's own part (before any query or fragment) has a segment a
+ * browser would resolve upward or sideways: `.` or `..` once decoded, one that
+ * decodes to a slash or a backslash, or one that cannot be decoded at all.
+ */
+function leavesItsDirectory(link: string): boolean {
+  const path = link.split(/[?#]/, 1)[0] ?? "";
+  return path.split("/").some(segment => {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      return true;
+    }
+    return (
+      decoded === "." ||
+      decoded === ".." ||
+      decoded.includes("/") ||
+      decoded.includes("\\")
+    );
+  });
 }
 
 /**
