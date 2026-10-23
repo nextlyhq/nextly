@@ -214,13 +214,18 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         // nobody asked — and answering "Custom" would demote a seeded role to
         // a custom one on any save, including a description-only edit.
         await roleApi.updateRole(roleId, roleData);
-        const currentIds = (role?.permissions || []).map(p => p.id);
-        const nextIds = values.permissions;
-        await roleApi.updateRolePermissions(roleId, currentIds, nextIds);
+        try {
+          const currentIds = (role?.permissions || []).map(p => p.id);
+          const nextIds = values.permissions;
+          await roleApi.updateRolePermissions(roleId, currentIds, nextIds);
+        } finally {
+          // The signed-in user may hold this role, so what they may do is
+          // asked again, as every other role, permission and assignment change
+          // does. Asked once the role itself is saved, whether or not its
+          // permissions follow: that save alone can change what it inherits.
+          invalidateCurrentUserAccess(queryClient);
+        }
         await queryClient.invalidateQueries({ queryKey: ["roles"] });
-        // The signed-in user may hold this role, so what they may do is asked
-        // again, as every other role, permission and assignment change does.
-        invalidateCurrentUserAccess(queryClient);
         toast.success("Role updated successfully");
       } else {
         debugLog("useRoleForm", "Creating role...");

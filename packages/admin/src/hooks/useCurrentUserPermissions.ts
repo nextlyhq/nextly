@@ -277,7 +277,10 @@ function answerState(
 ): AnswerState {
   const expired = endedAt !== null && query.dataUpdatedAt < endedAt;
   return {
-    isLoading: query.isPending || (expired && query.isFetching),
+    // An ended answer is waited on until a current one or an error arrives,
+    // before as well as during its refresh: neither the old answer nor its
+    // absence is a decision to show.
+    isLoading: query.isPending || (expired && query.error === null),
     error: query.error,
     hasAnswer: query.data !== undefined && !expired,
   };
