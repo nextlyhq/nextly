@@ -303,6 +303,8 @@ export {
 export type {
   AnyWidgetSetting,
   ContentSetting,
+  KnobContext,
+  KnobSource,
 } from "./domains/widgets/settings";
 // Which field NAMES an entry. The admin draws a column with it, the activity
 // feed labels a row with it, and the dashboard's generated list widgets pick a

@@ -473,6 +473,67 @@ describe("applyWidgetSettings drives only the knobs it declares", () => {
       100000
     );
   });
+
+  it("reads the collection a card is set to, in place of the one declared", () => {
+    const collection: AnyWidgetSetting = {
+      name: "collection",
+      type: "collection",
+    };
+    const out = applyWidgetSettings(base, [collection], {
+      collection: "pages",
+    });
+    expect(out.source).toBe("collection:pages");
+    // The rest of the query is the widget's own.
+    expect(out).toEqual({ ...base, source: "collection:pages" });
+    expect(base.source).toBe("collection:posts");
+  });
+
+  it("reads the declared collection when the card is set to none, and keeps the query otherwise", () => {
+    const withDefault: AnyWidgetSetting = {
+      name: "collection",
+      type: "collection",
+      defaultValue: "pages",
+    };
+    expect(applyWidgetSettings(base, [withDefault], {}).source).toBe(
+      "collection:pages"
+    );
+    const without: AnyWidgetSetting = {
+      name: "collection",
+      type: "collection",
+    };
+    // Nothing chosen and nothing declared: the source the widget names stands.
+    expect(applyWidgetSettings(base, [without], {})).toBe(base);
+  });
+
+  it("drives the collection only over a collection source, or none", () => {
+    const collection: AnyWidgetSetting = {
+      name: "collection",
+      type: "collection",
+    };
+    // A system source is one read of its own: a Collection setting there would
+    // mean something else, so this knob leaves it as declared.
+    const system = { source: "system:releases", op: "list" as const, limit: 5 };
+    expect(
+      applyWidgetSettings(system, [collection], { collection: "pages" })
+    ).toBe(system);
+    // The source handed in is the one judged, whatever the query names.
+    expect(
+      applyWidgetSettings(
+        base,
+        [collection],
+        { collection: "pages" },
+        {
+          source: { id: "system:releases" },
+        }
+      )
+    ).toBe(base);
+    // No declared source at all: the card's collection is its source.
+    const sourceless = { op: "list" as const, limit: 5 };
+    expect(
+      applyWidgetSettings(sourceless, [collection], { collection: "pages" })
+        .source
+    ).toBe("collection:pages");
+  });
 });
 
 describe("the content settings: a collection, and a filter, sort or grouping over it", () => {
@@ -555,15 +616,34 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
     expect(list).toContain('setting "where" is typed "filter"');
   });
 
-  it("is refused at registration, naming its mark and what to use instead", () => {
-    // A registered widget's settings reach its query through knobs that carry
-    // `limit` alone, so a content setting there would change nothing the card
+  it("admits a Collection setting at registration over a collection source, or none", () => {
+    // The collection a card reads becomes its query's source, so the setting
+    // changes what the card shows and is drawn rather than refused.
+    expect(widgetSettingsProblem([content[0]])).toBeUndefined();
+    expect(
+      widgetSettingsProblem([content[0]], { id: "collection:posts" })
+    ).toBeUndefined();
+    expect(() => validateWidgetSettings([content[0]], "core/x")).not.toThrow();
+  });
+
+  it("refuses a Collection setting at registration over a source no knob drives it on", () => {
+    // On a system source the knob does not apply, so the setting would be
+    // drawn and saved and change nothing: refused with the mark.
+    expect(
+      widgetSettingsProblem([content[0]], { id: "system:releases" })
+    ).toContain(CONTENT_SETTING_NOT_DRAWN);
+    expect(() =>
+      validateWidgetSettings([content[0]], "core/x", { id: "system:releases" })
+    ).toThrow(CONTENT_SETTING_NOT_DRAWN);
+  });
+
+  it("refuses at registration a content setting no knob drives, naming its mark and what to use instead", () => {
+    // A registered widget's settings reach its query only through its knobs,
+    // so a filter, sort or grouping there would change nothing the card
     // shows; a declared widget, whose card query is built from them, may hold
     // these.
-    for (const setting of content) {
-      const set =
-        setting.type === "collection" ? [setting] : [content[0], setting];
-      const problem = widgetSettingsProblem(set);
+    for (const setting of content.filter(s => s.type !== "collection")) {
+      const problem = widgetSettingsProblem([content[0], setting]);
       expect(problem, setting.type).toContain(CONTENT_SETTING_NOT_DRAWN);
       expect(problem).toContain(
         "use a text, number, checkbox or select setting until those settings reach a registered widget's query"

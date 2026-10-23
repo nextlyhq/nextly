@@ -1375,5 +1375,11 @@ export function validateWidgetDefinition(
   validateCells(d);
   validateDefaultOrder(d);
   validateChrome(d);
-  validateWidgetSettings(d.settings, d.id ?? "widget");
+  // Judged on the widget's own source: a content setting is admitted where a
+  // knob drives it on that source.
+  validateWidgetSettings(
+    d.settings,
+    d.id ?? "widget",
+    typeof d.query?.source === "string" ? { id: d.query.source } : undefined
+  );
 }

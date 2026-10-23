@@ -41,6 +41,8 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 
+import { sourceKindFromId } from "./sources";
+
 /** What every setting carries, whatever kind it is. */
 export interface WidgetSettingBase {
   name: string;
@@ -123,12 +125,12 @@ export type WidgetSetting =
  * builder: the sheet draws these with controls of its own, from the choices
  * the server offers the reader.
  *
- * Registration still refuses them by name (`CONTENT_SETTING_NOT_DRAWN`), for
- * a reason about the QUERY rather than the sheet: a registered widget's
- * settings reach its query through `applyWidgetSettings`, whose knobs are
- * `limit` alone, so a content setting declared there would be drawn and saved
- * and change nothing the card shows. Only a declared widget, whose card query
- * is built from these settings, may hold one until those knobs carry them.
+ * Registration refuses one that no knob of `applyWidgetSettings` drives
+ * (`CONTENT_SETTING_NOT_DRAWN`), for a reason about the QUERY rather than the
+ * sheet: a registered widget's settings reach its query only through those
+ * knobs, so a setting no knob drives would be drawn and saved and change
+ * nothing the card shows. Only a declared widget, whose card query is built
+ * from these settings, may hold the others until knobs carry them.
  *
  * @experimental The shape may still change while the settings sheet's
  * content controls are built.
@@ -367,12 +369,19 @@ function fail(message: string): never {
  * install. One rule set answering both channels is the thing
  * `plugins/__tests__/channel-divergence` exists to protect.
  */
-export function widgetSettingsProblem(settings: unknown): string | undefined {
+export function widgetSettingsProblem(
+  settings: unknown,
+  source?: KnobSource
+): string | undefined {
   const [problem] = widgetSettingsProblems(settings);
   if (problem !== undefined) return problem;
-  // Every setting is now known to be well formed, so each has a type.
+  // Every setting is now known to be well formed, so each has a type. A
+  // content setting is admitted exactly when a knob drives it on the widget's
+  // own source, so a setting that would change nothing the card asks is never
+  // offered.
   const content = (settings as readonly AnyWidgetSetting[] | undefined)?.find(
-    isContentSetting
+    (setting): setting is ContentSetting =>
+      isContentSetting(setting) && knobFor(setting, source) === undefined
   );
   return content === undefined ? undefined : contentSettingRefusal(content);
 }
@@ -636,9 +645,10 @@ function defaultProblem(
  */
 export function validateWidgetSettings(
   settings: unknown,
-  widgetId: string
+  widgetId: string,
+  source?: KnobSource
 ): asserts settings is WidgetSetting[] | undefined {
-  const problem = widgetSettingsProblem(settings);
+  const problem = widgetSettingsProblem(settings, source);
   if (problem !== undefined) fail(`${widgetId}: ${problem}`);
 }
 
@@ -704,22 +714,95 @@ export function resolveWidgetSettings(
   return resolved;
 }
 
+/** The parts of a card's query a setting may set. */
+interface KnobQuery {
+  source?: string;
+  limit?: number;
+}
+
 /**
- * Query knobs a setting may drive, and the setting type each requires.
+ * The source a widget declares, as its knobs see it. A knob may drive a setting
+ * on one kind of source and not another, and set a different part of the query
+ * on each, so both questions are asked of the source too.
  *
- * 🔴 A closed set, matched by NAME. That is the contract and it is stated
- * rather than inferred: a setting called `limit` and typed `number` changes how
- * many rows the card asks for, and nothing else a widget declares touches the
- * query at all. The alternative — a mapping from each setting to the knob it
- * feeds — is a small DSL to learn, to document and to validate, for a set that
- * currently has one member.
- *
- * The type is part of the match, so a `text` setting named `limit` drives
- * nothing rather than putting a string where a row count goes.
+ * @experimental The shape may grow while the content widgets are built.
  */
-const QUERY_KNOBS: Record<string, WidgetSetting["type"]> = {
-  limit: "number",
-};
+export interface KnobSource {
+  id: string;
+}
+
+/**
+ * What the knobs may consult beyond the settings themselves, as one object so
+ * a later need adds a member rather than a parameter.
+ *
+ * @experimental The shape may grow while the content widgets are built.
+ */
+export interface KnobContext {
+  /** The widget's declared source; the query's own when absent. */
+  source?: KnobSource;
+}
+
+/** How one kind of setting becomes part of a card's query. */
+interface QueryKnob {
+  /** Whether this knob drives `setting` on `source`, or on no source. */
+  drives(setting: AnyWidgetSetting, source: KnobSource | undefined): boolean;
+  /** `query` with `value` applied on `source`: a copy, never the query itself. */
+  apply<T extends KnobQuery>(
+    query: T,
+    value: unknown,
+    source: KnobSource | undefined
+  ): T;
+}
+
+/** The source a query names, as its knobs see it. */
+function knobSourceOf(query: KnobQuery): KnobSource | undefined {
+  return typeof query.source === "string" ? { id: query.source } : undefined;
+}
+
+/**
+ * Query knobs a setting may drive: ONE closed list from a kind of setting to
+ * how it becomes part of the card's query.
+ *
+ * 🔴 Closed, and the only way a setting reaches a query. A setting no knob
+ * drives changes nothing the card asks, so registration refuses it rather than
+ * drawing a control that does nothing (`CONTENT_SETTING_NOT_DRAWN`).
+ *
+ * `limit` is matched by NAME as well as type, as it always was: a number
+ * setting called `limit` sets how many rows the card asks for, and a number
+ * setting of any other name drives nothing. A content kind is matched by type
+ * alone, since each type has one meaning for a query.
+ *
+ * A value reaches a knob only after `resolveWidgetSettings` has judged it by
+ * its type, so each knob applies a value of the type it drives.
+ */
+const QUERY_KNOBS: readonly QueryKnob[] = [
+  {
+    drives: setting => setting.type === "number" && setting.name === "limit",
+    apply: (query, value) => ({ ...query, limit: value as number }),
+  },
+  {
+    // The collection a card reads becomes its source, replacing the one the
+    // widget declared, so one widget can read whichever collection its card
+    // is set to. The reader's access to it is the server's to judge, as for
+    // any source a query names. Only over a collection source, or none: on
+    // another kind of source the same setting would mean something else.
+    drives: (setting, source) =>
+      setting.type === "collection" &&
+      (source === undefined || sourceKindFromId(source.id) === "collection"),
+    apply: (query, value) => ({
+      ...query,
+      source: `collection:${value as string}`,
+    }),
+  },
+];
+
+/** The knob that drives a setting on a source, or `undefined` when none does. */
+function knobFor(
+  setting: AnyWidgetSetting,
+  source: KnobSource | undefined
+): QueryKnob | undefined {
+  return QUERY_KNOBS.find(knob => knob.drives(setting, source));
+}
 
 /**
  * The query this card should ask, given what its reader chose.
@@ -735,25 +818,29 @@ const QUERY_KNOBS: Record<string, WidgetSetting["type"]> = {
  * Returns the query UNCHANGED when nothing applies, so a caller can use the
  * result unconditionally without asking whether it needed to.
  */
-export function applyWidgetSettings<T extends { limit?: number }>(
+export function applyWidgetSettings<T extends KnobQuery>(
   query: T,
   settings: readonly AnyWidgetSetting[] | undefined,
-  stored: Record<string, unknown> | undefined
+  stored: Record<string, unknown> | undefined,
+  context: KnobContext = {}
 ): T {
   if (!settings || settings.length === 0) return query;
+  // Judged on the DECLARED source, read once before any knob may replace it.
+  const source = context.source ?? knobSourceOf(query);
 
   const resolved = resolveWidgetSettings(settings, stored);
   let next = query;
 
   for (const setting of settings) {
-    if (QUERY_KNOBS[setting.name] !== setting.type) continue;
+    const knob = knobFor(setting, source);
+    if (knob === undefined) continue;
     const value = resolved[setting.name];
     if (value === undefined) continue;
-    // Copied on first write rather than up front: a card whose settings drive
-    // no knob hands back the query it was given, which is what lets a caller
-    // apply this to every card without a branch.
-    if (next === query) next = { ...query };
-    (next as { limit?: number }).limit = value as number;
+    // Each knob hands back a copy, so a card whose settings drive no knob
+    // keeps the query it was given, which is what lets a caller apply this to
+    // every card without a branch. Every knob sees the DECLARED source, not
+    // one an earlier knob put in its place.
+    next = knob.apply(next, value, source);
   }
 
   return next;
