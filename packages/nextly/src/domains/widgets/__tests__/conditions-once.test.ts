@@ -21,7 +21,6 @@ vi.mock("../../releases/releases-widget-source", () => ({
   callerMayReadAnyRelease: reads.callerMayReadAnyRelease,
 }));
 
-import { conditionProbe } from "../condition-probe";
 import { evaluateConditions } from "../conditions";
 import type { WidgetCondition } from "../lifecycle";
 
@@ -44,12 +43,9 @@ function given(world: {
   reads.callerMayReadAnyRelease.mockResolvedValue(world.releaseExists ?? true);
 }
 
+/** The conditions asked together, as one request asks them: through one probe of its own. */
 async function ask(conditions: WidgetCondition[]) {
-  return evaluateConditions(
-    new Set(conditions),
-    caller,
-    conditionProbe(caller)
-  );
+  return evaluateConditions(new Set(conditions), caller);
 }
 
 beforeEach(() => {
