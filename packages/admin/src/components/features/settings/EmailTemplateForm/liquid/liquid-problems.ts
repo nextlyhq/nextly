@@ -71,6 +71,18 @@ export function liquidTagNames(): string[] {
   return Object.keys(parser.tags).sort();
 }
 
+/**
+ * The tags LiquidJS has that the engine removed. Not "everything outside
+ * `liquidTagNames`": `else`, `elsif` and every `end…` belong to the tag they
+ * close, are no tag of their own, and are still written.
+ */
+export function removedTagNames(): string[] {
+  const registered = new Set(Object.keys(parser.tags));
+  return Object.keys(new Liquid().tags)
+    .filter(name => !registered.has(name))
+    .sort();
+}
+
 /** The filters an author can use, by name. */
 export function liquidFilterNames(): string[] {
   return Object.keys(parser.filters).sort();

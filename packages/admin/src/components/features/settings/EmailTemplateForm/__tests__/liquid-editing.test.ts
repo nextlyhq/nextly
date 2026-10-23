@@ -95,6 +95,12 @@ describe("completion", () => {
     }
   });
 
+  it("keeps offering what closes or branches an open tag", () => {
+    // `else` and `endif` are part of `if`, not tags the engine registers.
+    const labels = offered("{% if vip %}VIP{% ");
+    expect(labels).toEqual(expect.arrayContaining(["else", "endif"]));
+  });
+
   it("lists each variable once, with what it is", () => {
     const variables = variableCompletions(data);
     expect(variables.filter(v => v.label === "customer")).toHaveLength(1);

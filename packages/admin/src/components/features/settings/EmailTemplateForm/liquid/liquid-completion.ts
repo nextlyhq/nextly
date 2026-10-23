@@ -25,9 +25,9 @@ import { liquidCompletionSource } from "@codemirror/lang-liquid";
 import { BUILT_IN_VARIABLES } from "../sample-data";
 import type { TemplateFormVariable } from "../schema";
 
-import { liquidFilterNames, liquidTagNames } from "./liquid-problems";
+import { liquidFilterNames, removedTagNames } from "./liquid-problems";
 
-const TAGS: ReadonlySet<string> = new Set(liquidTagNames());
+const REMOVED_TAGS: ReadonlySet<string> = new Set(removedTagNames());
 const FILTERS: ReadonlySet<string> = new Set(liquidFilterNames());
 
 /** What completion knows about the template being edited. */
@@ -139,7 +139,9 @@ function atTagName(context: CompletionContext, from: number): boolean {
  */
 function isUnavailable(option: Completion, tagName: boolean): boolean {
   if (option.type === "function") return !FILTERS.has(option.label);
-  if (option.type === "keyword" && tagName) return !TAGS.has(option.label);
+  if (option.type === "keyword" && tagName) {
+    return REMOVED_TAGS.has(option.label);
+  }
   return false;
 }
 
