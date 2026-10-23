@@ -8,7 +8,7 @@
  * here on demand, none of it is part of the admin's startup. While it loads,
  * a box of the field's size holds its place, so nothing moves when it arrives.
  */
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, type JSX } from "react";
 
 import { cn } from "@admin/lib/utils";
 
@@ -18,7 +18,7 @@ const LiquidEditor = lazy(() =>
   import("./LiquidEditor").then(module => ({ default: module.LiquidEditor }))
 );
 
-export function LazyLiquidEditor(props: LiquidEditorProps) {
+export function LazyLiquidEditor(props: LiquidEditorProps): JSX.Element {
   const fallback = (
     <div
       aria-hidden

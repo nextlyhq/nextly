@@ -12,7 +12,7 @@
  */
 
 /** What the server says when a From address uses a variable. */
-export const VARIABLE_ADDRESS_MESSAGE =
+export const VARIABLE_ADDRESS_MESSAGE: string =
   "The From address can't use variables; only the name before it can, as in {{ shopName }} <shop@example.com>.";
 
 function usesVariables(value: string): boolean {

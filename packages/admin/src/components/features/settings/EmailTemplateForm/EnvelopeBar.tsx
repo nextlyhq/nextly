@@ -164,7 +164,10 @@ export function EnvelopeBar({
   ownsContent: boolean;
   /** What the fields complete: the template's variables and test data. */
   completion: CompletionData;
-  /** False for a template kept on the previous engine, sent without Liquid. */
+  /**
+   * False for a template kept on the previous engine, whose subject and
+   * preview text are sent as written. From and Reply-To stay Liquid.
+   */
   liquid: boolean;
 }): JSX.Element {
   if (isLayoutRow) {
@@ -189,7 +192,9 @@ export function EnvelopeBar({
           isPending={isPending}
           readOnly={field.owners && !ownsContent}
           completion={completion}
-          liquid={liquid}
+          // From and Reply-To render through Liquid on every engine; only
+          // the owner's content is sent as written on the previous one.
+          liquid={liquid || !field.owners}
         />
       ))}
     </div>

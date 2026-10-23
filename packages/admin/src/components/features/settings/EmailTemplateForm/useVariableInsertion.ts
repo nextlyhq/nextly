@@ -30,8 +30,10 @@ export function useVariableInsertion({
       // The editor owns its document, so the insert is dispatched to it: it
       // updates the text and the caret together, and its onChange carries the
       // new value to the field this tab is bound to.
+      // Only a view still on the page: on a phone or tablet, Details takes
+      // the body's place and its editor is destroyed, while the ref keeps it.
       const view = bodyViewRef.current;
-      if (view) {
+      if (view?.dom.isConnected) {
         const { from, to } = view.state.selection.main;
         view.dispatch({
           changes: { from, to, insert: token },
@@ -40,7 +42,8 @@ export function useVariableInsertion({
         view.focus();
         return;
       }
-      // The editor is still loading: append to the field being edited.
+      // The editor is still loading, or isn't shown: append to the field
+      // being edited.
       const fieldName =
         editorTab === "html" ? "htmlContent" : "plainTextContent";
       form.setValue(fieldName, (form.getValues(fieldName) ?? "") + token, {

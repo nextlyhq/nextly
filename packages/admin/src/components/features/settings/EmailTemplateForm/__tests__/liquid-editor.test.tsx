@@ -10,6 +10,7 @@
 import { currentCompletions, startCompletion } from "@codemirror/autocomplete";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { EditorView } from "@uiw/react-codemirror";
+import { useRef } from "react";
 import { useForm } from "react-hook-form";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -102,6 +103,22 @@ describe("the email editor", () => {
     expect(view().state.doc.toString()).toBe("Welcome");
   });
 
+  it("lets a value saved with a break be repaired, and adds no new one", () => {
+    // The API and the schemas accept a break in a subject. Refusing every edit
+    // to such a value would leave it impossible to fix in the editor.
+    const { view } = mountEditor({ singleLine: true, value: "Welcome\nback" });
+    act(() => {
+      view().dispatch({ changes: { from: 0, to: 7, insert: "Hello" } });
+    });
+    expect(view().state.doc.toString()).toBe("Hello\nback");
+
+    type(view(), "Hello\nback\nagain");
+    expect(view().state.doc.toString()).toBe("Hello\nback");
+
+    type(view(), "Hello back");
+    expect(view().state.doc.toString()).toBe("Hello back");
+  });
+
   it("lets a multi-line field take a line break", () => {
     const { view } = mountEditor({ value: "Welcome" });
     type(view(), "Welcome\nto the shop");
@@ -170,10 +187,12 @@ function EnvelopeWithError({
   field,
   message,
   values = {},
+  liquid = true,
 }: {
   field?: keyof TemplateFormValues;
   message?: string;
   values?: Partial<TemplateFormValues>;
+  liquid?: boolean;
 }) {
   const form = useForm<TemplateFormValues>({
     defaultValues: { ...DEFAULT_VALUES, ...values },
@@ -189,13 +208,35 @@ function EnvelopeWithError({
         isLayoutRow={false}
         ownsContent
         completion={COMPLETION}
-        liquid
+        liquid={liquid}
       />
     </Form>
   );
 }
 
 describe("the envelope", () => {
+  it("keeps From's Liquid checked on a template kept on the previous engine", async () => {
+    // That engine sends the subject as written, but From and Reply-To render
+    // through Liquid on every engine, and a save checks them as Liquid.
+    render(
+      <EnvelopeWithError
+        liquid={false}
+        values={{
+          subject: "Hi {{ userName | nope }}",
+          fromOverride: "{{ userName | nope }} <shop@example.com>",
+        }}
+      />
+    );
+    await screen.findByRole("textbox", { name: "From" }, { timeout: 5000 });
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole("alert")
+          .filter(alert => /nope/.test(alert.textContent ?? ""))
+      ).toHaveLength(1)
+    );
+  });
+
   it("names a refused field's message on the text area focus reaches", async () => {
     render(<EnvelopeWithError field="subject" message="Subject is required" />);
     const subject = await screen.findByRole(
@@ -242,7 +283,7 @@ function BodyWithChip({ tab }: { tab: "html" | "text" }) {
       plainTextContent: "Hi",
     },
   });
-  const bodyViewRef = { current: null as EditorView | null };
+  const bodyViewRef = useRef<EditorView | null>(null);
   const insert = useVariableInsertion({ form, editorTab: tab, bodyViewRef });
   return (
     <Form {...form}>
@@ -295,4 +336,28 @@ describe("inserting a variable", () => {
       });
     }
   );
+
+  it("still lands in the body once its editor is gone", async () => {
+    // On a phone or tablet, Details takes the body's place and destroys its
+    // editor; the ref still holds the view. A chip in Details then writes to
+    // the field, not to a view no one can see.
+    render(<BodyWithChip tab="text" />);
+    const field = await screen.findByRole(
+      "textbox",
+      { name: "Plain text body" },
+      { timeout: 5000 }
+    );
+    act(() => {
+      EditorView.findFromDOM(field)!.destroy();
+    });
+
+    act(() => {
+      screen.getByRole("button", { name: "userName" }).click();
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("text").textContent).toBe("Hi{{userName}}")
+    );
+    expect(screen.getByTestId("html").textContent).toBe("<p>Hi</p>");
+  });
 });

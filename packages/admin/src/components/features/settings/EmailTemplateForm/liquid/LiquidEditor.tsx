@@ -19,7 +19,13 @@ import { html } from "@codemirror/lang-html";
 import { liquid } from "@codemirror/lang-liquid";
 import { linter, type Diagnostic } from "@codemirror/lint";
 import CodeMirror, { EditorState, EditorView } from "@uiw/react-codemirror";
-import { useEffect, useMemo, useRef, type MutableRefObject } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  type JSX,
+  type MutableRefObject,
+} from "react";
 
 import { useTheme } from "@admin/context/providers/ThemeProvider";
 import {
@@ -68,9 +74,15 @@ export interface LiquidEditorProps {
   "aria-invalid"?: boolean | "true" | "false";
 }
 
-/** A single line: a change that would make two is refused. */
+/**
+ * A single line: a change that adds a line is refused. One that keeps the
+ * count is let through, so a value saved with a break before this editor (the
+ * API and the schemas accept one) can still be edited, and repaired.
+ */
 const oneLine = EditorState.transactionFilter.of(transaction =>
-  transaction.newDoc.lines > 1 ? [] : transaction
+  transaction.newDoc.lines > Math.max(1, transaction.startState.doc.lines)
+    ? []
+    : transaction
 );
 
 /**
@@ -146,29 +158,43 @@ function contentAttributes(given: ContentAttributes) {
   return attributes;
 }
 
-export function LiquidEditor({
-  value,
-  onChange,
-  mode,
-  singleLine = false,
-  label,
-  readOnly,
-  disabled = false,
-  completion,
-  placeholder,
-  minHeight = 380,
-  onCreateEditor,
-  onProblems,
-  liquid: isLiquid = true,
-  id,
-  "aria-describedby": describedBy,
-  "aria-invalid": invalid,
-}: LiquidEditorProps) {
-  const { resolvedTheme } = useTheme();
+/** What `basicSetup` turns on: an input-like line wants none of the code chrome. */
+function setupFor(singleLine: boolean, readOnly: boolean) {
+  const code = !singleLine;
+  return {
+    lineNumbers: code,
+    foldGutter: code,
+    highlightActiveLine: code && !readOnly,
+    highlightActiveLineGutter: code && !readOnly,
+    // Ours, from `liquidTooling`, with the template's variables.
+    autocompletion: false,
+    closeBrackets: true,
+    bracketMatching: true,
+    tabSize: 2,
+    indentOnInput: code,
+    searchKeymap: code,
+    completionKeymap: true,
+    lintKeymap: true,
+  };
+}
 
-  // Read through refs, so the extensions are built once per field: test
-  // data and declarations change as the author works, and rebuilding the
-  // extensions each time would reconfigure the editor under their caret.
+/**
+ * The editor's extensions, built once per field and its settings. Completion
+ * data and the problems callback are read through refs, so the extensions
+ * aren't rebuilt (which would reconfigure the editor under the author's
+ * caret) each time the test data or the declarations change.
+ */
+function useLiquidExtensions(
+  props: LiquidEditorProps,
+  isLiquid: boolean,
+  singleLine: boolean,
+  disabled: boolean
+) {
+  const { resolvedTheme } = useTheme();
+  const { mode, label, id, completion, onProblems } = props;
+  const describedBy = props["aria-describedby"];
+  const invalid = props["aria-invalid"];
+
   const completionRef = useRef(completion);
   const problemsRef = useRef(onProblems);
   useEffect(() => {
@@ -182,7 +208,7 @@ export function LiquidEditor({
     if (!isLiquid) problemsRef.current?.([]);
   }, [isLiquid]);
 
-  const extensions = useMemo(
+  return useMemo(
     () => [
       language(isLiquid, mode),
       ...(isLiquid ? liquidTooling(completionRef, problemsRef) : []),
@@ -208,14 +234,26 @@ export function LiquidEditor({
       resolvedTheme,
     ]
   );
+}
+
+export function LiquidEditor(props: LiquidEditorProps): JSX.Element {
+  const singleLine = props.singleLine ?? false;
+  const disabled = props.disabled ?? false;
+  const extensions = useLiquidExtensions(
+    props,
+    props.liquid ?? true,
+    singleLine,
+    disabled
+  );
 
   return (
     <CodeMirror
-      value={value}
-      onChange={onChange}
+      value={props.value}
+      onChange={props.onChange}
       extensions={extensions}
-      height={singleLine ? "36px" : undefined}
-      minHeight={singleLine ? undefined : `${minHeight}px`}
+      // A single line grows past one only for a value saved with a break,
+      // which then shows whole until it's repaired.
+      minHeight={singleLine ? "36px" : `${props.minHeight ?? 380}px`}
       // Colours come from `--nx-code-*`, which the theme redeclares in dark
       // mode, as for every other code field in the admin.
       theme="none"
@@ -223,24 +261,10 @@ export function LiquidEditor({
       // scrolled from the keyboard. `readOnly` refuses the edits, and marks
       // the field aria-readonly. Only a pending save takes the focus away.
       editable={!disabled}
-      readOnly={disabled || readOnly}
-      basicSetup={{
-        lineNumbers: !singleLine,
-        foldGutter: !singleLine,
-        highlightActiveLine: !singleLine && !readOnly,
-        highlightActiveLineGutter: !singleLine && !readOnly,
-        // Ours, above, with the template's variables.
-        autocompletion: false,
-        closeBrackets: true,
-        bracketMatching: true,
-        tabSize: 2,
-        indentOnInput: !singleLine,
-        searchKeymap: !singleLine,
-        completionKeymap: true,
-        lintKeymap: true,
-      }}
-      placeholder={placeholder}
-      onCreateEditor={onCreateEditor}
+      readOnly={disabled || props.readOnly}
+      basicSetup={setupFor(singleLine, props.readOnly)}
+      placeholder={props.placeholder}
+      onCreateEditor={props.onCreateEditor}
       className="overflow-hidden rounded-md border border-input"
     />
   );
