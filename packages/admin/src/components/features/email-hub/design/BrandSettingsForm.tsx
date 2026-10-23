@@ -11,7 +11,7 @@ import {
   SelectValue,
   Slider,
 } from "@nextlyhq/ui";
-import { useEffect, useId, useState } from "react";
+import { type JSX, useEffect, useId, useState } from "react";
 
 import { MediaPickerDialog } from "@admin/components/features/media-library/MediaPickerDialog";
 import { Image as ImageIcon, Info, Plus, X } from "@admin/components/icons";
@@ -458,7 +458,7 @@ export function BrandSettingsForm({
   readOnly: boolean;
   /** The Match my site button, where the site has colours to offer. */
   matchMySite?: React.ReactNode;
-}) {
+}): JSX.Element {
   return (
     <section
       aria-labelledby="brand-settings-heading"

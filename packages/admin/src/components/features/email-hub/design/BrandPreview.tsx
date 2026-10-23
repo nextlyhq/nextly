@@ -9,7 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
-import { useId, useMemo, useState } from "react";
+import { type JSX, useId, useMemo, useState } from "react";
 
 import { buildSampleData } from "@admin/components/features/settings/EmailTemplateForm/sample-data";
 import { PreviewPane } from "@admin/components/features/settings/EmailTemplateForm/TemplatePreview";
@@ -128,7 +128,7 @@ export function BrandPreview({
   unsaved: boolean;
   /** The site changed the Default layout, so emails don't look like this yet. */
   layoutKept: boolean;
-}) {
+}): JSX.Element {
   const [chosen, setChosen] = useState<string | null>(null);
   const email = emails.find(entry => entry.id === chosen) ?? emails[0] ?? null;
   return (

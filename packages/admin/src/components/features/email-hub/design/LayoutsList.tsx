@@ -8,7 +8,7 @@ import {
   Button,
   Skeleton,
 } from "@nextlyhq/ui";
-import { useMemo, useState } from "react";
+import { type JSX, useMemo, useState } from "react";
 
 import {
   ArrowUp,
@@ -250,7 +250,7 @@ function PendingNotices({ layouts }: { layouts: EmailTemplateRecord[] }) {
  * The layouts emails are sent in, each with the emails that use it, and the
  * partials layouts share. A layout opens in the same workbench as an email.
  */
-export function LayoutsList() {
+export function LayoutsList(): JSX.Element {
   const {
     data: templates = [],
     isLoading,

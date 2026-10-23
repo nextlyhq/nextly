@@ -12,8 +12,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@nextlyhq/ui";
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { type JSX, useState } from "react";
 
 import { Info, Sparkles } from "@admin/components/icons";
 import type { BrandFont, BrandSettings } from "@admin/services/emailBrandApi";
@@ -36,7 +36,7 @@ const SITE_STYLE_SLUG = "site-style";
  * The site's design variables, or null when there are none to offer: no page
  * builder, no permission to read them, or no colours in them.
  */
-export function useSiteStyle() {
+export function useSiteStyle(): UseQueryResult<SiteStyle | null> {
   return useQuery<SiteStyle | null>({
     queryKey: ["emailBrand", "siteStyle"],
     queryFn: async () => {
@@ -276,7 +276,7 @@ export function MatchMySite({
   current: BrandSettings;
   fonts: BrandFont[];
   onApply: (match: SiteMatch) => void;
-}) {
+}): JSX.Element {
   const [open, setOpen] = useState(false);
   return (
     <>

@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@nextlyhq/ui";
-import { useState } from "react";
+import { type JSX, useState } from "react";
 
 import {
   CheckCircle2,
@@ -41,7 +41,7 @@ export function EmailsByOwner({
 }: {
   emails: EmailTemplateRecord[];
   canOpen: boolean;
-}) {
+}): JSX.Element {
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {groupByOwner(emails).map(({ group, rows }) => (
@@ -151,7 +151,7 @@ export function BrandReachCard({
   reach: BrandReach[];
   emails: EmailTemplateRecord[];
   canOpen: boolean;
-}) {
+}): JSX.Element {
   const byId = new Map(emails.map(email => [email.id, email]));
   const known = reach.flatMap(entry => {
     const email = byId.get(entry.templateId);

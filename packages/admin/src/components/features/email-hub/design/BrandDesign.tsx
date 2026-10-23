@@ -7,7 +7,7 @@ import {
   Button,
   Skeleton,
 } from "@nextlyhq/ui";
-import { useCallback, useMemo, useState } from "react";
+import { type JSX, useCallback, useMemo, useState } from "react";
 
 import { AlertTriangle, Loader2 } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
@@ -249,7 +249,7 @@ function BrandEditor({
  * settings reach. Everyone who may read templates sees them; those who may
  * manage templates change them.
  */
-export function BrandDesign() {
+export function BrandDesign(): JSX.Element {
   const brand = useEmailBrand();
   const templates = useEmailTemplates();
   if (brand.isError || templates.isError) {
