@@ -13,6 +13,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { isVirtualField } from "../../../collections/fields/virtual";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
@@ -27,6 +28,7 @@ import {
   refusalsForFieldsLeavingTranslation,
   refusalsForTranslatedFieldRenamedAndReshaped,
   refusalsForTranslatedFieldRenamedAsTranslationEnds,
+  refusalsForTranslatedFieldsRemovedBesideAdded,
   storageDiffers,
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
@@ -96,6 +98,8 @@ async function writeArchiveFirst(
  *
  * Nothing is asked when no field leaves translation, or when the entity is not translated before
  * and after the change (turning translation off for the whole entity archives by its own path).
+ * Turning translation off or on still refuses a field that is or becomes translated removed beside
+ * an added one, as neither move can follow it to its new name.
  *
  * @throws NextlyError `VALIDATION_ERROR` naming each reshaped or constrained field and the order
  *   that works, leaving or joining, or `NEXTLY_MIGRATION_APPLY_FAILED` when the archive refuses the values
@@ -122,10 +126,31 @@ export async function archiveFieldsLeavingTranslation(args: {
    * decides by the main table's rule (`detectFieldRename`) instead.
    */
   renamed?: FieldRename | null;
+  /**
+   * Set by the schema dialogs, whose push refuses a main-table column drop the admin did not
+   * confirm (`BrowserPromptDispatcher`). Before translation is on, every field is a main-table
+   * column, so that refusal already asks about each one the change takes away.
+   */
+  mainDropsConfirmed?: boolean;
 }): Promise<void> {
-  if (!args.wasLocalized) return;
+  if (!args.wasLocalized) {
+    // Turning translation on moves a field's main column to the companion only under a name the
+    // field has before and after the change (`buildCompanionTransitionStatements`), so one that
+    // becomes translated and is removed beside an added field, a rename included, would lose its
+    // value with its main column. A rename is not carried by that move, so only an explicit
+    // drop-and-add answer passes, or a save whose main-table drops are confirmed on their own.
+    if (args.isLocalized && !args.mainDropsConfirmed) {
+      refuseTranslatedFieldsRemovedBesideAdded(args, args.oldFields, {
+        translationStarts: true,
+      });
+    }
+    return;
+  }
   if (!args.isLocalized) {
     await refuseRenameAsTranslationEnds(args);
+    // Turning translation off restores each field from the companion under the name it had, so
+    // a translated field removed beside an added one is restored under a name no field has.
+    refuseTranslatedFieldsRemovedBesideAdded(args, args.oldFields);
     return;
   }
   // A translated field renamed in this change is judged under its new name, as the companion
@@ -139,6 +164,9 @@ export async function archiveFieldsLeavingTranslation(args: {
     : args.oldFields;
   const leaving = new Set(fieldsLeavingTranslation(oldFields, args.newFields));
   const joining = fieldsJoiningTranslation(oldFields, args.newFields);
+  // Before the early return below: a change that only removes and adds translated fields changes
+  // no field's translation, and is exactly the one that would drop a column unasked.
+  refuseTranslatedFieldsRemovedBesideAdded(args, oldFields);
   // Nothing to judge or archive when no field changes whether it is translated, or its name.
   if (leaving.size === 0 && joining.length === 0 && !rename) {
     return;
@@ -198,6 +226,54 @@ export async function archiveFieldsLeavingTranslation(args: {
       renamedFrom: source.renamedFrom,
     })
   );
+}
+
+/**
+ * Refuses a change that removes translated fields while it adds others with no rename decided
+ * for them (`refusalsForTranslatedFieldsRemovedBesideAdded`), before anything runs. An explicit
+ * drop-and-add answer from the schema dialog is the admin choosing the drop, so it passes.
+ *
+ * @throws NextlyError `VALIDATION_ERROR` naming each removed field and the two saves that work
+ */
+function refuseTranslatedFieldsRemovedBesideAdded(
+  args: Parameters<typeof archiveFieldsLeavingTranslation>[0],
+  oldFields: readonly LeavingFieldLike[],
+  /** Set for the change that turns translation on, whose refusal names that save first. */
+  options: { translationStarts?: boolean } = {}
+): void {
+  if (args.renamed === null) return;
+  const before = new Set(oldFields.map(f => f.name));
+  const after = new Set(args.newFields.map(f => f.name));
+  // Any new field that stores something, translated or shared, wherever it stores it: a column
+  // on the main table or the companion, a junction table, a field group's own table. A translated
+  // field renamed to a type that is shared by default reads as one removed and one shared field
+  // added. Only a virtual field stores nothing.
+  const storesSomething = (
+    f: LeavingFieldLike & { virtual?: unknown; options?: unknown }
+  ) => !isVirtualField(f);
+  const added = args.newFields
+    .filter(f => !before.has(f.name) && storesSomething(f))
+    .map(f => f.name);
+  const removed = oldFields.filter(
+    f => !after.has(f.name) && isFieldLocalized(f, true)
+  );
+  // Judged by name first, so a change that does not both remove and add asks the adapter nothing.
+  if (added.length === 0 || removed.length === 0) return;
+  const dialect = args.adapter.getCapabilities().dialect;
+  const refusals = refusalsForTranslatedFieldsRemovedBesideAdded({
+    removed: removed
+      .filter(
+        f => fieldToLocalizedColumnSpec(f, dialect, args.builtBy) !== null
+      )
+      .map(f => f.name),
+    added,
+    translationStarts: options.translationStarts,
+  });
+  if (refusals.length === 0) return;
+  throw NextlyError.validation({
+    errors: refusals,
+    logContext: { entity: args.entity, fields: refusals.map(r => r.path) },
+  });
 }
 
 /**

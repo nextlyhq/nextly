@@ -598,7 +598,19 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     expect((live.data as { subhead?: unknown }).subhead).toBe("S");
   });
 
-  it("judges the shared value publish-all actually writes, not each snapshot's", async () => {
+  /**
+   * Three languages of a Single whose shared `guarded` only BOSS may write.
+   * English holds a change that edits `guarded` from "L" to "X". German then
+   * publishes "X", begins a change from it and edits it back to "L", and,
+   * unless `revertLive` is false, French publishes "L" again.
+   *
+   * Publishing every language takes each held change's own shared edits,
+   * measured against the version it began from, and keeps the later of two
+   * edits to one field, dated by when that language's history began holding
+   * the value: German's "L", whose history held "X" after English's edit.
+   * English's snapshot still holds "X".
+   */
+  async function heldEditsToGuarded(revertLive: boolean) {
     process.env.DB_DIALECT = "sqlite";
     const adapter = await createAdapter({
       type: "sqlite",
@@ -606,7 +618,7 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     } as Parameters<typeof createAdapter>[0]);
     current = await createTestNextly({
       adapter,
-      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      localization: { locales: ["en", "de", "fr"], defaultLocale: "en" },
       singles: [
         defineSingle({
           slug: SLUG,
@@ -620,8 +632,7 @@ describe("a Single's publish re-judges the draft it promotes", () => {
             // `localized` translates every field that does not opt out, and a
             // translated field goes to its own language's companion row where
             // no other language can supersede it. Shared, every language's
-            // snapshot writes it to the same main row and the last one applied
-            // is the value that lands.
+            // change reaches the same main row.
             text({
               name: "guarded",
               localized: false,
@@ -634,47 +645,104 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     const singles = current.getService<"singleEntryService">(
       "singleEntryService"
     ) as unknown as SingleEntryService;
+    const asBoss = (locale: string) => ({
+      routeAuthorized: true,
+      user: BOSS,
+      locale,
+    });
+    const ok = (result: { success: boolean }) =>
+      expect(result.success, JSON.stringify(result)).toBe(true);
 
     await singles.update(
       SLUG,
       { headline: "EN", guarded: "L", status: "published" },
       { overrideAccess: true, locale: "en" }
     );
-    await singles.update(
-      SLUG,
-      { headline: "DE", status: "published" },
-      { overrideAccess: true, locale: "de" }
+    for (const locale of ["de", "fr"]) {
+      await singles.update(
+        SLUG,
+        { headline: locale.toUpperCase(), status: "published" },
+        { overrideAccess: true, locale }
+      );
+    }
+    // English's held change edits the shared field, beginning from "L".
+    ok(
+      await singles.update(
+        SLUG,
+        { headline: "EN2", guarded: "X" },
+        asBoss("en")
+      )
     );
-    // The first language's held change edits the shared field.
-    await singles.update(
-      SLUG,
-      { headline: "EN2", guarded: "X" },
-      { routeAuthorized: true, user: BOSS, locale: "en" }
+    // German publishes "X"...
+    ok(await singles.update(SLUG, { guarded: "X" }, asBoss("de")));
+    ok(await singles.update(SLUG, { status: "published" }, asBoss("de")));
+    // ...then begins from it and edits it back to "L": its history held "X"
+    // after English's edit, so this edit of the same field is the later...
+    ok(
+      await singles.update(
+        SLUG,
+        { headline: "DE2", guarded: "L" },
+        asBoss("de")
+      )
     );
-    // The second's puts it back, and the fold applies these in this order, so
-    // "L" is what the main row ends up holding. The edit to "X" is superseded
-    // before it is ever written.
-    await singles.update(
-      SLUG,
-      { headline: "DE2", guarded: "L" },
-      { routeAuthorized: true, user: BOSS, locale: "de" }
-    );
+    if (revertLive) {
+      // ...and French publishes "L" again, so the live value is "L".
+      ok(await singles.update(SLUG, { guarded: "L" }, asBoss("fr")));
+      ok(await singles.update(SLUG, { status: "published" }, asBoss("fr")));
+    }
+    return singles;
+  }
+
+  it("judges the shared value publish-all actually writes, not each snapshot's", async () => {
+    const singles = await heldEditsToGuarded(true);
 
     // A publisher who may not write `guarded`. Judged snapshot by snapshot,
-    // the first language's superseded "X" reads as a change they are making
-    // and the whole publish is refused; judged on the state the write
-    // produces, nothing about `guarded` changes at all.
+    // English's superseded "X" reads as a change they are making and the
+    // whole publish is refused; judged on the state the write produces,
+    // `guarded` stays the "L" it already is.
     const result = await singles.publishAllLocales(SLUG, {
       routeAuthorized: true,
       user: CLERK,
     });
     expect(result.success, JSON.stringify(result)).toBe(true);
 
+    const en = await singles.get(SLUG, { overrideAccess: true, locale: "en" });
+    expect((en.data as { guarded?: unknown }).guarded).toBe("L");
+    expect((en.data as { headline?: unknown }).headline).toBe("EN2");
+    const de = await singles.get(SLUG, { overrideAccess: true, locale: "de" });
+    expect((de.data as { headline?: unknown }).headline).toBe("DE2");
+  });
+
+  it("refuses the same publish-all when what it writes does change the shared value", async () => {
+    // Live is still German's "X", so writing German's later "L" changes
+    // `guarded`: the gate refuses a publisher who may not write it, naming the
+    // field. This path reports a refusal by throwing...
+    const singles = await heldEditsToGuarded(false);
+    let issues: Array<{ path: string; code: string }> | undefined;
+    await expect(
+      singles
+        .publishAllLocales(SLUG, { routeAuthorized: true, user: CLERK })
+        .catch(error => {
+          issues = (
+            error as {
+              publicData?: { errors?: Array<{ path: string; code: string }> };
+            }
+          ).publicData?.errors;
+          throw error;
+        })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(issues?.map(i => i.path)).toEqual(["guarded"]);
+
+    // ...and lets one who may write it publish the same changes.
+    const published = await singles.publishAllLocales(SLUG, {
+      routeAuthorized: true,
+      user: BOSS,
+    });
+    expect(published.success, JSON.stringify(published)).toBe(true);
     const live = await singles.get(SLUG, {
       overrideAccess: true,
       locale: "en",
     });
     expect((live.data as { guarded?: unknown }).guarded).toBe("L");
-    expect((live.data as { headline?: unknown }).headline).toBe("EN2");
   });
 });
