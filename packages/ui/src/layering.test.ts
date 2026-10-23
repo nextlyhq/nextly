@@ -148,6 +148,13 @@ function resolvedConfig(
 }
 
 /**
+ * How long a test that asks `tsc` about a tsconfig may take. Each `resolvedConfig` starts the
+ * compiler twice, and the alias check asks about two configs, so four compiler starts sit behind
+ * one test, and on a machine busy with other builds that took 6.7 s, past Vitest's 5 s default.
+ */
+const TSC_TIMEOUT_MS = 60_000;
+
+/**
  * Whether a module specifier loads the forbidden package.
  *
  * A SUBPATH counts. `@nextlyhq/blocks-engine/schema` reaches the same package
@@ -1256,39 +1263,47 @@ describe("this package resolves no module at runtime", () => {
   // dependency. Making the tree un-leavable is what keeps the enumeration complete — the
   // alternative, following the entries' transitive graph, re-derives module resolution here and
   // inherits every disagreement with the resolver that actually runs.
-  it("scans exactly the files the shipping tsconfig compiles", () => {
-    // `isShippedModule` decides the scan by PATTERN and the tsconfig decides shipping by
-    // `exclude`; two answers to one question, which is why they drifted over `*.spec.*`. Asserted
-    // rather than merged into one function because `sourceFiles` has other callers — the point is
-    // that a divergence fails loudly here instead of silently changing what gets scanned.
-    expect(sourceFiles(SRC).sort()).toEqual(tsconfigShippedFiles());
-  });
+  it(
+    "scans exactly the files the shipping tsconfig compiles",
+    { timeout: TSC_TIMEOUT_MS },
+    () => {
+      // `isShippedModule` decides the scan by PATTERN and the tsconfig decides shipping by
+      // `exclude`; two answers to one question, which is why they drifted over `*.spec.*`. Asserted
+      // rather than merged into one function because `sourceFiles` has other callers — the point is
+      // that a divergence fails loudly here instead of silently changing what gets scanned.
+      expect(sourceFiles(SRC).sort()).toEqual(tsconfigShippedFiles());
+    }
+  );
 
   // The containment test is complete only while no ALIAS can name a file for it, and aliases come
   // from two places this package could grow: the manifest's `imports` map, asserted below, and
   // tsconfig `paths`. Both are conditions rather than observations, so both are pinned.
-  it("declares no tsconfig path alias for a specifier to hide behind", () => {
-    // Read from the RESOLVED options, not the file's own JSON. `tsconfig.json` extends
-    // `@nextlyhq/tsconfig/react-library-bundler.json`, so an alias declared in the base is one
-    // TypeScript and the bundler both honour while a check reading the local file sees nothing.
-    // `resolvedConfig` follows `extends`, which is why the scanned-file assertion above uses it
-    // too, and it refuses a config that does not parse or resolve, so a broken file cannot read as
-    // one with no aliases.
-    const aliases = ["tsconfig.json", "tsconfig.tests.json"].flatMap(name => {
-      const { compilerOptions } = resolvedConfig(name);
-      const paths = compilerOptions?.paths;
-      return Object.keys(
-        typeof paths === "object" && paths !== null ? paths : {}
-      ).map(alias => `${name}: ${alias}`);
-    });
+  it(
+    "declares no tsconfig path alias for a specifier to hide behind",
+    { timeout: TSC_TIMEOUT_MS },
+    () => {
+      // Read from the RESOLVED options, not the file's own JSON. `tsconfig.json` extends
+      // `@nextlyhq/tsconfig/react-library-bundler.json`, so an alias declared in the base is one
+      // TypeScript and the bundler both honour while a check reading the local file sees nothing.
+      // `resolvedConfig` follows `extends`, which is why the scanned-file assertion above uses it
+      // too, and it refuses a config that does not parse or resolve, so a broken file cannot read as
+      // one with no aliases.
+      const aliases = ["tsconfig.json", "tsconfig.tests.json"].flatMap(name => {
+        const { compilerOptions } = resolvedConfig(name);
+        const paths = compilerOptions?.paths;
+        return Object.keys(
+          typeof paths === "object" && paths !== null ? paths : {}
+        ).map(alias => `${name}: ${alias}`);
+      });
 
-    expect(
-      aliases,
-      "A `paths` alias maps a bare specifier to a file, so shipped source could import one that " +
-        "the containment test reads as a package name and never resolves. Resolve those aliases " +
-        "in the containment test before declaring one."
-    ).toEqual([]);
-  });
+      expect(
+        aliases,
+        "A `paths` alias maps a bare specifier to a file, so shipped source could import one that " +
+          "the containment test reads as a package name and never resolves. Resolve those aliases " +
+          "in the containment test before declaring one."
+      ).toEqual([]);
+    }
+  );
 
   it("reaches no file outside the tree the ban reads", () => {
     const escapes = sourceFiles(SRC).flatMap(file =>
