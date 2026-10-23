@@ -169,5 +169,12 @@ describe("a function rule's answer for a caller with no session", () => {
     cyclic.self = cyclic;
     clearRuleAnswerNotices();
     await expect(answerFor(cyclic)).resolves.toBe(false);
+    // Nor an answer that throws on any inspection, such as a revoked proxy:
+    // awaiting it already reads `then` and throws, which refuses as a rule
+    // that threw, and the notice reads nothing of it either.
+    const revoked = Proxy.revocable([], {});
+    revoked.revoke();
+    clearRuleAnswerNotices();
+    await expect(answerFor(revoked.proxy)).resolves.toBe(false);
   });
 });

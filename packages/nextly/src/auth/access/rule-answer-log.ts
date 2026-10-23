@@ -27,7 +27,8 @@ const named = new Set<string>();
 function describe(value: unknown): string {
   if (value === null) return "null";
   if (value === undefined) return "undefined";
-  if (Array.isArray(value)) return "an array";
+  // `typeof` alone, which reads nothing of the value and so cannot throw,
+  // even on a revoked proxy.
   const kind = typeof value;
   return kind === "object" ? "an object" : `a ${kind}`;
 }
