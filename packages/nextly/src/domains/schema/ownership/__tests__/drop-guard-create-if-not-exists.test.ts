@@ -259,6 +259,10 @@ describe("CREATE TABLE IF NOT EXISTS where a table of the name may stand, on pos
       ["CREATE TEMP TABLE legacy (orders SERIAL)"],
     ],
     [
+      "a CREATE running a TABLE query, which may create any name",
+      ["CREATE TABLE fx__scratch AS TABLE fx__view"],
+    ],
+    [
       "a routine that may create it",
       ["DO $$ BEGIN CREATE TEMP TABLE legacy_orders (id int); END $$"],
     ],
@@ -357,6 +361,8 @@ describe("CREATE TABLE IF NOT EXISTS where a table of the name may stand, on pos
           "CREATE TABLE app_other (id INT)",
           "ALTER TABLE app_other ADD COLUMN note INT",
           "COMMENT ON TABLE app_other IS 'notes'",
+          "GRANT SELECT ON app_other TO reader",
+          "REVOKE EXECUTE ON FUNCTION make_shadow() FROM reader",
           "DROP TABLE legacy_orders",
           "CREATE TABLE IF NOT EXISTS legacy_orders (id INT)",
           "ALTER TABLE legacy_orders ADD COLUMN note INT",

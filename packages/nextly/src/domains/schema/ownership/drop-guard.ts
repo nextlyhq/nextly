@@ -636,6 +636,18 @@ const POSTGRES_PLAIN_DDL = new Set([
 ]);
 
 /**
+ * Plain DDL that only names privileges, comments or settings: words such
+ * as `SELECT` or `EXECUTE` in it name a privilege, not a query to run.
+ */
+const POSTGRES_RUNS_NOTHING = new Set([
+  "GRANT",
+  "REVOKE",
+  "COMMENT",
+  "SET",
+  "RESET",
+]);
+
+/**
  * Words that make a PostgreSQL relation temporary. A temporary relation, or
  * one PostgreSQL derives from it (a serial column's sequence, an index),
  * shadows a permanent one of the same name under a name the text may not
@@ -680,19 +692,23 @@ function placesNames(
 
 /**
  * Whether a PostgreSQL statement may put a relation under a name it does
- * not spell: it is not plain DDL (`POSTGRES_PLAIN_DDL`), it runs a query
- * anywhere in it (`POSTGRES_RUNS_A_QUERY`), or it makes or names a temporary
- * relation (`POSTGRES_TEMPORARY_WORDS`, `pg_temp`). A function called from a
+ * not spell: it is not plain DDL (`POSTGRES_PLAIN_DDL`); or, unless it only
+ * names privileges, comments or settings (`POSTGRES_RUNS_NOTHING`), it runs a
+ * query anywhere in it (`POSTGRES_RUNS_A_QUERY`, or `AS TABLE`), or it makes
+ * or names a temporary relation (`POSTGRES_TEMPORARY_WORDS`, `pg_temp`). A function called from a
  * column's default, a check or a `USING` expression is not counted, as
  * everywhere else in this guard.
  */
 function postgresMayRunCode(opener: string, tokens: readonly Token[]): boolean {
   if (!POSTGRES_PLAIN_DDL.has(opener)) return true;
+  if (POSTGRES_RUNS_NOTHING.has(opener)) return false;
   return tokens.some(
-    token =>
+    (token, at) =>
       (token.kind === "word" &&
         (POSTGRES_RUNS_A_QUERY.has(token.upper) ||
-          POSTGRES_TEMPORARY_WORDS.has(token.upper))) ||
+          POSTGRES_TEMPORARY_WORDS.has(token.upper) ||
+          // `AS TABLE r`, a query reading `r`, which may be a view.
+          (token.upper === "AS" && isWord(tokens[at + 1], "TABLE")))) ||
       writtenName(token)?.toLowerCase() === "pg_temp"
   );
 }
