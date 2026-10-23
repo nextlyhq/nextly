@@ -22,9 +22,24 @@ describe("Needs attention's keys", () => {
     }
   });
 
+  it("carries a Single's language through its key, and never a collection's", () => {
+    const single = attentionPartKey("unpublished", "single", "home", "fr");
+    expect(single).toBe("unpublished:single:home:fr");
+    expect(parseAttentionKey(single)).toEqual({
+      kind: "unpublished",
+      part: { contentKind: "single", slug: "home", locale: "fr" },
+    });
+    // A collection's part has no language: its list is the one place it lives.
+    expect(attentionPartKey("unpublished", "collection", "posts", "fr")).toBe(
+      "unpublished:collection:posts"
+    );
+  });
+
   it.each([
     "",
     "nothing",
+    "unpublished:single:home:",
+    "unpublished:single:home:fr:extra",
     "unpublished:",
     "unpublished:page:home",
     "unpublished:collection:",

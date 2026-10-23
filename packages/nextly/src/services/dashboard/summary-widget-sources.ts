@@ -135,9 +135,11 @@ async function resolveContent(
   caller: ReadCaller
 ): Promise<WidgetResult> {
   refuseUnconsumedQueryFields(query, QUERY_FIELD_USE, CONTENT_SOURCE_ID);
+  // The limit goes to the service, which picks the page before counting it.
   const rows = await dashboard().getContentByCollection({
     scope: await resolveReadableResources(caller),
     caller,
+    limit: query.limit,
   });
   return listOf(rows, CONTENT_FIELDS, query);
 }
