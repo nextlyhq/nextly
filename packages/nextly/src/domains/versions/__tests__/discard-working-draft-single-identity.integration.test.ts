@@ -139,10 +139,18 @@ describe.each(getConfiguredTestDialects())(
           const held = new Promise<void>(resolve => {
             release = resolve;
           });
+          // Resolved once the writer holds the row's lock, so the call under
+          // test starts only after it: started first, the call would take the
+          // lock itself, nothing would wait, and the case would time out.
+          let locked: () => void = () => {};
+          const lockTaken = new Promise<void>(resolve => {
+            locked = resolve;
+          });
           // Another writer replaces the document under its lock, and holds the
           // lock until the discard is parked on it.
           const replacing = t.adapter.transaction(async tx => {
             await tx.lockRow(TABLE, liveId);
+            locked();
             const row = await tx.selectOne<Record<string, unknown>>(TABLE, {});
             await tx.delete(TABLE, {
               and: [{ column: "id", op: "=", value: liveId }],
@@ -156,6 +164,7 @@ describe.each(getConfiguredTestDialects())(
           try {
             // The route always names the document it checked; a direct call
             // to the Single's service may name none.
+            await lockTaken;
             const discarding = named
               ? discardWorkingDraft({
                   scopeKind: "single",

@@ -524,10 +524,18 @@ describe.each(getConfiguredTestDialects())(
           const held = new Promise<void>(resolve => {
             release = resolve;
           });
+          // Resolved once the writer holds the row's lock, so the call under
+          // test starts only after it: started first, the call would take the
+          // lock itself, nothing would wait, and the case would time out.
+          let locked: () => void = () => {};
+          const lockTaken = new Promise<void>(resolve => {
+            locked = resolve;
+          });
           // Another writer replaces the document under its lock, and holds the
           // lock until the take is parked on it.
           const replacing = current!.adapter.transaction(async tx => {
             await tx.lockRow(TABLE, authorised);
+            locked();
             const row = await tx.selectOne<Record<string, unknown>>(TABLE, {});
             await tx.delete(TABLE, {
               and: [{ column: "id", op: "=", value: authorised }],
@@ -542,6 +550,7 @@ describe.each(getConfiguredTestDialects())(
           });
 
           try {
+            await lockTaken;
             const taking = singles.takeLiveSharedValues({
               slug: SLUG,
               ...(named ? { entryId: authorised } : {}),
