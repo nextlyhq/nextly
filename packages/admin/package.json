@@ -29,7 +29,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup && node scripts/build-css.mjs && node scripts/stamp-dist.mjs",
+    "build": "tsdown && node scripts/build-css.mjs && node scripts/stamp-dist.mjs",
     "build:css": "node scripts/build-css.mjs",
     "build:css:watch": "node scripts/build-css-watch.mjs",
     "dev": "node scripts/dev.mjs",
@@ -50,7 +50,7 @@
   },
   "peerDependencies": {
     "@nextlyhq/ui": "workspace:^",
-    "next": "^14.0.0 || ^15.0.0 || ^16.0.0",
+    "next": "^15.5.28 || ^16.4.1",
     "nextly": "0.0.2-alpha.68",
     "react": "^18.0.0 || ^19.0.0",
     "react-dom": "^18.0.0 || ^19.0.0"
@@ -68,7 +68,7 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",
-    "@types/node": "^20.19.17",
+    "@types/node": "^22.20.5",
     "@types/pluralize": "^0.0.33",
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
@@ -85,7 +85,7 @@
     "react-dom": "19.2.0",
     "tailwindcss": "^4.3.2",
     "terser": "^5.44.1",
-    "tsup": "^8.5.0",
+    "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^4.1.0"
@@ -164,7 +164,7 @@
     "provenance": true
   },
   "engines": {
-    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+    "node": "^22.12.0 || >=24.0.0"
   },
   "homepage": "https://nextlyhq.com",
   "bugs": {
