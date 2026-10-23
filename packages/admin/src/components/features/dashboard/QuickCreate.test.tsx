@@ -244,18 +244,34 @@ describe("the quick-create card", () => {
     expect(screen.getByTestId("quick-create-empty")).toBeInTheDocument();
   });
 
-  it("says nothing while the PERMISSIONS are still in flight", () => {
-    // 🔴 The two requests resolve independently. `hasPermission` answers from
-    // an empty set until `/me/permissions` lands, so a collection list that
-    // arrives first filters every row out — and the card tells the reader they
-    // may create nothing, for the whole of that interval, on every page load.
+  it("says nothing while the answer about collections is still in flight", () => {
+    // 🔴 The two requests resolve independently. `canAccessCollection`
+    // answers no until the server's answer about collections lands, so a
+    // collection list that arrives first filters every row out — and the card
+    // tells the reader they may create nothing, for the whole of that
+    // interval, on every page load.
     mockCollections.mockReturnValue(listing([collection({ name: "posts" })]));
-    mockPermissions.mockReturnValue(granting([], { isLoading: true }));
+    mockPermissions.mockReturnValue(
+      granting([], { content: { isLoading: true, hasAnswer: false } })
+    );
 
     render(<QuickCreate />);
 
     expect(screen.queryByTestId("quick-create-empty")).toBeNull();
     expect(screen.queryByTestId("quick-create")).toBeNull();
+  });
+
+  it("offers what the answer about collections allows, though the permission list failed", () => {
+    // The permission list decides nothing here, so its failure takes nothing
+    // the answer about collections allows away.
+    mockCollections.mockReturnValue(listing([collection({ name: "posts" })]));
+    mockPermissions.mockReturnValue(
+      granting([], { error: new Error("boom"), allows: ["create-posts"] })
+    );
+
+    render(<QuickCreate />);
+
+    expect(screen.getByTestId("quick-create-posts")).toBeInTheDocument();
   });
 
   it("says nothing when either request FAILED", () => {

@@ -208,25 +208,6 @@ const CAPABILITY_OF_ACTION = {
   unpublish: "canUnpublish",
 } as const satisfies Record<string, keyof CollectionCapabilities>;
 
-/** Default capabilities (no access) shown while loading */
-const EMPTY_CAPABILITIES: AdminCapabilities = {
-  isSuperAdmin: false,
-  canViewCollections: false,
-  canViewUsers: false,
-  canViewRoles: false,
-  canViewMedia: false,
-  canViewSettings: false,
-  canViewWebhooks: false,
-  canViewReleases: false,
-  collections: {},
-  canManageUsers: false,
-  canManageRoles: false,
-  canManageMedia: false,
-  canManageSettings: false,
-  canManageEmailProviders: false,
-  canManageEmailTemplates: false,
-};
-
 /** Where an answer the hook asks for stands. */
 type AnswerState = {
   isLoading: boolean;
@@ -363,11 +344,18 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   const validUntil = answer.data?.validUntil ?? null;
   const answeredAt = answer.dataUpdatedAt;
   // The end, once it has passed. Read at render, so an answer already past its
-  // end when this mounts never counts, not even until a timer fires; the
-  // timer below only renders again when the end arrives.
-  const [, setEndsReached] = useState(0);
-  const endedAt =
+  // end when this mounts never counts, not even until a timer fires. The
+  // latest end the timer reached is also kept apart from the answer that gave
+  // it: a refresh can replace `validUntil` (with null, once the ending
+  // assignment is gone) while the request beside it fails, and that request's
+  // answer from before the end must still not count.
+  const [reachedEnd, setReachedEnd] = useState<number | null>(null);
+  const endedNow =
     validUntil !== null && Date.now() >= validUntil ? validUntil : null;
+  const endedAt =
+    endedNow === null || reachedEnd === null
+      ? (endedNow ?? reachedEnd)
+      : Math.max(endedNow, reachedEnd);
   useEffect(() => {
     if (validUntil === null) return undefined;
     let timer: ReturnType<typeof setTimeout>;
@@ -381,7 +369,9 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
       }
       timer = setTimeout(
         () => {
-          setEndsReached(reached => reached + 1);
+          setReachedEnd(reached =>
+            reached === null ? validUntil : Math.max(reached, validUntil)
+          );
           // Every mounted caller arms the same deadline; joining a refresh
           // already under way asks the server once.
           void refetch({ cancelRefetch: false });
@@ -409,13 +399,14 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     : false;
   const roles = permissionsState.hasAnswer ? (data?.roles ?? []) : [];
 
-  const capabilities = permissionsState.hasAnswer
-    ? buildCapabilities(
-        permissions,
-        isSuperAdmin,
-        content.hasAnswer ? answer.data : undefined
-      )
-    : EMPTY_CAPABILITIES;
+  // Each answer decides its own half: the permission list the system flags,
+  // and the content answer every collection and Single, so a failure of one
+  // takes nothing the other answered offline.
+  const capabilities = buildCapabilities(
+    permissions,
+    isSuperAdmin,
+    content.hasAnswer ? answer.data : undefined
+  );
 
   /**
    * Check if the current user has a specific permission by slug.

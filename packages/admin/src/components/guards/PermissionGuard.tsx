@@ -55,16 +55,10 @@ export function PermissionGuard({
   const access = useCurrentUserPermissions();
   const { hasPermission, canAccessCollection, content, retry } = access;
   const [isForceLoading, setIsForceLoading] = useState(false);
-  // A collection or Single route needs the server's answer about its entity
-  // as well as the permission list; any other route needs the list alone, so
-  // a content-registry failure leaves the system pages open.
-  const decidedBy = entity
-    ? {
-        isLoading: access.isLoading || content.isLoading,
-        hasAnswer: access.hasAnswer && content.hasAnswer,
-        error: access.error ?? content.error,
-      }
-    : access;
+  // A collection or Single route is decided by the server's answer about its
+  // entity alone, and any other route by the permission list alone, so a
+  // failure of either leaves the pages the other decides open.
+  const decidedBy = entity ? content : access;
   const { hasAnswer, error } = decidedBy;
   const hasAccess = entity
     ? canAccessCollection(entity.slug, entity.action)

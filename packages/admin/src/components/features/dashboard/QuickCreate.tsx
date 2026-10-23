@@ -87,12 +87,7 @@ export function QuickCreate(): JSX.Element | null {
   } = useCollections({
     pagination: { page: 0, pageSize: COLLECTION_PAGE_SIZE },
   });
-  const {
-    canAccessCollection,
-    isLoading: permissionsLoading,
-    error: permissionsError,
-    content,
-  } = useCurrentUserPermissions();
+  const { canAccessCollection, content } = useCurrentUserPermissions();
   const tier = useCardTier();
 
   const creatable = useMemo(() => {
@@ -111,17 +106,15 @@ export function QuickCreate(): JSX.Element | null {
     );
   }, [data?.items, canAccessCollection]);
 
-  // 🔴 EVERY request, and a failure of any. `canAccessCollection` answers no
-  // until the permissions and the server's answer about collections land, so a
-  // collection list that resolves first filters every row out and the card
-  // says the reader may create nothing — for the whole of that interval, and
-  // permanently if a request fails. Absence is the honest answer until all
-  // have arrived, because a claim about what someone may do cannot be made
-  // from an answer that has not come back.
-  if (collectionsLoading || permissionsLoading || content.isLoading) {
-    return null;
-  }
-  if (collectionsError || permissionsError || !content.hasAnswer) return null;
+  // 🔴 BOTH requests, and a failure of either. `canAccessCollection` answers
+  // no until the server's answer about collections lands, so a collection list
+  // that resolves first filters every row out and the card says the reader may
+  // create nothing — for the whole of that interval, and permanently if a
+  // request fails. Absence is the honest answer until both have arrived,
+  // because a claim about what someone may do cannot be made from an answer
+  // that has not come back.
+  if (collectionsLoading || content.isLoading) return null;
+  if (collectionsError || !content.hasAnswer) return null;
 
   // 🔴 A truncated list cannot support the empty claim either. The page holds
   // the first `COLLECTION_PAGE_SIZE` collections, so an install with more than
