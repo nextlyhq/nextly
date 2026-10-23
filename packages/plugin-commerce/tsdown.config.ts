@@ -1,4 +1,4 @@
-import { defineConfig } from "tsup";
+import { defineConfig } from "tsdown";
 
 export default defineConfig({
   // Two Node-safe entries. The root carries money and the provider contracts;
@@ -7,7 +7,10 @@ export default defineConfig({
   // a site ever loading test code from the root.
   entry: ["src/index.ts", "src/testing/index.ts"],
   format: ["esm"],
-  dts: true,
+  // `.js` and `.d.ts`, the names the exports map already publishes.
+  fixedExtension: false,
+  // Declarations without a type check: `check-types` is the type check.
+  dts: { sourcemap: false, compilerOptions: { noCheck: true } },
   clean: true,
   sourcemap: true,
   minify: false,

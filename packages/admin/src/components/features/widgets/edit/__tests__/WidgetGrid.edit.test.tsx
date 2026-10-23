@@ -1565,6 +1565,34 @@ describe("at one column", () => {
     expect(screen.getByTestId("card-width-label")).toHaveTextContent("⅓");
   });
 
+  it("keeps the drag library's sensors the same size while the dashboard narrows to one column", async () => {
+    // 🔴 The drag context swapped its sensors for none at one column, and dnd-kit reads the
+    // list as an effect's dependencies: every narrowing changed the list's size, which React
+    // warns of and does not promise to handle. That a drag still cannot start at one column is
+    // "draws no handle, and leaves every move to the card menu", above.
+    const errors = vi.spyOn(console, "error");
+    try {
+      renderGrid();
+      await beginEditing();
+      resizeDashboard(390);
+      await waitFor(() =>
+        expect(screen.queryAllByTestId("widget-drag-handle")).toEqual([])
+      );
+      resizeDashboard(1200);
+      await waitFor(() =>
+        expect(
+          screen.getAllByTestId("widget-drag-handle").length
+        ).toBeGreaterThan(0)
+      );
+      const sizeChanges = errors.mock.calls.filter(args =>
+        String(args[0]).includes("changed size between renders")
+      );
+      expect(sizeChanges).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   it("cancels a drag when the dashboard narrows to one column, and says why", async () => {
     renderGrid();
     await beginEditing();

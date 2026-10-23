@@ -4,7 +4,7 @@
  * Server-only code is three kinds, and each is refused wherever a browser bundle starts: a Node
  * built-in, a database package, and a module marked with the `server-only` package. A bundle starts
  * at two kinds of place: every admin module carrying `"use client"`, and every entry `nextly` lists
- * as client-safe in its `tsup.config.js` (`nextly/config` among them, which a site's config file and
+ * as client-safe in its `tsdown.config.ts` (`nextly/config` among them, which a site's config file and
  * the admin's browser code both import).
  *
  * The admin is a hybrid package: most of it renders on the server and may import anything, while a
@@ -609,18 +609,19 @@ function describeViolations(result: ClosureResult): string[] {
  * The entries `nextly` publishes as safe for a browser, read from its build config.
  *
  * 🔴 Read from the file, not restated: a copy of the list here would pass while an entry added
- * there went unchecked. Parsed rather than imported, because importing the config loads `tsup`
- * and with it esbuild, which refuses to start under this package's browser-like test environment.
+ * there went unchecked. Parsed rather than imported, because importing the config loads `tsdown`
+ * and with it rolldown's native binding, which has no place in this package's browser-like test
+ * environment.
  * The parse accepts exactly one shape, `const clientEntries = ["…", …]`, and throws on any other,
  * so a list it cannot read fails the run instead of being read as empty.
  */
 export function readClientEntries(configSource: string): string[] {
   const parsed = ts.createSourceFile(
-    "tsup.config.js",
+    "tsdown.config.ts",
     configSource,
     ts.ScriptTarget.Latest,
     true,
-    ts.ScriptKind.JS
+    ts.ScriptKind.TS
   );
   for (const statement of parsed.statements) {
     if (!ts.isVariableStatement(statement)) continue;
@@ -650,7 +651,7 @@ export function readClientEntries(configSource: string): string[] {
 /** The one refusal, whichever way the list could not be read. */
 function refuseClientEntries(): never {
   throw new Error(
-    "tsup.config.js must declare `clientEntries` as an array of path strings"
+    "tsdown.config.ts must declare `clientEntries` as an array of path strings"
   );
 }
 
@@ -658,7 +659,7 @@ describe("what nextly's client-safe entries can reach", () => {
   const workspace = readWorkspace(PACKAGES, realIo);
   const resolveSpecifier = makeResolver(ALIASES, workspace, realIo);
   const entries = readClientEntries(
-    realIo.read(join(NEXTLY_ROOT, "tsup.config.js"))
+    realIo.read(join(NEXTLY_ROOT, "tsdown.config.ts"))
   ).map(entry => join(NEXTLY_ROOT, entry));
   const result = walkClientClosure(entries, resolveSpecifier, realIo);
 
