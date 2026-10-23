@@ -365,6 +365,13 @@ export async function checkWrite(
 }
 
 /**
+ * The check a read of a system resource runs first: a write's, asked with the
+ * grant REST's read route asks, so a checked read is refused before anything
+ * is read and a trusted one is untouched.
+ */
+export const checkRead = checkWrite;
+
+/**
  * A write that may change who holds which role, run as REST runs it: checked
  * first, when the call asks to be, and then as its caller for the rule on
  * granting super-admin, which only a super-admin person passes and an API key

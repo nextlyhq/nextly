@@ -114,10 +114,14 @@ jobs:
   # is still explained, and the result of `lint` decides between posting and
   # clearing: a check that failed for any other reason leaves the comment as it
   # was rather than clearing an explanation that may still hold.
+  #
+  # Not on a push (`synchronize`): a push cannot change the title, so the
+  # verdict and the comment that explains it stand as the last open, reopen
+  # or edit left them, and the job would take a runner to repeat them.
   comment:
     name: Explain the title check on the pull request
     needs: lint
-    if: ${{ always() && github.event_name == 'pull_request_target' }}
+    if: ${{ always() && github.event_name == 'pull_request_target' && github.event.action != 'synchronize' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

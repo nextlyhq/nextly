@@ -125,6 +125,7 @@ import {
   assertLabelRequestValid,
   autosaveForDocument,
   discardWorkingDraftForDocument,
+  takeLiveSharedValuesForDocument,
   getAutosaveForDocument,
   requireSnapshotBody,
   getVersionDiffForDocument,
@@ -427,6 +428,24 @@ export const SINGLE_VERSION_METHODS: Record<
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
       });
       return respondMutation("Working draft discarded.", item);
+    },
+  },
+  takeLiveSingleSharedValues: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      // The document id comes from the live row, as for a discard: it is what
+      // the authorization checks are made against.
+      const entryId = await requireLiveSingleId(slug);
+      const item = await takeLiveSharedValuesForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: requireAuthenticatedUser(),
+        // `?locale=` names the language whose pending change takes the live
+        // values. An empty value is the same as none: the default language.
+        locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+      });
+      return respondMutation("Live values taken.", item);
     },
   },
 };
@@ -1226,6 +1245,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         newFields: fields as unknown as FieldDefinition[],
         wasLocalized,
         isLocalized,
+        // This apply's push refuses a main-table column drop the admin did not confirm.
+        mainDropsConfirmed: true,
       });
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();

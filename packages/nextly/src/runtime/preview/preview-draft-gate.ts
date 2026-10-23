@@ -17,15 +17,11 @@
  * @module runtime/preview/preview-draft-gate
  */
 import { assertEntryPreviewable } from "../../api/preview-access";
-import {
-  isSingleScope,
-  type PreviewTokenScope,
-} from "../../auth/preview/preview-token";
+import { isSingleScope } from "../../auth/preview/preview-token";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import type { ResolvedContext } from "../routing/content-route";
 
-import { resolvePreviewIdentity } from "./preview-identity";
-import { previewGrantsDraft, readPreviewSession } from "./preview-route";
+import { openPreviewRender } from "./preview-render";
 import type { PreviewScopeReaderConfig } from "./preview-route";
 
 /**
@@ -88,60 +84,19 @@ export function previewDraftGate(
   request: DraftGateRequest
 ) => Promise<{ entryId: string; readAs: UserContext } | false> {
   return async ({ collection, locale }) => {
-    // Re-read per request. The config is captured once at module scope while
-    // whether this visitor is previewing — and whether their token has since
-    // expired or been revoked — is a fact about the request in hand.
-    const verified = await readPreviewSession(config);
-
-    if (verified === null) return false;
-    const { scope, minter } = verified;
-
-    // A Single's token cannot grant a collection draft. Both name one document
-    // and only one, but they are different documents — and this gate answers
-    // for a COLLECTION path, so a single-scoped token reaching it is a token
-    // for somewhere else entirely.
-    if (isSingleScope(scope)) return false;
-
-    // `previewGrantsDraft` owns the whole authorization question — an absent
-    // session AND whether a present one reaches the document — so it is asked
-    // rather than rebuilt from its parts. Rejecting null here and calling
-    // `previewTokenCovers` beside it is the same decision computed twice, and
-    // the copy is the one that keeps the old policy when the shared one moves.
-    //
-    // `entryId` is the scope's own, because the route has not resolved a
-    // document yet and this gate must not read one of its own to guess. That
-    // leaves the entry comparison to the route, made against the row it
-    // actually resolved — a stronger check than any this function could do
-    // from a slug.
-    // The locale comes from the REQUEST, so it is the one the route is about to
-    // read in. Taking it from this gate's own config made it a second
-    // declaration of a value the route already holds, and the two disagreeing
-    // is not a type error: a token scoped to `en` satisfies an `en` gate, and
-    // the entry it names is then resolved in the route's `fr`.
-    const requested: PreviewTokenScope = {
+    // The link is opened for this collection in the route's language, or not
+    // at all. The entry it names is the link's own, because the route has not
+    // resolved a document yet and this gate must not read one of its own to
+    // guess: the route compares it against the row it resolves.
+    const render = await openPreviewRender(config, {
+      kind: "entry",
       collection,
-      entryId: scope.entryId,
-      ...(locale === undefined ? {} : { locale }),
-    };
-    if (!previewGrantsDraft(scope, requested)) return false;
-
-    // The row is read trusted so the working draft appears at all, and trust
-    // switched field-level read rules off with it. So the fields are judged
-    // separately, as the person who shared the link — otherwise the recipient
-    // sees fields the sharer cannot, which turns the link into a way to read
-    // past your own permissions by sending yourself one.
-    //
-    // **No identity, no draft.** Two cases reach this line without one: a token
-    // minted before the claim existed, and a sharer whose account has since
-    // been deleted. Granting the draft anyway would read it with no field rules
-    // at all, which IS the defect — so the grant is refused and the request
-    // resolves published-only, indistinguishable from an expired link. That
-    // does invalidate preview links minted in the hour before this ships;
-    // keeping a known field leak open for the lifetime of a token is the worse
-    // trade, and nothing new is mintable without a minter.
-    if (minter === undefined) return false;
-    const readAs = await resolvePreviewIdentity(minter);
-    if (readAs === null) return false;
+      locale,
+    });
+    // A link to a Single never opens here; asked again so the entry's id is
+    // in hand.
+    if (render === null || isSingleScope(render.scope)) return false;
+    const { scope, sharer: readAs } = render;
 
     // Asked again, on every render, and that is what makes revocation real.
     //
@@ -165,6 +120,8 @@ export function previewDraftGate(
         // a sharer's role was withdrawn — leaving this "re-authorization" able
         // to catch only a deleted or deactivated account.
         routeAuthorized: false,
+        // The language the link is to, as at the mint.
+        ...(render.locale === undefined ? {} : { locale: render.locale }),
       });
     } catch {
       // Refused rather than propagated. A revoked link is an ordinary request

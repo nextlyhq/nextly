@@ -15,7 +15,10 @@
  *
  * @module runtime/preview/preview-single-draft-gate
  */
-import { previewTokenCovers } from "../../auth/preview/preview-token";
+import {
+  everyLanguage,
+  withRuleLanguage,
+} from "../../auth/access/rule-language";
 import type { UserContext } from "../../direct-api/types/shared";
 import {
   singleDocumentEditable,
@@ -23,8 +26,7 @@ import {
 } from "../../domains/singles/services/single-document-access";
 import type { SingleDraftRequest } from "../routing/single-route";
 
-import { resolvePreviewIdentity } from "./preview-identity";
-import { readPreviewSession } from "./preview-route";
+import { openPreviewRender } from "./preview-render";
 import type { PreviewScopeReaderConfig } from "./preview-route";
 
 /** Options for {@link previewSingleDraftGate}. */
@@ -41,48 +43,16 @@ export function previewSingleDraftGate(
   config: PreviewSingleDraftGateConfig = {}
 ): (request: SingleDraftRequest) => Promise<{ readAs: UserContext } | false> {
   return async ({ slug, locale }) => {
-    // Re-read per request. The configuration is captured once, while whether
-    // this visitor is previewing — and whether their token has since expired or
-    // been revoked — is a fact about the request in hand.
-    const verified = await readPreviewSession(config);
-    if (verified === null) return false;
-    const { scope, minter } = verified;
-
-    // A collection entry's token cannot open a Single — a Single named `pages`
-    // is not the `pages` collection — and that comparison is NOT repeated here.
-    // `previewTokenCovers` compares the kind first, so a guard beside it would
-    // be a second copy of a question it already owns, and the copy is the one
-    // that keeps the old policy when the shared rule moves.
-    //
-    // Asked of the shared comparison rather than rebuilt from its parts. The
-    // locale comes from the ROUTE, so it is the language about to be read: a
-    // token scoped to `en` must not grant the `fr` document, and taking the
-    // locale from this gate's own configuration would make it a second
-    // declaration of a value the route already holds.
-    if (
-      !previewTokenCovers(scope, {
-        kind: "single",
-        single: slug,
-        ...(locale === undefined ? {} : { locale }),
-      })
-    ) {
-      return false;
-    }
-
-    // The document is read TRUSTED so the working draft appears at all, and
-    // trust switched field-level read rules off with it. So the fields are
-    // judged separately, as the person who shared the link — otherwise the
-    // recipient sees fields the sharer cannot, which turns the link into a way
-    // to read past your own permissions by sending yourself one.
-    //
-    // **No identity, no draft.** A token minted before the claim existed, and a
-    // sharer whose account has been deleted or deactivated, both arrive here
-    // without one. Granting anyway would read the document with no field rules
-    // at all, which IS the defect — so the grant is refused and the request
-    // resolves published-only, indistinguishable from an expired link.
-    if (minter === undefined) return false;
-    const readAs = await resolvePreviewIdentity(minter);
-    if (readAs === null) return false;
+    // The link is opened for this Single in the route's language, or not at
+    // all: a link to a collection entry, or to another language, never opens
+    // here.
+    const render = await openPreviewRender(config, {
+      kind: "single",
+      single: slug,
+      locale,
+    });
+    if (render === null) return false;
+    const readAs = render.sharer;
 
     // Asked again, on every render, and that is what makes revocation real.
     // Rebuilding the sharer's identity re-evaluates FIELD rules and nothing
@@ -117,13 +87,19 @@ export function previewSingleDraftGate(
       // coarse access gate for it, and claiming otherwise skips the only part
       // that notices a withdrawn role.
       routeAuthorized: false,
+      // The language the link is to, as at the mint.
+      ...(render.locale === undefined ? {} : { locale: render.locale }),
     };
-    if (
-      !(await singleDocumentEditable(slug, sharer)) ||
-      !(await singleStoredDocumentReadable(slug, sharer))
-    ) {
-      return false;
-    }
+    // A link naming no language is to the Single in every language, so its
+    // checks are told every language rather than whatever the render set.
+    const asked = async () =>
+      (await singleDocumentEditable(slug, sharer)) &&
+      (await singleStoredDocumentReadable(slug, sharer));
+    const allowed =
+      render.locale === undefined
+        ? await withRuleLanguage(everyLanguage(), asked)
+        : await asked();
+    if (!allowed) return false;
 
     return { readAs };
   };

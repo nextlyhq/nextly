@@ -808,7 +808,9 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   // their own documents mint a working credential for someone else's.
   const { auth, grant: entryGrant } = await authorizePreviewSharer(
     req,
-    { collection, entryId },
+    // The language the link will be to, so the sharer is judged in it and the
+    // grant names it, as for a Single.
+    { collection, entryId, ...(locale === undefined ? {} : { locale }) },
     "mint"
   );
 

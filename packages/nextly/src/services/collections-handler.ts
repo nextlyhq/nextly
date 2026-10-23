@@ -835,7 +835,18 @@ export class CollectionsHandler {
   async discardWorkingDraft(
     params: Parameters<CollectionEntryService["discardWorkingDraft"]>[0]
   ): Promise<void> {
-    return this.entryService.discardWorkingDraft(params);
+    await this.entryService.discardWorkingDraft(params);
+  }
+
+  /**
+   * {@link discardWorkingDraft}, answering how many drafts it removed, counted
+   * by the delete made under the document's lock. A separate method so the
+   * published `discardWorkingDraft` keeps its contract.
+   */
+  async discardWorkingDraftCounted(
+    params: Parameters<CollectionEntryService["discardWorkingDraft"]>[0]
+  ): Promise<number> {
+    return this.entryService.discardWorkingDraftCounted(params);
   }
 
   /**

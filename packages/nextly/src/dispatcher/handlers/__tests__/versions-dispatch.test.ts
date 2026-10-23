@@ -63,6 +63,9 @@ describe("version methods are registered", () => {
       "markEntryVersionSeen",
       "restoreEntryVersion",
       "setEntryVersionLabel",
+      // Brings one language's pending change up to date with the live
+      // shared values.
+      "takeLiveSharedValues",
     ]);
   });
 
@@ -79,6 +82,7 @@ describe("version methods are registered", () => {
       "markSingleVersionSeen",
       "restoreSingleVersion",
       "setSingleVersionLabel",
+      "takeLiveSingleSharedValues",
     ]);
   });
 
@@ -233,6 +237,24 @@ describe("version methods reach the router", () => {
       verb: "POST",
     },
     {
+      method: "takeLiveSharedValues",
+      path: [
+        "collections",
+        "posts",
+        "entries",
+        "e1",
+        "versions",
+        "working-draft",
+        "take-live",
+      ],
+      verb: "POST",
+    },
+    {
+      method: "takeLiveSingleSharedValues",
+      path: ["singles", "settings", "versions", "working-draft", "take-live"],
+      verb: "POST",
+    },
+    {
       method: "setSingleVersionLabel",
       path: ["singles", "settings", "versions", "2"],
       verb: "PATCH",
@@ -253,6 +275,27 @@ describe("version methods reach the router", () => {
     ).toBe("update");
     expect(
       operationFor(["singles", "settings", "versions", "2"], "PATCH")
+    ).toBe("update");
+    // Taking the live values rewrites the pending change: a write.
+    expect(
+      operationFor(
+        [
+          "collections",
+          "posts",
+          "entries",
+          "e1",
+          "versions",
+          "working-draft",
+          "take-live",
+        ],
+        "POST"
+      )
+    ).toBe("update");
+    expect(
+      operationFor(
+        ["singles", "settings", "versions", "working-draft", "take-live"],
+        "POST"
+      )
     ).toBe("update");
     // A read of the same version must not be promoted to a write.
     expect(

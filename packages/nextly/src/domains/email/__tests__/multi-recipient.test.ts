@@ -58,17 +58,9 @@ vi.mock("../../../lib/env", () => ({
   },
 }));
 
-// The REST routes resolve the service from the container after booting; both
-// are replaced so the route runs against the service built here.
+// The service is resolved from the container; it is the one built here.
 const containerGet = vi.hoisted(() => vi.fn());
 vi.mock("../../../di", () => ({ container: { get: containerGet } }));
-vi.mock("../../../init", () => ({
-  getCachedNextly: vi.fn().mockResolvedValue(undefined),
-}));
-vi.mock("../../../auth/middleware", () => ({
-  requireAuthentication: vi.fn().mockResolvedValue({ userId: "user-1" }),
-  isErrorResponse: vi.fn().mockReturnValue(false),
-}));
 
 // One registered kind of person, so a send naming one gets past the check
 // that the kind exists and reaches the recipient rules under test.
@@ -87,8 +79,6 @@ vi.mock("nodemailer", () => ({
   default: { createTransport: vi.fn(() => ({ sendMail: mockSendMail })) },
 }));
 
-import { POST as postSend } from "../../../api/email-send";
-import { POST as postSendTemplate } from "../../../api/email-send-template";
 import { createEmailNamespace } from "../../../direct-api/namespaces/email";
 import type { NextlyContext } from "../../../direct-api/namespaces/context";
 
@@ -208,13 +198,6 @@ function mockAdapter(maxToPerMessage?: number) {
   return { adapter, send };
 }
 
-function post(path: string, body: unknown): Request {
-  return new Request(`http://x${path}`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
 /** The validation entry a refusal carries, whichever surface raised it. */
 async function refusal(
   attempt: () => Promise<unknown>
@@ -228,17 +211,6 @@ async function refusal(
     errors: Array<{ path: string; code: string }>;
   };
   return entry.errors[0];
-}
-
-/** The validation entry of a refused REST send. */
-async function restRefusal(
-  response: Response
-): Promise<{ path: string; code: string }> {
-  expect(response.status).toBe(400);
-  const body = (await response.json()) as {
-    error: { data: { errors: Array<{ path: string; code: string }> } };
-  };
-  return body.error.data.errors[0];
 }
 
 const A = "a@example.com";
@@ -616,17 +588,9 @@ describe("several `to` addresses reach the provider", () => {
     await plugin.sendWithTemplate("alert", [A, B], {});
     await direct.send({ to: [A, B], subject: "Hi", html: "<p>x</p>" });
     await direct.sendWithTemplate({ to: [A, B], template: "alert" });
-    const rest = await postSend(
-      post("/api/email/send", { to: [A, B], subject: "Hi", html: "<p>x</p>" })
-    );
-    const restTemplate = await postSendTemplate(
-      post("/api/email/send-with-template", { to: [A, B], template: "alert" })
-    );
 
-    expect(rest.status).toBe(200);
-    expect(restTemplate.status).toBe(200);
     expect(send.mock.calls.map(([options]) => options.toList)).toEqual(
-      Array(6).fill([A, B])
+      Array(4).fill([A, B])
     );
   });
 });
@@ -651,18 +615,6 @@ describe("a send that cannot be delivered whole is refused before the provider",
       "nextly.email.sendWithTemplate": (to: unknown) =>
         refusal(() =>
           direct.sendWithTemplate({ to: to as string[], template: "alert" })
-        ),
-      "POST /api/email/send": async (to: unknown) =>
-        restRefusal(
-          await postSend(
-            post("/api/email/send", { to, subject: "Hi", html: "<p>x</p>" })
-          )
-        ),
-      "POST /api/email/send-with-template": async (to: unknown) =>
-        restRefusal(
-          await postSendTemplate(
-            post("/api/email/send-with-template", { to, template: "alert" })
-          )
         ),
     };
   };

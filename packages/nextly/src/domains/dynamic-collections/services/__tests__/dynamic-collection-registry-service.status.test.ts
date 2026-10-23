@@ -17,9 +17,12 @@ function makeService(rows: unknown[]) {
     where: () => chain,
     limit: () => Promise.resolve(rows),
   };
+  // No transaction is open, so the read goes through the row cache, which keys
+  // its rows by this adapter: each service here reads its own rows.
   const adapter = {
     getDrizzle: () => chain,
     getCapabilities: () => ({ dialect: "sqlite" }),
+    transactionOpenInFlow: () => false,
   } as never;
   const logger = {
     info: vi.fn(),
@@ -32,33 +35,25 @@ function makeService(rows: unknown[]) {
 
 describe("DynamicCollectionRegistryService.getCollection — status coercion", () => {
   it("returns status: true when DB row has status=1 (sqlite integer-boolean)", async () => {
-    const svc = makeService([
-      { id: "1", slug: "posts", status: 1 },
-    ]);
+    const svc = makeService([{ id: "1", slug: "posts", status: 1 }]);
     const result = (await svc.getCollection("posts")) as { status: boolean };
     expect(result.status).toBe(true);
   });
 
   it("returns status: true when DB row has status=true (postgres native boolean)", async () => {
-    const svc = makeService([
-      { id: "1", slug: "posts", status: true },
-    ]);
+    const svc = makeService([{ id: "1", slug: "posts", status: true }]);
     const result = (await svc.getCollection("posts")) as { status: boolean };
     expect(result.status).toBe(true);
   });
 
   it("returns status: false when DB row has status=0", async () => {
-    const svc = makeService([
-      { id: "1", slug: "posts", status: 0 },
-    ]);
+    const svc = makeService([{ id: "1", slug: "posts", status: 0 }]);
     const result = (await svc.getCollection("posts")) as { status: boolean };
     expect(result.status).toBe(false);
   });
 
   it("returns status: false when DB row has status=false", async () => {
-    const svc = makeService([
-      { id: "1", slug: "posts", status: false },
-    ]);
+    const svc = makeService([{ id: "1", slug: "posts", status: false }]);
     const result = (await svc.getCollection("posts")) as { status: boolean };
     expect(result.status).toBe(false);
   });

@@ -11,7 +11,14 @@
  * @module services/collections/trust-bound
  */
 
+import { decidePermission } from "../../auth/access/decide";
+import { deviate } from "../../auth/access/deviations";
+import {
+  actorForPrincipal,
+  actorForVisitor,
+} from "../../auth/access/resolve-actor";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import { currentPrincipal } from "../../auth/principal-scope";
 import { canReadSystemResource } from "../../auth/resource-readable";
 
 import type { RelatedRowReadContext } from "./related-row-read-context";
@@ -132,7 +139,22 @@ export async function identifiedCallerMayRead(
   access: RelatedRowReadContext,
   resource: string
 ): Promise<boolean> {
-  if (!hasCallerIdentity(access)) return resource === MEDIA_TARGET;
+  if (!hasCallerIdentity(access)) {
+    // Kept until a read with no caller identity, a visitor's or a plugin's
+    // person's, reads media through the Public role: the decision refuses a
+    // caller with no grant.
+    const principal = currentPrincipal();
+    return deviate(
+      "visitor-keeps-media",
+      resource === MEDIA_TARGET,
+      () =>
+        decidePermission(
+          principal ? actorForPrincipal(principal) : actorForVisitor(),
+          "read",
+          resource
+        ).allowed
+    );
+  }
   return canReadSystemResource(
     resource,
     callerId(access),

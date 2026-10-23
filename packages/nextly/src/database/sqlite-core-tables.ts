@@ -1,3 +1,4 @@
+import { EMAIL_BRAND_TABLE } from "../schemas/email-brand/table-name";
 import { EMAIL_SEND_CLAIMS_TABLE } from "../schemas/email-send-claims/table-name";
 import { LANGUAGES_TABLE } from "../schemas/languages/table-name";
 import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
@@ -747,6 +748,21 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "${NOTICES_TABLE}" ("subject_type", "subject_id")`,
     `CREATE INDEX IF NOT EXISTS "nextly_notices_created_idx"
       ON "${NOTICES_TABLE}" ("created_at")`,
+    // The site's email brand settings, one row. Columns match
+    // schemas/email-brand/sqlite.ts; each setting is nullable, null being its
+    // starting value.
+    `CREATE TABLE IF NOT EXISTS "${EMAIL_BRAND_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "logo_url" TEXT,
+      "logo_width" INTEGER,
+      "accent_color" TEXT,
+      "background_color" TEXT,
+      "content_color" TEXT,
+      "font_family" TEXT,
+      "footer_text" TEXT,
+      "footer_links" TEXT,
+      "updated_at" INTEGER NOT NULL
+    )`,
     `CREATE TABLE IF NOT EXISTS "nextly_widget_layout" (
       "id" TEXT PRIMARY KEY NOT NULL,
       "scope_kind" TEXT NOT NULL,

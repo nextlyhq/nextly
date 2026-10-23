@@ -549,6 +549,8 @@ export const COMPONENTS_METHODS: Record<
             newFields: fields as unknown as FieldDefinition[],
             wasLocalized,
             isLocalized,
+            // This apply's push refuses a main-table column drop the admin did not confirm.
+            mainDropsConfirmed: true,
           });
           // 🔴 Resolved BEFORE the apply. The runtime refresh at the end of this
           // handler suppresses its own failures by design, so a probe placed there
