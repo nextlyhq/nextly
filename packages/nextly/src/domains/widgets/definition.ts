@@ -392,6 +392,22 @@ export interface WidgetDefinition {
    * content with no heading and nothing to report its own loading.
    */
   chrome?: WidgetChrome;
+  /**
+   * Whether the host sizes this `custom` widget's list query to the card, as it
+   * sizes the lists it draws itself: it asks the rows the card's size draws, at
+   * most the reader's "Number of items", and one more, the row that says more
+   * exist.
+   *
+   * Only for a `custom` widget whose query is a `list`. Unstated, a custom
+   * widget is asked exactly its declared query, because its component draws the
+   * raw answer and would draw the extra row as an ordinary one. A component that
+   * opts in draws `rowsDrawn(tier, query.limit)` rows of the answer and says
+   * more exist when the answer holds more, from the `query` it is handed.
+   *
+   * @experimental The shape may change while custom cards adopt the host's
+   * sizing.
+   */
+  sizedQuery?: boolean;
   /** Bounds what a user may resize to. Omitted means unconstrained. */
   minSize?: WidgetSize;
   maxSize?: WidgetSize;
@@ -539,6 +555,36 @@ type ArchetypeStanding =
   /** Not a string at all, which no version of this contract permits. */
   | { kind: "invalid" };
 
+/**
+ * Why this widget cannot ask the host to size its query, or `undefined`.
+ *
+ * A BOOLEAN in every version, so anything else is a mistake rather than version
+ * skew. Only a `custom` widget may ask, since core already sizes the lists it
+ * draws, and only for a `list` query, the one kind with rows to size: asked of
+ * anything else it would be a validated option that changes nothing. Asked of
+ * the archetype only where this core knows it, as `chromeProblem` asks, so a
+ * newer core's archetype is not judged here.
+ */
+function sizedQueryProblem(
+  widget: Record<string, unknown>
+): string | undefined {
+  const sized = widget.sizedQuery;
+  if (sized === undefined) return undefined;
+  if (typeof sized !== "boolean") {
+    return "sizedQuery, when given, must be a boolean";
+  }
+  if (!sized) return undefined;
+  const standing = archetypeStanding(widget.archetype);
+  if (standing.kind === "known" && standing.name !== "custom") {
+    return `sizedQuery is only valid for archetype "custom", not "${standing.name}" -- core already sizes the lists it draws`;
+  }
+  const query = widget.query as { op?: unknown } | undefined;
+  if (query?.op !== "list") {
+    return "sizedQuery needs a list query: only a list has rows to size";
+  }
+  return undefined;
+}
+
 function archetypeStanding(value: unknown): ArchetypeStanding {
   if (value === undefined) return { kind: "resolved-custom" };
   if (typeof value !== "string") return { kind: "invalid" };
@@ -620,6 +666,9 @@ export function widgetValueProblem(
   ) {
     return "dismissible, when given, must be a boolean";
   }
+
+  const sized = sizedQueryProblem(widget);
+  if (sized !== undefined) return sized;
 
   const geometry = geometryShapeProblem(widget);
   if (geometry !== undefined) return geometry;

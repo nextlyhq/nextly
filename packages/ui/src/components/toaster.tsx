@@ -7,6 +7,7 @@ import {
   XCircle,
   Loader2,
 } from "lucide-react";
+import type { JSX } from "react";
 import { toast, Toaster as Sonner, type ToasterProps } from "sonner";
 
 // Re-export toast function for convenient usage
@@ -103,7 +104,10 @@ export { toast };
  * @see https://ui.shadcn.com/docs/components/sonner - shadcn/ui integration guide
  * @experimental
  */
-export function Toaster({ theme = "system", ...props }: ToasterProps) {
+export function Toaster({
+  theme = "system",
+  ...props
+}: ToasterProps): JSX.Element {
   return (
     <Sonner
       theme={theme}

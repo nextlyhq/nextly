@@ -1,8 +1,8 @@
 "use client";
 
 import { cva } from "class-variance-authority";
+import { cloneElement, Fragment, useEffect, useId, type JSX } from "react";
 import type * as React from "react";
-import { cloneElement, Fragment, useEffect, useId } from "react";
 
 import { devWarnOnce, isDevelopmentRuntime } from "../lib/dev-warn";
 import { cn } from "../lib/utils";
@@ -166,7 +166,7 @@ export function FieldShell({
   htmlFor,
   className,
   children,
-}: FieldShellProps) {
+}: FieldShellProps): JSX.Element {
   // Two independent id namespaces: one for the control (below), one for the
   // description/error text this field may render. The latter never depends
   // on `htmlFor` or the child's own id, because those name the CONTROL, not

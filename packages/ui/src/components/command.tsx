@@ -7,12 +7,16 @@ import {
   useCommandState as useCommandStatePrimitive,
 } from "cmdk";
 import { Search } from "lucide-react";
-import type {
-  ElementRef,
-  ComponentPropsWithoutRef,
-  HTMLAttributes,
+import {
+  forwardRef,
+  type ElementRef,
+  type ComponentPropsWithoutRef,
+  type HTMLAttributes,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+  type JSX,
 } from "react";
-import { forwardRef } from "react";
 
 import { cn } from "../lib/utils";
 import { usePortalContainer } from "../providers/portal-provider";
@@ -62,7 +66,10 @@ export type CommandProps = ComponentPropsWithoutRef<typeof CommandPrimitive>;
  * Handles filtering, keyboard navigation, and accessibility.
  * @experimental
  */
-const Command = forwardRef<ElementRef<typeof CommandPrimitive>, CommandProps>(
+const Command: ForwardRefExoticComponent<
+  PropsWithoutRef<CommandProps> &
+    RefAttributes<ElementRef<typeof CommandPrimitive>>
+> = forwardRef<ElementRef<typeof CommandPrimitive>, CommandProps>(
   ({ className, ...props }, ref) => (
     <CommandPrimitive
       ref={ref}
@@ -165,7 +172,7 @@ const CommandDialog = ({
   commandProps,
   contentProps,
   ...props
-}: CommandDialogProps) => {
+}: CommandDialogProps): JSX.Element => {
   const portalContainer = usePortalContainer();
 
   return (
@@ -223,39 +230,41 @@ export type CommandInputProps = ComponentPropsWithoutRef<
  * Includes search icon and styled per design system.
  * @experimental
  */
-const CommandInput = forwardRef<
-  ElementRef<typeof CommandPrimitive.Input>,
-  CommandInputProps
->(({ className, ...props }, ref) => (
-  <div
-    className="flex items-center  border-b border-border px-4"
-    // cmdk-input-wrapper is the attribute the cmdk library targets
-    // in its built-in stylesheet to scope wrapper-level styles.
-    // Required by the library; not a typo.
-    // eslint-disable-next-line react/no-unknown-property
-    cmdk-input-wrapper=""
-  >
-    <Search className="mr-3 h-5 w-5 shrink-0 text-muted-foreground" />
-    <CommandPrimitive.Input
-      ref={ref}
-      className={cn(
-        // Size
-        "flex h-12 w-full",
-        // Visual
-        "bg-transparent text-base",
-        "outline-none",
-        // Typography
-        "placeholder:text-muted-foreground",
-        // States
-        "disabled:cursor-not-allowed disabled:opacity-50",
-        // Prevent iOS zoom on focus
-        "text-base md:text-sm",
-        className
-      )}
-      {...props}
-    />
-  </div>
-));
+const CommandInput: ForwardRefExoticComponent<
+  PropsWithoutRef<CommandInputProps> &
+    RefAttributes<ElementRef<typeof CommandPrimitive.Input>>
+> = forwardRef<ElementRef<typeof CommandPrimitive.Input>, CommandInputProps>(
+  ({ className, ...props }, ref) => (
+    <div
+      className="flex items-center  border-b border-border px-4"
+      // cmdk-input-wrapper is the attribute the cmdk library targets
+      // in its built-in stylesheet to scope wrapper-level styles.
+      // Required by the library; not a typo.
+      // eslint-disable-next-line react/no-unknown-property
+      cmdk-input-wrapper=""
+    >
+      <Search className="mr-3 h-5 w-5 shrink-0 text-muted-foreground" />
+      <CommandPrimitive.Input
+        ref={ref}
+        className={cn(
+          // Size
+          "flex h-12 w-full",
+          // Visual
+          "bg-transparent text-base",
+          "outline-none",
+          // Typography
+          "placeholder:text-muted-foreground",
+          // States
+          "disabled:cursor-not-allowed disabled:opacity-50",
+          // Prevent iOS zoom on focus
+          "text-base md:text-sm",
+          className
+        )}
+        {...props}
+      />
+    </div>
+  )
+);
 CommandInput.displayName = "CommandInput";
 
 /** @experimental */
@@ -268,22 +277,24 @@ export type CommandListProps = ComponentPropsWithoutRef<
  * Max height 400px per design spec to prevent tall dialogs.
  * @experimental
  */
-const CommandList = forwardRef<
-  ElementRef<typeof CommandPrimitive.List>,
-  CommandListProps
->(({ className, ...props }, ref) => (
-  <CommandPrimitive.List
-    ref={ref}
-    className={cn(
-      // Scroll
-      "max-h-[400px] overflow-y-auto overflow-x-hidden",
-      // Spacing
-      "p-2",
-      className
-    )}
-    {...props}
-  />
-));
+const CommandList: ForwardRefExoticComponent<
+  PropsWithoutRef<CommandListProps> &
+    RefAttributes<ElementRef<typeof CommandPrimitive.List>>
+> = forwardRef<ElementRef<typeof CommandPrimitive.List>, CommandListProps>(
+  ({ className, ...props }, ref) => (
+    <CommandPrimitive.List
+      ref={ref}
+      className={cn(
+        // Scroll
+        "max-h-[400px] overflow-y-auto overflow-x-hidden",
+        // Spacing
+        "p-2",
+        className
+      )}
+      {...props}
+    />
+  )
+);
 CommandList.displayName = "CommandList";
 
 /** @experimental */
@@ -296,16 +307,18 @@ export type CommandEmptyProps = ComponentPropsWithoutRef<
  * Centered text with muted color per design spec.
  * @experimental
  */
-const CommandEmpty = forwardRef<
-  ElementRef<typeof CommandPrimitive.Empty>,
-  CommandEmptyProps
->((props, ref) => (
-  <CommandPrimitive.Empty
-    ref={ref}
-    className="py-8 px-4 text-center text-sm text-muted-foreground"
-    {...props}
-  />
-));
+const CommandEmpty: ForwardRefExoticComponent<
+  PropsWithoutRef<CommandEmptyProps> &
+    RefAttributes<ElementRef<typeof CommandPrimitive.Empty>>
+> = forwardRef<ElementRef<typeof CommandPrimitive.Empty>, CommandEmptyProps>(
+  (props, ref) => (
+    <CommandPrimitive.Empty
+      ref={ref}
+      className="py-8 px-4 text-center text-sm text-muted-foreground"
+      {...props}
+    />
+  )
+);
 CommandEmpty.displayName = "CommandEmpty";
 
 /** @experimental */
@@ -318,22 +331,24 @@ export type CommandGroupProps = ComponentPropsWithoutRef<
  * Heading styled as uppercase, small, semibold per design spec.
  * @experimental
  */
-const CommandGroup = forwardRef<
-  ElementRef<typeof CommandPrimitive.Group>,
-  CommandGroupProps
->(({ className, ...props }, ref) => (
-  <CommandPrimitive.Group
-    ref={ref}
-    className={cn(
-      // Spacing
-      "space-y-1 mb-2",
-      // Heading styling applied via parent Command className
-      "[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide",
-      className
-    )}
-    {...props}
-  />
-));
+const CommandGroup: ForwardRefExoticComponent<
+  PropsWithoutRef<CommandGroupProps> &
+    RefAttributes<ElementRef<typeof CommandPrimitive.Group>>
+> = forwardRef<ElementRef<typeof CommandPrimitive.Group>, CommandGroupProps>(
+  ({ className, ...props }, ref) => (
+    <CommandPrimitive.Group
+      ref={ref}
+      className={cn(
+        // Spacing
+        "space-y-1 mb-2",
+        // Heading styling applied via parent Command className
+        "[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide",
+        className
+      )}
+      {...props}
+    />
+  )
+);
 CommandGroup.displayName = "CommandGroup";
 
 /** @experimental */
@@ -346,7 +361,10 @@ export type CommandSeparatorProps = ComponentPropsWithoutRef<
  * 1px line with  border border-border color, 8px margin top/bottom.
  * @experimental
  */
-const CommandSeparator = forwardRef<
+const CommandSeparator: ForwardRefExoticComponent<
+  PropsWithoutRef<CommandSeparatorProps> &
+    RefAttributes<ElementRef<typeof CommandPrimitive.Separator>>
+> = forwardRef<
   ElementRef<typeof CommandPrimitive.Separator>,
   CommandSeparatorProps
 >(({ className, ...props }, ref) => (
@@ -369,35 +387,37 @@ export type CommandItemProps = ComponentPropsWithoutRef<
  * Includes hover, focus, and selected states.
  * @experimental
  */
-const CommandItem = forwardRef<
-  ElementRef<typeof CommandPrimitive.Item>,
-  CommandItemProps
->(({ className, ...props }, ref) => (
-  <CommandPrimitive.Item
-    ref={ref}
-    className={cn(
-      // Layout
-      "relative flex cursor-pointer select-none items-center gap-3",
-      // Size
-      "min-h-[44px] sm:min-h-[36px]", // Flexible height with minimal touch targets
-      // Spacing
-      "px-3 py-2.5",
-      // Visual
-      "rounded-sm text-base sm:text-sm outline-none",
-      // Transitions
-      "transition-all duration-200 ease-(--ease-premium)",
-      // Hover state - shared dashboard hover treatment
-      "hover-unified",
-      // Selected/focused state (keyboard navigation)
-      "aria-selected:bg-primary/5 aria-selected:text-primary",
-      "data-[selected=true]:bg-primary/5 data-[selected=true]:text-primary",
-      // Disabled state
-      "data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50",
-      className
-    )}
-    {...props}
-  />
-));
+const CommandItem: ForwardRefExoticComponent<
+  PropsWithoutRef<CommandItemProps> &
+    RefAttributes<ElementRef<typeof CommandPrimitive.Item>>
+> = forwardRef<ElementRef<typeof CommandPrimitive.Item>, CommandItemProps>(
+  ({ className, ...props }, ref) => (
+    <CommandPrimitive.Item
+      ref={ref}
+      className={cn(
+        // Layout
+        "relative flex cursor-pointer select-none items-center gap-3",
+        // Size
+        "min-h-[44px] sm:min-h-[36px]", // Flexible height with minimal touch targets
+        // Spacing
+        "px-3 py-2.5",
+        // Visual
+        "rounded-sm text-base sm:text-sm outline-none",
+        // Transitions
+        "transition-all duration-200 ease-(--ease-premium)",
+        // Hover state - shared dashboard hover treatment
+        "hover-unified",
+        // Selected/focused state (keyboard navigation)
+        "aria-selected:bg-primary/5 aria-selected:text-primary",
+        "data-[selected=true]:bg-primary/5 data-[selected=true]:text-primary",
+        // Disabled state
+        "data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50",
+        className
+      )}
+      {...props}
+    />
+  )
+);
 CommandItem.displayName = "CommandItem";
 
 /** @experimental */
@@ -408,7 +428,9 @@ export type CommandShortcutProps = HTMLAttributes<HTMLSpanElement>;
  * Monospace font, subtle background, right-aligned per design spec.
  * @experimental
  */
-const CommandShortcut = forwardRef<HTMLSpanElement, CommandShortcutProps>(
+const CommandShortcut: ForwardRefExoticComponent<
+  PropsWithoutRef<CommandShortcutProps> & RefAttributes<HTMLSpanElement>
+> = forwardRef<HTMLSpanElement, CommandShortcutProps>(
   ({ className, ...props }, ref) => {
     return (
       <span
@@ -457,7 +479,7 @@ export {
  *
  * @experimental
  */
-export const commandDefaultFilter = defaultFilter;
+export const commandDefaultFilter: typeof defaultFilter = defaultFilter;
 
 /**
  * The value of the item the palette has HIGHLIGHTED, from a component inside
