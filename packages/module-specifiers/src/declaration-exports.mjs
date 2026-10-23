@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
 
 import { parseSource } from "./parse-source.mjs";
 
@@ -13,6 +13,12 @@ import { parseSource } from "./parse-source.mjs";
  * before their chunks); returning nothing would walk a smaller graph and read
  * as a clean pass, so it is refused. A bare specifier names another package,
  * which this does not follow, and is refused too.
+ *
+ * The runtime extension decides which declaration, as it does for the
+ * compiler: `./chunk.mjs` is `chunk.d.mts` and `./chunk.cjs` is
+ * `chunk.d.cts`. A dual-format build emits both beside `chunk.d.ts`, so
+ * trying each in turn read whichever came first, which can be the other
+ * format's graph.
  */
 export function declarationFor(specifier, importer) {
   if (!specifier.startsWith(".")) {
@@ -20,13 +26,9 @@ export function declarationFor(specifier, importer) {
       `${importer} reaches into ${specifier}, another package, which is not followed`
     );
   }
-  const base = resolve(dirname(importer), specifier).replace(/\.(m|c)?js$/, "");
-  const found = [
-    `${base}.d.ts`,
-    `${base}.d.mts`,
-    `${base}.d.cts`,
-    join(base, "index.d.ts"),
-  ].find(candidate => existsSync(candidate));
+  const found = declarationCandidates(
+    resolve(dirname(importer), specifier)
+  ).find(candidate => existsSync(candidate));
   if (found === undefined) {
     throw new Error(
       `${specifier} is referenced by ${importer} and no declaration for it exists. ` +
@@ -34,6 +36,27 @@ export function declarationFor(specifier, importer) {
     );
   }
   return found;
+}
+
+/** The declaration each runtime extension stands for. */
+const DECLARATION_EXTENSION = {
+  ".mjs": ".d.mts",
+  ".cjs": ".d.cts",
+  ".js": ".d.ts",
+};
+
+/**
+ * Where the declaration for a runtime path can be: the one its extension
+ * names, or, for a path written without one, a `.d.ts` file or a directory's
+ * index.
+ */
+function declarationCandidates(path) {
+  const extension = extname(path);
+  const declaration = DECLARATION_EXTENSION[extension];
+  if (declaration === undefined) {
+    return [`${path}.d.ts`, join(path, "index.d.ts")];
+  }
+  return [path.slice(0, -extension.length) + declaration];
 }
 
 /**
@@ -119,6 +142,8 @@ const DECLARATIONS = new Set([
   "TSTypeAliasDeclaration",
   "TSEnumDeclaration",
   "TSModuleDeclaration",
+  // `export import Foo = Namespace.Foo`, an alias that binds `Foo`.
+  "TSImportEqualsDeclaration",
 ]);
 
 /**
@@ -130,20 +155,39 @@ export function exportedNames(file, follow = declarationFor, seen = new Set()) {
   if (seen.has(file)) return new Set();
   seen.add(file);
   const { named, declared, stars } = exportStatements(file);
-  const names = new Set([...named.map(entry => entry.exported), ...declared]);
-  for (const star of stars) {
-    if (star.as !== undefined) names.add(star.as);
-    else
-      addAll(
-        names,
-        exportedNames(follow(star.from, file), follow, seen),
-        "default"
-      );
-  }
+  const names = new Set([
+    ...named.map(entry => entry.exported),
+    ...declared,
+    ...stars.filter(star => star.as !== undefined).map(star => star.as),
+  ]);
+  const starred = stars
+    .filter(star => star.as === undefined)
+    .map(star => exportedNames(follow(star.from, file), follow, seen));
+  for (const name of starNames(starred, names, file)) names.add(name);
   return names;
 }
 
-/** `from` added into `into`, except `but`: `export *` never carries a default. */
-function addAll(into, from, but) {
-  for (const name of from) if (name !== but) into.add(name);
+/**
+ * The names the `export *` statements of `file` add, given what each target
+ * exports and the names `file` exports itself, which take precedence. An
+ * `export *` never carries a default.
+ *
+ * A name two targets both provide is exported only when both reach the same
+ * binding; otherwise it is ambiguous, and the language exports neither. This
+ * does not trace bindings, so such a name is refused: reporting it as exported
+ * could call a name a reader cannot import published. A target reached twice
+ * is read once, so a module two stars share adds its names once.
+ */
+function starNames(starred, explicit, file) {
+  const added = new Set();
+  for (const name of starred.flatMap(names => [...names])) {
+    if (name === "default" || explicit.has(name)) continue;
+    if (added.has(name)) {
+      throw new Error(
+        `${file}: two \`export *\` provide ${name}, which is exported only if both reach one binding, and bindings are not traced here`
+      );
+    }
+    added.add(name);
+  }
+  return added;
 }
