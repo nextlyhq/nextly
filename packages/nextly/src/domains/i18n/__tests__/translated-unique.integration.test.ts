@@ -173,6 +173,40 @@ describeEachDialect("a translated unique field", dialect => {
     expect((await write("en", { handle: "about" })).success).toBe(true);
   });
 
+  // The entity is translated already, but the field's values are still on the main table until
+  // this save moves them into the default language, so that is where the duplicates are.
+  it("refuses to make a shared field translated and unique over values it holds twice, and changes nothing", async () => {
+    const created = await handler().createCollection({
+      name: "pages",
+      label: "Page",
+      localized: true,
+      fields: [
+        { name: "handle", type: "text" },
+        { name: "ref", type: "text", localized: false },
+      ],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const a = idOf(await write("en", { handle: "a", ref: "same" }));
+    const b = idOf(await write("en", { handle: "b", ref: "same" }));
+
+    const refused = await handler().updateCollection(
+      { collectionName: "pages" },
+      {
+        fields: [
+          { name: "handle", type: "text" },
+          { name: "ref", type: "text", unique: true },
+        ],
+      }
+    );
+
+    expect(refused.success).toBe(false);
+    const said = JSON.stringify(refused);
+    expect(said).toMatch(/TRANSLATED_UNIQUE_OVER_DUPLICATES/);
+    expect(said).toContain(a);
+    expect(said).toContain(b);
+    expect(await columnsOf("dc_pages_locales")).not.toContain("ref");
+  });
+
   it.each([
     {
       change: "leaves translation",

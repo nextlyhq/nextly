@@ -300,21 +300,31 @@ export async function refuseTranslatedUniqueThatCannotHold(
   });
   if (becoming.length === 0 || !args.isLocalized) return;
   // Where the values the new index must hold are RIGHT NOW, which is not always the column the
-  // field will end up in:
-  // - the entity was already translated: on the companion, under the column the field has now,
+  // field will end up in, so each field is judged where its values are:
+  // - a field that is translated already: on the companion, under the column the field has now,
   //   which for a field this change renames is still its old one;
-  // - translation starts in this same change: on the main table, and the enable copies every row
-  //   into the default language before creating the index, so main's duplicates become that
+  // - a field joining translation in this change, whether the entity's translation starts now or
+  //   the entity was translated already: on the main table, and the move copies every row into
+  //   the default language before creating the index, so main's duplicates become that
   //   language's. Checked here because the main-table uniqueness preflight leaves out a field
   //   that is becoming translated, so otherwise nobody looks at these values and the index fails
   //   after the create, the seed and the column drops — on MySQL, already committed.
-  const duplicates = args.wasLocalized
-    ? await duplicatesAlreadyOnCompanion(args, companionTable, becoming)
-    : await duplicateValuesSeededFromMain(
-        args.adapter,
-        { mainTable: args.tableName, locale: args.defaultLocale ?? "en" },
-        await columnsStillOnMain(args, becoming)
-      );
+  const onMain = await columnsStillOnMain(args, becoming);
+  const joining = new Set(onMain.map(c => c.column));
+  const duplicates = [
+    ...(args.wasLocalized
+      ? await duplicatesAlreadyOnCompanion(
+          args,
+          companionTable,
+          becoming.filter(c => !joining.has(c.column))
+        )
+      : []),
+    ...(await duplicateValuesSeededFromMain(
+      args.adapter,
+      { mainTable: args.tableName, locale: args.defaultLocale ?? "en" },
+      onMain
+    )),
+  ];
   const refusals = refusalsForTranslatedUniqueOverDuplicates(duplicates);
   if (refusals.length === 0) return;
   throw NextlyError.validation({
