@@ -43,6 +43,8 @@ const NO_ENGLISH = "noenglishbanner";
 const UNPUBLISHABLE = "unpublishablebanner";
 const GROWING_ARTICLES = "growingarticles";
 const GROWING_BANNER = "growingbanner";
+const SHARED_ARTICLES = "sharedarticles";
+const SHARED_BANNER = "sharedbanner";
 const USER = { id: "user-1", isActive: true };
 
 /** Every question the publish rule was asked, in order. */
@@ -50,6 +52,10 @@ let asked: { locale?: string; locales: string[] }[] = [];
 
 /** Refuses English, the default language. */
 const englishRefused = ({ locale }: AccessRuleContext) => locale !== "en";
+
+/** Refuses anything involving French, by the languages it is told. */
+const frenchInvolvedRefused = ({ locales }: AccessRuleContext) =>
+  !locales.includes("fr");
 
 /** Each rule ask and each transaction opened, in the order they happened. */
 let order: string[] = [];
@@ -102,6 +108,18 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
     ],
     collections: [
+      defineCollection({
+        slug: SHARED_ARTICLES,
+        // Not localized: one set of values, shown in every language.
+        status: true,
+        access: {
+          create: () => true,
+          read: () => true,
+          update: () => true,
+          publish: frenchInvolvedRefused,
+        },
+        fields: [text({ name: "heading" })],
+      }),
       defineCollection({
         slug: GROWING_ARTICLES,
         localized: true,
@@ -178,6 +196,17 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           read: () => true,
           update: () => true,
           publish: frenchRefused,
+        },
+        fields: [text({ name: "headline" })],
+      }),
+      defineSingle({
+        slug: SHARED_BANNER,
+        // Not localized: one set of values, shown in every language.
+        status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: frenchInvolvedRefused,
         },
         fields: [text({ name: "headline" })],
       }),
@@ -734,6 +763,65 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(everyLanguage.success).toBe(false);
       expect(everyLanguage.statusCode).toBe(409);
+    });
+
+    it("tells a publish of content stored the same in every language every language", async () => {
+      // Not localized, on a site with languages: publishing it puts the same
+      // values live in every language, French included, so a rule refusing
+      // anything that involves French refuses it.
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: SHARED_ARTICLES,
+        data: { heading: "shared", status: "draft" },
+      });
+      const { id } = created.item;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      const entry = await handlerOf(t).publishAllLocales({
+        collectionName: SHARED_ARTICLES,
+        entryId: id,
+        overrideAccess: false,
+        user: USER,
+      });
+      expect(entry.success).toBe(false);
+      expect(entry.statusCode).toBe(403);
+
+      await singlesOf(t).update(
+        SHARED_BANNER,
+        { headline: "shared" },
+        { overrideAccess: true }
+      );
+      const single = await singlesOf(t).publishAllLocales(SHARED_BANNER, {
+        overrideAccess: false,
+        user: USER,
+      });
+      expect(single.success).toBe(false);
+      expect(single.statusCode).toBe(403);
+    });
+
+    it("refuses a caller who may not publish a Single before saying its translations are not ready", async () => {
+      const t = await boot(dialect);
+      // Its translations table gone before anything is written, as before a
+      // migration has run: a write the caller may make is refused with what to
+      // run to repair it.
+      await t.adapter.executeQuery(
+        `DROP TABLE IF EXISTS single_${UNPUBLISHABLE}_locales`
+      );
+      const publishEvery = (trusted: boolean) =>
+        singlesOf(t).update(
+          UNPUBLISHABLE,
+          { status: "published" },
+          trusted
+            ? { overrideAccess: true, locale: "*" }
+            : { overrideAccess: false, user: USER, locale: "*" }
+        );
+      // The control: a trusted publish of every language meets the repair
+      // message, so the state the case is about holds.
+      expect((await publishEvery(true)).statusCode).toBe(409);
+
+      const refused = await publishEvery(false);
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(403);
     });
   }
 );

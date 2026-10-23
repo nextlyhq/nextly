@@ -1646,6 +1646,67 @@ export class SingleMutationService extends BaseService {
             })
           : undefined;
       const companionPhysicallyExists = companionReadiness === "ready";
+
+      // A write to every language that publishes asks the publish permission
+      // and rule once for each language it puts live, each time told that
+      // language and all of them, as publishing every language does: a rule
+      // that answers by language answers for each, and any refusal refuses the
+      // write. Asked here, before the transaction and off its connection: a
+      // rule is the app's own code and may read the database. The lock
+      // re-reads what goes live (below), and asks nothing. Asked before the
+      // readiness checks below too, so a caller who may not publish is refused
+      // before it learns the state of the site's tables.
+      const sweepStatusesReadable =
+        sweepAllLocales &&
+        companion !== null &&
+        companion !== undefined &&
+        companionPhysicallyExists &&
+        companion.hasStatus;
+      const askedLanguages =
+        sweepAllLocales &&
+        !options.overrideAccess &&
+        (currentData as { status?: unknown }).status === "published"
+          ? this.languagesToPublish(
+              sweepStatusesReadable && companion
+                ? await readCompanionLocaleStatusAll(
+                    this.adapter.getDrizzle<
+                      Parameters<typeof readCompanionLocaleStatusAll>[0]
+                    >(),
+                    companion.table,
+                    existingDoc.id,
+                    cachedCompanionReadiness(
+                      this.adapter,
+                      companion.companionTableName
+                    )
+                  )
+                : new Map<string, string | null>(),
+              existingDoc.status,
+              reachesLocalizedGroup
+            )
+          : undefined;
+      if (askedLanguages !== undefined) {
+        const denied = await askEachLanguage(askedLanguages, () =>
+          checkSingleAccess({
+            slug,
+            operation: "publish",
+            user: options.user,
+            overrideAccess: options.overrideAccess,
+            trusted: options.trusted,
+            routeAuthorized: false,
+            rbacAccessControlService: this.rbacAccessControlService,
+            authenticatedScope: options.authenticatedScope,
+            logger: this.logger,
+          })
+        );
+        if (denied) {
+          // The languages refused are for the server log only.
+          this.logger.warn("Publish refused in some languages", {
+            single: slug,
+            refusedLanguages: denied.refused,
+          });
+          return denied.refusal;
+        }
+      }
       // A localized single whose companion table does not exist yet has nowhere to put
       // a NON-default locale's values: the split below moves them out of the main
       // payload and the companion upsert is then skipped, so the translation is
@@ -1712,65 +1773,6 @@ export class SingleMutationService extends BaseService {
         data: componentFieldData,
         locale: options.locale,
       });
-
-      // A write to every language that publishes asks the publish permission
-      // and rule once for each language it puts live, each time told that
-      // language and all of them, as publishing every language does: a rule
-      // that answers by language answers for each, and any refusal refuses the
-      // write. Asked here, before the transaction and off its connection: a
-      // rule is the app's own code and may read the database. The lock
-      // re-reads what goes live (below), and asks nothing.
-      const sweepStatusesReadable =
-        sweepAllLocales &&
-        companion !== null &&
-        companion !== undefined &&
-        companionPhysicallyExists &&
-        companion.hasStatus;
-      const askedLanguages =
-        sweepAllLocales &&
-        !options.overrideAccess &&
-        (currentData as { status?: unknown }).status === "published"
-          ? this.languagesToPublish(
-              sweepStatusesReadable && companion
-                ? await readCompanionLocaleStatusAll(
-                    this.adapter.getDrizzle<
-                      Parameters<typeof readCompanionLocaleStatusAll>[0]
-                    >(),
-                    companion.table,
-                    existingDoc.id,
-                    cachedCompanionReadiness(
-                      this.adapter,
-                      companion.companionTableName
-                    )
-                  )
-                : new Map<string, string | null>(),
-              existingDoc.status,
-              reachesLocalizedGroup
-            )
-          : undefined;
-      if (askedLanguages !== undefined) {
-        const denied = await askEachLanguage(askedLanguages, () =>
-          checkSingleAccess({
-            slug,
-            operation: "publish",
-            user: options.user,
-            overrideAccess: options.overrideAccess,
-            trusted: options.trusted,
-            routeAuthorized: false,
-            rbacAccessControlService: this.rbacAccessControlService,
-            authenticatedScope: options.authenticatedScope,
-            logger: this.logger,
-          })
-        );
-        if (denied) {
-          // The languages refused are for the server log only.
-          this.logger.warn("Publish refused in some languages", {
-            single: slug,
-            refusedLanguages: denied.refused,
-          });
-          return denied.refusal;
-        }
-      }
 
       try {
         // Retry the whole update+capture transaction on a version_no allocation
