@@ -25,7 +25,7 @@ import {
 import { EMAIL_PROVIDER_ACTIVITY_COLLECTION } from "../../../domains/email/provider-activity";
 import { executeWidgetQuery } from "../../../domains/widgets/execute";
 import type { WidgetResult } from "../../../domains/widgets/result";
-import { readActivitySingles } from "../activity-singles";
+import { readActivitySubjects } from "../activity-subjects";
 import { ACTIVITY_SOURCE_ID } from "../activity-widget-source";
 import {
   allResources,
@@ -38,6 +38,8 @@ import { resolveReadableResources } from "../resolve-readable-resources";
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run on a reused database.
 const NOTES = "rr_notes";
 const SECRET = "rr_secret";
+/** Hidden from the admin's navigation, so kept off the dashboard: read by everyone, shown nowhere there. */
+const HIDDEN = "rr_hidden";
 const HOME = "rr-home";
 
 const ANA = { id: "rr-ana", name: "Ana", email: "ana@rr.test" };
@@ -72,6 +74,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         slug: NOTES,
         // Draft/Published, without versions: an edit writes the live row.
         status: true,
+        access: { read: () => true },
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: HIDDEN,
+        admin: { hidden: true },
         access: { read: () => true },
         fields: [text({ name: "title" })],
       }),
@@ -168,7 +176,7 @@ async function feed(
     limit: options.limit ?? 20,
     scope: options.scope ?? allResources(),
     caller,
-    singles: await readActivitySingles(),
+    ...(await readActivitySubjects()),
     ...(options.before ? { before: options.before } : {}),
   });
 }
@@ -379,7 +387,7 @@ describe.each(getConfiguredTestDialects())(
             limit: 10,
             scope: await resolveReadableResources(reader),
             caller: reader,
-            singles: await readActivitySingles(),
+            ...(await readActivitySubjects()),
           });
         expect(card.map(row => [row.id, row.count])).toEqual(
           endpoint.activities.map(row => [row.id, row.count])
@@ -393,6 +401,38 @@ describe.each(getConfiguredTestDialects())(
         )
       );
       expect(forAna.map(row => row.entryId)).toEqual([note, note]);
+    });
+
+    it("leaves out a collection kept off the dashboard through both doors, for a reader who may read it", async () => {
+      const t = await boot(dialect);
+      const note = await entry(t, NOTES);
+      const hidden = await entry(t, HIDDEN);
+      await written(t, at(2), () => logSave(t, ANA, HIDDEN, hidden));
+      await written(t, at(1), () => logSave(t, ANA, NOTES, note));
+
+      // Everything is in Ana's reach: only the dashboard's rule leaves the hidden save out.
+      const endpoint = await feed(t, as(ANA));
+      expect(endpoint.activities.map(row => row.entryId)).toEqual([note]);
+      const card = listRows(
+        await executeWidgetQuery(
+          { source: ACTIVITY_SOURCE_ID, op: "list", limit: 10 },
+          as(ANA)
+        )
+      );
+      expect(card.map(row => row.entryId)).toEqual([note]);
+
+      // The must-differ half: the save is there, and readable, for a read the rule is not given to.
+      const unfiltered = await t
+        .getService("activityLogService")
+        .getRecentActivity({
+          limit: 10,
+          scope: allResources(),
+          caller: as(ANA),
+        });
+      expect(unfiltered.activities.map(row => row.entryId)).toEqual([
+        note,
+        hidden,
+      ]);
     });
 
     it("lists status only when it changed, so a plain save of a live entry joins and an unpublish does not", async () => {

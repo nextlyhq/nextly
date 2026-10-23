@@ -31,7 +31,7 @@ import type {
   ActivityLogEntry,
   ActivityLogService,
 } from "./activity-log-service";
-import { readActivitySingles } from "./activity-singles";
+import { readActivitySubjects } from "./activity-subjects";
 import type { ReadCaller } from "./readable-resources";
 import { resolveReadableResources } from "./resolve-readable-resources";
 
@@ -144,7 +144,7 @@ async function resolveActivity(
     ...(query.limit === undefined ? {} : { limit: query.limit }),
     scope: await resolveReadableResources(caller),
     caller,
-    singles: await readActivitySingles(),
+    ...(await readActivitySubjects()),
   });
   const names = selected(query.select);
   const fields = describeFields(query.select);

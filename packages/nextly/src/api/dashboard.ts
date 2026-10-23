@@ -27,7 +27,7 @@ import { conditionProbe } from "../domains/widgets/condition-probe";
 import { onboardingProgress } from "../domains/widgets/onboarding";
 import { getCachedNextly } from "../init";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
-import { readActivitySingles } from "../services/dashboard/activity-singles";
+import { readActivitySubjects } from "../services/dashboard/activity-subjects";
 import {
   apiKeyCountScope,
   readableAdminCounts,
@@ -212,12 +212,13 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
   // caller cannot open.
   const caller = await readCaller(auth);
   const scope = await resolveReadableResources(caller);
-  const singles = await readActivitySingles();
+  // The Singles and the kept-off collections, read once and handed on whole, as the card's
+  // source hands them: the two doors leave out the same rows.
   const result = await service.getRecentActivity({
     ...askedLimit(req),
     scope,
     caller,
-    singles,
+    ...(await readActivitySubjects()),
   });
 
   // Cursor-shaped read: `hasMore` sits beside `activities`, with no `total` --

@@ -248,6 +248,25 @@ export interface ActivityLogQueryOptions {
    * unknown, and showing every Single's row would show the hidden ones too.
    */
   singles?: ActivitySingles;
+  /**
+   * The collections kept off the dashboard, whose rows the feed leaves out for
+   * every caller, a super-admin included: the dashboard shows what the admin's
+   * navigation shows (`keptOffDashboard`). Omitted, none are left out, as the
+   * activity count treats an omitted set. From a registry read that did not
+   * complete, the feed answers no rows at all, as the dashboard's activity
+   * count answers none: which collections are hidden is then unknown, and a
+   * hidden one's rows cannot be told from the rest.
+   */
+  keptOffCollections?: ActivityKeptOffCollections;
+}
+
+/**
+ * The collections one registry read found kept off the dashboard. `complete` is
+ * false when the read did not finish, and `slugs` then describes nothing.
+ */
+export interface ActivityKeptOffCollections {
+  slugs: ReadonlySet<string>;
+  complete: boolean;
 }
 
 /**
@@ -299,14 +318,18 @@ function singlesKeptOffClause(
 type SinglesKeptOff = Pick<ActivitySingles, "keptOff" | "complete">;
 
 /**
- * The conditions every read of the feed starts from: inside what the caller may read, and
- * without the rows of Singles kept off the dashboard. `null` when the scope admits nothing,
- * which is answered without a query: an empty `IN ()` is a syntax error on some dialects.
+ * The conditions every read of the feed starts from, the feed's and the activity count's alike:
+ * inside what the caller may read, and without the rows of Singles and collections kept off the
+ * dashboard. `null` when the scope admits nothing, which is answered without a query (an empty
+ * `IN ()` is a syntax error on some dialects), and when the kept-off collections could not be
+ * read, so a hidden collection's rows are never shown for want of knowing it is hidden.
  */
 function feedConditions(
   scope: ReadableResources,
-  singles: SinglesKeptOff | undefined
+  singles: SinglesKeptOff | undefined,
+  keptOffCollections: ActivityKeptOffCollections | undefined
 ): NonNullable<WhereClause["and"]> | null {
+  if (keptOffCollections?.complete === false) return null;
   const conditions: NonNullable<WhereClause["and"]> = [];
   if (scope.kind === "some") {
     if (scope.resources.size === 0) return null;
@@ -318,12 +341,16 @@ function feedConditions(
   }
   const singlesClause = singlesKeptOffClause(singles);
   if (singlesClause !== undefined) conditions.push(singlesClause);
+  const collectionsClause = collectionsKeptOffClause(
+    keptOffCollections?.slugs ?? new Set()
+  );
+  if (collectionsClause !== undefined) conditions.push(collectionsClause);
   return conditions;
 }
 
 /**
- * The condition that leaves the rows of collections kept off the dashboard out of a count. A
- * row that states no kind is read as a collection's, as the feed reads it, so only rows stating
+ * The condition that leaves the rows of collections kept off the dashboard out of the feed and
+ * its count. A row that states no kind is read as a collection's, as the feed reads it, so only rows stating
  * another kind are spared; `IN` is unknown on that row's NULL, and the slug decides.
  */
 function collectionsKeptOffClause(
@@ -857,7 +884,11 @@ function feedWhere(
   if (options?.userId) {
     filters.push({ property: "userId", op: "=", value: options.userId });
   }
-  const starting = feedConditions(scope, options?.singles);
+  const starting = feedConditions(
+    scope,
+    options?.singles,
+    options?.keptOffCollections
+  );
   if (starting === null) return null;
   const conditions: NonNullable<WhereClause["and"]> = [
     ...filters.map(f => ({ column: f.property, op: f.op, value: f.value })),
@@ -1120,7 +1151,8 @@ export class ActivityLogService extends BaseService {
     try {
       const where = feedWhere(options, scope);
       // A scope that admits nothing matches nothing, the intended answer for a caller who may
-      // read nothing, and is answered before any query is built.
+      // read nothing, and is answered before any query is built; so is a feed whose kept-off
+      // collections could not be read.
       if (where === null) return { activities: [], hasMore: false };
 
       // Read until one row PAST the page exists, counted in rows the feed
@@ -1172,26 +1204,25 @@ export class ActivityLogService extends BaseService {
    * The cost is up to that many page reads and their authorization, where one aggregate used to
    * run.
    *
-   * Collections kept off the dashboard are left out as well, which the feed itself does not do:
-   * the figure promises to leave them out. Their rows are removed from the candidates before the
-   * walk, so the walk is still the only thing deciding what may be seen.
+   * Collections kept off the dashboard are left out as the feed leaves them out, by the same
+   * conditions (`feedConditions`): the figure counts the rows the feed would show. Their rows are
+   * removed from the candidates before the walk, so the walk is still the only thing deciding
+   * what may be seen.
    */
   async countRecentActivity(
     options: RecentActivityCountOptions
   ): Promise<RecentActivityCount> {
     const starting = feedConditions(
       options.scope ?? someResources([]),
-      options.singles
+      options.singles,
+      // The figure's caller leaves out kept-off collections only once it has read them whole.
+      { slugs: options.keptOffCollections ?? new Set(), complete: true }
     );
     if (starting === null) return { count: 0, atLeast: false };
-    const keptOff = collectionsKeptOffClause(
-      options.keptOffCollections ?? new Set()
-    );
     const where: WhereClause = {
       and: [
         ...starting,
         { column: "createdAt", op: ">", value: options.since },
-        ...(keptOff === undefined ? [] : [keptOff]),
       ],
     };
     // As many rows as the walk can find, so it stops at the table's end or at its own bound.

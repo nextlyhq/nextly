@@ -505,6 +505,46 @@ describe("dashboard activity scope", () => {
     );
   });
 
+  it("hands the feed the collections the registry keeps off the dashboard", async () => {
+    // Read from the registry by the same function the card's source calls, so
+    // the endpoint and the card leave out the same rows (R-17).
+    containerGet.mockImplementation((name: string) => {
+      if (name === "collectionRegistryService") {
+        return {
+          getAllSlugs: vi.fn().mockResolvedValue(["posts", "pb_patterns"]),
+          getAllCollections: vi
+            .fn()
+            .mockResolvedValue([
+              { slug: "posts" },
+              { slug: "pb_patterns", admin: { hidden: true } },
+            ]),
+        };
+      }
+      if (name === "singleRegistryService") {
+        return {
+          getAllSlugs: vi.fn().mockResolvedValue([]),
+          getAllSingles: vi.fn().mockResolvedValue([]),
+        };
+      }
+      return serviceStub;
+    });
+    const getRecentActivity = vi.fn().mockResolvedValue({
+      activities: [],
+      hasMore: false,
+    } satisfies ActivityLogResult);
+    serviceStub = { getRecentActivity };
+
+    await getDashboardActivity(
+      makeReq("http://localhost/api/dashboard/activity")
+    );
+
+    expect(getRecentActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        keptOffCollections: { slugs: new Set(["pb_patterns"]), complete: true },
+      })
+    );
+  });
+
   it("hands its limit to the service as asked, where the one clamp is", async () => {
     // The service clamps for every door onto the feed, this endpoint and the
     // Recent activity card's widget source alike. A clamp here as well would be

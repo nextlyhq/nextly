@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const getRecentActivity = vi.fn();
 const has = vi.fn();
 const resolveReadableResources = vi.fn();
-const readActivitySingles = vi.fn();
+const readActivitySubjects = vi.fn();
 
 vi.mock("../../../di/container", () => ({
   container: {
@@ -19,8 +19,8 @@ vi.mock("../resolve-readable-resources", () => ({
   resolveReadableResources: (...args: unknown[]) =>
     resolveReadableResources(...args) as unknown,
 }));
-vi.mock("../activity-singles", () => ({
-  readActivitySingles: () => readActivitySingles() as unknown,
+vi.mock("../activity-subjects", () => ({
+  readActivitySubjects: () => readActivitySubjects() as unknown,
 }));
 
 import { executeWidgetQuery } from "../../../domains/widgets/execute";
@@ -35,6 +35,8 @@ import { someResources } from "../readable-resources";
 const caller = { user: { id: "user-1", roles: ["editor"] } };
 const SCOPE = someResources(["posts"]);
 const SINGLES = { labels: new Map(), keptOff: new Set(), complete: true };
+// A collection the dashboard hides: the feed is told it, as the endpoint tells it.
+const KEPT_OFF = { slugs: new Set(["pb_patterns"]), complete: true };
 
 const entry = {
   id: "a1",
@@ -59,7 +61,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   has.mockReturnValue(true);
   resolveReadableResources.mockResolvedValue(SCOPE);
-  readActivitySingles.mockResolvedValue(SINGLES);
+  readActivitySubjects.mockResolvedValue({
+    singles: SINGLES,
+    keptOffCollections: KEPT_OFF,
+  });
   getRecentActivity.mockResolvedValue({ activities: [entry], hasMore: false });
   clearSources();
   clearSystemResolvers();
@@ -73,14 +78,16 @@ describe("what it asks the feed", () => {
       caller
     );
 
-    // The same three things the endpoint hands the feed, read the same way:
-    // the scope is asked of the access layer for THIS caller.
+    // The same things the endpoint hands the feed, read the same way: the
+    // scope is asked of the access layer for THIS caller, and the registries'
+    // Singles and kept-off collections are handed on whole.
     expect(resolveReadableResources).toHaveBeenCalledWith(caller);
     expect(getRecentActivity).toHaveBeenCalledWith({
       limit: 6,
       scope: SCOPE,
       caller,
       singles: SINGLES,
+      keptOffCollections: KEPT_OFF,
     });
   });
 
