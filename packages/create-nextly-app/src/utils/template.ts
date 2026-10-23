@@ -1106,8 +1106,9 @@ async function replacePlaceholders(
 const PINNED_VERSIONS: Record<string, string> = {
   // Next.js ecosystem — resolved at runtime via fetchLatestVersion()
   // (see generatePackageJson)
-  react: "^19.1.0",
-  "react-dom": "^19.1.0",
+  // The floor is the React the repository builds and tests with.
+  react: "^19.3.1",
+  "react-dom": "^19.3.1",
   // Dev dependencies
   typescript: "^5",
   // The oldest Node line in this package's `engines.node`, so a scaffolded

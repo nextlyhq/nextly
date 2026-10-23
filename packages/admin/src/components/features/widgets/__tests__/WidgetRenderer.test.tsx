@@ -324,6 +324,61 @@ describe("WidgetRenderer — custom", () => {
     expect(screen.getByText("count:7")).toBeInTheDocument();
   });
 
+  it("hands the plugin component the query it asked, and none to a card that asked nothing", () => {
+    // The query as asked, its reader's "Number of items" in it, is what lets a
+    // custom card draw the rows core's lists draw and know the extra row the
+    // batch asked for means more exist.
+    registerComponent(
+      "@acme/admin#Panel",
+      ({ query }: { query?: { source: string; limit?: number } }) => (
+        <div>{query ? `${query.source}:${query.limit}` : "no query"}</div>
+      )
+    );
+    const { unmount } = render(
+      <WidgetRenderer
+        definition={{
+          ...custom,
+          query: { source: "system:activity", op: "list", limit: 8 },
+        }}
+        slot={undefined}
+      />
+    );
+    expect(screen.getByText("system:activity:8")).toBeInTheDocument();
+    unmount();
+
+    render(<WidgetRenderer definition={custom} slot={undefined} />);
+    expect(screen.getByText("no query")).toBeInTheDocument();
+  });
+
+  it("hands the plugin component the card's Retry, which a framed card's error would offer", () => {
+    // A self-drawn card draws its own error, so without the callback it has no
+    // Retry to offer and stays failed until something else refetches.
+    const onRetry = vi.fn();
+    registerComponent(
+      "@acme/admin#Panel",
+      ({ onRetry: retry }: { onRetry?: () => void }) =>
+        retry ? (
+          <button type="button" onClick={retry}>
+            again
+          </button>
+        ) : (
+          <div>no retry</div>
+        )
+    );
+    render(
+      <WidgetRenderer
+        definition={{
+          ...custom,
+          query: { source: "collection:posts", op: "count" },
+        }}
+        slot={{ ok: false, error: "down" }}
+        onRetry={onRetry}
+      />
+    );
+    screen.getByRole("button", { name: "again" }).click();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
   it("marks a QUERIED custom card busy during a background refetch", () => {
     // The card keeps the plugin's body through a window-focus refetch, exactly
     // as an archetype keeps its number, so the only thing telling a screen
