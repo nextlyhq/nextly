@@ -26,7 +26,7 @@ import { container } from "../di";
 import { SETTINGS_ACTIVITY_NAMESPACES } from "../domains/audit/settings-activity-namespaces";
 import { refreshContentSources } from "../domains/widgets/collection-widgets";
 import { conditionProbe } from "../domains/widgets/condition-probe";
-import { onboardingSteps } from "../domains/widgets/onboarding";
+import { onboardingProgress } from "../domains/widgets/onboarding";
 import { getCachedNextly } from "../init";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
 import { readActivitySingles } from "../services/dashboard/activity-singles";
@@ -173,7 +173,8 @@ export const getDashboardStats = withErrorHandler(async (req: Request) => {
 /**
  * GET /api/dashboard/onboarding
  *
- * Which setup steps this reader has finished. The same answer the
+ * Which setup steps this reader has finished, and whether setup could be
+ * checked at all. The same answer the
  * `onboarding:incomplete` widget condition is derived from, so the card and the
  * rule that decides whether to offer it cannot disagree.
  *
@@ -194,10 +195,12 @@ export const getDashboardOnboarding = withErrorHandler(async (req: Request) => {
   const caller = await readCaller(auth);
   // The same probe the layout read builds, so this endpoint and the condition
   // that decides whether the card is offered resolve the reader's collections
-  // by one path rather than two.
-  const steps = await onboardingSteps(conditionProbe(caller));
+  // by one path rather than two. `unknown` travels with the steps, because the
+  // condition holds the card while setup cannot be checked and the rows alone
+  // would then read as finished.
+  const { steps, unknown } = await onboardingProgress(conditionProbe(caller));
 
-  return respondData({ steps }, { headers: PRIVATE_NO_STORE_HEADERS });
+  return respondData({ steps, unknown }, { headers: PRIVATE_NO_STORE_HEADERS });
 });
 
 /**
@@ -286,8 +289,11 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
   });
 
   // Cursor-shaped read: `hasMore` sits beside `activities`, with no `total` --
-  // see `ActivityLogResult` for why a count is not published here.
-  // Spread into a fresh literal so the response-shape generic accepts the
-  // named `ActivityLogResult` interface (no implicit index signature).
-  return respondData({ ...result }, { headers: PRIVATE_NO_STORE_HEADERS });
+  // see `ActivityLogResult` for why a count is not published here. Named field
+  // by field: the service's `next` position is for a caller that can pass it
+  // back, and this endpoint takes no position to resume from.
+  return respondData(
+    { activities: result.activities, hasMore: result.hasMore },
+    { headers: PRIVATE_NO_STORE_HEADERS }
+  );
 });
