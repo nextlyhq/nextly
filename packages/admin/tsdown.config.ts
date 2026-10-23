@@ -3,7 +3,7 @@ import { createRequire } from "module";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { defineConfig } from "tsup";
+import { defineConfig, type Rolldown } from "tsdown";
 
 // ESM __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -85,7 +85,38 @@ const NO_EXTERNAL_DEPS = [
   "@shadcn/ui",
 ];
 
-export default defineConfig(options => [
+/**
+ * A stylesheet a component imports resolves to an empty module.
+ *
+ * The admin's stylesheet is published by `build-css.mjs` as `./style.css`,
+ * compiled by Tailwind; the import in a component carries no code for the
+ * bundle. Resolved to an id that does not end in `.css`, so it is neither
+ * bundled as CSS nor refused for lacking a CSS pipeline.
+ */
+const EMPTY_STYLESHEET = "\0nextly:empty-stylesheet";
+const stylesheetImportsAreEmpty: Rolldown.Plugin = {
+  name: "nextly:empty-stylesheet",
+  resolveId: {
+    order: "pre",
+    filter: { id: /\.css$/ },
+    handler: () => EMPTY_STYLESHEET,
+  },
+  load: {
+    filter: { id: /^\0nextly:empty-stylesheet$/ },
+    handler: () => ({ code: "", moduleSideEffects: false }),
+  },
+};
+
+/** Whether an import names a listed package, or a subpath of one. */
+function matches(id: string, patterns: readonly (string | RegExp)[]): boolean {
+  return patterns.some(pattern =>
+    typeof pattern === "string"
+      ? id === pattern || id.startsWith(`${pattern}/`)
+      : pattern.test(id)
+  );
+}
+
+export default defineConfig([
   // Main admin bundle - ESM only due to top-level await in Lexical
   // Note: CSS is built separately by scripts/build-css.mjs using Tailwind CLI
   {
@@ -96,22 +127,18 @@ export default defineConfig(options => [
     ],
     format: ["esm"],
     outDir: "dist",
+    // tsdown cleans the directory once, before either config builds, so the
+    // CLI bundle written beside this one survives it.
     clean: true,
     sourcemap: false,
     target: "es2022",
-    dts: {
-      entry: [
-        "src/index.ts",
-        "src/lib/plugins/component-registry.ts",
-        "src/lib/plugins/plugin-components.ts",
-      ],
-      resolve: true,
-    },
+    // Declarations without a type check: `check-types` is the type check.
+    dts: { sourcemap: false, compilerOptions: { noCheck: true } },
     tsconfig: "tsconfig.json",
     define: {
       __NEXTLY_ADMIN_VERSION__: JSON.stringify(ADMIN_VERSION),
-      // tsup folds `process.env.NODE_ENV` at build time, and its own fallback
-      // for an unset NODE_ENV is "development", so without an explicit value
+      // The bundler folds `process.env.NODE_ENV` at build time, and tsup's
+      // fallback for an unset NODE_ENV was "development", so without an explicit value
       // the published dist is a development build. The outcome that matters:
       // the error screens' "View technical details" box — the caught error's
       // message and stack trace — renders under `NODE_ENV === "development"`,
@@ -125,52 +152,50 @@ export default defineConfig(options => [
         process.env.NODE_ENV ?? "production"
       ),
     },
-    external: EXTERNAL_DEPS,
-    noExternal: NO_EXTERNAL_DEPS,
-    splitting: true,
-    treeshake: true,
+    deps: {
+      neverBundle: id => matches(id, EXTERNAL_DEPS),
+      alwaysBundle: id => matches(id, NO_EXTERNAL_DEPS),
+      // The declarations name the packages their types come from rather than
+      // inlining them, bundled into the JavaScript or not. `@admin/*` is this
+      // package's own source under a path alias, so it is resolved and bundled.
+      dts: {
+        neverBundle: id =>
+          /^(@[\w-][\w.-]*\/)?[\w-]/.test(id) && !id.startsWith("@admin/"),
+      },
+    },
+    treeshake: {
+      // `console.debug` calls are dropped from the bundle.
+      manualPureFunctions: ["console.debug"],
+    },
     // Platform browser to avoid Node.js-specific require patterns
     platform: "browser",
-    // esbuild options to handle CJS interop properly
-    esbuildOptions(options) {
-      // Ensure proper ESM output without dynamic require
-      options.mainFields = ["module", "main"];
-      options.conditions = ["import", "module", "browser", "default"];
-
-      // CRITICAL: Alias use-sync-external-store/shim to our React re-export
-      // The original shim has polyfill code that doesn't work with React 19's changed internals
-      // By aliasing to our shim, we use React's built-in useSyncExternalStore
-      options.alias = {
-        ...options.alias,
-        "use-sync-external-store/shim": path.resolve(
-          __dirname,
-          "src/shims/use-sync-external-store-shim.ts"
-        ),
-        "use-sync-external-store/shim/index.js": path.resolve(
-          __dirname,
-          "src/shims/use-sync-external-store-shim.ts"
-        ),
-        "use-sync-external-store": path.resolve(
-          __dirname,
-          "src/shims/use-sync-external-store-shim.ts"
-        ),
-      };
-    },
-    minify: "terser",
-    terserOptions: {
-      compress: {
-        passes: 2,
-        dead_code: true,
-        drop_console: false,
-        pure_funcs: ["console.debug"],
-      },
-      mangle: {
-        safari10: true,
-      },
-      format: {
-        comments: false,
+    // Resolve the browser builds of dependencies, as ES modules, so the
+    // bundle carries no Node-specific `require` patterns.
+    inputOptions: {
+      resolve: {
+        mainFields: ["module", "main"],
+        conditionNames: ["import", "module", "browser", "default"],
       },
     },
+    // CRITICAL: Alias use-sync-external-store/shim to our React re-export
+    // The original shim has polyfill code that doesn't work with React 19's changed internals
+    // By aliasing to our shim, we use React's built-in useSyncExternalStore
+    alias: {
+      "use-sync-external-store/shim": path.resolve(
+        __dirname,
+        "src/shims/use-sync-external-store-shim.ts"
+      ),
+      "use-sync-external-store/shim/index.js": path.resolve(
+        __dirname,
+        "src/shims/use-sync-external-store-shim.ts"
+      ),
+      "use-sync-external-store": path.resolve(
+        __dirname,
+        "src/shims/use-sync-external-store-shim.ts"
+      ),
+    },
+    minify: true,
+    plugins: [stylesheetImportsAreEmpty],
     onSuccess: async () => {
       const distDir = path.join(process.cwd(), "dist");
 
@@ -319,10 +344,9 @@ export default defineConfig(options => [
       }
       console.log("=".repeat(60) + "\n");
     },
-    outExtension({ format }) {
-      return {
-        js: format === "cjs" ? ".cjs" : ".mjs",
-      };
+    // Keep the file names the exports map already publishes.
+    outExtensions() {
+      return { js: ".mjs", dts: ".d.ts" };
     },
   },
   // CLI bundle - can use CJS since it doesn't depend on Lexical
@@ -332,16 +356,18 @@ export default defineConfig(options => [
     outDir: "dist",
     sourcemap: false,
     target: "es2020",
-    dts: {
-      entry: ["src/cli.ts"],
-      resolve: true,
-    },
+    clean: false,
+    dts: { sourcemap: false, compilerOptions: { noCheck: true } },
     tsconfig: "tsconfig.json",
-    external: EXTERNAL_DEPS,
-    outExtension({ format }) {
-      return {
-        js: format === "cjs" ? ".cjs" : ".mjs",
-      };
+    deps: { neverBundle: id => matches(id, EXTERNAL_DEPS) },
+    // Keep the file names the exports map already publishes.
+    outExtensions({ format }) {
+      return format === "cjs"
+        ? { js: ".cjs", dts: ".d.cts" }
+        : { js: ".mjs", dts: ".d.ts" };
     },
+    // CommonJS stays published beside ESM; tsdown's hint to drop it is noise here.
+    checks: { legacyCjs: false },
+    cjsDefault: false,
   },
 ]);

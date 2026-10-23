@@ -83,11 +83,11 @@ MySQL lacks a few features Nextly uses natively in PostgreSQL. The adapter emula
 
 ## Compatibility
 
-| Tool     | Version               |
-| -------- | --------------------- |
-| Node.js  | 20.19+, 22.12+ or 24+ |
-| `mysql2` | 3+                    |
-| `nextly` | 0.0.x                 |
+| Tool     | Version       |
+| -------- | ------------- |
+| Node.js  | 22.12+ or 24+ |
+| `mysql2` | 3+            |
+| `nextly` | 0.0.x         |
 
 ## Documentation
 

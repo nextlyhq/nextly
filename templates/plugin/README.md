@@ -26,7 +26,7 @@ pnpm test     # boots a real Nextly on in-memory SQLite via createTestNextly
 ## Build & publish
 
 ```bash
-pnpm build    # tsup → dist/
+pnpm build    # tsdown → dist/
 npm publish
 ```
 

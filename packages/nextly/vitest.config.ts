@@ -31,8 +31,11 @@ export default defineConfig({
     // local gate for reasons unrelated to the code under test. Fewer workers
     // trades suite wall-time for per-test CPU, which is what the timeouts
     // actually measure.
+    // `maxWorkers`, not `poolOptions.forks.maxForks`: Vitest 4 removed
+    // `poolOptions` and ignores it, so the cap above had silently stopped
+    // applying and a plain `pnpm test` took a worker per core.
     fileParallelism: true,
-    poolOptions: { forks: { maxForks: 3 } },
+    maxWorkers: 3,
     // Why explicit exclude of integration tests: F18 runs unit and integration
     // suites separately. Unit run skips *.integration.test.ts so the suite
     // stays green without a database. Integration run uses

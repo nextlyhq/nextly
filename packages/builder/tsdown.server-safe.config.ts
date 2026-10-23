@@ -1,4 +1,12 @@
-import { defineConfig } from "tsup";
+import { defineConfig } from "tsdown";
+
+// Packages this build never bundles: each name and its subpaths.
+const NEVER_BUNDLE = [
+  "react",
+  "react-dom",
+  "@nextlyhq/ui",
+  "@nextlyhq/plugin-sdk",
+];
 
 /**
  * The parts of this package that contain no React.
@@ -19,7 +27,7 @@ import { defineConfig } from "tsup";
  *
  * Built SEPARATELY from the root entry because that entry carries a
  * `"use client"` banner. The banner is required there — the shell is a client
- * component and Rollup drops per-module directives — but it applies to
+ * component and bundling drops per-module directives — but it applies to
  * everything the entry re-exports, which marked these two as client-only as
  * well. A Server Component could then not compute a layout bound or a
  * coordinate, for no reason other than how the bundle was assembled.
@@ -49,23 +57,22 @@ export default defineConfig({
     "src/ops.ts",
   ],
   format: ["esm"],
-  dts: true,
+  // Declarations without a type check: `check-types` is the type check.
+  dts: { sourcemap: false, compilerOptions: { noCheck: true } },
   clean: false,
   sourcemap: true,
   // Only reached through the type side of the root entry's declarations; no
   // runtime import here pulls any of them in. Declared so `dts` resolves them
   // rather than trying to bundle a copy.
-  external: [
-    "react",
-    "react-dom",
-    "react/jsx-runtime",
-    "@nextlyhq/ui",
-    "@nextlyhq/plugin-sdk",
-  ],
+  deps: {
+    neverBundle: id =>
+      NEVER_BUNDLE.some(name => id === name || id.startsWith(`${name}/`)),
+  },
   // Safe here, unlike the root config: with no directive to preserve, there is
   // nothing for the treeshaking pass to strip.
   treeshake: true,
-  outExtension() {
-    return { js: ".mjs" };
+  // Keep the file names the exports map already publishes.
+  outExtensions() {
+    return { js: ".mjs", dts: ".d.ts" };
   },
 });

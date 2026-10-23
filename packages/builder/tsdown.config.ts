@@ -1,4 +1,12 @@
-import { defineConfig } from "tsup";
+import { defineConfig } from "tsdown";
+
+// Packages this build never bundles: each name and its subpaths.
+const NEVER_BUNDLE = [
+  "react",
+  "react-dom",
+  "@nextlyhq/ui",
+  "@nextlyhq/plugin-sdk",
+];
 
 /**
  * The CLIENT entry, and the externals are the contract.
@@ -26,7 +34,8 @@ export default defineConfig({
   // with the Tailwind CLI, because the shell draws with utility classes and a
   // verbatim copy ships the custom properties without the rules that use them.
   format: ["esm"],
-  dts: true,
+  // Declarations without a type check: `check-types` is the type check.
+  dts: { sourcemap: false, compilerOptions: { noCheck: true } },
   // NOT `clean`. This config is one of three producers writing into the same
   // `dist`, and under `--watch` a clean here deletes the other two's output on
   // every rebuild — the root entry, the server-safe subpaths and the compiled
@@ -34,22 +43,17 @@ export default defineConfig({
   // build script clears the directory once, up front, where nothing races it.
   clean: false,
   sourcemap: true,
-  // Mutually exclusive with the banner above, and correctness wins. Rollup runs
-  // the treeshaking pass and drops module-level directives from the bundle —
-  // including one in the entry source — so a treeshaken build ships without
-  // `"use client"` and a Server Component importing it fails. The bytes are
-  // recovered by consumers, whose own bundlers treeshake this package now that
-  // `sideEffects` is declared. `@nextlyhq/ui` made the same trade for the same
-  // reason.
+  // Off, as before. The banner above is added after treeshaking, so the
+  // directive does not depend on this; the bytes are recovered by consumers,
+  // whose own bundlers treeshake this package now that `sideEffects` is
+  // declared. `@nextlyhq/ui` keeps the same setting.
   treeshake: false,
-  external: [
-    "react",
-    "react-dom",
-    "react/jsx-runtime",
-    "@nextlyhq/ui",
-    "@nextlyhq/plugin-sdk",
-  ],
-  outExtension() {
-    return { js: ".mjs" };
+  deps: {
+    neverBundle: id =>
+      NEVER_BUNDLE.some(name => id === name || id.startsWith(`${name}/`)),
+  },
+  // Keep the file names the exports map already publishes.
+  outExtensions() {
+    return { js: ".mjs", dts: ".d.ts" };
   },
 });
