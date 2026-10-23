@@ -41,6 +41,7 @@ import {
 } from "@nextlyhq/ui";
 import type { SizeTier } from "@nextlyhq/ui/format";
 import { Plus } from "lucide-react";
+import type { JSX } from "react";
 import { useMemo } from "react";
 
 import { Link } from "@admin/components/ui/link";
@@ -53,13 +54,6 @@ import { useCardTier } from "../widgets/frame/tier";
 
 import { keptOffDashboard } from "./kept-off-dashboard";
 
-/**
- * How many shortcuts are drawn before the rest are counted.
- *
- * The same budget the `actions` archetype uses, for the same reason: past a
- * handful this stops being a shortcut and becomes a second navigation menu,
- * which the sidebar already is. The surplus is reachable there.
- */
 /**
  * The shortcuts the card offers at each tier; the rest are a menu away. Past a handful a row of
  * shortcuts stops being one and becomes a second navigation menu, which the sidebar already is.
@@ -81,7 +75,7 @@ const SHORTCUTS_DRAWN: Readonly<Record<SizeTier, number>> = Object.freeze({
  */
 const COLLECTION_PAGE_SIZE = 100;
 
-export function QuickCreate() {
+export function QuickCreate(): JSX.Element | null {
   // 🔴 The SERVER's list, not the whole registry. This is the same query the
   // sidebar reads, and it is already filtered to what this reader may see — so
   // a collection they are not allowed to know exists is absent before any
@@ -103,10 +97,13 @@ export function QuickCreate() {
   const creatable = useMemo(() => {
     const items = data?.items ?? [];
     // A collection kept off the dashboard (internal, or hidden from the navigation) is never a
-    // shortcut here, whatever the reader may create in it.
+    // shortcut here, whatever the reader may create in it. Nor is one whose documents only a
+    // machine creates (`admin.disableCreate`, as form submissions declare): its own list offers
+    // no "New" either, so a shortcut here would lead to a form nobody is meant to fill.
     return items.filter(
       collection =>
         !keptOffDashboard(collection) &&
+        !collection.admin?.disableCreate &&
         hasPermission(`create-${collection.name}`)
     );
   }, [data?.items, hasPermission]);

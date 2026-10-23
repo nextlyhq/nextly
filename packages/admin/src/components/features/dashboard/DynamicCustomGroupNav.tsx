@@ -51,7 +51,7 @@ interface GroupItem {
 export function DynamicCustomGroupNav({
   isActive,
   search = "",
-}: DynamicCustomGroupNavProps) {
+}: DynamicCustomGroupNavProps): React.JSX.Element | null {
   const { state } = useSidebar();
   const isCollapsed = state === "collapsed";
   const branding = useBranding();

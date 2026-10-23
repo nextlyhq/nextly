@@ -49,6 +49,9 @@ vi.mock("@admin/components/features/dashboard/TeamSummary", () => ({
 vi.mock("@admin/components/features/dashboard/RecentActivity", () => ({
   RecentActivityCard: stub,
 }));
+vi.mock("@admin/components/features/dashboard/UpcomingReleases", () => ({
+  UpcomingReleasesCard: stub,
+}));
 
 describe("core widget components register at runtime", () => {
   beforeEach(async () => {
@@ -79,6 +82,7 @@ describe("core widget components register at runtime", () => {
       "core#QuickCreate",
       "core#TeamSummary",
       "core#RecentActivity",
+      "core#UpcomingReleases",
     ]) {
       expect(hasComponent(path), `${path} is not registered`).toBe(true);
     }

@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useState } from "react";
 import { FormProvider } from "react-hook-form";
 
@@ -25,7 +26,7 @@ interface AcceptInviteProps {
   searchParams?: Record<string, string | string[] | undefined>;
 }
 
-export function AcceptInvite({ searchParams }: AcceptInviteProps) {
+export function AcceptInvite({ searchParams }: AcceptInviteProps): JSX.Element {
   const token =
     typeof searchParams?.token === "string" ? searchParams.token : null;
 

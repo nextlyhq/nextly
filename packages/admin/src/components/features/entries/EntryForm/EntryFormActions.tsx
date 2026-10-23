@@ -9,6 +9,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useState } from "react";
 
 import { Loader2 } from "@admin/components/icons";
@@ -105,7 +106,7 @@ export function EntryFormActions({
   previewLabel = "Preview",
   isLinkAvailable = false,
   shareDocument,
-}: EntryFormActionsProps) {
+}: EntryFormActionsProps): JSX.Element {
   const [shareOpen, setShareOpen] = useState(false);
   const submitLabel = mode === "create" ? `Create` : "Save Changes";
 

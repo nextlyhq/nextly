@@ -41,7 +41,7 @@ const SIDEBAR_PAGE_SIZE = 100;
 export function DynamicSingleNav({
   isActive,
   search = "",
-}: DynamicSingleNavProps) {
+}: DynamicSingleNavProps): React.JSX.Element | null {
   // Walk the paginated singles endpoint until `meta.hasNext` is false so the
   // sidebar can render every single regardless of count.
   const {

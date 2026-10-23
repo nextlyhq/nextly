@@ -167,8 +167,8 @@ describe("turbo hashes every TypeScript module it type-checks", () => {
       const tracked = trackedTypeScript(task.directory);
 
       // A package may legitimately ship no TypeScript at all — `tsconfig`,
-      // `eslint-config`, `prettier-config` and `admin-css` are configuration
-      // and CSS, and all four still declare `check-types`. So emptiness is a
+      // `prettier-config` and `admin-css` are configuration and CSS, and all
+      // three still declare `check-types`. So emptiness is a
       // valid answer HERE, and the population is asserted once above instead,
       // where an empty read cannot be mistaken for a clean one.
       // A task appears in the dry run whether or not the package defines the
@@ -179,8 +179,8 @@ describe("turbo hashes every TypeScript module it type-checks", () => {
       // assertion here green while its gate quietly stopped existing.
       //
       // Only required of packages that SHIP TypeScript. `tsconfig`,
-      // `eslint-config`, `prettier-config` and `admin-css` are configuration
-      // and CSS, and are legitimately `<NONEXISTENT>`.
+      // `prettier-config` and `admin-css` are configuration and CSS, and are
+      // legitimately `<NONEXISTENT>`.
       if (tracked.length > 0) {
         expect(
           String(task.command),

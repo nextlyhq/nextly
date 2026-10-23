@@ -22,6 +22,7 @@ import {
   AlertDialogTitle,
   Button,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useState } from "react";
 
 import * as Icons from "@admin/components/icons";
@@ -210,7 +211,7 @@ export function DashboardEditChrome({
   on,
   saveRequest,
   focus,
-}: DashboardEditChromeProps) {
+}: DashboardEditChromeProps): JSX.Element {
   const [askingReset, setAskingReset] = useState(false);
   const requestSave = () => void saveRequest.request();
 

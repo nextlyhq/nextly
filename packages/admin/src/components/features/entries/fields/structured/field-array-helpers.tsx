@@ -51,7 +51,7 @@ export function RowDragHandle({
   attributes,
   listeners,
   ariaLabel,
-}: RowDragHandleProps) {
+}: RowDragHandleProps): React.JSX.Element {
   if (!isSortable || !isInteractive) {
     return <div className="w-6" />;
   }
@@ -85,7 +85,7 @@ export function RowRemoveButton({
   isInteractive,
   onRemove,
   ariaLabel,
-}: RowRemoveButtonProps) {
+}: RowRemoveButtonProps): React.JSX.Element | null {
   if (!canRemove || !isInteractive) return null;
 
   return (
@@ -402,7 +402,7 @@ export function SortableFieldArrayContainer<T extends { id: string }>({
   readOnly,
   describeItem = (_, index) => `Item ${index + 1}`,
   children,
-}: SortableFieldArrayContainerProps<T>) {
+}: SortableFieldArrayContainerProps<T>): React.JSX.Element {
   const ids = items.map(item => item.id);
   const announcements = sortableAnnouncements({
     describe: ({ id }) => {
@@ -444,7 +444,7 @@ export function RowLimitNotice({
   minRows,
   maxRows,
   label,
-}: RowLimitNoticeProps) {
+}: RowLimitNoticeProps): React.JSX.Element {
   const pluralLabel = label.toLowerCase();
 
   return (

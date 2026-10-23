@@ -17,6 +17,7 @@ import {
   SelectValue,
   Switch,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { cn } from "@admin/lib/utils";
 
@@ -41,7 +42,7 @@ export function HookConfigForm({
   config,
   onConfigChange,
   fieldNames,
-}: HookConfigFormProps) {
+}: HookConfigFormProps): JSX.Element {
   const hookConfig = getPrebuiltHook(hookId);
 
   if (!hookConfig) {

@@ -28,7 +28,7 @@
  * @module components/features/widgets/archetypes/chart-frame
  */
 
-import { useId, type ReactNode } from "react";
+import { useId, type ReactNode, type JSX } from "react";
 
 import { CardFigure } from "../frame/figure";
 
@@ -103,7 +103,7 @@ export function ChartFrame({
   rows,
   note,
   children,
-}: ChartFrameProps) {
+}: ChartFrameProps): JSX.Element {
   const base = useId();
   const titleId = `${base}-title`;
   const descId = `${base}-desc`;

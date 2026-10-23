@@ -14,6 +14,7 @@
 
 import { Button } from "@nextlyhq/ui";
 import { Globe } from "lucide-react";
+import type { JSX } from "react";
 
 import { usePublishAllLanguages } from "./usePublishAllLanguages";
 
@@ -24,7 +25,7 @@ export interface PublishAllLanguagesButtonProps {
 
 export function PublishAllLanguagesButton({
   hasStatus,
-}: PublishAllLanguagesButtonProps) {
+}: PublishAllLanguagesButtonProps): JSX.Element | null {
   const publish = usePublishAllLanguages(
     hasStatus === undefined ? {} : { hasStatus }
   );

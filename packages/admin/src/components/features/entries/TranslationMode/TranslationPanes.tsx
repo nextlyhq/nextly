@@ -32,6 +32,7 @@
  * @module components/features/entries/TranslationMode/TranslationPanes
  */
 
+import type { JSX } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppression";
@@ -85,7 +86,7 @@ export function TranslationPanes({
   onExit = () => {},
   children,
   control,
-}: TranslationPanesProps) {
+}: TranslationPanesProps): JSX.Element {
   return source ? (
     <ActivePanes source={source} onExit={onExit} control={control}>
       {children}

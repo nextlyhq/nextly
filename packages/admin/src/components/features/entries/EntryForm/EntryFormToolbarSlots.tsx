@@ -23,6 +23,7 @@
  *
  * @module components/features/entries/EntryForm/EntryFormToolbarSlots
  */
+import type { JSX } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
@@ -46,7 +47,7 @@ export function EntryFormToolbarSlots({
    * thing on screen that disagrees with the version below it.
    */
   value?: unknown;
-}) {
+}): JSX.Element | null {
   const branding = useBranding();
   const form = useFormContext();
   // Subscribe to the controller field's value so the toolbar reflects it. Hooks

@@ -11,7 +11,7 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 
-import { requiredPermissionSlugs } from "./gate";
+import { requiredPermissionSlugs, type WidgetPermissionGate } from "./gate";
 import {
   lifecycleProblem,
   type WidgetCondition,
@@ -35,8 +35,10 @@ export type { WidgetSetting } from "./settings";
 
 export {
   holdsWidgetPermission,
+  requiredPermissionGroups,
   requiredPermissionSlugs,
   widgetGateHolds,
+  type WidgetPermissionGate,
 } from "./gate";
 
 /** Column span at the large breakpoint, as a named step rather than a number. */
@@ -430,14 +432,16 @@ export interface WidgetDefinition {
    *
    * Any-of rather than all-of because that is the shape every consumer of this
    * vocabulary already has -- `requireAnyPermission` at the route layer, the
-   * capability lists in the admin. A card needing all of several grants has no
-   * consumer yet, and inventing the second form before something needs it is
-   * how a declaration ends up with two meanings nobody can keep straight.
+   * capability lists in the admin. A card that needs several grants together
+   * says so with the separate `{ allOf }` form (@experimental), whose entries
+   * are slugs or any-of arrays: the Team card needs a reader who may read people
+   * AND may add or change them. An array never means all-of, so no declaration
+   * reads two ways.
    *
    * `WidgetAction.requiredPermission` stays a single slug. It gates one
    * shortcut rather than a card, and nothing has asked it for more.
    */
-  requiredPermission?: string | readonly string[];
+  requiredPermission?: WidgetPermissionGate;
   /**
    * Required for every data archetype unless `serverData` is set; forbidden
    * for `text` and `actions`.
@@ -700,7 +704,7 @@ export function widgetValueProblem(
     widget.requiredPermission !== undefined &&
     requiredPermissionSlugs(widget.requiredPermission) === undefined
   ) {
-    return "requiredPermission, when given, must be a permission slug or a non-empty array of them";
+    return "requiredPermission, when given, must be a permission slug, a non-empty array of them, or { allOf: [...] } whose entries are each a slug or a non-empty array of slugs";
   }
 
   // A query is an OBJECT in every version, so it belongs here rather than

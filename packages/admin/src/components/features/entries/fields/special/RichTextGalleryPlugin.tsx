@@ -38,6 +38,7 @@ import {
   type LexicalCommand,
 } from "lexical";
 import { useState, useCallback, useEffect } from "react";
+import type { JSX } from "react";
 
 import { MediaPickerDialog } from "@admin/components/features/media-library/MediaPickerDialog";
 import { GalleryHorizontalEnd, X, AlertCircle } from "@admin/components/icons";
@@ -73,7 +74,7 @@ type DialogStep = "closed" | "select" | "configure";
 
 export function RichTextGalleryPlugin({
   disabled = false,
-}: RichTextGalleryPluginProps) {
+}: RichTextGalleryPluginProps): JSX.Element {
   const [editor] = useLexicalComposerContext();
   const [step, setStep] = useState<DialogStep>("closed");
   const [selectedImages, setSelectedImages] = useState<GalleryImage[]>([]);

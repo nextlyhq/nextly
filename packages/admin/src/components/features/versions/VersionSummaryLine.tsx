@@ -14,6 +14,8 @@
  * @module components/features/versions/VersionSummaryLine
  */
 
+import type { JSX } from "react";
+
 import { useVersionDiff } from "@admin/hooks/queries/useVersions";
 import type { VersionScope } from "@admin/services/versionApi";
 
@@ -47,7 +49,7 @@ export function VersionSummaryLine({
   versionNo,
   previous,
   enabled = true,
-}: VersionSummaryLineProps) {
+}: VersionSummaryLineProps): JSX.Element | null {
   const from = previous.kind === "version" ? previous.versionNo : null;
   const diff = useVersionDiff({
     scope,

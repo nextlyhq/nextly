@@ -74,7 +74,7 @@ Claude Code loads by path, `.claude/rules/integration-tests.md` for
   `/templates` (`base`, `blank`, `blog`, `plugin`).
 - `packages/ui` - shared React components and the design-token theme.
 - `packages/admin-css`, `packages/eslint-plugin`, `packages/module-specifiers`,
-  `packages/eslint-config`, `packages/prettier-config`, `packages/tsconfig`,
+  `packages/eslint-config` (empty), `packages/prettier-config`, `packages/tsconfig`,
   `packages/telemetry` - shared tooling and support packages.
 - `apps/playground` - contributor dev harness (not published).
 - `e2e/` - Playwright suite. `docs/` - user docs (MDX, deployed to

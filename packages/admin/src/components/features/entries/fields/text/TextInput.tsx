@@ -16,6 +16,7 @@
 
 import { Input } from "@nextlyhq/ui";
 import type { TextFieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import {
   useController,
   type Control,
@@ -145,7 +146,7 @@ export function TextInput<TFieldValues extends FieldValues = FieldValues>({
   disabled = false,
   readOnly = false,
   className,
-}: TextInputProps<TFieldValues>) {
+}: TextInputProps<TFieldValues>): JSX.Element {
   // Get default value - handle function default values
   const defaultValue =
     typeof field.defaultValue === "function"

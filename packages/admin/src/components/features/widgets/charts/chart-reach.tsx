@@ -23,6 +23,7 @@ import {
   type FocusEvent,
   type KeyboardEvent,
   type ReactNode,
+  type JSX,
 } from "react";
 
 import { useKeyboardShortcuts } from "@admin/hooks/useKeyboardShortcuts";
@@ -157,7 +158,7 @@ export function ChartReachArea({
   describedBy: string;
   announcement: string;
   children: ReactNode;
-}) {
+}): JSX.Element {
   return (
     <div
       role="group"
@@ -223,7 +224,7 @@ export function ChartTooltip({
   className?: string;
   /** Where it sits, for a place set by the data. */
   style?: CSSProperties;
-}) {
+}): JSX.Element {
   return (
     <div
       aria-hidden="true"

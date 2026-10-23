@@ -19,7 +19,7 @@ import {
   CollapsibleTrigger,
 } from "@nextlyhq/ui";
 import type { RepeaterFieldConfig, FieldConfig } from "nextly/config";
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import { ChevronDown, ChevronRight } from "@admin/components/icons";
@@ -347,7 +347,7 @@ export function RepeaterRow<TFieldValues extends FieldValues = FieldValues>({
   readOnly = false,
   renderField,
   isSortable = field.admin?.isSortable !== false,
-}: RepeaterRowProps<TFieldValues>) {
+}: RepeaterRowProps<TFieldValues>): JSX.Element {
   const {
     isOpen,
     setIsOpen,

@@ -93,7 +93,9 @@ describe("widget-registry reset at boot", () => {
     ).toEqual([
       "system:activity",
       "system:attention",
+      "system:content",
       "system:releases",
+      "system:team",
       "system:versions",
     ]);
     // The previous boot's widget is gone; core's own cards are what boot

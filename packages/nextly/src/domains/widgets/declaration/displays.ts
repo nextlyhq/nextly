@@ -212,6 +212,8 @@ const DISPLAY_DATA_SCHEMAS: Record<CoreDisplay, z.ZodType> = {
       })
     ),
     truncated: z.boolean().optional(),
+    // The instant the answer was computed at, for buckets that depend on it.
+    asOf: z.string().optional(),
     // The grouped field, whose choices name each bucket's value.
     field: RESULT_FIELD.optional(),
     // The bucket counts are floors, as a count's `atLeast` says its total is.

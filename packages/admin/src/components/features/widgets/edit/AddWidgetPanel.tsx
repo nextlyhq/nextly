@@ -35,6 +35,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type JSX,
 } from "react";
 
 import * as Icons from "@admin/components/icons";
@@ -330,7 +331,7 @@ export function AddWidgetPanel({
   onAdd,
   onAddBack,
   onClosed,
-}: AddWidgetPanelProps) {
+}: AddWidgetPanelProps): JSX.Element {
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);

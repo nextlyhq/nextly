@@ -32,6 +32,7 @@ import {
   useMemo,
   useState,
   type ReactNode,
+  type JSX,
 } from "react";
 import { FormProvider, useForm, type UseFormReturn } from "react-hook-form";
 
@@ -468,7 +469,9 @@ function SheetActions({
   );
 }
 
-export function WidgetSettingsSheet(props: WidgetSettingsSheetProps) {
+export function WidgetSettingsSheet(
+  props: WidgetSettingsSheetProps
+): JSX.Element {
   const { open, title, settings, config, blocked, renderPreview } = props;
   // The collections and fields this reader may be offered, decided on the
   // server; absent until the session-gated half of the payload arrives.
