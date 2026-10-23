@@ -14,11 +14,14 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import { inArray } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { defineCollection, text } from "../../../config";
+import { getDialectTables } from "../../../database/index";
+import { seedPermissions } from "../../../database/seeders";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -41,8 +44,12 @@ const POSTS = "posts";
 const INTERNAL = "nx_usage_index";
 const HIDDEN = "patterns";
 
-/** The one built-in with a permission: a reader without it may not see it. */
+/** A built-in gated on the releases grant: a reader without it may not see it. */
 const GATED = "core/upcoming-releases";
+/** Gated on reading people AND adding or changing them. */
+const TEAM = "core/team";
+/** A built-in with no gate, which every signed-in reader is offered. */
+const UNGATED = "core/recent-activity";
 
 interface LayoutRead {
   placements: { widgetId: string }[];
@@ -69,6 +76,47 @@ describeEachDialect("what the add panel is offered", dialect => {
       data: { email, password: "Password123!", name: email, isActive: true },
     });
     return created.item.id;
+  }
+
+  /** An account whose role may read people and change them, Team's grant. */
+  async function teamManager(): Promise<string> {
+    await seedPermissions(handle!.adapter, { silent: true });
+    const { permissions } = getDialectTables(dialect);
+    const db = handle!.adapter.getDrizzle() as unknown as {
+      select: (fields: unknown) => {
+        from: (table: unknown) => {
+          where: (cond: unknown) => Promise<Array<{ id: unknown }>>;
+        };
+      };
+    };
+    const grants = await db
+      .select({ id: permissions.id })
+      .from(permissions)
+      .where(inArray(permissions.slug, ["read-users", "update-users"]));
+    expect(grants).toHaveLength(2);
+    const nextly = handle!.nextly as unknown as {
+      roles: {
+        create: (a: { data: Record<string, unknown> }) => Promise<{
+          item: { id: string };
+        }>;
+      };
+      users: {
+        update: (a: {
+          id: string;
+          data: Record<string, unknown>;
+        }) => Promise<unknown>;
+      };
+    };
+    const role = await nextly.roles.create({
+      data: {
+        name: "Team manager",
+        slug: "team-manager",
+        permissionIds: grants.map(grant => String(grant.id)),
+      },
+    });
+    const id = await account("manager@example.com");
+    await nextly.users.update({ id, data: { roles: [role.item.id] } });
+    return id;
   }
 
   async function read(userId: string): Promise<LayoutRead> {
@@ -140,10 +188,22 @@ describeEachDialect("what the add panel is offered", dialect => {
 
   it("does not name a widget the reader may not see", async () => {
     const layout = await read(reader);
+    // Neither gated built-in: this reader holds no grant at all.
+    for (const id of [GATED, TEAM]) {
+      expect(named(layout).has(id), id).toBe(false);
+      expect(layout.widgets, id).not.toHaveProperty(id);
+    }
+    // The control: the same read names an ungated built-in, so the absences
+    // above are the gates at work rather than an empty read.
+    expect(named(layout).has(UNGATED)).toBe(true);
+  });
+
+  it("names the Team card to a reader who may read and change people", async () => {
+    const layout = await read(await teamManager());
+    expect(named(layout).has(TEAM)).toBe(true);
+    expect(layout.widgets[TEAM]?.group).toBe("team");
+    // Only that card's grant: the releases card stays withheld.
     expect(named(layout).has(GATED)).toBe(false);
-    expect(layout.widgets).not.toHaveProperty(GATED);
-    // The control: the same read names the ungated built-ins.
-    expect(named(layout).has("core/team")).toBe(true);
   });
 
   it("offers no card derived from a collection, and has none for content kept off the dashboard", async () => {
