@@ -1,8 +1,23 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import type { HTMLAttributes } from "react";
-import { forwardRef } from "react";
+import {
+  forwardRef,
+  type HTMLAttributes,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
+import type { VariantsFn } from "../lib/variants";
+
+/** The arms `cardVariants` is built from. Its type is read from them: {@link VariantsFn}. */
+export const CARD_VARIANT_MAP = {
+  variant: {
+    default: "",
+    interactive: "cursor-pointer hover:border-primary active:scale-[0.99]",
+    elevated: "shadow-md",
+  },
+};
 
 /**
  * Card Component - Design System Specification
@@ -55,16 +70,10 @@ import { cn } from "../lib/utils";
  * - Use aria-label or aria-labelledby for cards without visible text labels
  * @experimental
  */
-const cardVariants = cva(
+const cardVariants: VariantsFn<typeof CARD_VARIANT_MAP> = cva(
   "bg-card text-foreground rounded-lg  border border-border   transition-all duration-200",
   {
-    variants: {
-      variant: {
-        default: "",
-        interactive: "cursor-pointer hover:border-primary active:scale-[0.99]",
-        elevated: "shadow-md",
-      },
-    },
+    variants: CARD_VARIANT_MAP,
     defaultVariants: {
       variant: "default",
     },
@@ -76,7 +85,9 @@ export type CardProps = HTMLAttributes<HTMLDivElement> &
   VariantProps<typeof cardVariants>;
 
 /** @experimental */
-const Card = forwardRef<HTMLDivElement, CardProps>(
+const Card: ForwardRefExoticComponent<
+  PropsWithoutRef<CardProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, CardProps>(
   ({ className, variant, ...props }, ref) => {
     return (
       <div
@@ -100,7 +111,9 @@ export interface CardHeaderProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 /** @experimental */
-const CardHeader = forwardRef<HTMLDivElement, CardHeaderProps>(
+const CardHeader: ForwardRefExoticComponent<
+  PropsWithoutRef<CardHeaderProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, CardHeaderProps>(
   ({ className, noBorder = false, ...props }, ref) => {
     return (
       <div
@@ -129,7 +142,9 @@ CardHeader.displayName = "CardHeader";
 export type CardTitleProps = HTMLAttributes<HTMLHeadingElement>;
 
 /** @experimental */
-const CardTitle = forwardRef<HTMLHeadingElement, CardTitleProps>(
+const CardTitle: ForwardRefExoticComponent<
+  PropsWithoutRef<CardTitleProps> & RefAttributes<HTMLHeadingElement>
+> = forwardRef<HTMLHeadingElement, CardTitleProps>(
   ({ className, ...props }, ref) => {
     return (
       <h3
@@ -147,7 +162,9 @@ CardTitle.displayName = "CardTitle";
 export type CardDescriptionProps = HTMLAttributes<HTMLParagraphElement>;
 
 /** @experimental */
-const CardDescription = forwardRef<HTMLParagraphElement, CardDescriptionProps>(
+const CardDescription: ForwardRefExoticComponent<
+  PropsWithoutRef<CardDescriptionProps> & RefAttributes<HTMLParagraphElement>
+> = forwardRef<HTMLParagraphElement, CardDescriptionProps>(
   ({ className, ...props }, ref) => {
     return (
       <p
@@ -165,7 +182,9 @@ CardDescription.displayName = "CardDescription";
 export type CardActionProps = HTMLAttributes<HTMLDivElement>;
 
 /** @experimental */
-const CardAction = forwardRef<HTMLDivElement, CardActionProps>(
+const CardAction: ForwardRefExoticComponent<
+  PropsWithoutRef<CardActionProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, CardActionProps>(
   ({ className, ...props }, ref) => {
     return (
       <div
@@ -183,7 +202,9 @@ CardAction.displayName = "CardAction";
 export type CardContentProps = HTMLAttributes<HTMLDivElement>;
 
 /** @experimental */
-const CardContent = forwardRef<HTMLDivElement, CardContentProps>(
+const CardContent: ForwardRefExoticComponent<
+  PropsWithoutRef<CardContentProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, CardContentProps>(
   ({ className, ...props }, ref) => {
     return (
       <div
@@ -201,7 +222,9 @@ CardContent.displayName = "CardContent";
 export type CardFooterProps = HTMLAttributes<HTMLDivElement>;
 
 /** @experimental */
-const CardFooter = forwardRef<HTMLDivElement, CardFooterProps>(
+const CardFooter: ForwardRefExoticComponent<
+  PropsWithoutRef<CardFooterProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, CardFooterProps>(
   ({ className, ...props }, ref) => {
     return (
       <div

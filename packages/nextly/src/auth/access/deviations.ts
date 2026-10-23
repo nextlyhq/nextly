@@ -33,8 +33,6 @@ export const DEVIATIONS = [
   // A Single asked by a route that authorized no user falls through to the
   // visitor's answer, where a collection refuses.
   "single-route-authorized-visitor",
-  // A Single reads the key scope it is handed, never the request's.
-  "single-explicit-scope-only",
   // A super-admin role named on a server-supplied `user` passes without a
   // lookup.
   "claimed-super-admin",

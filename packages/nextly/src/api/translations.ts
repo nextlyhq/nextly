@@ -30,6 +30,7 @@ import {
   type TranslationFilterState,
 } from "../domains/i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import { appLocalization } from "../domains/i18n/configured-locales";
 import { isValidLocale } from "../domains/i18n/resolve-locale";
 import { resolveCompanionColumn } from "../domains/i18n/runtime/companion-readiness";
 import {
@@ -152,9 +153,7 @@ async function readableCollections(
  * it, so "which languages exist" has one answer.
  */
 function configuredLocalization(): SanitizedLocalizationConfig | undefined {
-  if (!container.has("config")) return undefined;
-  return container.get<{ localization?: SanitizedLocalizationConfig }>("config")
-    .localization;
+  return appLocalization();
 }
 
 /**

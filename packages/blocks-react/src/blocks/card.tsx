@@ -46,7 +46,7 @@
  *
  * @module blocks/library/card
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
 
@@ -100,7 +100,7 @@ export const CARD_BASE_STYLES = {
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
 // published types is typed the same as one compiled here. See `./index.ts`.
-export const card = defineBlock<ContainerProps, PageContext>({
+export const card: BlockDefinition<ContainerProps, PageContext> = defineBlock({
   name: CARD_BLOCK,
   version: 1,
   description:

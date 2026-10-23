@@ -184,6 +184,12 @@ async function readComponentSchema(
  */
 export async function resolveComponentSchemas(
   fields: FieldConfig[],
+  /**
+   * The transaction-bound executor, for a caller resolving these while its
+   * transaction holds a connection: the reads then run on it, rather than on a
+   * second pooled connection that cannot see its writes and can stall behind it.
+   */
+  executor?: unknown,
   options: {
     known?: ReadonlyMap<string, ComponentSchemaInfo>;
     readRegistry?: boolean;
@@ -215,7 +221,7 @@ export async function resolveComponentSchemas(
   let registry: ServiceMap["fieldGroupRegistryService"] | undefined;
   const lookup = (slug: string) => {
     registry ??= getService("fieldGroupRegistryService");
-    return registry.getComponentBySlug(slug);
+    return registry.getComponentBySlug(slug, executor);
   };
   const leftOut = new Set<string>();
 

@@ -75,6 +75,10 @@
       "types": "./dist/domains/collections/query/reserved-filter-keys.d.mts",
       "import": "./dist/domains/collections/query/reserved-filter-keys.mjs"
     },
+    "./attention-keys": {
+      "types": "./dist/domains/widgets/attention-keys.d.mts",
+      "import": "./dist/domains/widgets/attention-keys.mjs"
+    },
     "./query": {
       "types": "./dist/query/index.d.mts",
       "import": "./dist/query/index.mjs"

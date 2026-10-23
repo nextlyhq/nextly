@@ -38,7 +38,10 @@ import {
 } from "../../domains/widgets/system-sources";
 import { RELEASES_SOURCE_ID } from "../../domains/releases/releases-widget-source";
 import { VERSIONS_SOURCE_ID } from "../../domains/versions/versions-widget-source";
-import { ACTIVITY_SOURCE_ID } from "../../domains/widgets/system-source-ids";
+import {
+  ACTIVITY_SOURCE_ID,
+  ATTENTION_SOURCE_ID,
+} from "../../domains/widgets/system-source-ids";
 import { resetWidgetRegistries } from "../registrations/register-widgets";
 
 beforeEach(() => {
@@ -85,7 +88,12 @@ describe("resetWidgetRegistries", () => {
         .map(source => source.id)
         .sort()
     ).toEqual(
-      [ACTIVITY_SOURCE_ID, RELEASES_SOURCE_ID, VERSIONS_SOURCE_ID].sort()
+      [
+        ACTIVITY_SOURCE_ID,
+        ATTENTION_SOURCE_ID,
+        RELEASES_SOURCE_ID,
+        VERSIONS_SOURCE_ID,
+      ].sort()
     );
     // The proof that the clear is what made room: the same id registers again
     // without the conflict `registerSource` raises for a duplicate.

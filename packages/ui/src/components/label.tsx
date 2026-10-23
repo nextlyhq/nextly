@@ -1,10 +1,13 @@
 import { Root as LabelRoot } from "@radix-ui/react-label";
-import type { ComponentProps } from "react";
+import type { ComponentProps, JSX } from "react";
 
 import { cn } from "../lib/utils";
 
 /** @public */
-function Label({ className, ...props }: ComponentProps<typeof LabelRoot>) {
+function Label({
+  className,
+  ...props
+}: ComponentProps<typeof LabelRoot>): JSX.Element {
   return (
     <LabelRoot
       data-slot="label"

@@ -116,7 +116,9 @@ async function draftSplitOf(
   return evaluateDraftSplitEligibility({
     ...input,
     componentSchemas: asks
-      ? await resolveComponentSchemas(input.fields, {
+      ? // No executor: a registry read here is not part of a transaction's
+        // own writes, so the pooled connection is the right one.
+        await resolveComponentSchemas(input.fields, undefined, {
           known: new Map(
             (source.components ?? []).map(component => [
               component.slug,

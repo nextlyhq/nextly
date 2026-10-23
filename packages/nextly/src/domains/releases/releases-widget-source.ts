@@ -222,6 +222,38 @@ async function resolveReleases(
 }
 
 /**
+ * Whether this dashboard caller may read releases, by the decision every
+ * release read makes.
+ *
+ * For a reader outside this domain that must leave a release-derived count out
+ * entirely, rather than show it as zero or fail, for a caller who may not read
+ * releases.
+ *
+ * @experimental
+ */
+export function callerMayReadReleases(caller: ReadCaller): Promise<boolean> {
+  return service().mayRead(actorFor(caller));
+}
+
+/**
+ * How many releases are overdue, for this dashboard caller: the releases
+ * domain's own count of its Needs attention tab narrowed to overdue, so a
+ * reader shows exactly the releases that tab's overdue filter lists and never
+ * decides "overdue" for itself.
+ *
+ * Refused, as every release read is, for a caller who may not read releases;
+ * ask {@link callerMayReadReleases} first to leave the count out instead.
+ *
+ * @experimental
+ */
+export function overdueReleaseCount(caller: ReadCaller): Promise<number> {
+  return service().count(
+    { tab: "attention", reason: "overdue" },
+    actorFor(caller)
+  );
+}
+
+/**
  * Publish the source and the function that answers it.
  *
  * Called from the boot-time registry reset, which is the one choke point both

@@ -522,18 +522,6 @@ class PermissionChecker {
     return false;
   }
 
-  async hasAllPermissions(
-    userId: string,
-    checks: PermissionCheck[]
-  ): Promise<boolean> {
-    if (!userId || !Array.isArray(checks) || checks.length === 0) return false;
-    for (const c of checks) {
-      if (!(await this.hasPermission(userId, c.action, c.resource)))
-        return false;
-    }
-    return true;
-  }
-
   async getAllRoleIdsForUser(
     userId: string,
     // Optional transaction-bound executor; see `hasPermission`.
@@ -848,19 +836,6 @@ export async function hasAnyPermission(
   try {
     const checker = new PermissionChecker();
     return await checker.hasAnyPermission(userId, checks);
-  } catch {
-    getAuthLogger()?.log?.("error", { category: "auth", op: "error", userId });
-    return false;
-  }
-}
-
-export async function hasAllPermissions(
-  userId: string,
-  checks: PermissionCheck[]
-): Promise<boolean> {
-  try {
-    const checker = new PermissionChecker();
-    return await checker.hasAllPermissions(userId, checks);
   } catch {
     getAuthLogger()?.log?.("error", { category: "auth", op: "error", userId });
     return false;

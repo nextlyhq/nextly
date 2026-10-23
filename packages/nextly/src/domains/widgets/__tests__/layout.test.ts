@@ -9,6 +9,7 @@ import {
   MAX_CONFIG_DEPTH,
   MAX_PLACEMENTS,
   MAX_STORED_PLACEMENTS,
+  RETIRED_WIDGETS,
   applyRetirements,
   defaultPlacements,
   layoutSizeProblem,
@@ -1007,5 +1008,87 @@ describe("a stored row that holds one id twice", () => {
       ],
     });
     expect(readStoredLayout(raw).duplicatePlacementIds).toEqual(["same"]);
+  });
+});
+
+describe("Unpublished changes retires into Needs attention", () => {
+  // The production map, so these hold for the row this release ships.
+  const read = (placements: WidgetPlacement[]) =>
+    readStoredLayout(serializeLayout(placements), RETIRED_WIDGETS).placements;
+
+  it("converts a stored card in place, keeping its id, position, width and removal", () => {
+    expect(
+      read([
+        card("a"),
+        card("pending", "core/pending-edits", {
+          width: "quarter",
+          removed: true,
+        }),
+        card("b"),
+      ])
+    ).toEqual([
+      card("a"),
+      // The quarter is kept as stored; the admin draws it at a third, the
+      // nearest width Needs attention allows.
+      card("pending", "core/needs-attention", {
+        width: "quarter",
+        removed: true,
+      }),
+      card("b"),
+    ]);
+  });
+
+  it("merges into a Needs attention card the layout already holds, which keeps its id, position, width and settings", () => {
+    expect(
+      read([
+        card("pending", "core/pending-edits", { width: "full" }),
+        card("attention", "core/needs-attention", {
+          width: "third",
+          config: { note: "kept" },
+        }),
+      ])
+    ).toEqual([
+      card("attention", "core/needs-attention", {
+        width: "third",
+        config: { note: "kept" },
+      }),
+    ]);
+  });
+
+  it("keeps a merged card unless every card merged into it was removed", () => {
+    const merged = read([
+      card("pending", "core/pending-edits", { removed: true }),
+      card("attention", "core/needs-attention", { removed: false }),
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.removed).toBe(false);
+    const bothRemoved = read([
+      card("pending", "core/pending-edits", { removed: true }),
+      card("attention", "core/needs-attention", { removed: true }),
+    ]);
+    expect(bothRemoved[0]?.removed).toBe(true);
+  });
+
+  it("merges two converted cards into the first, at the larger width Needs attention allows", () => {
+    expect(
+      read([
+        card("first", "core/pending-edits", { width: "quarter" }),
+        card("between"),
+        card("second", "core/pending-edits", { width: "half" }),
+      ])
+    ).toEqual([
+      card("first", "core/needs-attention", { width: "half" }),
+      card("between"),
+    ]);
+  });
+
+  it("changes nothing on a second read of a converted layout", () => {
+    const once = read([card("pending", "core/pending-edits")]);
+    // Converted by the first read, or "unchanged by the second" would hold
+    // for a map that converts nothing.
+    expect(once.map(placement => placement.widgetId)).toEqual([
+      "core/needs-attention",
+    ]);
+    expect(read(once)).toEqual(once);
   });
 });
