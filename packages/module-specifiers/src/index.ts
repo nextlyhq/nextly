@@ -196,9 +196,10 @@ function boundNames(pattern: BindingPattern | ParamPattern | null): string[] {
  *
  * The parser does not build a tree for JSDoc, so this reads the comment's own
  * grammar: a tag type is the brace-balanced `{...}` after a tag, and an
- * `@import` tag runs to the next tag. Prose in the description is not a type
- * expression and is not read, which keeps a sentence that mentions `import()`
- * from becoming a dependency.
+ * `@import` tag runs to the next tag, which starts after whitespace. An `@`
+ * inside the tag, as in a scoped package's quoted name, does not end it. Prose
+ * in the description is not a type expression and is not read, which keeps a
+ * sentence that mentions `import()` from becoming a dependency.
  */
 function jsDocRefs(comment: Comment): PlacedRef[] {
   const found: PlacedRef[] = [];
@@ -206,7 +207,7 @@ function jsDocRefs(comment: Comment): PlacedRef[] {
   // `value` excludes the opening `/*`, so offsets inside it start two characters in.
   const at = (index: number): number => comment.start + 2 + index;
 
-  for (const tag of text.matchAll(/@import\b([^@]*)/g)) {
+  for (const tag of text.matchAll(/@import\b([\s\S]*?)(?=\s@[A-Za-z]|$)/g)) {
     const from = /\bfrom\s*(["'])([^"'\n]*)\1/.exec(tag[1] ?? "");
     found.push({
       specifier: from?.[2] ?? UNRESOLVABLE_SPECIFIER,
@@ -240,16 +241,19 @@ function jsDocRefs(comment: Comment): PlacedRef[] {
 /**
  * The `/// <reference types="..." />` directives, which only count before the
  * first statement: one further down is an ordinary comment to the compiler.
+ * The element's attributes may come in any order, so `types` is found among
+ * them rather than expected first.
  */
 function typeReferenceRefs(comments: Comment[], program: Program): PlacedRef[] {
   const firstStatement = program.body[0]?.start ?? Number.POSITIVE_INFINITY;
   return comments.flatMap(comment => {
     if (comment.type !== "Line" || comment.end > firstStatement) return [];
-    const directive = /^\/\s*<reference\s+types\s*=\s*(["'])([^"']*)\1/.exec(
-      comment.value
-    );
-    return directive?.[2]
-      ? [{ specifier: directive[2], typeOnly: true, start: comment.start }]
+    const attributes = /^\/\s*<reference\b([^>]*)>/.exec(comment.value)?.[1];
+    const types = /(?:^|\s)types\s*=\s*(["'])([^"']*)\1/.exec(
+      attributes ?? ""
+    )?.[2];
+    return types
+      ? [{ specifier: types, typeOnly: true, start: comment.start }]
       : [];
   });
 }

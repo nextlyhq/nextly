@@ -49,10 +49,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  parseSource,
-  walk,
-} from "@nextlyhq/module-specifiers/parse-source";
+import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -123,9 +120,15 @@ function plainName(node) {
   return node?.type === "Identifier" ? node.name : quotedString(node);
 }
 
-/** The name a property is written under, when it is written plainly rather than computed. */
+/**
+ * The name a property is written under: a plain key, or a computed key that is
+ * a string (`["role"]`), which names the property as surely. A key computed
+ * from anything else has no name to read.
+ */
 function propertyName(property) {
-  return property.computed ? undefined : plainName(property.key);
+  return property.computed
+    ? quotedString(property.key)
+    : plainName(property.key);
 }
 
 /** `{ roles }` or `{ role: r }` in a destructuring pattern. */
@@ -138,7 +141,9 @@ function bindsRole(node, parent) {
 /** `x.roles`, `x.role`, `x["roles"]` or `x["role"]`. */
 function accessesRole(node) {
   if (node.type !== "MemberExpression") return false;
-  const key = node.computed ? quotedString(node.property) : plainName(node.property);
+  const key = node.computed
+    ? quotedString(node.property)
+    : plainName(node.property);
   return ROLE_KEYS.has(key ?? "");
 }
 
@@ -173,7 +178,9 @@ function declarationsOf(statement, text) {
       : [["default", { node: unwrap(declared), typed: false }]];
   }
   const declared =
-    statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;
+    statement.type === "ExportNamedDeclaration"
+      ? statement.declaration
+      : statement;
   if (declared?.type === "FunctionDeclaration") {
     return declared.id
       ? [[declared.id.name, { node: declared, typed: false }]]
@@ -236,7 +243,9 @@ function exportedElements(statement) {
 function reExportsOf(statement) {
   const elements = exportedElements(statement);
   const from =
-    statement.type === "ExportNamedDeclaration" ? statement.source?.value : undefined;
+    statement.type === "ExportNamedDeclaration"
+      ? statement.source?.value
+      : undefined;
   return from === undefined
     ? { imports: [], declarations: renamedLocals(elements) }
     : { imports: forwardedImports(elements, from), declarations: [] };
@@ -337,7 +346,8 @@ function accessObjects(program) {
     }
     const value = unwrap(node.value);
     if (value.type === "ObjectExpression") found.push({ object: value });
-    else if (value.type === "Identifier") found.push({ identifier: value.name });
+    else if (value.type === "Identifier")
+      found.push({ identifier: value.name });
   });
   return found;
 }
@@ -392,8 +402,7 @@ function propertiesOf(files, parse, at, seen = new Set()) {
   if (seen.has(at.object)) return [];
   seen.add(at.object);
   return at.object.properties.flatMap(property => {
-    if (property.type !== "SpreadElement")
-      return [{ path: at.path, property }];
+    if (property.type !== "SpreadElement") return [{ path: at.path, property }];
     const spread = unwrap(property.argument);
     const inner =
       spread.type === "ObjectExpression"

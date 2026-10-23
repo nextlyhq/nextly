@@ -67,6 +67,17 @@ describe("the forms this reader claims to see", () => {
     );
   });
 
+  it("sees a JSDoc @import of a scoped package, whose name starts with the tag character", () => {
+    // The tag ends at the next tag, which starts after whitespace; an `@`
+    // inside the quoted specifier is part of the name.
+    const read2 = read(
+      '/**\n * @import { T } from "@scope/pkg"\n * @import { U } from "other"\n */',
+      "module.js"
+    );
+    expect(read2).toContain("@scope/pkg");
+    expect(read2).toContain("other");
+  });
+
   it("sees an import type inside a JSDoc typedef, which JavaScript files use", () => {
     expect(read('/** @typedef {import("pkg").T} T */', "module.js")).toContain(
       "pkg"
@@ -75,6 +86,12 @@ describe("the forms this reader claims to see", () => {
 
   it("sees a triple-slash type reference, which is not in the node tree at all", () => {
     expect(read('/// <reference types="pkg" />')).toContain("pkg");
+  });
+
+  it("sees a triple-slash type reference whose types attribute is not the first", () => {
+    expect(
+      read('/// <reference resolution-mode="import" types="pkg" />')
+    ).toContain("pkg");
   });
 
   it("sees a specifier written as a substitution-free template literal", () => {

@@ -68,6 +68,30 @@ describe("check-access-rule-role-names", () => {
     ).toEqual(["packages/plugin-x/src/pages.ts:3 delete"]);
   });
 
+  it("reports a role bound through a computed key written as a string", () => {
+    expect(
+      scan({
+        "packages/plugin-x/src/notes.ts": [
+          "export const Notes = defineCollection({",
+          '  access: { read: ({ ["role"]: who }) => who === "admin" },',
+          "});",
+        ].join("\n"),
+      })
+    ).toEqual(["packages/plugin-x/src/notes.ts:2 read"]);
+  });
+
+  it("reads an access map written under a computed key that is a string", () => {
+    expect(
+      scan({
+        "packages/plugin-x/src/files.ts": [
+          "export const Files = defineCollection({",
+          '  ["access"]: { read: ({ roles }) => roles.includes("admin") },',
+          "});",
+        ].join("\n"),
+      })
+    ).toEqual(["packages/plugin-x/src/files.ts:2 read"]);
+  });
+
   it("follows an untyped rule imported into a collection's access", () => {
     expect(
       scan({
