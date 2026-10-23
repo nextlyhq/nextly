@@ -298,13 +298,15 @@ Before a pull request joins the queue, `node scripts/verify-merge.mjs <pr-number
 
 The following hooks run automatically:
 
-| Hook         | What runs                                                                             |
-| ------------ | ------------------------------------------------------------------------------------- |
-| `pre-commit` | Prettier formatting + oxlint on staged files (via lint-staged) + gitleaks secret scan |
-| `commit-msg` | Validates conventional commit format (see [Commit messages](#commit-messages))        |
-| `pre-push`   | Runs the production build to ensure all packages still compile                        |
+| Hook         | What runs                                                                              |
+| ------------ | -------------------------------------------------------------------------------------- |
+| `pre-commit` | Prettier formatting + oxlint on staged files (via lint-staged) + gitleaks secret scan  |
+| `commit-msg` | Validates conventional commit format (see [Commit messages](#commit-messages))         |
+| `pre-push`   | Lint, the production build and the type-check, then the unit tests the push can affect |
 
 If a hook fails, fix the issue and re-stage. **Never bypass with `--no-verify`** — the hooks exist to catch problems before CI does.
+
+The pre-push's unit tests are narrowed twice: to the packages the push touches (`scripts/gate-scope.mjs`), then, inside each, to the test files the change can affect (`scripts/test-changed.mjs`, which uses Vitest's `--changed` over the dependency records each test left on its last run). Tests that read files or spawn processes always run, since no record names what they read. A package runs in full when the lockfile or a `tsconfig` changed, or when a workspace package it depends on changed too. The root `scripts/` tests run when a script, the turbo config or a Vitest config changed. `NEXTLY_PREPUSH_ALL_TESTS=1 git push` runs every test of the touched packages instead. CI always runs everything.
 
 ---
 

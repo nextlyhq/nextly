@@ -200,15 +200,25 @@ GATE_FILTERS=$(node scripts/gate-scope.mjs --filters)
 GATE_STATUS=$?
 set -e
 
+# Inside each package the change touches, only the test FILES it can affect run:
+# `scripts/test-changed.mjs` asks Vitest's `--changed` over the dependency records
+# each test left on its last run, always adds the tests that read files or spawn
+# processes (which no record names), runs the whole package for a change every
+# test compiles against or a workspace dependency changed beside it, and runs the
+# root scripts tests when a script, the turbo config or a Vitest config changed.
+# NEXTLY_PREPUSH_ALL_TESTS=1 runs every test of the touched packages instead.
 if [ "$GATE_STATUS" -eq 2 ]; then
   echo "pre-push: the diff redefines the workspace or task graph — testing every workspace."
   pnpm turbo test --continue -- --maxWorkers="$VITEST_WORKERS"
+  node scripts/test-changed.mjs --scripts-only
 elif [ "$GATE_STATUS" -ne 0 ]; then
   echo "pre-push: gate-scope could not derive a trustworthy scope; refusing." >&2
   exit "$GATE_STATUS"
-elif [ -n "$GATE_FILTERS" ]; then
+elif [ "${NEXTLY_PREPUSH_ALL_TESTS:-}" = 1 ] && [ -n "$GATE_FILTERS" ]; then
   # shellcheck disable=SC2086 -- one flag per line, intentionally word-split
   pnpm turbo test --continue $GATE_FILTERS -- --maxWorkers="$VITEST_WORKERS"
+else
+  node scripts/test-changed.mjs --max-workers="$VITEST_WORKERS"
 fi
 
 # The TYPES of the packages this push AFFECTS, blocking.
