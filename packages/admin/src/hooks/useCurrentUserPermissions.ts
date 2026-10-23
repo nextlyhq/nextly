@@ -1,4 +1,8 @@
-import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import {
+  useQuery,
+  useQueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
@@ -245,25 +249,30 @@ type CurrentUserPermissions = AnswerState & {
 };
 
 /**
- * Where one query's answer stands, once the role assignment it was given for
- * may have ended: an answer that arrived before `endedAt` no longer counts,
- * and its refresh is what is being waited for.
+ * Where one query's answer stands, once it may no longer hold: an answer that
+ * arrived before `endedAt`, the end of the role assignment it was given for,
+ * no longer counts, and nor does one a change to roles, permissions,
+ * assignments or the schema has `invalidated`, until a newer one arrives.
  */
 function answerState(
   query: Pick<
     UseQueryResult<unknown>,
     "data" | "dataUpdatedAt" | "error" | "isFetching" | "isPending"
   >,
-  endedAt: number | null
+  endedAt: number | null,
+  invalidated: boolean
 ): AnswerState {
-  const expired = endedAt !== null && query.dataUpdatedAt < endedAt;
+  const unusable =
+    invalidated || (endedAt !== null && query.dataUpdatedAt < endedAt);
   return {
-    // An ended answer is waited on until a current one or an error arrives,
-    // before as well as during its refresh: neither the old answer nor its
-    // absence is a decision to show.
-    isLoading: query.isPending || (expired && query.error === null),
+    // An answer that no longer holds is waited on until a current one or an
+    // error arrives, before as well as during its refresh: neither the old
+    // answer nor its absence is a decision to show.
+    isLoading:
+      query.isPending ||
+      (unusable && (query.isFetching || query.error === null)),
     error: query.error,
-    hasAnswer: query.data !== undefined && !expired,
+    hasAnswer: query.data !== undefined && !unusable,
   };
 }
 
@@ -299,6 +308,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // to operators.
   const { route } = useRouter();
   const isPrivateRoute = route?.routeType === "private";
+  const queryClient = useQueryClient();
   // The content language on screen: a rule can answer by language, so the
   // answer is asked for, and kept, per language, as the screen's own
   // requests are sent.
@@ -323,8 +333,9 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // only on focus, when a role assignment ends, and when the admin changes
   // roles, permissions, role assignments or the schema, not each time
   // another component mounts.
+  const capabilitiesKey = currentUserCapabilitiesKey(locale);
   const answer = useQuery<CapabilitiesResponse>({
-    queryKey: currentUserCapabilitiesKey(locale),
+    queryKey: capabilitiesKey,
     queryFn: () =>
       protectedApi.get<CapabilitiesResponse>(
         locale === undefined
@@ -372,10 +383,12 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
           setReachedEnd(reached =>
             reached === null ? validUntil : Math.max(reached, validUntil)
           );
-          // Every mounted caller arms the same deadline; joining a refresh
-          // already under way asks the server once.
-          void refetch({ cancelRefetch: false });
-          void refetchAnswer({ cancelRefetch: false });
+          // A refresh already under way may have been asked before the end,
+          // and its answer would arrive after it looking current, so it is
+          // replaced rather than joined: only an answer asked after the end
+          // counts.
+          void refetch();
+          void refetchAnswer();
         },
         // An answer the server gave after its own end is asked about again at
         // most once a second; any other is asked about at its end.
@@ -388,8 +401,17 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     return () => clearTimeout(timer);
   }, [validUntil, answeredAt, refetch, refetchAnswer]);
 
-  const permissionsState = answerState(permissionsQuery, endedAt);
-  const content = answerState(answer, endedAt);
+  // A change the admin made invalidates both answers; the old ones stop
+  // counting then, not once a refresh succeeds, since a refresh that fails
+  // would otherwise leave them in place indefinitely.
+  const invalidated = (key: readonly unknown[]): boolean =>
+    queryClient.getQueryState(key)?.isInvalidated === true;
+  const permissionsState = answerState(
+    permissionsQuery,
+    endedAt,
+    invalidated(CURRENT_USER_PERMISSIONS_KEY)
+  );
+  const content = answerState(answer, endedAt, invalidated(capabilitiesKey));
 
   const permissions = permissionsState.hasAnswer
     ? (data?.permissions ?? [])

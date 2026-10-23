@@ -23,6 +23,8 @@ const server = vi.hoisted(() => ({
   permissions: undefined as UserPermissionsResponse | Error | undefined,
   capabilities: undefined as CapabilitiesResponse | Error | undefined,
   asked: [] as string[],
+  /** A delay for the next permissions request, which answers as asked. */
+  permissionsDelayMs: 0,
 }));
 
 /** The content language the screen's `?locale=` names, if any. */
@@ -35,8 +37,13 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
     get: async (path: string) => {
       server.asked.push(path);
       if (path === "/me/permissions") {
-        if (server.permissions instanceof Error) throw server.permissions;
-        return server.permissions;
+        // Answered as the server stood when asked, however late it arrives.
+        const asAsked = server.permissions;
+        const delay = server.permissionsDelayMs;
+        server.permissionsDelayMs = 0;
+        if (delay > 0) await new Promise(done => setTimeout(done, delay));
+        if (asAsked instanceof Error) throw asAsked;
+        return asAsked;
       }
       if (path.split("?")[0] === "/me/capabilities") {
         if (server.capabilities instanceof Error) throw server.capabilities;
@@ -114,6 +121,7 @@ beforeEach(() => {
   server.permissions = EDITOR;
   server.capabilities = undefined;
   server.asked = [];
+  server.permissionsDelayMs = 0;
   onScreen.locale = undefined;
 });
 
@@ -297,6 +305,61 @@ describe("useCurrentUserPermissions", () => {
     // The permission list from before the end still does not count.
     expect(result.current.hasAnswer).toBe(false);
     expect(result.current.hasPermission("read-posts")).toBe(false);
+  });
+
+  it("asks again at the end, rather than taking a refresh asked before it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    server.capabilities = answering({ read: true }, Date.now() + 60_000);
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(newClient()),
+    });
+    await waitFor(() => expect(result.current.hasAnswer).toBe(true));
+
+    // A refresh asked a second before the end, whose permission list arrives
+    // two seconds later: after the end, though it describes the role before.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(59_000);
+    });
+    server.permissionsDelayMs = 2_000;
+    const asks = server.asked.length;
+    await act(async () => {
+      result.current.retry();
+    });
+    // POPULATION CONTROL: that refresh was asked before the change below.
+    expect(server.asked.slice(asks)).toContain("/me/permissions");
+
+    // From the end on, the permission list cannot be had again.
+    server.permissions = new Error("permissions unavailable");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+
+    expect(result.current.hasAnswer).toBe(false);
+    expect(result.current.hasPermission("read-posts")).toBe(false);
+  });
+
+  it("stops counting an answer once a change invalidates it, until a new one arrives", async () => {
+    server.capabilities = answering({ read: true });
+    const client = newClient();
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+    expect(result.current.canAccessCollection("posts", "read")).toBe(true);
+
+    // A role change lands, and asking again fails for both.
+    server.capabilities = new Error("capabilities unavailable");
+    server.permissions = new Error("permissions unavailable");
+    act(() => {
+      invalidateCurrentUserAccess(client);
+    });
+    await waitFor(() => expect(result.current.content.error).not.toBeNull());
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+
+    expect(result.current.content.hasAnswer).toBe(false);
+    expect(result.current.canAccessCollection("posts", "read")).toBe(false);
+    expect(result.current.hasAnswer).toBe(false);
   });
 
   it("decides content from the content answer when the permission list fails", async () => {
