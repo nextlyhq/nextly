@@ -1,5 +1,11 @@
-import type { HTMLAttributes, ReactNode } from "react";
-import { forwardRef } from "react";
+import {
+  forwardRef,
+  type HTMLAttributes,
+  type ReactNode,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
 
@@ -44,7 +50,9 @@ export interface PageHeaderProps
  * prop.
  * @experimental
  */
-export const PageHeader = forwardRef<HTMLElement, PageHeaderProps>(
+export const PageHeader: ForwardRefExoticComponent<
+  PropsWithoutRef<PageHeaderProps> & RefAttributes<HTMLElement>
+> = forwardRef<HTMLElement, PageHeaderProps>(
   ({ title, description, breadcrumbs, actions, className, ...props }, ref) => (
     <header
       ref={ref}
