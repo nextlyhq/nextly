@@ -241,22 +241,97 @@ function storedContainers(
   if (!row) return undefined;
   const found: Record<string, unknown> = {};
   for (const field of fields) {
-    const { name, fields: children } = field as {
-      name?: unknown;
-      fields?: unknown;
-    };
-    if (typeof name !== "string" || !Array.isArray(children)) continue;
-    let value: unknown = row[toSnakeCase(name)];
-    if (typeof value === "string") {
-      try {
-        value = JSON.parse(value);
-      } catch {
-        continue;
-      }
-    }
-    if (value !== null && typeof value === "object") found[name] = value;
+    const name = containerName(field);
+    if (name === undefined) continue;
+    const value = parsedColumn(row[toSnakeCase(name)]);
+    if (value !== undefined) found[name] = value;
   }
   return Object.keys(found).length > 0 ? found : undefined;
+}
+
+/** A field's name where it is a group or repeater, which holds fields. */
+function containerName(field: FieldConfig): string | undefined {
+  const { name, fields } = field as { name?: unknown; fields?: unknown };
+  return typeof name === "string" && Array.isArray(fields) ? name : undefined;
+}
+
+/** A JSON column's value as a container, or nothing where it holds none. */
+function parsedColumn(value: unknown): unknown {
+  let parsed = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  return parsed !== null && typeof parsed === "object" ? parsed : undefined;
+}
+
+/**
+ * Every password value `containers` hold, at any depth: the stored hashes an
+ * update's restore may put back.
+ */
+function storedPasswordValues(
+  containers: Record<string, unknown>,
+  fields: readonly FieldConfig[]
+): Set<string> {
+  const found = new Set<string>();
+  collectPasswords(containers, fields, found);
+  return found;
+}
+
+/** {@link storedPasswordValues} for one value: a record or a list of them. */
+function collectPasswords(
+  value: unknown,
+  level: readonly FieldConfig[],
+  found: Set<string>
+): void {
+  for (const row of Array.isArray(value) ? value : [value]) {
+    if (row === null || typeof row !== "object") continue;
+    for (const field of level) {
+      collectFieldPasswords(row as Record<string, unknown>, field, found);
+    }
+  }
+}
+
+/** The password values one field of `record` holds, at any depth. */
+function collectFieldPasswords(
+  record: Record<string, unknown>,
+  field: FieldConfig,
+  found: Set<string>
+): void {
+  const { name, type, fields } = field as {
+    name?: unknown;
+    type?: unknown;
+    fields?: unknown;
+  };
+  if (typeof name !== "string") return;
+  const held = record[name];
+  if (type === "password" && typeof held === "string") found.add(held);
+  else if (Array.isArray(fields)) {
+    collectPasswords(held, fields as FieldConfig[], found);
+  }
+}
+
+/**
+ * Judge `instance` with its container columns' denied children kept at their
+ * stored values, in place: a container column is written whole, so a denied
+ * child removed from the update would be erased from the row, where a denied
+ * top-level field keeps its value by not being written.
+ */
+async function keepContainersAtStored(
+  instance: Record<string, unknown>,
+  stored: Record<string, unknown>,
+  judge: (data: Record<string, unknown>) => Promise<void>
+): Promise<void> {
+  const kept = await keepDeniedAtStored({
+    update: instance,
+    stored,
+    applyRules: judge,
+  });
+  for (const key of Object.keys(instance)) delete instance[key];
+  Object.assign(instance, kept);
 }
 
 function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
@@ -1897,13 +1972,64 @@ export class FieldGroupMutationService extends BaseService {
         ],
       });
     }
+    const restoredHashes = await this.judgeInstanceForWrite(
+      instance,
+      componentFields,
+      mode,
+      slug,
+      storedId
+    );
+    // Reduced in place, and before validation, because both halves of the write
+    // depend on it. A validator is written against a field's public value, the
+    // document id, and would otherwise be handed the populated row. The
+    // localized split then copies values out of this same object into the
+    // companion payload, which never reaches `serializeComponentRow` — so a
+    // reference left populated here is stored there as a snapshot of the row.
+    normalizeRelationshipFields(instance, componentFields);
+
+    // The components nested in this one: their schemas judge one held in a group or repeater here,
+    // whose value no component write of its own reaches, and tell a seeded value from a real one.
+    const nested = await this.nestedComponentsOf(componentFields);
+    // The stored definition carries no functions, so a component field's own
+    // `validate` is attached from the field-level registry, as the parent's
+    // fields are; without it that validator never ran on any write.
+    // A component placed directly among these fields is judged by the refusal alone: nothing
+    // stores it and the admin never draws it, so the rest of validation does not ask for it, a
+    // required one included, or an instance of this component could never be written.
+    const judged = omitDirectComponentFields(componentFields);
+    const issues = [
+      ...unstoredNestedComponentIssues(instance, componentFields),
+      ...(await validateEntryData(
+        instance,
+        slug ? attachFieldValidators("fieldGroup", slug, judged) : judged,
+        { mode, req, componentFields: nested }
+      )),
+    ];
+    if (issues.length > 0) {
+      throw NextlyError.validation({ errors: issues });
+    }
+    await hashPasswordFieldValues(instance, componentFields, restoredHashes);
+  }
+
+  /**
+   * The field group's own rules on one instance about to be written, and on
+   * what its defaults bring in for a new one; see `prepareInstanceForWrite`.
+   * Returns the stored hashes an update's restore put back.
+   */
+  private async judgeInstanceForWrite(
+    instance: ComponentInstanceData,
+    componentFields: FieldConfig[],
+    mode: "create" | "update",
+    slug: string | undefined,
+    storedId: string | undefined
+  ): Promise<ReadonlySet<string>> {
     // The id an update's rules are told: the row the save updates.
     const ruleId =
       storedId ??
       (mode === "update" && typeof instance.id === "string"
         ? instance.id
         : undefined);
-    await this.applyInstanceWriteRules(
+    const restoredHashes = await this.applyInstanceWriteRules(
       instance,
       mode,
       slug,
@@ -1934,36 +2060,7 @@ export class FieldGroupMutationService extends BaseService {
       // ones: judged now, by that field group's own rules.
       await this.judgeInlineFieldGroupsOf(instance, componentFields);
     }
-    // Reduced in place, and before validation, because both halves of the write
-    // depend on it. A validator is written against a field's public value, the
-    // document id, and would otherwise be handed the populated row. The
-    // localized split then copies values out of this same object into the
-    // companion payload, which never reaches `serializeComponentRow` — so a
-    // reference left populated here is stored there as a snapshot of the row.
-    normalizeRelationshipFields(instance, componentFields);
-
-    // The components nested in this one: their schemas judge one held in a group or repeater here,
-    // whose value no component write of its own reaches, and tell a seeded value from a real one.
-    const nested = await this.nestedComponentsOf(componentFields);
-    // The stored definition carries no functions, so a component field's own
-    // `validate` is attached from the field-level registry, as the parent's
-    // fields are; without it that validator never ran on any write.
-    // A component placed directly among these fields is judged by the refusal alone: nothing
-    // stores it and the admin never draws it, so the rest of validation does not ask for it, a
-    // required one included, or an instance of this component could never be written.
-    const judged = omitDirectComponentFields(componentFields);
-    const issues = [
-      ...unstoredNestedComponentIssues(instance, componentFields),
-      ...(await validateEntryData(
-        instance,
-        slug ? attachFieldValidators("fieldGroup", slug, judged) : judged,
-        { mode, req, componentFields: nested }
-      )),
-    ];
-    if (issues.length > 0) {
-      throw NextlyError.validation({ errors: issues });
-    }
-    await hashPasswordFieldValues(instance, componentFields);
+    return restoredHashes;
   }
 
   /**
@@ -1984,7 +2081,7 @@ export class FieldGroupMutationService extends BaseService {
     slug: string | undefined,
     storedId: string | undefined,
     componentFields: readonly FieldConfig[]
-  ): Promise<void> {
+  ): Promise<ReadonlySet<string>> {
     const access = writeScope.getStore()?.access;
     if (access === undefined || slug === undefined) {
       throw NextlyError.internal({
@@ -1994,7 +2091,7 @@ export class FieldGroupMutationService extends BaseService {
         },
       });
     }
-    if (access.overrideAccess) return;
+    if (access.overrideAccess) return new Set();
     const judge = (data: Record<string, unknown>) =>
       applyFieldWriteAccess({
         kind: "fieldGroup",
@@ -2016,18 +2113,12 @@ export class FieldGroupMutationService extends BaseService {
         : undefined;
     if (!stored) {
       await judge(instance);
-      return;
+      return new Set();
     }
-    // A container column is written whole, so a denied child removed from
-    // the update would be erased from the row: it keeps its stored value, as
-    // a denied top-level field does by not being written.
-    const kept = await keepDeniedAtStored({
-      update: instance,
-      stored,
-      applyRules: judge,
-    });
-    for (const key of Object.keys(instance)) delete instance[key];
-    Object.assign(instance, kept);
+    await keepContainersAtStored(instance, stored, judge);
+    // The stored hashes the write may put back, so the hashing pass leaves
+    // them as they are.
+    return storedPasswordValues(stored, componentFields);
   }
 
   /**
