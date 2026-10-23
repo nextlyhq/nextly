@@ -8,13 +8,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const countTeamFigure = vi.fn();
 const getContentByCollection = vi.fn();
+const getContentSingles = vi.fn();
 const resolveReadableResources = vi.fn();
 const granted = vi.fn<() => string[]>();
 
 vi.mock("../../../di/container", () => ({
   container: {
     has: () => true,
-    get: () => ({ countTeamFigure, getContentByCollection }),
+    get: () => ({ countTeamFigure, getContentByCollection, getContentSingles }),
   },
 }));
 vi.mock("../resolve-readable-resources", () => ({
@@ -73,6 +74,7 @@ beforeEach(() => {
   );
   resolveReadableResources.mockResolvedValue(SCOPE);
   getContentByCollection.mockResolvedValue([POSTS]);
+  getContentSingles.mockResolvedValue([]);
   clearSources();
   clearSystemResolvers();
   registerSummaryWidgetSources();
@@ -131,7 +133,27 @@ describe("the content source", () => {
     expect(getContentByCollection).toHaveBeenCalledWith(
       expect.objectContaining({ scope: SCOPE, caller })
     );
-    expect(answer).toEqual([POSTS]);
+    expect(answer).toEqual([{ kind: "collection", ...POSTS }]);
+  });
+
+  it("answers the Singles after the collections, in the room the collections leave", async () => {
+    getContentSingles.mockResolvedValue([{ slug: "home", label: "Home page" }]);
+    const answer = rows(await askContent({ limit: 3 }));
+    // 🔴 Without them, retiring the Singles card took every Single off the dashboard.
+    expect(getContentSingles).toHaveBeenCalledWith({ scope: SCOPE, limit: 2 });
+    expect(answer).toEqual([
+      { kind: "collection", ...POSTS },
+      { kind: "single", slug: "home", label: "Home page", group: null },
+    ]);
+  });
+
+  it("asks for no Singles when the collections fill the page", async () => {
+    getContentByCollection.mockResolvedValue([
+      POSTS,
+      { ...POSTS, slug: "pages" },
+    ]);
+    await askContent({ limit: 2 });
+    expect(getContentSingles).not.toHaveBeenCalled();
   });
 
   it("hands the query's limit to the service, which counts only that page", async () => {

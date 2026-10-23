@@ -1092,3 +1092,112 @@ describe("Unpublished changes retires into Needs attention", () => {
     expect(read(once)).toEqual(once);
   });
 });
+
+describe("Collections, Singles and the per-Single cards retire into Content", () => {
+  // The production map, so these hold for the rows this release converts.
+  const read = (placements: WidgetPlacement[]) =>
+    readStoredLayout(serializeLayout(placements), RETIRED_WIDGETS).placements;
+  const CONTENT = "core/content";
+
+  it("makes one Content card at the first one's position, whichever came first", () => {
+    expect(
+      read([
+        card("a"),
+        card("cols", "core/collections"),
+        card("b"),
+        card("sing", "core/singles"),
+      ])
+    ).toEqual([card("a"), card("cols", CONTENT), card("b")]);
+    // 🔴 Singles first: kept as an existing successor, Content would have
+    // stood at Collections' place instead.
+    expect(
+      read([
+        card("sing", "core/singles"),
+        card("a"),
+        card("cols", "core/collections"),
+      ])
+    ).toEqual([card("sing", CONTENT), card("a")]);
+  });
+
+  it("takes the larger width Content allows, and keeps the widest when it allows none", () => {
+    expect(
+      read([
+        card("cols", "core/collections", { width: "half" }),
+        card("sing", "core/singles", { width: "twoThirds" }),
+      ])[0]?.width
+    ).toBe("twoThirds");
+    expect(
+      read([
+        card("cols", "core/collections", { width: "quarter" }),
+        card("sing", "core/singles", { width: "third" }),
+      ])[0]?.width
+    ).toBe("third");
+  });
+
+  for (const [cols, sing] of [
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ]) {
+    it(`is removed only if both were (Collections removed: ${cols}, Singles removed: ${sing})`, () => {
+      for (const order of [
+        [
+          card("cols", "core/collections", { removed: cols }),
+          card("sing", "core/singles", { removed: sing }),
+        ],
+        [
+          card("sing", "core/singles", { removed: sing }),
+          card("cols", "core/collections", { removed: cols }),
+        ],
+      ]) {
+        const merged = read(order);
+        expect(merged).toHaveLength(1);
+        expect(merged[0]?.removed).toBe(cols && sing);
+      }
+    });
+  }
+
+  it("merges into a Content card the layout already holds, which keeps its id, position, width and settings", () => {
+    expect(
+      read([
+        card("cols", "core/collections", { width: "full" }),
+        card("content", CONTENT, { width: "half", config: { note: "kept" } }),
+        card("sing", "core/singles", { removed: true }),
+      ])
+    ).toEqual([
+      card("content", CONTENT, { width: "half", config: { note: "kept" } }),
+    ]);
+  });
+
+  it("turns a per-Single card into Content, merging it, without its settings", () => {
+    expect(
+      read([
+        card("home", "single/home-status", { config: { limit: 3 } }),
+        card("about", "single/about-status", { width: "half" }),
+        card("a"),
+      ])
+    ).toEqual([card("home", CONTENT), card("a")]);
+    expect(
+      read([card("content", CONTENT), card("home", "single/home-status")])
+    ).toEqual([card("content", CONTENT)]);
+  });
+
+  it("leaves a card that only looks like a per-Single one, and the generated collection cards, as they are", () => {
+    const kept = [
+      card("near", "single/home-statuses"),
+      card("posts", "collection/posts-count"),
+    ];
+    expect(read(kept)).toEqual(kept);
+  });
+
+  it("changes nothing on a second read of a converted layout", () => {
+    const once = read([
+      card("sing", "core/singles"),
+      card("home", "single/home-status"),
+      card("cols", "core/collections"),
+    ]);
+    expect(once.map(placement => placement.widgetId)).toEqual([CONTENT]);
+    expect(read(once)).toEqual(once);
+  });
+});

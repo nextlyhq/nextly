@@ -299,6 +299,19 @@ export function callerMayReadReleases(caller: ReadCaller): Promise<boolean> {
 }
 
 /**
+ * Whether a release exists that this dashboard caller may read: the releases
+ * domain's own answer (`anyReadable`), one id read rather than a count.
+ *
+ * Refused, as every release read is, for a caller who may not read releases;
+ * ask {@link callerMayReadReleases} first to answer "no" instead.
+ *
+ * @experimental
+ */
+export function callerMayReadAnyRelease(caller: ReadCaller): Promise<boolean> {
+  return service().anyReadable(actorFor(caller));
+}
+
+/**
  * How many releases are overdue, for this dashboard caller: the releases
  * domain's own count of its Needs attention tab narrowed to overdue, so a
  * reader shows exactly the releases that tab's overdue filter lists and never

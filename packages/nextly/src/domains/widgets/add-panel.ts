@@ -39,8 +39,7 @@ export type AddPanelGroup = (typeof ADD_PANEL_GROUPS)[number];
 const CORE_GROUPS = {
   "core/seed-demo-content": "overview",
   "core/onboarding-checklist": "overview",
-  "core/collections": "overview",
-  "core/singles": "overview",
+  "core/content": "overview",
   "core/quick-create": "overview",
   "core/team": "team",
   "core/needs-attention": "overview",

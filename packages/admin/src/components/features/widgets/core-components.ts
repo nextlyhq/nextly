@@ -23,7 +23,6 @@ import { OnboardingChecklist } from "@admin/components/features/dashboard/Onboar
 import { QuickCreate } from "@admin/components/features/dashboard/QuickCreate";
 import { RecentActivityCard } from "@admin/components/features/dashboard/RecentActivity";
 import { SeedDemoContentCard } from "@admin/components/features/dashboard/SeedDemoContentCard";
-import { SinglesQuickLinks } from "@admin/components/features/dashboard/SinglesQuickLinks";
 import { TeamSummary } from "@admin/components/features/dashboard/TeamSummary";
 import { UpcomingReleasesCard } from "@admin/components/features/dashboard/UpcomingReleases";
 import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
@@ -40,7 +39,6 @@ export function registerCoreWidgetComponents(): void {
   registerCoreComponent("core#SeedDemoContentCard", SeedDemoContentCard);
   registerCoreComponent("core#OnboardingChecklist", OnboardingChecklist);
   registerCoreComponent("core#CollectionQuickLinks", CollectionQuickLinks);
-  registerCoreComponent("core#SinglesQuickLinks", SinglesQuickLinks);
   registerCoreComponent("core#QuickCreate", QuickCreate);
   registerCoreComponent("core#TeamSummary", TeamSummary);
   registerCoreComponent("core#NeedsAttention", NeedsAttention);
