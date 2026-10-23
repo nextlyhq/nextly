@@ -23,7 +23,7 @@ import type { RequestActor } from "../../auth/request-actor";
 import {
   roleChangeCallerFor,
   runAsRoleChangeCaller,
-} from "../../domains/auth/services/super-admin-grant";
+} from "../../domains/auth/services/role-change-caller";
 import type { RouteGrant } from "../../domains/auth/system-write-policy";
 import { withCurrentLanguages } from "../../domains/i18n/configured-locales";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
