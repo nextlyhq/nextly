@@ -353,8 +353,8 @@ function readableClassLibrary(
   return siteStyle?.classes ?? NO_CLASSES;
 }
 
-/** What {@link useClassSurface} returns. */
-type ClassSurface = {
+/** What {@link useClassSurface} returns, and what the editor hands on as its `classes`. */
+export type ClassSurface = {
   library: readonly NamedClass[] | undefined;
 
   absence: "pending" | "failed";
