@@ -1,7 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
+import { LOCALE_PARAM } from "../constants/search-params";
 import { protectedApi } from "../lib/api/protectedApi";
 import type {
   AdminCapabilities,
@@ -11,9 +12,10 @@ import type {
 } from "../types/permissions";
 
 import {
-  CURRENT_USER_CAPABILITIES_KEY,
   CURRENT_USER_PERMISSIONS_KEY,
+  currentUserCapabilitiesKey,
 } from "./current-user-access";
+import { useLocaleParam } from "./useLocaleParam";
 import { useRouter } from "./useRouter";
 
 /** The flags derived purely from which permission slugs are held. */
@@ -174,6 +176,9 @@ export function buildCapabilities(
 /** The longest delay a browser timer holds without overflowing. */
 const MAX_TIMER_MS = 2_147_483_647;
 
+/** The shortest wait before asking again about an answer past its end. */
+const MIN_RECHECK_MS = 1_000;
+
 /** The capability flag each action is answered by. */
 const CAPABILITY_OF_ACTION = {
   read: "canRead",
@@ -203,21 +208,33 @@ const EMPTY_CAPABILITIES: AdminCapabilities = {
   canManageEmailTemplates: false,
 };
 
+/** Where an answer the hook asks for stands. */
+type AnswerState = {
+  isLoading: boolean;
+  error: Error | null;
+  /**
+   * Whether a current answer is in hand. A failed first request leaves it
+   * empty, which reads exactly like a user who may do nothing, so a guard
+   * must ask this before treating "not allowed" as a refusal. A failed
+   * refresh keeps the last answer, which still counts until the role
+   * assignment it was given for ends.
+   */
+  hasAnswer: boolean;
+};
+
 /** What {@link useCurrentUserPermissions} returns. */
-type CurrentUserPermissions = {
+type CurrentUserPermissions = AnswerState & {
   capabilities: AdminCapabilities;
   permissions: string[];
   roles: string[];
   isSuperAdmin: boolean;
-  isLoading: boolean;
-  error: Error | null;
   /**
-   * Whether both answers have arrived. A failed first request leaves the
-   * capabilities empty, which reads exactly like a user who holds nothing,
-   * so a guard must ask this before treating "no permission" as a refusal.
-   * A failed refresh keeps the last answer, which still counts.
+   * Where the server's answer about collections and Singles stands, apart
+   * from the permission list the other fields describe: a content-registry
+   * failure leaves the system sections, which the permission list decides,
+   * as they were.
    */
-  hasAnswer: boolean;
+  content: AnswerState;
   /** Ask for the permissions and capabilities again, after a failure. */
   retry: () => void;
   hasPermission: (slug: string) => boolean;
@@ -228,25 +245,45 @@ type CurrentUserPermissions = {
 };
 
 /**
+ * Where one query's answer stands, once the role assignment it was given for
+ * may have ended: an answer that arrived before `expiredAt` no longer counts,
+ * and its refresh is what is being waited for.
+ */
+function answerState(
+  query: Pick<
+    UseQueryResult<unknown>,
+    "data" | "dataUpdatedAt" | "error" | "isFetching" | "isPending"
+  >,
+  expiredAt: number | null
+): AnswerState {
+  const expired = expiredAt !== null && query.dataUpdatedAt < expiredAt;
+  return {
+    isLoading: query.isPending || (expired && query.isFetching),
+    error: query.error,
+    hasAnswer: query.data !== undefined && !expired,
+  };
+}
+
+/**
  * Hook to fetch and cache the current user's resolved permissions.
  *
  * Returns an `AdminCapabilities` object with boolean flags for
  * sidebar filtering, route guards, and action visibility.
  *
  * - Super-admin users get all capabilities as `true` (short-circuit).
- * - Other users get capabilities computed from their resolved permission slugs.
- * - Cached via TanStack Query with 5-minute stale time (global default).
+ * - The system flags come from the user's permission slugs; what the user may
+ *   do with each collection and Single comes from the server's answer.
  *
  * @example
  * ```tsx
- * const { capabilities, isLoading, hasPermission } = useCurrentUserPermissions();
+ * const { capabilities, isLoading, canAccessCollection } = useCurrentUserPermissions();
  *
  * if (capabilities.canViewUsers) {
  *   // Show users nav item
  * }
  *
- * if (hasPermission('read-posts')) {
- *   // Show posts section
+ * if (canAccessCollection("posts", "create")) {
+ *   // Offer a new post
  * }
  * ```
  */
@@ -259,54 +296,96 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // to operators.
   const { route } = useRouter();
   const isPrivateRoute = route?.routeType === "private";
+  // The content language on screen: a rule can answer by language, so the
+  // answer is asked for, and kept, per language, as the screen's own
+  // requests are sent.
+  const locale = useLocaleParam(LOCALE_PARAM);
 
   // The `/me/permissions` endpoint returns the canonical
   // UserPermissionsResponse shape directly, so `data` here IS the
   // permissions payload.
-  const { data, isLoading, isPending, error, refetch } =
-    useQuery<UserPermissionsResponse>({
-      queryKey: CURRENT_USER_PERMISSIONS_KEY,
-      queryFn: () =>
-        protectedApi.get<UserPermissionsResponse>("/me/permissions"),
-      enabled: isPrivateRoute,
-      staleTime: 0,
-      refetchOnMount: "always",
-      refetchOnWindowFocus: true,
-    });
-
-  // What the server decides the user may do with each collection and Single,
-  // code rules included. Asked as eagerly as the permissions beside it.
-  const answer = useQuery<CapabilitiesResponse>({
-    queryKey: CURRENT_USER_CAPABILITIES_KEY,
-    queryFn: () => protectedApi.get<CapabilitiesResponse>("/me/capabilities"),
+  const permissionsQuery = useQuery<UserPermissionsResponse>({
+    queryKey: CURRENT_USER_PERMISSIONS_KEY,
+    queryFn: () => protectedApi.get<UserPermissionsResponse>("/me/permissions"),
     enabled: isPrivateRoute,
     staleTime: 0,
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
   });
+  const { data, refetch } = permissionsQuery;
+
+  // What the server decides the user may do with each collection and Single,
+  // code rules included. One answer covers every entity, so it is costly to
+  // compute and is shared by every caller of this hook: it is asked again
+  // only on focus, when a role assignment ends, and when the admin changes
+  // roles, permissions, role assignments or the schema, not each time
+  // another component mounts.
+  const answer = useQuery<CapabilitiesResponse>({
+    queryKey: currentUserCapabilitiesKey(locale),
+    queryFn: () =>
+      protectedApi.get<CapabilitiesResponse>(
+        locale === undefined
+          ? "/me/capabilities"
+          : `/me/capabilities?locale=${encodeURIComponent(locale)}`
+      ),
+    enabled: isPrivateRoute,
+    staleTime: Infinity,
+    refetchOnWindowFocus: "always",
+  });
   const refetchAnswer = answer.refetch;
 
-  // The answer stops holding when the soonest role assignment ends, so it is
-  // asked again then rather than waiting for the next focus or navigation.
+  // The answer stops holding when the soonest role assignment ends, and so
+  // does the permission list beside it. Then both are asked again, and until
+  // a fresh answer arrives neither counts: a failed refresh must not leave
+  // the admin offering what an ended role allowed.
   const validUntil = answer.data?.validUntil ?? null;
+  const answeredAt = answer.dataUpdatedAt;
+  const [expiredAt, setExpiredAt] = useState<number | null>(null);
   useEffect(() => {
     if (validUntil === null) return undefined;
-    // Timers overflow past about 24.8 days; a later expiry is asked about on
-    // a later render.
-    const wait = Math.min(Math.max(0, validUntil - Date.now()), MAX_TIMER_MS);
-    const timer = setTimeout(() => {
-      void refetch();
-      void refetchAnswer();
-    }, wait);
+    let timer: ReturnType<typeof setTimeout>;
+    const arm = (): void => {
+      const remaining = validUntil - Date.now();
+      // Timers overflow past about 24.8 days, so a later end is waited for in
+      // steps rather than asked about early.
+      if (remaining > MAX_TIMER_MS) {
+        timer = setTimeout(arm, MAX_TIMER_MS);
+        return;
+      }
+      timer = setTimeout(
+        () => {
+          setExpiredAt(Date.now());
+          // Every mounted caller arms the same deadline; joining a refresh
+          // already under way asks the server once.
+          void refetch({ cancelRefetch: false });
+          void refetchAnswer({ cancelRefetch: false });
+        },
+        // An answer already past its end, as a clock ahead of the server's
+        // reads it, is asked about again at most once a second.
+        Math.max(remaining, MIN_RECHECK_MS)
+      );
+    };
+    arm();
     return () => clearTimeout(timer);
-  }, [validUntil, refetch, refetchAnswer]);
+  }, [validUntil, answeredAt, refetch, refetchAnswer]);
 
-  const permissions = data?.permissions ?? [];
-  const isSuperAdmin = data?.isSuperAdmin ?? false;
-  const roles = data?.roles ?? [];
+  const permissionsState = answerState(permissionsQuery, expiredAt);
+  const content = answerState(answer, expiredAt);
 
-  const capabilities = data
-    ? buildCapabilities(permissions, isSuperAdmin, answer.data)
+  const permissions = permissionsState.hasAnswer
+    ? (data?.permissions ?? [])
+    : [];
+  const isSuperAdmin = permissionsState.hasAnswer
+    ? (data?.isSuperAdmin ?? false)
+    : false;
+  const roles = permissionsState.hasAnswer ? (data?.roles ?? []) : [];
+
+  const capabilities = permissionsState.hasAnswer
+    ? buildCapabilities(
+        permissions,
+        isSuperAdmin,
+        content.hasAnswer ? answer.data : undefined
+      )
     : EMPTY_CAPABILITIES;
 
   /**
@@ -337,16 +416,8 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     permissions,
     roles,
     isSuperAdmin,
-    isLoading: isLoading || isPending || answer.isLoading || answer.isPending,
-    error: error ?? answer.error,
-    /**
-     * Whether both answers have arrived. A failed first request leaves the
-     * capabilities empty, which reads exactly like a user who holds nothing,
-     * so a guard must ask this before treating "no permission" as a refusal.
-     * A failed refresh keeps the last answer, which still counts.
-     */
-    hasAnswer: data !== undefined && answer.data !== undefined,
-    /** Ask for the permissions and capabilities again, after a failure. */
+    ...permissionsState,
+    content,
     retry: (): void => {
       void refetch();
       void refetchAnswer();
