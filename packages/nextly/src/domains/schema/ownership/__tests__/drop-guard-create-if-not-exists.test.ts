@@ -99,12 +99,11 @@ describe.each(DIALECTS)(
       ).not.toThrow();
     });
 
-    it("fills a name after an earlier statement only read or copied its rows", () => {
+    it("fills a name the migration renamed away", () => {
       expect(() =>
         guard(
           [
-            "INSERT INTO fx__notes (id) SELECT id FROM legacy_orders",
-            "DROP TABLE legacy_orders",
+            "ALTER TABLE legacy_orders RENAME TO legacy_orders_old",
             "CREATE TABLE IF NOT EXISTS legacy_orders (id INT)",
             "ALTER TABLE legacy_orders ADD COLUMN note INT",
           ],
@@ -113,12 +112,20 @@ describe.each(DIALECTS)(
         )
       ).not.toThrow();
     });
+  }
+);
 
-    it("fills a name the migration renamed away", () => {
+describe.each(["mysql", "sqlite"] as const)(
+  "CREATE TABLE IF NOT EXISTS after statements that only read or write rows, on %s",
+  dialect => {
+    // A trigger or a function a data statement calls cannot run DDL here, so
+    // a statement that copies rows puts no relation under any name.
+    it("fills a name after an earlier statement copied its rows", () => {
       expect(() =>
         guard(
           [
-            "ALTER TABLE legacy_orders RENAME TO legacy_orders_old",
+            "INSERT INTO fx__notes (id) SELECT id FROM legacy_orders",
+            "DROP TABLE legacy_orders",
             "CREATE TABLE IF NOT EXISTS legacy_orders (id INT)",
             "ALTER TABLE legacy_orders ADD COLUMN note INT",
           ],
@@ -225,6 +232,14 @@ describe("CREATE TABLE IF NOT EXISTS where a table of the name may stand, on pos
         "CREATE TEMP TABLE scratch (id INT)",
         "ALTER TABLE scratch RENAME TO legacy_orders",
       ],
+    ],
+    [
+      "a SELECT calling a function, which may create any name",
+      ["SELECT make_shadow()"],
+    ],
+    [
+      "a data statement, whose trigger may create any name",
+      ["INSERT INTO fx__notes (id) SELECT id FROM legacy_orders"],
     ],
     [
       "a routine that may create it",

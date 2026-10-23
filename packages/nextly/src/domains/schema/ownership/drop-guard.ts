@@ -620,14 +620,38 @@ const MAY_PLACE_A_NAME = new Set(["CREATE", "SELECT", "WITH", "RENAME"]);
 const MAY_PLACE_ANY_NAME = new Set(["DO", "CALL", "EXECUTE", "IMPORT"]);
 
 /**
- * Whether a statement may put a relation under a name: under any name
- * (`MAY_PLACE_ANY_NAME`), under the names it spells (`MAY_PLACE_A_NAME`, or
- * an `ALTER ... RENAME`), or under none.
+ * Statements, by the word that opens them, that may run code on PostgreSQL:
+ * a function they call, or a trigger on a table they write, can run DDL
+ * under any name. MySQL's and SQLite's functions and triggers cannot.
  */
-function placesNames(tokens: readonly Token[]): "any" | "spelled" | undefined {
+const POSTGRES_MAY_RUN_CODE = new Set([
+  "SELECT",
+  "WITH",
+  "VALUES",
+  "INSERT",
+  "UPDATE",
+  "DELETE",
+  "MERGE",
+  "TRUNCATE",
+  "COPY",
+]);
+
+/**
+ * Whether a statement may put a relation under a name: under any name
+ * (`MAY_PLACE_ANY_NAME`, or on PostgreSQL `POSTGRES_MAY_RUN_CODE`), under
+ * the names it spells (`MAY_PLACE_A_NAME`, or an `ALTER ... RENAME`), or
+ * under none.
+ */
+function placesNames(
+  tokens: readonly Token[],
+  dialect: SupportedDialect
+): "any" | "spelled" | undefined {
   const first = tokens.find(token => token.kind === "word");
   const opener = first?.kind === "word" ? first.upper : "";
   if (MAY_PLACE_ANY_NAME.has(opener)) return "any";
+  if (dialect === "postgresql" && POSTGRES_MAY_RUN_CODE.has(opener)) {
+    return "any";
+  }
   if (MAY_PLACE_A_NAME.has(opener)) return "spelled";
   const renames =
     opener === "ALTER" && tokens.some(token => isWord(token, "RENAME"));
@@ -1023,11 +1047,11 @@ class DropReader {
   /**
    * Records the names a statement may put a relation under: each name a
    * `MAY_PLACE_A_NAME` statement or an `ALTER ... RENAME` spells, and every
-   * name for a `MAY_PLACE_ANY_NAME` one. A later `CREATE TABLE IF NOT
+   * name for one that may run code (`placesNames`). A later `CREATE TABLE IF NOT
    * EXISTS` may find such a relation standing (`fillIfVacated`).
    */
   private notePlacing(tokens: readonly Token[]): void {
-    const places = placesNames(tokens);
+    const places = placesNames(tokens, this.dialect);
     if (places === "any") this.placingAnyIn ??= this.reads;
     if (places !== "spelled") return;
     for (const token of tokens) {
