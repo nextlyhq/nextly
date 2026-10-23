@@ -139,10 +139,10 @@ describe("SingleQueryService.get — the read gate", () => {
   });
 
   it("skips the permission check for a caller with no identity", async () => {
-    // There are no permissions to look up for an anonymous caller, so with no
-    // code-defined rule governing the read it falls through to the
-    // permission-less default rather than being refused.
-    const readRule = vi.fn(() => undefined);
+    // There are no permissions to look up for an anonymous caller, so a
+    // code-defined rule that answers `true` admits them by the
+    // permission-less default rather than being refused for want of a grant.
+    const readRule = vi.fn(() => true);
     const { service } = createService(false, readRule);
 
     const result = await service.get("site-settings", {});

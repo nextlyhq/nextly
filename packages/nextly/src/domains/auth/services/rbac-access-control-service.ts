@@ -44,6 +44,7 @@ import {
   clearDeclaredTargets,
   declareTarget,
 } from "../../../auth/access/declared-rules";
+import { noticeRuleNoLongerAllows } from "../../../auth/access/rule-answer-log";
 import { buildRuleContext } from "../../../auth/access/rule-context";
 import type { Principal } from "../../../plugins/principals/types";
 import type { AccessOperation } from "../../../services/access/types";
@@ -215,8 +216,9 @@ export class RBACAccessControlService {
           operationAccess,
           executor
         );
+        let answer: unknown;
         try {
-          return await operationAccess(ctx);
+          answer = await operationAccess(ctx);
         } catch (error) {
           // Code access function threw — fail-secure
           consoleLogger.error(
@@ -225,6 +227,17 @@ export class RBACAccessControlService {
           );
           return false;
         }
+        // A rule allows only by answering `true`. A truthy answer that is
+        // not `true` let a signed-in user in before, so it is named once.
+        if (answer !== true && Boolean(answer)) {
+          noticeRuleNoLongerAllows(
+            resource,
+            operation,
+            "signed-in user",
+            answer
+          );
+        }
+        return answer === true;
       }
     }
 
@@ -311,8 +324,9 @@ export class RBACAccessControlService {
     if (typeof rule === "boolean") return rule;
     if (typeof rule !== "function") return undefined;
 
+    let answer: unknown;
     try {
-      return await rule(
+      answer = await rule(
         buildRuleContext(
           rule,
           { user: null, roles: [], permissions: [], principal },
@@ -328,6 +342,13 @@ export class RBACAccessControlService {
       );
       return false;
     }
+    // A rule allows only by answering `true`. A visitor was refused before
+    // only by `false`, so any other answer that now refuses one is named
+    // once; a plugin's person was already held to `true`.
+    if (principal === null && answer !== true && answer !== false) {
+      noticeRuleNoLongerAllows(resource, operation, "visitor", answer);
+    }
+    return answer === true;
   }
 
   /**

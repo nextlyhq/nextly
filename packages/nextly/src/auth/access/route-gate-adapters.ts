@@ -568,10 +568,9 @@ async function heldPermission(
 }
 
 /**
- * A signed-in user's answer to a caller check: the route gate's, refused
- * without the access-control service, and a rule's own answer as it came.
- * A lookup that failed fails the check, as it always has, rather than
- * answering no.
+ * A signed-in user's answer to a caller check: the route gate's, a yes or a
+ * no, and refused without the access-control service. A lookup that failed
+ * fails the check, as it always has, rather than answering no.
  */
 async function sessionAnswer(
   userId: string,
@@ -585,14 +584,7 @@ async function sessionAnswer(
     Promise.resolve(false)
   );
   if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
-  if (!("ruleAnswer" in verdict)) return verdict.allowed;
-  // Typed as the rule declares its answer, a yes or no; a rule that answered
-  // anything else has that handed back as it came.
-  return deviate(
-    "can-returns-raw-rule-value",
-    verdict.ruleAnswer as boolean,
-    () => verdict.allowed
-  );
+  return verdict.allowed;
 }
 
 /** An empty action or resource, refused whoever asks. */
