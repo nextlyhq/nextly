@@ -126,7 +126,9 @@ describe.each(getConfiguredTestDialects())(
         const replacing = t.adapter.transaction(async tx => {
           await tx.lockRow(TABLE, liveId);
           const row = await tx.selectOne<Record<string, unknown>>(TABLE, {});
-          await tx.delete(TABLE, { column: "id", op: "=", value: liveId });
+          await tx.delete(TABLE, {
+            and: [{ column: "id", op: "=", value: liveId }],
+          });
           await tx.insert(TABLE, { ...row, id: `${liveId}-put-in-place` });
           await held;
         });

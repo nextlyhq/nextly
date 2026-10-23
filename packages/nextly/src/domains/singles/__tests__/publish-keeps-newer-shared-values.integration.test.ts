@@ -504,7 +504,9 @@ describe.each(getConfiguredTestDialects())(
         const replacing = current!.adapter.transaction(async tx => {
           await tx.lockRow(TABLE, authorised);
           const row = await tx.selectOne<Record<string, unknown>>(TABLE, {});
-          await tx.delete(TABLE, { column: "id", op: "=", value: authorised });
+          await tx.delete(TABLE, {
+            and: [{ column: "id", op: "=", value: authorised }],
+          });
           await tx.insert(TABLE, { ...row, id: `${authorised}-put-in-place` });
           await held;
         });
