@@ -1,3 +1,4 @@
+import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
 import { expect, test } from "@playwright/test";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -64,14 +65,61 @@ function specs(dir: string): string[] {
   });
 }
 
+/**
+ * The locks a spec actually configures: each `LOCK.<name>` in the `lock` array
+ * of a `test.describe.configure({ ... })` call, read from the parsed source.
+ * Not the constant appearing anywhere: an import, a comment or a configure call
+ * that was never written would otherwise pass while Playwright schedules the
+ * file with no lock at all.
+ */
+function configuredLocks(source: string, file: string): Set<string> {
+  const { program } = parseSource(source, file);
+  const locks = new Set<string>();
+  walk(program, node => {
+    if (node.type !== "CallExpression") return;
+    const callee = source.slice(node.callee.start, node.callee.end);
+    if (callee !== "test.describe.configure") return;
+    for (const name of lockNames(node.arguments[0])) locks.add(name);
+  });
+  return locks;
+}
+
+/** The node types `lockNames` reads, as oxc names them. */
+type Parsed = Parameters<Parameters<typeof walk>[1]>[0];
+
+/** The `LOCK.<name>` names in the `lock` array of a configure call's options. */
+function lockNames(options: Parsed | undefined): string[] {
+  if (options?.type !== "ObjectExpression") return [];
+  return options.properties.flatMap(property =>
+    property.type === "Property" &&
+    property.key.type === "Identifier" &&
+    property.key.name === "lock" &&
+    property.value.type === "ArrayExpression"
+      ? property.value.elements.flatMap(lockMember)
+      : []
+  );
+}
+
+/** The name in one `LOCK.<name>` element, or none for anything else. */
+function lockMember(element: Parsed | null): string[] {
+  if (element?.type !== "MemberExpression") return [];
+  const { object, property } = element;
+  return object.type === "Identifier" &&
+    object.name === "LOCK" &&
+    property.type === "Identifier"
+    ? [property.name]
+    : [];
+}
+
 test("every spec that writes shared state holds its lock", () => {
   const files = specs(TESTS);
   // Read before judged: an empty list would pass with nothing checked.
   expect(files.length).toBeGreaterThan(50);
   const unlocked = files.flatMap(file => {
     const source = readFileSync(file, "utf8");
+    const held = configuredLocks(source, file);
     return WRITERS.filter(
-      ({ writes, lock }) => writes(source) && !source.includes(`LOCK.${lock}`)
+      ({ writes, lock }) => writes(source) && !held.has(lock)
     ).map(
       ({ lock, what }) =>
         `${relative(TESTS, file)} ${what} without LOCK.${lock}`
@@ -108,4 +156,20 @@ test("recognises each kind of write it is there for", () => {
       'from "../support/playground-dev-server"'
     )
   ).toBe(true);
+});
+
+test("reads the locks a spec configures, not the constant anywhere", () => {
+  const read = (source: string) => [...configuredLocks(source, "a.spec.ts")];
+  // The constant imported and named, but no lock configured: Playwright holds none.
+  expect(
+    read(`import { LOCK } from "./support/locks";\n// takes LOCK.dashboard\n`)
+  ).toEqual([]);
+  expect(
+    read(`// test.describe.configure({ lock: [LOCK.dashboard] });\n`)
+  ).toEqual([]);
+  expect(
+    read(
+      `test.describe.configure({ mode: "serial", lock: [LOCK.usersRoles, LOCK.email] });\n`
+    )
+  ).toEqual(["usersRoles", "email"]);
 });

@@ -481,6 +481,9 @@ importers:
       '@nextlyhq/builder':
         specifier: workspace:*
         version: link:../packages/builder
+      '@nextlyhq/module-specifiers':
+        specifier: workspace:*
+        version: link:../packages/module-specifiers
       '@nextlyhq/plugin-form-builder':
         specifier: workspace:*
         version: link:../packages/plugin-form-builder

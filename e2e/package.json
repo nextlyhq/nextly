@@ -19,6 +19,7 @@
     "@nextlyhq/adapter-sqlite": "workspace:*",
     "@nextlyhq/admin": "workspace:*",
     "@nextlyhq/builder": "workspace:*",
+    "@nextlyhq/module-specifiers": "workspace:*",
     "@nextlyhq/plugin-form-builder": "workspace:*",
     "@nextlyhq/plugin-page-builder": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
