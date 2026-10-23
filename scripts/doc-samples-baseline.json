@@ -141,8 +141,8 @@
       "compiled": 1
     },
     "docs/page-builder/index.mdx": {
-      "samples": 3,
-      "compiled": 3
+      "samples": 5,
+      "compiled": 5
     },
     "docs/page-builder/locked-areas.mdx": {
       "samples": 2,
@@ -520,7 +520,7 @@
       "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/page-builder/index.mdx": {
-      "reader-file #1 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/testing.mdx": {
       "reader-file #0 error TS2307: Cannot find module '../src' or its corresponding type declarations.": 1

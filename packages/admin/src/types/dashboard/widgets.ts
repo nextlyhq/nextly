@@ -135,6 +135,12 @@ export interface DashboardWidget {
    * a dismissed card is recoverable from the same controls as any other.
    */
   dismissible?: boolean;
+  /**
+   * Whether the batch sizes this `custom` widget's list query to the card, as
+   * it does for the lists core draws: the rows the card's size draws and one
+   * more. Unstated, a custom widget is asked exactly its declared query.
+   */
+  sizedQuery?: boolean;
 }
 
 /**

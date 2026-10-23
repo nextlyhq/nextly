@@ -17,7 +17,7 @@
  *    what remains is exactly the external packages, and JSX has already become a
  *    `react/jsx-runtime` import by the time it gets here.
  *
- * 2. **What was INLINED.** A bundled dependency leaves no import to find: tsup treats
+ * 2. **What was INLINED.** A bundled dependency leaves no import to find: the bundler treats
  *    `dependencies` as external and copies anything else into the artifact whole, so a
  *    `devDependencies` package is present with no specifier naming it. The build's own metafile is
  *    the record of what it read, and that is what this asks rather than the text.
@@ -371,7 +371,7 @@ export function packageOf(specifier: string): string | null {
   // consumer. Named rather than exempted, so it fails the allow-list.
   if (specifier.startsWith("/")) return specifier;
   // Asked of Node rather than matched on the `node:` prefix. Both spellings resolve to the same
-  // built-in and tsup preserves whichever the source used, so recognising only the prefixed form
+  // built-in and the bundler preserves whichever the source used, so recognising only the prefixed form
   // rejects a server-safe entry for importing `path` or `fs/promises`.
   if (isBuiltin(specifier)) return null;
   const parts = specifier.split("/");
@@ -382,7 +382,7 @@ export function packageOf(specifier: string): string | null {
 /**
  * Every emitted file reachable from one artifact, following the relative specifiers between them.
  *
- * A split build does not put an entry's dependencies in the entry. With code splitting on — tsup's
+ * A split build does not put an entry's dependencies in the entry. With code splitting on — the bundler's
  * default — `utils.mjs` can be nothing but `export { x } from "./chunk-abc.js"`, and the chunk is
  * where `react` would appear. Scanning only the named entry exempts exactly the file that holds
  * what this is looking for.
@@ -548,7 +548,7 @@ function manifestName(directory: string): string | null {
  * The packages BUNDLED into one artifact, from the build's own record of what went into it.
  *
  * The specifier scan can only see what SURVIVES, and a bundled dependency leaves nothing to see:
- * tsup treats `dependencies` as external but INLINES anything else, so a `devDependencies` package
+ * The bundler treats `dependencies` as external but INLINES anything else, so a `devDependencies` package
  * is copied into the artifact whole with no import naming it. Asking the bundler what it read is
  * the only way to find that, and it is bounded — the list is finite and the build wrote it.
  *

@@ -23,7 +23,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ActivitySubjectKind } from "../activity-log-service";
-import { readActivitySingles } from "../activity-singles";
+import { readActivitySubjects } from "../activity-subjects";
 import {
   allResources,
   someResources,
@@ -112,7 +112,7 @@ describeEachDialect("a Single's saves in Recent activity", dialect => {
         limit: 20,
         scope,
         caller,
-        singles: await readActivitySingles(),
+        ...(await readActivitySubjects()),
       })
     ).activities;
 
