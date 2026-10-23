@@ -116,6 +116,8 @@ jobs:
       # `main`, in the merge queue, for a dispatch), and on a pull request only
       # when it changes a path where the platforms differ or carries the
       # `ci:all-os` label. An empty answer, a step that failed, runs them.
+      # The label adds these legs to a pull request's CI; it does not start CI
+      # for an inert change, which runs no test job on any operating system.
       all-os: ${{ github.event_name != 'pull_request' || steps.os.outputs.inert != 'true' || contains(github.event.pull_request.labels.*.name, 'ci:all-os') }}
     steps:
       - name: Checkout

@@ -145,6 +145,24 @@ describe("the Windows and macOS legs", () => {
     expect(answer("pull_request", { inert: "" })).toBe("true");
   });
 
+  // What a Windows gate job decides, from both answers it reads, evaluated as
+  // the job's own `if:`: the label adds the legs to a pull request whose CI
+  // runs, and an inert change runs no test job on any operating system.
+  it("adds the Windows gate jobs to a pull request's CI when it carries the label", () => {
+    const gate = ci.jobs["windows-gates"].if;
+    const runs = ({ inert, osInert, labels = [] }) =>
+      String(
+        evaluate(conditionTokens(gate), gate, {
+          "needs.changes.outputs.inert": inert,
+          "needs.changes.outputs.all-os": answer("pull_request", { inert: osInert, labels }),
+        })
+      );
+    expect(runs({ inert: "false", osInert: "true" })).toBe("false");
+    expect(runs({ inert: "false", osInert: "true", labels: ["ci:all-os"] })).toBe("true");
+    expect(runs({ inert: "false", osInert: "false" })).toBe("true");
+    expect(runs({ inert: "true", osInert: "true", labels: ["ci:all-os"] })).toBe("false");
+  });
+
   // The step's own patterns, read by the same function `change-scope.mjs` runs
   // them through: each platform-sensitive path asks for the legs on its own,
   // and a pull request of product code and docs asks for none.
