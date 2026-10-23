@@ -19,6 +19,8 @@ import ts from "typescript";
 
 import { describe, expect, it } from "vitest";
 
+import { parseJsonc } from "./jsonc.mjs";
+
 const read = path => load(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
 /** A JSON file of the repository, such as a package manifest. */
 const readJson = path => JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
@@ -1412,7 +1414,7 @@ describe("who owns what the required checks run", () => {
     // Every task reached is one the task graph defines: a dependency on
     // another package's task (`^build`) or a named package's (`nextly#build`)
     // is that task, never a name of its own that no script answers to.
-    const graph = parsedJsonc(readRepositoryFile("turbo.jsonc")).tasks;
+    const graph = parseJsonc(readRepositoryFile("turbo.jsonc")).tasks;
     expect([...tasks].filter(task => !Object.hasOwn(graph, task))).toEqual([]);
     const files = trackedFiles();
     const tracked = new Set(files);
@@ -1687,10 +1689,6 @@ const TEST_CONFIGURATION = /(?:^|\/)(?:vitest|playwright)[^/]*\.config\.[^/]+$/;
 const LOCAL_FILE = /(?:^|[\s="'])(\.{0,2}\/?[\w./-]+\.(?:[cm]?js|jsx|[cm]?ts|tsx|sh|json))(?=$|[\s"';&|)])/g;
 
 /** A JSONC text as data: comments outside strings removed, and trailing commas. */
-function parsedJsonc(text) {
-  const withoutComments = text.replace(/("(?:\\.|[^"\\])*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (match, string) => string ?? "");
-  return JSON.parse(withoutComments.replace(/,(\s*[}\]])/g, "$1"));
-}
 
 /**
  * The Turbo tasks the required checks run: each `turbo run <task>` in the
@@ -1704,7 +1702,7 @@ function tasksRequiredChecksRun() {
     return runBy(workflow, requiredJobs(workflow, checks)).texts;
   });
   const named = [...commandsRunBy(texts)].flatMap(turboTasksIn);
-  const graph = parsedJsonc(readRepositoryFile("turbo.jsonc")).tasks;
+  const graph = parseJsonc(readRepositoryFile("turbo.jsonc")).tasks;
   return reachable(named, task => dependenciesOf(graph, task));
 }
 
