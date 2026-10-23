@@ -235,25 +235,18 @@ test.describe("the settings sheet", () => {
     // ran past the screen with nothing to scroll: on a phone the footer, Done included, was off
     // the bottom and out of reach. The area now scrolls inside the sheet, so Done can be brought
     // into view, and pressing it keeps the change.
-    await page.setViewportSize({ width: 390, height: 420 });
+    await page.setViewportSize({ width: 390, height: 400 });
     await page.reload();
     await expect(rows(page)).toHaveCount(3);
     const sheet = await openSettings(page);
-    // Guards the guard: the stacked preview and form must be taller than the screen, or Done is
-    // in view whatever the layout does, and this test would pass on the old one.
-    const taller = await sheet.evaluate(element => {
-      const preview = element.querySelector("[data-testid='settings-preview']");
-      const form = element.querySelector("form");
-      return (
-        (preview?.scrollHeight ?? 0) + (form?.scrollHeight ?? 0) >
-        window.innerHeight
-      );
-    });
-    expect(taller, "the sheet's content must be taller than the screen").toBe(
-      true
-    );
     await chooseRows(sheet, 2);
     const done = sheet.getByRole("button", { name: "Done" });
+    // Guards the guard: Done must start below the screen, or it is in view whatever the sheet's
+    // layout does, and this test would pass on the old one.
+    const startsBelow = await done.evaluate(
+      element => element.getBoundingClientRect().bottom > window.innerHeight
+    );
+    expect(startsBelow, "Done must start below the screen").toBe(true);
     await done.scrollIntoViewIfNeeded();
     await expect(done).toBeInViewport();
     await done.click();
