@@ -83,6 +83,9 @@ const PANEL_WIDE_WINDOW = 1200;
  */
 const PANEL_MIN_WINDOW = 1024;
 
+/** One array for "nothing was held back", so its identity never changes. */
+const NOTHING_WITHHELD: readonly string[] = [];
+
 /**
  * Folds the content sidebar for as long as it is mounted, which is while
  * history is open beside the document on a window too narrow to hold both
@@ -236,6 +239,9 @@ export function VersionHistorySheet({
   const viewedLocale = detail.data?.locale ?? null;
   const viewedLoading = detail.isLoading;
   const viewedError = detail.error ?? null;
+  // What the read held back. A shared constant while nothing has arrived, so a
+  // render that has no version yet does not republish the selection.
+  const viewedWithheld = detail.data?.withheld ?? NOTHING_WITHHELD;
 
   // Shown once it has arrived and is on screen: chosen and still loading, or
   // failed, is not a version the person has seen.
@@ -282,13 +288,14 @@ export function VersionHistorySheet({
     onSuccess: result => {
       setConfirmingRestore(false);
       onOpenChange(false);
-      // A restore can succeed while leaving parts behind, when the schema no
-      // longer has a field the version held. Saying so beats a clean success
-      // message that overstates what came back.
+      // A restore can succeed while leaving parts behind: a field the schema no
+      // longer has, one the restorer may not read, or one they may not write.
+      // Saying so beats a clean success message that overstates what came
+      // back. The message names no single cause, since the list mixes them.
       if (result.droppedFields.length > 0) {
         toast.success(
           `Restored version ${result.restoredFrom}. ` +
-            `${result.droppedFields.length} field(s) no longer in this schema were skipped: ` +
+            `${result.droppedFields.length} field(s) were not restored and keep their current values: ` +
             result.droppedFields.join(", ")
         );
         return;
@@ -378,6 +385,7 @@ export function VersionHistorySheet({
       versionNo: selected,
       snapshot: viewedSnapshot,
       locale: viewedLocale,
+      withheld: viewedWithheld,
       isLoading: viewedLoading,
       error: viewedError,
       scope: scopeRef.current,
@@ -392,6 +400,7 @@ export function VersionHistorySheet({
     selected,
     viewedSnapshot,
     viewedLocale,
+    viewedWithheld,
     viewedLoading,
     viewedError,
     viewedAbout,
@@ -855,6 +864,7 @@ export function VersionHistorySheet({
             versionNo={selected}
             isPublished={liveStatus === "published"}
             unsavedChanges={liveDirty}
+            hasWithheldFields={viewedWithheld.length > 0}
             confirmDisabled={restoreRefused}
             isRestoring={restore.isPending}
             // Re-checked at confirm time: the Restore… trigger can vanish while

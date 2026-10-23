@@ -1,0 +1,52 @@
+"use client";
+
+/**
+ * Which fields of the version on screen the reader may not read.
+ *
+ * A version read names what its read rules held back, path by path, and a list
+ * row is named by its own index (`items.1.secret`), so a field hidden in one
+ * row is readable in the row beside it. The paths are carried here rather than
+ * handed down through the form: the fields are drawn by the same renderer the
+ * live editor uses, several levels below whoever read the version, and
+ * threading a set through every level would make every field type's props
+ * carry a fact only one of them acts on.
+ *
+ * Empty by default, which is the live editor's own answer: nothing is withheld
+ * where there is no version on screen.
+ *
+ * @module components/features/versions/withheld-fields-context
+ */
+
+import { createContext, useContext, useMemo, type ReactNode } from "react";
+
+const NONE: ReadonlySet<string> = new Set<string>();
+
+const WithheldFieldsContext = createContext<ReadonlySet<string>>(NONE);
+
+export function WithheldFieldsProvider({
+  paths,
+  children,
+}: {
+  /** The field paths the version read held back. */
+  paths: readonly string[];
+  children: ReactNode;
+}) {
+  const withheld = useMemo(
+    () => (paths.length === 0 ? NONE : new Set(paths)),
+    [paths]
+  );
+  return (
+    <WithheldFieldsContext.Provider value={withheld}>
+      {children}
+    </WithheldFieldsContext.Provider>
+  );
+}
+
+/**
+ * Whether this field's value was held back from the reader. Answered by the
+ * field's full path, so only the row that lost the field is told it did.
+ */
+export function useFieldWithheld(fieldPath: string | undefined): boolean {
+  const withheld = useContext(WithheldFieldsContext);
+  return fieldPath !== undefined && fieldPath !== "" && withheld.has(fieldPath);
+}

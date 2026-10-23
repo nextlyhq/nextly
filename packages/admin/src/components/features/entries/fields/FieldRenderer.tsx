@@ -360,6 +360,7 @@ export function FieldRenderer({
     <FieldWrapper
       field={field}
       error={error?.message}
+      fieldPath={fieldPath}
       horizontal={useHorizontalLayout}
       editorIsOpaque={hasPluginEditor}
     >

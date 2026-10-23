@@ -32,6 +32,12 @@ export interface ViewedVersion {
   snapshot: unknown;
   /** The locale it was captured in, when the document is localized. */
   locale: string | null;
+  /**
+   * The fields the read held back, by their full paths, a list row named by
+   * its own index (`items.1.secret`). Empty while the read is in flight, and
+   * for a reader who may read all of it.
+   */
+  withheld: readonly string[];
   /** True while the snapshot is being read. */
   isLoading: boolean;
   /** Set when the read failed, so the document says so rather than blanking. */
