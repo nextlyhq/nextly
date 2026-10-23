@@ -2,7 +2,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import { parseSource } from "@nextlyhq/module-specifiers/parse-source";
+import { Visitor } from "oxc-parser";
+import type { Expression, PrivateIdentifier } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -48,40 +50,28 @@ function sourceFiles(dir: string): string[] {
 
 const FILES = sourceFiles(SRC);
 
-function parse(file: string): ts.SourceFile {
-  return ts.createSourceFile(
-    file,
-    readFileSync(file, "utf8"),
-    ts.ScriptTarget.Latest,
-    true
-  );
-}
-
 /** Is this expression a call to `currentEpoch()`? */
-function isCurrentEpochCall(node: ts.Node): boolean {
+function isCurrentEpochCall(node: Expression | PrivateIdentifier): boolean {
   return (
-    ts.isCallExpression(node) &&
-    ts.isIdentifier(node.expression) &&
-    node.expression.text === "currentEpoch"
+    node.type === "CallExpression" &&
+    node.callee.type === "Identifier" &&
+    node.callee.name === "currentEpoch"
   );
 }
 
-/** Every `x === currentEpoch()` (or `!==`, either way round) in one file. */
-function stampComparisons(source: ts.SourceFile): number[] {
+/** Every `x === currentEpoch()` (or `!==`, either way round) in one source, by line. */
+function stampComparisons(text: string, fileName: string): number[] {
   const found: number[] = [];
-  const visit = (node: ts.Node): void => {
-    if (
-      ts.isBinaryExpression(node) &&
-      (node.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken ||
-        node.operatorToken.kind ===
-          ts.SyntaxKind.ExclamationEqualsEqualsToken) &&
-      (isCurrentEpochCall(node.left) || isCurrentEpochCall(node.right))
-    ) {
-      found.push(source.getLineAndCharacterOfPosition(node.pos).line + 1);
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
+  new Visitor({
+    BinaryExpression(node) {
+      if (
+        (node.operator === "===" || node.operator === "!==") &&
+        (isCurrentEpochCall(node.left) || isCurrentEpochCall(node.right))
+      ) {
+        found.push(text.slice(0, node.start).split("\n").length);
+      }
+    },
+  }).visit(parseSource(text, fileName).program);
   return found;
 }
 
@@ -93,7 +83,7 @@ describe("whether a stamp is current is asked in one place", () => {
     const offenders = FILES.flatMap(file => {
       const where = relative(SRC, file);
       if (where === EPOCH_MODULE) return [];
-      return stampComparisons(parse(file)).map(
+      return stampComparisons(readFileSync(file, "utf8"), file).map(
         line => `${where.split(sep).join("/")}:${line}`
       );
     });
@@ -105,15 +95,11 @@ describe("whether a stamp is current is asked in one place", () => {
     // The control. An AST walk that matches nothing — a renamed function, a
     // visitor that never descends, a file list that resolved to an empty
     // directory — satisfies the assertion above perfectly.
-    const written = ts.createSourceFile(
-      "probe.ts",
+    const written =
       "const ok = entry.epoch === currentEpoch();\n" +
-        "const no = currentEpoch() !== other;\n",
-      ts.ScriptTarget.Latest,
-      true
-    );
+      "const no = currentEpoch() !== other;\n";
 
-    expect(stampComparisons(written)).toHaveLength(2);
+    expect(stampComparisons(written, "probe.ts")).toEqual([1, 2]);
   });
 
   it("reads a population, so an empty file list cannot pass it", () => {

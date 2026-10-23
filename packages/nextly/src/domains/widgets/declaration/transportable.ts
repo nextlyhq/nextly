@@ -178,3 +178,16 @@ function childrenOf(value: object): [string, unknown][] {
     .filter(([, item]) => item !== undefined)
     .map(([key, item]) => [`.${key}`, item]);
 }
+
+/**
+ * `value` as JSON carries it to the browser: a date as its ISO string, an
+ * absent property left out. What core's own reads answer is sent this way, so
+ * a data function handed rows as they would arrive can answer them unchanged.
+ * Throws as `JSON.stringify` does, on a cycle or a bigint.
+ */
+export function sentAsJson(value: unknown): TransportableValue {
+  const text = JSON.stringify(value);
+  // `undefined` alone is what `JSON.stringify` answers with no text: JSON has
+  // no value for it, so the browser would receive nothing, which is `null`.
+  return text === undefined ? null : (JSON.parse(text) as TransportableValue);
+}

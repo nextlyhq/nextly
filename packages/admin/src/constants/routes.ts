@@ -1,3 +1,5 @@
+import { isAdminRelativePath } from "nextly/config";
+
 export const ROUTES = {
   // Public routes
   SETUP: "/admin/setup",
@@ -252,4 +254,21 @@ export function withQuery(
 
   const queryString = params.toString();
   return queryString ? `${route}?${queryString}` : route;
+}
+
+/**
+ * The href of a path a plugin wrote relative to the admin, such as
+ * `"collections/orders"`, or `undefined` when the path is not one.
+ *
+ * 🔴 The one place such a path becomes an href, so wherever the admin is served
+ * changes here alone. The rule is startup's own, the one `isAdminRelativePath`
+ * both ask: no scheme (so never `javascript:`), no leading slash (so never
+ * `//host`), no backslash, and no segment that climbs out of the admin
+ * (`../logout`). A path that breaks it is not drawn as a link at all, whatever
+ * startup let through.
+ */
+export function adminHref(relative: string): string | undefined {
+  return isAdminRelativePath(relative)
+    ? `${ROUTES.DASHBOARD}/${relative}`
+    : undefined;
 }

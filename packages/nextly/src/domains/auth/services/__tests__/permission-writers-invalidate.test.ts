@@ -2,7 +2,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
+import type { Node, Program } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -71,6 +72,21 @@ function sourceFiles(dir: string): string[] {
  */
 const FILES = sourceFiles(SRC);
 
+/** One parsed file: its program, and the text its nodes' offsets point into. */
+interface Source {
+  readonly text: string;
+  readonly program: Program;
+}
+
+function read(text: string, fileName: string): Source {
+  return { text, program: parseSource(text, fileName).program };
+}
+
+/** The source text of one node, as it is written. */
+function textOf(source: Source, node: Node): string {
+  return source.text.slice(node.start, node.end);
+}
+
 /** Does this expression name the permissions table? */
 function namesTable(text: string, aliases: ReadonlySet<string>): boolean {
   return /(^|\.)permissions$/.test(text) || aliases.has(text);
@@ -84,62 +100,69 @@ function namesTable(text: string, aliases: ReadonlySet<string>): boolean {
  * pattern above cannot see. Resolved as a fixed point so a name bound from
  * another bound name counts too.
  */
-function aliasesIn(source: ts.SourceFile): Set<string> {
+function aliasesIn(source: Source): Set<string> {
   const aliases = new Set<string>();
   for (let changed = true; changed; ) {
     changed = false;
-    const visit = (n: ts.Node): void => {
-      const name = boundToTable(n, aliases) ?? gateParameter(n);
+    walk(source.program, n => {
+      const name = boundToTable(source, n, aliases) ?? gateParameter(source, n);
       if (name && !aliases.has(name)) {
         aliases.add(name);
         changed = true;
       }
-      ts.forEachChild(n, visit);
-    };
-    visit(source);
+    });
   }
   return aliases;
 }
 
 /** `const p = this.tables.permissions` — the name it binds, if it binds one. */
-function boundToTable(n: ts.Node, aliases: ReadonlySet<string>): string | null {
-  if (!ts.isVariableDeclaration(n) || !n.initializer) return null;
-  if (!ts.isIdentifier(n.name)) return null;
-  return namesTable(n.initializer.getText(), aliases) ? n.name.text : null;
+function boundToTable(
+  source: Source,
+  n: Node,
+  aliases: ReadonlySet<string>
+): string | null {
+  if (n.type !== "VariableDeclarator" || !n.init) return null;
+  if (n.id.type !== "Identifier") return null;
+  return namesTable(textOf(source, n.init), aliases) ? n.id.name : null;
+}
+
+/** Is this node a call to the gate? */
+function isGateCall(source: Source, n: Node): boolean {
+  return n.type === "CallExpression" && textOf(source, n.callee).endsWith(GATE);
 }
 
 /** The gate hands the table to its callback, so the parameter is the table. */
-function gateParameter(n: ts.Node): string | null {
-  if (!ts.isCallExpression(n)) return null;
-  if (!n.expression.getText().endsWith(GATE)) return null;
+function gateParameter(source: Source, n: Node): string | null {
+  if (n.type !== "CallExpression" || !isGateCall(source, n)) return null;
   if (n.arguments.length !== 2) return null;
   const run = n.arguments[1];
-  if (!ts.isArrowFunction(run) && !ts.isFunctionExpression(run)) return null;
-  if (run.parameters.length !== 1) return null;
-  const param = run.parameters[0].name;
-  return ts.isIdentifier(param) ? param.text : null;
+  if (
+    run.type !== "ArrowFunctionExpression" &&
+    run.type !== "FunctionExpression"
+  ) {
+    return null;
+  }
+  if (run.params.length !== 1) return null;
+  const param = run.params[0];
+  return param.type === "Identifier" ? param.name : null;
 }
 
 /** The mutating builder calls, named once. */
 const WRITE_CALLS = ["insert", "update", "delete"];
 
 /** Is this node a mutation of the permissions table? */
-function isTableWrite(n: ts.Node, aliases: ReadonlySet<string>): boolean {
-  if (!ts.isCallExpression(n)) return false;
-  if (!ts.isPropertyAccessExpression(n.expression)) return false;
-  if (!WRITE_CALLS.includes(n.expression.name.text)) return false;
+function isTableWrite(
+  source: Source,
+  n: Node,
+  aliases: ReadonlySet<string>
+): boolean {
+  if (n.type !== "CallExpression") return false;
+  const callee = n.callee;
+  if (callee.type !== "MemberExpression" || callee.computed) return false;
+  if (callee.property.type !== "Identifier") return false;
+  if (!WRITE_CALLS.includes(callee.property.name)) return false;
   if (n.arguments.length !== 1) return false;
-  return namesTable(n.arguments[0].getText(), aliases);
-}
-
-/** Is this node lexically inside a call to the gate? */
-function insideGate(node: ts.Node): boolean {
-  for (let n = node.parent; n; n = n.parent) {
-    if (ts.isCallExpression(n) && n.expression.getText().endsWith(GATE)) {
-      return true;
-    }
-  }
-  return false;
+  return namesTable(textOf(source, n.arguments[0]), aliases);
 }
 
 /**
@@ -148,41 +171,62 @@ function insideGate(node: ts.Node): boolean {
  * Functions only. A write assigned to a local — `const insertPerm = db.insert(
  * …)` — sits inside a variable declaration as well as inside the method, and
  * naming the nearest binding labels two writes in different services by local
- * names that say nothing about where they are.
+ * names that say nothing about where they are. A function is named by its own
+ * name, a method (class or object-literal) by its key, and a function held by
+ * a variable or a class field by what holds it.
  */
-function enclosingName(node: ts.Node): string {
-  for (let n = node.parent; n; n = n.parent) {
-    if (declaresFunction(n)) return n.name.getText();
-    if (holdsFunction(n)) return n.name.text;
+function enclosingName(source: Source, ancestors: readonly Node[]): string {
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    const name = functionNameAt(source, ancestors[i]);
+    if (name !== null) return name;
   }
   return "<top level>";
 }
 
-/** A function declared with a name of its own. */
-function declaresFunction(
-  n: ts.Node
-): n is (ts.MethodDeclaration | ts.FunctionDeclaration) & { name: ts.Node } {
-  if (!ts.isMethodDeclaration(n) && !ts.isFunctionDeclaration(n)) return false;
-  return n.name !== undefined;
+/** The name this node gives a function it declares or holds, or null if it gives none. */
+function functionNameAt(source: Source, n: Node): string | null {
+  return declaredName(source, n) ?? holderName(n);
 }
 
-/** A binding whose value is a function, which is named by what holds it. */
-function holdsFunction(n: ts.Node): n is (
-  | ts.VariableDeclaration
-  | ts.PropertyDeclaration
-) & {
-  name: ts.Identifier;
-} {
-  if (!ts.isVariableDeclaration(n) && !ts.isPropertyDeclaration(n))
-    return false;
-  if (!n.initializer) return false;
-  if (
-    !ts.isArrowFunction(n.initializer) &&
-    !ts.isFunctionExpression(n.initializer)
-  ) {
-    return false;
-  }
-  return ts.isIdentifier(n.name);
+/** A function or method named by its own name or key. */
+function declaredName(source: Source, n: Node): string | null {
+  if (n.type === "FunctionDeclaration") return n.id?.name ?? null;
+  const isMethod =
+    n.type === "MethodDefinition" || (n.type === "Property" && n.method);
+  return isMethod ? textOf(source, n.key) : null;
+}
+
+/** A function held by a variable or a class field, named by what holds it. */
+function holderName(n: Node): string | null {
+  const [name, value] =
+    n.type === "VariableDeclarator"
+      ? [n.id, n.init]
+      : n.type === "PropertyDefinition"
+        ? [n.key, n.value]
+        : [null, null];
+  return name?.type === "Identifier" && holdsFunction(value) ? name.name : null;
+}
+
+/** Whether a binding's value is a function, so the binding names it. */
+function holdsFunction(value: Node | null): boolean {
+  return (
+    value?.type === "ArrowFunctionExpression" ||
+    value?.type === "FunctionExpression"
+  );
+}
+
+/** Every table write in one source, whether the gate encloses it, and where it sits. */
+function tableWrites(source: Source): { gated: boolean; enclosing: string }[] {
+  const aliases = aliasesIn(source);
+  const found: { gated: boolean; enclosing: string }[] = [];
+  walk(source.program, (n, ancestors) => {
+    if (!isTableWrite(source, n, aliases)) return;
+    found.push({
+      gated: ancestors.some(above => isGateCall(source, above)),
+      enclosing: enclosingName(source, ancestors),
+    });
+  });
+  return found;
 }
 
 /**
@@ -193,20 +237,7 @@ function holdsFunction(n: ts.Node): n is (
  * reader built for the test would agree with the test and not with the rule.
  */
 function gatingOf(code: string): boolean[] {
-  const source = ts.createSourceFile(
-    "probe.ts",
-    code,
-    ts.ScriptTarget.Latest,
-    true
-  );
-  const aliases = aliasesIn(source);
-  const found: boolean[] = [];
-  const visit = (n: ts.Node): void => {
-    if (isTableWrite(n, aliases)) found.push(insideGate(n));
-    ts.forEachChild(n, visit);
-  };
-  visit(source);
-  return found;
+  return tableWrites(read(code, "probe.ts")).map(write => write.gated);
 }
 
 type Write = { where: string; gated: boolean };
@@ -216,20 +247,11 @@ function writesIn(file: string): Write[] {
   // Cheap reject before building a tree: the package has thousands of files and
   // only a handful mention this table at all.
   if (!text.includes("permissions")) return [];
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-  const aliases = aliasesIn(source);
-  const out: Write[] = [];
-  const visit = (n: ts.Node): void => {
-    if (isTableWrite(n, aliases)) {
-      out.push({
-        where: `${relative(SRC, file).split(sep).join("/")}:${enclosingName(n)}`,
-        gated: insideGate(n),
-      });
-    }
-    ts.forEachChild(n, visit);
-  };
-  visit(source);
-  return out;
+  const where = relative(SRC, file).split(sep).join("/");
+  return tableWrites(read(text, file)).map(write => ({
+    where: `${where}:${write.enclosing}`,
+    gated: write.gated,
+  }));
 }
 
 const writes = FILES.flatMap(writesIn);
@@ -323,21 +345,20 @@ describe("a write to a permission row goes through the gate", () => {
     const offenders = FILES.filter(f => {
       const text = readFileSync(f, "utf-8");
       if (!text.includes("permissions")) return false;
-      const source = ts.createSourceFile(f, text, ts.ScriptTarget.Latest, true);
+      const source = read(text, f);
       let raw = false;
-      const visit = (n: ts.Node): void => {
+      walk(source.program, n => {
         if (
-          ts.isTaggedTemplateExpression(n) &&
-          n.tag.getText().endsWith("sql") &&
+          n.type === "TaggedTemplateExpression" &&
+          textOf(source, n.tag).endsWith("sql") &&
           /(INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+"?permissions"?\b/i.test(
-            n.template.getText()
+            textOf(source, n.quasi)
           )
         ) {
           raw = true;
         }
-        if (!raw) ts.forEachChild(n, visit);
-      };
-      visit(source);
+        return !raw;
+      });
       return raw;
     }).map(f => relative(SRC, f).split(sep).join("/"));
     expect(offenders).toEqual([]);

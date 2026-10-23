@@ -19,6 +19,7 @@ import type { WidgetScope } from "../../resolved-sources";
 import type { QueryAnswer } from "../displays";
 import {
   defineWidget,
+  type WidgetReadServices,
   type WidgetData,
   type WidgetProps,
   type WidgetSettingValues,
@@ -195,3 +196,13 @@ defineWidget({
   },
   display: "metric",
 });
+
+// A data function's reads take no person, user or access option: who reads is bound by core, so
+// the only options are the ones a read carries. Pinned exactly, so an option added to either is
+// a decision made here, not an accident.
+expectTypeOf<
+  keyof NonNullable<Parameters<WidgetReadServices["count"]>[1]>
+>().toEqualTypeOf<"where" | "signal">();
+expectTypeOf<
+  keyof NonNullable<Parameters<WidgetReadServices["find"]>[1]>
+>().toEqualTypeOf<"where" | "sort" | "limit" | "select" | "signal">();

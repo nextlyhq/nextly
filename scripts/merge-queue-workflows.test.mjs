@@ -13,9 +13,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { posix } from "node:path";
 
+import { importedSpecifiers } from "@nextlyhq/module-specifiers";
 import { load } from "js-yaml";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
 
 import { describe, expect, it } from "vitest";
 
@@ -1972,7 +1972,7 @@ function toolingImportedBy(roots, tracked, readFile = readRepositoryFile) {
 function loadsIn(text, path) {
   const beside = imported => specifier => ({ specifier, target: repositoryPathOf(specifier, path, new Map()), imported });
   const read = [...text.matchAll(/readFileSync\(([^;]*?)["']utf-?8["']/g)].flatMap(match => [...match[1].matchAll(/["']([^"']+)["']/g)].map(literal => `./${literal[1]}`));
-  const modules = [...importsIn(text), ...jsPluginsIn(text)];
+  const modules = [...importsIn(text, path), ...jsPluginsIn(text)];
   return [...modules.filter(specifier => specifier.startsWith(".")).map(beside(true)), ...read.map(beside(false))];
 }
 
@@ -2007,12 +2007,13 @@ const EXTENDS = /"extends"\s*:\s*(\[[^\]]*\]|"[^"]*")/;
 /**
  * The modules a module's text imports, as written: `import … from`,
  * `export … from`, a bare `import` for its side effects, `require()` and
- * `import()`. TypeScript's own scanner reads them, so text that only looks like
- * an import, in a comment or in a string such as a child process's source, is
- * never taken for one.
+ * `import()`. Read by the repository's one reader of imports, from the parsed
+ * module, so text that only looks like an import, in a comment or in a string
+ * such as a child process's source, is never taken for one. `path` names the
+ * language the module is written in.
  */
-function importsIn(text) {
-  return ts.preProcessFile(text, true, true).importedFiles.map(file => file.fileName);
+function importsIn(text, path) {
+  return importedSpecifiers(text, path);
 }
 
 /**
@@ -2041,7 +2042,10 @@ function workspacePackages(files) {
 function sharedConfigurationOf(path, packages) {
   const text = readRepositoryFile(path);
   const extended = EXTENDS.exec(text)?.[1] ?? "";
-  const specifiers = [...[...extended.matchAll(/"([^"]+)"/g)].map(match => match[1]), ...importsIn(text), ...jsPluginsIn(text)];
+  // A JSON configuration is not a module: it has no imports to parse, though its
+  // `jsPlugins` are read like any configuration's.
+  const imported = path.endsWith(".json") ? [] : importsIn(text, path);
+  const specifiers = [...[...extended.matchAll(/"([^"]+)"/g)].map(match => match[1]), ...imported, ...jsPluginsIn(text)];
   return specifiers.map(specifier => repositoryPathOf(specifier, path, packages)).filter(Boolean);
 }
 

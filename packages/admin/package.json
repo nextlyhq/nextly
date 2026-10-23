@@ -76,6 +76,7 @@
     "chokidar": "^5.0.0",
     "jsdom": "^27.1.0",
     "nextly": "workspace:*",
+    "oxc-parser": "^0.155.0",
     "postcss": "^8.5.6",
     "react": "19.3.1",
     "react-dom": "19.3.1",

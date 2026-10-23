@@ -46,6 +46,7 @@
   "devDependencies": {
     "@babel/types": "^7.29.7",
     "@nextlyhq/eslint-plugin": "workspace:*",
+    "@nextlyhq/module-specifiers": "workspace:*",
     "@nextlyhq/telemetry": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@testing-library/react": "^16.3.0",
@@ -58,6 +59,7 @@
     "@vitest/ui": "^5.0.5",
     "eslint": "^9.39.1",
     "jsdom": "^27.1.0",
+    "oxc-parser": "^0.155.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "tsdown": "^0.23.1",

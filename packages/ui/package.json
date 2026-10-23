@@ -115,6 +115,7 @@
     "culori": "^4.0.2",
     "jsdom": "^27.1.0",
     "lucide-react": "^0.544.0",
+    "oxc-parser": "^0.155.0",
     "postcss": "^8.5.6",
     "react": "19.3.1",
     "react-dom": "19.3.1",
