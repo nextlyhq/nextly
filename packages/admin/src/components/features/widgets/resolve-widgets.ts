@@ -23,6 +23,7 @@ import type {
 } from "nextly/config";
 import { widgetGateHolds, type WidgetPermissionGate } from "nextly/widget-gate";
 
+import { adminHref } from "@admin/constants/routes";
 import type {
   PluginMetadata,
   RegisteredWidgetMeta,
@@ -280,6 +281,8 @@ function resolveRegistered(
     size: meta.defaultSize,
     ...(meta.defaultHeight === undefined ? {} : { height: meta.defaultHeight }),
     query: meta.query,
+    ...(meta.serverData === true ? { serverData: true as const } : {}),
+    ...declaredEmptyOf(meta.empty),
     settings: meta.settings,
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
@@ -541,4 +544,24 @@ export function resolveDashboardWidgets(
       (a.defaultOrder ?? Number.POSITIVE_INFINITY) -
       (b.defaultOrder ?? Number.POSITIVE_INFINITY)
   );
+}
+
+/**
+ * A declared widget's empty state as its card draws it: the declared message as
+ * the empty state's title, and its action with its link made an href. An action
+ * whose link is not a path relative to the admin is not drawn.
+ */
+function declaredEmptyOf(
+  empty: RegisteredWidgetMeta["empty"]
+): Pick<DashboardWidget, "declaredEmpty"> {
+  if (empty === undefined) return {};
+  const href =
+    empty.action === undefined ? undefined : adminHref(empty.action.link);
+  const declared = {
+    ...(empty.message === undefined ? {} : { title: empty.message }),
+    ...(empty.action === undefined || href === undefined
+      ? {}
+      : { action: { label: empty.action.label, href } }),
+  };
+  return Object.keys(declared).length === 0 ? {} : { declaredEmpty: declared };
 }

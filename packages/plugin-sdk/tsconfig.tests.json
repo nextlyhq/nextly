@@ -23,7 +23,9 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "types": ["node"]
+    "types": ["node"],
+    // Tests publish nothing, so they need not state every export's type.
+    "isolatedDeclarations": false
   },
   "include": ["src/**/*"],
   "exclude": ["dist", "node_modules"]

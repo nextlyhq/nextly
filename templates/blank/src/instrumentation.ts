@@ -23,5 +23,10 @@ export async function register(): Promise<void> {
 
   const { createRegister } = await import("nextly");
   const { default: config } = await import("../nextly.config");
-  await createRegister(config)();
+  // Next.js writes its Cache Components setting into this file as it builds
+  // it. Nextly, loaded from node_modules, cannot read that for itself, and
+  // warns when Cache Components is on, which it does not support yet.
+  await createRegister(config, {
+    cacheComponents: process.env.__NEXT_CACHE_COMPONENTS,
+  })();
 }

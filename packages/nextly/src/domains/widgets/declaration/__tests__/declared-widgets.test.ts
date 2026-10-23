@@ -1,7 +1,7 @@
 /**
  * The declared widgets core knows at startup: checked all together, kept for
- * the server and not yet offered to the admin, and looked up by id when a
- * card's query is built.
+ * the server, offered to the admin as data only (not yet those drawn by their
+ * own component), and looked up by id when a card's query is built.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -41,16 +41,97 @@ afterEach(() => {
 });
 
 describe("registering declared widgets", () => {
-  it("offers none to the admin yet: nothing runs a declared widget's data for a card", () => {
+  it("publishes each to the registry the admin reads as data only, its cards answered on the server", () => {
     registerWidgetDeclarations([
-      { owner: SHOP, declarations: [ordersByState, revenue] },
+      { owner: SHOP, declarations: [ordersByState, recentOrders] },
     ]);
-    // Kept for the server, and absent from the registry the admin reads, so
-    // no dashboard places a card that could draw only an error.
-    expect(declaredWidget("acme/orders-by-state")).toBeDefined();
-    expect(declaredWidget("acme/revenue")).toBeDefined();
-    expect(getWidget("acme/orders-by-state")).toBeUndefined();
+    const published = getWidget("acme/orders-by-state");
+    expect(published).toMatchObject({
+      id: "acme/orders-by-state",
+      title: "Orders by state",
+      description: "How many orders sit in each state",
+      category: "Shop",
+      archetype: "bars",
+      sketch: "bars",
+      requiredPermission: "read-orders",
+      allowedWidths: ["third", "half", "twoThirds"],
+      defaultWidth: "half",
+      serverData: true,
+    });
+    // Data only: no query, no data function and no empty test reach what the admin is sent,
+    // and what is published survives JSON exactly, so nothing in it is code.
+    expect(published?.query).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(published))).toEqual(published);
+    expect(Object.keys(published ?? {})).not.toContain("data");
+    // The widths as declared, a gap included: `recent-orders` takes half and full, not two thirds.
+    expect(getWidget("acme/recent-orders")?.allowedWidths).toEqual([
+      "half",
+      "full",
+    ]);
+    // A declared empty state: its words and action are published, its test is not, and the
+    // action's permission is the gate's own name.
+    registerWidgetDeclarations([
+      {
+        owner: SHOP,
+        declarations: [
+          { ...ordersByState, id: "acme/orders-empty", empty: revenue.empty },
+        ],
+      },
+    ]);
+    const own = getWidget("acme/orders-empty");
+    expect(own).toMatchObject({
+      archetype: "bars",
+      empty: {
+        message: "No takings in this range",
+        action: {
+          label: "Add a product",
+          link: "collections/products/create",
+          requiredPermission: "create-products",
+        },
+      },
+    });
+    expect(Object.keys(own?.empty ?? {})).not.toContain("when");
+    // And the declaration itself is still kept whole, for the server to answer its cards from.
+    expect(declaredWidget("acme/orders-by-state")).toMatchObject({
+      owner: SHOP,
+      declaration: ordersByState,
+    });
+  });
+
+  it("keeps a widget drawn by its own component but offers it nowhere yet, saying so once", () => {
+    // 🔴 The admin does not yet hand a widget's own component the props its
+    // declaration types, so a published one would throw in its card. It is
+    // kept and checked like any other, and left out of what the admin reads.
+    registerWidgetDeclarations([{ owner: SHOP, declarations: [revenue] }]);
+    registerWidgetDeclarations([{ owner: SHOP, declarations: [revenue] }]);
     expect(getWidget("acme/revenue")).toBeUndefined();
+    expect(declaredWidget("acme/revenue")).toMatchObject({
+      owner: SHOP,
+      declaration: revenue,
+    });
+    // Its author is told why the card never appears, once per process.
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatchObject({
+      kind: "widget-component-display-held",
+      widget: "acme/revenue",
+      plugin: SHOP,
+    });
+    // The control: a core display beside it is offered as declared.
+    registerWidgetDeclarations([
+      { owner: SHOP, declarations: [ordersByState] },
+    ]);
+    expect(getWidget("acme/orders-by-state")).toBeDefined();
+  });
+
+  it("holds a widget drawn by its own component in production too, without the warning", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      registerWidgetDeclarations([{ owner: SHOP, declarations: [revenue] }]);
+      expect(getWidget("acme/revenue")).toBeUndefined();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("keeps each declaration, with its server code, for the server's own use", () => {

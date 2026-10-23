@@ -88,6 +88,13 @@ export interface CanonicalWidget {
   category?: string;
   /** The declaration's archetype, which picks the add panel's sketch. */
   archetype?: string;
+  /** The sketch the declaration names in place of its archetype's, when it names one. */
+  sketch?: string;
+  /**
+   * Set when core builds this widget's data on the server from its declaration,
+   * so the admin asks for its cards by card rather than by query.
+   */
+  serverData?: true;
   requiredPermission?: WidgetPermissionGate;
   defaultSize?: string;
   /**
@@ -124,7 +131,8 @@ export interface CanonicalWidget {
   dismissible?: boolean;
   /**
    * The gates INSIDE the declaration: one per action of an `actions` widget,
-   * verbatim, `undefined` where the action declares none.
+   * verbatim, `undefined` where the action declares none, and a declared
+   * widget's empty-state action's, when it has one.
    *
    * Carried so the workspace payload can withhold an action from a reader
    * who lacks its grant before the declaration ships -- an action is a label
@@ -169,6 +177,11 @@ const REGISTRATION_FIELDS = [
   "maxSize",
   "defaultHeight",
   "defaultOrder",
+  "allowedWidths",
+  "defaultWidth",
+  "allowsSeveral",
+  "sketch",
+  "serverData",
   "lifecycle",
   "visibleWhen",
   "dismissible",
@@ -183,7 +196,14 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
   ).map(field => [field, definition[field]]);
   return {
     id: definition.id,
-    actionGates: actionGatesOf(definition.actions),
+    // A declared widget's empty-state action is gated like a shortcut, so its
+    // gate is resolved with them, before the payload decides what to withhold.
+    actionGates: [
+      ...actionGatesOf(definition.actions),
+      ...(definition.empty?.action?.requiredPermission === undefined
+        ? []
+        : [definition.empty.action.requiredPermission]),
+    ],
     ...(Object.fromEntries(stated) as Partial<CanonicalWidget>),
   };
 }
@@ -465,6 +485,19 @@ export interface WidgetWidthFacts {
   defaultWidth: WidgetWidth;
   /** Whether one dashboard may hold more than one card of this widget. */
   allowsSeveral: boolean;
+}
+
+/**
+ * Whether a widget enters the default arrangement: the ONE answer, for every
+ * reader that follows the default.
+ *
+ * A plugin's declared widget is offered, never placed by default: where a
+ * plugin may put one is its suggestion, which the site may decline, and an
+ * unsuggested one stays in the add panel. Until suggestions are placed, no
+ * declared widget enters it at all.
+ */
+export function placedByDefault(widget: CanonicalWidget): boolean {
+  return widget.serverData !== true;
 }
 
 /**

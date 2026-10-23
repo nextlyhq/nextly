@@ -28,7 +28,9 @@ vi.mock("../domains/widgets/execute", () => ({ executeWidgetQuery }));
 // `readCaller` resolves role slugs from the database. Mocked so this handler
 // test exercises the batching and error isolation, not the auth stack.
 const { readCaller } = vi.hoisted(() => ({ readCaller: vi.fn() }));
-vi.mock("./authenticated-read", () => ({
+// Partial: the caller is stood in for, and the rest of the module (its response headers) is real.
+vi.mock("./authenticated-read", async importOriginal => ({
+  ...(await importOriginal<typeof import("./authenticated-read")>()),
   readCaller,
   readAccessCaller: (caller: { user: { id: string } }) => ({
     userId: caller.user.id,

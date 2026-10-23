@@ -32,7 +32,11 @@ import { dirname, join, posix, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
-import ts from "typescript";
+import {
+  literalText,
+  parseSource,
+  walk,
+} from "@nextlyhq/module-specifiers/parse-source";
 
 import { exportTargets } from "./check-published-build.mjs";
 
@@ -63,79 +67,31 @@ export function findJsFiles(dir) {
 }
 
 /**
- * The relative specifier an import/export declaration names, or null.
- */
-function declarationSpecifier(node) {
-  if (!ts.isImportDeclaration(node) && !ts.isExportDeclaration(node)) {
-    return null;
-  }
-  if (!node.moduleSpecifier || !ts.isStringLiteralLike(node.moduleSpecifier)) {
-    return null;
-  }
-  return node.moduleSpecifier.text;
-}
-
-/**
- * The relative specifier a dynamic `import("...")` call names, or null.
- */
-function dynamicImportSpecifier(node) {
-  if (
-    !ts.isCallExpression(node) ||
-    node.expression.kind !== ts.SyntaxKind.ImportKeyword
-  ) {
-    return null;
-  }
-  const [arg] = node.arguments;
-  if (!arg || !ts.isStringLiteralLike(arg)) {
-    return null;
-  }
-  return arg.text;
-}
-
-/**
  * Parse an emitted JS chunk to extract relative static and dynamic import specifiers.
  *
- * The tree is walked with an explicit stack: a minified chunk is one deep
- * expression chain, and a recursive visitor over it can blow the call stack
- * before the report renders (check-published-build.mjs walks the same
- * artifacts this way).
+ * Static ones come from `import`/`export ... from` declarations, dynamic ones
+ * from an `import("...")` of a literal. The shared walk is iterative: a
+ * minified chunk is one deep expression chain, and a recursive visitor over it
+ * can blow the call stack before the report renders. Specifiers are collected
+ * in source document order.
  */
 export function parseChunkImports(filePath, code) {
-  const sourceFile = ts.createSourceFile(
-    filePath,
-    code,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.JS
-  );
-
   const staticImports = [];
   const dynamicImports = [];
-  const stack = [sourceFile];
 
-  while (stack.length > 0) {
-    const node = stack.pop();
-    const declared = declarationSpecifier(node);
-    if (declared !== null) {
-      if (declared.startsWith(".")) staticImports.push(declared);
-    } else {
-      const dynamic = dynamicImportSpecifier(node);
-      if (dynamic !== null && dynamic.startsWith(".")) {
-        dynamicImports.push(dynamic);
-      }
+  walk(parseSource(code, filePath).program, node => {
+    if (
+      node.type === "ImportDeclaration" ||
+      node.type === "ExportNamedDeclaration" ||
+      node.type === "ExportAllDeclaration"
+    ) {
+      const declared = literalText(node.source);
+      if (declared?.startsWith(".")) staticImports.push(declared);
+    } else if (node.type === "ImportExpression") {
+      const dynamic = literalText(node.source);
+      if (dynamic?.startsWith(".")) dynamicImports.push(dynamic);
     }
-    // Braces, not a bare arrow body: forEachChild stops at the first child
-    // whose callback returns truthy, and Array.push returns that length.
-    // Children go on the stack last-first, so pops — and the collected
-    // specifiers — keep the source document order.
-    const children = [];
-    ts.forEachChild(node, child => {
-      children.push(child);
-    });
-    for (let i = children.length - 1; i >= 0; i--) {
-      stack.push(children[i]);
-    }
-  }
+  });
 
   return {
     staticImports: [...new Set(staticImports)],

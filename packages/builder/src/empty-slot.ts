@@ -77,7 +77,7 @@ import {
  * applies both markers to a block's single root — so the element found by node
  * id is the element this question is about, with no second address to resolve.
  */
-export const EMPTY_CONTAINER_SELECTOR =
+export const EMPTY_CONTAINER_SELECTOR: string =
   `.${BUILDER_CHROME_CLASS}:not([${EMPTY_ELEMENTS_ATTRIBUTE}="hidden"]) ` +
   `.${CANVAS_ROOT_CLASS} [${SLOTS_ATTRIBUTE}]:empty`;
 

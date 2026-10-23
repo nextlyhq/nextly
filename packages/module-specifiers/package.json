@@ -6,7 +6,11 @@
   "type": "module",
   "private": true,
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./parse-source": {
+      "types": "./src/parse-source.d.mts",
+      "default": "./src/parse-source.mjs"
+    }
   },
   "scripts": {
     "check-types": "tsc --noEmit",
@@ -19,10 +23,10 @@
     "typescript": "^5.9.3",
     "vitest": "^5.0.5"
   },
-  "peerDependencies": {
-    "typescript": "^5.9.3"
-  },
   "engines": {
     "node": "^22.12.0 || >=24.0.0"
+  },
+  "dependencies": {
+    "oxc-parser": "^0.155.0"
   }
 }

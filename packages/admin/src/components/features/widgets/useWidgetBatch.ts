@@ -53,6 +53,15 @@ export interface BatchCard {
    * nothing applies, and the card is keyed by what it asks.
    */
   declaredQuery?: DashboardWidget["query"];
+  /** The settings this reader stored for the card, as the arrangement holds them. */
+  config?: Record<string, unknown>;
+  /**
+   * Set while the dashboard is being customised, for a card whose data core
+   * builds on the server: its settings may then be a change not yet saved, or
+   * the card itself one not yet saved, so it is asked with the settings it is
+   * drawn with rather than by its id.
+   */
+  editing?: true;
 }
 
 export interface WidgetBatch {
@@ -99,11 +108,35 @@ export interface WidgetBatch {
  * widget makes the read just as wasted as no renderer at all.
  */
 function worthAsking(widget: DashboardWidget): boolean {
+  // A card core answers on the server is asked for as a card, with no query.
+  if (widget.serverData === true) return true;
   // A `stats` card asks through its CELLS, so it has no top-level query and the
   // original test declared every one of them not worth asking -- which is the
   // shape that would have shipped a card whose numbers never load.
   if (!widget.query && !widget.cells?.length) return false;
   return widget.archetype === "custom" || coreDraws(widget);
+}
+
+/**
+ * How a card core answers on the server is asked for: by its id while it is a
+ * stored card with its stored settings, filed under those settings so a saved
+ * change of them asks it again alone; with the settings it is drawn with while
+ * the dashboard is being customised, when either may not be saved yet. Never
+ * sized: core answers it as declared.
+ */
+function cardAskFor(card: BatchCard): WidgetQueryRequest {
+  const widget = card.widget.id;
+  if (card.editing === true) {
+    return {
+      placementId: card.placementId,
+      card: { widget, settings: card.config ?? {} },
+    };
+  }
+  return {
+    placementId: card.placementId,
+    card: { widget, card: card.placementId },
+    ...(card.config === undefined ? {} : { config: card.config }),
+  };
 }
 
 /**
@@ -117,6 +150,7 @@ function worthAsking(widget: DashboardWidget): boolean {
  */
 function questionsFor(card: BatchCard): WidgetQueryRequest[] {
   const { placementId, widget } = card;
+  if (widget.serverData === true) return [cardAskFor(card)];
   if (widget.cells?.length) {
     return widget.cells.map(cell => ({
       placementId,
@@ -124,7 +158,15 @@ function questionsFor(card: BatchCard): WidgetQueryRequest[] {
       query: cell.query,
     }));
   }
-  if (!widget.query) return [];
+  return widget.query ? [queryAskFor(card, widget.query)] : [];
+}
+
+/** The one question a card asks by its widget's query, at the card's tier where it is sized. */
+function queryAskFor(
+  card: BatchCard,
+  query: NonNullable<DashboardWidget["query"]>
+): WidgetQueryRequest {
+  const { placementId, widget } = card;
   // Sized for a card the host draws, whose body slices to its tier, and for a custom card
   // that asked to be (`sizedQuery`), whose component draws by the same rule. Any other
   // custom card's component draws the raw answer with no tier, so it is asked exactly as
@@ -134,17 +176,13 @@ function questionsFor(card: BatchCard): WidgetQueryRequest[] {
       ? undefined
       : card.tier;
   // Keyed by the declared question and sent as the settings ask it; see `declaredQuery`.
-  const declared = card.declaredQuery ?? widget.query;
-  return [
-    {
-      placementId,
-      query: declared,
-      ...(declared === widget.query ? {} : { applied: widget.query }),
-      ...(tier
-        ? { sized: { query: queryForTier(widget.query, tier), tier } }
-        : {}),
-    },
-  ];
+  const declared = card.declaredQuery ?? query;
+  return {
+    placementId,
+    query: declared,
+    ...(declared === query ? {} : { applied: query }),
+    ...(tier ? { sized: { query: queryForTier(query, tier), tier } } : {}),
+  };
 }
 
 /**
@@ -249,7 +287,11 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
         // A `stats` card is one CARD in the announcement, however many numbers
         // it draws: the reader is told how many cards updated, not how many
         // queries ran.
-        .filter(card => card.widget.query ?? card.widget.cells?.length)
+        .filter(
+          card =>
+            card.widget.serverData === true ||
+            (card.widget.query ?? card.widget.cells?.length)
+        )
         .map(card =>
           widgetOutcome(
             card.widget,

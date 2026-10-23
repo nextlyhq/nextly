@@ -61,6 +61,7 @@ import {
   CardError,
   CardSkeleton,
   CardUnavailable,
+  EMPTY_DEFAULT,
   type CardEmptyContent,
   type SkeletonShape,
 } from "./frame/states";
@@ -163,8 +164,6 @@ export interface WidgetCardProps {
   children: ReactNode;
   className?: string;
 }
-
-const EMPTY_DEFAULT: CardEmptyContent = { title: "Nothing to show yet" };
 
 /**
  * What the card's state and error come to: what `data-state` says, whether content is on show,

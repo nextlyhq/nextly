@@ -83,6 +83,17 @@ export interface DashboardWidget {
   /** Present for the data archetypes; absent for `text`, `actions`, `custom`. */
   query?: WidgetQuery;
   /**
+   * Set when core builds this card's data on the server from the widget's
+   * declaration: the card is asked for by its id, never by a query, and has none.
+   */
+  serverData?: true;
+  /**
+   * What a declared widget's empty state says and offers in place of the
+   * frame's own, its action already an href and already one this reader may
+   * take (the server withholds one they may not).
+   */
+  declaredEmpty?: { title?: string; action?: { label: string; href: string } };
+  /**
    * What a reader may change about this card, as the widget declared it.
    *
    * The OFFER, not one reader's answer: the stored values live on the
