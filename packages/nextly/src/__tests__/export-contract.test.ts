@@ -1,9 +1,19 @@
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import ts from "typescript";
+import { parseSource } from "@nextlyhq/module-specifiers/parse-source";
 import { describe, expect, it } from "vitest";
+
+import { compile, listedFiles } from "../../../../scripts/tsc-cli.mjs";
 
 import type {
   WidgetArchetype,
@@ -143,62 +153,134 @@ const ENTRY_POINTS: Array<[string, string]> = declaredSubpaths.map(subpath => [
 ]);
 
 /**
- * Every name each published entry point exports, types included, keyed by
- * entry point.
+ * Which of `names` each published entry point exports, types included, keyed by
+ * entry point, as the compiler answers it.
  *
- * Read from the type checker rather than from an import, because an import
- * sees only runtime values and a type-only export is erased before it runs.
- * The program is built with the package's own compiler options, so `@nextly/*`
- * paths and every `export *` chain resolve as they do in the build.
+ * Read from the compiler rather than from an import, because an import sees only
+ * runtime values and a type-only export is erased before it runs. A file per
+ * entry point imports each name with `import type`, which accepts a value or a
+ * type, and the compiler's command line checks them with the package's own
+ * options, so `@nextly/*` paths and every `export *` chain resolve as they do in
+ * the build: "has no exported member" on a line is that name's absence. Any other
+ * error, such as an entry point that did not load, is a question the compiler
+ * could not answer and stops the run rather than reading as an absence.
+ *
+ * The files sit in a directory of their own under the package's `.turbo`, which
+ * git and every scan of the tree ignore, with `rootDir` widened to hold them.
  */
-function compiledProgram(): ts.Program {
-  const configPath = path.join(packageRoot, "tsconfig.json");
-  const config = ts.readConfigFile(configPath, ts.sys.readFile);
-  const parsed = ts.parseJsonConfigFileContent(
-    config.config,
-    ts.sys,
-    packageRoot
-  );
-  return ts.createProgram({
-    rootNames: ENTRY_POINTS.map(([, source]) => source),
-    options: { ...parsed.options, noEmit: true },
-  });
-}
+const ABSENT = new Set(["TS2305", "TS2724", "TS2614"]);
 
-/** The exported symbols of each published entry point, by name. */
-function compiledExports(): Map<string, Map<string, ts.Symbol>> {
-  const program = compiledProgram();
-  const checker = program.getTypeChecker();
-  const exported = new Map<string, Map<string, ts.Symbol>>();
-  for (const [entry, source] of ENTRY_POINTS) {
-    const file = program.getSourceFile(source);
-    const moduleSymbol = file ? checker.getSymbolAtLocation(file) : undefined;
-    exported.set(
-      entry,
-      new Map(
-        (moduleSymbol ? checker.getExportsOfModule(moduleSymbol) : []).map(
-          symbol => {
-            // A re-export is an alias; its documentation is on what it names.
-            const target =
-              symbol.flags & ts.SymbolFlags.Alias
-                ? checker.getAliasedSymbol(symbol)
-                : symbol;
-            return [symbol.getName(), target];
-          }
-        )
-      )
+function exportedAmong(names: readonly string[]): Map<string, Set<string>> {
+  const parent = path.join(packageRoot, ".turbo");
+  mkdirSync(parent, { recursive: true });
+  const scratch = mkdtempSync(path.join(parent, "export-contract-"));
+  try {
+    const probes = ENTRY_POINTS.map(([entry, source], index) => {
+      const file = path.join(scratch, `entry-${index}.ts`);
+      const specifier = source.replace(/\.ts$/, "").replaceAll("\\", "/");
+      writeFileSync(
+        file,
+        [
+          ...names.map(
+            (name, line) =>
+              `import type { ${name} as _${line} } from ${JSON.stringify(specifier)};`
+          ),
+          `export type { ${names.map((_, line) => `_${line}`).join(", ")} };`,
+          "",
+        ].join("\n")
+      );
+      return { entry, file };
+    });
+    const config = path.join(scratch, "tsconfig.json");
+    writeFileSync(
+      config,
+      JSON.stringify({
+        extends: path.join(packageRoot, "tsconfig.json"),
+        compilerOptions: { rootDir: packageRoot },
+        files: probes.map(probe => probe.file),
+        include: [],
+      })
     );
+    const listed = new Set(listedFiles(config));
+    for (const { file } of probes) {
+      expect(listed, `${file} is not in the program`).toContain(
+        file.replaceAll("\\", "/")
+      );
+    }
+
+    const diagnostics = compile(["-p", config], scratch);
+    return new Map(
+      probes.map(({ entry, file }) => {
+        const absent = new Set<string>();
+        for (const d of diagnostics) {
+          if (d.file === undefined) continue;
+          if (path.resolve(scratch, d.file) !== file) continue;
+          const name = names[(d.line ?? 0) - 1];
+          if (ABSENT.has(d.code) && name !== undefined) absent.add(name);
+          else
+            throw new Error(`${entry}: could not ask: ${d.code} ${d.message}`);
+        }
+        return [entry, new Set(names.filter(name => !absent.has(name)))];
+      })
+    );
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
   }
-  return exported;
 }
 
-function compiledExportNames(): Map<string, Set<string>> {
-  return new Map(
-    [...compiledExports()].map(([entry, symbols]) => [
-      entry,
-      new Set(symbols.keys()),
-    ])
+/** The names asked about below, in one compile of the package. */
+const ASKED = [
+  ...RETIRED_ACCOUNT_TYPES,
+  ...RETIRED_ACCOUNT_NAMES,
+  "UserListResponse",
+  "UserListResponseSchema",
+  "defaultSkipAdminApi",
+];
+
+let exportedCache: Map<string, Set<string>> | undefined;
+function exported(): Map<string, Set<string>> {
+  exportedCache ??= exportedAmong(ASKED);
+  return exportedCache;
+}
+
+/** How long the one compile of the package gets, on a slow runner. */
+const COMPILE_TIMEOUT_MS = 180_000;
+
+/**
+ * The leading documentation of the one function or constant `name` declares in
+ * this package's source, read with oxc. More than one declaration of the name
+ * is refused: which one an entry point publishes would then be a guess.
+ */
+function declarationDocs(name: string): string {
+  const found: string[] = [];
+  const declaration = new RegExp(
+    `^export (?:async )?(?:function|const|let) ${name}\\b`,
+    "m"
   );
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.tsx?$/.test(entry.name) && !/\.test\./.test(entry.name)) {
+        const text = readFileSync(full, "utf8");
+        const match = declaration.exec(text);
+        if (!match) continue;
+        const { comments } = parseSource(text, full);
+        const before = comments.filter(
+          comment => comment.type === "Block" && comment.end <= match.index
+        );
+        const nearest = before.at(-1);
+        const between =
+          nearest === undefined ? "" : text.slice(nearest.end, match.index);
+        found.push(
+          nearest !== undefined && between.trim() === "" ? nearest.value : ""
+        );
+      }
+    }
+  };
+  walk(path.join(packageRoot, "src"));
+  expect(found, `declarations of ${name}`).toHaveLength(1);
+  return found[0] ?? "";
 }
 
 describe("published export surface", () => {
@@ -230,37 +312,44 @@ describe("published export surface", () => {
     }
   );
 
-  it("exports no retired linked-account type from any entry point", () => {
-    const compiled = compiledExportNames();
-    const leaked = [...compiled].flatMap(([entry, names]) =>
-      [...RETIRED_ACCOUNT_TYPES, ...RETIRED_ACCOUNT_NAMES]
-        .filter(name => names.has(name))
-        .map(name => `${entry}: ${name}`)
-    );
-    expect(leaked).toEqual([]);
+  it(
+    "exports no retired linked-account type from any entry point",
+    () => {
+      const compiled = exported();
+      const leaked = [...compiled].flatMap(([entry, names]) =>
+        [...RETIRED_ACCOUNT_TYPES, ...RETIRED_ACCOUNT_NAMES]
+          .filter(name => names.has(name))
+          .map(name => `${entry}: ${name}`)
+      );
+      expect(leaked).toEqual([]);
 
-    // The controls. A file the program failed to load, or a re-export chain
-    // the checker did not follow, reads as an entry point exporting nothing,
-    // which passes every absence check. So each entry point must export
-    // something, and the user types and validators that stayed beside the
-    // retired ones must be read through both `export *` hops to the root.
-    expect(compiled.size).toBe(ENTRY_POINTS.length);
-    for (const [entry, names] of compiled) {
-      expect(names.size, `${entry} exports nothing`).toBeGreaterThan(0);
-    }
-    for (const entry of ["nextly", "nextly/schemas"]) {
-      expect(compiled.get(entry)?.has("UserListResponse")).toBe(true);
-      expect(compiled.get(entry)?.has("UserListResponseSchema")).toBe(true);
-    }
-  });
+      // The controls. An entry point the compiler could not load stops the run
+      // in `exportedAmong` rather than reading as one exporting nothing, and
+      // every entry point is asked. The user types and validators that stayed
+      // beside the retired ones must be read through both `export *` hops to
+      // the root, or a chain the compiler did not follow would pass this too.
+      expect(compiled.size).toBe(ENTRY_POINTS.length);
+      for (const entry of ["nextly", "nextly/schemas"]) {
+        expect(compiled.get(entry)?.has("UserListResponse")).toBe(true);
+        expect(compiled.get(entry)?.has("UserListResponseSchema")).toBe(true);
+      }
+    },
+    COMPILE_TIMEOUT_MS
+  );
 
-  it("keeps publishing defaultSkipAdminApi from the root, marked deprecated", () => {
-    // No longer the REST limit's default, and kept for an app that passes it
-    // as `rateLimit.skip` until a later release removes it.
-    const symbol = compiledExports().get("nextly")?.get("defaultSkipAdminApi");
-    expect(symbol, "nextly exports defaultSkipAdminApi").toBeDefined();
-    expect(symbol?.getJsDocTags().map(tag => tag.name)).toContain("deprecated");
-  });
+  it(
+    "keeps publishing defaultSkipAdminApi from the root, marked deprecated",
+    () => {
+      // No longer the REST limit's default, and kept for an app that passes it
+      // as `rateLimit.skip` until a later release removes it.
+      expect(
+        exported().get("nextly")?.has("defaultSkipAdminApi"),
+        "nextly exports defaultSkipAdminApi"
+      ).toBe(true);
+      expect(declarationDocs("defaultSkipAdminApi")).toMatch(/@deprecated\b/);
+    },
+    COMPILE_TIMEOUT_MS
+  );
 
   it("still publishes the user validators beside the retired ones", async () => {
     // The control: an absence check is also satisfied by an entry point that
