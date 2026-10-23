@@ -193,6 +193,10 @@ describe("the Windows and macOS legs", () => {
       "apps/playground/vitest.config.ts",
       "apps/playground/next.config.ts",
       "packages/telemetry/src/environment.ts",
+      "packages/nextly/src/storage/adapters/local-adapter.ts",
+      "packages/nextly/src/shared/lib/generated-output-paths.ts",
+      "packages/nextly/src/plugins/codegen/component-import-map.ts",
+      "packages/nextly/src/domains/widgets/declaration/component-map-check.ts",
     ];
     for (const file of sensitive) expect(running([file]), file).toEqual([file]);
     const neutral = [
@@ -218,6 +222,20 @@ describe("the Windows and macOS legs", () => {
       expect(placement(job), id).toContain("needs.changes.outputs.all-os");
       expect([job.needs].flat(), id).toContain("changes");
     }
+  });
+});
+
+describe("the labels the workflows read", () => {
+  // `labels-sync.yml` creates every label in this file, and GitHub's label API
+  // refuses a description over 100 characters, which fails the whole sync: a
+  // label a workflow reads, such as `ci:all-os`, then never exists to apply.
+  it("each fit GitHub's 100-character description limit", () => {
+    const labels = read(".github/labels.yml");
+    expect(labels.length).toBeGreaterThan(0);
+    const over = labels
+      .filter(label => (label.description ?? "").length > 100)
+      .map(label => `${label.name}: ${label.description.length}`);
+    expect(over).toEqual([]);
   });
 });
 
