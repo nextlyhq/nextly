@@ -34,7 +34,7 @@
  */
 
 /**
- * The extensions TypeScript and tsup follow.
+ * The extensions TypeScript and the bundler follow.
  *
  * `.mts` and `.cts` are here because both tools resolve them. A module written
  * with either extension is a module the bundler follows, so a list omitting

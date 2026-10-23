@@ -1,6 +1,6 @@
 /**
  * The template directories the CLI build copies into the package
- * (tsup.config.ts), so a scaffold can use them offline and in step with the
+ * (tsdown.config.ts), so a scaffold can use them offline and in step with the
  * package versions it installs. Content templates (blog) are downloaded at run
  * time instead. `base` is the app skeleton the app templates build on, not a
  * template anyone selects.

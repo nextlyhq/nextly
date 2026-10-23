@@ -140,14 +140,6 @@ packages/nextly/src/db/migrations/dynamic/*.sql
 # public. Ignored here so a worktree cannot commit one by accident.
 /tasks/
 
-# tsup writes a bundled copy of its config while building and removes it on
-# exit. A watcher killed mid-run leaves one behind, and an untracked build
-# artifact in a package root fails the next lint rather than being ignored.
-tsup.config.bundled_*.mjs
-tsup.config.bundled_*.cjs
-tsup.*.config.bundled_*.mjs
-tsup.*.config.bundled_*.cjs
-
 # Working directory and dumped reports from the nightly Lighthouse run; the run
 # uploads them as an artifact rather than committing them.
 .lighthouseci/

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      // This build compiles Tailwind, which scans source files for class
+      // names, tests and Markdown included. So unlike the shared build inputs,
+      // this hash keeps them: a class used only in a test still lands in the
+      // compiled sheet, and leaving it out would replay a stale sheet.
+      "inputs": ["$TURBO_DEFAULT$", ".env*"]
+    }
+  }
+}

@@ -7,7 +7,7 @@
  * else is `@experimental` and may change in any release.
  *
  * `cn` and the Tailwind preset are deliberately NOT re-exported here: this
- * barrel ships a `"use client"` banner (see tsup.config.ts), because all but a
+ * barrel ships a `"use client"` banner (see tsdown.config.ts), because all but a
  * couple of these modules use hooks, context, forwardRef or Radix and cannot
  * render in a Server Component. Those two contain no React runtime and are
  * published as "@nextlyhq/ui/utils" and "@nextlyhq/ui/tailwind-preset" so
