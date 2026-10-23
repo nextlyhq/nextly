@@ -5,6 +5,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
   type UseQueryOptions,
   type UseMutationResult,
   type UseQueryResult,
@@ -253,6 +254,20 @@ export function useCreateUser(): UseMutationResult<
 }
 
 /**
+ * Whether one of `userIds` may be the signed-in user, whose access only an
+ * edit of themselves can change: an edit of someone else asks nothing again,
+ * since invalidating would cost the admin its answer if that refresh failed.
+ * Unknown until the signed-in user has loaded, and then it may be.
+ */
+function mayBeSignedIn(
+  queryClient: QueryClient,
+  userIds: readonly string[]
+): boolean {
+  const signedIn = queryClient.getQueryData<{ id: string }>(currentUserKey);
+  return signedIn === undefined || userIds.includes(signedIn.id);
+}
+
+/**
  * useUpdateUser - Mutation hook for updating an existing user
  *
  * Updates a user's information and automatically invalidates relevant caches.
@@ -357,8 +372,10 @@ export function useUpdateUser(): UseMutationResult<
     // What the signed-in user may do is asked again only once the change has
     // landed: a failed edit changed nothing, and invalidating would leave the
     // admin without an answer if that refresh then failed too.
-    onSuccess: () => {
-      invalidateCurrentUserAccess(queryClient);
+    onSuccess: (_, { userId }) => {
+      if (mayBeSignedIn(queryClient, [userId])) {
+        invalidateCurrentUserAccess(queryClient);
+      }
     },
     onSettled: (_, __, { userId }) => {
       // Always refetch after mutation (success or error) to ensure cache is up-to-date
@@ -529,7 +546,8 @@ export function useBulkUpdateUsers(): UseBulkMutationReturn<
         },
       },
     }),
-    queryClient
+    queryClient,
+    result => mayBeSignedIn(queryClient, result.succeededIds)
   );
 }
 
@@ -780,6 +798,7 @@ export function useBulkAssignRole(): UseBulkMutationReturn<
         },
       },
     }),
-    queryClient
+    queryClient,
+    result => mayBeSignedIn(queryClient, result.succeededIds)
   );
 }

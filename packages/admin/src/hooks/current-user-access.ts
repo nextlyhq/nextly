@@ -51,17 +51,20 @@ export function invalidateCurrentUserAccess(queryClient: QueryClient): void {
 
 /**
  * A bulk edit that asks again what the user may do once a run has changed
- * anything. The refresh rides on the run itself rather than on a default
+ * anything that can: by default any item that succeeded, or what `changes`
+ * says. The refresh rides on the run itself rather than on a default
  * callback, which a caller's own `onComplete` replaces.
  */
 export function withAccessRefresh<TId, TData, TError, TContext>(
   bulk: UseBulkMutationReturn<TId, TData, TError, TContext>,
-  queryClient: QueryClient
+  queryClient: QueryClient,
+  changes: (result: BulkMutationResult<TData, TError>) => boolean = result =>
+    result.succeeded > 0
 ): UseBulkMutationReturn<TId, TData, TError, TContext> {
   const afterRun = (
     result: BulkMutationResult<TData, TError>
   ): BulkMutationResult<TData, TError> => {
-    if (result.succeeded > 0) invalidateCurrentUserAccess(queryClient);
+    if (changes(result)) invalidateCurrentUserAccess(queryClient);
     return result;
   };
   return {
