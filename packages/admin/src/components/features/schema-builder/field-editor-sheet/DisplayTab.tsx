@@ -8,6 +8,7 @@
 // - Conditional visibility stays as the JSON textarea here; PR E2 will
 //   rebuild it into a visual rule builder.
 import { Button, Label, Switch } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import {
   FIELD_WIDTH_OPTIONS,
@@ -34,7 +35,7 @@ export function DisplayTab({
   siblingFields,
   readOnly = false,
   onChange,
-}: Props) {
+}: Props): JSX.Element {
   const a = field.admin ?? {};
   const setA = (next: Partial<NonNullable<BuilderField["admin"]>>) =>
     onChange({ ...field, admin: { ...a, ...next } });

@@ -216,7 +216,13 @@ interface PluginAdminWidgetBase {
    * the browser hid it. Declaring the type narrower than what boot accepts is
    * what made that reachable.
    */
-  requiredPermission?: PermissionSlug | readonly PermissionSlug[];
+  requiredPermission?:
+    | PermissionSlug
+    | readonly PermissionSlug[]
+    /** @experimental Every entry must hold; each is a slug or an any-of array. */
+    | {
+        readonly allOf: readonly (PermissionSlug | readonly PermissionSlug[])[];
+      };
   title?: string;
   description?: string;
   icon?: string;

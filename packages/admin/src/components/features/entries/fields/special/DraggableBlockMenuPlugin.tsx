@@ -25,6 +25,7 @@ import {
   $isRangeSelection,
   $isRootOrShadowRoot,
 } from "lexical";
+import type { JSX } from "react";
 import { useCallback, useRef, useState } from "react";
 
 import { GripVertical, Plus } from "@admin/components/icons";
@@ -37,7 +38,7 @@ interface DraggableBlockMenuPluginProps {
 export function DraggableBlockMenuPlugin({
   disabled = false,
   anchorElem,
-}: DraggableBlockMenuPluginProps) {
+}: DraggableBlockMenuPluginProps): JSX.Element | null {
   const [editor] = useLexicalComposerContext();
   const menuRef = useRef<HTMLDivElement>(null);
   const targetLineRef = useRef<HTMLDivElement>(null);

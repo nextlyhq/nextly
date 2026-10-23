@@ -1,4 +1,5 @@
 import { Checkbox } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import type { Permission } from "@admin/types/ui/form";
 
@@ -29,7 +30,7 @@ export function PermissionMatrixCell({
   onToggle,
   // Width comes from the table's colgroup; this only handles spacing.
   className = "px-2 py-4 text-center  border-b border-border align-middle",
-}: PermissionMatrixCellProps) {
+}: PermissionMatrixCellProps): JSX.Element {
   // No such permission, as opposed to one that exists and is not granted.
   // The dash is decorative: a screen reader voices "-" as nothing at all, so
   // the distinction has to be carried by text.

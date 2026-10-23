@@ -28,6 +28,7 @@ import {
   toast,
 } from "@nextlyhq/ui";
 import { useState, useCallback, useMemo } from "react";
+import type { JSX } from "react";
 
 import {
   Copy,
@@ -92,7 +93,7 @@ export function ResponseViewer({
   status,
   time,
   size,
-}: ResponseViewerProps) {
+}: ResponseViewerProps): JSX.Element {
   // The text last copied, so the feedback belongs to it rather than to the
   // button. Null means nothing was copied recently.
   const [copied, setCopied] = useState<string | null>(null);

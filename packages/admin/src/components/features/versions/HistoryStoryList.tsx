@@ -12,6 +12,7 @@
  */
 
 import { Info } from "lucide-react";
+import type { JSX } from "react";
 import { useCallback, useMemo, useState } from "react";
 
 import {
@@ -337,7 +338,7 @@ export function HistoryStoryList({
   onRename,
   onClearSelection,
   footer,
-}: HistoryStoryListProps) {
+}: HistoryStoryListProps): JSX.Element {
   const { languageName, partsLabel } = useStoryWords(localized);
   const [filter, setFilter] = useState<HistoryFilter>("everything");
   const [view, changeView] = useHistoryView(

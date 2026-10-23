@@ -13,6 +13,7 @@
 import { Button } from "@nextlyhq/ui";
 import type { UploadFieldConfig } from "nextly/config";
 import { useState, useCallback } from "react";
+import type { JSX } from "react";
 import {
   useController,
   type Control,
@@ -334,7 +335,7 @@ export function UploadInput<TFieldValues extends FieldValues = FieldValues>({
   disabled = false,
   readOnly = false,
   className,
-}: UploadInputProps<TFieldValues>) {
+}: UploadInputProps<TFieldValues>): JSX.Element {
   // Media picker dialog state
   const [isPickerOpen, setIsPickerOpen] = useState(false);
 

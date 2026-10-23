@@ -1,4 +1,5 @@
 import { Checkbox } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { actionLabel } from "@admin/constants/permissions";
 import {
@@ -36,7 +37,7 @@ export function PermissionMatrixHeader({
   onToggleAction,
   isAllSelectedForAction,
   isPartiallySelectedForAction,
-}: PermissionMatrixHeaderProps) {
+}: PermissionMatrixHeaderProps): JSX.Element {
   // Widths come from the table's colgroup, not from here, so the header and
   // body cannot disagree about them.
   const headerClass =

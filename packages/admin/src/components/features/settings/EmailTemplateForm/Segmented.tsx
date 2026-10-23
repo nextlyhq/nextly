@@ -23,7 +23,7 @@ export function Segmented<T extends string>({
   options: SegOption<T>[];
   value: T;
   onChange: (v: T) => void;
-}) {
+}): React.JSX.Element {
   return (
     // The end segments paint their active fill to the outline's edge, so at a
     // nonzero --radius that fill would square off across the rounded corners.

@@ -15,6 +15,7 @@
  * @since 1.0.0
  */
 
+import type { JSX } from "react";
 import { useCallback, useMemo, useState } from "react";
 
 import { autosaveIntervalFrom } from "@admin/components/features/versions/autosave-interval";
@@ -297,7 +298,7 @@ export function EntryForm({
   onViewApi,
   documentActions,
   documentView,
-}: EntryFormProps) {
+}: EntryFormProps): JSX.Element {
   /*
    * Whether the preview pane is open, and when the document last saved.
    *

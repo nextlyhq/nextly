@@ -10,6 +10,7 @@
  * @module components/features/widgets/edit/DashboardAddPanel
  */
 
+import type { JSX } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
@@ -86,7 +87,9 @@ export function useAddPanelState(isEditing: boolean): AddPanelState {
 const NO_WIDGET_FACTS: Readonly<Record<string, never>> = {};
 
 /** The add panel, which exists only while customising. */
-export function DashboardAddPanel(props: DashboardAddPanelProps) {
+export function DashboardAddPanel(
+  props: DashboardAddPanelProps
+): JSX.Element | null {
   return props.editor.isEditing ? <CustomizingAddPanel {...props} /> : null;
 }
 

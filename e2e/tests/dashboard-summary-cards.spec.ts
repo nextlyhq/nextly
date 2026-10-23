@@ -1,0 +1,99 @@
+/**
+ * The dashboard's Team, Content, Create and Upcoming releases cards, in a
+ * browser: each draws from its own answer and offers the way on that its name
+ * promises.
+ *
+ * - Team draws the number of people and links to Users.
+ * - Content draws a tile per collection, each linking to its list.
+ * - Create draws its shortcuts.
+ * - Upcoming releases links to Releases.
+ *
+ * The cards are placed through the layout write first, so the test does not
+ * depend on which conditional cards this run's other specs left offered; the
+ * suite's user is the first account, a super-admin, whom every gate admits.
+ *
+ * @module tests/dashboard-summary-cards.spec
+ */
+import { expect, type Page } from "@playwright/test";
+
+import { test } from "./support/test";
+import { gotoAdmin, type Theme } from "./support/admin";
+import { expectNoAxeViolations } from "./support/axe";
+
+const CARDS = [
+  "core/team",
+  "core/collections",
+  "core/quick-create",
+  "core/upcoming-releases",
+] as const;
+
+interface Layout {
+  version: number;
+  scope: string;
+  widgets: Record<string, unknown>;
+  placements: Array<{
+    id: string;
+    widgetId: string;
+    width: string;
+    removed?: boolean;
+  }>;
+}
+
+/** Place each of the four cards, full width and not removed, in the saved layout. */
+async function placeCards(page: Page): Promise<void> {
+  const read = await page.request.get("/admin/api/dashboard/layout");
+  const layout = (await read.json()) as Layout;
+  for (const id of CARDS) {
+    if (!(id in layout.widgets)) {
+      throw new Error(`${id} is not visible to this reader`);
+    }
+  }
+  const others = layout.placements.filter(
+    placement => !CARDS.includes(placement.widgetId as (typeof CARDS)[number])
+  );
+  const placements = [
+    ...CARDS.map(widgetId => ({
+      id: `e2e-${widgetId.replace("/", "-")}`,
+      widgetId,
+      width: "full",
+      removed: false,
+    })),
+    ...others,
+  ];
+  const write = await page.request.put("/admin/api/dashboard/layout", {
+    data: { placements, version: layout.version, scope: layout.scope },
+  });
+  expect(write.ok()).toBe(true);
+}
+
+const cell = (page: Page, id: string) => page.getByTestId(`widget-cell-${id}`);
+
+for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
+  test(`draws Team, Content, Create and Upcoming releases with their links (${theme})`, async ({
+    page,
+  }) => {
+    await gotoAdmin(page, "/");
+    await placeCards(page);
+    await gotoAdmin(page, "/", theme);
+
+    const team = cell(page, "core/team");
+    await expect(team.getByText("Users").first()).toBeVisible();
+    await expect(team.getByRole("link", { name: "All users" })).toHaveAttribute(
+      "href",
+      /\/admin\/users$/
+    );
+
+    const content = cell(page, "core/collections");
+    // At least one collection tile, each a link to its list.
+    await expect(content.getByRole("link").first()).toBeVisible();
+
+    await expect(cell(page, "core/quick-create")).toBeVisible();
+
+    const releases = cell(page, "core/upcoming-releases");
+    await expect(
+      releases.getByRole("link", { name: "All releases" })
+    ).toHaveAttribute("href", /\/admin\/releases$/);
+
+    await expectNoAxeViolations(page);
+  });
+}

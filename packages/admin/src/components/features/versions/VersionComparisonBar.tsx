@@ -12,6 +12,7 @@
  */
 
 import { ArrowLeft, History } from "lucide-react";
+import type { JSX } from "react";
 
 import { Button } from "@admin/components/ui";
 import { formatDateTime } from "@admin/lib/dates/format";
@@ -156,7 +157,7 @@ export function VersionComparisonBar({
   onOpenComparison,
   onCompareCurrent,
   layoutToggle,
-}: VersionComparisonBarProps) {
+}: VersionComparisonBarProps): JSX.Element {
   const changed = changes.kind === "ready" ? changes.changed : 0;
   return (
     <section

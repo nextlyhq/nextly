@@ -24,7 +24,7 @@
 
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetComponentProps } from "nextly/widget-result";
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import type {
@@ -294,7 +294,7 @@ export function WidgetRenderer({
   updatedAt = null,
   isFetching = false,
   answerTier,
-}: WidgetRendererProps) {
+}: WidgetRendererProps): JSX.Element {
   const shared = sharedCardProps(definition, slot, placement, {
     headerAction,
     quick,

@@ -1,6 +1,7 @@
 "use client";
 
 import { Badge, Button, Textarea } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 // ============================================================
 // Rail: Data tab (sample data + variable check)
@@ -18,7 +19,7 @@ export function DataRail({
   onReset: () => void;
   sampleError: string | null;
   unknownVariables: string[];
-}) {
+}): JSX.Element {
   return (
     <div className="space-y-5">
       <div>

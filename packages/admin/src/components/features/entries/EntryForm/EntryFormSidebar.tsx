@@ -1,5 +1,7 @@
 "use client";
 
+import type { JSX } from "react";
+
 import { DocumentPanel } from "./panels";
 import type { EntryFormMode, EntryData } from "./useEntryForm";
 
@@ -38,7 +40,7 @@ export function EntryFormSidebar({
   onLocaleChange,
   actionsDisabled = false,
   isDirty = false,
-}: EntryFormSidebarProps) {
+}: EntryFormSidebarProps): JSX.Element | null {
   if (hidden) return null;
 
   return (

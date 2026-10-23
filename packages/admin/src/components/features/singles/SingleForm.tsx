@@ -456,7 +456,7 @@ export function SingleForm({
   className,
   documentActions,
   documentView,
-}: SingleFormProps) {
+}: SingleFormProps): React.JSX.Element {
   // Generate Zod schema from field configurations. Singles render title/slug
   // read-only from config, so relax their required rule — submitting must not
   // error when they aren't user-entered.

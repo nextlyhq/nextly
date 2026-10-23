@@ -14,6 +14,8 @@
  * @module components/features/widgets/charts/over-time-chart
  */
 
+import type { JSX } from "react";
+
 import { ChartFrame, type ChartRow } from "../archetypes/chart-frame";
 import {
   linePath,
@@ -88,7 +90,7 @@ export function OverTimeChart({
   intervals,
   series: given,
   labelHeading = "Interval",
-}: OverTimeChartProps) {
+}: OverTimeChartProps): JSX.Element {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
   // One range for every series, so a point is drawn at its interval whatever else its series

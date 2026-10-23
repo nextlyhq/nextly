@@ -7,7 +7,9 @@
 // The `title` attribute is a portable tooltip (same pattern the width badge in
 // SortableRow uses); a richer Radix tooltip can replace it later.
 
-export function FieldSourceBadge({ owner }: { owner?: string }) {
+import type { JSX } from "react";
+
+export function FieldSourceBadge({ owner }: { owner?: string }): JSX.Element {
   // "@acme/plugin-example" -> "plugin-example" for a compact label.
   const short = owner?.split("/").pop() ?? owner ?? "plugin";
   return (

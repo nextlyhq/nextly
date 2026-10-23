@@ -4,10 +4,11 @@
 // code-first locked collections always have fields and there's no add
 // affordance to offer.
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 type Props = { onAdd: () => void; readOnly?: boolean };
 
-export function EmptyState({ onAdd, readOnly = false }: Props) {
+export function EmptyState({ onAdd, readOnly = false }: Props): JSX.Element {
   if (readOnly) {
     return (
       <div className="border border-dashed border-border rounded-md p-8 text-center text-sm text-muted-foreground">

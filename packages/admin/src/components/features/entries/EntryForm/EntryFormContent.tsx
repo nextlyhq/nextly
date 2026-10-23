@@ -11,6 +11,7 @@
 
 import { Card, CardContent } from "@nextlyhq/ui";
 import type { FieldConfig } from "nextly/config";
+import type { JSX } from "react";
 
 import { packFieldsIntoRows } from "@admin/lib/forms/pack-fields-into-rows";
 import { cn } from "@admin/lib/utils";
@@ -80,7 +81,7 @@ export function EntryFormContent({
   withCard = false,
   className,
   mode,
-}: EntryFormContentProps) {
+}: EntryFormContentProps): JSX.Element {
   // Group fields by row (Q-D4=A: smart auto-pack widths). Width-packing rules
   // live in packFieldsIntoRows; FieldRow is the flex container.
   const rows = packFieldsIntoRows(fields);

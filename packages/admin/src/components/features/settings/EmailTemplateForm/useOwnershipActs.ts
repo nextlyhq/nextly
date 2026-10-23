@@ -6,6 +6,7 @@
  * duplicate or delete it. Each act's confirmation is one of the workbench's
  * dialogs, and which one is open is held here too.
  */
+import type { SetStateAction, Dispatch } from "react";
 import { useState } from "react";
 
 import { isDeletable } from "@admin/components/features/email-hub/messages/messages-model";
@@ -133,7 +134,23 @@ export function useOwnershipActs({
   isDirty: boolean;
   /** Where the workbench returns once its email is deleted. */
   listHref: string;
-}) {
+}): {
+  dialog: WorkbenchDialog | null;
+  setDialog: Dispatch<SetStateAction<WorkbenchDialog | null>>;
+  owner: string;
+  menu: WorkbenchMenu;
+  undoNote: UndoNote | null;
+  startAct: (act: SavedAct) => void;
+  /** After discarding unsaved edits: on to the act they were asked for. */
+  continueAfterUnsaved: () => void;
+  confirmOverride: () => void;
+  confirmReset: () => void;
+  confirmDelete: () => void;
+  onReviewApplied: (undo: OwnerUpdateUndo) => void;
+  isOverriding: boolean;
+  isResetting: boolean;
+  isDeleting: boolean;
+} {
   const [dialog, setDialog] = useState<WorkbenchDialog | null>(null);
   const [undoable, setUndoable] = useState<Undoable | null>(null);
   // The act the unsaved-edits question was asked for, to continue to.
@@ -146,7 +163,7 @@ export function useOwnershipActs({
   const remove = useDeleteEmailTemplate();
   const owner = template ? ownerName(template) : "";
 
-  const confirmOverride = () => {
+  const confirmOverride = (): void => {
     if (!template) return;
     override.mutate(
       { id: template.id },
@@ -162,7 +179,7 @@ export function useOwnershipActs({
     );
   };
 
-  const confirmReset = () => {
+  const confirmReset = (): void => {
     if (!template) return;
     const version = versionOf(template);
     const details = {
@@ -184,7 +201,7 @@ export function useOwnershipActs({
     });
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = (): void => {
     if (!template) return;
     remove.mutate(template.id, {
       onSuccess: () => {
@@ -202,7 +219,7 @@ export function useOwnershipActs({
    * the form with what the server returns, so unsaved edits (a setting, say)
    * are asked about first rather than silently dropped.
    */
-  const startAct = (act: SavedAct) => {
+  const startAct = (act: SavedAct): void => {
     setAfterUnsaved(act);
     setDialog(isDirty ? "unsaved" : act);
   };
@@ -240,11 +257,11 @@ export function useOwnershipActs({
     ),
     startAct,
     /** After discarding unsaved edits: on to the act they were asked for. */
-    continueAfterUnsaved: () => setDialog(afterUnsaved),
+    continueAfterUnsaved: (): void => setDialog(afterUnsaved),
     confirmOverride,
     confirmReset,
     confirmDelete,
-    onReviewApplied: (undo: OwnerUpdateUndo) =>
+    onReviewApplied: (undo: OwnerUpdateUndo): void =>
       setUndoable({ kind: "review", undo }),
     isOverriding: override.isPending,
     isResetting: reset.isPending,

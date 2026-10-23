@@ -8,6 +8,7 @@
  * applied review or reset undone until the person leaves.
  */
 import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import {
   KEPT_HELP,
@@ -41,7 +42,7 @@ export function OwnershipNotices({
   onOverride: () => void;
   onReview: () => void;
   onReset: () => void;
-}) {
+}): JSX.Element | null {
   if (!record) return null;
   const owner = ownerName(record);
 

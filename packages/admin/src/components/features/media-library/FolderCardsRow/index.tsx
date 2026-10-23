@@ -20,6 +20,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import {
   Folder as FolderIconComponent,
@@ -53,7 +54,7 @@ export function FolderCardsRow({
   onDeleteFolder,
   openMenuId,
   onOpenMenuChange,
-}: FolderCardsRowProps) {
+}: FolderCardsRowProps): JSX.Element | null {
   if (folders.length === 0) return null;
 
   return (

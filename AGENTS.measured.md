@@ -22,7 +22,7 @@ adapter-drizzle adapter-mysql adapter-postgres adapter-sqlite admin admin-css bl
 PR scopes accepted by the title check (the enforced list; commitlint checks format only, not scope membership)
 
 ```
-$ sed -n '/scopes: |/,/requireScope/p' .github/workflows/pr-title.yml | sed '1d;$d' | grep -vE '^ *$' | awk '/^ *[a-z0-9-]+ *$/{gsub(/ +/,"");print;next}{exit 1}' | tr '\n' ' '   # at d05a3a7aa-dirty
+$ sed -n '/scopes: |/,/requireScope/p' .github/workflows/small-checks.yml | sed '1d;$d' | grep -vE '^ *$' | awk '/^ *[a-z0-9-]+ *$/{gsub(/ +/,"");print;next}{exit 1}' | tr '\n' ' '   # at d05a3a7aa-dirty
 nextly admin admin-css client ui adapter-postgres adapter-mysql adapter-sqlite adapter-drizzle storage-s3 storage-vercel-blob storage-uploadthing blocks-engine blocks-react builder plugin-accounts plugin-commerce plugin-form-builder plugin-mcp plugin-page-builder plugin-seo plugin-sdk create-nextly-app eslint-config eslint-plugin module-specifiers prettier-config tsconfig telemetry playground root ci docs deps release
 ```
 
