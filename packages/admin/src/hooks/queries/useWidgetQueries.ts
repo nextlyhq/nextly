@@ -682,6 +682,7 @@ function asResult(value: unknown): WidgetResult | undefined {
     fields?: unknown;
     buckets?: unknown;
     truncated?: unknown;
+    asOf?: unknown;
     field?: unknown;
     points?: unknown;
     interval?: unknown;

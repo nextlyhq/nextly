@@ -38,7 +38,7 @@ interface TestCollection {
   name: string;
   label?: string;
   labels?: { singular: string; plural: string };
-  admin?: { hidden?: boolean };
+  admin?: { hidden?: boolean; disableCreate?: boolean };
 }
 
 function collection(
@@ -110,6 +110,28 @@ describe("the quick-create card", () => {
 
     expect(screen.getByTestId("quick-create-posts")).toBeInTheDocument();
     expect(screen.queryByTestId("quick-create-nx_pb_class_usage")).toBeNull();
+  });
+
+  it("offers no shortcut for a collection only a machine creates in, even one the reader may", () => {
+    // Form submissions declare `admin.disableCreate`: their list offers no "New", so neither
+    // does this card. The reader holds the create grant, so only that flag removes it.
+    mockCollections.mockReturnValue(
+      listing([
+        collection({ name: "posts" }),
+        collection({
+          name: "form-submissions",
+          admin: { disableCreate: true },
+        }),
+      ])
+    );
+    mockPermissions.mockReturnValue(
+      granting(["create-posts", "create-form-submissions"])
+    );
+
+    render(<QuickCreate />);
+
+    expect(screen.getByTestId("quick-create-posts")).toBeInTheDocument();
+    expect(screen.queryByTestId("quick-create-form-submissions")).toBeNull();
   });
 
   it("names the entity the way its form does", () => {
