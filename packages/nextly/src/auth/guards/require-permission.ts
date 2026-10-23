@@ -29,9 +29,15 @@ export function createErrorResponse(
  * These guards put what a caller should read in `message` and the HTTP
  * reason in `error` (`"Missing API key"`, `"Unauthorized"`), the other way
  * round from the middleware, so `message` is the one answered.
+ *
+ * Pass the `request` to answer with its own request id (`x-request-id`, or a
+ * proxy's); without it a new id is made.
  */
-export function createJsonErrorResponse(errResp: ErrorResponse): Response {
-  return answerRefusal({ ...errResp, error: errResp.message });
+export function createJsonErrorResponse(
+  errResp: ErrorResponse,
+  request?: Request
+): Response {
+  return answerRefusal({ ...errResp, error: errResp.message }, request);
 }
 
 /**

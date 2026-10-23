@@ -37,5 +37,5 @@ A request the REST route gate, the media routes, the admin's workspace and sideb
 
 - A client that read a refusal's `data.error`, `data.message` or `data.code` reads `error.message` and `error.code`.
 - The REST rate limit's and the sign-in rate limit's code is now `RATE_LIMITED`, the code every other limit answers with; it was `RATE_LIMIT_EXCEEDED`. `error.retryAfter` is now `error.data.retryAfterSeconds`.
-- `createJsonErrorResponse` from `auth/guards` returns the same body, so a route built on `requirePermission` or `requireApiKey` answers as the rest of the API does.
+- `createJsonErrorResponse` from `auth/guards` returns the same body, so a route built on `requirePermission` or `requireApiKey` answers as the rest of the API does. Pass the request as its second argument to answer with the request's own id; without it a new id is made.
 - A public media URL that serves no file answers its 404 with the same body rather than an empty one.

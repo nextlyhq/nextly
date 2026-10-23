@@ -83,6 +83,26 @@ describe("a refusal is answered in the one error body", () => {
     expect(JSON.stringify(body)).not.toContain("X-RateLimit-Limit");
   });
 
+  it("with the request's own id where the request is passed", async () => {
+    const request = new Request("http://localhost/api/x", {
+      headers: { "x-request-id": "req_upstream" },
+    });
+    const fromGate = createJsonErrorResponse(
+      createErrorResponse(403, "Forbidden", "No."),
+      request
+    );
+    const fromGuard = guardResponse(
+      guardRefusal(401, "Missing API key", "Unauthorized"),
+      request
+    );
+    for (const res of [fromGate, fromGuard]) {
+      expect(res.headers.get("x-request-id")).toBe("req_upstream");
+      expect(await bodyOf(res)).toMatchObject({
+        error: { requestId: "req_upstream" },
+      });
+    }
+  });
+
   it("from the exported guard helpers too", async () => {
     // As `requireApiKey` builds it: what the caller should read, then the
     // HTTP reason.
