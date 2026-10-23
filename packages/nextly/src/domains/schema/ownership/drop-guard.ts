@@ -606,6 +606,20 @@ const NAME_RESOLUTION_STATEMENTS: Partial<
 };
 
 /**
+ * Statements, by the word that opens them, that may put a relation under a
+ * name they spell: a CREATE of any kind, `SELECT ... INTO` (also after
+ * `WITH`), and MySQL's `RENAME TABLE`. An `ALTER ... RENAME` does too.
+ */
+const MAY_PLACE_A_NAME = new Set(["CREATE", "SELECT", "WITH", "RENAME"]);
+
+/**
+ * Statements, by the word that opens them, that run code which may put a
+ * relation under any name, spelled or not: a block, a procedure call, a
+ * prepared or dynamic statement, an import of foreign tables.
+ */
+const MAY_PLACE_ANY_NAME = new Set(["DO", "CALL", "EXECUTE", "IMPORT"]);
+
+/**
  * Words that, before `SCHEMA`, make or rename a PostgreSQL schema — which
  * may then be the `$user` schema the search path starts with.
  */
@@ -883,6 +897,14 @@ class DropReader {
   private readonly createdAnywhere = new Set<string>();
   /** Names a statement vacated while naming their schema. */
   private readonly vacatedQualified = new Set<string>();
+  /** The statements read so far, counted as `read` is called. */
+  private reads = 0;
+  /** The statement that last vacated each name, by its count (`reads`). */
+  private readonly vacatedIn = new Map<string, number>();
+  /** Statements that may have put a relation under each name (`notePlacing`). */
+  private readonly placingIn = new Map<string, number[]>();
+  /** The first statement that may have put a relation under any name. */
+  private placingAnyIn: number | undefined;
   /**
    * Whether the list holds a statement that may change which table an
    * unqualified name reaches (`changesNameResolution`). Once it does, no
@@ -977,8 +999,37 @@ class DropReader {
 
   read(statement: string): void {
     this.nextStatement();
+    this.reads += 1;
     const tokens = new Lexer(this.dialect, statement).tokens(statement);
+    this.notePlacing(tokens);
     new StatementWalk(this, tokens, statement).run();
+  }
+
+  /**
+   * Records the names a statement may put a relation under: each name a
+   * `MAY_PLACE_A_NAME` statement or an `ALTER ... RENAME` spells, and every
+   * name for a `MAY_PLACE_ANY_NAME` one. A later `CREATE TABLE IF NOT
+   * EXISTS` may find such a relation standing (`fillIfVacated`).
+   */
+  private notePlacing(tokens: readonly Token[]): void {
+    const first = tokens.find(token => token.kind === "word");
+    const opener = first?.kind === "word" ? first.upper : "";
+    if (MAY_PLACE_ANY_NAME.has(opener)) {
+      this.placingAnyIn ??= this.reads;
+      return;
+    }
+    const renames =
+      opener === "ALTER" && tokens.some(token => isWord(token, "RENAME"));
+    if (!MAY_PLACE_A_NAME.has(opener) && !renames) return;
+    for (const token of tokens) {
+      const written =
+        token.kind === "escaped-name" ? undefined : writtenName(token);
+      if (!written) continue;
+      const name = canonicalTableName(storedNameKey(written, this.dialect));
+      const placing = this.placingIn.get(name);
+      if (placing === undefined) this.placingIn.set(name, [this.reads]);
+      else placing.push(this.reads);
+    }
   }
 
   /**
@@ -1020,6 +1071,7 @@ class DropReader {
    */
   vacate(name: string, local = true): void {
     this.vacated.set(name, this.statementIndex);
+    this.vacatedIn.set(name, this.reads);
     if (!local) this.vacatedQualified.add(name);
   }
 
@@ -1046,13 +1098,24 @@ class DropReader {
    * vacated the name, named a schema: an unqualified name may then reach
    * another schema than the one emptied, where a table may stand. Nor once a
    * statement may have changed which schema an unqualified name reaches
-   * (`resolutionMayChange`). Credited with nothing else (`create`).
+   * (`resolutionMayChange`). Nor when an earlier statement other than the
+   * one that vacated the name may have put a relation under it
+   * (`notePlacing`), or the name was vacated by an earlier list of the run,
+   * whose statements this reader has not read. Credited with nothing else
+   * (`create`).
    */
   fillIfVacated(table: TableRef): void {
     if (!table.local) return;
     const at = this.vacated.get(table.name);
     if (at === undefined || at >= this.statementIndex) return;
+    const emptiedIn = this.vacatedIn.get(table.name);
+    if (emptiedIn === undefined) return;
+    const placedEarlier = (this.placingIn.get(table.name) ?? []).some(
+      read => read < this.reads && read !== emptiedIn
+    );
     if (
+      placedEarlier ||
+      (this.placingAnyIn !== undefined && this.placingAnyIn < this.reads) ||
       this.createdAnywhere.has(table.name) ||
       this.vacatedQualified.has(table.name) ||
       this.resolutionMayChange

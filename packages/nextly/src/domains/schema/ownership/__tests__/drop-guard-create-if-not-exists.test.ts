@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SupportedDialect } from "../../../../database/schema-registry";
 import { NextlyError } from "../../../../errors/nextly-error";
-import { assertNoForeignDrops } from "../drop-guard";
+import { assertNoForeignDrops, liveTablesAfter } from "../drop-guard";
 import type { OwnerRecord } from "../owner-registry";
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
@@ -37,10 +37,14 @@ const owners = new Map<string, OwnerRecord>([
   ],
 ]);
 
+/** The tables the database holds before any list runs. */
+const LIVE = new Set([...owners.keys(), "legacy_orders"]);
+
 function guard(
   statements: string[],
   stream: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  liveTables: ReturnType<typeof liveTablesAfter> | Set<string> = LIVE
 ): void {
   assertNoForeignDrops({
     statements,
@@ -49,7 +53,7 @@ function guard(
     elementOwners: [...owners.values()],
     dialect,
     source: "0009_under_test",
-    liveTables: new Set([...owners.keys(), "legacy_orders"]),
+    liveTables,
   });
 }
 
@@ -90,6 +94,21 @@ describe.each(DIALECTS)(
             "ALTER TABLE fx__notes ADD COLUMN note INT",
           ],
           "plugin:fx",
+          dialect
+        )
+      ).not.toThrow();
+    });
+
+    it("fills a name after an earlier statement only read or copied its rows", () => {
+      expect(() =>
+        guard(
+          [
+            "INSERT INTO fx__notes (id) SELECT id FROM legacy_orders",
+            "DROP TABLE legacy_orders",
+            "CREATE TABLE IF NOT EXISTS legacy_orders (id INT)",
+            "ALTER TABLE legacy_orders ADD COLUMN note INT",
+          ],
+          "app",
           dialect
         )
       ).not.toThrow();
@@ -188,6 +207,63 @@ describe("CREATE TABLE IF NOT EXISTS where a table of the name may stand, on pos
             ],
             "app",
             "postgresql"
+          )
+        )
+      ).toMatch(vacated);
+    }
+  );
+
+  it.each([
+    [
+      "a conditional temporary create",
+      ["CREATE TEMP TABLE IF NOT EXISTS legacy_orders (id INT)"],
+    ],
+    ["a SELECT INTO", ["SELECT 1 AS id INTO TEMP legacy_orders"]],
+    [
+      "a rename onto the name",
+      [
+        "CREATE TEMP TABLE scratch (id INT)",
+        "ALTER TABLE scratch RENAME TO legacy_orders",
+      ],
+    ],
+    [
+      "a routine that may create it",
+      ["DO $$ BEGIN CREATE TEMP TABLE legacy_orders (id int); END $$"],
+    ],
+  ])(
+    "fills nothing after %s of the name earlier in the list",
+    (_form, earlier) => {
+      expect(
+        refusal(() =>
+          guard(
+            [
+              ...earlier,
+              "DROP TABLE legacy_orders",
+              "CREATE TABLE IF NOT EXISTS legacy_orders (id INT)",
+              "ALTER TABLE legacy_orders ADD COLUMN note INT",
+            ],
+            "app",
+            "postgresql"
+          )
+        )
+      ).toMatch(vacated);
+    }
+  );
+
+  it.each(["DROP TABLE public.legacy_orders", "DROP TABLE legacy_orders"])(
+    "fills nothing for a name an earlier rollback target vacated (%s)",
+    earlier => {
+      const after = liveTablesAfter(LIVE, [earlier], "postgresql");
+      expect(
+        refusal(() =>
+          guard(
+            [
+              "CREATE TABLE IF NOT EXISTS legacy_orders (id INT)",
+              "ALTER TABLE legacy_orders ADD COLUMN note INT",
+            ],
+            "app",
+            "postgresql",
+            after
           )
         )
       ).toMatch(vacated);
