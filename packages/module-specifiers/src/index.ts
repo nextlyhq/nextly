@@ -195,11 +195,18 @@ function boundNames(pattern: BindingPattern | ParamPattern | null): string[] {
  * `import("...")` inside a tag's `{type}` expression.
  *
  * The parser does not build a tree for JSDoc, so this reads the comment's own
- * grammar: a tag type is the brace-balanced `{...}` after a tag, and an
- * `@import` tag runs to the next tag, which starts after whitespace. An `@`
- * inside the tag, as in a scoped package's quoted name, does not end it. Prose
- * in the description is not a type expression and is not read, which keeps a
- * sentence that mentions `import()` from becoming a dependency.
+ * grammar: a tag type is the brace-balanced `{...}` after a tag, its quoted
+ * strings skipped whole, and an `@import` tag runs to the next tag, which starts
+ * after whitespace. An `@` inside the tag, as in a scoped package's quoted name,
+ * does not end it. A specifier is the value its quoted literal spells, escapes
+ * decoded. Prose in the description is not a type expression and is not read,
+ * which keeps a sentence that mentions `import()` from becoming a dependency.
+ *
+ * Every JSDoc block is read, including one the compiler would not attach
+ * as documentation, such as one trailing a statement. That over-reports, and
+ * deliberately: a check reading these fails loudly on valid but odd source,
+ * which is the safe direction for a boundary, where matching the compiler's
+ * attachment rules exactly would take its own JSDoc parser.
  */
 function jsDocRefs(comment: Comment): PlacedRef[] {
   const found: PlacedRef[] = [];
@@ -208,9 +215,11 @@ function jsDocRefs(comment: Comment): PlacedRef[] {
   const at = (index: number): number => comment.start + 2 + index;
 
   for (const tag of text.matchAll(/@import\b([\s\S]*?)(?=\s@[A-Za-z]|$)/g)) {
-    const from = /\bfrom\s*(["'])([^"'\n]*)\1/.exec(tag[1] ?? "");
+    const from = new RegExp(String.raw`\bfrom\s*(${QUOTED})`).exec(
+      tag[1] ?? ""
+    );
     found.push({
-      specifier: from?.[2] ?? UNRESOLVABLE_SPECIFIER,
+      specifier: decodedSpecifier(from?.[1]),
       typeOnly: true,
       start: at(tag.index),
     });
@@ -218,24 +227,69 @@ function jsDocRefs(comment: Comment): PlacedRef[] {
 
   for (const tag of text.matchAll(/@[A-Za-z]+\s*\{/g)) {
     const open = tag.index + tag[0].length - 1;
-    let depth = 0;
-    let close = open;
-    for (; close < text.length; close++) {
-      if (text[close] === "{") depth++;
-      else if (text[close] === "}" && --depth === 0) break;
-    }
-    const typeExpression = text.slice(open + 1, close);
+    const typeExpression = text.slice(open + 1, closingBrace(text, open));
     for (const call of typeExpression.matchAll(
-      /\bimport\s*\(\s*(?:(["'`])([^"'`]*)\1\s*\))?/g
+      new RegExp(String.raw`\bimport\s*\(\s*(?:(${QUOTED})\s*\))?`, "g")
     )) {
       found.push({
-        specifier: call[2] ?? UNRESOLVABLE_SPECIFIER,
+        specifier: decodedSpecifier(call[1]),
         typeOnly: true,
         start: at(open + 1 + call.index),
       });
     }
   }
   return found;
+}
+
+/** A quoted literal in JavaScript's syntax: either quote or a backtick, escapes included. */
+const QUOTED = String.raw`(["'\`])(?:\\[\s\S]|(?!\2)[^\\\n])*\2`;
+
+/**
+ * The string a quoted literal spells, decoded as JavaScript reads it, so
+ * `"p\u0067"` is `pg`; unresolvable for no literal or one that is not valid.
+ */
+function decodedSpecifier(quoted: string | undefined): string {
+  if (quoted === undefined) return UNRESOLVABLE_SPECIFIER;
+  try {
+    const [statement] = parseSource(`void ${quoted};`, "literal.js").program
+      .body;
+    const value =
+      statement?.type === "ExpressionStatement" &&
+      statement.expression.type === "UnaryExpression"
+        ? literalText(statement.expression.argument)
+        : null;
+    return value ?? UNRESOLVABLE_SPECIFIER;
+  } catch {
+    return UNRESOLVABLE_SPECIFIER;
+  }
+}
+
+/**
+ * Where the brace-balanced expression opened at `open` closes, or the end of
+ * `text`. A quoted string is skipped whole: a brace inside it is a character.
+ */
+function closingBrace(text: string, open: number): number {
+  let depth = 0;
+  for (let index = open; index < text.length; index++) {
+    const char = text[index];
+    if (char === '"' || char === "'" || char === "`") {
+      index = endOfQuoted(text, index);
+    } else if (char === "{") {
+      depth++;
+    } else if (char === "}" && --depth === 0) {
+      return index;
+    }
+  }
+  return text.length;
+}
+
+/** The index of the quote that closes the string opened at `start`, escapes skipped. */
+function endOfQuoted(text: string, start: number): number {
+  for (let index = start + 1; index < text.length; index++) {
+    if (text[index] === "\\") index++;
+    else if (text[index] === text[start]) return index;
+  }
+  return text.length;
 }
 
 /**

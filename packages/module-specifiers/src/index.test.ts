@@ -78,6 +78,22 @@ describe("the forms this reader claims to see", () => {
     expect(read2).toContain("other");
   });
 
+  it("reads an escaped JSDoc specifier as the string it spells", () => {
+    // `p\u0067` is `pg` to the compiler; the raw text would name no package.
+    expect(read('/** @import { T } from "p\\u0067" */', "module.js")).toEqual([
+      "pg",
+    ]);
+    expect(
+      read('/** @typedef {import("p\\u0067").T} T */', "module.js")
+    ).toEqual(["pg"]);
+  });
+
+  it("reads past a quoted brace inside a JSDoc type, which is a character, not its end", () => {
+    expect(
+      read('/** @type {"}" | import("forbidden").T} */', "module.js")
+    ).toContain("forbidden");
+  });
+
   it("sees an import type inside a JSDoc typedef, which JavaScript files use", () => {
     expect(read('/** @typedef {import("pkg").T} T */', "module.js")).toContain(
       "pkg"
