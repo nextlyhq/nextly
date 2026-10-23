@@ -140,7 +140,7 @@ describe("a rule's answer, at the collection gate", () => {
     expect(named).toHaveLength(2);
     expect(named[0]).toContain("answered null, so a visitor is now refused");
     expect(named[1]).toContain(
-      'answered string "yes", so a signed-in user is now refused'
+      "answered a string, so a signed-in user is now refused"
     );
   });
 });
