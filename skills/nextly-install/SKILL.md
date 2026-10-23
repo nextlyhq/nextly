@@ -27,7 +27,7 @@ Checked against `nextly` 0.0.2-alpha.67 with Next.js 16.4. Run
   Next.js 14 the generator leaves the Next config alone and prints the
   `experimental` block to add instead (`serverComponentsExternalPackages` and
   `instrumentationHook`).
-- Node.js `^20.19.0 || ^22.12.0 || >=24.0.0`. Node 23 is not supported.
+- Node.js `^22.12.0 || >=24.0.0`. Node 20 and Node 23 are not supported.
 - A clean git working tree, so every change below is visible in one diff.
 
 ## 1. Run the generator in the project root

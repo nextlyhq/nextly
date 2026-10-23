@@ -244,7 +244,7 @@
     "dev": "tsdown --watch",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
-    "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
+    "check-types": "tsc --noEmit -p tsconfig.tests.json",
     "clean": "rimraf dist",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
@@ -255,7 +255,7 @@
     "db:seed:all": "tsx scripts/seed-all.ts"
   },
   "engines": {
-    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+    "node": "^22.12.0 || >=24.0.0"
   },
   "devDependencies": {
     "@nextlyhq/adapter-mysql": "workspace:*",
