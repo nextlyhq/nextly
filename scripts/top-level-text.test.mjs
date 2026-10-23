@@ -75,6 +75,15 @@ describe("topLevelOnly", () => {
     expect(kept("const half = total / 2;\nconst b = { c: 1 } / 1;")).toBe(
       "const half = total / 2; const b = { } / 1;"
     );
+    // After a member named like a keyword, or a non-null `!`, a slash looks
+    // like one that opens an expression, but none closes on its line, so it
+    // divides and the brace after it on the same line is real.
+    expect(kept("function f() { return obj.from / 2; }\nconst top = 1;")).toBe(
+      "function f() { } const top = 1;"
+    );
+    expect(kept("function f() { return value! / 2; }\nconst top = 1;")).toBe(
+      "function f() { } const top = 1;"
+    );
     // A slash in a character class does not end the expression.
     expect(kept("function f() { const re = /[/}]/; }\nconst top = 1;")).toBe(
       "function f() { } const top = 1;"

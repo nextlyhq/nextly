@@ -149,14 +149,18 @@ const TRIVIA = /(?:\s+|\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$))+/y;
 const LEXEMES = [
   ["string", /(["'])(?:\\[\s\S]|(?!\1)[^\\\n])*\1?/y],
   ["number", /(?:[0-9]|\.[0-9])[\w.]*/y],
-  ["word", /[A-Za-z_$\u0080-￿][\w$\u0080-￿]*/y],
+  ["word", /(?:[A-Za-z_$]|[^\x00-\x7f])(?:[\w$]|[^\x00-\x7f])*/y],
   ["++", /\+\+/y],
   ["--", /--/y],
 ];
 
-/** A regular expression literal: an unescaped `/` outside a class ends it. */
-const REGEX =
-  /\/(?:\\[^\n]|\[(?:\\[^\n]|[^\]\\\n])*\]?|[^/\\\n[])*(?:\/[a-z]*)?/iy;
+/**
+ * A regular expression literal: an unescaped `/` outside a class ends it, on
+ * the same line. One that does not close there is not one, and the `/` is
+ * read as division, as the compiler's scanner recovers: `obj.from / 2; }`
+ * keeps the brace that closes its block.
+ */
+const REGEX = /\/(?:\\[^\n]|\[(?:\\[^\n]|[^\]\\\n])*\]?|[^/\\\n[])*\/[a-z]*/iy;
 
 /** A template literal's text up to its closing backtick or a `${`. */
 const TEMPLATE_TEXT = /(?:\\[\s\S]|[^`\\$]|\$(?!\{))*/y;
@@ -204,10 +208,14 @@ function delimitedAt(code, start, previous) {
   if (code[start] === "`") {
     return { kind: "template", end: templateEnd(code, start) };
   }
-  if (code[start] === "/" && !DIVISION_FOLLOWS.has(previous)) {
-    return { kind: "regex", end: matchEnd(REGEX, code, start) };
-  }
-  return undefined;
+  return regexAt(code, start, previous);
+}
+
+/** A regular expression closed on its line, where a `/` cannot divide. */
+function regexAt(code, start, previous) {
+  if (code[start] !== "/" || DIVISION_FOLLOWS.has(previous)) return undefined;
+  const end = matchEnd(REGEX, code, start);
+  return end > start ? { kind: "regex", end } : undefined;
 }
 
 /** A string, a number, a word, `++` or `--`; else one punctuation character. */
