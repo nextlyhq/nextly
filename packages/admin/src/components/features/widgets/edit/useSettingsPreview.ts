@@ -32,7 +32,7 @@ import type {
 
 import type { CellSlotLookup } from "../archetypes/types";
 import { queryForTier } from "../tier-query";
-import { widgetAsAsked } from "../widget-as-asked";
+import { questionOf, widgetAsAsked } from "../widget-as-asked";
 
 /** How long the values must stay still before a changed question is asked. */
 const PREVIEW_ASK_DELAY_MS = 300;
@@ -68,14 +68,6 @@ export interface SettingsPreview {
   answerTier?: SizeTier;
 }
 
-/** The query a widget asks with `config`, as one comparable value. */
-function askedWith(
-  widget: DashboardWidget,
-  config: Record<string, unknown> | undefined
-): string {
-  return JSON.stringify(widgetAsAsked(widget, config).query ?? null);
-}
-
 export function useSettingsPreview(args: {
   /** The widget as declared, before any settings apply. */
   widget: DashboardWidget;
@@ -93,13 +85,24 @@ export function useSettingsPreview(args: {
     () => widgetAsAsked(widget, draft),
     [widget, draft]
   );
-  const asking = askedWith(widget, draft);
-  const sameQuestion = asking === askedWith(widget, stored);
+  const asking = questionOf(widget, draft);
+  const sameQuestion = asking === questionOf(widget, stored);
   // The question settles before it is asked, so a run of changes asks once.
   const settled = useDebouncedValue(asking, PREVIEW_ASK_DELAY_MS);
 
   const requests = useMemo<WidgetQueryRequest[]>(() => {
-    if (sameQuestion || settled !== asking || !definition.query) return [];
+    if (sameQuestion || settled !== asking) return [];
+    // A card core answers on the server is asked with the draft settings, as its own card: never
+    // the stored card's ask, so its answer is never filed as the stored card's.
+    if (widget.serverData === true) {
+      return [
+        {
+          placementId: previewId,
+          card: { widget: widget.id, settings: draft },
+        },
+      ];
+    }
+    if (!definition.query) return [];
     // The settled question itself is the request's query, so each new question is a new one.
     // Sized as the batch sizes a card it draws, and asked as declared for a custom card, whose
     // own component draws the raw answer with no tier.
@@ -116,7 +119,7 @@ export function useSettingsPreview(args: {
         },
       },
     ];
-  }, [sameQuestion, settled, asking, definition, previewId]);
+  }, [sameQuestion, settled, asking, definition, previewId, widget, draft]);
   const asked = useWidgetQueries(requests);
 
   const placement = useMemo(
@@ -148,6 +151,9 @@ export function useSettingsPreview(args: {
     slot: settled === asking ? asked.slots[previewId] : undefined,
     updatedAt: settled === asking ? asked.updatedAt : null,
     isFetching: settled !== asking || asked.fetchingPlacementIds.has(previewId),
-    ...(definition.archetype === "custom" ? {} : { answerTier: PREVIEW_TIER }),
+    // Only an answer asked sized has a tier: a custom card's and a server card's were not.
+    ...(definition.archetype === "custom" || widget.serverData === true
+      ? {}
+      : { answerTier: PREVIEW_TIER }),
   };
 }

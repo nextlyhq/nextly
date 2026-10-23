@@ -34,7 +34,7 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import { parseSource } from "@nextlyhq/module-specifiers/parse-source";
 import { beforeAll, describe, expect, it } from "vitest";
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
@@ -524,14 +524,30 @@ describe("ui release tags do not shadow the documentation", () => {
    */
   function shadowed(file: string): string[] {
     const text = readFileSync(file, "utf8");
-    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+    const { program, comments } = parseSource(text, file);
     const found: string[] = [];
-    for (const stmt of sf.statements) {
-      const blocks = (
-        ts.getLeadingCommentRanges(text, stmt.getFullStart()) ?? []
-      )
-        .filter(r => text.slice(r.pos, r.pos + 3) === "/**")
-        .map(r => text.slice(r.pos, r.end));
+    let previousEnd = 0;
+    for (const stmt of program.body) {
+      // A statement's leading doc blocks, as the compiler attaches them: the
+      // comments between the previous statement and this one, from the first
+      // line break on, since a comment on the previous statement's own line
+      // trails that statement rather than leading this one.
+      const lineBreak = text.indexOf("\n", previousEnd);
+      const from =
+        previousEnd === 0
+          ? 0
+          : lineBreak === -1
+            ? Number.POSITIVE_INFINITY
+            : lineBreak;
+      const blocks = comments
+        .filter(
+          c =>
+            c.start >= from &&
+            c.end <= stmt.start &&
+            text.startsWith("/**", c.start)
+        )
+        .map(c => text.slice(c.start, c.end));
+      previousEnd = stmt.end;
       if (blocks.length < 2) continue;
 
       // Only the last block reaches the symbol, so the defect is a last block
@@ -547,7 +563,7 @@ describe("ui release tags do not shadow the documentation", () => {
       if (prose(blocks[blocks.length - 1]!) !== "") continue;
       if (!blocks.slice(0, -1).some(b => prose(b) !== "")) continue;
 
-      const line = sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line + 1;
+      const line = text.slice(0, stmt.start).split("\n").length;
       found.push(`${path.relative(SRC, file)}:${line}`);
     }
     return found;

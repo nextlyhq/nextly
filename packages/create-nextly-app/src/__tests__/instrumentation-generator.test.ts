@@ -56,7 +56,7 @@ async function typeErrors(source: string): Promise<string[]> {
       declarations,
       [
         'declare module "nextly/runtime" { export function registerNextCacheRevalidator(): void; }',
-        'declare module "nextly" { export function createRegister(config: unknown): () => Promise<void>; }',
+        'declare module "nextly" { export function createRegister(config: unknown, host?: { cacheComponents?: string | boolean }): () => Promise<void>; }',
         "declare const process: { env: Record<string, string | undefined> };",
       ].join("\n")
     );
@@ -174,7 +174,11 @@ describe("generateInstrumentation", () => {
       expect(result.skipped).toHaveLength(1);
       expect(result.skipped[0].path).toBe(`src/${name}`);
       expect(result.skipped[0].toAdd).toContain(
-        "await createRegister(config)();"
+        "await createRegister(config, {"
+      );
+      // The setting Next.js inlines here, which Nextly cannot read for itself.
+      expect(result.skipped[0].toAdd).toContain(
+        "cacheComponents: process.env.__NEXT_CACHE_COMPONENTS"
       );
       expect(result.skipped[0].toAdd).toContain(
         'await import("../nextly.config")'

@@ -33,7 +33,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import type { FormFieldCatalogType } from "nextly/field-catalog";
 import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type JSX, useCallback, useEffect, useRef, useState } from "react";
 
 import type { FormField, FormFieldTypeId } from "../types";
 
@@ -724,7 +724,7 @@ export function FormBuilderView({
   onSuccess,
   onCancel,
   documentLock,
-}: FormBuilderViewProps) {
+}: FormBuilderViewProps): JSX.Element {
   const resolvedEntryId = entryId || id || initialData?.id;
   const resolvedCollectionSlug = collectionSlug || collection || "forms";
   const resolvedIsCreating = isCreating ?? !resolvedEntryId;

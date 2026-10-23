@@ -142,9 +142,16 @@ function NothingToDraw({
  */
 function askedWith(
   rows: ArrangedWidget[],
-  dashboardWidth: number | undefined
-): Array<ArrangedWidget & { tier?: SizeTier }> {
+  dashboardWidth: number | undefined,
+  editing: boolean
+): Array<ArrangedWidget & { tier?: SizeTier; editing?: true }> {
   return rows.map(row => {
+    // A card core answers on the server is asked by its id at rest, and with
+    // the settings it is drawn with while customising, when they may not be
+    // saved yet (see `questionsFor`).
+    if (row.widget.serverData === true) {
+      return editing ? { ...row, editing: true as const } : row;
+    }
     // The tier the card will be drawn at, from the dashboard's width and the card's drawn span:
     // the query is asked before the card can measure itself, and sized for that tier.
     const tier = predictedTier(
@@ -175,6 +182,7 @@ const NO_CARDS: [] = [];
  */
 function useCardsAtDashboardWidth(
   visible: ArrangedWidget[],
+  editing: boolean,
   carry: Pick<
     Parameters<typeof useCardDrag>[0],
     "gridRef" | "say" | "drop" | "requestFocus"
@@ -186,8 +194,8 @@ function useCardsAtDashboardWidth(
     () =>
       dashboardWidth === undefined
         ? NO_CARDS
-        : askedWith(visible, dashboardWidth),
-    [visible, dashboardWidth]
+        : askedWith(visible, dashboardWidth, editing),
+    [visible, dashboardWidth, editing]
   );
   const band =
     dashboardWidth === undefined ? undefined : bandForWidth(dashboardWidth);
@@ -400,7 +408,7 @@ export function WidgetGrid() {
     failed,
     settling,
     retry,
-  } = useCardsAtDashboardWidth(visible, {
+  } = useCardsAtDashboardWidth(visible, editor.isEditing, {
     gridRef: focus.gridRef,
     say: announce.drag,
     drop: arrangement.dropCard,

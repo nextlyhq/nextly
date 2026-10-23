@@ -38,7 +38,12 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import {
+  literalText,
+  parseSource,
+  walk,
+} from "@nextlyhq/module-specifiers/parse-source";
+import type { Node } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 import { collectModules } from "./source-modules";
 
@@ -122,52 +127,48 @@ function sourceFiles(dir: string): string[] {
   );
 }
 
+/**
+ * The name a property key or member property spells, if it spells one.
+ *
+ * A computed one names something only when it is a plain string: `el[method]`
+ * reads whatever `method` holds, and treating the variable's name as the
+ * property's would report the wrong thing in both directions.
+ */
+function nameOf(node: Node, computed: boolean): string | null {
+  if (node.type === "Identifier") return computed ? null : node.name;
+  return literalText(node);
+}
+
+/** The method name a node reads off an object, if it reads one. */
+function readNameAt(node: Node, parent: Node | undefined): string | null {
+  // `el.getBoundingClientRect()`, and `el["getBoundingClientRect"]()` — the
+  // same call, spelled so a text search for the dotted form does not see it.
+  if (node.type === "MemberExpression") {
+    return nameOf(node.property, node.computed);
+  }
+  // `const { getBoundingClientRect: read } = el` — the method taken off the
+  // element and called later through a name of the caller's choosing. Neither
+  // spelling above sees it: the access is a binding pattern, and the call site
+  // is a bare identifier that could be anything. The KEY is the name read,
+  // whether the binding is renamed or shorthand, and the shorthand is the form
+  // someone reaches for first.
+  if (node.type === "Property" && parent?.type === "ObjectPattern") {
+    return nameOf(node.key, node.computed);
+  }
+  // `const [getBoundingClientRect] = …` binds the name directly.
+  if (node.type === "Identifier" && parent?.type === "ArrayPattern") {
+    return node.name;
+  }
+  return null;
+}
+
 /** Every cross-frame read a source text performs, by the name it used. */
 function crossFrameReads(text: string, file: string): string[] {
-  const source = ts.createSourceFile(
-    file,
-    text,
-    ts.ScriptTarget.Latest,
-    true,
-    file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
-  );
   const found: string[] = [];
-
-  const visit = (node: ts.Node): void => {
-    // `el.getBoundingClientRect()`
-    if (ts.isPropertyAccessExpression(node)) {
-      if (CROSS_FRAME_READS.has(node.name.text)) found.push(node.name.text);
-    }
-    // `el["getBoundingClientRect"]()` — the same call, spelled so a text search
-    // for the dotted form does not see it.
-    if (
-      ts.isElementAccessExpression(node) &&
-      ts.isStringLiteralLike(node.argumentExpression) &&
-      CROSS_FRAME_READS.has(node.argumentExpression.text)
-    ) {
-      found.push(node.argumentExpression.text);
-    }
-    // `const { getBoundingClientRect: read } = el` — the method taken off the
-    // element and called later through a name of the caller's choosing. Neither
-    // branch above sees it: the access is a binding pattern, and the call site
-    // is a bare identifier that could be anything.
-    //
-    // Both spellings count. A renamed binding carries `propertyName`, a
-    // shorthand one carries only `name`, and the shorthand is the form someone
-    // reaches for first.
-    if (ts.isBindingElement(node)) {
-      const read = node.propertyName ?? node.name;
-      if (ts.isIdentifier(read) && CROSS_FRAME_READS.has(read.text)) {
-        found.push(read.text);
-      }
-      if (ts.isStringLiteralLike(read) && CROSS_FRAME_READS.has(read.text)) {
-        found.push(read.text);
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-
-  visit(source);
+  walk(parseSource(text, file).program, (node, ancestors) => {
+    const read = readNameAt(node, ancestors.at(-1));
+    if (read !== null && CROSS_FRAME_READS.has(read)) found.push(read);
+  });
   return found;
 }
 
@@ -282,5 +283,13 @@ describe("rectangles are read across the frame in one place", () => {
     );
 
     expect(computed).toEqual([]);
+    // The other side of the same edge: a variable that merely shares the
+    // method's NAME reads whatever it holds, so it is not this read either.
+    expect(
+      crossFrameReads(
+        'const getBoundingClientRect = "width"; const w = el[getBoundingClientRect];',
+        "probe.ts"
+      )
+    ).toEqual([]);
   });
 });
