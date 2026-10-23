@@ -43,7 +43,7 @@
     "@vitest/ui": "^5.0.5",
     "pg": "^8.16.3",
     "tsdown": "^0.23.1",
-    "typescript": "^5.9.3",
+    "typescript": "^7.0.2",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^5.0.5"
   },

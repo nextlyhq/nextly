@@ -251,7 +251,7 @@ importers:
         version: 0.4.3
       '@commitlint/cli':
         specifier: ^20.1.0
-        version: 20.1.0(@types/node@22.20.5)(typescript@5.9.3)
+        version: 20.1.0(@types/node@22.20.5)(typescript@7.0.2)
       '@commitlint/config-conventional':
         specifier: ^20.0.0
         version: 20.0.0
@@ -299,7 +299,7 @@ importers:
         version: 9.39.1(jiti@2.7.0)(supports-color@7.2.0)
       eslint-plugin-import-x:
         specifier: ^4.16.2
-        version: 4.16.2(@typescript-eslint/utils@8.59.0(eslint@9.39.1(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3))(eslint-import-resolver-node@0.3.9(supports-color@7.2.0))(eslint@9.39.1(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)
+        version: 4.16.2(@typescript-eslint/utils@8.59.0(eslint@9.39.1(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@7.0.2))(eslint-import-resolver-node@0.3.9(supports-color@7.2.0))(eslint@9.39.1(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)
       eslint-plugin-turbo:
         specifier: 2.9.18
         version: 2.9.18(eslint@9.39.1(jiti@2.7.0)(supports-color@7.2.0))(turbo@2.9.18)
@@ -340,8 +340,8 @@ importers:
         specifier: 2.9.18
         version: 2.9.18
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -458,8 +458,8 @@ importers:
         specifier: ^4.3.2
         version: 4.3.2
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -500,8 +500,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/nextly
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
 
   packages/adapter-drizzle:
     dependencies:
@@ -523,13 +523,13 @@ importers:
         version: 5.0.5(vitest@5.0.5)
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
-        version: 5.1.4(supports-color@7.2.0)(typescript@5.9.3)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
+        version: 5.1.4(supports-color@7.2.0)(typescript@7.0.2)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -557,13 +557,13 @@ importers:
         version: 5.0.5(vitest@5.0.5)
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
-        version: 5.1.4(supports-color@7.2.0)(typescript@5.9.3)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
+        version: 5.1.4(supports-color@7.2.0)(typescript@7.0.2)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -594,13 +594,13 @@ importers:
         version: 5.0.5(vitest@5.0.5)
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
-        version: 5.1.4(supports-color@7.2.0)(typescript@5.9.3)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
+        version: 5.1.4(supports-color@7.2.0)(typescript@7.0.2)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -631,13 +631,13 @@ importers:
         version: 5.0.5(vitest@5.0.5)
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
-        version: 5.1.4(supports-color@7.2.0)(typescript@5.9.3)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
+        version: 5.1.4(supports-color@7.2.0)(typescript@7.0.2)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -697,37 +697,37 @@ importers:
         version: 5.2.2(react-hook-form@7.66.0(react@19.3.1))
       '@lexical/code-core':
         specifier: ^0.47.0
-        version: 0.47.0(typescript@5.9.3)
+        version: 0.47.0(typescript@7.0.2)
       '@lexical/code-prism':
         specifier: ^0.47.0
-        version: 0.47.0(typescript@5.9.3)
+        version: 0.47.0(typescript@7.0.2)
       '@lexical/history':
         specifier: ^0.47.0
-        version: 0.47.0(typescript@5.9.3)
+        version: 0.47.0(typescript@7.0.2)
       '@lexical/link':
         specifier: ^0.47.0
-        version: 0.47.0(typescript@5.9.3)
+        version: 0.47.0(typescript@7.0.2)
       '@lexical/list':
         specifier: ^0.47.0
-        version: 0.47.0(typescript@5.9.3)
+        version: 0.47.0(typescript@7.0.2)
       '@lexical/markdown':
         specifier: ^0.47.0
-        version: 0.47.0(typescript@5.9.3)
+        version: 0.47.0(typescript@7.0.2)
       '@lexical/react':
         specifier: ^0.47.0
-        version: 0.47.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@5.9.3)(yjs@13.6.27)
+        version: 0.47.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(yjs@13.6.27)
       '@lexical/rich-text':
         specifier: ^0.47.0
-        version: 0.47.0(typescript@5.9.3)
+        version: 0.47.0(typescript@7.0.2)
       '@lexical/selection':
         specifier: ^0.47.0
-        version: 0.47.0(typescript@5.9.3)
+        version: 0.47.0(typescript@7.0.2)
       '@lexical/table':
         specifier: ^0.47.0
-        version: 0.47.0(typescript@5.9.3)
+        version: 0.47.0(typescript@7.0.2)
       '@lexical/utils':
         specifier: ^0.47.0
-        version: 0.47.0(typescript@5.9.3)
+        version: 0.47.0(typescript@7.0.2)
       '@lezer/highlight':
         specifier: 1.2.3
         version: 1.2.3
@@ -799,7 +799,7 @@ importers:
         version: 1.1.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       lexical:
         specifier: ^0.47.0
-        version: 0.47.0(typescript@5.9.3)
+        version: 0.47.0(typescript@7.0.2)
       lucide-react:
         specifier: ^0.544.0
         version: 0.544.0(react@19.3.1)
@@ -914,13 +914,13 @@ importers:
         version: 5.44.1
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
-        version: 5.1.4(supports-color@7.2.0)(typescript@5.9.3)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
+        version: 5.1.4(supports-color@7.2.0)(typescript@7.0.2)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -964,10 +964,10 @@ importers:
         version: 6.1.3
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -1013,10 +1013,10 @@ importers:
         version: 6.1.3
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -1080,10 +1080,10 @@ importers:
         version: 4.3.2
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -1171,13 +1171,13 @@ importers:
         version: 19.3.1(react@19.3.1)
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
-        version: 5.1.4(supports-color@7.2.0)(typescript@5.9.3)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
+        version: 5.1.4(supports-color@7.2.0)(typescript@7.0.2)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -1209,8 +1209,8 @@ importers:
         specifier: ^22.20.5
         version: 22.20.5
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -1355,16 +1355,16 @@ importers:
         version: 0.35.5(@types/node@22.20.5)
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       tsx:
         specifier: ^4.20.5
         version: 4.21.0
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
-        version: 5.1.4(supports-color@7.2.0)(typescript@5.9.3)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
+        version: 5.1.4(supports-color@7.2.0)(typescript@7.0.2)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -1420,10 +1420,10 @@ importers:
         version: 19.3.1(react@19.3.1)
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -1451,10 +1451,10 @@ importers:
         version: link:../nextly
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -1524,10 +1524,10 @@ importers:
         version: 19.3.1(react@19.3.1)
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -1555,10 +1555,10 @@ importers:
         version: link:../nextly
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -1643,10 +1643,10 @@ importers:
         version: 7.8.5
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -1680,10 +1680,10 @@ importers:
         version: 19.3.1(react@19.3.1)
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -1704,10 +1704,10 @@ importers:
         version: link:../nextly
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -1747,13 +1747,13 @@ importers:
         version: link:../nextly
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
-        version: 5.1.4(supports-color@7.2.0)(typescript@5.9.3)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
+        version: 5.1.4(supports-color@7.2.0)(typescript@7.0.2)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -1781,13 +1781,13 @@ importers:
         version: link:../nextly
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
-        version: 5.1.4(supports-color@7.2.0)(typescript@5.9.3)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
+        version: 5.1.4(supports-color@7.2.0)(typescript@7.0.2)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -1815,13 +1815,13 @@ importers:
         version: link:../nextly
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
-        version: 5.1.4(supports-color@7.2.0)(typescript@5.9.3)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
+        version: 5.1.4(supports-color@7.2.0)(typescript@7.0.2)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -1855,10 +1855,10 @@ importers:
         version: 6.1.3
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -2008,16 +2008,16 @@ importers:
         version: 4.3.2
       tsdown:
         specifier: ^0.23.1
-        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3)
+        version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       tsx:
         specifier: ^4.20.5
         version: 4.21.0
       typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
+        specifier: ^7.0.2
+        version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
-        version: 5.1.4(supports-color@7.2.0)(typescript@5.9.3)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
+        version: 5.1.4(supports-color@7.2.0)(typescript@7.0.2)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
       vitest:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(happy-dom@20.9.0)(jsdom@27.1.0(supports-color@7.2.0))(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
@@ -8538,11 +8538,6 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
-  typescript@5.9.3:
-    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
-    engines: {node: '>=14.17'}
-    hasBin: true
-
   typescript@7.0.2:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
     engines: {node: '>=16.20.0'}
@@ -9618,11 +9613,11 @@ snapshots:
   '@colors/colors@1.5.0':
     optional: true
 
-  '@commitlint/cli@20.1.0(@types/node@22.20.5)(typescript@5.9.3)':
+  '@commitlint/cli@20.1.0(@types/node@22.20.5)(typescript@7.0.2)':
     dependencies:
       '@commitlint/format': 20.0.0
       '@commitlint/lint': 20.0.0
-      '@commitlint/load': 20.1.0(@types/node@22.20.5)(typescript@5.9.3)
+      '@commitlint/load': 20.1.0(@types/node@22.20.5)(typescript@7.0.2)
       '@commitlint/read': 20.0.0
       '@commitlint/types': 20.0.0
       tinyexec: 1.3.1
@@ -9669,15 +9664,15 @@ snapshots:
       '@commitlint/rules': 20.0.0
       '@commitlint/types': 20.0.0
 
-  '@commitlint/load@20.1.0(@types/node@22.20.5)(typescript@5.9.3)':
+  '@commitlint/load@20.1.0(@types/node@22.20.5)(typescript@7.0.2)':
     dependencies:
       '@commitlint/config-validator': 20.0.0
       '@commitlint/execute-rule': 20.0.0
       '@commitlint/resolve-extends': 20.1.0
       '@commitlint/types': 20.0.0
       chalk: 5.6.2
-      cosmiconfig: 9.0.0(typescript@5.9.3)
-      cosmiconfig-typescript-loader: 6.1.0(@types/node@22.20.5)(cosmiconfig@9.0.0(typescript@5.9.3))(typescript@5.9.3)
+      cosmiconfig: 9.0.0(typescript@7.0.2)
+      cosmiconfig-typescript-loader: 6.1.0(@types/node@22.20.5)(cosmiconfig@9.0.0(typescript@7.0.2))(typescript@7.0.2)
       lodash.isplainobject: 4.0.6
       lodash.merge: 4.6.2
       lodash.uniq: 4.5.0
@@ -10286,244 +10281,244 @@ snapshots:
     dependencies:
       jsbi: 4.3.2
 
-  '@lexical/a11y@0.47.0(typescript@5.9.3)':
+  '@lexical/a11y@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/extension': 0.47.0(typescript@5.9.3)
-      '@lexical/utils': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/extension': 0.47.0(typescript@7.0.2)
+      '@lexical/utils': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/clipboard@0.47.0(typescript@5.9.3)':
+  '@lexical/clipboard@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/extension': 0.47.0(typescript@5.9.3)
-      '@lexical/html': 0.47.0(typescript@5.9.3)
-      '@lexical/internal': 0.47.0(typescript@5.9.3)
-      '@lexical/list': 0.47.0(typescript@5.9.3)
-      '@lexical/selection': 0.47.0(typescript@5.9.3)
-      '@lexical/utils': 0.47.0(typescript@5.9.3)
+      '@lexical/extension': 0.47.0(typescript@7.0.2)
+      '@lexical/html': 0.47.0(typescript@7.0.2)
+      '@lexical/internal': 0.47.0(typescript@7.0.2)
+      '@lexical/list': 0.47.0(typescript@7.0.2)
+      '@lexical/selection': 0.47.0(typescript@7.0.2)
+      '@lexical/utils': 0.47.0(typescript@7.0.2)
       '@types/trusted-types': 2.0.7
-      lexical: 0.47.0(typescript@5.9.3)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/code-core@0.47.0(typescript@5.9.3)':
+  '@lexical/code-core@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/extension': 0.47.0(typescript@5.9.3)
-      '@lexical/html': 0.47.0(typescript@5.9.3)
-      '@lexical/internal': 0.47.0(typescript@5.9.3)
-      '@lexical/utils': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/extension': 0.47.0(typescript@7.0.2)
+      '@lexical/html': 0.47.0(typescript@7.0.2)
+      '@lexical/internal': 0.47.0(typescript@7.0.2)
+      '@lexical/utils': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/code-prism@0.47.0(typescript@5.9.3)':
+  '@lexical/code-prism@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/code-core': 0.47.0(typescript@5.9.3)
-      '@lexical/extension': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/code-core': 0.47.0(typescript@7.0.2)
+      '@lexical/extension': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
       prismjs: 1.30.0
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/devtools-core@0.47.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@5.9.3)':
+  '@lexical/devtools-core@0.47.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)':
     dependencies:
-      '@lexical/html': 0.47.0(typescript@5.9.3)
-      '@lexical/link': 0.47.0(typescript@5.9.3)
-      '@lexical/mark': 0.47.0(typescript@5.9.3)
-      '@lexical/table': 0.47.0(typescript@5.9.3)
-      '@lexical/utils': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/html': 0.47.0(typescript@7.0.2)
+      '@lexical/link': 0.47.0(typescript@7.0.2)
+      '@lexical/mark': 0.47.0(typescript@7.0.2)
+      '@lexical/table': 0.47.0(typescript@7.0.2)
+      '@lexical/utils': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
       react: 19.3.1
       react-dom: 19.3.1(react@19.3.1)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/dragon@0.47.0(typescript@5.9.3)':
+  '@lexical/dragon@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/extension': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/extension': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/extension@0.47.0(typescript@5.9.3)':
+  '@lexical/extension@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/internal': 0.47.0(typescript@5.9.3)
-      '@lexical/utils': 0.47.0(typescript@5.9.3)
+      '@lexical/internal': 0.47.0(typescript@7.0.2)
+      '@lexical/utils': 0.47.0(typescript@7.0.2)
       '@preact/signals-core': 1.14.4
-      lexical: 0.47.0(typescript@5.9.3)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/hashtag@0.47.0(typescript@5.9.3)':
+  '@lexical/hashtag@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/text': 0.47.0(typescript@5.9.3)
-      '@lexical/utils': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/text': 0.47.0(typescript@7.0.2)
+      '@lexical/utils': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/history@0.47.0(typescript@5.9.3)':
+  '@lexical/history@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/extension': 0.47.0(typescript@5.9.3)
-      '@lexical/utils': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/extension': 0.47.0(typescript@7.0.2)
+      '@lexical/utils': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/html@0.47.0(typescript@5.9.3)':
+  '@lexical/html@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/extension': 0.47.0(typescript@5.9.3)
-      '@lexical/internal': 0.47.0(typescript@5.9.3)
-      '@lexical/selection': 0.47.0(typescript@5.9.3)
-      '@lexical/utils': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/extension': 0.47.0(typescript@7.0.2)
+      '@lexical/internal': 0.47.0(typescript@7.0.2)
+      '@lexical/selection': 0.47.0(typescript@7.0.2)
+      '@lexical/utils': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/internal@0.47.0(typescript@5.9.3)':
+  '@lexical/internal@0.47.0(typescript@7.0.2)':
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/link@0.47.0(typescript@5.9.3)':
+  '@lexical/link@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/extension': 0.47.0(typescript@5.9.3)
-      '@lexical/html': 0.47.0(typescript@5.9.3)
-      '@lexical/internal': 0.47.0(typescript@5.9.3)
-      '@lexical/utils': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/extension': 0.47.0(typescript@7.0.2)
+      '@lexical/html': 0.47.0(typescript@7.0.2)
+      '@lexical/internal': 0.47.0(typescript@7.0.2)
+      '@lexical/utils': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/list@0.47.0(typescript@5.9.3)':
+  '@lexical/list@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/extension': 0.47.0(typescript@5.9.3)
-      '@lexical/html': 0.47.0(typescript@5.9.3)
-      '@lexical/internal': 0.47.0(typescript@5.9.3)
-      '@lexical/utils': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/extension': 0.47.0(typescript@7.0.2)
+      '@lexical/html': 0.47.0(typescript@7.0.2)
+      '@lexical/internal': 0.47.0(typescript@7.0.2)
+      '@lexical/utils': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/mark@0.47.0(typescript@5.9.3)':
+  '@lexical/mark@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/utils': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/utils': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/markdown@0.47.0(typescript@5.9.3)':
+  '@lexical/markdown@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/code-core': 0.47.0(typescript@5.9.3)
-      '@lexical/internal': 0.47.0(typescript@5.9.3)
-      '@lexical/link': 0.47.0(typescript@5.9.3)
-      '@lexical/list': 0.47.0(typescript@5.9.3)
-      '@lexical/rich-text': 0.47.0(typescript@5.9.3)
-      '@lexical/selection': 0.47.0(typescript@5.9.3)
-      '@lexical/text': 0.47.0(typescript@5.9.3)
-      '@lexical/utils': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/code-core': 0.47.0(typescript@7.0.2)
+      '@lexical/internal': 0.47.0(typescript@7.0.2)
+      '@lexical/link': 0.47.0(typescript@7.0.2)
+      '@lexical/list': 0.47.0(typescript@7.0.2)
+      '@lexical/rich-text': 0.47.0(typescript@7.0.2)
+      '@lexical/selection': 0.47.0(typescript@7.0.2)
+      '@lexical/text': 0.47.0(typescript@7.0.2)
+      '@lexical/utils': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/overflow@0.47.0(typescript@5.9.3)':
+  '@lexical/overflow@0.47.0(typescript@7.0.2)':
     dependencies:
-      lexical: 0.47.0(typescript@5.9.3)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/plain-text@0.47.0(typescript@5.9.3)':
+  '@lexical/plain-text@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/clipboard': 0.47.0(typescript@5.9.3)
-      '@lexical/dragon': 0.47.0(typescript@5.9.3)
-      '@lexical/extension': 0.47.0(typescript@5.9.3)
-      '@lexical/selection': 0.47.0(typescript@5.9.3)
-      '@lexical/utils': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/clipboard': 0.47.0(typescript@7.0.2)
+      '@lexical/dragon': 0.47.0(typescript@7.0.2)
+      '@lexical/extension': 0.47.0(typescript@7.0.2)
+      '@lexical/selection': 0.47.0(typescript@7.0.2)
+      '@lexical/utils': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/react@0.47.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@5.9.3)(yjs@13.6.27)':
+  '@lexical/react@0.47.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(yjs@13.6.27)':
     dependencies:
       '@floating-ui/react': 0.27.20(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
-      '@lexical/a11y': 0.47.0(typescript@5.9.3)
-      '@lexical/devtools-core': 0.47.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@5.9.3)
-      '@lexical/dragon': 0.47.0(typescript@5.9.3)
-      '@lexical/extension': 0.47.0(typescript@5.9.3)
-      '@lexical/hashtag': 0.47.0(typescript@5.9.3)
-      '@lexical/history': 0.47.0(typescript@5.9.3)
-      '@lexical/internal': 0.47.0(typescript@5.9.3)
-      '@lexical/link': 0.47.0(typescript@5.9.3)
-      '@lexical/list': 0.47.0(typescript@5.9.3)
-      '@lexical/mark': 0.47.0(typescript@5.9.3)
-      '@lexical/markdown': 0.47.0(typescript@5.9.3)
-      '@lexical/overflow': 0.47.0(typescript@5.9.3)
-      '@lexical/plain-text': 0.47.0(typescript@5.9.3)
-      '@lexical/rich-text': 0.47.0(typescript@5.9.3)
-      '@lexical/table': 0.47.0(typescript@5.9.3)
-      '@lexical/text': 0.47.0(typescript@5.9.3)
-      '@lexical/utils': 0.47.0(typescript@5.9.3)
-      '@lexical/yjs': 0.47.0(typescript@5.9.3)(yjs@13.6.27)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/a11y': 0.47.0(typescript@7.0.2)
+      '@lexical/devtools-core': 0.47.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)
+      '@lexical/dragon': 0.47.0(typescript@7.0.2)
+      '@lexical/extension': 0.47.0(typescript@7.0.2)
+      '@lexical/hashtag': 0.47.0(typescript@7.0.2)
+      '@lexical/history': 0.47.0(typescript@7.0.2)
+      '@lexical/internal': 0.47.0(typescript@7.0.2)
+      '@lexical/link': 0.47.0(typescript@7.0.2)
+      '@lexical/list': 0.47.0(typescript@7.0.2)
+      '@lexical/mark': 0.47.0(typescript@7.0.2)
+      '@lexical/markdown': 0.47.0(typescript@7.0.2)
+      '@lexical/overflow': 0.47.0(typescript@7.0.2)
+      '@lexical/plain-text': 0.47.0(typescript@7.0.2)
+      '@lexical/rich-text': 0.47.0(typescript@7.0.2)
+      '@lexical/table': 0.47.0(typescript@7.0.2)
+      '@lexical/text': 0.47.0(typescript@7.0.2)
+      '@lexical/utils': 0.47.0(typescript@7.0.2)
+      '@lexical/yjs': 0.47.0(typescript@7.0.2)(yjs@13.6.27)
+      lexical: 0.47.0(typescript@7.0.2)
       react: 19.3.1
       react-dom: 19.3.1(react@19.3.1)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
       yjs: 13.6.27
 
-  '@lexical/rich-text@0.47.0(typescript@5.9.3)':
+  '@lexical/rich-text@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/clipboard': 0.47.0(typescript@5.9.3)
-      '@lexical/dragon': 0.47.0(typescript@5.9.3)
-      '@lexical/extension': 0.47.0(typescript@5.9.3)
-      '@lexical/html': 0.47.0(typescript@5.9.3)
-      '@lexical/selection': 0.47.0(typescript@5.9.3)
-      '@lexical/utils': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/clipboard': 0.47.0(typescript@7.0.2)
+      '@lexical/dragon': 0.47.0(typescript@7.0.2)
+      '@lexical/extension': 0.47.0(typescript@7.0.2)
+      '@lexical/html': 0.47.0(typescript@7.0.2)
+      '@lexical/selection': 0.47.0(typescript@7.0.2)
+      '@lexical/utils': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/selection@0.47.0(typescript@5.9.3)':
+  '@lexical/selection@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/internal': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/internal': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/table@0.47.0(typescript@5.9.3)':
+  '@lexical/table@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/clipboard': 0.47.0(typescript@5.9.3)
-      '@lexical/extension': 0.47.0(typescript@5.9.3)
-      '@lexical/html': 0.47.0(typescript@5.9.3)
-      '@lexical/internal': 0.47.0(typescript@5.9.3)
-      '@lexical/utils': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/clipboard': 0.47.0(typescript@7.0.2)
+      '@lexical/extension': 0.47.0(typescript@7.0.2)
+      '@lexical/html': 0.47.0(typescript@7.0.2)
+      '@lexical/internal': 0.47.0(typescript@7.0.2)
+      '@lexical/utils': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/text@0.47.0(typescript@5.9.3)':
+  '@lexical/text@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/internal': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/internal': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/utils@0.47.0(typescript@5.9.3)':
+  '@lexical/utils@0.47.0(typescript@7.0.2)':
     dependencies:
-      '@lexical/internal': 0.47.0(typescript@5.9.3)
-      '@lexical/selection': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/internal': 0.47.0(typescript@7.0.2)
+      '@lexical/selection': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  '@lexical/yjs@0.47.0(typescript@5.9.3)(yjs@13.6.27)':
+  '@lexical/yjs@0.47.0(typescript@7.0.2)(yjs@13.6.27)':
     dependencies:
-      '@lexical/internal': 0.47.0(typescript@5.9.3)
-      '@lexical/selection': 0.47.0(typescript@5.9.3)
-      lexical: 0.47.0(typescript@5.9.3)
+      '@lexical/internal': 0.47.0(typescript@7.0.2)
+      '@lexical/selection': 0.47.0(typescript@7.0.2)
+      lexical: 0.47.0(typescript@7.0.2)
       yjs: 13.6.27
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
   '@lezer/common@1.5.2': {}
 
@@ -12189,12 +12184,12 @@ snapshots:
       '@types/node': 22.20.5
     optional: true
 
-  '@typescript-eslint/project-service@8.59.0(supports-color@7.2.0)(typescript@5.9.3)':
+  '@typescript-eslint/project-service@8.59.0(supports-color@7.2.0)(typescript@7.0.2)':
     dependencies:
-      '@typescript-eslint/tsconfig-utils': 8.59.0(typescript@5.9.3)
+      '@typescript-eslint/tsconfig-utils': 8.59.0(typescript@7.0.2)
       '@typescript-eslint/types': 8.59.0
       debug: 4.4.3(supports-color@7.2.0)
-      typescript: 5.9.3
+      typescript: 7.0.2
     transitivePeerDependencies:
       - supports-color
     optional: true
@@ -12205,37 +12200,37 @@ snapshots:
       '@typescript-eslint/visitor-keys': 8.59.0
     optional: true
 
-  '@typescript-eslint/tsconfig-utils@8.59.0(typescript@5.9.3)':
+  '@typescript-eslint/tsconfig-utils@8.59.0(typescript@7.0.2)':
     dependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
     optional: true
 
   '@typescript-eslint/types@8.59.0': {}
 
-  '@typescript-eslint/typescript-estree@8.59.0(supports-color@7.2.0)(typescript@5.9.3)':
+  '@typescript-eslint/typescript-estree@8.59.0(supports-color@7.2.0)(typescript@7.0.2)':
     dependencies:
-      '@typescript-eslint/project-service': 8.59.0(supports-color@7.2.0)(typescript@5.9.3)
-      '@typescript-eslint/tsconfig-utils': 8.59.0(typescript@5.9.3)
+      '@typescript-eslint/project-service': 8.59.0(supports-color@7.2.0)(typescript@7.0.2)
+      '@typescript-eslint/tsconfig-utils': 8.59.0(typescript@7.0.2)
       '@typescript-eslint/types': 8.59.0
       '@typescript-eslint/visitor-keys': 8.59.0
       debug: 4.4.3(supports-color@7.2.0)
       minimatch: 10.2.6
       semver: 7.8.5
       tinyglobby: 0.2.17
-      ts-api-utils: 2.5.0(typescript@5.9.3)
-      typescript: 5.9.3
+      ts-api-utils: 2.5.0(typescript@7.0.2)
+      typescript: 7.0.2
     transitivePeerDependencies:
       - supports-color
     optional: true
 
-  '@typescript-eslint/utils@8.59.0(eslint@9.39.1(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3)':
+  '@typescript-eslint/utils@8.59.0(eslint@9.39.1(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@7.0.2)':
     dependencies:
       '@eslint-community/eslint-utils': 4.9.1(eslint@9.39.1(jiti@2.7.0)(supports-color@7.2.0))
       '@typescript-eslint/scope-manager': 8.59.0
       '@typescript-eslint/types': 8.59.0
-      '@typescript-eslint/typescript-estree': 8.59.0(supports-color@7.2.0)(typescript@5.9.3)
+      '@typescript-eslint/typescript-estree': 8.59.0(supports-color@7.2.0)(typescript@7.0.2)
       eslint: 9.39.1(jiti@2.7.0)(supports-color@7.2.0)
-      typescript: 5.9.3
+      typescript: 7.0.2
     transitivePeerDependencies:
       - supports-color
     optional: true
@@ -12835,21 +12830,21 @@ snapshots:
 
   convert-source-map@2.0.0: {}
 
-  cosmiconfig-typescript-loader@6.1.0(@types/node@22.20.5)(cosmiconfig@9.0.0(typescript@5.9.3))(typescript@5.9.3):
+  cosmiconfig-typescript-loader@6.1.0(@types/node@22.20.5)(cosmiconfig@9.0.0(typescript@7.0.2))(typescript@7.0.2):
     dependencies:
       '@types/node': 22.20.5
-      cosmiconfig: 9.0.0(typescript@5.9.3)
+      cosmiconfig: 9.0.0(typescript@7.0.2)
       jiti: 2.7.0
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  cosmiconfig@9.0.0(typescript@5.9.3):
+  cosmiconfig@9.0.0(typescript@7.0.2):
     dependencies:
       env-paths: 2.2.1
       import-fresh: 3.3.1
       js-yaml: 4.3.2
       parse-json: 5.2.0
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
   crelt@1.0.7: {}
 
@@ -13110,7 +13105,7 @@ snapshots:
       - supports-color
     optional: true
 
-  eslint-plugin-import-x@4.16.2(@typescript-eslint/utils@8.59.0(eslint@9.39.1(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3))(eslint-import-resolver-node@0.3.9(supports-color@7.2.0))(eslint@9.39.1(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0):
+  eslint-plugin-import-x@4.16.2(@typescript-eslint/utils@8.59.0(eslint@9.39.1(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@7.0.2))(eslint-import-resolver-node@0.3.9(supports-color@7.2.0))(eslint@9.39.1(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0):
     dependencies:
       '@package-json/types': 0.0.12
       '@typescript-eslint/types': 8.59.0
@@ -13124,7 +13119,7 @@ snapshots:
       stable-hash-x: 0.2.0
       unrs-resolver: 1.11.1
     optionalDependencies:
-      '@typescript-eslint/utils': 8.59.0(eslint@9.39.1(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3)
+      '@typescript-eslint/utils': 8.59.0(eslint@9.39.1(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@7.0.2)
       eslint-import-resolver-node: 0.3.9(supports-color@7.2.0)
     transitivePeerDependencies:
       - supports-color
@@ -13772,11 +13767,11 @@ snapshots:
       prelude-ls: 1.2.1
       type-check: 0.4.0
 
-  lexical@0.47.0(typescript@5.9.3):
+  lexical@0.47.0(typescript@7.0.2):
     dependencies:
-      '@lexical/internal': 0.47.0(typescript@5.9.3)
+      '@lexical/internal': 0.47.0(typescript@7.0.2)
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
   lib0@0.2.117:
     dependencies:
@@ -14895,7 +14890,7 @@ snapshots:
       glob: 13.0.6
       package-json-from-dist: 1.0.1
 
-  rolldown-plugin-dts@0.28.8(rolldown@1.2.15)(typescript@5.9.3):
+  rolldown-plugin-dts@0.28.8(rolldown@1.2.15)(typescript@7.0.2):
     dependencies:
       dts-resolver: 3.0.0
       get-tsconfig: 5.0.0-beta.6
@@ -14905,7 +14900,7 @@ snapshots:
       yuku-codegen: 0.19.0
       yuku-parser: 0.19.0
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
     transitivePeerDependencies:
       - oxc-resolver
 
@@ -15329,16 +15324,16 @@ snapshots:
 
   trough@2.2.0: {}
 
-  ts-api-utils@2.5.0(typescript@5.9.3):
+  ts-api-utils@2.5.0(typescript@7.0.2):
     dependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
     optional: true
 
-  tsconfck@3.1.6(typescript@5.9.3):
+  tsconfck@3.1.6(typescript@7.0.2):
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 7.0.2
 
-  tsdown@0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@5.9.3):
+  tsdown@0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2):
     dependencies:
       cac: 7.1.0
       defu: 6.1.7
@@ -15348,7 +15343,7 @@ snapshots:
       obug: 3.0.0
       picomatch: 4.0.7
       rolldown: 1.2.15
-      rolldown-plugin-dts: 0.28.8(rolldown@1.2.15)(typescript@5.9.3)
+      rolldown-plugin-dts: 0.28.8(rolldown@1.2.15)(typescript@7.0.2)
       tinyexec: 1.3.1
       tinyglobby: 0.2.17
       tree-kill: 1.2.2
@@ -15358,7 +15353,7 @@ snapshots:
       '@arethetypeswrong/core': 0.18.5
       publint: 0.3.18
       tsx: 4.21.0
-      typescript: 5.9.3
+      typescript: 7.0.2
     transitivePeerDependencies:
       - '@typescript/native-preview'
       - '@volar/typescript'
@@ -15396,8 +15391,6 @@ snapshots:
 
   typescript@5.6.1-rc: {}
 
-  typescript@5.9.3: {}
-
   typescript@7.0.2:
     optionalDependencies:
       '@typescript/typescript-aix-ppc64': 7.0.2
@@ -15420,7 +15413,6 @@ snapshots:
       '@typescript/typescript-sunos-x64': 7.0.2
       '@typescript/typescript-win32-arm64': 7.0.2
       '@typescript/typescript-win32-x64': 7.0.2
-    optional: true
 
   uint8array-extras@1.5.0: {}
 
@@ -15560,11 +15552,11 @@ snapshots:
       '@types/unist': 3.0.3
       vfile-message: 4.0.3
 
-  vite-tsconfig-paths@5.1.4(supports-color@7.2.0)(typescript@5.9.3)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3)):
+  vite-tsconfig-paths@5.1.4(supports-color@7.2.0)(typescript@7.0.2)(vite@7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3)):
     dependencies:
       debug: 4.4.3(supports-color@7.2.0)
       globrex: 0.1.2
-      tsconfck: 3.1.6(typescript@5.9.3)
+      tsconfck: 3.1.6(typescript@7.0.2)
     optionalDependencies:
       vite: 7.3.6(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3)
     transitivePeerDependencies:
