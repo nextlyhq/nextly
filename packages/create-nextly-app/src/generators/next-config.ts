@@ -1011,7 +1011,9 @@ function cacheComponentsObject(
 ): ObjectExpression | string {
   const body = parseBody(source, file);
   if (!body) return "it could not be parsed";
-  const object = exportedConfig(body);
+  // Not through a wrapper call: Next.js receives what the wrapper returns, which
+  // may set the option again, so the literal passed in says nothing final.
+  const object = exportedConfig(body, false);
   if (typeof object === "string") return object;
   return (
     hiddenSettings(object, [CACHE_COMPONENTS, PARTIAL_PREFETCHING], "it") ??
@@ -1071,9 +1073,8 @@ export async function turnOffCacheComponents(
   const file = await findConfigFile(cwd);
   if (!file) return { kind: "unchanged" };
   const source = await fs.readFile(path.join(cwd, file), "utf-8");
-  // A config that never names the setting leaves it at Next.js's default, off,
-  // even when it is a file this cannot read.
-  if (!source.includes(CACHE_COMPONENTS)) return { kind: "unchanged" };
+  // Read structurally even when the file never names the setting: a spread or
+  // a wrapper can still turn it on, and only the parser can say it cannot tell.
   const plan = cacheComponentsPlan(source, file);
   if ("reason" in plan) return { kind: "manual", file, reason: plan.reason };
   if (plan.edits.length === 0) return { kind: "unchanged" };
@@ -1111,7 +1112,7 @@ export function cacheComponentsFiles(
   } else if (patch.kind === "manual") {
     files.skipped.push({
       path: patch.file,
-      why: `Cache Components was not turned off: ${patch.reason}. Nextly does not support it yet (${CACHE_COMPONENTS_DOCS_URL}); set it off in the config object it exports, and remove ${PARTIAL_PREFETCHING} if it is there`,
+      why: `Nextly could not confirm Cache Components is off: ${patch.reason}. Nextly does not support it yet (${CACHE_COMPONENTS_DOCS_URL}); make sure the config Next.js receives leaves it unset or sets it to false, with no ${PARTIAL_PREFETCHING}`,
       toAdd: `  ${CACHE_COMPONENTS}: false,`,
     });
   }

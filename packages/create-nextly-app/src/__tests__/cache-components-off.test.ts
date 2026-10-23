@@ -138,6 +138,33 @@ export default nextConfig;
   });
 });
 
+describe("a config whose final setting it cannot see", () => {
+  // Next.js receives what a wrapper RETURNS, which may set the option again, so
+  // turning off the literal passed in would report a change Next.js never sees.
+  it("leaves a wrapped config alone, and says what to change", async () => {
+    const config =
+      'import withPlugin from "some-plugin";\nexport default withPlugin({ cacheComponents: true });\n';
+    await write("next.config.mjs", config);
+
+    const result = await turnOffCacheComponents(dir);
+
+    expect(result.kind).toBe("manual");
+    expect(await read("next.config.mjs")).toBe(config);
+  });
+
+  // The setting can arrive through a spread without the file ever naming it.
+  it("reports a config that spreads another object, though it never names the setting", async () => {
+    const config =
+      'import base from "./base.mjs";\nexport default { ...base };\n';
+    await write("next.config.mjs", config);
+
+    const result = await turnOffCacheComponents(dir);
+
+    expect(result.kind).toBe("manual");
+    expect(await read("next.config.mjs")).toBe(config);
+  });
+});
+
 describe("the page the notice links", () => {
   it("is the one nextly's own error links", async () => {
     const nextly = await readFile(
