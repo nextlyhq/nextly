@@ -194,6 +194,22 @@ describe("a widget declaration as startup receives it", () => {
     }
   });
 
+  it("refuses an example holding NaN or an infinity, as it refuses a card's data", () => {
+    // JSON writes NaN and both infinities as `null`, so the preview would draw a number the
+    // example does not hold. The same rule a card's data is held to says so, in the same words.
+    for (const [value, said] of [
+      [NaN, "NaN"],
+      [Infinity, "Infinity"],
+      [-Infinity, "-Infinity"],
+    ] as const) {
+      expect(
+        problemsOf(valid({ display: "metric", example: { total: value } }))
+      ).toEqual([
+        `example cannot be sent to the browser as it is: example.total is ${said}`,
+      ]);
+    }
+  });
+
   it("refuses an example with a symbol-keyed property, which JSON drops", () => {
     const tag = Symbol("tag");
     // The value is safe; the KEY is what JSON throws away, so this is a

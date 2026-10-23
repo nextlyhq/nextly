@@ -73,7 +73,7 @@ function open(
       title="Recent posts"
       settings={declared}
       config={config}
-      onSave={onSave}
+      onDone={onSave}
     />
   );
   return onSave;
@@ -104,7 +104,7 @@ describe("the settings sheet with content settings", () => {
     expect(
       screen.getByText("Group by was reset: secret is no longer available")
     ).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     // The stale value is not saved back: the card follows its default.
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("by");
@@ -124,7 +124,7 @@ describe("the settings sheet with content settings", () => {
       .map(option => option.textContent);
     expect(offered).toEqual(["Posts", "Pages"]);
     await userEvent.click(screen.getByRole("option", { name: "Pages" }));
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     // Group by named a field of Posts; with Pages chosen it goes back to its
     // default rather than naming a field of the other collection.
@@ -156,7 +156,7 @@ describe("the settings sheet with content settings", () => {
       screen.getByRole("textbox", { name: "Condition value" }),
       "Hello"
     );
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     const where = saved(onSave).where as Record<
       string,
@@ -178,7 +178,7 @@ describe("the settings sheet with content settings", () => {
       screen.queryByRole("combobox", { name: "Condition field" })
     ).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Clear filter" }));
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).toEqual({ collection: "posts" });
   });
@@ -193,7 +193,7 @@ describe("the settings sheet with content settings", () => {
         title="Recent posts"
         settings={settings}
         config={{ collection: "posts", by: "secret" }}
-        onSave={onSave}
+        onDone={onSave}
       />
     );
     const { rerender } = render(sheet(false));
@@ -203,7 +203,7 @@ describe("the settings sheet with content settings", () => {
     expect(
       screen.getByText("Group by was reset: secret is no longer available")
     ).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).not.toHaveProperty("by");
   });
@@ -215,7 +215,7 @@ describe("the settings sheet with content settings", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Reset to defaults" })
     );
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).toEqual({ collection: "pages" });
   });
@@ -225,7 +225,7 @@ describe("the settings sheet with content settings", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Clear selection" })
     );
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     // Only Group by went; the other preference stayed.
     expect(saved(onSave)).toEqual({ collection: "posts", items: 9 });
@@ -255,7 +255,7 @@ describe("the settings sheet with content settings", () => {
     expect(
       screen.getByText("Collection was reset: gone is no longer available")
     ).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).toEqual({});
   });
@@ -277,7 +277,7 @@ describe("the settings sheet with content settings", () => {
     await userEvent.click(screen.getByRole("option", { name: "Posts" }));
     await userEvent.click(screen.getByRole("combobox", { name: /Collection/ }));
     await userEvent.click(screen.getByRole("option", { name: "Default" }));
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     // Back at the default, so nothing is stored.
     expect(saved(onSave)).toEqual({});
@@ -296,7 +296,7 @@ describe("the settings sheet with content settings", () => {
     // field Pages does not have. Started afresh, it has no value to take.
     const value = screen.queryByLabelText("Condition value");
     if (value !== null) await userEvent.type(value, "2026-01-01");
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).toEqual({ collection: "pages" });
   });
@@ -306,7 +306,7 @@ describe("the settings sheet with content settings", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Reset to defaults" })
     );
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave.mock.calls[0]?.[0]).toEqual({ collection: "posts" });
   });
