@@ -424,6 +424,45 @@ describe("useCurrentUserPermissions", () => {
     expect(result.current.hasPermission("read-posts")).toBe(true);
   });
 
+  it("keeps an end learned in one language when an older answer in another is restored", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // A client that keeps a language's answer once nothing shows it, as the
+    // app's does, so switching back restores it from the cache.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    onScreen.locale = "fr";
+    server.capabilities = answering({ read: true }, null);
+    const { result, rerender } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+
+    // In German, the answer names an assignment that ends in a minute.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    onScreen.locale = "de";
+    server.capabilities = answering({ read: true }, Date.now() + 60_000);
+    rerender();
+    await waitFor(() =>
+      expect(server.asked).toContain("/me/capabilities?locale=de")
+    );
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+
+    // Back to French, whose older answer named no end.
+    onScreen.locale = "fr";
+    rerender();
+    server.permissions = new Error("permissions unavailable");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+
+    // The permission list from before the end no longer counts.
+    expect(result.current.hasAnswer).toBe(false);
+  });
+
   it("asks once at an end, however many callers are mounted", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     server.capabilities = answering({ read: true }, Date.now() + 60_000);

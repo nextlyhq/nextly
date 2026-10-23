@@ -335,6 +335,12 @@ function waitingStep({ ends, validUntil, now }: DeadlineState): DeadlineStep {
     : { kind: "wait", at: next, since: next };
 }
 
+/** An end an answer named, and when that answer was given. */
+interface NamedEnd {
+  end: number;
+  namedAt: number;
+}
+
 /** The latest of `ends` that has passed by `now`, or null. */
 function latestPassed(ends: readonly number[], now: number): number | null {
   const passed = ends.filter(end => end <= now);
@@ -464,23 +470,29 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // an answer given after an end can drop it (with null, once the ending
   // assignment is gone) before that end's timer has run, and the other
   // request's answer from before it must still not count. An end still to
-  // come when a newer answer that no longer names it was given is retired:
-  // that answer says no such end remains, the assignment having been removed
-  // or extended. Kept in the render that first sees it, so no ordering of
-  // responses and timers can lose one.
-  const [ends, setEnds] = useState<readonly number[]>([]);
-  const knownEnds = useMemo(() => {
-    const kept = ends.filter(end => end === validUntil || end <= answeredAt);
-    return validUntil === null || kept.includes(validUntil)
+  // come is retired only by an answer newer than the one that named it, and
+  // that no longer names it: such an answer says no such end remains, the
+  // assignment having been removed or extended. An older answer, such as
+  // another language's restored from the cache, retires nothing. Kept in the
+  // render that first sees it, so no ordering of responses and timers can
+  // lose one.
+  const [ends, setEnds] = useState<readonly NamedEnd[]>([]);
+  const namedEnds = useMemo(() => {
+    const kept = ends.filter(
+      ({ end, namedAt }) =>
+        end === validUntil || end <= answeredAt || answeredAt <= namedAt
+    );
+    return validUntil === null || kept.some(({ end }) => end === validUntil)
       ? kept
-      : [...kept, validUntil];
+      : [...kept, { end: validUntil, namedAt: answeredAt }];
   }, [ends, validUntil, answeredAt]);
   if (
-    knownEnds.length !== ends.length ||
-    knownEnds.some((end, index) => end !== ends[index])
+    namedEnds.length !== ends.length ||
+    namedEnds.some((named, index) => named !== ends[index])
   ) {
-    setEnds(knownEnds);
+    setEnds(namedEnds);
   }
+  const knownEnds = useMemo(() => namedEnds.map(({ end }) => end), [namedEnds]);
   // The latest end that has passed, read at render, so an answer already past
   // its end when this mounts never counts, not even until a timer fires.
   const endedAt = latestPassed(knownEnds, Date.now());
