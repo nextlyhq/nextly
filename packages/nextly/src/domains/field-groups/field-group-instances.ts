@@ -112,6 +112,8 @@ function judgingSlugs(
 export interface FieldGroupInstanceVisit {
   instance: Record<string, unknown>;
   slug: string;
+  /** The name of the field holding the instance, at its own level. */
+  field: string;
   /**
    * Whether the instance sits inside a container's value (a group, a repeater
    * row, or another instance) rather than directly on the document. One that
@@ -205,27 +207,7 @@ export async function forEachFieldGroupInstance(
     outer: Record<string, unknown> | undefined
   ): Promise<void> {
     if (isFieldGroupField(field)) {
-      for (const { slug, instance } of componentInstances(
-        field,
-        rows,
-        options.declaredComponentDecides
-      )) {
-        if (slug === null) {
-          withholdWhole(instance);
-          continue;
-        }
-        await visit({ instance, slug, inline, outer });
-        const inner = componentFields.get(slug);
-        if (inner) {
-          await walkLevel(
-            instance,
-            inner,
-            true,
-            new WeakSet(),
-            inline ? outer : instance
-          );
-        }
-      }
+      await walkInstances(rows, field, inline, outer);
       return;
     }
     // A row moves to another value, where a loop through the same container is
@@ -233,6 +215,42 @@ export async function forEachFieldGroupInstance(
     const sub = subFieldsOf(field) ?? [];
     for (const row of rows) {
       await walkLevel(row, sub, true, new WeakSet(), outer);
+    }
+  }
+
+  /** The instances a field-group field holds: each visited, then walked. */
+  async function walkInstances(
+    rows: Record<string, unknown>[],
+    field: FieldConfig,
+    inline: boolean,
+    outer: Record<string, unknown> | undefined
+  ): Promise<void> {
+    for (const { slug, instance } of componentInstances(
+      field,
+      rows,
+      options.declaredComponentDecides
+    )) {
+      if (slug === null) {
+        withholdWhole(instance);
+        continue;
+      }
+      await visit({
+        instance,
+        slug,
+        field: nameOf(field) ?? "",
+        inline,
+        outer,
+      });
+      const inner = componentFields.get(slug);
+      if (inner) {
+        await walkLevel(
+          instance,
+          inner,
+          true,
+          new WeakSet(),
+          inline ? outer : instance
+        );
+      }
     }
   }
 }

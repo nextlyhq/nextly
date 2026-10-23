@@ -337,9 +337,13 @@ export async function keepDeniedFieldGroupsInDraft(params: {
   for (const [name, value] of Object.entries(kept)) params.draft[name] = value;
 }
 
-/** A stored instance's identity: its field group, and its id there. */
-function instanceKey(slug: string, id: string): string {
-  return `${slug}\u0000${id}`;
+/**
+ * A stored instance's identity: the field holding it, its field group, and
+ * its id there. The save looks an instance up among its own field's rows, so
+ * an id from another field holding the same field group names no row here.
+ */
+function instanceKey(field: string, slug: string, id: string): string {
+  return `${field}\u0000${slug}\u0000${id}`;
 }
 
 /** The identities of the instances `document` holds in their own tables. */
@@ -353,9 +357,9 @@ async function storedInstanceKeys(
     detachData(document),
     fields,
     fieldGroupFields,
-    ({ instance, slug, inline }) => {
+    ({ instance, slug, field, inline }) => {
       if (!inline && typeof instance.id === "string") {
-        keys.add(instanceKey(slug, instance.id));
+        keys.add(instanceKey(field, slug, instance.id));
       }
       return Promise.resolve();
     },
@@ -400,7 +404,7 @@ async function keepProtectedStoredInstances(params: {
           storedRows[0] ? slugOf(storedRows[0]) : undefined,
           params
         )
-      : await keptInstanceList(sent, storedRows, slugOf, params);
+      : await keptInstanceList(name, sent, storedRows, slugOf, params);
     if (kept !== undefined) params.data[name] = kept;
   }
 }
@@ -431,6 +435,7 @@ async function keptSingleInstance(
  * put back at its stored place, or nothing when it drops none of them.
  */
 async function keptInstanceList(
+  field: string,
   sent: unknown,
   storedRows: Record<string, unknown>[],
   slugOf: (row: Record<string, unknown>) => string | undefined,
@@ -441,7 +446,7 @@ async function keptInstanceList(
     rowsOf(kept).flatMap(row => {
       const slug = slugOf(row);
       return typeof row.id === "string" && slug
-        ? [instanceKey(slug, row.id)]
+        ? [instanceKey(field, slug, row.id)]
         : [];
     })
   );
@@ -449,7 +454,7 @@ async function keptInstanceList(
   for (const [index, row] of storedRows.entries()) {
     const slug = slugOf(row);
     if (!slug || typeof row.id !== "string") continue;
-    if (sentKeys.has(instanceKey(slug, row.id))) continue;
+    if (sentKeys.has(instanceKey(field, slug, row.id))) continue;
     if (!(await holdsProtectedValue(row, slug, params))) continue;
     kept.splice(Math.min(index, kept.length), 0, row);
     changed = true;
@@ -594,7 +599,7 @@ function standingOf(
   existing: ReadonlySet<string> | undefined,
   created: WeakSet<object>
 ): { isNew: boolean; storedId: string | undefined } {
-  const { instance, slug, inline, outer } = reached;
+  const { instance, slug, field, inline, outer } = reached;
   if (inline) {
     return {
       isNew: outer !== undefined && created.has(outer),
@@ -603,7 +608,7 @@ function standingOf(
   }
   const id = typeof instance.id === "string" ? instance.id : undefined;
   const storedHere =
-    id !== undefined && existing?.has(instanceKey(slug, id)) === true;
+    id !== undefined && existing?.has(instanceKey(field, slug, id)) === true;
   const isNew = existing !== undefined && !storedHere;
   if (isNew) created.add(instance);
   return { isNew, storedId: storedHere ? id : undefined };
