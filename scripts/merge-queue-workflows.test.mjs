@@ -1778,7 +1778,6 @@ const CHECK_CONFIGURATION = [
   "lint-staged.config.mjs",
   "oxlint.config.mjs",
   "oxlint.scripts.config.mjs",
-  "tsconfig.base.json",
   "vitest.config.ts",
 ];
 
