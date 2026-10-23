@@ -98,6 +98,23 @@ async function singlesArePresent(probe: ConditionProbe): Promise<boolean> {
 }
 
 /**
+ * Whether setup is left to do, answering "yes" when the check itself failed.
+ *
+ * 🔴 The one condition that fails VISIBLE. Every other evaluator that throws
+ * is left unanswered, which hides its card; that is right for a card that is
+ * merely optional, and wrong for this one, whose card is where a reader learns
+ * setup could not be checked. Hidden on failure, a broken check reads exactly
+ * like a finished setup.
+ */
+async function setupNotKnownToBeDone(probe: ConditionProbe): Promise<boolean> {
+  try {
+    return await onboardingIsIncomplete(probe);
+  } catch {
+    return true;
+  }
+}
+
+/**
  * One arm per condition, exhaustively.
  *
  * A `Record` keyed by the union rather than a `switch` with a default: a
@@ -110,7 +127,7 @@ const EVALUATORS: Record<
   (probe: ConditionProbe) => Promise<boolean>
 > = {
   "content:empty": contentIsEmpty,
-  "onboarding:incomplete": onboardingIsIncomplete,
+  "onboarding:incomplete": setupNotKnownToBeDone,
   "seed:unanswered": seedIsUnanswered,
   "collections:present": collectionsArePresent,
   "singles:present": singlesArePresent,
