@@ -17,6 +17,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { untilSomeoneWaitsOnALock } from "../../versions/__tests__/helpers/lock-wait";
 import type { SingleEntryService } from "../services/single-entry-service";
 
 let current: TestNextly | undefined;
@@ -26,6 +27,7 @@ afterEach(async () => {
 });
 
 const SLUG = "site";
+const TABLE = `single_${SLUG}`;
 
 async function boot(
   dialect: TestDialect,
@@ -454,8 +456,15 @@ describe.each(getConfiguredTestDialects())(
         locale: "en",
         overrideAccess: true,
       });
-      expect(refused.success).toBe(false);
-      expect(refused.statusCode).toBe(404);
+      expect({
+        success: refused.success,
+        statusCode: refused.statusCode,
+        message: refused.message,
+      }).toEqual({
+        success: false,
+        statusCode: 404,
+        message: "This document no longer exists.",
+      });
       expect((await pendingSnapshot("en")).articleCount).toBe(10);
 
       // The document as it is, named: taken.
@@ -471,6 +480,69 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(taken.data).toEqual({ taken: ["articleCount"], outOfDate: [] });
     });
+
+    // The row can be replaced while the take waits for its lock. A read taken
+    // before the lock, compared after it, still holds the id it read, and the
+    // lock itself holds a row that is gone. SQLite runs one writer at a time,
+    // so the two cannot overlap there.
+    it.skipIf(dialect === "sqlite")(
+      "refuses when the document is replaced while the take waits for the lock",
+      async () => {
+        const singles = await boot(dialect);
+        await spanishPublishesThirteen(singles);
+        const authorised = (
+          (await singles.get(SLUG, { locale: "en", overrideAccess: true }))
+            .data as { id: string }
+        ).id;
+
+        let release = (): void => {};
+        const held = new Promise<void>(resolve => {
+          release = resolve;
+        });
+        // Another writer replaces the document under its lock, and holds the
+        // lock until the take is parked on it.
+        const replacing = current!.adapter.transaction(async tx => {
+          await tx.lockRow(TABLE, authorised);
+          const row = await tx.selectOne<Record<string, unknown>>(TABLE, {});
+          await tx.delete(TABLE, { column: "id", op: "=", value: authorised });
+          await tx.insert(TABLE, { ...row, id: `${authorised}-put-in-place` });
+          await held;
+        });
+
+        try {
+          const taking = singles.takeLiveSharedValues({
+            slug: SLUG,
+            entryId: authorised,
+            locale: "en",
+            overrideAccess: true,
+          });
+          await untilSomeoneWaitsOnALock(current!.adapter, dialect);
+          release();
+          await replacing;
+
+          const refused = await taking;
+          // Refused for the document, by the check that reads it under its
+          // own lock. Read before the lock instead, the take carries on into
+          // a document that is gone and fails far downstream, where the
+          // version pins are written and the message is about pinning.
+          expect({
+            success: refused.success,
+            statusCode: refused.statusCode,
+            message: refused.message,
+          }).toEqual({
+            success: false,
+            statusCode: 404,
+            message: "This document no longer exists.",
+          });
+          // The change the caller named kept the count it began from: the
+          // live values were taken into no document at all.
+          expect((await pendingSnapshot("en")).articleCount).toBe(10);
+        } finally {
+          release();
+          await replacing.catch(() => {});
+        }
+      }
+    );
 
     // A field rule that reads a sibling is judged on the change as it will
     // be, the sibling included, not on the fields taken alone.

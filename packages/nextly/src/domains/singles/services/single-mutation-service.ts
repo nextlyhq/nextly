@@ -376,18 +376,27 @@ export class SingleMutationService extends BaseService {
     requestLocale: string | null,
     expectedEntryId?: string
   ) {
-    const row = await tx.selectOne<{ id?: string }>(singleMeta.tableName, {});
+    // Lock the row and read it in one statement. A plain read followed by a
+    // separate lock leaves a window: a row replaced in between is gone by the
+    // time the lock runs, so the lock holds nothing and the id compared below
+    // is still the one read before it. `forUpdate` also makes MySQL's
+    // repeatable-read isolation return the latest committed row rather than
+    // this transaction's snapshot. SQLite serializes writers with BEGIN
+    // IMMEDIATE, so the lock is a no-op there and the read is current anyway.
+    const row = await tx.selectOne<{ id?: string }>(singleMeta.tableName, {
+      forUpdate: true,
+    });
     const entryId = row?.id;
-    if (entryId === undefined) return null;
-    await tx.lockRow(singleMeta.tableName, entryId);
     if (expectedEntryId !== undefined && entryId !== expectedEntryId) {
       throw NextlyError.notFound({
+        message: "This document no longer exists.",
         logContext: {
           reason: "take-live-shared-values-single-replaced",
           scopeSlug: slug,
         },
       });
     }
+    if (entryId === undefined) return null;
     const ref = { scopeKind: "single" as const, scopeSlug: slug, entryId };
     const locale = workingDraftLocale({
       documentLocalized: true,
@@ -621,7 +630,15 @@ export class SingleMutationService extends BaseService {
       // A Single is one row, so its identity comes from reading that row rather
       // than from the request. No row means the document has never been written,
       // which cannot have a pending change against it.
-      const row = await tx.selectOne<{ id?: string }>(singleMeta.tableName, {});
+      //
+      // The read takes the row's lock in the same statement, which serializes
+      // it with the draft-save upserts that lock this row before writing the
+      // sidecar. Read before the lock instead, a row replaced in between is
+      // gone by the time the lock runs, so the lock holds nothing and the id
+      // compared here is still the one read before it.
+      const row = await tx.selectOne<{ id?: string }>(singleMeta.tableName, {
+        forUpdate: true,
+      });
       const entryId = row?.id;
       if (params.entryId !== undefined && entryId !== params.entryId) {
         throw NextlyError.notFound({
@@ -633,9 +650,6 @@ export class SingleMutationService extends BaseService {
       }
       if (entryId === undefined) return 0;
 
-      // Serialize with concurrent draft-save upserts, which lock this same row
-      // before writing the sidecar.
-      await tx.lockRow(singleMeta.tableName, entryId);
       const draftLocale = workingDraftLocale({
         documentLocalized: singleMeta.localized === true,
         requestLocale: params.locale ?? null,

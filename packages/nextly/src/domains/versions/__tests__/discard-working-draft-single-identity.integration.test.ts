@@ -26,8 +26,10 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { discardWorkingDraft } from "../discard-working-draft";
+import { untilSomeoneWaitsOnALock } from "./helpers/lock-wait";
 
 const SETTINGS = "discard_identity_settings";
+const TABLE = `single_${SETTINGS}`;
 
 describe.each(getConfiguredTestDialects())(
   "a Single's discard is bound to the document it was checked against (%s)",
@@ -100,5 +102,56 @@ describe.each(getConfiguredTestDialects())(
       expect(removed).toBe(1);
       expect(await draftParts()).toEqual([]);
     });
+
+    // The row can be replaced while the discard waits for its lock. Read
+    // before the lock, the id compared is still the one read before it and
+    // the lock holds a row that is gone, so the discard goes on to remove the
+    // draft of a document it was never checked against. SQLite runs one
+    // writer at a time, so the two cannot overlap there.
+    it.skipIf(dialect === "sqlite")(
+      "refuses when the Single is replaced while the discard waits for the lock",
+      async () => {
+        await new Nextly().updateSingle({
+          slug: SETTINGS,
+          data: { siteName: "Acme (pending once more)" },
+        });
+        expect((await draftParts()).length).toBeGreaterThan(0);
+
+        let release = (): void => {};
+        const held = new Promise<void>(resolve => {
+          release = resolve;
+        });
+        // Another writer replaces the document under its lock, and holds the
+        // lock until the discard is parked on it.
+        const replacing = t.adapter.transaction(async tx => {
+          await tx.lockRow(TABLE, liveId);
+          const row = await tx.selectOne<Record<string, unknown>>(TABLE, {});
+          await tx.delete(TABLE, { column: "id", op: "=", value: liveId });
+          await tx.insert(TABLE, { ...row, id: `${liveId}-put-in-place` });
+          await held;
+        });
+
+        try {
+          const discarding = discardWorkingDraft({
+            scopeKind: "single",
+            slug: SETTINGS,
+            entryId: liveId,
+            user: { id: "system-check", roles: ["super-admin"] },
+          });
+          await untilSomeoneWaitsOnALock(t.adapter, dialect);
+          release();
+          await replacing;
+
+          await expect(discarding).rejects.toMatchObject({
+            code: "NOT_FOUND",
+          });
+          // The draft of the document that was checked is still there.
+          expect((await draftParts()).length).toBeGreaterThan(0);
+        } finally {
+          release();
+          await replacing.catch(() => {});
+        }
+      }
+    );
   }
 );
