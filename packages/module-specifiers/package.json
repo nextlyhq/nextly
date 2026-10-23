@@ -10,6 +10,10 @@
     "./parse-source": {
       "types": "./src/parse-source.d.mts",
       "default": "./src/parse-source.mjs"
+    },
+    "./declaration-exports": {
+      "types": "./src/declaration-exports.d.mts",
+      "default": "./src/declaration-exports.mjs"
     }
   },
   "scripts": {
