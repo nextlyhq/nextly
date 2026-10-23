@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 
 import { oklchToRgb, parseHex, type Rgb } from "@nextlyhq/ui/color";
+import { getBrandingCss } from "nextly/config";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -112,11 +113,120 @@ describe("the brand's stylesheet", () => {
       `.nextly-admin, .nextly-admin.dark { --nx-primary: ${PALE};`
     );
     expect(css).toContain(
-      `.nextly-admin { --nx-chart-1: ${chartColourFor(PALE, "light")}; --nx-chart-2: ${NAVY}; }`
+      `.nextly-admin.nextly-admin { --nx-chart-1: ${chartColourFor(PALE, "light")}; --nx-chart-2: ${NAVY}; }`
     );
     expect(css).toContain(
-      `.nextly-admin.dark { --nx-chart-1: ${PALE}; --nx-chart-2: ${chartColourFor(NAVY, "dark")}; }`
+      `.nextly-admin.nextly-admin.dark { --nx-chart-1: ${PALE}; --nx-chart-2: ${chartColourFor(NAVY, "dark")}; }`
     );
     expect(brandingCss({})).toBeUndefined();
+  });
+});
+
+/** One declaration of a property, with the class-only selectors it is declared under. */
+interface Declaration {
+  selectors: string[][];
+  value: string;
+}
+
+/**
+ * The classes a class-only selector names, repeats included. Any other
+ * selector throws, so a sheet this cannot grade fails the test rather than
+ * being misread.
+ */
+function classesOf(selector: string): string[] {
+  if (!/^(\.[\w-]+)+$/.test(selector)) {
+    throw new Error(`not a class-only selector: ${selector}`);
+  }
+  return selector.slice(1).split(".");
+}
+
+/** Every declaration of `property` in `sheet`, in the order it is written. */
+function declarationsOf(property: string, sheet: string): Declaration[] {
+  const declared = new RegExp(`${property}:\\s*([^;]+);`);
+  return [...sheet.matchAll(/([^{}]+)\{([^}]*)\}/g)].flatMap(
+    ([, selectorList, body]) => {
+      const value = declared.exec(body!)?.[1];
+      if (value === undefined) return [];
+      const selectors = selectorList!.split(",").map(s => classesOf(s.trim()));
+      return [{ selectors, value: value.trim() }];
+    }
+  );
+}
+
+/**
+ * The value of `property` that wins on a wrapper carrying `classes`, when the
+ * sheets are applied in the order given.
+ *
+ * The cascade worked out from the selectors, because the test DOM's computed
+ * style gives the last matching rule whatever its specificity. A class-only
+ * selector's specificity is the number of classes it names, repeats included;
+ * a rule takes the most specific of its selectors that match, and a tie goes
+ * to the later rule.
+ */
+function winningValue(
+  property: string,
+  classes: readonly string[],
+  sheets: readonly string[]
+): string | undefined {
+  let winner: { specificity: number; value: string } | undefined;
+  for (const { selectors, value } of sheets.flatMap(sheet =>
+    declarationsOf(property, sheet)
+  )) {
+    const matching = selectors.filter(named =>
+      named.every(name => classes.includes(name))
+    );
+    if (matching.length === 0) continue;
+    const specificity = Math.max(...matching.map(named => named.length));
+    if (!winner || specificity >= winner.specificity) {
+      winner = { specificity, value };
+    }
+  }
+  return winner?.value;
+}
+
+const LIGHT = ["nextly-admin"];
+const DARK = ["nextly-admin", "dark"];
+
+describe("the adjusted chart slots beside the server-rendered stylesheet", () => {
+  // The same brand as the server renders it: `getBrandingCss` writes the
+  // unadjusted slots, and the admin is sent the colours it wrote.
+  const serverSheet = getBrandingCss({
+    colors: { primary: "#fcf49c", accent: "#0e1539" },
+  })!;
+  const sent = (token: string) =>
+    new RegExp(`--nx-${token}: ([^;]+);`).exec(serverSheet)![1]!;
+  const primary = sent("primary");
+  const accent = sent("accent");
+  const clientSheet = brandingCss({ primary, accent })!;
+
+  it("win in each mode, though the server's sheet comes later", () => {
+    // The adjustment has something to win: each colour fails one mode.
+    expect(lowest(primary, "light")).toBeLessThan(3);
+    expect(lowest(accent, "dark")).toBeLessThan(3);
+
+    // The admin's sheet is in the head; the server's is in the layout's body.
+    const sheets = [clientSheet, serverSheet];
+    expect(winningValue("--nx-chart-1", LIGHT, sheets)).toBe(
+      chartColourFor(primary, "light")
+    );
+    expect(winningValue("--nx-chart-2", DARK, sheets)).toBe(
+      chartColourFor(accent, "dark")
+    );
+    // And the mode a colour reads in keeps it as given.
+    expect(winningValue("--nx-chart-1", DARK, sheets)).toBe(primary);
+    expect(winningValue("--nx-chart-2", LIGHT, sheets)).toBe(accent);
+  });
+
+  it("would lose to the server's sheet at its specificity, which is why they repeat the class", () => {
+    // The control: the reading above can tell the two apart. At one
+    // `.nextly-admin` (and `.nextly-admin.dark`) the later server sheet wins,
+    // and the unadjusted colour is drawn.
+    const atServerSpecificity = clientSheet.replaceAll(
+      ".nextly-admin.nextly-admin",
+      ".nextly-admin"
+    );
+    const sheets = [atServerSpecificity, serverSheet];
+    expect(winningValue("--nx-chart-1", LIGHT, sheets)).toBe(primary);
+    expect(winningValue("--nx-chart-2", DARK, sheets)).toBe(accent);
   });
 });

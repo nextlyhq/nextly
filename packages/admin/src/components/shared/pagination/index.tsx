@@ -196,7 +196,9 @@ function PaginationSummary({
  * />
  * ```
  */
-export const Pagination = React.forwardRef<HTMLElement, PaginationProps>(
+export const Pagination: React.ForwardRefExoticComponent<
+  PaginationProps & React.RefAttributes<HTMLElement>
+> = React.forwardRef<HTMLElement, PaginationProps>(
   (
     {
       currentPage,

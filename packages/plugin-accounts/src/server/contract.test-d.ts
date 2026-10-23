@@ -72,7 +72,7 @@ const verifyAnswers: Equal<
   AccountOutcome & { readonly signedIn: boolean }
 > = true;
 
-export const assertions = [
+export const assertions: true[] = [
   serverAnswers,
   servicesAnswer,
   changes,

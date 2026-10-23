@@ -84,39 +84,45 @@ function endpoint(
   };
 }
 
-export const signUpEndpoint = endpoint("signUp");
+export const signUpEndpoint: Endpoint = endpoint("signUp");
 
 /** Verifies by link or by code, and says whether it signed the visitor in. */
-export const verifyEndpoint = endpoint("verifyAddress", outcome => ({
+export const verifyEndpoint: Endpoint = endpoint("verifyAddress", outcome => ({
   signedIn: outcome.signedIn === true,
 }));
 
-export const resendEndpoint = endpoint("resendVerification");
+export const resendEndpoint: Endpoint = endpoint("resendVerification");
 
-export const notMeEndpoint = endpoint("removeUnverifiedAccount");
+export const notMeEndpoint: Endpoint = endpoint("removeUnverifiedAccount");
 
 /** Signs in, and says where to go next: a path on the site only. */
-export const signInEndpoint = endpoint("signIn", (_outcome, read, server) => ({
-  redirectTo: server.returnPath(read("next") || undefined),
-}));
+export const signInEndpoint: Endpoint = endpoint(
+  "signIn",
+  (_outcome, read, server) => ({
+    redirectTo: server.returnPath(read("next") || undefined),
+  })
+);
 
-export const signOutEndpoint = endpoint("signOut");
+export const signOutEndpoint: Endpoint = endpoint("signOut");
 
-export const signOutEverywhereEndpoint = endpoint("signOutEverywhere");
+export const signOutEverywhereEndpoint: Endpoint =
+  endpoint("signOutEverywhere");
 
-export const resetRequestEndpoint = endpoint("requestPasswordReset");
+export const resetRequestEndpoint: Endpoint = endpoint("requestPasswordReset");
 
-export const resetEndpoint = endpoint("resetPassword");
+export const resetEndpoint: Endpoint = endpoint("resetPassword");
 
-export const changePasswordEndpoint = endpoint("changePassword");
+export const changePasswordEndpoint: Endpoint = endpoint("changePassword");
 
-export const changeAddressEndpoint = endpoint("changeAddress");
+export const changeAddressEndpoint: Endpoint = endpoint("changeAddress");
 
-export const confirmAddressEndpoint = endpoint("confirmAddressChange");
+export const confirmAddressEndpoint: Endpoint = endpoint(
+  "confirmAddressChange"
+);
 
-export const cancelAddressEndpoint = endpoint("cancelAddressChange");
+export const cancelAddressEndpoint: Endpoint = endpoint("cancelAddressChange");
 
-export const deleteAccountEndpoint = endpoint("deleteAccount");
+export const deleteAccountEndpoint: Endpoint = endpoint("deleteAccount");
 
 /** The signed-in account, or null; never cached. */
 export const meEndpoint: Endpoint = async (deps, request) => {

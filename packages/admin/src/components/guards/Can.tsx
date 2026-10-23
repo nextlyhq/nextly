@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { useCan } from "../../hooks/useCan";
 
@@ -20,6 +20,10 @@ export interface CanProps {
  * shows while permissions are loading. Client-side UX gating only — the server
  * still enforces access via `requirePermission`.
  */
-export function Can({ permission, fallback = null, children }: CanProps) {
+export function Can({
+  permission,
+  fallback = null,
+  children,
+}: CanProps): JSX.Element {
   return useCan(permission) ? <>{children}</> : <>{fallback}</>;
 }

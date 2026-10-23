@@ -52,7 +52,9 @@ interface DualSidebarProps {
   isMobile?: boolean;
 }
 
-export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
+export function DualSidebar({
+  isMobile,
+}: DualSidebarProps = {}): React.JSX.Element {
   const { pathname, route, isHydrated } = useRouter();
   const { isFolderTreeVisible } = useMediaContext();
   const {

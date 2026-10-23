@@ -28,6 +28,8 @@ import {
   useQueries,
   useQuery,
   useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
@@ -45,6 +47,12 @@ import {
   publishReleaseNow,
   removeReleaseMember,
   scheduleRelease,
+  type ReleaseReadinessListResponse,
+  type ReleaseMutationResponse,
+  type ReleaseListResponse,
+  type MemberMutationResponse,
+  type MemberListResponse,
+  type BlockerListResponse,
 } from "@admin/services/releaseApi";
 import {
   RELEASE_LIST_TABS,
@@ -57,23 +65,40 @@ import {
   type ReleaseListParams,
   type ReleaseListTab,
   type ScheduleReleasePayload,
+  type Release,
 } from "@admin/types/releases";
 
 export const releaseKeys = {
   all: () => ["releases"] as const,
-  list: (params: ReleaseListParams) => ["releases", "list", params] as const,
-  calendar: (params: ReleaseCalendarParams) =>
+  list: (
+    params: ReleaseListParams
+  ): readonly ["releases", "list", ReleaseListParams] =>
+    ["releases", "list", params] as const,
+  calendar: (
+    params: ReleaseCalendarParams
+  ): readonly ["releases", "calendar", ReleaseCalendarParams] =>
     ["releases", "calendar", params] as const,
-  everyId: (params: ReleaseListParams) =>
+  everyId: (
+    params: ReleaseListParams
+  ): readonly ["releases", "every-id", ReleaseListParams] =>
     ["releases", "every-id", params] as const,
-  detail: (id: string) => ["releases", "detail", id] as const,
-  members: (id: string) => ["releases", "members", id] as const,
-  blockers: (id: string) => ["releases", "blockers", id] as const,
-  readiness: (ids: readonly string[], listReadAt: number) =>
+  detail: (id: string): readonly ["releases", "detail", string] =>
+    ["releases", "detail", id] as const,
+  members: (id: string): readonly ["releases", "members", string] =>
+    ["releases", "members", id] as const,
+  blockers: (id: string): readonly ["releases", "blockers", string] =>
+    ["releases", "blockers", id] as const,
+  readiness: (
+    ids: readonly string[],
+    listReadAt: number
+  ): readonly ["release-page-readiness", readonly string[], number] =>
     ["release-page-readiness", [...ids], listReadAt] as const,
 };
 
-export function useReleases(params: ReleaseListParams = {}, enabled = true) {
+export function useReleases(
+  params: ReleaseListParams = {},
+  enabled = true
+): UseQueryResult<ReleaseListResponse, Error> {
   return useQuery({
     queryKey: releaseKeys.list(params),
     queryFn: () => fetchReleases(params),
@@ -112,7 +137,9 @@ export function useReleases(params: ReleaseListParams = {}, enabled = true) {
  * Polled on the same two speeds as the rest of the releases screens, and for
  * the same reason.
  */
-export function useReleaseListPage(params: ReleaseListParams) {
+export function useReleaseListPage(
+  params: ReleaseListParams
+): UseQueryResult<ReleaseListResponse, Error> {
   return useQuery({
     queryKey: releaseKeys.list(params),
     queryFn: () => fetchReleases(params),
@@ -158,7 +185,9 @@ function sameTab(
  * days, or of the same dates in another zone, and drawing it under the new
  * grid would put releases on days they are not on.
  */
-export function useReleaseCalendar(params: ReleaseCalendarParams) {
+export function useReleaseCalendar(
+  params: ReleaseCalendarParams
+): UseQueryResult<ReleaseCalendarRead, Error> {
   return useQuery({
     queryKey: releaseKeys.calendar(params),
     queryFn: () => fetchReleaseCalendar(params),
@@ -207,7 +236,10 @@ async function readEveryReleaseId(
  * Inside the `releases` root, so every release write refreshes it, and polled
  * on the list's pending speed: the answer is about releases still waiting.
  */
-export function useEveryReleaseId(params: ReleaseListParams, enabled = true) {
+export function useEveryReleaseId(
+  params: ReleaseListParams,
+  enabled = true
+): UseQueryResult<string[], Error> {
   return useQuery({
     queryKey: releaseKeys.everyId(params),
     queryFn: () => readEveryReleaseId(params),
@@ -238,7 +270,16 @@ function calendarHasPendingRelease(
 export function useReleaseTabCounts(filters: {
   search?: string;
   kind?: ReleaseKind;
-}) {
+}): {
+  counts: Record<
+    "done" | "attention" | "upcoming" | "drafts",
+    number | undefined
+  >;
+  isPending: boolean;
+  isError: boolean;
+  /** Ask every tab's count again, as a retry after a failure. */
+  refetch: () => void;
+} {
   const results = useQueries({
     queries: RELEASE_LIST_TABS.map(tab => {
       const params: ReleaseListParams = {
@@ -267,7 +308,7 @@ export function useReleaseTabCounts(filters: {
     isPending: results.some(result => result.isPending),
     isError: results.some(result => result.isError),
     /** Ask every tab's count again, as a retry after a failure. */
-    refetch: () => {
+    refetch: (): void => {
       for (const result of results) void result.refetch();
     },
   };
@@ -292,7 +333,7 @@ export function useReleaseTabCounts(filters: {
 export function useReleasesReadiness(
   releaseIds: readonly string[],
   listReadAt: number
-) {
+): UseQueryResult<ReleaseReadinessListResponse, Error> {
   return useQuery({
     queryKey: releaseKeys.readiness(releaseIds, listReadAt),
     queryFn: () => fetchReleasesReadiness(releaseIds),
@@ -314,7 +355,7 @@ export function useReleasesReadiness(
 export function useReleasesContaining(
   document: ReleaseDocumentRef | undefined,
   enabled = true
-) {
+): UseQueryResult<ReleaseListResponse, Error> {
   // The route's ceiling rather than its default of 50. A document in more
   // than fifty scheduled releases is implausible, and asking for the ceiling
   // costs nothing when the real answer is one or two — but the banner presents
@@ -384,7 +425,9 @@ function hasPendingRelease(
   return (data?.items ?? []).some(release => release.state === "scheduled");
 }
 
-export function useRelease(id: string | undefined) {
+export function useRelease(
+  id: string | undefined
+): UseQueryResult<Release, Error> {
   return useQuery({
     queryKey: releaseKeys.detail(id ?? ""),
     queryFn: () => fetchRelease(id as string),
@@ -433,7 +476,10 @@ export function useRelease(id: string | undefined) {
  * "nothing is blocking this" is exactly the answer that would let somebody
  * schedule a launch that cannot run.
  */
-export function useReleaseBlockers(id: string | undefined, enabled = true) {
+export function useReleaseBlockers(
+  id: string | undefined,
+  enabled = true
+): UseQueryResult<BlockerListResponse, Error> {
   return useQuery({
     queryKey: releaseKeys.blockers(id ?? ""),
     queryFn: () => fetchReleaseBlockers(id as string),
@@ -442,7 +488,9 @@ export function useReleaseBlockers(id: string | undefined, enabled = true) {
   });
 }
 
-export function useReleaseMembers(id: string | undefined) {
+export function useReleaseMembers(
+  id: string | undefined
+): UseQueryResult<MemberListResponse, Error> {
   return useQuery({
     queryKey: releaseKeys.members(id ?? ""),
     queryFn: () => fetchReleaseMembers(id as string),
@@ -484,7 +532,12 @@ function useRefreshRelease() {
  */
 const NO_RETRY = { retry: false } as const;
 
-export function useCreateRelease() {
+export function useCreateRelease(): UseMutationResult<
+  ReleaseMutationResponse,
+  Error,
+  CreateReleasePayload,
+  unknown
+> {
   const refresh = useRefreshRelease();
   return useMutation({
     ...NO_RETRY,
@@ -496,7 +549,14 @@ export function useCreateRelease() {
   });
 }
 
-export function useScheduleRelease(id: string) {
+export function useScheduleRelease(id: string): UseMutationResult<
+  {
+    message: string;
+  },
+  Error,
+  ScheduleReleasePayload,
+  unknown
+> {
   const refresh = useRefreshRelease();
   return useMutation({
     ...NO_RETRY,
@@ -509,7 +569,14 @@ export function useScheduleRelease(id: string) {
   });
 }
 
-export function useCancelRelease(id: string) {
+export function useCancelRelease(id: string): UseMutationResult<
+  {
+    message: string;
+  },
+  Error,
+  void,
+  unknown
+> {
   const refresh = useRefreshRelease();
   return useMutation({
     ...NO_RETRY,
@@ -521,7 +588,14 @@ export function useCancelRelease(id: string) {
   });
 }
 
-export function useAddReleaseMember(releaseId: string) {
+export function useAddReleaseMember(
+  releaseId: string
+): UseMutationResult<
+  MemberMutationResponse,
+  Error,
+  AddReleaseMemberPayload,
+  unknown
+> {
   const refresh = useRefreshRelease();
   return useMutation({
     ...NO_RETRY,
@@ -534,7 +608,14 @@ export function useAddReleaseMember(releaseId: string) {
   });
 }
 
-export function useRemoveReleaseMember(releaseId: string) {
+export function useRemoveReleaseMember(releaseId: string): UseMutationResult<
+  {
+    message: string;
+  },
+  Error,
+  string,
+  unknown
+> {
   const refresh = useRefreshRelease();
   return useMutation({
     ...NO_RETRY,
@@ -549,7 +630,9 @@ export function useRemoveReleaseMember(releaseId: string) {
   });
 }
 
-export function usePublishReleaseNow(id: string) {
+export function usePublishReleaseNow(
+  id: string
+): UseMutationResult<ReleaseMutationResponse, Error, void, unknown> {
   const refresh = useRefreshRelease();
   return useMutation({
     ...NO_RETRY,
@@ -563,7 +646,9 @@ export function usePublishReleaseNow(id: string) {
   });
 }
 
-export function useDeleteRelease(id: string) {
+export function useDeleteRelease(
+  id: string
+): UseMutationResult<ReleaseMutationResponse, Error, void, unknown> {
   const queryClient = useQueryClient();
   const refresh = useRefreshRelease();
   return useMutation({

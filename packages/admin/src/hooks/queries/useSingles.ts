@@ -33,12 +33,15 @@ import {
   useQueryClient,
   type QueryClient,
   type UseQueryOptions,
+  type UseMutationResult,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { singleApi, type SingleDocument } from "@admin/services/singleApi";
 import type { ApiSingle, UpdateSinglePayload } from "@admin/types/entities";
+import type { UseBulkMutationReturn } from "@admin/types/hooks/bulk-mutation";
 
 import { useBulkMutation } from "../useBulkMutation";
 
@@ -73,13 +76,25 @@ export const singleKeys = {
   all: () => ["singles"] as const,
 
   /** Base key for Single list queries */
-  lists: () => [...singleKeys.all(), "list"] as const,
+  lists: (): readonly ["singles", "list"] =>
+    [...singleKeys.all(), "list"] as const,
 
   /**
    * Stable query key for paginated/filtered Single lists.
    * Flattens params to prevent object reference issues.
    */
-  list: (params: TableParams) =>
+  list: (
+    params: TableParams
+  ): readonly [
+    "singles",
+    "list",
+    {
+      readonly page: number;
+      readonly pageSize: number;
+      readonly search: string;
+      readonly sorting: string;
+    },
+  ] =>
     [
       ...singleKeys.lists(),
       {
@@ -91,16 +106,20 @@ export const singleKeys = {
     ] as const,
 
   /** Base key for Single detail queries */
-  details: () => [...singleKeys.all(), "detail"] as const,
+  details: (): readonly ["singles", "detail"] =>
+    [...singleKeys.all(), "detail"] as const,
 
   /** Query key for a single Single by slug */
-  detail: (slug: string) => [...singleKeys.details(), slug] as const,
+  detail: (slug: string): readonly ["singles", "detail", string] =>
+    [...singleKeys.details(), slug] as const,
 
   /** Base key for Single schema queries */
-  schemas: () => [...singleKeys.all(), "schema"] as const,
+  schemas: (): readonly ["singles", "schema"] =>
+    [...singleKeys.all(), "schema"] as const,
 
   /** Query key for a Single's schema by slug */
-  schema: (slug: string) => [...singleKeys.schemas(), slug] as const,
+  schema: (slug: string): readonly ["singles", "schema", string] =>
+    [...singleKeys.schemas(), slug] as const,
 };
 
 /**
@@ -155,7 +174,7 @@ export function useSingles(
     UseQueryOptions<ListResponse<ApiSingle>, Error>,
     "queryKey" | "queryFn"
   >
-) {
+): UseQueryResult<ListResponse<ApiSingle>, Error> {
   const effectiveParams = params || defaultParams;
   return useQuery<ListResponse<ApiSingle>, Error>({
     queryKey: singleKeys.list(effectiveParams),
@@ -201,7 +220,7 @@ export function useSingles(
 export function useSingle(
   slug?: string,
   options?: Omit<UseQueryOptions<ApiSingle, Error>, "queryKey" | "queryFn">
-) {
+): UseQueryResult<ApiSingle, Error> {
   return useQuery<ApiSingle, Error>({
     queryKey: slug ? singleKeys.detail(slug) : singleKeys.details(),
     queryFn: async () => {
@@ -282,7 +301,15 @@ function clearSingleIdentityCaches(
   }
 }
 
-export function useCreateSingle() {
+export function useCreateSingle(): UseMutationResult<
+  {
+    message: string;
+    data: ApiSingle;
+  },
+  Error,
+  UpdateSinglePayload,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -328,7 +355,17 @@ export function useCreateSingle() {
  * }
  * ```
  */
-export function useUpdateSingle() {
+export function useUpdateSingle(): UseMutationResult<
+  {
+    message: string;
+  },
+  Error,
+  {
+    slug: string;
+    updates: UpdateSinglePayload;
+  },
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -370,7 +407,12 @@ export function useUpdateSingle() {
  * }
  * ```
  */
-export function useDeleteSingle() {
+export function useDeleteSingle(): UseMutationResult<
+  void,
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<void, Error, string>({
@@ -420,7 +462,12 @@ export function useDeleteSingle() {
  * }
  * ```
  */
-export function useBulkDeleteSingles() {
+export function useBulkDeleteSingles(): UseBulkMutationReturn<
+  string,
+  void,
+  Error,
+  void
+> {
   const queryClient = useQueryClient();
 
   return useBulkMutation<string, void, Error, void>({
@@ -455,10 +502,12 @@ export const singleDocumentKeys = {
   all: () => ["single-documents"] as const,
 
   /** Base key for Single document detail queries */
-  details: () => [...singleDocumentKeys.all(), "detail"] as const,
+  details: (): readonly ["single-documents", "detail"] =>
+    [...singleDocumentKeys.all(), "detail"] as const,
 
   /** Query key for a Single document by slug */
-  detail: (slug: string) => [...singleDocumentKeys.details(), slug] as const,
+  detail: (slug: string): readonly ["single-documents", "detail", string] =>
+    [...singleDocumentKeys.details(), slug] as const,
 };
 
 /**
@@ -519,7 +568,7 @@ export function useSingleDocument(
       "queryKey" | "queryFn"
     >;
   }
-) {
+): UseQueryResult<SingleDocument, Error> {
   return useQuery<SingleDocument, Error>({
     // i18n: locale is part of cache identity — switching languages must refetch, not serve the
     // previous language's values. Mirrors useEntry.
@@ -585,7 +634,7 @@ export function useSingleDocument(
 export function useSingleSchema(
   slug?: string,
   options?: Omit<UseQueryOptions<ApiSingle, Error>, "queryKey" | "queryFn">
-) {
+): UseQueryResult<ApiSingle, Error> {
   return useQuery<ApiSingle, Error>({
     queryKey: slug ? singleKeys.schema(slug) : singleKeys.schemas(),
     queryFn: async () => {
@@ -646,7 +695,7 @@ export function useUpdateSingleDocument(
      */
     scopeId?: string;
   }
-) {
+): UseMutationResult<SingleDocument, Error, Record<string, unknown>, unknown> {
   const queryClient = useQueryClient();
 
   // `Error`, not `ApiError`, because not every rejection is one. `fetcher`
