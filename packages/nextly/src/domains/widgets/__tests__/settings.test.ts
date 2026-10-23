@@ -811,10 +811,35 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
           { label: "30 days", value: "30d" },
         ],
       };
-      expect(applyWidgetSettings(base, [dateRange], {}).since).toBe("30d");
+      // On a count, which a window bounds.
+      const counted = { ...base, op: "count" as const };
+      expect(applyWidgetSettings(counted, [dateRange], {}).since).toBe("30d");
       expect(
-        applyWidgetSettings(base, [dateRange], { dateRange: "7d" }).since
+        applyWidgetSettings(counted, [dateRange], { dateRange: "7d" }).since
       ).toBe("7d");
+      // A list takes no window, so the same setting leaves it as declared.
+      expect(applyWidgetSettings(base, [dateRange], { dateRange: "7d" })).toBe(
+        base
+      );
+    });
+
+    it("leaves a widget's own select named dateRange alone when it offers anything but the query's spans", () => {
+      // A plugin card that reads its own "week" or "month" in its component,
+      // as it did before the knob existed: never sent to the query as since.
+      const ownRange = {
+        name: "dateRange",
+        type: "select" as const,
+        defaultValue: "week",
+        options: [
+          { label: "This week", value: "week" },
+          { label: "Last 30 days", value: "30d" },
+        ],
+      };
+      const counted = { ...base, op: "count" as const };
+      expect(applyWidgetSettings(counted, [ownRange], {})).toBe(counted);
+      expect(
+        applyWidgetSettings(counted, [ownRange], { dateRange: "30d" })
+      ).toBe(counted);
     });
 
     it("applies a stored value as it is where the collection's fields are not known, for the server to judge", () => {

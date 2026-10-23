@@ -42,7 +42,7 @@
 import { NextlyError } from "../../errors/nextly-error";
 import { SLUG_PATTERN } from "../../shared/slug-pattern";
 
-import { whereFieldNames, type RelativeSpan } from "./query";
+import { RELATIVE_SPANS, whereFieldNames, type RelativeSpan } from "./query";
 import {
   getSource,
   sourceKindFromId,
@@ -809,6 +809,7 @@ export interface KnobContext {
 /** The parts of a widget query a setting may drive. */
 interface KnobQuery {
   source?: string;
+  op?: string;
   limit?: number;
   since?: RelativeSpan;
   where?: Record<string, unknown>;
@@ -861,6 +862,14 @@ function withReaderFilter(
   const joined = Array.isArray(declared.and) ? declared.and : [];
   return { ...declared, and: [...joined, filter] };
 }
+
+/** Whether a value is one of the query's window spans. */
+function isRelativeSpan(value: unknown): value is RelativeSpan {
+  return (RELATIVE_SPANS as readonly unknown[]).includes(value);
+}
+
+/** The ops a window bounds: a count, and a timeseries. */
+const WINDOWED_OPS: ReadonlySet<string> = new Set(["count", "timeseries"]);
 
 /** The field a sort names, without its direction. */
 function sortField(sort: string): string {
@@ -916,13 +925,21 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
     },
   },
   {
-    // A card's Date range is how far back its read reaches: the range's value
-    // is a span of the query's own vocabulary, so it becomes `since` as is.
+    // A card's Date range is how far back its read reaches, for a select that
+    // offers only the query's own spans: its value becomes `since` as is, on an
+    // op a window bounds. A select of the same name offering anything else is
+    // the widget's own, and leaves the query as it was declared.
     drives: (setting, source) =>
       setting.type === "select" &&
       setting.name === "dateRange" &&
+      setting.options.every(option => isRelativeSpan(option.value)) &&
       readsACollection(source),
-    apply: (query, value) => ({ ...query, since: value as RelativeSpan }),
+    apply: (query, value) =>
+      isRelativeSpan(value) &&
+      query.op !== undefined &&
+      WINDOWED_OPS.has(query.op)
+        ? { ...query, since: value }
+        : query,
   },
   {
     drives: (setting, source) =>
