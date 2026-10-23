@@ -25,18 +25,23 @@ interface NavigationEntries {
   entries: () => ReadonlyArray<{ url: string | null }>;
 }
 
+/**
+ * Whether a value has the two members read here. A guard rather than a cast,
+ * so the return below is narrowed by the checks that justify it.
+ */
+function isNavigationEntries(value: unknown): value is NavigationEntries {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "entries" in value &&
+    typeof value.entries === "function" &&
+    "currentEntry" in value
+  );
+}
+
 function navigationEntries(): NavigationEntries | undefined {
   const { navigation } = window as Window & { navigation?: unknown };
-  if (
-    typeof navigation === "object" &&
-    navigation !== null &&
-    "entries" in navigation &&
-    typeof navigation.entries === "function" &&
-    "currentEntry" in navigation
-  ) {
-    return navigation as NavigationEntries;
-  }
-  return undefined;
+  return isNavigationEntries(navigation) ? navigation : undefined;
 }
 
 /**
