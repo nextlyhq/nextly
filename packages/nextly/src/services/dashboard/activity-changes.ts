@@ -18,7 +18,7 @@
  * @module services/dashboard/activity-changes
  */
 
-import { SYSTEM_COLUMNS } from "../../lib/system-columns";
+import { LIFECYCLE_FIELDS } from "../../domains/audit/lifecycle-fields";
 
 /**
  * A row's metadata as an object, from either form a driver hands back: the
@@ -70,17 +70,12 @@ export function publishes(metadata: unknown): boolean {
 }
 
 /**
- * The fields the status lifecycle stamps on its own: `updatedAt`, which every
- * write stamps, and every system column that exists only with Draft/Published,
- * by the name a document carries it under. Taken from the declarations rather
- * than listed, so a lifecycle column added there is one here too.
+ * Whether the row is a publish whose request also carried content of its own,
+ * written over the pending edits it promoted: a save as well as a publish.
  */
-const LIFECYCLE_FIELDS: ReadonlySet<string> = new Set([
-  "updatedAt",
-  ...SYSTEM_COLUMNS.filter(
-    column => column.presence === "withStatusLifecycle"
-  ).map(column => column.camelName),
-]);
+export function publishesWithEdits(metadata: unknown): boolean {
+  return activityMetadataOf(metadata)?.publishedWithEdits === true;
+}
 
 /**
  * Whether the row changed the document's status and nothing a person edits: a
@@ -106,7 +101,8 @@ export function isStatusOnlyChange(metadata: unknown): boolean {
  *   the person who made the edits it puts live.
  * - A publish that left the status as it was is not either. It promoted pending
  *   edits, or put other languages live, and the edits were each recorded when
- *   they were saved.
+ *   they were saved. Unless its request carried content of its own, which no
+ *   earlier save recorded: that publish is a save too.
  * - An update that does not say what it changed is read as a save: it was
  *   written before the fields were recorded, or by a save that changed
  *   nothing, and either way a person saved the document.
@@ -114,7 +110,13 @@ export function isStatusOnlyChange(metadata: unknown): boolean {
 export function isContentSave(action: unknown, metadata: unknown): boolean {
   if (action === "create") return true;
   if (action !== "update") return false;
-  if (publishes(metadata) && !changesStatus(metadata)) return false;
+  if (
+    publishes(metadata) &&
+    !changesStatus(metadata) &&
+    !publishesWithEdits(metadata)
+  ) {
+    return false;
+  }
   const changed = changedFieldsOf(metadata);
   if (changed === undefined) return true;
   return changed.some(name => !LIFECYCLE_FIELDS.has(name));

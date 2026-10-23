@@ -89,6 +89,17 @@ export type WidgetResult =
        * widget chose and nothing honest to head them with.
        */
       fields?: WidgetResultField[];
+      /**
+       * The span of time the source looked at, in whole days back from now.
+       *
+       * A source that keeps rows only for a period answers from that period
+       * alone, so an empty answer means "none in that span" rather than
+       * "none ever", and a card can say which. Absent when the source looked
+       * without a bound, and from a source that does not say.
+       *
+       * @experimental
+       */
+      window?: { days: number };
     }
   | {
       op: "groupBy";

@@ -11,14 +11,18 @@ const readableDocumentStatuses = vi.fn();
 const readableSingleStatus = vi.fn();
 const resolveReadableResources = vi.fn();
 const readRecentEditSubjects = vi.fn();
+/** The booted config the source reads its retention window from. */
+let serviceConfig: Record<string, unknown> = {};
 
 vi.mock("../../../di/container", () => ({
   container: {
     has: () => true,
     get: (name: string) =>
-      name === "versionsService"
-        ? { pendingChangeLocales }
-        : { getRecentEdits },
+      name === "config"
+        ? serviceConfig
+        : name === "versionsService"
+          ? { pendingChangeLocales }
+          : { getRecentEdits },
   },
 }));
 vi.mock("../../lib/readable-documents", () => ({
@@ -35,6 +39,10 @@ vi.mock("../activity-subjects", () => ({
   readRecentEditSubjects: () => readRecentEditSubjects() as unknown,
 }));
 
+import {
+  resolveAuditRetentionConfig,
+  setAuditRetention,
+} from "../../../domains/audit/retention-config";
 import { executeWidgetQuery } from "../../../domains/widgets/execute";
 import { clearSources } from "../../../domains/widgets/sources";
 import { clearSystemResolvers } from "../../../domains/widgets/system-sources";
@@ -77,6 +85,8 @@ const rows = (answer: unknown) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  serviceConfig = {};
+  setAuditRetention(undefined);
   resolveReadableResources.mockResolvedValue(SCOPE);
   readRecentEditSubjects.mockResolvedValue({
     singles: SINGLES,
@@ -204,6 +214,25 @@ describe("each row's status now", () => {
     ]);
   });
 
+  it("says nothing of pending changes when their read failed, rather than none", async () => {
+    // 🔴 `false` would tell the card there is nothing unpublished when the
+    // question was never answered; a read that answered still says `false`.
+    pendingChangeLocales.mockImplementation(
+      async (_kind: string, slug: string) => {
+        if (slug === "posts") throw new Error("read failed");
+        return new Map();
+      }
+    );
+    const answer = await executeWidgetQuery(
+      { source: RECENT_EDITS_SOURCE_ID, op: "list" },
+      caller
+    );
+    expect(rows(answer).map(row => [row.entryId, row.pendingChanges])).toEqual([
+      ["p1", null],
+      ["g1", false],
+    ]);
+  });
+
   it("asks no status of a collection without one", async () => {
     readRecentEditSubjects.mockResolvedValue({
       singles: SINGLES,
@@ -231,5 +260,44 @@ describe("each row's status now", () => {
       entryTitle: "Title p1",
       status: "published",
     });
+  });
+});
+
+describe("the span the answer covers", () => {
+  const ask = () =>
+    executeWidgetQuery(
+      { source: RECENT_EDITS_SOURCE_ID, op: "list", limit: 5 },
+      caller
+    );
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it("states the trail's retention, in days, when the trail is pruned", async () => {
+    serviceConfig = { auditRetention: resolveAuditRetentionConfig(undefined) };
+    expect(await ask()).toMatchObject({ window: { days: 90 } });
+    serviceConfig = {
+      auditRetention: resolveAuditRetentionConfig({
+        activityMaxAgeMs: 30 * DAY,
+      }),
+    };
+    expect(await ask()).toMatchObject({ window: { days: 30 } });
+  });
+
+  it("states a reloaded window, the one the passes now prune by", async () => {
+    serviceConfig = { auditRetention: resolveAuditRetentionConfig(undefined) };
+    setAuditRetention(
+      resolveAuditRetentionConfig({ activityMaxAgeMs: 7 * DAY })
+    );
+    expect(await ask()).toMatchObject({ window: { days: 7 } });
+  });
+
+  it("states none when nothing prunes the trail", async () => {
+    // Retention off, and an install with no audit policy at all: both keep
+    // every row, so the answer has no bound to state.
+    serviceConfig = {
+      auditRetention: resolveAuditRetentionConfig({ activityMaxAgeMs: false }),
+    };
+    expect(await ask()).not.toHaveProperty("window");
+    serviceConfig = {};
+    expect(await ask()).not.toHaveProperty("window");
   });
 });
