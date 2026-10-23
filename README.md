@@ -164,7 +164,7 @@ Nextly has a plugin SDK, in alpha: pin exact versions. The Visual Page Builder i
 
 | Tool       | Minimum                                                 |
 | ---------- | ------------------------------------------------------- |
-| Node.js    | 20.19+, 22.12+ or 24+ (not 23; Node 24 LTS recommended) |
+| Node.js    | 22.12+ or 24+ (not 23; Node 24 LTS recommended)         |
 | pnpm       | 9+ recommended; npm, yarn, and bun also supported       |
 | Next.js    | 16+ (App Router required)                               |
 | React      | 19+                                                     |

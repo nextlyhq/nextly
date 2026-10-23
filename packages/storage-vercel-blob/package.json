@@ -30,7 +30,7 @@
     "clean": "rimraf dist"
   },
   "engines": {
-    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+    "node": "^22.12.0 || >=24.0.0"
   },
   "dependencies": {
     "@vercel/blob": "^2.0.0"
@@ -38,7 +38,7 @@
   "devDependencies": {
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
-    "@types/node": "^20.19.17",
+    "@types/node": "^22.20.5",
     "@vitest/coverage-v8": "^4.1.0",
     "@vitest/ui": "^4.1.0",
     "eslint": "^9.39.1",

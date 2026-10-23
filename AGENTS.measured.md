@@ -32,7 +32,7 @@ supported node ranges and the pinned pnpm
 
 ```
 $ node -e "const p=require('./package.json');console.log(p.engines.node, '·', p.packageManager)"   # at 809cdd9dd
-^20.19.0 || ^22.12.0 || >=24.0.0 · pnpm@12.5.1
+^22.12.0 || >=24.0.0 · pnpm@12.5.1
 ```
 
 ## comment-convention
