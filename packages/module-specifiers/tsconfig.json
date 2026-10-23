@@ -1,7 +1,9 @@
 {
   "extends": "@nextlyhq/tsconfig/base-bundler.json",
   "compilerOptions": {
-    "types": []
+    // Node's, because the declaration reader reads built files and its tests
+    // write them.
+    "types": ["node"]
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules"]

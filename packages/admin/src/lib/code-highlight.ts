@@ -424,6 +424,10 @@ export function nextlyEditorChrome({
       // placeholder is pale in every mode. Same for the drop cursor, which the
       // view package draws in the foreground colour and which therefore
       // disappears against a dark background.
+      // The view package's placeholder is a fixed #888, under AA contrast on
+      // the admin's light surfaces; muted-foreground is the admin's own pale
+      // text, measured for both modes.
+      ".cm-placeholder": { color: "var(--nx-muted-foreground)" },
       ".cm-foldPlaceholder": {
         backgroundColor: "var(--nx-muted)",
         color: "var(--nx-muted-foreground)",

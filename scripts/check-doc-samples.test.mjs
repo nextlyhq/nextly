@@ -12,6 +12,7 @@ import {
   contextOnlyWorthRecording,
   deprecatedPropertiesIn,
   declaredNamesIn,
+  declaredValuesIn,
   extensionFor,
   extractFrom,
   identityOf,
@@ -27,13 +28,13 @@ import {
   readerOwnedMention,
   usedOnlyAsValue,
   withDerivedCoverage,
-  workspaceValueExports,
   parseSample,
   rebaseContextDiagnostics,
   unaccountedFor,
   unterminatedFences,
   withEarlierContext,
 } from "./check-doc-samples.mjs";
+import { topLevelOnly } from "./top-level-text.mjs";
 
 /**
  * Each guard is asserted against a CONTROL that reproduces what the checker did
@@ -59,6 +60,12 @@ const declarationHost = text => {
 
 /** What the baseline held before fences were part of an identity. */
 const messageOnly = line => line.slice(line.indexOf("  ") + 2);
+
+/**
+ * Export sets naming nothing, so a reader-ownership question is asked without
+ * the workspace's, which needs a build.
+ */
+const NOTHING_EXPORTED = { names: new Set(), values: new Set() };
 
 /** A fingerprint keyed the old way, for the control side of each comparison. */
 const fingerprintBy = (key, byFile) =>
@@ -736,6 +743,52 @@ describe("declaredNamesIn under the right grammar", () => {
   });
 });
 
+describe("declaredNamesIn on a sample that parses", () => {
+  // Each sample is a program the text reading gets wrong about one name, which
+  // the control shows: a slash after `!` that a later slash on the line makes
+  // look like a regular expression, an apostrophe in JSX text read as opening
+  // a string, and a declaration written inside a top-level template literal.
+  it.each([
+    [
+      "function f(value: number) { const x = (value! / 2) / 3; }\nconst pageValue = 1;",
+      ["f", "pageValue"],
+      "pageValue",
+    ],
+    [
+      "function f() { return <p>Don't</p>; }\nconst pageValue = 1;",
+      ["f", "pageValue"],
+      "pageValue",
+    ],
+    ["const doc = `\nconst ghost = 1;\n`;", ["doc"], "ghost"],
+  ])(
+    "reads its top-level declarations from the parse: %s",
+    (code, names, misread) => {
+      expect(declaredNamesIn(code).sort()).toEqual(names);
+      // The control: the top-level text has the name exactly when the program
+      // does not declare it there.
+      expect(new RegExp(`\\b${misread}\\b`).test(topLevelOnly(code))).toBe(
+        !names.includes(misread)
+      );
+    }
+  );
+
+  it("reads every binding of a pattern and which names are values", () => {
+    const code = [
+      "const { a, b: { c }, ...rest } = obj;",
+      "export default function Shown() {}",
+      "interface Shape {}",
+      "enum Mode { A }",
+    ].join("\n");
+
+    expect(declaredNamesIn(code).sort()).toEqual(
+      ["Mode", "Shape", "Shown", "a", "c", "rest"].sort()
+    );
+    expect(declaredValuesIn(code).sort()).toEqual(
+      ["Shown", "a", "c", "rest"].sort()
+    );
+  });
+});
+
 describe("unaccountedFor", () => {
   const complete = {
     total: 10,
@@ -792,41 +845,39 @@ describe("unterminatedFences and closing lines", () => {
   });
 });
 
-describe("isModule asks the compiler rather than listing node kinds", () => {
-  /**
-   * The kinds this used to enumerate, as the control.
-   *
-   * A list answers only for what somebody thought of, and this one was short in
-   * both directions at once, which is the shape a list always fails in.
-   */
-  const byKindList = (code, extension = "ts") =>
-    parseSample(code, extension).statements.some(
-      statement =>
-        ts.isImportDeclaration(statement) ||
-        ts.isImportEqualsDeclaration(statement) ||
-        ts.isExportDeclaration(statement) ||
-        ts.isExportAssignment(statement) ||
-        (ts.getModifiers?.(statement) ?? statement.modifiers ?? []).some(
-          modifier => modifier.kind === ts.SyntaxKind.ExportKeyword
-        )
-    );
-
+describe("isModule answers as TypeScript decides a file is a module", () => {
   it("compiles a fence whose only module syntax is import.meta", () => {
-    // TypeScript sets its module indicator for `import.meta`, so this fence is
-    // a module to the compiler that would compile it while the list read it as
-    // a fragment. Neither the reviewer nor the list found this one.
+    // TypeScript calls a file with `import.meta` a module, so the compiler that
+    // would compile this fence treats it as one. A list of declaration kinds
+    // read it as a fragment.
     const code = "const here = import.meta.url;\nconsole.log(here);\n";
     expect(isModule(code, "ts")).toBe(true);
-    expect(byKindList(code)).toBe(false);
   });
 
-  it("leaves a namespace alias alone", () => {
+  it("leaves a namespace alias alone, and loads through an import equals", () => {
     // `import A = N.M` names an existing namespace rather than loading a
-    // module, and TypeScript does not call the file a module for it. The list
-    // matched every ImportEqualsDeclaration, so it read this as a program.
-    const code = "import A = N.M;\n";
+    // module, and TypeScript does not call the file a module for it; the
+    // `require` form loads one, and it does.
+    expect(isModule("import A = N.M;\n", "ts")).toBe(false);
+    expect(isModule('import fs = require("node:fs");\n', "ts")).toBe(true);
+    expect(isModule("const a = 1;\nexport = a;\n", "ts")).toBe(true);
+  });
+
+  it("does not take top-level await for module syntax", () => {
+    // The parser's own "has module syntax" counts top-level `await`, which
+    // TypeScript does not, and the Direct API pages are full of fragments that
+    // await a call. Read that way, sixty of them became modules.
+    const code = "const posts = await nextly.find({ collection: 'posts' });\n";
     expect(isModule(code, "ts")).toBe(false);
-    expect(byKindList(code)).toBe(true);
+    expect(parseSample(code, "ts").module.hasModuleSyntax).toBe(true);
+  });
+
+  it("reads a fence that does not parse as declaring and loading nothing", () => {
+    // The parser answers a syntax error with an empty program, not a partial
+    // one, so a placeholder fragment is a fragment.
+    const code = 'import { a } from "b";\nconst c = { ... };\n';
+    expect(parseSample(code, "ts").program.body).toEqual([]);
+    expect(isModule(code, "ts")).toBe(false);
   });
 
   it("still answers for the cases the list got right", () => {
@@ -1415,135 +1466,10 @@ describe("a missing name the reader owns", () => {
   });
 });
 
-describe("the workspace's own exported names", () => {
-  // The rule above is stated against a fixture, so this is what ties it to
-  // reality. Read from `src`, which is present whether or not a build has run,
-  // so it answers the same on a clean checkout as on a laptop.
-  //
-  // The timeout is explicit because this is the one test that builds the real
-  // program over every published entry. It took 13.7 seconds on an inspected
-  // clean checkout, and vitest's 5-second default made that a red run on a
-  // slower machine rather than a slow one.
-  const BUILDS_THE_PROGRAM = 120_000;
-
-  it(
-    "knows what this workspace publishes and what it does not",
-    () => {
-      expect(readerOwnedName("Media")).toBe(false);
-      expect(readerOwnedName("Skeleton")).toBe(false);
-      // Published from a subpath and deliberately kept out of the root barrel.
-      expect(readerOwnedName("BuilderShell")).toBe(false);
-      // Entries whose output name does not mirror their source, which is what
-      // made this answer depend on a build. `nextly/document-lock` is built
-      // from `src/domains/document-lock/contract.ts`, and `@nextlyhq/ui`
-      // declares its subpath sources in a module beside its build config, so
-      // neither is reachable by turning `dist/X.d.ts` into `src/X.ts`. Each of
-      // these read as the reader's on a clean checkout and as ours after a
-      // build, which is the case that silences a real finding.
-      expect(readerOwnedName("DocumentLockHolder")).toBe(false);
-      expect(readerOwnedName("FieldTypeCatalogEntry")).toBe(false);
-      expect(readerOwnedName("Hsv")).toBe(false);
-      expect(readerOwnedName("FIELD_TYPE_CATALOG")).toBe(false);
-      expect(readerOwnedName("WidgetResult")).toBe(false);
-      // The reader's, and the control: a set that answered "exported" to
-      // everything would satisfy every assertion above. `Users` is the one that
-      // catches the opposite error: a scan of all source rather than of the
-      // published entries picks up an icon barrel's `Users` and charges four
-      // diagnostics for a name every reader generates.
-      expect(readerOwnedName("Posts")).toBe(true);
-      expect(readerOwnedName("MyCollection")).toBe(true);
-      expect(readerOwnedName("Users")).toBe(true);
-    },
-    BUILDS_THE_PROGRAM
-  );
-
-  it(
-    "separates the names that can supply a value",
-    () => {
-      // `Media` is exported as a type by `nextly` and as an interface by
-      // `@nextlyhq/admin`, and by nothing as a value.
-      expect(workspaceValueExports().has("Media")).toBe(false);
-      // Declared type-only over a target that IS a value.
-      // `export type { QueryClient } from "./types/query"` points at TanStack's
-      // runtime class, so resolving the alias and stopping there called it a
-      // value that `@nextlyhq/admin` cannot actually supply.
-      expect(workspaceValueExports().has("QueryClient")).toBe(false);
-      // The control: the same set answers yes for a real component and for a
-      // value published from a subpath, so the two checks above are a namespace
-      // distinction rather than an empty set.
-      expect(workspaceValueExports().has("Skeleton")).toBe(true);
-      expect(workspaceValueExports().has("BuilderShell")).toBe(true);
-    },
-    BUILDS_THE_PROGRAM
-  );
-
-  it(
-    "keeps a broken sample rather than calling its name the reader's",
-    () => {
-      // Three shapes that are not reader-owned however they look: a class the
-      // sample forgot to import, one of ours with a letter missing, and a
-      // component of ours misspelled.
-      expect(
-        readerOwnedMention("S3Client", "const s = new S3Client({});", "ts")
-      ).toBe(false);
-      expect(
-        readerOwnedMention("NextlyEror", "const e: NextlyEror = x;", "ts")
-      ).toBe(false);
-      expect(
-        readerOwnedMention("Skelton", "const s = <Skelton />;", "tsx")
-      ).toBe(false);
-      // Construction settles it even for a name the workspace does export,
-      // because a type-only export cannot supply the class either.
-      expect(
-        readerOwnedMention("QueryClient", "const q = new QueryClient();", "ts")
-      ).toBe(false);
-      // The control, and the reason the rule exists: the reader's own names
-      // are still set aside, including the two that sit one character from a
-      // model this workspace exports.
-      for (const name of ["Posts", "Users", "Page", "Chart", "MyCollection"]) {
-        expect(
-          readerOwnedMention(
-            name,
-            `const c = { collections: [${name}] };`,
-            "ts"
-          )
-        ).toBe(true);
-      }
-    },
-    BUILDS_THE_PROGRAM
-  );
-
-  it(
-    "reads a type-only name by how the block used it",
-    () => {
-      // `collections: [Posts, Users, Media]` needs a value, and no import here
-      // can supply one, so that `Media` is the reader's own collection exactly
-      // as `Posts` is.
-      expect(
-        readerOwnedMention(
-          "Media",
-          "const config = { collections: [Posts, Users, Media] };",
-          "ts"
-        )
-      ).toBe(true);
-      // The opposite, and the control: as a type it IS importable, so a sample
-      // using it without the import is a defect a reader meets.
-      expect(readerOwnedMention("Media", "declare const m: Media;", "ts")).toBe(
-        false
-      );
-      // And `typeof Media` needs the value, which nothing here exports, so it
-      // is the reader's the way `collections: [Media]` is.
-      expect(readerOwnedMention("Media", "type X = typeof Media;", "ts")).toBe(
-        true
-      );
-      // A name exported as a value stays a finding however it is used.
-      expect(
-        readerOwnedMention("Skeleton", "const el = <Skeleton />;", "tsx")
-      ).toBe(false);
-    },
-    BUILDS_THE_PROGRAM
-  );
-});
+// The workspace's own export sets are held to names whose answer is known by
+// `workspaceSetProblems` in check-doc-samples.mjs, which the gate runs before
+// judging any page: the sets are read from the published declarations, and CI
+// runs this suite before the build.
 
 describe("a name this workspace does not export", () => {
   // Not exporting a name is not the same as the reader owning it, and treating
@@ -1632,7 +1558,10 @@ describe("a name this workspace does not export", () => {
     const exported = new Set(["NextlyError"]);
     expect(misspelledExport("NNextlyError", exported)).toBe(true);
     expect(
-      readerOwnedMention("NNextlyError", "const e: NNextlyError = x;", "ts")
+      readerOwnedMention("NNextlyError", "const e: NNextlyError = x;", "ts", {
+        names: exported,
+        values: exported,
+      })
     ).toBe(false);
   });
 
@@ -1716,6 +1645,7 @@ describe("a missing name in object shorthand", () => {
     const { readerNames, real } = await classifyDocDiagnostics({
       diagnostics: [shorthand("Page"), shorthand("baseUrl")],
       samples,
+      exported: NOTHING_EXPORTED,
     });
     const named = lines => lines.map(l => /property '([^']+)'/.exec(l)[1]);
     // The reader's own component, set aside.
@@ -1732,18 +1662,26 @@ describe("a diagnostic whose block cannot be found", () => {
     // Two of the three tests need the block, so answering from the name alone
     // was the permissive direction: a constructed name and a misspelled export
     // would both have been set aside there.
-    expect(mentionIsReaderOwned("Posts", "docs/nope.mdx", 0, [])).toBe(false);
+    expect(
+      mentionIsReaderOwned("Posts", "docs/nope.mdx", 0, [], NOTHING_EXPORTED)
+    ).toBe(false);
     // The control: with the block present the same name is the reader's, so
     // the line above is the fallback answering and not the rule.
     expect(
-      mentionIsReaderOwned("Posts", "docs/a.mdx", 0, [
-        {
-          file: "docs/a.mdx",
-          index: 0,
-          code: "const c = [Posts];",
-          lang: "ts",
-        },
-      ])
+      mentionIsReaderOwned(
+        "Posts",
+        "docs/a.mdx",
+        0,
+        [
+          {
+            file: "docs/a.mdx",
+            index: 0,
+            code: "const c = [Posts];",
+            lang: "ts",
+          },
+        ],
+        NOTHING_EXPORTED
+      )
     ).toBe(true);
   });
 });

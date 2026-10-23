@@ -97,9 +97,6 @@ export class UserRoleService extends BaseService {
       }
 
       const { userRoles } = this.tables;
-      // One moment for the check and the replacement below, so the row this
-      // request found lapsed is the row it replaces.
-      const now = new Date();
       const userRoleData: UserRoleInsertData = {
         id: randomUUID(),
         userId,
@@ -121,6 +118,11 @@ export class UserRoleService extends BaseService {
           [roleId],
           { userId, roleId }
         );
+        // One moment for the check and the replacement below, so the row this
+        // request found lapsed is the row it replaces. Taken once the lock is
+        // held: a role that lapsed while this request waited for it grants
+        // nothing, and is given again rather than answered as held.
+        const now = new Date();
 
         // "Already assigned" means held now. An assignment that has lapsed
         // grants nothing, so answering 409 for it left the role impossible to
@@ -211,34 +213,31 @@ export class UserRoleService extends BaseService {
     roleId: string
   ): Promise<{ success: boolean; statusCode: number; message: string }> {
     try {
-      const existingUserRole = await (
-        this.db as RBACDatabaseInstance
-      ).query.userRoles.findFirst({
-        where: { userId: userId, roleId: roleId },
-        columns: { id: true },
-      });
-
-      if (!existingUserRole) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "Role is not assigned to this user",
-        };
-      }
-
       // In a transaction of its own, which on SQLite goes through the adapter:
       // a plain delete made while another request's transaction is open runs
       // inside it, and that transaction's rollback would hand the user back
       // the role just taken away. The last active super-admin keeps the role,
-      // asked under the lock every removal of one takes, before the delete.
-      await this.withTransaction(async tx => {
+      // asked under the lock every removal of one takes, before the delete,
+      // and the assignment is looked for under it too, so what was found is
+      // what is removed.
+      const assigned = await this.withTransaction(async tx => {
         await refuseRemovingLastSuperAdmin(
           tx as LastSuperAdminTx,
           this.tables,
           this.dialect,
-          userId,
-          { kind: "unassignRole", roleId }
+          { kind: "unassignRole", userId, roleId }
         );
+        const existing = await (tx as LastSuperAdminTx)
+          .select({ id: this.tables.userRoles.id })
+          .from(this.tables.userRoles)
+          .where(
+            and(
+              eq(this.tables.userRoles.userId, userId),
+              eq(this.tables.userRoles.roleId, roleId)
+            )
+          )
+          .limit(1);
+        if (existing.length === 0) return false;
         await (tx as RBACDatabaseInstance)
           .delete(this.tables.userRoles)
           .where(
@@ -247,7 +246,16 @@ export class UserRoleService extends BaseService {
               eq(this.tables.userRoles.roleId, roleId)
             )
           );
+        return true;
       });
+
+      if (!assigned) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: "Role is not assigned to this user",
+        };
+      }
 
       await this.invalidateRoleCaches(userId);
 

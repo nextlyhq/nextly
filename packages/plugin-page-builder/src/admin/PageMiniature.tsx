@@ -50,7 +50,7 @@ import {
   previewContainerStyle,
   type PageRendererProps,
 } from "@nextlyhq/blocks-react";
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
 
 import { entryBlockResolver } from "./entry-block-resolver";
 import type { PageRenderInputs } from "./page-render-inputs";
@@ -98,7 +98,7 @@ export function PageMiniature({
   siteStyles,
   render,
   renderWidth = DEFAULT_RENDER_WIDTH,
-}: PageMiniatureProps) {
+}: PageMiniatureProps): JSX.Element {
   const frame = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
 

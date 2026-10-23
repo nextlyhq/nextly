@@ -176,7 +176,25 @@ export interface WidgetSource {
   supports: readonly WidgetOp[];
   /** The only field names a query may reference. */
   fields: readonly WidgetSourceField[];
+  /**
+   * The card settings this source narrows its answer by, rather than being
+   * replaced by: a source reading across collections takes a Collection
+   * setting as a filter, where a card over one collection takes it as its
+   * source. Each one named here is a key of the query's `where` the source
+   * reads, and the only keys it takes there.
+   *
+   * @experimental
+   */
+  filters?: readonly WidgetSourceFilter[];
 }
+
+/**
+ * A card setting a source may narrow its answer by: the Collection a row
+ * belongs to, or Only mine, the reader's own.
+ *
+ * @experimental
+ */
+export type WidgetSourceFilter = "collection" | "onlyMine";
 
 // A malformed widget source is a plugin/core author's mistake, not end-user
 // input, so this uses `invalidInput` (developer-facing, safe to surface
@@ -220,6 +238,39 @@ function validateSourceTitleField(s: Partial<WidgetSource>): void {
   const declared = (s.fields ?? []).some(field => field.name === s.titleField);
   if (!declared) {
     fail(`${s.id}: titleField "${s.titleField}" is not one of its fields`);
+  }
+}
+
+/** The card settings a source may narrow by, as `WidgetSource.filters` names them. */
+const SOURCE_FILTERS: ReadonlySet<string> = new Set<WidgetSourceFilter>([
+  "collection",
+  "onlyMine",
+]);
+
+/**
+ * A source's filters, when given: a list of the settings a source may narrow
+ * by, each once, on a SYSTEM source alone. A collection's own source never
+ * takes them: a Collection setting on a card over one collection is that
+ * card's source. A plugin's source registers once its plugin's context exists,
+ * after the widgets naming it are admitted, so the settings a filter would
+ * admit could not be judged against it.
+ */
+function validateSourceFilters(s: Partial<WidgetSource>): void {
+  if (s.filters === undefined) return;
+  if (!Array.isArray(s.filters)) {
+    fail(`${s.id}: filters, when given, must be a list`);
+  }
+  const unknown = s.filters.filter(filter => !SOURCE_FILTERS.has(filter));
+  if (unknown.length > 0) {
+    fail(
+      `${s.id}: filters names what no setting narrows by: ${unknown.join(", ")}`
+    );
+  }
+  if (new Set(s.filters).size !== s.filters.length) {
+    fail(`${s.id}: filters names a setting twice`);
+  }
+  if (s.kind !== "system") {
+    fail(`${s.id}: only a system source takes filters, not a ${s.kind} source`);
   }
 }
 
@@ -462,6 +513,7 @@ export function validateWidgetSource(
   validateSourceFields(s);
   // AFTER the fields, because it is checked against them.
   validateSourceTitleField(s);
+  validateSourceFilters(s);
 }
 
 const globalForSources = globalThis as unknown as {
