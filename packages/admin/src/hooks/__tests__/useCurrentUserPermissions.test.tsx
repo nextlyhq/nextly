@@ -240,6 +240,9 @@ describe("useCurrentUserPermissions", () => {
     expect(result.current.content.hasAnswer).toBe(false);
     expect(result.current.hasAnswer).toBe(false);
     expect(result.current.canAccessCollection("posts", "read")).toBe(false);
+    // Waited on, not refused: no current answer and no error is not a "no".
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.content.isLoading).toBe(true);
   });
 
   it("decides content from the server's answer, its super-admin verdict included", async () => {
