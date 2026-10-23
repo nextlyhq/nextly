@@ -44,8 +44,10 @@ vi.mock("@admin/components/features/dashboard/QuickCreate", () => ({
 vi.mock("@admin/components/features/dashboard/TeamSummary", () => ({
   TeamSummary: stub,
 }));
+// The card the dashboard draws, answered by `system:activity`; the section of
+// the same name is deprecated and no longer registered.
 vi.mock("@admin/components/features/dashboard/RecentActivity", () => ({
-  RecentActivity: stub,
+  RecentActivityCard: stub,
 }));
 
 describe("core widget components register at runtime", () => {

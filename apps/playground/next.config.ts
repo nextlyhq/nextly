@@ -112,13 +112,21 @@ const nextConfig: NextConfig = {
     ...(isDev ? [] : NEXTLY_HMR_PACKAGES),
   ],
   experimental: {
-    esmExternals: true,
     // Page data is collected by a pool of one worker per CPU unless this is
     // set, and that pool runs inside one turbo task: a local run bounded to
     // two workers still started seven, and ran out of memory. The local
     // worker limit (scripts/bounded.mjs) sets it; unset, as in CI, Next keeps
     // its own default.
     cpus: localWorkerLimit(),
+    // Next.js type-checks and loads its config through the project's own
+    // TypeScript CLI rather than TypeScript's library API. That is the 16.4
+    // default, stated here so it cannot change underneath: a TypeScript with no
+    // library API (7.0) works only this way.
+    useTypeScriptCli: true,
+    // Turbopack's garbage collector removes cache entries nothing reaches any
+    // more, so `.next` stops growing across dev sessions and builds. Off by
+    // default in 16.4.
+    turbopackGc: true,
   },
   turbopack: {
     resolveAlias: {
