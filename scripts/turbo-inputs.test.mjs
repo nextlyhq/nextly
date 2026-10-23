@@ -23,9 +23,10 @@
  * @module turbo-inputs.test
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -459,20 +460,48 @@ describe("a root script in the global inputs brings its imports with it", () => 
   // that one an input as well: `create-nextly-app`'s build loads
   // `agent-skills.mjs`, which imports `agent-instructions.mjs`, so an edit to
   // the latter changes the build while, unlisted, it leaves the hash unmoved.
-  const RELATIVE_IMPORT =
-    /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|^\s*import\s*)["'](\.{1,2}\/[^"']+)["']/gm;
+  // Every string literal in the script that names an existing file beside it
+  // counts, not only `import`/`require` specifiers: `dev-doctor.mjs` loads
+  // `cli-entry.mjs` through `import(pathToFileURL(path.join(HERE,
+  // "cli-entry.mjs")).href)`, a path built at run time that no specifier
+  // pattern sees. Read from the parsed source, so a file named in a comment
+  // is no edge, and erring only toward listing a file that is merely named.
+  // Running the scripts to record what they load is no option: they act on
+  // the machine when run.
+  const EXTENSIONS = ["", ".mjs", ".js", ".ts", ".cjs"];
+
+  function namedFile(from, text) {
+    const base = normalize(join(dirname(from), text));
+    return EXTENSIONS.map(ext => base + ext).find(candidate => {
+      const path = join(REPO_ROOT, candidate);
+      return existsSync(path) && statSync(path).isFile();
+    });
+  }
+
+  const isStringLiteral = node => ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
+
+  /** The text of every string literal in the file, from its syntax tree. */
+  function stringLiterals(file) {
+    const texts = [];
+    const visit = node => {
+      if (isStringLiteral(node)) texts.push(node.text);
+      ts.forEachChild(node, visit);
+    };
+    visit(ts.createSourceFile(file, readFileSync(join(REPO_ROOT, file), "utf8"), ts.ScriptTarget.Latest, true));
+    return texts;
+  }
 
   function rootScriptImports(file) {
-    const source = readFileSync(join(REPO_ROOT, file), "utf8");
-    return [...source.matchAll(RELATIVE_IMPORT)]
-      .map(([, specifier]) => normalize(join(dirname(file), specifier)))
-      .filter(target => target.startsWith("scripts/"))
-      .map(target =>
-        existsSync(join(REPO_ROOT, target))
-          ? target
-          : [".mjs", ".js", ".ts", ".cjs"].map(ext => target + ext).find(candidate => existsSync(join(REPO_ROOT, candidate))) ?? target
-      );
+    const targets = stringLiterals(file).map(text => namedFile(file, text));
+    return [...new Set(targets.filter(target => target?.startsWith("scripts/") && target !== file))];
   }
+
+  it("follows a script loaded through a path built at run time, and ignores one named in a comment", () => {
+    // `dev-doctor.mjs` builds the path to `cli-entry.mjs`, and
+    // `pnpm-invocation.mjs` names `verify-merge.mjs` only in its comments.
+    expect(rootScriptImports("scripts/dev-doctor.mjs")).toContain("scripts/cli-entry.mjs");
+    expect(rootScriptImports("scripts/pnpm-invocation.mjs")).not.toContain("scripts/verify-merge.mjs");
+  });
 
   it("lists every root script a listed one imports", () => {
     const globalFiles = new Set(Object.keys(dryRun().globalCacheInputs.files));
