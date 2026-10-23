@@ -60,3 +60,111 @@ export function writtenFields(blocks: unknown): WrittenFields {
 export function formatOf(stored: unknown): TemplateFormat {
   return stored === "written" ? "written" : "code";
 }
+
+/** A save's format, checked: unset is coded. */
+function checkedFormat(format: unknown): TemplateFormat {
+  if (format === undefined || format === null || format === "code")
+    return "code";
+  if (format === "written") return "written";
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "format",
+        code: "invalid_value",
+        message: 'Use "code" or "written".',
+      },
+    ],
+  });
+}
+
+function refused(message: string, reason: string): NextlyError {
+  return new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: message,
+    logContext: { reason },
+  });
+}
+
+/** The fields a save can carry that decide a template's format. */
+interface FormatInput {
+  format?: TemplateFormat | null;
+  blocks?: WrittenDocument | null;
+  kind?: string;
+  htmlContent?: string;
+  plainTextContent?: string | null;
+}
+
+/**
+ * A new template as it is stored: a written one with its HTML and plain text
+ * written from its blocks, a coded one with none.
+ *
+ * @throws NextlyError VALIDATION_ERROR for blocks that don't pass their rules
+ * @throws NextlyError BUSINESS_RULE_VIOLATION for blocks on a coded template,
+ *   or a written layout (a layout is always coded)
+ */
+export function writtenForCreate<T extends FormatInput>(data: T): T {
+  if (checkedFormat(data.format) === "code") {
+    if (data.blocks !== undefined && data.blocks !== null) {
+      throw refused(
+        'A coded template has no blocks. Save it with format "written" to write it in blocks.',
+        "blocks-on-coded-template"
+      );
+    }
+    return { ...data, format: "code", blocks: null };
+  }
+  if ((data.kind ?? "template") !== "template") {
+    throw refused("A layout is always coded.", "written-layout");
+  }
+  return { ...data, ...writtenFields(data.blocks) };
+}
+
+/**
+ * An update as it is stored. A coded template is never turned into blocks. A
+ * written template's HTML and plain text are written from its blocks, so they
+ * change only when its blocks do.
+ *
+ * @throws NextlyError BUSINESS_RULE_VIOLATION for a change of format, blocks
+ *   on a coded template, or HTML given for a written one
+ */
+export function writtenForUpdate<T extends Omit<FormatInput, "kind">>(
+  record: { format: TemplateFormat },
+  data: T
+): T {
+  if (
+    data.format !== undefined &&
+    checkedFormat(data.format) !== record.format
+  ) {
+    throw record.format === "code"
+      ? refused(
+          "A coded template can't be turned into blocks.",
+          "code-to-written"
+        )
+      : refused(
+          "A written template can't be turned into code here.",
+          "written-to-code"
+        );
+  }
+  if (record.format === "code") {
+    if (data.blocks !== undefined && data.blocks !== null) {
+      throw refused(
+        "A coded template can't be turned into blocks.",
+        "code-to-written"
+      );
+    }
+    return data;
+  }
+  if (data.htmlContent !== undefined || data.plainTextContent !== undefined) {
+    throw refused(
+      "A written template's HTML is written from its blocks. Change its blocks instead.",
+      "html-on-written-template"
+    );
+  }
+  if (data.blocks === undefined) return data;
+  const fields = writtenFields(data.blocks);
+  return {
+    ...data,
+    blocks: fields.blocks,
+    htmlContent: fields.htmlContent,
+    plainTextContent: fields.plainTextContent,
+  };
+}

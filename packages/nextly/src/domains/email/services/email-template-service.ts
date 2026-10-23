@@ -92,6 +92,11 @@ import {
   transactionOpenInFlow,
 } from "../transaction-flow";
 import type { EmailConfig } from "../types";
+import {
+  formatOf,
+  writtenForCreate,
+  writtenForUpdate,
+} from "../written/fields";
 
 import { EmailBrandStore } from "./email-brand-store";
 import {
@@ -201,6 +206,7 @@ const UPDATABLE_FIELDS = [
   "providerId",
   "attachments",
   "description",
+  "blocks",
 ] as const satisfies ReadonlyArray<keyof UpdateEmailTemplateInput>;
 
 /**
@@ -576,6 +582,11 @@ export class EmailTemplateService extends BaseService {
     return {
       ...columns,
       kind: columns.kind ?? "template",
+      format: formatOf(columns.format),
+      blocks:
+        formatOf(columns.format) === "written"
+          ? (columns.blocks ?? null)
+          : null,
       description: columns.description ?? null,
       cc: columns.cc ?? null,
       bcc: columns.bcc ?? null,
@@ -1228,6 +1239,7 @@ export class EmailTemplateService extends BaseService {
     data: CreateEmailTemplateInput,
     actor?: RequestActor | null
   ): Promise<EmailTemplateRecord> {
+    data = writtenForCreate(data);
     const kind = orDefault(data, "kind");
     this.assertLayoutMarker(kind, data.htmlContent);
     this.assertLiquid(data);
@@ -1249,6 +1261,8 @@ export class EmailTemplateService extends BaseService {
       subject: data.subject,
       htmlContent: data.htmlContent,
       plainTextContent: orDefault(data, "plainTextContent"),
+      format: data.format ?? "code",
+      blocks: data.blocks ?? null,
       preheader: orDefault(data, "preheader"),
       layoutId: orDefault(data, "layoutId"),
       fromOverride: orDefault(data, "fromOverride"),
@@ -1449,6 +1463,7 @@ export class EmailTemplateService extends BaseService {
   ): Promise<EmailTemplateRecord> {
     const existing = await this.getRow(id);
     const record = this.toRecord(existing);
+    data = writtenForUpdate(record, data);
 
     // Validate the effective post-update row (a layout must keep exactly one
     // `{{content}}` marker). Kind is immutable on update, so use the existing

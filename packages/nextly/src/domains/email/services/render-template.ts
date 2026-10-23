@@ -29,6 +29,8 @@ import {
   STARTING_BRAND,
   type BrandSettings,
 } from "../brand-settings";
+import { compileWrittenHtml, compileWrittenText } from "../written/compile";
+import type { TemplateFormat, WrittenDocument } from "../written/document";
 
 import {
   markHtml,
@@ -78,6 +80,13 @@ export interface TemplateFields {
    * is stored about the template; absent means Liquid.
    */
   legacy?: boolean;
+  /**
+   * Written (blocks) or coded; coded when absent. A written template renders
+   * from its blocks, written out as Liquid when it is rendered.
+   */
+  format?: TemplateFormat;
+  /** A written template's blocks. */
+  blocks?: WrittenDocument | null;
 }
 
 /** A layout as the render needs it. */
@@ -145,15 +154,31 @@ function fill(
 }
 
 /**
+ * A written template as the render reads it: its body and plain text written
+ * from its blocks as they are now, on Liquid. Compiled here, at every render,
+ * so a preview, a test and a send of the same blocks write the same email.
+ */
+function fromBlocks(template: TemplateFields): TemplateFields {
+  if (template.format !== "written" || !template.blocks) return template;
+  return {
+    ...template,
+    htmlContent: compileWrittenHtml(template.blocks),
+    plainTextContent: compileWrittenText(template.blocks),
+    legacy: false,
+  };
+}
+
+/**
  * @throws NextlyError when a Liquid template cannot be rendered (it does not
  *   parse, or a render limit is hit); it is not retryable.
  */
 export function renderTemplate(
-  template: TemplateFields,
+  given: TemplateFields,
   layout: LayoutFields | null,
   data: Record<string, unknown>,
   options: RenderTemplateOptions
 ): RenderedTemplate {
+  const template = fromBlocks(given);
   const legacy = template.legacy;
   const layoutData = withLayoutChrome(data, options);
   // The body reads the brand settings as `brand` too, so a site's template
