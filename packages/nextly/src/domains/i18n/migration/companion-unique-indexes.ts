@@ -15,6 +15,8 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { indexNameForColumns } from "../../schema/services/index-name";
 import { isFieldLocalized } from "../classify-fields";
@@ -24,8 +26,24 @@ import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import type { CompanionFieldLike } from "./reconcile-companion";
 import type { LocalizedColumnKind } from "./types";
 
-/** A field as the companion knows it, with whether it is marked unique. */
-export type UniqueFieldLike = CompanionFieldLike & { unique?: boolean };
+/**
+ * A field as the companion knows it, with what makes its column unique: the flag, or the
+ * cardinality a one-to-one relationship carries instead of one.
+ */
+export type UniqueFieldLike = CompanionFieldLike & {
+  unique?: boolean;
+  /** As loose as every caller's own field shape: the predicate below reads it, nobody else. */
+  options?: unknown;
+};
+
+/**
+ * Whether a field's column is unique, judged by the one predicate the shared columns use. A
+ * one-to-one relationship is unique by its cardinality and carries no `unique` flag, so reading
+ * the flag alone let two rows in one language point at the same target.
+ */
+export function isUniqueField(field: UniqueFieldLike): boolean {
+  return builderColumnIsUnique(field as unknown as FieldDefinition);
+}
 
 /** A translated field that is unique within each language, and its companion column. */
 export interface UniqueTranslatedColumn {
@@ -33,6 +51,11 @@ export interface UniqueTranslatedColumn {
   column: string;
   /** Whether the column stores text, which alone has a blank (`''`) to leave out. */
   text: boolean;
+  /**
+   * What the column stores, where it is known: what decides whether a dialect can key it at all.
+   * Unknown for a column recorded by name alone, by a snapshot written before kinds were kept.
+   */
+  kind?: LocalizedColumnKind;
 }
 
 /** The storage kinds that hold text. */
@@ -55,29 +78,47 @@ export function uniqueTranslatedColumns(args: {
   builtBy: ColumnOrigin;
 }): UniqueTranslatedColumn[] {
   return args.fields.flatMap(field => {
-    if (field.unique !== true) return [];
+    if (!isUniqueField(field)) return [];
     if (!isFieldLocalized(field, args.entityLocalized)) return [];
     const spec = fieldToLocalizedColumnSpec(field, args.dialect, args.builtBy);
     return spec
-      ? [{ field: field.name, column: spec.name, text: isTextKind(spec.kind) }]
+      ? [
+          {
+            field: field.name,
+            column: spec.name,
+            text: isTextKind(spec.kind),
+            kind: spec.kind,
+          },
+        ]
       : [];
   });
 }
 
 /**
- * Unique columns recorded by name (a snapshot, a migration file's header), with whether each
- * stores text, read off the companion's columns as the file or spec describes them. A column it no
- * longer describes is taken as text, so a way back that recreates its index still leaves a blank
- * out.
+ * Unique columns recorded by name (a snapshot, a migration file's header), with what each stores.
+ *
+ * An entry's own kind is taken first: a column the change removes or renames is no longer in the
+ * companion's columns, and a way back that recreates its index has only what was recorded with it.
+ * Read off the columns otherwise, and, for a record written before kinds were kept, taken as text,
+ * so recreating a text column's index still leaves a blank out.
  */
 export function uniqueColumnsWithKind(
-  entries: readonly { field: string; column: string }[],
+  entries: readonly {
+    field: string;
+    column: string;
+    kind?: LocalizedColumnKind;
+  }[],
   columns: readonly { name: string; kind: LocalizedColumnKind }[]
 ): UniqueTranslatedColumn[] {
   const kindOf = new Map(columns.map(c => [c.name, c.kind]));
-  return entries.map(({ field, column }) => {
-    const kind = kindOf.get(column);
-    return { field, column, text: kind === undefined || isTextKind(kind) };
+  return entries.map(({ field, column, kind: recorded }) => {
+    const kind = recorded ?? kindOf.get(column);
+    return {
+      field,
+      column,
+      text: kind === undefined || isTextKind(kind),
+      ...(kind === undefined ? {} : { kind }),
+    };
   });
 }
 

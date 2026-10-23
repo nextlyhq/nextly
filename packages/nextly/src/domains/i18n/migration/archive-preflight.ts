@@ -22,8 +22,15 @@ import {
 } from "../../schema/pipeline/live-table-facts";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
-import { companionColumnNames } from "../runtime/companion-io";
+import {
+  companionColumnNames,
+  localizedColumnsOnMain,
+} from "../runtime/companion-io";
 
+import {
+  isUniqueField,
+  type UniqueTranslatedColumn,
+} from "./companion-unique-indexes";
 import { ensureI18nArchive } from "./ensure-archive";
 import { fieldsJoiningTranslation } from "./field-joins-translation";
 import {
@@ -44,8 +51,10 @@ import {
 import type { I18nTransitionKind } from "./transition-state";
 import {
   duplicateTranslatedValues,
+  duplicateValuesSeededFromMain,
   refusalsForTranslatedUniqueOverDuplicates,
   refuseUnindexableTranslatedUnique,
+  type TranslatedDuplicate,
 } from "./translated-unique-preconditions";
 
 /**
@@ -258,16 +267,20 @@ export async function refuseTranslatedUniqueThatCannotHold(
     | "newFields"
     | "wasLocalized"
     | "isLocalized"
-  >
+  > &
+    Partial<
+      Pick<
+        Parameters<typeof archiveFieldsLeavingTranslation>[0],
+        "defaultLocale" | "renamed"
+      >
+    >
 ): Promise<void> {
   const companionTable = `${args.tableName}_locales`;
   // Judged against the indexes the companion has, so a field marked unique before the rule was
   // enforced, and never indexed, is checked as the save that indexes it. Only read when a field
   // is unique, so most saves ask nothing.
   const indexedOn =
-    args.wasLocalized &&
-    args.isLocalized &&
-    args.newFields.some(f => f.unique === true)
+    args.wasLocalized && args.isLocalized && args.newFields.some(isUniqueField)
       ? {
           companionTable,
           // Only the unique ones: an index under the name that is not unique holds nothing, so
@@ -285,22 +298,81 @@ export async function refuseTranslatedUniqueThatCannotHold(
     ...args,
     indexedOn,
   });
-  if (becoming.length === 0 || !args.wasLocalized) return;
-  const live = new Set(
-    await companionColumnNames(args.adapter, args.tableName)
-  );
-  const refusals = refusalsForTranslatedUniqueOverDuplicates(
-    await duplicateTranslatedValues(
-      args.adapter,
-      companionTable,
-      becoming.filter(c => live.has(c.column))
-    )
-  );
+  if (becoming.length === 0 || !args.isLocalized) return;
+  // Where the values the new index must hold are RIGHT NOW, which is not always the column the
+  // field will end up in:
+  // - the entity was already translated: on the companion, under the column the field has now,
+  //   which for a field this change renames is still its old one;
+  // - translation starts in this same change: on the main table, and the enable copies every row
+  //   into the default language before creating the index, so main's duplicates become that
+  //   language's. Checked here because the main-table uniqueness preflight leaves out a field
+  //   that is becoming translated, so otherwise nobody looks at these values and the index fails
+  //   after the create, the seed and the column drops — on MySQL, already committed.
+  const duplicates = args.wasLocalized
+    ? await duplicatesAlreadyOnCompanion(args, companionTable, becoming)
+    : await duplicateValuesSeededFromMain(
+        args.adapter,
+        { mainTable: args.tableName, locale: args.defaultLocale ?? "en" },
+        await columnsStillOnMain(args, becoming)
+      );
+  const refusals = refusalsForTranslatedUniqueOverDuplicates(duplicates);
   if (refusals.length === 0) return;
   throw NextlyError.validation({
     errors: refusals,
     logContext: { entity: args.entity, fields: refusals.map(r => r.path) },
   });
+}
+
+/**
+ * The duplicates a companion already holds for the fields becoming unique, each read from the
+ * column its values are in now.
+ *
+ * A field this change renames keeps its values in its OLD column until the rename runs, so the
+ * new name finds nothing: asked under it, the check passed over existing duplicates, the rename
+ * carried them across intact, and the index creation failed afterwards — on MySQL behind DDL
+ * that had already committed. A column that is on neither name holds nothing to collide.
+ */
+async function duplicatesAlreadyOnCompanion(
+  args: Pick<
+    Parameters<typeof refuseTranslatedUniqueThatCannotHold>[0],
+    "adapter" | "tableName" | "builtBy" | "oldFields" | "newFields" | "renamed"
+  >,
+  companionTable: string,
+  becoming: readonly UniqueTranslatedColumn[]
+): Promise<TranslatedDuplicate[]> {
+  const live = new Set(
+    await companionColumnNames(args.adapter, args.tableName)
+  );
+  const renamedFrom = renamedColumn(
+    await renameInChange(args),
+    args.builtBy,
+    args.adapter.getCapabilities().dialect
+  );
+  const sources = becoming.flatMap(column => {
+    if (live.has(column.column)) return [column];
+    const from = renamedFrom?.get(column.column);
+    // Named by the field the save asks for, so the refusal reads under the name being saved.
+    return from !== undefined && live.has(from)
+      ? [{ ...column, column: from }]
+      : [];
+  });
+  return duplicateTranslatedValues(args.adapter, companionTable, sources);
+}
+
+/** Those of `becoming` whose values the main table still holds, and an enable will copy over. */
+async function columnsStillOnMain(
+  args: Pick<
+    Parameters<typeof refuseTranslatedUniqueThatCannotHold>[0],
+    "adapter" | "tableName" | "newFields"
+  >,
+  becoming: readonly UniqueTranslatedColumn[]
+): Promise<UniqueTranslatedColumn[]> {
+  const present = new Set(
+    (
+      await localizedColumnsOnMain(args.adapter, args.tableName, args.newFields)
+    ).map(c => c.name)
+  );
+  return becoming.filter(c => present.has(c.column));
 }
 
 /**

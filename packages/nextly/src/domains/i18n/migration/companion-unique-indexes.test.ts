@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   companionUniqueIndexName,
   companionUniqueIndexStatements,
+  uniqueColumnsWithKind,
   uniqueTranslatedColumns,
 } from "./companion-unique-indexes";
 
@@ -21,7 +22,7 @@ describe("a translated field's uniqueness within each language", () => {
         dialect: "postgresql",
         builtBy: "collection",
       })
-    ).toEqual([{ field: "slug", column: "slug", text: true }]);
+    ).toEqual([{ field: "slug", column: "slug", text: true, kind: "text" }]);
     expect(
       uniqueTranslatedColumns({
         fields,
@@ -65,7 +66,9 @@ describe("a translated field's uniqueness within each language", () => {
       dialect: "postgresql",
       builtBy: "collection",
     });
-    expect(columns).toEqual([{ field: "rank", column: "rank", text: false }]);
+    expect(columns).toEqual([
+      { field: "rank", column: "rank", text: false, kind: "integer" },
+    ]);
     const [pg] = companionUniqueIndexStatements({
       dialect: "postgresql",
       companionTable: "dc_posts_locales",
@@ -128,5 +131,85 @@ describe("a translated field's uniqueness within each language", () => {
     expect(
       companionUniqueIndexName(`dc_${"a".repeat(55)}_locales`, "c".repeat(60))
     ).not.toBe(name);
+  });
+
+  it("holds a one-to-one relationship unique without an explicit flag, as a shared column does", () => {
+    const oneToOne = {
+      name: "author",
+      type: "relationship",
+      localized: true,
+      options: { relationType: "oneToOne", collection: "authors" },
+    };
+    const columns = uniqueTranslatedColumns({
+      fields: [oneToOne],
+      entityLocalized: true,
+      dialect: "postgresql",
+      builtBy: "collection",
+    });
+    expect(columns.map(c => c.field)).toEqual(["author"]);
+    expect(columns[0]?.text).toBe(false);
+  });
+
+  it("leaves a relationship that is not one-to-one alone", () => {
+    expect(
+      uniqueTranslatedColumns({
+        fields: [
+          {
+            name: "tags",
+            type: "relationship",
+            localized: true,
+            options: { relationType: "oneToMany", collection: "tags" },
+          },
+        ],
+        entityLocalized: true,
+        dialect: "postgresql",
+        builtBy: "collection",
+      })
+    ).toEqual([]);
+  });
+
+  it("carries each column's storage kind, so a caller can judge what the dialect can key", () => {
+    const [slug] = uniqueTranslatedColumns({
+      fields: [{ name: "slug", type: "text", unique: true, localized: true }],
+      entityLocalized: true,
+      dialect: "postgresql",
+      builtBy: "collection",
+    });
+    expect(slug?.kind).toBe("text");
+    const [payload] = uniqueTranslatedColumns({
+      fields: [
+        { name: "payload", type: "json", unique: true, localized: true },
+      ],
+      entityLocalized: true,
+      dialect: "mysql",
+      builtBy: "collection",
+    });
+    expect(payload?.kind).toBe("json");
+  });
+
+  it("keeps a recorded column's kind, and reads an unrecorded one as text", () => {
+    expect(
+      uniqueColumnsWithKind(
+        [
+          { field: "rank", column: "rank" },
+          { field: "gone", column: "gone" },
+        ],
+        [{ name: "rank", kind: "integer" }]
+      )
+    ).toEqual([
+      { field: "rank", column: "rank", text: false, kind: "integer" },
+      { field: "gone", column: "gone", text: true },
+    ]);
+  });
+
+  it("takes the kind an entry carries over the companion's columns, so a dropped column keeps its own", () => {
+    expect(
+      uniqueColumnsWithKind(
+        [{ field: "rank", column: "rank", kind: "integer" }],
+        []
+      )
+    ).toEqual([
+      { field: "rank", column: "rank", text: false, kind: "integer" },
+    ]);
   });
 });

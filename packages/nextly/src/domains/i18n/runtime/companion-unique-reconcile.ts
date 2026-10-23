@@ -85,12 +85,26 @@ export async function reconcileCompanionUniqueIndexes(
     const missing = wanted.filter(
       c => !unique.has(companionUniqueIndexName(companionTable, c.column))
     );
-    let refusals = refusalsForUnindexableTranslatedUnique(adapter, missing);
-    if (refusals.length === 0 && missing.length > 0) {
-      refusals = refusalsForTranslatedUniqueOverDuplicates(
-        await duplicateTranslatedValues(adapter, companionTable, missing)
-      );
-    }
+    const unindexable = refusalsForUnindexableTranslatedUnique(
+      adapter,
+      missing
+    );
+    // The fields still worth checking: one held back for a column this server cannot key says
+    // nothing about the others. Asking only when none was refused left a duplicated number
+    // alongside a refused text field unchecked, and its index failed at DDL time, after the
+    // earlier ones had run.
+    const refusedForDialect = new Set(unindexable.map(r => r.path));
+    const indexable = missing.filter(
+      c => !refusedForDialect.has(`fields.${c.field}`)
+    );
+    const refusals = [
+      ...unindexable,
+      ...(indexable.length > 0
+        ? refusalsForTranslatedUniqueOverDuplicates(
+            await duplicateTranslatedValues(adapter, companionTable, indexable)
+          )
+        : []),
+    ];
     const held = new Set(refusals.map(r => r.path));
     for (const statement of companionUniqueIndexStatements({
       dialect,

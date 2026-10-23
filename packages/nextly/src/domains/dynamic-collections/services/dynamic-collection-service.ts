@@ -1712,6 +1712,23 @@ export class DynamicCollectionService extends BaseService {
       // the main columns and a disable restores + archives them, even without a field edit. A
       // simultaneous status flip still emits its main ADD/DROP `status` column.
       const oldUserFields = existingUserFieldsForTransition;
+      // The same preconditions a field-changing save is asked, because this save builds the same
+      // companion DDL: an enable creates, seeds, drops main's columns and then creates each
+      // per-language unique index. Skipped here, a field already marked unique reached the index
+      // on a server that cannot key it, or over values a language already holds twice, with the
+      // statements before it committed on MySQL.
+      await archiveFieldsLeavingTranslation({
+        builtBy: "collection",
+        tableName: collection.tableName,
+        defaultLocale: this.defaultLocale,
+        adapter: this.adapter,
+        entity: collectionName,
+        kind: "collection",
+        oldFields: oldUserFields,
+        newFields: oldUserFields,
+        wasLocalized: collectionWasLocalized,
+        isLocalized: collectionIsLocalized,
+      });
       const hasStatus =
         updates.status !== undefined
           ? updates.status === true

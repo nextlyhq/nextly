@@ -61,7 +61,11 @@ export function planTranslatedUniqueMigration(args: {
     (args.previous?.localized === true
       ? (args.previous.uniqueLocalizedColumns ?? [])
       : []
-    ).map(column => ({ field: column, column })),
+    ).map(entry =>
+      typeof entry === "string"
+        ? { field: entry, column: entry }
+        : { field: entry.column, column: entry.column, kind: entry.kind }
+    ),
     args.spec.columns
   );
   const wanted = uniqueTranslatedColumns({

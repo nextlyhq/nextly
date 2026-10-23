@@ -1607,22 +1607,45 @@ async function loadTargetSnapshot(
 
 /**
  * Refuses a `unique` companion file whose per-language unique index cannot hold
- * (`refuseTranslatedUniqueMigrationThatCannotHold`). Any other file passes untouched.
+ * (`refuseTranslatedUniqueMigrationThatCannotHold`), and returns the UP it should run here: the
+ * file's own, less any index this database already carries.
+ *
+ * A companion file is snapshotless and runs verbatim, so one generated from a pre-feature
+ * snapshot still creates an index that `db:sync` or a Schema Builder save may already have
+ * installed on this database. PostgreSQL and SQLite adopt it through `IF NOT EXISTS`; MySQL has
+ * no such spelling and would fail on the duplicate name. Any other file passes untouched.
  */
 async function refuseUniqueFileThatCannotHold(
   adapter: DrizzleAdapter,
   localization: LocalizationMigrationIntent | undefined,
-  filename: string
-): Promise<void> {
-  if (localization?.kind !== "unique") return;
-  const { refuseTranslatedUniqueMigrationThatCannotHold } = await import(
+  filename: string,
+  upSql: string
+): Promise<string> {
+  if (localization?.kind !== "unique") return upSql;
+  const {
+    installedTranslatedUniqueIndexes,
+    refuseTranslatedUniqueMigrationThatCannotHold,
+    withoutAlreadyInstalledIndexes,
+  } = await import(
     "../../domains/i18n/migration/translated-unique-preconditions"
+  );
+  const installed = await installedTranslatedUniqueIndexes(
+    adapter,
+    localization.spec.companionTable
   );
   await refuseTranslatedUniqueMigrationThatCannotHold(
     adapter,
     localization.spec,
-    filename
+    filename,
+    installed
   );
+  const statements = splitSqlStatements(upSql, adapter.dialect);
+  const keep = withoutAlreadyInstalledIndexes(statements, installed);
+  return keep.length === statements.length
+    ? upSql
+    : keep
+        .map(statement => `${statement};`)
+        .join("\n--> statement-breakpoint\n");
 }
 
 /**
@@ -1732,8 +1755,14 @@ export async function runFileMigrations(args: {
       unit: "file",
     });
     // A file adding per-language unique indexes is refused here, before the ledger records an
-    // attempt and before any statement, where one cannot hold.
-    await refuseUniqueFileThatCannotHold(dz, m.localization, filename);
+    // attempt and before any statement, where one cannot hold. It also answers with the UP to
+    // run on THIS database, which leaves out an index already installed here.
+    m.upSql = await refuseUniqueFileThatCannotHold(
+      dz,
+      m.localization,
+      filename,
+      m.upSql
+    );
 
     if (!target) {
       // No paired snapshot (hand-written migration): run verbatim + record.

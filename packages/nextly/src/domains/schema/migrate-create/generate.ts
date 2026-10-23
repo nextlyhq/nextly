@@ -1288,12 +1288,16 @@ function withLocalizedMarker(
     collectionLocalized: true,
     status: entity.status === true,
   });
+  // Each column is recorded with what it stores, so the migration that later removes or renames
+  // one can still key the index its DOWN recreates the way this one keyed it.
   const unique = uniqueTranslatedColumns({
     fields: entity.fields,
     entityLocalized: true,
     dialect,
     builtBy: "codeFirst",
-  }).map(c => c.column);
+  }).map(c =>
+    c.kind === undefined ? c.column : { column: c.column, kind: c.kind }
+  );
   return {
     ...table,
     localized: true,
