@@ -10,11 +10,11 @@ export default defineConfig({
     exclude: ["node_modules", "dist", ".turbo"],
     testTimeout: 30000,
     hookTimeout: 30000,
+    // One file at a time on one worker, against the one test database.
+    // `poolOptions.forks.singleFork` did this before Vitest 4, which removed
+    // `poolOptions` and ignores it, so files could run in parallel.
     pool: "forks",
-    poolOptions: {
-      forks: {
-        singleFork: true,
-      },
-    },
+    maxWorkers: 1,
+    fileParallelism: false,
   },
 });

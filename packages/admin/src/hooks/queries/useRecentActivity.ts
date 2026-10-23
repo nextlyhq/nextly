@@ -47,6 +47,13 @@ interface ActivityLogEntry {
   subjectKind?: "collection" | "single" | "settings" | null;
   metadata: Record<string, unknown> | null;
   createdAt: string;
+  /**
+   * How many saves the row stands for. Optional because a server older than
+   * this admin does not send it, and every row it sends is one save.
+   */
+  count?: number;
+  /** Whether `count` is a floor. Absent from an older server. */
+  countAtLeast?: boolean;
   /** When this row's identity was erased; null while the actor exists. */
   identityErasedAt: string | null;
 }
@@ -113,6 +120,8 @@ function shared(
     action: ACTION_LABELS[entry.action] ?? entry.action,
     category: ACTION_CATEGORIES[entry.action] ?? "info",
     timestamp: entry.createdAt,
+    count: entry.count ?? 1,
+    countAtLeast: entry.countAtLeast === true,
   };
 }
 

@@ -209,9 +209,10 @@ jobs:
           cache: pnpm
 
       # The script is TypeScript, so this installs to get `tsx`. Node can strip types natively
-      # from 22.6, which would avoid the install — but `engines.node` supports 20.19, where it
-      # cannot, and a contributor whose local build works differently from CI is a worse cost than
-      # one install. Scoped to this package so it stays short.
+      # from 22.6, which would avoid the install — but only behind a flag until 22.18, and
+      # `engines.node` supports 22.12, where it cannot be relied on. A contributor whose local
+      # build works differently from CI is a worse cost than one install. Scoped to this package
+      # so it stays short.
       - name: Install
         run: pnpm install --frozen-lockfile --filter @nextlyhq/ui...
 
