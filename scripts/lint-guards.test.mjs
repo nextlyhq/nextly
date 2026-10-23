@@ -92,3 +92,59 @@ tester.run("no-keyboard-listener", guards.rules["no-keyboard-listener"], {
     { code: 'document.addEventListener("keypress", onKey);', errors: 1 },
   ],
 });
+
+const MIGRATE_ONLY = {
+  patterns: [
+    {
+      group: ["**/cli/commands/migrate", "**/cli/commands/migrate-*"],
+      message: "no static migrate import",
+    },
+  ],
+};
+
+tester.run(
+  "no-static-restricted-import",
+  guards.rules["no-static-restricted-import"],
+  {
+    valid: [
+      // The lazy load the boot path is allowed, and modules the patterns
+      // do not name.
+      {
+        code: 'const m = await import("../cli/commands/migrate");',
+        options: [MIGRATE_ONLY],
+      },
+      {
+        code: 'import { x } from "../cli/commands/other";',
+        options: [MIGRATE_ONLY],
+      },
+      // `migrate-*` matches within one segment only.
+      {
+        code: 'import { x } from "../cli/commands/migrate-x/deep";',
+        options: [MIGRATE_ONLY],
+      },
+    ],
+    invalid: [
+      // Every static form, at any depth the `**/` prefix allows.
+      {
+        code: 'import { run } from "../cli/commands/migrate";',
+        options: [MIGRATE_ONLY],
+        errors: 1,
+      },
+      {
+        code: 'import "../../src/cli/commands/migrate-down";',
+        options: [MIGRATE_ONLY],
+        errors: 1,
+      },
+      {
+        code: 'export { run } from "../cli/commands/migrate";',
+        options: [MIGRATE_ONLY],
+        errors: 1,
+      },
+      {
+        code: 'export * from "../cli/commands/migrate-status";',
+        options: [MIGRATE_ONLY],
+        errors: 1,
+      },
+    ],
+  }
+);

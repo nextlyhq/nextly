@@ -47,6 +47,52 @@ const CONSOLE_ALLOWED = inPackage(
   )
 );
 
+/**
+ * Modules the deployed request path never loads: drizzle-kit's dev-only
+ * entrypoints and the migrate CLI. One list, held by two rules below.
+ */
+const REQUEST_PATH_RESTRICTED = [
+  {
+    group: ["**/database/drizzle-kit-lazy", "**/database/drizzle-kit-lazy.*"],
+    message:
+      "Handlers must not import drizzle-kit-lazy directly. Call a service in domains/schema/services/ instead. drizzle-kit's payload/* entrypoints are dev-only and should never be in a request graph.",
+  },
+  {
+    group: [
+      "**/cli/commands/migrate",
+      "**/cli/commands/migrate.*",
+      "**/cli/commands/migrate-*",
+    ],
+    message:
+      "F11: deployed runtime must not import migrate-* CLI modules. Migrations are a CLI-only concern. See docs/guides/production-migrations.mdx.",
+  },
+];
+
+/** Every rule oxlint implements from Next.js's own lint preset. */
+const NEXT_RULES = [
+  "google-font-display",
+  "google-font-preconnect",
+  "inline-script-id",
+  "next-script-for-ga",
+  "no-assign-module-variable",
+  "no-async-client-component",
+  "no-before-interactive-script-outside-document",
+  "no-css-tags",
+  "no-document-import-in-page",
+  "no-duplicate-head",
+  "no-head-element",
+  "no-head-import-in-document",
+  "no-html-link-for-pages",
+  "no-img-element",
+  "no-page-custom-font",
+  "no-script-component-in-head",
+  "no-styled-jsx-in-document",
+  "no-sync-scripts",
+  "no-title-in-document-head",
+  "no-typos",
+  "no-unwanted-polyfillio",
+];
+
 /** Test files: exempt from the product rules below. */
 const TESTS = [
   "**/*.test.{ts,tsx,mts,cts,js,jsx,mjs}",
@@ -113,6 +159,12 @@ export default defineConfig({
     "packages/create-nextly-app/templates/**",
     "packages/eslint-plugin/**",
     "apps/playground/src/stubs/**",
+    // The playground's scripts and tests run in its TypeScript project and
+    // were always linted with it, so they are taken back from the two
+    // exclusions above.
+    "!apps/playground/scripts/**",
+    "!apps/playground/**/__tests__/**",
+    "!apps/playground/**/*.test.{ts,tsx}",
   ],
   rules: {
     "constructor-super": "error",
@@ -349,9 +401,9 @@ export default defineConfig({
         "packages/nextly/src/routeHandler.ts",
         "packages/nextly/src/next.ts",
       ],
-      // These two load the migrate CLI through a dynamic `import()`, which the
-      // ESLint rule this replaces never checked. They are the boot-time
-      // migration path, exempt as they always were in effect.
+      // These two are the boot-time migration path, and load the migrate CLI
+      // through `import()` on purpose. They get the override below instead,
+      // which still refuses a static import there.
       excludeFiles: [
         "packages/nextly/src/init/boot-apply.ts",
         "packages/nextly/src/init/prod-migrations.ts",
@@ -360,37 +412,36 @@ export default defineConfig({
         "no-restricted-imports": [
           "error",
           {
-            patterns: [
-              {
-                group: [
-                  "**/database/drizzle-kit-lazy",
-                  "**/database/drizzle-kit-lazy.*",
-                ],
-                message:
-                  "Handlers must not import drizzle-kit-lazy directly. Call a service in domains/schema/services/ instead. drizzle-kit's payload/* entrypoints are dev-only and should never be in a request graph.",
-              },
-              {
-                group: [
-                  "**/cli/commands/migrate",
-                  "**/cli/commands/migrate.*",
-                  "**/cli/commands/migrate-*",
-                ],
-                message:
-                  "F11: deployed runtime must not import migrate-* CLI modules. Migrations are a CLI-only concern. See docs/guides/production-migrations.mdx.",
-              },
-            ],
+            patterns: REQUEST_PATH_RESTRICTED,
           },
         ],
       },
     },
     {
-      // The playground is a Next.js app. Its lint gated on Next's error-level
-      // rules; it reads runtime harness flags no turbo task builds against,
-      // and Next's async page components need no `await`.
+      // The boot-time migration path: the CLI may be loaded lazily, through
+      // `import()`, and through no static import that would put it in the
+      // deployed graph.
+      files: [
+        "packages/nextly/src/init/boot-apply.ts",
+        "packages/nextly/src/init/prod-migrations.ts",
+      ],
+      rules: {
+        "nextly/no-static-restricted-import": [
+          "error",
+          { patterns: REQUEST_PATH_RESTRICTED },
+        ],
+      },
+    },
+    {
+      // The playground is a Next.js app, linted with every rule of Next's
+      // preset at error, as its lint ran with no warning allowed. It reads
+      // runtime harness flags no turbo task builds against, and Next's async
+      // page components need no `await`.
       files: ["apps/playground/**/*.{ts,tsx,js,jsx}"],
       rules: {
-        "nextjs/no-html-link-for-pages": "error",
-        "nextjs/no-sync-scripts": "error",
+        ...Object.fromEntries(
+          NEXT_RULES.map(rule => [`nextjs/${rule}`, "error"])
+        ),
         "turbo/no-undeclared-env-vars": "off",
         "typescript/require-await": "off",
         "import-order/order": "off",

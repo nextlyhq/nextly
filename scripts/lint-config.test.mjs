@@ -208,6 +208,23 @@ describe("the console guard's allowlist", () => {
   }, 120_000);
 });
 
+describe("the boot modules' exemption from the request-path imports guard", () => {
+  // The two boot modules may load the migrate CLI only through `import()`:
+  // they are taken out of `no-restricted-imports`, which also refuses that
+  // form, and given the static-only rule with the same patterns instead.
+  // Exempting them from both would let a static import in.
+  it("hands every exempted file the static-only rule, over the same patterns", () => {
+    const restricted = overrideFor("no-restricted-imports");
+    const staticOnly = overrideFor("nextly/no-static-restricted-import");
+    expect(staticOnly.files.sort()).toEqual(
+      [...restricted.excludeFiles].sort()
+    );
+    expect(
+      staticOnly.rules["nextly/no-static-restricted-import"][1].patterns
+    ).toEqual(restricted.rules["no-restricted-imports"][1].patterns);
+  });
+});
+
 describe("the API-key scope guard's allowlist", () => {
   const files = API_KEY_SCOPE_FILES.map(f => `packages/nextly/${f}`);
 

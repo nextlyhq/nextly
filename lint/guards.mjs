@@ -162,11 +162,82 @@ function isKeyboardEvent(event) {
   );
 }
 
+/**
+ * A glob of the `no-restricted-imports` kind as a regular expression over a
+ * specifier: `**\/` matches any leading directories, `*` anything within one.
+ */
+function globPattern(glob) {
+  const source = glob
+    .split("**/")
+    .map(part =>
+      part
+        .split("*")
+        .map(text => text.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+        .join("[^/]*")
+    )
+    .join("(?:.*/)?");
+  return new RegExp(`^${source}$`);
+}
+
+/** The `{ group, message }` entry whose glob matches `specifier`, if any. */
+function matchingPattern(patterns, specifier) {
+  return patterns.find(pattern =>
+    pattern.regexes.some(regex => regex.test(specifier))
+  );
+}
+
+/**
+ * `no-restricted-imports` for static imports only: `import … from`,
+ * `export … from` and `export * from` naming a restricted module are reported,
+ * and `import()` is not. A module that loads the target lazily on purpose, so
+ * it stays out of the graph until called, keeps that one way in and no other.
+ */
+const noStaticRestrictedImport = {
+  meta: {
+    type: "problem",
+    schema: [
+      {
+        type: "object",
+        properties: {
+          patterns: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                group: { type: "array", items: { type: "string" } },
+                message: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+    ],
+  },
+  create(context) {
+    const patterns = (context.options[0]?.patterns ?? []).map(pattern => ({
+      message: pattern.message,
+      regexes: pattern.group.map(globPattern),
+    }));
+    const check = node => {
+      const specifier = node.source?.value;
+      const found =
+        typeof specifier === "string" && matchingPattern(patterns, specifier);
+      if (found) context.report({ node: node.source, message: found.message });
+    };
+    return {
+      ImportDeclaration: check,
+      ExportNamedDeclaration: check,
+      ExportAllDeclaration: check,
+    };
+  },
+};
+
 export default {
   meta: { name: "nextly" },
   rules: {
     "no-bare-error": noBareError,
     "api-key-scope": apiKeyScope,
     "no-keyboard-listener": noKeyboardListener,
+    "no-static-restricted-import": noStaticRestrictedImport,
   },
 };
