@@ -360,6 +360,53 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
+   * The id of the Single's one row, locked, or undefined when it has none.
+   *
+   * A Single is one row, so a call that names no document acts on the one the
+   * Single holds when it begins: its id is read first, and from then on the
+   * call is bound to that document exactly as one that names it. The row is
+   * then read and locked in one statement, by that id, and a row that is no
+   * longer it, replaced since or while this waited for the lock, is refused
+   * as not found.
+   *
+   * Bound by id, the answer is the same on every dialect. An unqualified
+   * locking read is not: under a concurrent replacement MySQL's returns the
+   * row put in place, so the call would act on a document it never read,
+   * while PostgreSQL's finds no row at all. Locking in the read itself
+   * matters too: a plain read followed by a separate lock leaves a window in
+   * which a row replaced in between is gone, so the lock holds nothing. On
+   * SQLite writers are serialized, so the read is current anyway.
+   *
+   * @param expectedEntryId The document the caller was checked against, when
+   *   it was.
+   * @param reason Names the operation in the refusal's log context.
+   */
+  private async lockedSingleRowId(
+    tx: TransactionContext,
+    tableName: string,
+    slug: string,
+    expectedEntryId: string | undefined,
+    reason: string
+  ): Promise<string | undefined> {
+    const bound =
+      expectedEntryId ??
+      (await tx.selectOne<{ id?: string }>(tableName, { columns: ["id"] }))?.id;
+    if (bound === undefined) return undefined;
+    const row = await tx.selectOne<{ id?: string }>(tableName, {
+      columns: ["id"],
+      where: this.whereEq("id", bound),
+      forUpdate: true,
+    });
+    if (row?.id !== bound) {
+      throw NextlyError.notFound({
+        message: "This document no longer exists.",
+        logContext: { reason, scopeSlug: slug },
+      });
+    }
+    return bound;
+  }
+
+  /**
    * A language's pending change on this Single, under the row lock every save
    * and publish takes, so the live values read beside it are the ones the
    * next publish compares. Null when the Single has no row or the language no
@@ -376,26 +423,13 @@ export class SingleMutationService extends BaseService {
     requestLocale: string | null,
     expectedEntryId?: string
   ) {
-    // Lock the row and read it in one statement. A plain read followed by a
-    // separate lock leaves a window: a row replaced in between is gone by the
-    // time the lock runs, so the lock holds nothing and the id compared below
-    // is still the one read before it. `forUpdate` also makes MySQL's
-    // repeatable-read isolation return the latest committed row rather than
-    // this transaction's snapshot. SQLite serializes writers with BEGIN
-    // IMMEDIATE, so the lock is a no-op there and the read is current anyway.
-    const row = await tx.selectOne<{ id?: string }>(singleMeta.tableName, {
-      forUpdate: true,
-    });
-    const entryId = row?.id;
-    if (expectedEntryId !== undefined && entryId !== expectedEntryId) {
-      throw NextlyError.notFound({
-        message: "This document no longer exists.",
-        logContext: {
-          reason: "take-live-shared-values-single-replaced",
-          scopeSlug: slug,
-        },
-      });
-    }
+    const entryId = await this.lockedSingleRowId(
+      tx,
+      singleMeta.tableName,
+      slug,
+      expectedEntryId,
+      "take-live-shared-values-single-replaced"
+    );
     if (entryId === undefined) return null;
     const ref = { scopeKind: "single" as const, scopeSlug: slug, entryId };
     const locale = workingDraftLocale({
@@ -627,27 +661,16 @@ export class SingleMutationService extends BaseService {
 
     // The drafts it removed, counted by the delete made under the lock.
     return this.adapter.transaction(async tx => {
-      // A Single is one row, so its identity comes from reading that row rather
-      // than from the request. No row means the document has never been written,
-      // which cannot have a pending change against it.
-      //
-      // The read takes the row's lock in the same statement, which serializes
-      // it with the draft-save upserts that lock this row before writing the
-      // sidecar. Read before the lock instead, a row replaced in between is
-      // gone by the time the lock runs, so the lock holds nothing and the id
-      // compared here is still the one read before it.
-      const row = await tx.selectOne<{ id?: string }>(singleMeta.tableName, {
-        forUpdate: true,
-      });
-      const entryId = row?.id;
-      if (params.entryId !== undefined && entryId !== params.entryId) {
-        throw NextlyError.notFound({
-          logContext: {
-            reason: "discard-working-draft-single-replaced",
-            scopeSlug: params.slug,
-          },
-        });
-      }
+      // No row means the document has never been written, which cannot have a
+      // pending change against it. The lock serializes this with the
+      // draft-save upserts that lock this row before writing the sidecar.
+      const entryId = await this.lockedSingleRowId(
+        tx,
+        singleMeta.tableName,
+        params.slug,
+        params.entryId,
+        "discard-working-draft-single-replaced"
+      );
       if (entryId === undefined) return 0;
 
       const draftLocale = workingDraftLocale({

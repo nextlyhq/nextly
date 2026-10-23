@@ -108,52 +108,76 @@ describe.each(getConfiguredTestDialects())(
     // the lock holds a row that is gone, so the discard goes on to remove the
     // draft of a document it was never checked against. SQLite runs one
     // writer at a time, so the two cannot overlap there.
-    it.skipIf(dialect === "sqlite")(
-      "refuses when the Single is replaced while the discard waits for the lock",
-      async () => {
-        await new Nextly().updateSingle({
-          slug: SETTINGS,
-          data: { siteName: "Acme (pending once more)" },
-        });
-        expect((await draftParts()).length).toBeGreaterThan(0);
-
-        let release = (): void => {};
-        const held = new Promise<void>(resolve => {
-          release = resolve;
-        });
-        // Another writer replaces the document under its lock, and holds the
-        // lock until the discard is parked on it.
-        const replacing = t.adapter.transaction(async tx => {
-          await tx.lockRow(TABLE, liveId);
-          const row = await tx.selectOne<Record<string, unknown>>(TABLE, {});
-          await tx.delete(TABLE, {
-            and: [{ column: "id", op: "=", value: liveId }],
-          });
-          await tx.insert(TABLE, { ...row, id: `${liveId}-put-in-place` });
-          await held;
-        });
-
-        try {
-          const discarding = discardWorkingDraft({
-            scopeKind: "single",
+    // Whether or not the caller names the document, the answer is the same
+    // on every dialect: a call that names none acts on the document the
+    // Single holds when it begins, not on one put in its place meanwhile.
+    for (const [naming, named] of [
+      ["naming the document", true],
+      ["naming no document", false],
+    ] as const) {
+      it.skipIf(dialect === "sqlite")(
+        `refuses when the Single is replaced while the discard waits for the lock, ${naming}`,
+        async () => {
+          // The document as the Single holds it now: an earlier case may have
+          // put another in its place.
+          liveId = String(
+            (
+              (await new Nextly().findSingle({ slug: SETTINGS })) as {
+                id: string;
+              }
+            ).id
+          );
+          await new Nextly().updateSingle({
             slug: SETTINGS,
-            entryId: liveId,
-            user: { id: "system-check", roles: ["super-admin"] },
+            data: { siteName: "Acme (pending once more)" },
           });
-          await untilSomeoneWaitsOnALock(t.adapter, dialect);
-          release();
-          await replacing;
-
-          await expect(discarding).rejects.toMatchObject({
-            code: "NOT_FOUND",
-          });
-          // The draft of the document that was checked is still there.
           expect((await draftParts()).length).toBeGreaterThan(0);
-        } finally {
-          release();
-          await replacing.catch(() => {});
+
+          let release = (): void => {};
+          const held = new Promise<void>(resolve => {
+            release = resolve;
+          });
+          // Another writer replaces the document under its lock, and holds the
+          // lock until the discard is parked on it.
+          const replacing = t.adapter.transaction(async tx => {
+            await tx.lockRow(TABLE, liveId);
+            const row = await tx.selectOne<Record<string, unknown>>(TABLE, {});
+            await tx.delete(TABLE, {
+              and: [{ column: "id", op: "=", value: liveId }],
+            });
+            await tx.insert(TABLE, { ...row, id: `${liveId}-put-in-place` });
+            await held;
+          });
+
+          try {
+            // The route always names the document it checked; a direct call
+            // to the Single's service may name none.
+            const discarding = named
+              ? discardWorkingDraft({
+                  scopeKind: "single",
+                  slug: SETTINGS,
+                  entryId: liveId,
+                  user: { id: "system-check", roles: ["super-admin"] },
+                })
+              : t.getService("singleEntryService").discardWorkingDraft({
+                  slug: SETTINGS,
+                  user: { id: "system-check", roles: ["super-admin"] },
+                });
+            await untilSomeoneWaitsOnALock(t.adapter, dialect);
+            release();
+            await replacing;
+
+            await expect(discarding).rejects.toMatchObject({
+              code: "NOT_FOUND",
+            });
+            // The draft of the document that was checked is still there.
+            expect((await draftParts()).length).toBeGreaterThan(0);
+          } finally {
+            release();
+            await replacing.catch(() => {});
+          }
         }
-      }
-    );
+      );
+    }
   }
 );
