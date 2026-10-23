@@ -517,6 +517,14 @@ function editTime(
  * shown only the fields taken, a rule asking about another field sees it
  * missing and answers for a document that will never exist.
  *
+ * Judged again whenever that set shrinks, because the document it was judged
+ * against shrinks with it. A rule reading a sibling was answered beside that
+ * sibling's live value; drop the sibling and the change keeps its own value
+ * there instead, which is a different document and may be one the rule
+ * refuses. Each pass leaves at least one field behind, so the answer settles
+ * after at most as many passes as there are fields, on the one document the
+ * save will actually write.
+ *
  * @param pending The pending change the fields would be taken into.
  * @param applyWriteRules The caller's field write rules, which remove what
  *   they refuse from the data they are handed, at any depth.
@@ -527,14 +535,20 @@ export async function wholeWritableFields(
   pending: Record<string, unknown>,
   applyWriteRules: (data: Record<string, unknown>) => Promise<void>
 ): Promise<string[]> {
-  const data = structuredClone({
-    ...pending,
-    ...Object.fromEntries(names.map(name => [name, live[name]])),
-  });
-  await applyWriteRules(data);
-  return names.filter(
-    name => name in data && sameSharedValue(data[name], live[name])
-  );
+  let candidates = names;
+  while (candidates.length > 0) {
+    const data = structuredClone({
+      ...pending,
+      ...Object.fromEntries(candidates.map(name => [name, live[name]])),
+    });
+    await applyWriteRules(data);
+    const kept = candidates.filter(
+      name => name in data && sameSharedValue(data[name], live[name])
+    );
+    if (kept.length === candidates.length) return kept;
+    candidates = kept;
+  }
+  return [];
 }
 
 /**

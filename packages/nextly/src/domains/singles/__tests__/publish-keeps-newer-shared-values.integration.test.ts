@@ -81,6 +81,22 @@ async function boot(
                 "open",
             },
           }),
+          // The same pair, where the sibling the rule reads is one the caller
+          // may never write: the fee may be written only while the gate is
+          // open, and the gate is nobody's to open.
+          text({
+            name: "gate",
+            localized: false,
+            access: { update: () => false },
+          }),
+          number({
+            name: "fee",
+            localized: false,
+            access: {
+              update: ({ data }) =>
+                (data as { gate?: unknown } | undefined)?.gate === "open",
+            },
+          }),
         ],
       }),
     ],
@@ -584,6 +600,51 @@ describe.each(getConfiguredTestDialects())(
         expect(result.data).toEqual({ taken, outOfDate });
       }
     );
+
+    // Judging every candidate at once answers for a document that will not
+    // exist once a candidate is left behind. The fee's rule reads the gate;
+    // judged beside the gate's live "open" the fee may be written, but the
+    // gate itself is nobody's to write, so taking only the fee would leave
+    // the change holding its own closed gate beside the live fee — the one
+    // combination the rule refuses. Nothing is taken.
+    it("takes nothing when the only field that allowed another is itself left behind", async () => {
+      const singles = await boot(dialect);
+      await live(singles);
+      expect(
+        (
+          await save(singles, "en", {
+            gate: "closed",
+            fee: 5,
+            status: "published",
+          })
+        ).success
+      ).toBe(true);
+      // English begins a change from the closed gate and the fee of 5.
+      expect(
+        (await save(singles, "en", { siteName: "EN edited" })).success
+      ).toBe(true);
+      // Spanish publishes an open gate and a new fee, so both are out of date.
+      expect(
+        (await save(singles, "es", { gate: "open", fee: 20 })).success
+      ).toBe(true);
+      expect((await save(singles, "es", { status: "published" })).success).toBe(
+        true
+      );
+
+      const result = await singles.takeLiveSharedValues({
+        slug: SLUG,
+        locale: "en",
+        overrideAccess: false,
+        user: { id: "u1" },
+      });
+
+      expect(result.data).toEqual({ taken: [], outOfDate: ["gate", "fee"] });
+      const pending = await pendingSnapshot("en");
+      expect({ gate: pending.gate, fee: pending.fee }).toEqual({
+        gate: "closed",
+        fee: 5,
+      });
+    });
 
     it("judges taking the live values by the rules of the language asked for", async () => {
       const singles = await boot(dialect);
