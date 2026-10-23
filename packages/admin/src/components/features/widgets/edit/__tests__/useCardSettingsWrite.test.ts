@@ -138,12 +138,52 @@ describe("saving a card's settings outside customise mode", () => {
     expect(mutate).not.toHaveBeenCalled();
   });
 
-  it("sends nothing while another layout write is in flight", () => {
+  it("sends nothing while another layout write is in flight, and says so to the caller", () => {
+    // A caller waiting on its save, the settings sheet's Done, would otherwise wait for good.
     const { layout, mutate } = fakeLayout("ok", { isWriting: true });
     const { result } = renderHook(() => useCardSettingsWrite(layout));
+    const onFailed = vi.fn();
     act(() =>
-      result.current.write({ placementId: "p1", title: "A", config: {} })
+      result.current.write(
+        { placementId: "p1", title: "A", config: {} },
+        { onFailed }
+      )
     );
     expect(mutate).not.toHaveBeenCalled();
+    expect(onFailed).toHaveBeenCalledWith(
+      expect.stringContaining("still saving")
+    );
+  });
+
+  it("says so to the caller when the card is no longer on the dashboard", () => {
+    const { layout, mutate } = fakeLayout();
+    const { result } = renderHook(() => useCardSettingsWrite(layout));
+    const onFailed = vi.fn();
+    act(() =>
+      result.current.write(
+        { placementId: "gone", title: "Old card", config: {} },
+        { onFailed }
+      )
+    );
+    expect(mutate).not.toHaveBeenCalled();
+    expect(onFailed).toHaveBeenCalledWith(
+      "Old card is no longer on your dashboard, so its settings were not saved."
+    );
+  });
+
+  it("leaves a failure out of the toast when the caller shows it in place", () => {
+    const { layout } = fakeLayout("conflict");
+    const { result } = renderHook(() => useCardSettingsWrite(layout));
+    const onFailed = vi.fn();
+    act(() =>
+      result.current.write(
+        { placementId: "p1", title: "A", config: { limit: 7 } },
+        { onFailed, showsFailure: true }
+      )
+    );
+    expect(onFailed).toHaveBeenCalledWith(
+      "A changed elsewhere, so this change was not saved."
+    );
+    expect(toastError).not.toHaveBeenCalled();
   });
 });

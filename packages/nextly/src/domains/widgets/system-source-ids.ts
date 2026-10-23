@@ -21,3 +21,6 @@ export const RELEASES_SOURCE_ID = "system:releases";
 
 /** The documents carrying edits that are not live. */
 export const VERSIONS_SOURCE_ID = "system:versions";
+
+/** Who changed what, most recent first: the activity this caller may see. */
+export const ACTIVITY_SOURCE_ID = "system:activity";

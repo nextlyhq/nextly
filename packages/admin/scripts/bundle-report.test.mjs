@@ -465,7 +465,10 @@ describe("bundle-report", () => {
         );
         expect(otherEntryFiles).toContain("lib/plugins/component-registry.mjs");
         expect(otherEntryFiles).toContain("lib/plugins/plugin-components.mjs");
-        expect(report.totals.unreachable.count).toBeGreaterThan(0);
+        // The build emits no orphan: every chunk is reachable from an entry.
+        // esbuild used to leave some behind, imported by nothing; one coming
+        // back is bytes every install downloads and no page can load.
+        expect(report.categories.unreachable.chunks.map(c => c.rel)).toEqual([]);
         expect(report.totals.routeLater.count).toBeGreaterThan(0);
         expect(report.routes.length).toBeGreaterThan(0);
 

@@ -14,9 +14,10 @@
     // directory, so turbo's package-scoped `outputs` never matched and 21
     // packages logged `no output files found` on every run.
     //
-    // Removing the option instead is not an alternative: tsup's dts step drives
-    // tsc through flags rather than a config file, where `--incremental`
-    // without an explicit `--tsBuildInfoFile` is TS5074 and fails the build.
+    // Removing the option was not an alternative while tsup built the
+    // declarations: its dts step drove tsc through flags rather than a config
+    // file, where `--incremental` without an explicit `--tsBuildInfoFile` is
+    // TS5074. tsdown's declaration step writes no build info at all.
     "tsBuildInfoFile": "${configDir}/.tsbuildinfo",
     "isolatedModules": true,
     "lib": ["es2022", "DOM", "DOM.Iterable"],

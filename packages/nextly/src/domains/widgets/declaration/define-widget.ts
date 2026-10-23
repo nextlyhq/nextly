@@ -16,6 +16,7 @@
 
 import type { UserContext } from "../../collections/services/collection-types";
 import type { WidgetQuerySpec } from "../query";
+import type { WidgetScope } from "../resolved-sources";
 import type { WidgetOp } from "../sources";
 import type { WidgetWidth } from "../widths";
 
@@ -79,6 +80,15 @@ export interface WidgetDataInput<Values> {
   /** Aborted when the person leaves or the card's time budget runs out. */
   signal: AbortSignal;
   services: WidgetReadServices;
+  /**
+   * Work shared by every card of this widget's owner within one batch, asked
+   * for by one person: two cards that need the same scan ask for it under one
+   * key, and the scan runs once. Kept apart from every other owner's keys and
+   * from every content source's, so the same key in two places never meets.
+   *
+   * @experimental
+   */
+  scope: WidgetScope;
 }
 
 /** A widget's own data function, run on the server for each card. */

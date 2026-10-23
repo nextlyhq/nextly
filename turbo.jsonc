@@ -23,7 +23,7 @@
   // Task Execution Patterns:
   //   - dependsOn: ["^build"] = Build workspace dependencies FIRST (^ = dependencies)
   //   - cache: false = Never cache (for dev servers, formatters, destructive operations)
-  //   - cache: true = Reuses results if inputs unchanged (test, build, lint)
+  //   - cache: true = Reuses results if inputs unchanged (test, build)
   //   - persistent: true = Long-running process (dev servers, watch modes)
   //
   // Cache Behavior:
@@ -110,6 +110,16 @@
   // has run `turbo link` holds no key, and would otherwise be unable to run
   // turbo at all; what such a machine signs, CI's key rejects as a miss.
   "remoteCache": { "signature": true },
+
+  // The runner's operating system and architecture are part of every task's
+  // hash, so the shared cache never replays a Linux task's output on a
+  // Windows or macOS job. Those jobs exist to catch what differs between the
+  // platforms. GitHub sets both on every runner; on a machine without them
+  // they are empty, the same on every run. An environment variable rather
+  // than the generated file of Turborepo's platform guide, which every entry
+  // point would have to write before turbo starts: one that forgot would hash
+  // without it, silently.
+  "globalEnv": ["RUNNER_OS", "RUNNER_ARCH"],
 
   "globalPassThroughEnv": [
     "npm_config_user_agent", // create-nextly-app reads this to detect the invoking PM
@@ -218,7 +228,20 @@
     //     served from a cached build.
     "build": {
       "dependsOn": ["^build"], // Build dependencies first (critical for npm packages)
-      "inputs": ["$TURBO_DEFAULT$", ".env*"], // Source files + env files
+      // Source files and env files, less tests and prose: every build reads
+      // only what it ships (tsdown follows imports from the entries, and its
+      // declarations from those), so a test-only or README edit no longer
+      // rebuilds a package and everything that depends on it.
+      // scripts/turbo-inputs.test.mjs refuses this for a build that reads them.
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".env*",
+        "!**/*.test.{ts,tsx,mts,cts}",
+        "!**/*.spec.{ts,tsx,mts,cts}",
+        "!**/*.test-d.ts",
+        "!**/__tests__/**",
+        "!**/*.md"
+      ],
       "outputs": ["dist/**", ".next/**", "!.next/cache/**", "**/*.tsbuildinfo"],
       "env": ["NODE_ENV", "NEXTLY_DEV_DIAGNOSTICS"]
     },
@@ -324,9 +347,9 @@
       // `build` WITHOUT the caret is this package's own, and it is here for a
       // different reason than the two beside it: ordering, not coverage.
       // `${configDir}/.tsbuildinfo` is one file per package, `incremental` is on
-      // in the shared config, and BOTH tasks write it — `tsup`'s declaration
-      // pass and this `tsc --noEmit` alike, which is why both declare it under
-      // `outputs`. Before `^build` existed the two never shared a run, so
+      // in the shared config, and this `tsc --noEmit` writes it. tsup's
+      // declaration pass wrote it too, which is why both tasks declare it under
+      // `outputs`; tsdown's writes none, and the order below costs nothing. Before `^build` existed the two never shared a run, so
       // nothing ordered them and nothing had to. Pulling every dependency's
       // build into this graph put 19 packages' `build` and `check-types` in one
       // run as unordered siblings, free to write and restore that file at the
@@ -412,48 +435,9 @@
     // ==================== CODE QUALITY TASKS ====================
     // Linting, formatting, and code style enforcement
 
-    // lint - Run ESLint to check code quality and style issues
-    //
-    // Fast Parallel Execution:
-    //   - NO build dependency (lints source code directly)
-    //   - Can run alongside builds for faster CI/CD
-    //
-    // Usage:
-    //   - pnpm lint        = Check all packages for issues
-    //   - pnpm lint:fix    = Auto-fix issues (see below)
-    "lint": {
-      "dependsOn": [], // No build needed (lints source directly)
-      "inputs": [
-        "src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
-        "*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
-        "eslint.config.*",
-        "tsconfig.json"
-      ],
-      "outputs": [] // Linting produces no artifacts
-    },
-
-    // lint:fix - Auto-fix ESLint issues (formatting, simple errors)
-    //
-    // Difference from 'lint':
-    //   - lint = Read-only check (reports issues)
-    //   - lint:fix = Writes fixes to source files
-    //
-    // Why cache: false:
-    //   - Modifies source files (destructive operation)
-    //   - Each run should attempt fixes (not skip based on cache)
-    //
-    // Usage: Pre-commit hook or manual cleanup before PR
-    "lint:fix": {
-      "dependsOn": [], // No build needed
-      "inputs": [
-        "src/**/*.{ts,tsx,js,jsx}",
-        "*.{ts,tsx,js,jsx}",
-        "eslint.config.*",
-        "tsconfig.json"
-      ],
-      "outputs": [], // Modifies inputs (doesn't produce separate output)
-      "cache": false // Always run (fixes should attempt every time)
-    },
+    // Lint is not a task here: oxlint reads the whole repository in three
+    // passes (`pnpm lint`, scripts/lint.mjs, configured by oxlint.config.mjs),
+    // faster than turbo could fan it out per package.
 
     // format - Run Prettier to format all files
     //
@@ -514,8 +498,8 @@
       "dependsOn": ["^build"],
       "inputs": [
         "src/**/*.{ts,tsx,mts,cts}",
-        "tsup.config.ts",
-        "tsup.server-safe.config.ts",
+        "tsdown.config.ts",
+        "tsdown.server-safe.config.ts",
         "tsconfig.json",
         "package.json",
         // The scripts BUILD it, and one of them decides what gets built:
@@ -564,15 +548,17 @@
         "*.md",
         "package.json",
         "vitest.config.ts",
+        // A JavaScript-only package's config, so it keeps no TypeScript that
+        // nothing type-checks.
+        "vitest.config.mjs",
         "tsconfig.json",
         // Scripts and build configs are read BY tests, not only by builds: the ui suite derives
-        // its entry-point guards from `scripts/published-entries.ts`, which the tsup configs
+        // its entry-point guards from `scripts/published-entries.ts`, which the tsdown configs
         // also consume, and nextly's suites read the client entries out of its tsdown config.
         // Without these, retargeting a source barrel or changing an entry's client/server
         // classification leaves the cache key untouched, so CI replays the previous pass
         // precisely when the source of truth those guards read has changed.
         "scripts/**",
-        "tsup*.config.ts",
         "tsdown*.config.ts"
       ],
       "outputs": ["coverage/**"], // Coverage reports

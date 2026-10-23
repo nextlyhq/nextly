@@ -19,7 +19,6 @@ export async function healthCheck(): Promise<HealthCheckResult> {
   const timestamp = new Date().toISOString();
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
     const adapter = container.get("adapter") as DrizzleAdapter;
     const dialect = adapter.getCapabilities().dialect;
 

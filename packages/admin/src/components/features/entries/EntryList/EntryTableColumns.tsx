@@ -584,7 +584,6 @@ export function buildEntryColumns(
 declare module "@tanstack/react-table" {
   // Reason: TData is required by the generic interface signature for module
   // augmentation but is not referenced in the custom meta properties below.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface ColumnMeta<TData, TValue> {
     /** The field type for custom rendering */
     fieldType?: string;

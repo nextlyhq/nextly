@@ -109,6 +109,8 @@ export interface ReadableWidgetDeclaration {
   chrome?: WidgetChrome;
   /** Whether the reader may send this card away; see `DashboardWidget`. */
   dismissible?: boolean;
+  /** Whether the host sizes this custom widget's list query; see `DashboardWidget`. */
+  sizedQuery?: boolean;
 }
 
 /**
@@ -238,6 +240,7 @@ function resolveOne(
     defaultOrder: meta.defaultOrder,
     chrome: meta.chrome,
     dismissible: meta.dismissible,
+    sizedQuery: meta.sizedQuery,
   };
 }
 
@@ -286,6 +289,7 @@ function resolveRegistered(
     defaultOrder: meta.defaultOrder,
     chrome: meta.chrome,
     dismissible: meta.dismissible,
+    sizedQuery: meta.sizedQuery,
   };
 }
 
@@ -400,6 +404,12 @@ function mergeCollision(
     dismissible: preferRegistered(
       registration.dismissible,
       contribution.dismissible
+    ),
+    // Named for the same reason: dropped here, a merged card would be asked
+    // its query unsized and could never say more exist.
+    sizedQuery: preferRegistered(
+      registration.sizedQuery,
+      contribution.sizedQuery
     ),
   };
 }

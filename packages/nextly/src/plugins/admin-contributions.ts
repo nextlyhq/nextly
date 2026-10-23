@@ -323,7 +323,15 @@ interface PluginAdminCustomWidgetBase extends PluginAdminWidgetBase {
  */
 export type PluginAdminCustomWidget = PluginAdminCustomWidgetBase &
   (
-    | { archetype?: "custom"; chrome?: WidgetChrome }
+    | {
+        archetype?: "custom";
+        chrome?: WidgetChrome;
+        /**
+         * @experimental Whether the host sizes this widget's list query to the
+         * card; see `WidgetDefinition.sizedQuery`.
+         */
+        sizedQuery?: boolean;
+      }
     // A queryless archetype is not a fallback case: `text` IS its prose and
     // `actions` IS its list, so a component beside either still needs the
     // payload, and only the arms that require it can say so. Routed there.
@@ -333,6 +341,7 @@ export type PluginAdminCustomWidget = PluginAdminCustomWidgetBase &
           "custom" | QuerylessWidgetArchetype
         >;
         chrome?: never;
+        sizedQuery?: never;
       }
   );
 
