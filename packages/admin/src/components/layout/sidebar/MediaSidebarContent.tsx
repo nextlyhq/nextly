@@ -1,7 +1,9 @@
+import type { JSX } from "react";
+
 import { useMediaContext } from "../../../context/providers/MediaProvider";
 import { FolderTreeView } from "../../features/media-library/FolderTreeView";
 
-export function MediaSidebarContent() {
+export function MediaSidebarContent(): JSX.Element {
   const { activeFolderId, setActiveFolderId, triggerAction } =
     useMediaContext();
 

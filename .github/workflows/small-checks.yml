@@ -74,7 +74,7 @@ jobs:
           fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '1' }}
           persist-credentials: false
 
-      # What is judged: the pull request's head, the queue's commit or the
+      # What is judged: a pull request's head, the queue's commit or the
       # pushed commit, with full history so each range's ends are present.
       # Checkout refuses a fork's head under `pull_request_target` unless told
       # otherwise; that is safe here only because nothing in `change/` runs.

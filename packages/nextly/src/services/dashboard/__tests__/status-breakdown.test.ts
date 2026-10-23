@@ -217,3 +217,52 @@ describe("the status breakdown honours the caller's row-level access", () => {
     }
   });
 });
+
+describe("the Content card's page", () => {
+  // Sixty collections the registry returns in reverse slug order, so a page
+  // taken in the registry's order and one taken in slug order differ.
+  const MANY = Array.from({ length: 60 }, (_, i) => ({
+    slug: `c${String(i).padStart(2, "0")}`,
+    tableName: `c${i}`,
+    labels: { plural: `C${i}` },
+    fields: [],
+  })).reverse();
+  const FIRST_FIFTY = MANY.map(c => c.slug)
+    .sort()
+    .slice(0, 50);
+
+  beforeEach(() => {
+    containerGet.mockImplementation((name: string) => {
+      if (name === "collectionRegistryService") {
+        return { getAllCollections: vi.fn().mockResolvedValue(MANY) };
+      }
+      throw new Error(`unexpected container.get("${name}")`);
+    });
+  });
+
+  it("counts only the collections on the page it answers, the first by slug", async () => {
+    const rows = await makeService(adapter).getContentByCollection({
+      scope: someResources(MANY.map(c => c.slug)),
+      caller: CALLER,
+      limit: 50,
+    });
+
+    expect(rows.map(row => row.slug)).toEqual(FIRST_FIFTY);
+    // The separating assertion: counting all sixty and then keeping fifty
+    // answers the same rows, and only the calls tell the two apart.
+    const counted = new Set(
+      count.mock.calls.map(
+        ([options]) => (options as { collection: string }).collection
+      )
+    );
+    expect([...counted].sort()).toEqual(FIRST_FIFTY);
+  });
+
+  it("counts every collection when no limit is given, as /stats reads them", async () => {
+    const rows = await makeService(adapter).getContentByCollection({
+      scope: someResources(MANY.map(c => c.slug)),
+      caller: CALLER,
+    });
+    expect(rows).toHaveLength(60);
+  });
+});

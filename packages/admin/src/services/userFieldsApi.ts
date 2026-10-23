@@ -213,7 +213,17 @@ export async function reorderFields(
   return { data: result.fields };
 }
 
-export const userFieldApi = {
+/** The type of {@link userFieldApi}. */
+type UserFieldApiType = {
+  readonly listFields: typeof listFields;
+  readonly getField: typeof getField;
+  readonly createField: typeof createField;
+  readonly updateField: typeof updateField;
+  readonly deleteField: typeof deleteField;
+  readonly reorderFields: typeof reorderFields;
+};
+
+export const userFieldApi: UserFieldApiType = {
   listFields,
   getField,
   createField,

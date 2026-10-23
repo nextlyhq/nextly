@@ -1,6 +1,8 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
+import type { JSX } from "react";
+import type { UseFormReturn } from "react-hook-form";
 import { useForm, useFormContext } from "react-hook-form";
 import { z } from "zod";
 
@@ -16,7 +18,10 @@ import { passwordSchema } from "@admin/lib/validation";
  * disagree without the component reading a name the form does not have — a
  * mismatch nothing would catch until someone typed into it.
  */
-export const newPasswordFormSchema = z
+export const newPasswordFormSchema: z.ZodObject<{
+  newPassword: z.ZodString;
+  confirmPassword: z.ZodString;
+}> = z
   .object({
     newPassword: passwordSchema,
     confirmPassword: z.string().min(1, "Please confirm your password"),
@@ -36,7 +41,7 @@ export type NewPasswordFormValues = z.infer<typeof newPasswordFormSchema>;
  * be changed on one screen and not the others. Pairing it with the schema means
  * the fields, the rules and the moment of feedback arrive together.
  */
-export function useNewPasswordForm() {
+export function useNewPasswordForm(): UseFormReturn<NewPasswordFormValues> {
   return useForm<NewPasswordFormValues>({
     resolver: zodResolver(newPasswordFormSchema),
     mode: "onBlur",
@@ -69,7 +74,7 @@ export interface AuthNewPasswordFieldsProps {
  */
 export function AuthNewPasswordFields({
   passwordLabel = "New Password",
-}: AuthNewPasswordFieldsProps) {
+}: AuthNewPasswordFieldsProps): JSX.Element {
   const { watch } = useFormContext<NewPasswordFormValues>();
   const newPasswordValue = watch("newPassword");
 

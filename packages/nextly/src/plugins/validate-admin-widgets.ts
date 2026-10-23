@@ -339,7 +339,9 @@ const FIELD_RULES: ReadonlyArray<
   // travelled to the admin, and threw out of `applyWidgetSettings` while the
   // grid was rendering -- taking the whole dashboard down rather than the one
   // install that declared it.
-  widget => widgetSettingsProblem(widget.settings),
+  // Judged on the widget's own source, as registration judges it.
+  widget =>
+    widgetSettingsProblem(widget.settings, false, declaredSourceOf(widget)),
 
   // Through the SAME rule the registry applies. Without it a contributed
   // `{ archetype: "metric", chrome: "none" }` passed boot while the registry
@@ -392,6 +394,16 @@ const FIELD_RULES: ReadonlyArray<
     return problem === undefined ? undefined : problem;
   },
 ];
+
+/** The source a contributed widget's query names, as its setting knobs see it. */
+function declaredSourceOf(
+  widget: Record<string, unknown>
+): { id: string } | undefined {
+  const query = widget.query;
+  if (typeof query !== "object" || query === null) return undefined;
+  const source = (query as { source?: unknown }).source;
+  return typeof source === "string" ? { id: source } : undefined;
+}
 
 function undrawableReason(widget: Record<string, unknown>): string | undefined {
   for (const rule of FIELD_RULES) {

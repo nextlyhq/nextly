@@ -1,5 +1,13 @@
 "use client";
 
+import {
+  oklchToRgb,
+  parseHex,
+  readableOn,
+  toHex,
+  type Oklch,
+  type Rgb,
+} from "@nextlyhq/ui/color";
 import { useQuery } from "@tanstack/react-query";
 import type React from "react";
 import { createContext, useContext, useEffect, useMemo } from "react";
@@ -116,6 +124,143 @@ export function useBrandingStatus(): Omit<BrandingState, "branding"> {
 // ============================================================================
 
 /**
+ * The surfaces a chart mark is drawn on, in each mode: the card, a bar's track
+ * and the tooltip, as `--nx-card`, `--nx-muted` and `--nx-popover` are set in
+ * the theme (`packages/ui/src/styles/theme.css`, which a test holds this to).
+ */
+export const CHART_SURFACES: Readonly<
+  Record<"light" | "dark", readonly Oklch[]>
+> = {
+  light: [
+    { l: 1, c: 0, h: 0 },
+    { l: 0.97, c: 0, h: 0 },
+    { l: 0.99, c: 0, h: 0 },
+  ],
+  dark: [
+    { l: 0.14, c: 0, h: 0 },
+    { l: 0.23, c: 0, h: 0 },
+    { l: 0.18, c: 0, h: 0 },
+  ],
+};
+
+/** The contrast a chart mark keeps against what it is drawn on (WCAG's non-text minimum). */
+const CHART_MARK_CONTRAST = 3;
+
+/**
+ * A brand colour as `/admin-meta` resolves it (`hsl(239 84.3% 64.7%)`, or a
+ * hex value), in sRGB; `undefined` for anything else, which is then drawn as
+ * given.
+ */
+export function parseBrandColour(css: string): Rgb | undefined {
+  const hex = parseHex(css.trim());
+  if (hex) return hex;
+  const match =
+    /^hsla?\(\s*(-?[\d.]+)(?:deg)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%(?:\s*[,/]\s*[\d.]+%?)?\s*\)$/i.exec(
+      css.trim()
+    );
+  if (!match) return undefined;
+  const h = (((Number(match[1]) % 360) + 360) % 360) / 360;
+  const s = Math.min(1, Number(match[2]) / 100);
+  const l = Math.min(1, Number(match[3]) / 100);
+  if ([h, s, l].some(Number.isNaN)) return undefined;
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const channel = (t: number) => {
+    const u = t < 0 ? t + 1 : t > 1 ? t - 1 : t;
+    if (u < 1 / 6) return p + (q - p) * 6 * u;
+    if (u < 1 / 2) return q;
+    if (u < 2 / 3) return p + (q - p) * (2 / 3 - u) * 6;
+    return p;
+  };
+  return { r: channel(h + 1 / 3), g: channel(h), b: channel(h - 1 / 3) };
+}
+
+/**
+ * A brand colour as a chart mark draws it in `mode`: unchanged when it already
+ * reads at 3:1 on every surface a mark is drawn on, and otherwise moved in
+ * lightness alone until it does (`readableOn`), so the chart stays the brand's
+ * hue and never becomes unreadable. A colour that cannot be read as one is
+ * drawn as given.
+ */
+export function chartColourFor(css: string, mode: "light" | "dark"): string {
+  const colour = parseBrandColour(css);
+  if (!colour) return css;
+  const readable = readableOn(
+    colour,
+    CHART_SURFACES[mode].map(oklchToRgb),
+    CHART_MARK_CONTRAST
+  );
+  return readable === colour ? css : toHex(readable);
+}
+
+/**
+ * The stylesheet that writes the brand's colours over the theme's tokens, or
+ * `undefined` when the brand sets none: separate from the effect that injects
+ * it, so what it writes for each mode can be read without a document.
+ */
+export function brandingCss(
+  colors: ResolvedBrandingColors | undefined
+): string | undefined {
+  if (!colors || (!colors.primary && !colors.accent)) return undefined;
+
+  const rules: string[] = [];
+
+  // The /admin-meta API resolves these to complete CSS colors (e.g.
+  // "hsl(239 84.3% 64.7%)"), which is what the `--nx-*` tokens hold.
+  const primaryHsl = colors.primary;
+  const accentHsl = colors.accent;
+
+  if (primaryHsl) {
+    rules.push(`--nx-primary: ${primaryHsl};`);
+    // Only when the API resolved one. The fallback was the bare triplet
+    // "0 0% 100%", which lands in `color: var(--nx-primary-foreground)` as an
+    // invalid value: the declaration is dropped and the text inherits the
+    // ambient foreground, which on a branded surface is the page's dark text.
+    // Emitting nothing instead leaves the theme's own token in force, which is
+    // a real colour chosen for the mode rather than one invented here.
+    if (colors.primaryForeground) {
+      rules.push(`--nx-primary-foreground: ${colors.primaryForeground};`);
+    }
+    // Derived tokens that reference --nx-primary HSL triplet
+    rules.push(`--nx-ring: ${primaryHsl};`);
+    rules.push(`--nx-focus-ring: ${primaryHsl};`);
+    rules.push(`--nx-sidebar-ring: ${primaryHsl};`);
+  }
+
+  if (accentHsl) {
+    rules.push(`--nx-accent: ${accentHsl};`);
+    // Conditional for the same reason as the primary foreground above.
+    if (colors.accentForeground) {
+      rules.push(`--nx-accent-foreground: ${colors.accentForeground};`);
+    }
+  }
+
+  // The chart slots per mode: a brand colour drawn as a chart mark is held to
+  // 3:1 on that mode's surfaces, so one too light for the light theme, or too
+  // dark for the dark one, is adjusted for that mode alone.
+  const chartRules = (mode: "light" | "dark") =>
+    [
+      primaryHsl ? `--nx-chart-1: ${chartColourFor(primaryHsl, mode)};` : "",
+      accentHsl ? `--nx-chart-2: ${chartColourFor(accentHsl, mode)};` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+  // Scoped to .nextly-admin so we never leak styles to the host application.
+  // The brand tokens are the same in both modes; the chart slots alone are
+  // written per mode, each adjusted for that mode's surfaces. Keep this
+  // selector and the token names in step with `getBrandingCss`, which
+  // server-renders the unadjusted declarations to avoid a flash of unbranded
+  // color before this runs; charts draw only once their data has loaded on
+  // the client, by when these have replaced them.
+  return (
+    `.nextly-admin, .nextly-admin.dark { ${rules.join(" ")} } ` +
+    `.nextly-admin { ${chartRules("light")} } ` +
+    `.nextly-admin.dark { ${chartRules("dark")} }`
+  );
+}
+
+/**
  * Injects a <style> tag that overrides the Tailwind CSS custom properties on
  * `.nextly-admin` and `.nextly-admin.dark` with user-supplied brand colors.
  *
@@ -127,48 +272,8 @@ export function useBrandingStatus(): Omit<BrandingState, "branding"> {
  */
 function useColorInjection(colors: ResolvedBrandingColors | undefined) {
   useEffect(() => {
-    if (!colors || (!colors.primary && !colors.accent)) return;
-
-    const rules: string[] = [];
-
-    // The /admin-meta API resolves these to complete CSS colors (e.g.
-    // "hsl(239 84.3% 64.7%)"), which is what the `--nx-*` tokens hold.
-    const primaryHsl = colors.primary;
-    const accentHsl = colors.accent;
-
-    if (primaryHsl) {
-      rules.push(`--nx-primary: ${primaryHsl};`);
-      // Only when the API resolved one. The fallback was the bare triplet
-      // "0 0% 100%", which lands in `color: var(--nx-primary-foreground)` as an
-      // invalid value: the declaration is dropped and the text inherits the
-      // ambient foreground, which on a branded surface is the page's dark text.
-      // Emitting nothing instead leaves the theme's own token in force, which is
-      // a real colour chosen for the mode rather than one invented here.
-      if (colors.primaryForeground) {
-        rules.push(`--nx-primary-foreground: ${colors.primaryForeground};`);
-      }
-      // Derived tokens that reference --nx-primary HSL triplet
-      rules.push(`--nx-ring: ${primaryHsl};`);
-      rules.push(`--nx-focus-ring: ${primaryHsl};`);
-      rules.push(`--nx-sidebar-ring: ${primaryHsl};`);
-      rules.push(`--nx-chart-1: ${primaryHsl};`);
-    }
-
-    if (accentHsl) {
-      rules.push(`--nx-accent: ${accentHsl};`);
-      // Conditional for the same reason as the primary foreground above.
-      if (colors.accentForeground) {
-        rules.push(`--nx-accent-foreground: ${colors.accentForeground};`);
-      }
-      rules.push(`--nx-chart-2: ${accentHsl};`);
-    }
-
-    // Scoped to .nextly-admin so we never leak styles to the host application.
-    // Applied to both light and dark variants since the user's brand colors
-    // are injected as the same values in both modes. Keep this selector and the
-    // token names in step with `getBrandingCss`, which server-renders the same
-    // declarations to avoid a flash of unbranded color before this runs.
-    const css = `.nextly-admin, .nextly-admin.dark { ${rules.join(" ")} }`;
+    const css = brandingCss(colors);
+    if (css === undefined) return;
 
     const style = document.createElement("style");
     style.id = "nextly-branding-colors";
@@ -202,7 +307,9 @@ interface BrandingProviderProps {
   children: React.ReactNode;
 }
 
-export function BrandingProvider({ children }: BrandingProviderProps) {
+export function BrandingProvider({
+  children,
+}: BrandingProviderProps): React.JSX.Element {
   // Both queries below are cached for five minutes, and a schema change makes
   // them stale — the workspace half carries the widget declarations, including
   // the cards core derives per collection. This provider owns them, so it is

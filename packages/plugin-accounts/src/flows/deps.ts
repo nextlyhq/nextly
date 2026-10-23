@@ -44,7 +44,11 @@ export interface AccountsEventPayloads {
 }
 
 /** The events the plugin declares, one per name it emits. */
-export const ACCOUNTS_EVENTS = [
+export const ACCOUNTS_EVENTS: readonly [
+  "nextlyhq-plugin-accounts.account.deleted",
+  "nextlyhq-plugin-accounts.account.deactivated",
+  "nextlyhq-plugin-accounts.account.reactivated",
+] = [
   "nextlyhq-plugin-accounts.account.deleted",
   "nextlyhq-plugin-accounts.account.deactivated",
   "nextlyhq-plugin-accounts.account.reactivated",
@@ -58,8 +62,8 @@ export interface AccountsEvents {
 }
 
 export const MINUTE = 60_000;
-export const HOUR = 60 * MINUTE;
-export const DAY = 24 * HOUR;
+export const HOUR: number = 60 * MINUTE;
+export const DAY: number = 24 * HOUR;
 
 /** How long a session lasts, from the site's settings. */
 export function sessionLimits(

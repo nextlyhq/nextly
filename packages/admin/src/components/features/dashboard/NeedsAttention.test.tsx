@@ -87,6 +87,53 @@ describe("the Needs attention card", () => {
     expect(screen.getByRole("link", { name: "Pages: 1" })).toBeInTheDocument();
   });
 
+  it("links a spread kind's two largest lists when small, then says how many more", () => {
+    drawAt("small", {
+      ok: true,
+      result: {
+        op: "groupBy",
+        buckets: [
+          { value: "unpublished", count: 6 },
+          { value: "unpublished:collection:posts", count: 3 },
+          { value: "unpublished:collection:pages", count: 2 },
+          { value: "unpublished:collection:events", count: 1 },
+        ],
+        field: {
+          name: "item",
+          type: "string",
+          choices: [
+            { value: "unpublished:collection:posts", label: "Posts" },
+            { value: "unpublished:collection:pages", label: "Pages" },
+            { value: "unpublished:collection:events", label: "Events" },
+          ],
+        },
+      },
+    });
+    const parts = screen.getByTestId("needs-attention-unpublished-parts");
+    expect(parts).toHaveTextContent("+1 more");
+    expect(screen.getByRole("link", { name: "Posts: 3" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Pages: 2" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Events: 1" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("says a kind was not all checked, never all clear, when its lists went partly unread", () => {
+    drawAt("medium", {
+      ok: true,
+      result: {
+        op: "groupBy",
+        buckets: [{ value: "unpublished", count: 0, atLeast: true }],
+      },
+    });
+    const row = screen.getByTestId("needs-attention-unpublished-unchecked");
+    expect(row).toHaveTextContent("Not all checked");
+    expect(row).toHaveTextContent("Not all lists were checked");
+    expect(screen.queryByText("All clear")).not.toBeInTheDocument();
+    // No number is drawn, and no link leads to lists that were not read.
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
   it("says a floor aloud as a floor", () => {
     drawAt("medium", {
       ok: true,

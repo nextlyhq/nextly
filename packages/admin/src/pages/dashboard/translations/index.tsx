@@ -12,6 +12,8 @@
  * @module pages/dashboard/translations
  */
 
+import type { JSX } from "react";
+
 import { TranslationWorklist } from "@admin/components/features/translations/TranslationWorklist";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -35,7 +37,7 @@ function single(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-export default function TranslationsPage() {
+export default function TranslationsPage(): JSX.Element {
   const params = useSearchParams();
   const localeParam = single(params[LOCALE_PARAM]);
   const stateParam = single(params[STATE_PARAM]);

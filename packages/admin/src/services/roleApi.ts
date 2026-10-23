@@ -250,7 +250,11 @@ export const createRole = async (
 /**
  * Stats projection over the roles list.
  */
-export const getStats = async () => {
+export const getStats = async (): Promise<{
+  totalRoles: number;
+  systemRoles: number;
+  customRoles: number;
+}> => {
   try {
     const result = await fetcher<ListResponse<ApiRole>>(`/roles`, {}, true);
 
@@ -272,8 +276,20 @@ export const getStats = async () => {
   }
 };
 
+/** The type of {@link roleApi}. */
+type RoleApiType = {
+  fetchRoles: typeof fetchRoles;
+  createRole: typeof createRole;
+  updateRole: typeof updateRole;
+  deleteRole: typeof deleteRole;
+  getRoleById: typeof getRoleById;
+  getRoleDetails: typeof getRoleDetails;
+  getStats: typeof getStats;
+  updateRolePermissions: typeof updateRolePermissions;
+};
+
 // Export all functions
-export const roleApi = {
+export const roleApi: RoleApiType = {
   fetchRoles,
   createRole,
   updateRole,

@@ -8,7 +8,7 @@
  * exist.
  */
 
-import { useEffect } from "react";
+import { useEffect, type JSX } from "react";
 
 import { EmptyEntitiesState } from "@admin/components/features/dashboard/EmptyEntitiesState";
 import { useSingles } from "@admin/hooks/queries/useSingles";
@@ -20,7 +20,7 @@ import { pickSinglesLandingTarget } from "@admin/lib/sidebar-landing";
 // Same key as DynamicSingleNav — they MUST share the pinned set.
 const PINNED_SINGLES_STORAGE_KEY = "nextly:sidebar:pinned-singles";
 
-export default function SinglesLandingRedirect() {
+export default function SinglesLandingRedirect(): JSX.Element {
   const { capabilities } = useCurrentUserPermissions();
   const { pinned: pinnedSingles } = useSidebarPins({
     storageKey: PINNED_SINGLES_STORAGE_KEY,
