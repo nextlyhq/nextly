@@ -19,6 +19,10 @@ import { expect, type Page } from "@playwright/test";
 import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.dashboard] });
 
 const CARDS = [
   "core/team",
