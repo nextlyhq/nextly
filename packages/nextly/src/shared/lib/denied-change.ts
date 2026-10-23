@@ -311,8 +311,10 @@ function restoreArray(
   // protected value of one row landing on another.
   const rows = Array.isArray(live) ? live : [];
   const pairing = rowPairing(before, rows);
-  return before.map((row, index) => {
+  const paired = new Set<number>();
+  const out = before.map((row, index) => {
     const at = pairing(index);
+    if (at !== undefined) paired.add(at);
     return restoreDenied(
       row,
       permitted[index],
@@ -320,6 +322,27 @@ function restoreArray(
       at === undefined ? undefined : itemAt(permittedLive, at)
     );
   });
+  keepDeniedLiveOnlyRows(out, rows, paired, permittedLive);
+  return out;
+}
+
+/**
+ * A row the list holds that this document drops, put back at its own place
+ * when it holds a value the caller may not change: the list is written whole,
+ * so dropping it would delete that value. A row holding none is a deletion the
+ * caller may make.
+ */
+function keepDeniedLiveOnlyRows(
+  out: unknown[],
+  rows: readonly unknown[],
+  paired: ReadonlySet<number>,
+  permittedLive: unknown
+): void {
+  for (const [index, row] of rows.entries()) {
+    if (paired.has(index)) continue;
+    if (sameStoredValue(row, itemAt(permittedLive, index))) continue;
+    out.splice(Math.min(index, out.length), 0, row);
+  }
 }
 
 /**
@@ -451,8 +474,10 @@ function restoreRecord(
 /**
  * A key the row holds that this document drops. Allowed, that is a deletion the
  * promotion is entitled to make; denied, it is one the caller may not, so the
- * value stays. Anything the pending change was deleting has already been
- * refused, so what reaches here is the caller's own.
+ * value stays. Denied counts anywhere inside it too: a branch holding a value
+ * the caller may not change cannot be dropped without deleting that value.
+ * Anything the pending change was deleting has already been refused, so what
+ * reaches here is the caller's own.
  */
 function keepDeniedLiveOnlyKeys(
   out: Record<string, unknown>,
@@ -463,9 +488,22 @@ function keepDeniedLiveOnlyKeys(
   if (!live) return;
   for (const key of Object.keys(live)) {
     if (hasOwn(before, key)) continue;
-    if (permittedLive && hasOwn(permittedLive, key)) continue;
+    if (!holdsDenied(live[key], permittedLive, key)) continue;
     assign(out, key, live[key]);
   }
+}
+
+/**
+ * Whether the rules removed `value`, the live value at `key`, or anything
+ * inside it: what judging live left at `key` is not the value itself.
+ */
+function holdsDenied(
+  value: unknown,
+  permittedLive: Record<string, unknown> | undefined,
+  key: string
+): boolean {
+  if (!permittedLive || !hasOwn(permittedLive, key)) return true;
+  return !sameStoredValue(value, permittedLive[key]);
 }
 
 function recordOrUndefined(
