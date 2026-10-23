@@ -21,10 +21,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { actorForWrite } from "../../../auth/request-actor";
-import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../../../errors/nextly-error";
+import type { SharedFieldsConflictPublicData } from "../../../errors/public-data";
 import {
   buildSingleRevalidationIntent,
   readRevalidateConfig,
@@ -40,7 +40,6 @@ import {
 import type { Logger } from "../../../shared/types";
 import { recordTransitionEvents } from "../../content-events/write-event";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
-import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { readCompanionLocaleStatusAll } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
@@ -54,6 +53,18 @@ import {
 import { captureInTx } from "../../versions/capture-in-tx";
 import { draftComponentValues } from "../../versions/draft-components";
 import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
+import {
+  differingFields,
+  editedSharedFields,
+  outOfDateSharedFields,
+  releaseAllSharedBases,
+  sameSharedValue,
+  sharedEditOrder,
+  type SharedEditTime,
+  sharedValuesConflict,
+  snapshotRecord,
+  type SharedViews,
+} from "../../versions/shared-publish-base";
 import {
   type ComponentFieldResolver,
   resolveComponentFieldMap,
@@ -82,6 +93,7 @@ import {
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
+import { liveSharedSingle, perLanguageFieldNames } from "./live-shared-single";
 import {
   assertDraftsMayBePromoted,
   liveStoredDocument,
@@ -471,7 +483,13 @@ export class SinglePublishAllService extends BaseService {
     // writer's. A language with nothing pending goes live as it is stored,
     // judged when it was saved as a draft and never as published, so it is
     // judged as a promotion of an empty change in the same outcome.
-    const pending = await this.pendingChanges(tx, plan);
+    const pending = await this.sharedValuesForPublish(
+      tx,
+      plan,
+      await this.pendingChanges(tx, plan),
+      options,
+      promoteGrants
+    );
     await this.assertPendingChangesMayBePromoted(
       tx,
       plan,
@@ -837,6 +855,8 @@ export class SinglePublishAllService extends BaseService {
     await new VersionsRepository(tx).deleteAllWorkingDrafts(
       this.workingDraftRef(plan)
     );
+    // Their bases go with them, so retention may let those versions go.
+    await releaseAllSharedBases(tx, this.workingDraftRef(plan));
   }
 
   /**
@@ -930,15 +950,256 @@ export class SinglePublishAllService extends BaseService {
     return prior;
   }
 
-  /** Every language's pending change, where the Single keeps drafts. */
+  /**
+   * Every language's pending change, where the Single keeps drafts, in the
+   * order their languages last saved. They are applied to one main row in this
+   * order, so where two changed one shared field the later save's value is
+   * the one left, whatever order the database returns the rows in.
+   */
   private async pendingChanges(
     tx: TransactionContext,
     plan: PublishPlan
   ): Promise<PendingChange[]> {
     if (!plan.draftsEligible) return [];
-    return new VersionsRepository(tx).findAllWorkingDrafts(
-      this.workingDraftRef(plan)
+    const repo = new VersionsRepository(tx);
+    const drafts = await repo.findAllWorkingDrafts(this.workingDraftRef(plan));
+    if (drafts.length < 2) return drafts;
+    const newest = await repo.newestVersionNoByLocale(
+      this.workingDraftRef(plan),
+      drafts.map(draft => draft.locale)
     );
+    const savedAt = (draft: PendingChange) => newest.get(draft.locale) ?? 0;
+    return [...drafts].sort((a, b) => savedAt(a) - savedAt(b));
+  }
+
+  /**
+   * The pending changes as this publish writes them, each carrying the one
+   * shared state the publish leaves.
+   *
+   * Refused first, naming every field, when any change holds a shared value
+   * someone else published after it began: that is the out-of-date change a
+   * single publish refuses too, and nothing is merged on its behalf.
+   *
+   * Otherwise every change began from the live shared values, and each brings
+   * only the shared fields it edited itself, measured against its own base.
+   * Where two edited one field, the later edit's value is kept, and the
+   * publish is refused, naming the field, when history can no longer show
+   * which edit was later. Combining the
+   * edits of changes that are all current is not the field-by-field merge an
+   * out-of-date change was refused to avoid: no change here is behind live,
+   * so none of its values reverts another's. Every change is then written with
+   * the same shared state, so the order the rows are applied in no longer
+   * decides it.
+   */
+  private async sharedValuesForPublish(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    pending: readonly PendingChange[],
+    options: PublishAllSingleLocalesOptions,
+    promoteGrants?: () => Promise<CallerGrants>
+  ): Promise<PendingChange[]> {
+    const { companion, singleMeta, existingDoc } = plan;
+    const reader = this.queryService;
+    if (!companion || !reader || pending.length === 0) return [...pending];
+    // Read under the lock this transaction took on the row, with its shared
+    // components.
+    const { live, shared, views, byHand } = await liveSharedSingle(
+      tx,
+      {
+        fieldGroupDataService: this.fieldGroupDataService,
+        deserialize: row =>
+          reader.deserializeJsonFields(
+            row as SingleDocument,
+            singleMeta.fields
+          ),
+      },
+      {
+        singleMeta,
+        entryId: existingDoc.id,
+        locale: null,
+        translated: new Set(companion.localizedFields.map(f => f.name)),
+      }
+    );
+    const caller = { options, promoteGrants };
+    await this.assertNoneOutOfDate(
+      tx,
+      plan,
+      pending,
+      { live, shared, views },
+      caller
+    );
+    await this.assertTranslatedComponentsUnedited(
+      plan,
+      pending,
+      { live, views, byHand },
+      caller
+    );
+    // A translated component's shared parts are judged above but not merged:
+    // each language's component also holds its own translated values, so it
+    // goes live as that language saved it.
+    const merged = shared.filter(name => !byHand.has(name));
+    const state = await this.mergedSharedState(
+      tx,
+      plan,
+      pending,
+      { live, shared: merged },
+      caller
+    );
+    return pending.map(draft => withSharedState(draft, merged, state));
+  }
+
+  /**
+   * Refuse, naming each, a component kept per language whose shared parts
+   * (its instances, and the sub-fields it marks shared) a change edited, when
+   * more than one language publishes. Each language's promotion writes its
+   * own copy of the component, so whichever went last would undo the others'
+   * edit, and the edit can't be merged into another language's instances
+   * safely. Published one language at a time, the later one is out of date
+   * and its editor copies the shared parts by hand.
+   */
+  private async assertTranslatedComponentsUnedited(
+    plan: PublishPlan,
+    pending: readonly PendingChange[],
+    document: {
+      live: Record<string, unknown>;
+      views: SharedViews;
+      byHand: ReadonlySet<string>;
+    },
+    caller: SharedFieldsCaller
+  ): Promise<void> {
+    if (pending.length < 2) return;
+    const { live, views } = document;
+    const edited = [...document.byHand].filter(name =>
+      pending.some(draft => {
+        const values = snapshotRecord(draft.snapshot);
+        return (
+          name in values &&
+          differingFields([name], values, live, views).length > 0
+        );
+      })
+    );
+    if (edited.length === 0) return;
+    throw await this.sharedConflict(plan, caller, {
+      fields: edited,
+      live,
+      reason: "shared-edits-unmergeable",
+    });
+  }
+
+  /** Refuse, naming every field, when any change is behind live. */
+  private async assertNoneOutOfDate(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    pending: readonly PendingChange[],
+    document: {
+      live: Record<string, unknown>;
+      shared: readonly string[];
+      views: SharedViews;
+    },
+    caller: SharedFieldsCaller
+  ): Promise<void> {
+    const ref = this.workingDraftRef(plan);
+    const stale = new Set<string>();
+    for (const draft of pending) {
+      const fields = await outOfDateSharedFields(tx, {
+        ref,
+        locale: draft.locale,
+        shared: document.shared,
+        live: document.live,
+        pending: snapshotRecord(draft.snapshot),
+        views: document.views,
+      });
+      for (const name of fields) stale.add(name);
+    }
+    if (stale.size === 0) return;
+    throw await this.sharedConflict(plan, caller, {
+      fields: [...stale],
+      live: document.live,
+    });
+  }
+
+  /** A refusal over shared fields, named as this caller may read them. */
+  private sharedConflict(
+    plan: PublishPlan,
+    caller: SharedFieldsCaller,
+    refused: {
+      fields: string[];
+      live: Record<string, unknown>;
+      reason?: SharedFieldsConflictPublicData["reason"];
+    }
+  ): Promise<NextlyError> {
+    const { options } = caller;
+    return sharedValuesConflict({
+      kind: "single",
+      slug: plan.slug,
+      entryId: plan.existingDoc.id,
+      ...refused,
+      user: options.user,
+      // A routed request runs trusted but still answers to the caller's field
+      // read rules.
+      overrideAccess: options.overrideAccess && !options.routeAuthorized,
+      authenticatedScope: options.authenticatedScope,
+      // Resolved before the transaction opened.
+      grants: caller.promoteGrants,
+    });
+  }
+
+  /**
+   * The live shared values, each overlaid by the change that edited it last:
+   * where two changes edited one field, the one whose edit of THAT field is
+   * the later, from its language's version history, whichever language saved
+   * anything last. Later only where history proves it: a field whose edits it
+   * can no longer order is refused, naming it, and never decided by a guess.
+   */
+  private async mergedSharedState(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    pending: readonly PendingChange[],
+    document: { live: Record<string, unknown>; shared: readonly string[] },
+    caller: SharedFieldsCaller
+  ): Promise<Record<string, unknown>> {
+    const { live, shared } = document;
+    const ref = this.workingDraftRef(plan);
+    const edits = new Map<string, SharedEdit[]>();
+    for (const draft of pending) {
+      const values = snapshotRecord(draft.snapshot);
+      const edited = await editedSharedFields(tx, {
+        ref,
+        locale: draft.locale,
+        shared,
+        pending: values,
+      });
+      const order = await sharedEditOrder(tx, {
+        ref,
+        locale: draft.locale,
+        fields: edited,
+        pending: values,
+      });
+      for (const name of edited) {
+        const time = order.get(name) ?? { after: 0, by: 0 };
+        edits.set(name, [
+          ...(edits.get(name) ?? []),
+          { value: values[name], ...time },
+        ]);
+      }
+    }
+    const state: Record<string, unknown> = Object.fromEntries(
+      shared.map(name => [name, live[name]])
+    );
+    const unordered: string[] = [];
+    for (const [name, candidates] of edits) {
+      const winner = latestEdit(candidates);
+      if (winner) state[name] = winner.value;
+      else unordered.push(name);
+    }
+    if (unordered.length > 0) {
+      throw await this.sharedConflict(plan, caller, {
+        fields: unordered,
+        live,
+        reason: "shared-edits-unordered",
+      });
+    }
+    return state;
   }
 
   private workingDraftRef(plan: PublishPlan) {
@@ -1459,27 +1720,48 @@ function languagesGoingLiveAsStored(
   return [{ locale: null, snapshot: {} }];
 }
 
+/** A pending change carrying the one shared state a publish of every language leaves. */
+/** Who publishes, for the field read rules a refusal answers to. */
+interface SharedFieldsCaller {
+  options: PublishAllSingleLocalesOptions;
+  promoteGrants?: () => Promise<CallerGrants>;
+}
+
+/** One language's edit of a shared field, and when it was made. */
+interface SharedEdit extends SharedEditTime {
+  value: unknown;
+}
+
 /**
- * The fields judged per language when every language is published: the
- * translated fields, and each field whose component is translated. A dynamic
- * zone counts when any type it permits is translated. References are read
- * through `fieldGroupSlugList`, so a definition stored under the migrated
- * `fieldGroup` / `fieldGroups` keys counts as the field-group saver sees it.
+ * The edit history proves later than every edit of another value, or null
+ * when none is: two edits whose times overlap can't be ordered.
  */
-export async function perLanguageFieldNames(
-  fieldConfigs: readonly FieldConfig[],
-  localizedFieldNames: ReadonlySet<string>,
-  isComponentLocalized: (slug: string) => Promise<boolean>
-): Promise<Set<string>> {
-  const names = new Set(localizedFieldNames);
-  for (const field of fieldConfigs) {
-    if (!isFieldGroupField(field)) continue;
-    for (const slug of fieldGroupSlugList(field)) {
-      if (await isComponentLocalized(slug)) {
-        names.add(field.name);
-        break;
-      }
-    }
-  }
-  return names;
+function latestEdit(edits: readonly SharedEdit[]): SharedEdit | null {
+  return (
+    edits.find(edit =>
+      edits.every(
+        other =>
+          other === edit ||
+          sameSharedValue(other.value, edit.value) ||
+          edit.after >= other.by
+      )
+    ) ?? null
+  );
+}
+
+function withSharedState(
+  draft: PendingChange,
+  shared: readonly string[],
+  state: Record<string, unknown>
+): PendingChange {
+  const values = snapshotRecord(draft.snapshot);
+  return {
+    ...draft,
+    snapshot: {
+      ...values,
+      ...Object.fromEntries(
+        shared.filter(name => name in values).map(name => [name, state[name]])
+      ),
+    },
+  };
 }

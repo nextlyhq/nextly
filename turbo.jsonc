@@ -43,6 +43,16 @@
   "$schema": "https://v2-9-7.turborepo.dev/schema.json",
   "ui": "tui", // Terminal UI for better task visualization
 
+  // The local cache's bound. Turbo keeps every task's outputs until told
+  // otherwise (both settings default to off), and with several worktrees
+  // sharing one clone's cache it grew about 20 GB a day on a busy machine
+  // until the disk filled. At the start of each run turbo evicts entries older
+  // than the age, then the oldest until the cache fits the size. An evicted
+  // entry costs a rebuild, never a wrong result. `cacheDir` stays unset on
+  // purpose: worktrees share the main clone's cache only at the default path.
+  "cacheMaxAge": "3d",
+  "cacheMaxSize": "5GB",
+
   // Files OUTSIDE any package that a task's result depends on.
   //
   // A task's hash covers its own package's files plus, through `dependsOn`, its

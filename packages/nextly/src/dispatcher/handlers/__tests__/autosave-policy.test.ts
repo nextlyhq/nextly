@@ -17,6 +17,7 @@ vi.mock("../../../api/versions-access", () => ({
   assertDocumentUpdatable: vi.fn(),
   resolveVersionsPolicy: (...a: unknown[]) => policySpy(...a),
   tryResolveCurrentFields: vi.fn(async () => []),
+  stripAutosavePasswords: vi.fn(async () => undefined),
   redactSnapshotForUser: vi.fn(),
   resolveSingleDocumentId: vi.fn(),
   assertDiffVersionPair: vi.fn(),

@@ -27,6 +27,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { assertEntryPreviewable } from "../../api/preview-access";
 import {
+  registeredWriteAsNamedLanguagesFor,
+  withRuleLanguage,
+} from "../access/rule-language";
+import {
   defineCollection,
   defineFieldGroup,
   defineSingle,
@@ -43,6 +47,10 @@ import {
 import type { CollectionService } from "../../domains/collections/services/collection-service";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import type { AccessRuleContext } from "../../shared/types/access";
+import {
+  singleDocumentEditable,
+  singleStoredDocumentReadable,
+} from "../../domains/singles/services/single-document-access";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 
 let current: TestNextly | undefined;
@@ -75,6 +83,7 @@ const SHARED_ENGLISH = "sharedenglishnotes";
 const SHARED_OPEN = "sharedopennotes";
 const LINKING = "linkingnotes";
 const PREVIEW_OPEN = "previewopen";
+const PREVIEW_EDIT_CLOSED = "previeweditclosed";
 
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
@@ -206,6 +215,13 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         localized: true,
         // The control: the same, with the read open in every language.
         access: { create: () => true, read: () => true, update: () => true },
+        fields: [text({ name: "body", localized: true })],
+      }),
+      defineCollection({
+        slug: PREVIEW_EDIT_CLOSED,
+        localized: true,
+        // Open to read, so only the edit rule can refuse a preview link.
+        access: { create: () => true, read: () => true, update: frenchClosed },
         fields: [text({ name: "body", localized: true })],
       }),
     ],
@@ -534,6 +550,113 @@ describe.each(getConfiguredTestDialects())(
             routeAuthorized: true,
           })
         ).resolves.toBeDefined();
+      });
+    });
+
+    describe("minting or opening a preview link to one language", () => {
+      const sharer = { id: "user-1", email: "user-1@example.test", roles: [] };
+
+      it("asks a Single's stored-row checks in the language they name: allowed in English, refused in French", async () => {
+        const t = await boot(dialect);
+        // A row to ask about; the stored checks read it, never create it.
+        expect(
+          (
+            await singlesOf(t).update(
+              SETTINGS,
+              { tagline: "hello" },
+              { overrideAccess: true, locale: "en" }
+            )
+          ).success
+        ).toBe(true);
+        for (const check of [
+          singleStoredDocumentReadable,
+          singleDocumentEditable,
+        ]) {
+          const ask = (locale: string) =>
+            check(SETTINGS, { user: sharer, routeAuthorized: false, locale });
+          expect(await ask("en")).toBe(true);
+          expect(await ask("fr")).toBe(false);
+        }
+      });
+
+      it("asks a Single's stored-row check naming no language in the languages its caller set", async () => {
+        const t = await boot(dialect);
+        expect(
+          (
+            await singlesOf(t).update(
+              SETTINGS,
+              { tagline: "hello" },
+              { overrideAccess: true, locale: "en" }
+            )
+          ).success
+        ).toBe(true);
+        // As a REST autosave or discard calls it: the request's language set
+        // around the call, none named in it.
+        const ask = () =>
+          singleDocumentEditable(SETTINGS, {
+            user: sharer,
+            routeAuthorized: false,
+          });
+        expect(
+          await withRuleLanguage(registeredWriteAsNamedLanguagesFor("en"), ask)
+        ).toBe(true);
+        expect(
+          await withRuleLanguage(registeredWriteAsNamedLanguagesFor("fr"), ask)
+        ).toBe(false);
+      });
+
+      it("asks the read rule in the link's language: allowed in English, refused in French", async () => {
+        const t = await boot(dialect);
+        const closed = await seed(t, PREVIEW_CLOSED);
+        // At the mint, and at an open, which no route gate has run for.
+        for (const routeAuthorized of [true, false]) {
+          await expect(
+            assertEntryPreviewable(PREVIEW_CLOSED, closed, sharer, {
+              routeAuthorized,
+              locale: "en",
+            })
+          ).resolves.toBeDefined();
+          await expect(
+            assertEntryPreviewable(PREVIEW_CLOSED, closed, sharer, {
+              routeAuthorized,
+              locale: "fr",
+            })
+          ).rejects.toMatchObject({ code: "FORBIDDEN" });
+        }
+      });
+
+      it("asks the edit rule in the link's language: allowed in English, refused in French", async () => {
+        const t = await boot(dialect);
+        // The control for the French refusal below: where every rule is open,
+        // a link to French is allowed, so that refusal is the edit rule's.
+        const open = await seed(t, PREVIEW_OPEN);
+        await expect(
+          assertEntryPreviewable(PREVIEW_OPEN, open, sharer, {
+            routeAuthorized: false,
+            locale: "fr",
+          })
+        ).resolves.toBeDefined();
+
+        const entry = await seed(t, PREVIEW_EDIT_CLOSED);
+        await expect(
+          assertEntryPreviewable(PREVIEW_EDIT_CLOSED, entry, sharer, {
+            routeAuthorized: false,
+            locale: "en",
+          })
+        ).resolves.toBeDefined();
+        await expect(
+          assertEntryPreviewable(PREVIEW_EDIT_CLOSED, entry, sharer, {
+            routeAuthorized: false,
+            locale: "fr",
+          })
+        ).rejects.toMatchObject({ code: "FORBIDDEN" });
+        // The control: a link naming no language is asked in every language,
+        // French included.
+        await expect(
+          assertEntryPreviewable(PREVIEW_EDIT_CLOSED, entry, sharer, {
+            routeAuthorized: false,
+          })
+        ).rejects.toMatchObject({ code: "FORBIDDEN" });
       });
     });
   }

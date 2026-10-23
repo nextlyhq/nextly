@@ -607,6 +607,41 @@ describe("a grant covers ONE document, not the holder", () => {
     ).rejects.toThrow();
   });
 
+  it("refuses an entry grant for a DIFFERENT translation of the same entry", async () => {
+    // The entry's sharer check is made in the link's language, so the grant
+    // carries it: an `en` grant does not answer for `fr`.
+    const forEnglish = previewCallerAuthorized(PRINCIPAL, {
+      collection: "pages",
+      entryId: "e1",
+      locale: "en",
+    });
+
+    await expect(
+      explainPreviewRedirect(
+        { collection: "pages", entryId: "e1", locale: "fr" },
+        deps(),
+        forEnglish
+      )
+    ).rejects.toThrow();
+  });
+
+  it("ALLOWS the translation the entry grant names", async () => {
+    // The control: the refusal above is about the locale.
+    const forFrench = previewCallerAuthorized(PRINCIPAL, {
+      collection: "pages",
+      entryId: "e1",
+      locale: "fr",
+    });
+
+    await expect(
+      explainPreviewRedirect(
+        { collection: "pages", entryId: "e1", locale: "fr" },
+        deps(),
+        forFrench
+      )
+    ).resolves.toBeDefined();
+  });
+
   it("refuses a grant for a DIFFERENT translation of the same Single", async () => {
     /*
      * `assertSinglePreviewable` runs a locale-specific readable check, so a

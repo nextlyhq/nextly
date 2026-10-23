@@ -22,6 +22,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
@@ -64,6 +65,7 @@ import {
   attachFieldValidators,
   runFieldHooks,
   resolvedCallerGrants,
+  type CallerGrants,
 } from "../../../shared/lib/field-level-registry";
 import {
   coerceDateFieldsToDate,
@@ -106,6 +108,7 @@ import {
 } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
+  type CompanionSchema,
   splitLocalizedWrite,
 } from "../../i18n/runtime/companion-io";
 import {
@@ -129,6 +132,17 @@ import { storeDraftSave } from "../../versions/draft-save";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
 import { hasLifecycle } from "../../versions/recorded-status";
 import { resolveComponentSchemas } from "../../versions/restore-version";
+import {
+  outOfDateSharedFields,
+  recordSharedBase,
+  releaseSharedBase,
+  sharedValuesConflict,
+  snapshotRecord,
+  takeLiveSharedValuesInto,
+  takenLiveValues,
+  type TakenLiveValues,
+  wholeWritableFields,
+} from "../../versions/shared-publish-base";
 import {
   resolveComponentFieldMap,
   tagComponentTypes,
@@ -159,6 +173,7 @@ import {
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
+import { liveSharedSingle, type SharedComparison } from "./live-shared-single";
 import {
   assertDraftsMayBePromoted,
   liveStoredDocument,
@@ -263,6 +278,37 @@ export class SingleMutationService extends BaseService {
    */
   private readonly versionCapture = new VersionCaptureService();
 
+  /**
+   * The Single as it stands live in this transaction, and the fields every
+   * language shares in it; see `liveSharedSingle`. Read under the row lock
+   * the write already holds.
+   */
+  private liveSharedDocument(
+    tx: TransactionContext,
+    singleMeta: DynamicSingleRecord,
+    entryId: string,
+    companion: CompanionSchema,
+    locale: string | null
+  ): Promise<SharedComparison & { live: Record<string, unknown> }> {
+    return liveSharedSingle(
+      tx,
+      {
+        fieldGroupDataService: this.fieldGroupDataService,
+        deserialize: row =>
+          this.queryService.deserializeJsonFields(
+            row as SingleDocument,
+            singleMeta.fields
+          ),
+      },
+      {
+        singleMeta,
+        entryId,
+        locale,
+        translated: new Set(companion.localizedFields.map(f => f.name)),
+      }
+    );
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -297,6 +343,208 @@ export class SingleMutationService extends BaseService {
    * provided partial data.
    */
   /**
+   * The schema of a translated Single's translations table; null for a Single
+   * without languages, which has no shared values apart from its languages'.
+   */
+  private translationsOf(
+    singleMeta: DynamicSingleRecord
+  ): CompanionSchema | null {
+    if (!this.localization || singleMeta.localized !== true) return null;
+    return buildCompanionSchema({
+      slug: singleMeta.slug,
+      tableName: singleMeta.tableName,
+      fields: singleMeta.fields as { name: string; type: string }[],
+      dialect: this.adapter.dialect,
+      status: (singleMeta as { status?: boolean }).status === true,
+    });
+  }
+
+  /**
+   * A language's pending change on this Single, under the row lock every save
+   * and publish takes, so the live values read beside it are the ones the
+   * next publish compares. Null when the Single has no row or the language no
+   * pending change.
+   */
+  private async lockedPendingChange(
+    tx: TransactionContext,
+    singleMeta: DynamicSingleRecord,
+    slug: string,
+    requestLocale: string | null
+  ) {
+    const row = await tx.selectOne<{ id?: string }>(singleMeta.tableName, {});
+    const entryId = row?.id;
+    if (entryId === undefined) return null;
+    await tx.lockRow(singleMeta.tableName, entryId);
+    const ref = { scopeKind: "single" as const, scopeSlug: slug, entryId };
+    const locale = workingDraftLocale({
+      documentLocalized: true,
+      requestLocale,
+      defaultLocale: this.localization?.defaultLocale ?? null,
+    });
+    const pending = await new VersionsRepository(tx).findWorkingDraft(
+      ref,
+      locale
+    );
+    return pending ? { ref, locale, pending } : null;
+  }
+
+  /**
+   * The body of {@link takeLiveSharedValues}, in its transaction: null when
+   * there is no pending change to bring up to date.
+   */
+  private async takeLiveInTx(
+    tx: TransactionContext,
+    singleMeta: DynamicSingleRecord,
+    companion: CompanionSchema,
+    params: Parameters<SingleMutationService["takeLiveSharedValues"]>[0],
+    grants: () => Promise<CallerGrants>
+  ): Promise<{
+    taken: string[];
+    remaining: string[];
+    live: Record<string, unknown>;
+    byHand: ReadonlySet<string>;
+  } | null> {
+    const found = await this.lockedPendingChange(
+      tx,
+      singleMeta,
+      params.slug,
+      params.locale ?? null
+    );
+    if (!found) return null;
+    const { ref, locale, pending } = found;
+    const { live, shared, views, byHand } = await this.liveSharedDocument(
+      tx,
+      singleMeta,
+      ref.entryId,
+      companion,
+      locale
+    );
+    const took = await takeLiveSharedValuesInto(tx, this.versionCapture, {
+      ref,
+      locale,
+      shared,
+      live,
+      views,
+      pending: snapshotRecord(pending.snapshot),
+      createdBy: params.user?.id ?? null,
+      maxPerDoc: singleMeta.versions?.maxPerDoc,
+      // Only what this caller may write, whole: a field rule that refuses
+      // them a value, at any depth, refuses them taking its live one too.
+      // Nor a translated component's shared sub-fields, which are left to the
+      // editor to copy by hand.
+      mayTake: stale =>
+        wholeWritableFields(
+          stale.filter(name => !byHand.has(name)),
+          live,
+          data =>
+            applyFieldWriteAccess({
+              kind: "single",
+              slug: params.slug,
+              data,
+              operation: "update",
+              user: params.user,
+              authenticatedScope: params.authenticatedScope,
+              overrideAccess: params.overrideAccess,
+              id: ref.entryId,
+              grants,
+            })
+        ),
+    });
+    // A save of the pending change, in its history like any other.
+    await this.recordSingleSave(
+      tx,
+      params.slug,
+      ref.entryId,
+      { user: params.user, actor: params.actor },
+      { locale, toState: "draft", versionNo: took.versionNo }
+    );
+    return { taken: took.taken, remaining: took.remaining, live, byHand };
+  }
+
+  /**
+   * Bring a language's pending change up to date with the shared values
+   * someone else published after it began: each out-of-date shared field takes
+   * its live value, and the change's base moves to the version those live
+   * values are in, so its next publish goes through. A shared value the change
+   * edited that nobody else published keeps the change's value.
+   *
+   * Applies the Single's update rules: this writes the pending change.
+   *
+   * @experimental
+   */
+  async takeLiveSharedValues(params: {
+    slug: string;
+    /** Which language's pending change; the default when none is named. */
+    locale?: string | null;
+    /** Who took them, for the change's history. */
+    actor?: RequestActor;
+    user?: UserContext;
+    overrideAccess?: boolean;
+    routeAuthorized?: boolean;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<SingleResult<TakenLiveValues>> {
+    try {
+      const accessDenied = await checkSingleAccess({
+        slug: params.slug,
+        operation: "update",
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+        rbacAccessControlService: this.rbacAccessControlService,
+        authenticatedScope: params.authenticatedScope,
+        logger: this.logger,
+      });
+      if (accessDenied) {
+        return { ...accessDenied, data: undefined };
+      }
+      const singleMeta = await resolveSingleForRequest(
+        this.adapter,
+        this.singleRegistryService,
+        params.slug,
+        this.logger
+      );
+      const companion = singleMeta ? this.translationsOf(singleMeta) : null;
+      // Resolved before the transaction: they take a pooled connection.
+      const grants = await resolvedCallerGrants(
+        params.user,
+        params.authenticatedScope
+      );
+      const took =
+        singleMeta && companion
+          ? await this.adapter.transaction(tx =>
+              this.takeLiveInTx(tx, singleMeta, companion, params, grants)
+            )
+          : null;
+      if (!took) {
+        throw NextlyError.notFound({
+          message: "This language has no pending change.",
+          logContext: {
+            reason: "take-live-no-pending-change",
+            single: params.slug,
+          },
+        });
+      }
+      const data = await takenLiveValues(
+        {
+          kind: "single",
+          slug: params.slug,
+          user: params.user,
+          overrideAccess: params.overrideAccess && !params.routeAuthorized,
+          authenticatedScope: params.authenticatedScope,
+          grants,
+        },
+        took
+      );
+      return { success: true, statusCode: 200, data };
+    } catch (error) {
+      return {
+        ...buildSingleErrorResult(error, "Failed to take the live values"),
+        data: undefined,
+      };
+    }
+  }
+
+  /**
    * Remove a Single's pending working-draft sidecar for one language, under the
    * same row lock a draft save takes.
    *
@@ -326,7 +574,13 @@ export class SingleMutationService extends BaseService {
     /** Who discarded it, for the Single's history. */
     actor?: RequestActor;
     user?: UserContext;
-  }): Promise<void> {
+    /**
+     * The document the caller was checked against, when it was. A Single
+     * deleted and made again since is a different document, so the discard
+     * is refused rather than removing that document's draft.
+     */
+    entryId?: string;
+  }): Promise<number> {
     const singleMeta = await resolveSingleForRequest(
       this.adapter,
       this.singleRegistryService,
@@ -342,13 +596,22 @@ export class SingleMutationService extends BaseService {
       });
     }
 
-    await this.adapter.transaction(async tx => {
+    // The drafts it removed, counted by the delete made under the lock.
+    return this.adapter.transaction(async tx => {
       // A Single is one row, so its identity comes from reading that row rather
       // than from the request. No row means the document has never been written,
       // which cannot have a pending change against it.
       const row = await tx.selectOne<{ id?: string }>(singleMeta.tableName, {});
       const entryId = row?.id;
-      if (entryId === undefined) return;
+      if (params.entryId !== undefined && entryId !== params.entryId) {
+        throw NextlyError.notFound({
+          logContext: {
+            reason: "discard-working-draft-single-replaced",
+            scopeSlug: params.slug,
+          },
+        });
+      }
+      if (entryId === undefined) return 0;
 
       // Serialize with concurrent draft-save upserts, which lock this same row
       // before writing the sidecar.
@@ -358,14 +621,16 @@ export class SingleMutationService extends BaseService {
         requestLocale: params.locale ?? null,
         defaultLocale: this.localization?.defaultLocale ?? null,
       });
+      const discardedRef = {
+        scopeKind: "single" as const,
+        scopeSlug: params.slug,
+        entryId,
+      };
       const removed = await new VersionsRepository(tx).deleteWorkingDraft(
-        {
-          scopeKind: "single",
-          scopeSlug: params.slug,
-          entryId,
-        },
+        discardedRef,
         draftLocale
       );
+      await releaseSharedBase(tx, discardedRef, draftLocale);
       // In the Single's history only when there was a draft to discard.
       if (removed > 0) {
         await recordWriteEvent(
@@ -380,6 +645,7 @@ export class SingleMutationService extends BaseService {
           }
         );
       }
+      return removed;
     });
   }
 
@@ -1847,6 +2113,47 @@ export class SingleMutationService extends BaseService {
                     callerData: { ...currentData, ...promotedComponents },
                   }
                 );
+                // A language's pending change carries every shared value; one
+                // someone else published since the change began would be put
+                // back by this write, so the publish is refused, naming it.
+                if (companion) {
+                  const { live, shared, views } = await this.liveSharedDocument(
+                    tx,
+                    singleMeta,
+                    existingDoc.id,
+                    companion,
+                    singleDraftLocale ?? null
+                  );
+                  const stale = await outOfDateSharedFields(tx, {
+                    ref: {
+                      scopeKind: "single",
+                      scopeSlug: slug,
+                      entryId: existingDoc.id,
+                    },
+                    locale: singleDraftLocale ?? null,
+                    shared,
+                    live,
+                    pending: snapshotRecord(pendingDraft.snapshot),
+                    views,
+                  });
+                  if (stale.length > 0) {
+                    throw await sharedValuesConflict({
+                      kind: "single",
+                      slug,
+                      entryId: existingDoc.id,
+                      fields: stale,
+                      live,
+                      user: options.user,
+                      // A routed request runs trusted but still answers to
+                      // the caller's field read rules.
+                      overrideAccess:
+                        options.overrideAccess && !options.routeAuthorized,
+                      authenticatedScope: options.authenticatedScope,
+                      // Resolved before the transaction opened.
+                      grants: promoteGrants,
+                    });
+                  }
+                }
                 // The caller's own payload wins over the pending change: a
                 // publish that also sets a field is saying something about that
                 // field now.
@@ -2481,13 +2788,20 @@ export class SingleMutationService extends BaseService {
             // A promoted pending change is consumed: its content is now live,
             // and leaving the row would re-apply it on the next publish.
             if (promotedDraft) {
+              const promotedRef = {
+                scopeKind: "single" as const,
+                scopeSlug: slug,
+                entryId: existingDoc.id,
+              };
               await new VersionsRepository(tx).deleteWorkingDraft(
-                {
-                  scopeKind: "single",
-                  scopeSlug: slug,
-                  entryId: existingDoc.id,
-                },
+                promotedRef,
                 singleDraftLocale
+              );
+              // Its base goes with it, so retention may let that version go.
+              await releaseSharedBase(
+                tx,
+                promotedRef,
+                singleDraftLocale ?? null
               );
             }
 
@@ -2693,6 +3007,29 @@ export class SingleMutationService extends BaseService {
                 if (Object.prototype.hasOwnProperty.call(pending, name)) {
                   pending[name] = recordNested({ [name]: pending[name] })[name];
                 }
+              }
+              // A language's change records its base when it begins: the
+              // version whose shared values are the live ones it began from. A
+              // later save keeps it, so saving again never makes an old shared
+              // value current. Recorded before the save's own capture, whose
+              // retention pass then keeps it.
+              if (!existingDraft && companion) {
+                // A held save has written nothing live, so the live document
+                // read here is the one the change began from.
+                const { live, shared, views } = await this.liveSharedDocument(
+                  tx,
+                  singleMeta,
+                  existingDoc.id,
+                  companion,
+                  singleDraftLocale ?? null
+                );
+                await recordSharedBase(tx, {
+                  ref: draftRef,
+                  locale: singleDraftLocale ?? null,
+                  shared,
+                  live,
+                  views,
+                });
               }
               // The draft, and the save as a version of its own. A save that
               // changes nothing against what it replaces records no version.

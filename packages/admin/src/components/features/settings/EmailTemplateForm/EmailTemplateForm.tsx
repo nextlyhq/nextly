@@ -387,6 +387,7 @@ export function EmailTemplateForm({
           <SendTestDialog
             open={sendTestOpen}
             onOpenChange={setSendTestOpen}
+            templateId={template?.id ?? ""}
             templateName={name}
             slug={slug}
             sampleData={derived.sampleData}

@@ -73,6 +73,9 @@ export interface DiscardWorkingDraftArgs {
   authenticatedScope?: AuthenticatedScope;
   /** Who discarded it, for the document's history. */
   actor?: RequestActor;
+  /** The request and context the caller's own read carries, for read hooks. */
+  request?: Request;
+  context?: Record<string, unknown>;
 }
 
 /**
@@ -80,9 +83,16 @@ export interface DiscardWorkingDraftArgs {
  * published document as a plain read would shape it. A no-op that still returns
  * the live row when no working draft exists.
  */
+/** What a discard leaves: the live document, and how many drafts it removed. */
+export interface DiscardedWorkingDraft {
+  document: unknown;
+  /** Counted by the delete made under the document's lock. */
+  removed: number;
+}
+
 export async function discardWorkingDraft(
   args: DiscardWorkingDraftArgs
-): Promise<unknown> {
+): Promise<DiscardedWorkingDraft> {
   // Read the live published row FIRST, through the full read pipeline (hooks,
   // redaction, field-level access) and WITHOUT the working-draft overlay, so it
   // is the live document the editor resets to. The delete below never touches
@@ -104,6 +114,12 @@ export async function discardWorkingDraft(
   // as though it might be trusted, and this is the document a caller receives.
   // The live-document read gate beside this one states it for the same reason.
   const locale = args.locale ? { locale: args.locale } : {};
+  // The live-document read runs the read hooks, so they see what the caller's
+  // own read would.
+  const hookInputs = {
+    ...(args.request === undefined ? {} : { request: args.request }),
+    ...(args.context === undefined ? {} : { context: args.context }),
+  };
   const result =
     args.scopeKind === "single"
       ? await getService("singleEntryService").get(args.slug, {
@@ -113,6 +129,7 @@ export async function discardWorkingDraft(
           authenticatedScope: args.authenticatedScope,
           status: "all",
           ...locale,
+          ...hookInputs,
         })
       : await getService("collectionsHandler").getEntry({
           collectionName: args.slug,
@@ -123,6 +140,7 @@ export async function discardWorkingDraft(
           authenticatedScope: args.authenticatedScope,
           status: "all",
           ...locale,
+          ...hookInputs,
         });
 
   // A failed read (a concurrent delete, or an after-read hook or database error)
@@ -142,22 +160,23 @@ export async function discardWorkingDraft(
   // this request's authorization checks and the delete would otherwise have its
   // brand-new draft removed with both requests reporting success. Deleting when
   // none exists is a no-op, not an error.
-  if (args.scopeKind === "single") {
-    await getService("singleEntryService").discardWorkingDraft({
-      slug: args.slug,
-      locale: args.locale ?? null,
-      actor: args.actor,
-      user: args.user,
-    });
-  } else {
-    await getService("collectionsHandler").discardWorkingDraft({
-      collectionName: args.slug,
-      entryId: args.entryId,
-      locale: args.locale ?? null,
-      actor: args.actor,
-      user: args.user,
-    });
-  }
+  const removed =
+    args.scopeKind === "single"
+      ? await getService("singleEntryService").discardWorkingDraftCounted({
+          slug: args.slug,
+          // The document every check above was made against.
+          entryId: args.entryId,
+          locale: args.locale ?? null,
+          actor: args.actor,
+          user: args.user,
+        })
+      : await getService("collectionsHandler").discardWorkingDraftCounted({
+          collectionName: args.slug,
+          entryId: args.entryId,
+          locale: args.locale ?? null,
+          actor: args.actor,
+          user: args.user,
+        });
 
-  return result.data;
+  return { document: result.data, removed };
 }
