@@ -23,6 +23,7 @@ import { resolveComponentFieldMap } from "../versions/tag-component-types";
 
 import {
   forEachFieldGroupInstance,
+  type FieldGroupInstanceVisit,
   nameOf,
   rowsOf,
   subFieldsOf,
@@ -581,6 +582,33 @@ function directFieldGroupFields(fields: readonly FieldConfig[]): FieldConfig[] {
   return found;
 }
 
+/**
+ * Whether an instance the walk reaches is new, and the stored id it is
+ * judged with: one in its own table is new where `existing` does not hold
+ * it, and one held inline is created with the instance it is held in.
+ * `created` collects the new instances in their own tables, which the walk
+ * reaches before what they hold.
+ */
+function standingOf(
+  reached: FieldGroupInstanceVisit,
+  existing: ReadonlySet<string> | undefined,
+  created: WeakSet<object>
+): { isNew: boolean; storedId: string | undefined } {
+  const { instance, slug, inline, outer } = reached;
+  if (inline) {
+    return {
+      isNew: outer !== undefined && created.has(outer),
+      storedId: undefined,
+    };
+  }
+  const id = typeof instance.id === "string" ? instance.id : undefined;
+  const storedHere =
+    id !== undefined && existing?.has(instanceKey(slug, id)) === true;
+  const isNew = existing !== undefined && !storedHere;
+  if (isNew) created.add(instance);
+  return { isNew, storedId: storedHere ? id : undefined };
+}
+
 /** The one judgment both passes make, over the instances the walk reaches. */
 async function judgeFieldGroupInstances(params: {
   data: Record<string, unknown>;
@@ -592,23 +620,22 @@ async function judgeFieldGroupInstances(params: {
   /**
    * The identities of the instances already stored in their own tables
    * (`storedInstanceKeys`). Given, one in its own table that is not among
-   * them is new, and judged as a create; an inline one has no row of its own
-   * and takes `operation`, the document's.
+   * them is new, and judged as a create; an inline one has no row of its own,
+   * and is created with the instance it is held in when that one is new, and
+   * otherwise takes `operation`, the document's.
    */
   existing?: ReadonlySet<string>;
 }): Promise<void> {
   const { access, existing } = params;
+  const created = new WeakSet<object>();
   await forEachFieldGroupInstance(
     params.data,
     params.fields,
     params.fieldGroupFields,
-    async ({ instance, slug, inline }) => {
+    async reached => {
+      const { instance, slug, inline } = reached;
+      const { isNew, storedId } = standingOf(reached, existing, created);
       if (params.inlineOnly && !inline) return;
-      const storedHere =
-        !inline &&
-        typeof instance.id === "string" &&
-        existing?.has(instanceKey(slug, instance.id)) === true;
-      const isNew = existing !== undefined && !inline && !storedHere;
       await applyFieldWriteAccess({
         kind: "fieldGroup",
         slug,
@@ -622,7 +649,7 @@ async function judgeFieldGroupInstances(params: {
         // named: a new instance is stored under an id of its own, so the one
         // it was sent with is the client's, and an inline instance has no row
         // of its own to name.
-        id: storedHere ? (instance.id as string) : undefined,
+        id: storedId,
         grants: access.grants,
       });
     },

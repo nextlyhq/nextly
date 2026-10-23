@@ -119,6 +119,12 @@ export interface FieldGroupInstanceVisit {
    * inside a container is stored inline, in that container's column.
    */
   inline: boolean;
+  /**
+   * The instance directly on the document that this one is held inline in,
+   * at any depth; absent for one directly on the document. An inline instance
+   * is written with that row, so it is created when that row is.
+   */
+  outer?: Record<string, unknown>;
 }
 
 /**
@@ -141,16 +147,17 @@ export async function forEachFieldGroupInstance(
     withholdMalformed?: boolean;
   }
 ): Promise<void> {
-  await walkLevel(entry, fields, false, new WeakSet());
+  await walkLevel(entry, fields, false, new WeakSet(), undefined);
 
   async function walkLevel(
     level: Record<string, unknown>,
     levelFields: readonly FieldConfig[],
     inline: boolean,
-    open: WeakSet<object>
+    open: WeakSet<object>,
+    outer: Record<string, unknown> | undefined
   ): Promise<void> {
     for (const field of levelFields) {
-      await walkField(level, field, inline, open);
+      await walkField(level, field, inline, open, outer);
     }
   }
 
@@ -158,7 +165,8 @@ export async function forEachFieldGroupInstance(
     level: Record<string, unknown>,
     field: FieldConfig,
     inline: boolean,
-    open: WeakSet<object>
+    open: WeakSet<object>,
+    outer: Record<string, unknown> | undefined
   ): Promise<void> {
     const name = nameOf(field);
     const sub = subFieldsOf(field);
@@ -170,7 +178,7 @@ export async function forEachFieldGroupInstance(
     if (name === undefined) {
       if (!sub || open.has(field)) return;
       open.add(field);
-      await walkLevel(level, sub, inline, open);
+      await walkLevel(level, sub, inline, open, outer);
       open.delete(field);
       return;
     }
@@ -182,7 +190,7 @@ export async function forEachFieldGroupInstance(
     // parsed, walked, and written back as text, as the entity's own pass does.
     const container = openNestedContainer(level[name]);
     if (container === null) return;
-    await walkRows(container.rows, field, inline);
+    await walkRows(container.rows, field, inline, outer);
     level[name] = container.serialize();
   }
 
@@ -193,7 +201,8 @@ export async function forEachFieldGroupInstance(
   async function walkRows(
     rows: Record<string, unknown>[],
     field: FieldConfig,
-    inline: boolean
+    inline: boolean,
+    outer: Record<string, unknown> | undefined
   ): Promise<void> {
     if (isFieldGroupField(field)) {
       for (const { slug, instance } of componentInstances(
@@ -205,9 +214,17 @@ export async function forEachFieldGroupInstance(
           withholdWhole(instance);
           continue;
         }
-        await visit({ instance, slug, inline });
+        await visit({ instance, slug, inline, outer });
         const inner = componentFields.get(slug);
-        if (inner) await walkLevel(instance, inner, true, new WeakSet());
+        if (inner) {
+          await walkLevel(
+            instance,
+            inner,
+            true,
+            new WeakSet(),
+            inline ? outer : instance
+          );
+        }
       }
       return;
     }
@@ -215,7 +232,7 @@ export async function forEachFieldGroupInstance(
     // no longer possible, so it starts a fresh set.
     const sub = subFieldsOf(field) ?? [];
     for (const row of rows) {
-      await walkLevel(row, sub, true, new WeakSet());
+      await walkLevel(row, sub, true, new WeakSet(), outer);
     }
   }
 }
