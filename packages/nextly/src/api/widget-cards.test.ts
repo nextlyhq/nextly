@@ -16,9 +16,17 @@ import { askableCards } from "./widget-layout";
 // What this module decides is observed; what it stands on is stood in: the caller's handed cards
 // (the layout read's own lookup), the declarations, and the query executor.
 vi.mock("./widget-layout", () => ({ askableCards: vi.fn() }));
-vi.mock("../domains/widgets/declaration/declared-widgets", () => ({
-  declaredWidget: vi.fn(),
-}));
+// Partial: the declarations are stood in for, and the one checked builder of
+// a card's query stays real, since what a card runs is what it judges.
+vi.mock(
+  "../domains/widgets/declaration/declared-widgets",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../domains/widgets/declaration/declared-widgets")
+    >()),
+    declaredWidget: vi.fn(),
+  })
+);
 vi.mock("../domains/widgets/execute", () => ({ executeWidgetQuery: vi.fn() }));
 
 const person = { user: { id: "reader" } } as never;
@@ -67,6 +75,25 @@ const declarations: Record<string, unknown> = {
       display: "list",
     },
   },
+  // Plain JavaScript, as no type saw it: a list whose query counts once its
+  // card asks for more than the starting number of items.
+  "acme/shifty": {
+    owner: "plugin @acme/shop",
+    declaration: {
+      id: "acme/shifty",
+      widths: ["full"],
+      settings: { items: { type: "number", default: 5 } },
+      data: {
+        query: ({ settings }: { settings: { items: number } }) => ({
+          collection: "orders",
+          op: settings.items > 5 ? "count" : "list",
+          select: ["id"],
+          limit: settings.items,
+        }),
+      },
+      display: "list",
+    },
+  },
 };
 
 beforeEach(() => {
@@ -95,12 +122,27 @@ beforeEach(() => {
         },
       ],
       [
+        "c-shifty",
+        {
+          id: "c-shifty",
+          widgetId: "acme/shifty",
+          width: "full",
+          removed: false,
+          config: { items: 9 },
+        },
+      ],
+      [
         "c-gone",
         { id: "c-gone", widgetId: "acme/gone", width: "full", removed: false },
       ],
     ]) as never,
     // The widgets this caller could place: the layout write's own gate.
-    placeable: new Set(["acme/orders", "acme/recent", "acme/gone"]),
+    placeable: new Set([
+      "acme/orders",
+      "acme/recent",
+      "acme/shifty",
+      "acme/gone",
+    ]),
   });
   // Answers the op it is asked, as a source must.
   vi.mocked(executeWidgetQuery).mockImplementation(async query =>
@@ -224,6 +266,24 @@ describe("a card asked for by widget and card id", () => {
       result: { op: "list", items: [{ id: "row" }] },
       empty: false,
     });
+  });
+
+  it("fails a card whose query its display cannot draw, judged for the card's own settings", async () => {
+    // 🔴 Startup judged the query its starting settings write, a list. This
+    // card's settings write a count, which a list cannot draw: run, it would
+    // reach the admin as an answer the card misreads, for good.
+    const prepared = await prepareCards(
+      [{ widget: "acme/shifty", card: "c-shifty" }],
+      batch
+    );
+    await expect(
+      (prepared.get(0) as { answer: Function }).answer({
+        signal: new AbortController().signal,
+        scope: createBatchScope().forOwner("plugin @acme/shop"),
+        now: new Date(Date.UTC(2026, 9, 22)),
+      })
+    ).rejects.toThrow();
+    expect(executeWidgetQuery).not.toHaveBeenCalled();
   });
 
   it("reads the caller's cards once for the batch, and not at all for a batch of queries", async () => {

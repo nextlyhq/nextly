@@ -16,15 +16,19 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../../config";
+import { seedPermissionsAndRolePresets } from "../../../init/seed-permissions";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { executeWidgetQuery } from "../../widgets/execute";
 import { RELEASE_TABS, releaseTabOf, type ReleaseTab } from "../release-tabs";
+import { RELEASES_SOURCE_ID } from "../releases-widget-source";
 import { releaseMemberKey } from "../release-member-key";
 import { ReleasesRepository, type ReleaseRow } from "../releases-repository";
+import { seedLiveAuthor } from "./helpers/live-author";
 import {
   ANY_EDITABLE_STATE,
   publishAsItStands,
@@ -429,6 +433,43 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(overdue.rows.map(row => row.title)).toEqual(["Overdue"]);
       expect(overdue.total).toBe(1);
+    });
+
+    it("answers the Upcoming releases card's attention counts with the list's own, as the reader", async () => {
+      // What the card shows ("1 stopped · 1 overdue") and what each part links
+      // to must agree: both are counted by the releases service for one reader.
+      const app = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+      // The first account, which core makes super-admin, so the read is allowed.
+      const reader = await seedLiveAuthor(app);
+      await seedOneOfEach(new ReleasesRepository(app.adapter), new Date());
+
+      const answer = (await executeWidgetQuery(
+        {
+          source: RELEASES_SOURCE_ID,
+          op: "list",
+          select: ["kind", "reason", "count", "title"],
+        },
+        { user: { id: reader, roles: [] } }
+      )) as { items: Record<string, unknown>[] };
+      const attention = answer.items.filter(item => item.kind === "attention");
+
+      const listed = async (reason: "stopped" | "overdue") =>
+        app.nextly.releases.count({ tab: "attention", reason });
+      expect(attention).toEqual([
+        {
+          kind: "attention",
+          reason: "stopped",
+          count: await listed("stopped"),
+        },
+        {
+          kind: "attention",
+          reason: "overdue",
+          count: await listed("overdue"),
+        },
+      ]);
+      // Not two zeros agreeing: the seed holds one of each.
+      expect(attention.map(item => item.count)).toEqual([1, 1]);
     });
 
     it("returns a release's members in the order they were added", async () => {

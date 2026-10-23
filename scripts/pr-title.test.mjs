@@ -15,10 +15,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main, rulesFrom, titleProblem, titlesFor, titlesProblem } from "./pr-title.mjs";
 import { readGit } from "./workflow-context.mjs";
 
-/** The inputs `.github/workflows/pr-title.yml` hands the action, as the action hands them on. */
+/** The inputs `.github/workflows/small-checks.yml` hands the action, as the action hands them on. */
 function workflowEnv() {
-  const workflow = load(readFileSync(new URL("../.github/workflows/pr-title.yml", import.meta.url), "utf8"));
-  const inputs = workflow.jobs.lint.steps.find(step => step.id === "lint_pr_title").with;
+  const workflow = load(readFileSync(new URL("../.github/workflows/small-checks.yml", import.meta.url), "utf8"));
+  const inputs = workflow.jobs.checks.steps.find(step => step.id === "lint_pr_title").with;
   return {
     TYPES: inputs.types,
     SCOPES: inputs.scopes,

@@ -290,7 +290,7 @@ The tests run in two GitHub Actions workflows on every PR:
 
 `CI gate` collects the `ci.yml` jobs a merge needs: the change filter, the comment check, `Lint / Typecheck / Test / Build`, the nextly and admin unit tests, `Published admin build`, and the CLI entry-guard smoke test. `Published admin build` packs `@nextlyhq/admin` as a release does and refuses a build that would show a production user development-only behaviour: an error's message or stack trace, the query developer tools, the development reload stream opened on its own, or a schema-builder address with no page. Run it locally with `pnpm --filter @nextlyhq/admin check:published-build`, after a build. The browser tests, the scaffold and dev-script smoke tests, and the three `Pre-push gates (windows-latest…)` jobs report on their own and are not required to merge. Those three run the pre-push hook's gates on Windows: one runs the lints, the build, the type check and most unit suites, and the other two run nextly's and the admin's unit suites. They have passed on `main` since 2026-10-03, so treat a red one on your pull request as a failure of your change. `main` also requires the integration jobs, the secret scan and the other checks listed under [Branch protection](#branch-protection), and the merge queue runs them all.
 
-Before a pull request joins the queue, `node scripts/verify-merge.mjs <pr-number>` checks that every blocking review thread is resolved, and that every check whose absence would mean no coverage has reported. Threads from advisory reviewers (CodeRabbit by default, set by `CI_VERDICT_ADVISORY`) don't count toward its verdict, but `main` still requires every conversation resolved before a merge, so resolve those too. The checks it requires are `Lint / Typecheck / Test / Build`, `gitleaks`, the comment check, the three integration jobs and the PR title. It doesn't cover the independent review, which runs only in the queue. After a merge, it checks that the pull request landed whole.
+Before a pull request joins the queue, `node scripts/verify-merge.mjs <pr-number>` checks that every blocking review thread is resolved, and that every check whose absence would mean no coverage has reported. Threads from advisory reviewers (CodeRabbit by default, set by `CI_VERDICT_ADVISORY`) don't count toward its verdict, but `main` still requires every conversation resolved before a merge, so resolve those too. The checks it requires are `Lint / Typecheck / Test / Build`, `Small checks (title, AI credit, secret scan, review)`, the comment check and the three integration jobs. It doesn't cover the independent review, which runs only in the queue. After a merge, it checks that the pull request landed whole.
 
 ---
 
@@ -298,13 +298,15 @@ Before a pull request joins the queue, `node scripts/verify-merge.mjs <pr-number
 
 The following hooks run automatically:
 
-| Hook         | What runs                                                                             |
-| ------------ | ------------------------------------------------------------------------------------- |
-| `pre-commit` | Prettier formatting + oxlint on staged files (via lint-staged) + gitleaks secret scan |
-| `commit-msg` | Validates conventional commit format (see [Commit messages](#commit-messages))        |
-| `pre-push`   | Runs the production build to ensure all packages still compile                        |
+| Hook         | What runs                                                                              |
+| ------------ | -------------------------------------------------------------------------------------- |
+| `pre-commit` | Prettier formatting + oxlint on staged files (via lint-staged) + gitleaks secret scan  |
+| `commit-msg` | Validates conventional commit format (see [Commit messages](#commit-messages))         |
+| `pre-push`   | Lint, the production build and the type-check, then the unit tests the push can affect |
 
 If a hook fails, fix the issue and re-stage. **Never bypass with `--no-verify`** — the hooks exist to catch problems before CI does.
+
+The pre-push's unit tests are narrowed twice: to the packages the push touches (`scripts/gate-scope.mjs`), then, inside each, to the test files the change can affect (`scripts/test-changed.mjs`, which uses Vitest's `--changed` over the dependency records each test left on its last run). Tests that read files or spawn processes always run, since no record names what they read. A package runs in full when its own `tsconfig` or a workspace package it depends on changed too, and every package runs in full when the lockfile, `.nvmrc`, a root `tsconfig`, `packages/tsconfig` or a file turbo hashes into every task changed. A package whose test task declares a changed root file as an input (`turbo.jsonc`, e.g. `templates/**` for create-nextly-app) runs in full too. So does a package whose files changed since its last passing full run in a way this push does not account for (a pull, a rebase, a branch switch), since a dependency record lags behind an import the code gained. A package Vitest finds no test file in runs its own `test` script, which decides whether that passes. The root `scripts/` tests run when any file outside a workspace (a script, a hook, a workflow, the lockfile, the docs) or a Vitest config changed. `NEXTLY_PREPUSH_ALL_TESTS=1 git push` runs every test of the same packages instead. CI always runs everything.
 
 ---
 
@@ -333,7 +335,7 @@ Branch names aren't strictly enforced by CI — but consistent names make the me
 
 ## Commit messages
 
-We follow [Conventional Commits](https://www.conventionalcommits.org/). The `pr-title.yml` workflow enforces this on PR titles, and commitlint validates each commit locally via the `commit-msg` hook.
+We follow [Conventional Commits](https://www.conventionalcommits.org/). The `small-checks.yml` workflow enforces this on PR titles, and commitlint validates each commit locally via the `commit-msg` hook.
 
 ```
 <type>(<scope>): <description>
@@ -345,7 +347,7 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/). The `pr-
 
 **Types**: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
 
-**Scopes**: see the canonical list in [`.github/workflows/pr-title.yml`](.github/workflows/pr-title.yml). Match a package directory name (`admin`, `nextly`, `adapter-postgres`, etc.) or use `root`, `deps`, `release`, `ci`, or `docs` for repo-wide changes.
+**Scopes**: see the canonical list in [`.github/workflows/small-checks.yml`](.github/workflows/small-checks.yml). Match a package directory name (`admin`, `nextly`, `adapter-postgres`, etc.) or use `root`, `deps`, `release`, `ci`, or `docs` for repo-wide changes.
 
 **Description rules**: imperative mood ("add" not "added"), lowercase, no trailing period, ≤72 characters.
 
@@ -412,7 +414,7 @@ Every pull request merges through GitHub's merge queue: it runs the required che
 
 - a maintainer has approved it, and a code owner too for the files [`.github/CODEOWNERS`](.github/CODEOWNERS) names;
 - every conversation is resolved;
-- these checks pass: `CI gate`, `Comment convention (describes code, not process)`, `Integration (mysql)`, `Integration (postgres)`, `Integration (sqlite)`, `Validate PR title follows Conventional Commits`, `Independent review of the revision being merged`, `gitleaks` and `No AI credit`.
+- these checks pass: `CI gate`, `Comment convention (describes code, not process)`, `Integration (mysql)`, `Integration (postgres)`, `Integration (sqlite)` and `Small checks (title, AI credit, secret scan, review)`. That last one is a single job whose steps check the title, refuse AI credit, run gitleaks and, in the queue, require an independent review.
 
 ---
 

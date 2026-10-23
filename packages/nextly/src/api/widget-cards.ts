@@ -14,11 +14,9 @@ import { z } from "zod";
 import type { AuthContext } from "../auth/middleware";
 import { answerAsAsked } from "../domains/widgets/answer-as-asked";
 import { cardAnswerResult } from "../domains/widgets/declaration/card-answer";
+import { resolveCardSettings } from "../domains/widgets/declaration/card-query";
 import {
-  buildCardQuery,
-  resolveCardSettings,
-} from "../domains/widgets/declaration/card-query";
-import {
+  checkedCardQuery,
   declaredWidget,
   type DeclaredWidget,
 } from "../domains/widgets/declaration/declared-widgets";
@@ -223,7 +221,9 @@ async function answerCard(
     const result = cardAnswerResult(declaration.display, value, declaration.id);
     return { result, empty: isEmpty?.(value) === true };
   }
-  const built = buildCardQuery(declaration, placement.config, collections);
+  // Through the one checked builder: a query its display cannot draw fails
+  // this card alone, rather than reaching the admin as an answer it misreads.
+  const built = checkedCardQuery(declared, placement.config);
   // A query that cannot be written (a setting it needs has no value) is a card
   // with nothing it may be asked: the one unavailable answer, like any other.
   if (built === undefined) {

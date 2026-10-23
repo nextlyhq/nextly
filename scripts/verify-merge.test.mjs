@@ -96,7 +96,7 @@ const FILTERED_INTEGRATION_YML = [
   '      - "**/*.md"',
 ].join("\n");
 const PR_IGNORE = workflowPathsIgnore(FILTERED_INTEGRATION_YML, "pull_request");
-const REQUIRED = requiredChecks(PR_IGNORE, { merged: false });
+const REQUIRED = requiredChecks(PR_IGNORE);
 
 /**
  * Every required check present and green, which is what a pass needs.
@@ -106,7 +106,7 @@ const REQUIRED = requiredChecks(PR_IGNORE, { merged: false });
  * revision that is missing one - so the suite would go red for a correct widening and green for
  * a fixture that had silently stopped matching the thing it stands for.
  */
-const TITLE = "Validate PR title follows Conventional Commits";
+const SMALL = "Small checks (title, AI credit, secret scan, review)";
 const allGreen = () => REQUIRED.map(check => green(check.name));
 
 describe("countRewriteEvents", () => {
@@ -243,7 +243,7 @@ describe("blockingJobs", () => {
     // A count sends the reader to the web UI. A name tells them whether the red
     // is theirs — which is what separates attributing a failure from
     // inheriting one, and four of tonight's reds were inherited.
-    const runs = [green("gitleaks"), queued("Browser tests")];
+    const runs = [green(SMALL), queued("Browser tests")];
 
     expect(blockingJobs(runs)).toEqual([
       { name: "Browser tests", status: "queued", conclusion: null },
@@ -710,10 +710,10 @@ describe("statusAsRun", () => {
 describe("missingRequired", () => {
   it("reports the CI job when only unrelated workflows reported", () => {
     // The workflows are independent, so a run where `ci.yml` never created
-    // its jobs while `secret-scan.yml` succeeded yields a non-empty,
+    // its jobs while `small-checks.yml` succeeded yields a non-empty,
     // all-green set containing no build and no tests. Absence is invisible to
     // any filter over what is present.
-    expect(missingRequired([green("gitleaks")], CODE_CHANGE, REQUIRED)).toContain(
+    expect(missingRequired([green(SMALL)], CODE_CHANGE, REQUIRED)).toContain(
       "Lint / Typecheck / Test / Build"
     );
   });
@@ -730,12 +730,12 @@ describe("missingRequired", () => {
   it("reports the integration legs a code change was due to run", () => {
     // The unit suites mock the drivers and the browser tests run on sqlite
     // alone, so these are the only coverage a Postgres- or MySQL-specific
-    // regression has. Listing the CI job and gitleaks while omitting them let a
+    // regression has. Listing the CI job and the small checks while omitting them let a
     // run where `integration.yml` created no check-runs pass on the other two
     // being green.
     expect(
       missingRequired(
-        [green("Lint / Typecheck / Test / Build"), green("gitleaks")],
+        [green("Lint / Typecheck / Test / Build"), green(SMALL)],
         CODE_CHANGE,
         REQUIRED
       )
@@ -744,7 +744,6 @@ describe("missingRequired", () => {
       "Integration (postgres)",
       "Integration (mysql)",
       "Integration (sqlite)",
-      TITLE,
     ]);
   });
 
@@ -754,31 +753,30 @@ describe("missingRequired", () => {
     // request forever, and the test above would pass on that implementation.
     expect(
       missingRequired(
-        [green("Lint / Typecheck / Test / Build"), green("gitleaks")],
+        [green("Lint / Typecheck / Test / Build"), green(SMALL)],
         DOCS_CHANGE,
         REQUIRED
       )
-    ).toEqual(["Comment convention (describes code, not process)", TITLE]);
+    ).toEqual(["Comment convention (describes code, not process)"]);
   });
 
   it("requires every check when the change set could not be read", () => {
     // An unknown change set must not excuse a check. The failure this whole
     // file guards is a gate reporting clean because it could not see, so the
     // unreadable case resolves toward demanding evidence.
-    expect(missingRequired([green("gitleaks")], undefined, REQUIRED)).toEqual([
+    expect(missingRequired([green(SMALL)], undefined, REQUIRED)).toEqual([
       "Lint / Typecheck / Test / Build",
       "Comment convention (describes code, not process)",
       "Integration (postgres)",
       "Integration (mysql)",
       "Integration (sqlite)",
-      TITLE,
     ]);
   });
 
   it("names the checks whose ABSENCE means no coverage", () => {
     expect(REQUIRED.map(c => c.name)).toEqual([
       "Lint / Typecheck / Test / Build",
-      "gitleaks",
+      SMALL,
       // An INDEPENDENT job: nothing depends on it, so deleting or renaming it
       // produces no check-run for a failure check to reject, and the control
       // would vanish in the same change it exists to judge.
@@ -786,7 +784,6 @@ describe("missingRequired", () => {
       "Integration (postgres)",
       "Integration (mysql)",
       "Integration (sqlite)",
-      TITLE,
     ]);
   });
 });
@@ -953,7 +950,7 @@ describe("gateVerdict + required checks", () => {
     const verdict = gateVerdict({
       tip: "91fd9500285dcf264e3609a916b7518b591b51f3",
       unresolvedThreads: 0,
-      checkRuns: [green("gitleaks")],
+      checkRuns: [green(SMALL)],
       changedPaths: CODE_CHANGE,
       required: REQUIRED,
       codexReviewedSha: "91fd950028",
@@ -1026,15 +1023,15 @@ describe("landedWhole", () => {
 });
 
 describe("REQUIRED_CHECKS", () => {
-  it("includes the secret scan, which is its own workflow", () => {
-    // `secret-scan.yml` runs on every pull request and the repository calls it
-    // the enforcement gate. With only the CI job listed, a run where that
-    // workflow created no check-run passed on an unrelated workflow being
-    // green — absence being invisible, one workflow along.
-    expect(REQUIRED.map(c => c.name)).toContain("gitleaks");
+  it("includes the small checks, which are their own workflow", () => {
+    // `small-checks.yml` runs on every pull request and holds the secret scan,
+    // the repository's enforcement gate. With only the CI job listed, a run
+    // where that workflow created no check-run passed on an unrelated workflow
+    // being green — absence being invisible, one workflow along.
+    expect(REQUIRED.map(c => c.name)).toContain(SMALL);
 
-    const withoutScan = allGreen().filter(run => run.name !== "gitleaks");
-    expect(missingRequired(withoutScan, CODE_CHANGE, REQUIRED)).toEqual(["gitleaks"]);
+    const withoutSmall = allGreen().filter(run => run.name !== SMALL);
+    expect(missingRequired(withoutSmall, CODE_CHANGE, REQUIRED)).toEqual([SMALL]);
   });
 });
 
@@ -1098,18 +1095,36 @@ describe("workflowPathsIgnore", () => {
   });
 });
 
-describe("requiredChecks by mode", () => {
-  it("requires the PR-title status before a merge and not after", () => {
-    // It reports through the statuses surface from its own workflow, and only
-    // on a pull request. Judged only when present, a run that never started
-    // left the title unvalidated and the gate green; required after a merge, it
-    // would demand a status a push never writes.
-    expect(requiredChecks([], { merged: false }).map(c => c.name)).toContain(
-      TITLE
-    );
-    expect(requiredChecks([], { merged: true }).map(c => c.name)).not.toContain(
-      TITLE
-    );
+describe("requiredChecks after a merge", () => {
+  it("requires the small checks before a merge and after it", () => {
+    // One job checks the title, AI credit, secrets and the review, and its
+    // workflow runs on a push to the base branch too, where it scans the
+    // pushed commits; so its absence is a gap on either side of the merge.
+    expect(requiredChecks([]).map(c => c.name)).toContain(SMALL);
+    expect(requiredChecks([], { merged: true }).map(c => c.name)).toContain(SMALL);
+    expect(requiredChecks([]).map(c => c.name)).not.toContain("gitleaks");
+  });
+
+  // A revision whose runs started from a base without the combined workflow
+  // reports the checks it replaced; all of them together cover it.
+  const OLD_TITLE = "Validate PR title follows Conventional Commits";
+  const withoutSmall = required => required.filter(check => check.name !== SMALL).map(check => green(check.name));
+
+  it("takes the secret scan and the title together for the small checks before a merge", () => {
+    const required = requiredChecks([]);
+    expect(missingRequired([...withoutSmall(required), green("gitleaks"), green(OLD_TITLE)], CODE_CHANGE, required)).toEqual([]);
+  });
+
+  it("does not take either one alone before a merge", () => {
+    const required = requiredChecks([]);
+    expect(missingRequired([...withoutSmall(required), green("gitleaks")], CODE_CHANGE, required)).toEqual([SMALL]);
+    expect(missingRequired([...withoutSmall(required), green(OLD_TITLE)], CODE_CHANGE, required)).toEqual([SMALL]);
+  });
+
+  it("takes the secret scan alone after a merge, where a push had no title to check", () => {
+    const required = requiredChecks([], { merged: true });
+    expect(missingRequired([...withoutSmall(required), green("gitleaks")], CODE_CHANGE, required)).toEqual([]);
+    expect(missingRequired(withoutSmall(required), CODE_CHANGE, required)).toEqual([SMALL]);
   });
 });
 
