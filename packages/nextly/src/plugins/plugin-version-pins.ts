@@ -22,6 +22,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import {
   registerNamespacedVersionPinHolder,
   type VersionPinHolderDefinition,
+  type VersionPinSlot,
 } from "../domains/versions/version-pins";
 import type { VersionRef } from "../domains/versions/versions-repository";
 import { NextlyError } from "../errors";
@@ -48,11 +49,12 @@ export interface PluginPinOptions {
   tx: PluginPinTransaction;
 }
 
-/** @experimental One of a holder's slots, and the version it points at. */
-export interface PluginVersionPin {
-  slot: string;
-  versionNo: number;
-}
+/**
+ * @experimental One of a holder's slots, and the version it points at: the
+ * row core's holders list, named for the plugin surface rather than declared
+ * again, so the two cannot drift apart.
+ */
+export type PluginVersionPin = VersionPinSlot;
 
 /**
  * @experimental A holder a plugin registered, pinning on the plugin's own

@@ -67,8 +67,8 @@ These ship today but carry no guarantee yet — use them, but expect change:
   `PluginRawDatabase` (`ctx.db.raw`)
 - Version pins on the plugin's own transaction, `ctx.services.versions.pins`,
   and their types `PluginVersionPins`, `PluginVersionPinHolder`,
-  `PluginVersionPin`, `PluginPinOptions`, `PluginPinTransaction` and
-  `VersionRef`
+  `PluginVersionPin`, `PluginPinOptions`, `PluginPinTransaction`,
+  `VersionPinHolderDefinition` and `VersionRef`
 - `PluginMigration.transaction` — `false` runs a migration module outside a
   transaction, statement by statement
 - `onInstall` / `onUninstall`, called by `nextly plugins install` and

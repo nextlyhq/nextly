@@ -393,7 +393,8 @@ export type {
  *   `ctx.services.collections.withTransaction` hands its work), and the
  *   version pins of `ctx.services.versions.pins`: `PluginVersionPins`,
  *   `PluginVersionPinHolder`, `PluginVersionPin`, `PluginPinOptions`,
- *   `PluginPinTransaction` and `VersionRef` (the document a pin is on).
+ *   `PluginPinTransaction`, `VersionPinHolderDefinition` (what
+ *   `registerHolder` takes) and `VersionRef` (the document a pin is on).
  *   `FrozenCopy`
  *   is the readonly-all-the-way-down type `PluginConfig` is built from, and
  *   `FrozenValue` the type of each of its properties, both exported so a
@@ -415,6 +416,7 @@ export type {
   PluginVersionPin,
   PluginPinOptions,
   PluginPinTransaction,
+  VersionPinHolderDefinition,
   VersionRef,
 } from "nextly";
 

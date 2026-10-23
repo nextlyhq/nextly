@@ -511,6 +511,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "UserEvents (value)",
   "ValidateFieldValuesOptions (type)",
   "ValidationIssue (type)",
+  "VersionPinHolderDefinition (type)",
   "VersionRef (type)",
   "WIDGET_ARCHETYPES (value)",
   "WIDGET_CHROME (value)",
