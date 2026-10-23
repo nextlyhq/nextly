@@ -1,4 +1,5 @@
 import { permissionSlug } from "../../schemas/_zod/rbac";
+import { createJsonErrorResponse as answerRefusal } from "../middleware/error-response";
 import type { AuthContext } from "../session/session-types";
 
 export interface ErrorResponse {
@@ -22,18 +23,11 @@ export function createErrorResponse(
 }
 
 /**
- * Create a JSON Response from an ErrorResponse.
+ * Create a JSON Response from an ErrorResponse: the one error body every
+ * refusal is answered with, as the auth middleware answers it.
  */
 export function createJsonErrorResponse(errResp: ErrorResponse): Response {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(errResp.headers || {}),
-  };
-
-  return new Response(JSON.stringify(errResp), {
-    status: errResp.statusCode,
-    headers,
-  });
+  return answerRefusal(errResp);
 }
 
 /**

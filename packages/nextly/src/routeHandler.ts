@@ -1554,7 +1554,7 @@ async function serveServiceRequest(
     if (params[0] === "me") {
       const authResult = await requireAuthentication(req);
       if (isErrorResponse(authResult)) {
-        return refuseRequest(method, authResult);
+        return refuseRequest(req, method, authResult);
       }
       // Add user ID to route params for /api/me endpoints
       if (routeParams) {
@@ -1566,7 +1566,7 @@ async function serveServiceRequest(
     else if (requiresAuthOnly(service, method)) {
       const authResult = await requireAuthentication(req);
       if (isErrorResponse(authResult)) {
-        return refuseRequest(method, authResult);
+        return refuseRequest(req, method, authResult);
       }
       authorizedUser = authResult;
     }
@@ -1581,7 +1581,7 @@ async function serveServiceRequest(
         httpMethod
       );
       if (isErrorResponse(authResult)) {
-        return refuseRequest(method, authResult);
+        return refuseRequest(req, method, authResult);
       }
       authorizedUser = authResult;
     }
@@ -2107,10 +2107,12 @@ function respondAdminMeta(payload: Record<string, unknown>): Response {
  * person's 401 or 403 to another hides from them what they may read.
  */
 function refuseRequest(
+  req: Request,
   method: string,
   refusal: Parameters<typeof createJsonErrorResponse>[0]
 ): Response {
-  const response = createJsonErrorResponse(refusal);
+  // Answered with the request's own id, as every other error is.
+  const response = createJsonErrorResponse(refusal, req);
   return SESSION_PRIVATE_METHODS.has(method)
     ? withSessionCacheHeaders(response)
     : response;

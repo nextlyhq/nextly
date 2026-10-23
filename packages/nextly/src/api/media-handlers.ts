@@ -198,7 +198,7 @@ async function gateMediaRoute(
   await ensureInitialized();
   const auth = await requirePermission(request, action, "media");
   if (isErrorResponse(auth)) {
-    return createJsonErrorResponse(auth);
+    return createJsonErrorResponse(auth, request);
   }
   // Surface both the acting user id (for uploader attribution on the DB row)
   // and the full actor (session vs API key) so media writes record the true

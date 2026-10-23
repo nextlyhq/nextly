@@ -22,6 +22,8 @@
  * @module api/media-raw
  */
 import { getService } from "../di";
+import { buildErrorResponse } from "./error-response";
+import { generateRequestId } from "./request-id";
 import { NextlyError } from "../errors/nextly-error";
 import type { RequestContext } from "../services/shared";
 import { canonicalMimeType } from "../services/upload-validation/mime";
@@ -65,9 +67,14 @@ const IMMUTABLE_FOR_A_YEAR = "public, max-age=31536000, immutable";
  */
 const MEDIA_COLLECTION = "media";
 
-/** The response for a record this route will not talk about. */
+/**
+ * The response for a record this route will not talk about: the one error
+ * body every refusal is answered with, saying no more than "not found".
+ */
 function notFound(): Response {
-  return new Response(null, { status: 404 });
+  return buildErrorResponse(NextlyError.notFound(), {
+    requestId: generateRequestId(),
+  });
 }
 
 /**
