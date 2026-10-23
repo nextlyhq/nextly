@@ -290,6 +290,23 @@ describe("the span the answer covers", () => {
     expect(await ask()).toMatchObject({ window: { days: 7 } });
   });
 
+  it("never states more than the trail holds: whole days, and none below a day", async () => {
+    // 🔴 A 36-hour window is one whole day, not two, and a 12-hour one is no
+    // day at all: rounding either up would claim edits the trail has pruned.
+    serviceConfig = {
+      auditRetention: resolveAuditRetentionConfig({
+        activityMaxAgeMs: 36 * 60 * 60 * 1000,
+      }),
+    };
+    expect(await ask()).toMatchObject({ window: { days: 1 } });
+    serviceConfig = {
+      auditRetention: resolveAuditRetentionConfig({
+        activityMaxAgeMs: 12 * 60 * 60 * 1000,
+      }),
+    };
+    expect(await ask()).not.toHaveProperty("window");
+  });
+
   it("states none when nothing prunes the trail", async () => {
     // Retention off, and an install with no audit policy at all: both keep
     // every row, so the answer has no bound to state.
