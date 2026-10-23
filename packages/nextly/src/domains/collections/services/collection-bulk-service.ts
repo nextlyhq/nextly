@@ -2253,11 +2253,12 @@ async function assertCallerFilterReadable(
   queryService: CollectionQueryService
 ): Promise<void> {
   // A reserved condition on another table is not a field, so the field check
-  // below never sees it. `_inRelease` selects rows by what releases hold, which
-  // a caller who may not read releases must not learn from which rows a write
-  // reached, so it is judged here by the same decision a read makes. A new
-  // reserved key that discloses another table needs its own judgement here too.
-  await queryService.assertReleaseFilterReadable(params);
+  // below never sees it. `_pendingChange` and `_inRelease` select rows by what
+  // drafts and releases hold, which a caller who may not read them must not
+  // learn from which rows a write reached, so they are judged here by the
+  // decisions a read makes: the collection's read gate, then the releases'.
+  // A new reserved key that discloses another table needs its judgement there.
+  await queryService.assertWorkflowFilterReadable(params);
   await assertFilterableFields(
     "collection",
     params.collectionName,

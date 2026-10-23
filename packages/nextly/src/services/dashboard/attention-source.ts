@@ -56,7 +56,7 @@ import {
 } from "../../domains/widgets/attention-keys";
 import type { WidgetQuery } from "../../domains/widgets/query";
 import {
-  queryableCollectionSlugs,
+  queryableSlugs,
   readableCollectionSlugs,
 } from "../../domains/widgets/reader-content";
 import type { ResolverOptions } from "../../domains/widgets/resolved-sources";
@@ -154,7 +154,8 @@ function collections(): CollectionsHandler {
 async function countedCollections(
   caller: ReadCaller
 ): Promise<{ slugs: string[]; more: boolean }> {
-  const queryable = queryableCollectionSlugs(
+  const queryable = queryableSlugs(
+    "collection",
     await readableCollectionSlugs(caller)
   ).sort();
   return {

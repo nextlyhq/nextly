@@ -1,14 +1,14 @@
 /**
  * verify-dts.ts
  *
- * Verifies that the bundled `.d.ts` produced by `rollup.dts.config.ts`
- * is complete and internally consistent.
+ * Verifies that the bundled declarations tsdown writes for each entry
+ * are complete and internally consistent.
  *
  * For each entry in `package.json` "exports" this script checks:
  *   1. The `.d.ts` file referenced by `exports.<key>.types` exists and is
  *      non-empty.
  *   2. The file contains at least one `export` statement (so it is not a
- *      placeholder or a file that rollup accidentally emitted empty).
+ *      placeholder or a file the bundler emitted empty).
  *   3. Every relative `import` / `export ... from` path in the bundled
  *      declaration resolves to a real file on disk. This catches the class
  *      of bugs where chunk references use the wrong extension, point at a
@@ -132,8 +132,15 @@ function verifyEntry(entry: string, value: PackageExportValue): Failure[] {
     const resolved = resolve(baseDir, specifier);
     if (existsSync(resolved)) continue;
 
-    // Try common extension fallbacks in case rollup dropped the suffix.
-    const candidates = [`${resolved}.d.ts`, `${resolved}/index.d.ts`];
+    // The declaration file a specifier names: `./x.mjs` is described by
+    // `./x.d.mts`, `./x.js` by `./x.d.ts`, and a bare path by either.
+    const candidates = [
+      resolved.replace(/\.mjs$/, ".d.mts"),
+      resolved.replace(/\.js$/, ".d.ts"),
+      `${resolved}.d.ts`,
+      `${resolved}.d.mts`,
+      `${resolved}/index.d.ts`,
+    ];
     if (candidates.some(candidate => existsSync(candidate))) continue;
 
     failures.push({
