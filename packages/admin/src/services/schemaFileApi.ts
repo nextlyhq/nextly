@@ -20,35 +20,35 @@ export const schemaFileApi = {
    * Upsert a collection in ui-schema.json. The `/admin/api` prefix is added by
    * the fetcher's BASE_URL.
    */
-  writeCollection: (entity: ManifestEntity) =>
+  writeCollection: (entity: ManifestEntity): Promise<DevSchemaWriteResponse> =>
     protectedApi.post<DevSchemaWriteResponse>(
       "/_dev/schema/collection",
       entity
     ),
 
   /** Upsert a single in ui-schema.json. */
-  writeSingle: (entity: ManifestEntity) =>
+  writeSingle: (entity: ManifestEntity): Promise<DevSchemaWriteResponse> =>
     protectedApi.post<DevSchemaWriteResponse>("/_dev/schema/single", entity),
 
   /** Upsert a component in ui-schema.json. */
-  writeFieldGroup: (entity: ManifestEntity) =>
+  writeFieldGroup: (entity: ManifestEntity): Promise<DevSchemaWriteResponse> =>
     protectedApi.post<DevSchemaWriteResponse>(
       "/_dev/schema/field-group",
       entity
     ),
 
   /** Remove a collection from ui-schema.json. */
-  deleteCollection: (slug: string) =>
+  deleteCollection: (slug: string): Promise<DevSchemaWriteResponse> =>
     protectedApi.delete<DevSchemaWriteResponse>(
       `/_dev/schema/collection/${slug}`
     ),
 
   /** Remove a single from ui-schema.json. */
-  deleteSingle: (slug: string) =>
+  deleteSingle: (slug: string): Promise<DevSchemaWriteResponse> =>
     protectedApi.delete<DevSchemaWriteResponse>(`/_dev/schema/single/${slug}`),
 
   /** Remove a component from ui-schema.json. */
-  deleteFieldGroup: (slug: string) =>
+  deleteFieldGroup: (slug: string): Promise<DevSchemaWriteResponse> =>
     protectedApi.delete<DevSchemaWriteResponse>(
       `/_dev/schema/field-group/${slug}`
     ),

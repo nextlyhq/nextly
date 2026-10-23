@@ -23,11 +23,12 @@ import type {
   WidgetQuerySpec,
 } from "./query";
 import {
+  knobSourceFor,
   validateWidgetSettings,
   type AnyWidgetSetting,
   type KnobSource,
 } from "./settings";
-import type { WidgetOp } from "./sources";
+import type { WidgetOp, WidgetSourceFilter } from "./sources";
 import { WIDGET_WIDTHS, type WidgetWidth } from "./widths";
 
 /*
@@ -374,6 +375,18 @@ export interface WidgetDefinition {
     message?: string;
     action?: { label: string; link: string; requiredPermission?: string };
   };
+  /**
+   * The settings the widget's source narrows by rather than being replaced by
+   * (`WidgetSource.filters`), so the admin's knobs build the card's query as
+   * the server admits its settings.
+   *
+   * 🔴 Set by core when it publishes a registered widget, read from the source
+   * registry then, and never taken from the registration: a stated value is
+   * replaced, so a widget cannot claim a filter its source does not take.
+   *
+   * @experimental The shape may grow while the content widgets are built.
+   */
+  sourceFilters?: readonly WidgetSourceFilter[];
   /**
    * Where this widget sits by default, ascending. Omitted means "after
    * everything that states one".
@@ -1712,7 +1725,8 @@ function sourceProblem(d: Partial<WidgetDefinition>): string | undefined {
 }
 
 /**
- * The source a definition's settings knobs see: its query's own; none yet
+ * The source a definition's settings knobs see: its query's own, with the
+ * filters that source declares; none yet
  * (`undefined`) for a query or cells a Collection setting supplies; and `null`
  * for a widget that asks nothing a knob could drive, whose content settings
  * would be drawn and saved and change nothing.
@@ -1720,7 +1734,7 @@ function sourceProblem(d: Partial<WidgetDefinition>): string | undefined {
 function knobSourceOfDefinition(
   d: Partial<WidgetDefinition>
 ): KnobSource | null | undefined {
-  if (typeof d.query?.source === "string") return { id: d.query.source };
+  if (typeof d.query?.source === "string") return knobSourceFor(d.query.source);
   if (d.query !== undefined) return undefined;
   return Array.isArray(d.cells) && d.cells.length > 0 ? undefined : null;
 }
@@ -1750,8 +1764,9 @@ export function validateWidgetDefinition(
   validateCells(d);
   validateDefaultOrder(d);
   validateChrome(d);
-  // Judged on the widget's own source: a content setting is admitted where
-  // core builds the query, or where a knob drives it on that source.
+  // Judged on the widget's own source, with the filters that source declares:
+  // a content setting is admitted where core builds the query, or where a knob
+  // drives it on that source.
   validateWidgetSettings(
     d.settings,
     d.id ?? "widget",

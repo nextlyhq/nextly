@@ -79,6 +79,7 @@ import {
 } from "../../../shared/lib/password-fields";
 import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import type { Logger } from "../../../shared/types";
+import { willRecordSingleActivity } from "../../audit/record-activity";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
 import {
   recordSaveEvent,
@@ -2540,9 +2541,21 @@ export class SingleMutationService extends BaseService {
             // endpoint and audit off, this assembly is pure waste and must not be
             // able to fail a scalar content write.
             const recordingEnabled = isOutboxRecordingActive("single", slug);
+            // The documents are assembled for the activity trail too, whenever
+            // it will record this save: it names the fields a save changed by
+            // comparing them, as it does an entry's, and it records every save
+            // by a person on every install. Assembled for webhooks alone, an
+            // install with neither webhooks nor audit would compare a raw row
+            // with nothing, and a component-only edit would read as no change.
+            // The webhook payload below stays gated on `recordingEnabled`.
+            const assembleDocuments =
+              recordingEnabled ||
+              willRecordSingleActivity(
+                actorForWrite(options.actor ?? null, options.user)
+              );
 
             const previousDoc =
-              recordingEnabled && preRow
+              assembleDocuments && preRow
                 ? await buildSingleWebhookDoc(
                     this.fieldGroupDataService,
                     tx,
@@ -3447,7 +3460,7 @@ export class SingleMutationService extends BaseService {
             // Assemble the event document only when recording — this is the
             // populateComponentData(strict) read the opt-out must skip. When off,
             // recordMutationEvent ignores `data`, so the raw written row stands in.
-            const dataDoc = recordingEnabled
+            const dataDoc = assembleDocuments
               ? await buildSingleWebhookDoc(
                   this.fieldGroupDataService,
                   tx,
@@ -3555,6 +3568,20 @@ export class SingleMutationService extends BaseService {
               label: singleMeta.label,
               locale: holdEdit ? (singleDraftLocale ?? null) : eventLocale,
               actor,
+              // Compared for the fields the save changed only when both were
+              // assembled; the raw row stands in otherwise, and names none.
+              ...(assembleDocuments
+                ? { data: dataDoc, previous: previousDoc }
+                : {}),
+              // This language's own statuses, as the transitions above read
+              // them, and whether the save promoted the pending edits, which
+              // leaves the status published and so is not a transition.
+              publication: {
+                statusAfter: singleHasStatus ? dataLocaleStatus : undefined,
+                statusBefore: previousLocaleStatus,
+                promotedPendingEdits: promotedDraft,
+                restores: options.sourceVersionNo != null,
+              },
             });
             // Record only when the same opt-out decision that gated the payload
             // assembly still holds. `recordMutationEvent` re-derives the policy

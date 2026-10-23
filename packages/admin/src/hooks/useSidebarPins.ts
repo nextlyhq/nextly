@@ -35,7 +35,11 @@ function savePinnedItems(storageKey: string, pinnedItems: string[]): void {
 /**
  * Shared localStorage-backed pin manager for sidebar lists.
  */
-export function useSidebarPins({ storageKey }: UseSidebarPinsOptions) {
+export function useSidebarPins({ storageKey }: UseSidebarPinsOptions): {
+  pinned: Set<string>;
+  isPinned: (itemId: string) => boolean;
+  togglePin: (itemId: string) => void;
+} {
   const [pinned, setPinned] = React.useState<Set<string>>(new Set());
 
   React.useEffect(() => {
@@ -43,7 +47,7 @@ export function useSidebarPins({ storageKey }: UseSidebarPinsOptions) {
   }, [storageKey]);
 
   const togglePin = React.useCallback(
-    (itemId: string) => {
+    (itemId: string): void => {
       setPinned(prev => {
         const next = new Set(prev);
         if (next.has(itemId)) {
@@ -60,7 +64,7 @@ export function useSidebarPins({ storageKey }: UseSidebarPinsOptions) {
   );
 
   const isPinned = React.useCallback(
-    (itemId: string) => pinned.has(itemId),
+    (itemId: string): boolean => pinned.has(itemId),
     [pinned]
   );
 

@@ -91,7 +91,21 @@ export function widgetAsAsked(
       : { ...widget, cells: asked };
   }
   if (!widget.query) return widget;
-  const query = applyWidgetSettings(widget.query, widget.settings, config, ctx);
+  // The widget's own source, with the filters it narrows by: a knob such as
+  // Collection then sets a key of the query's `where` on a source that reads
+  // across collections, where on a collection source it would replace the
+  // source itself. A query with no source yet has none to hand on.
+  const query = applyWidgetSettings(widget.query, widget.settings, config, {
+    ...ctx,
+    ...(widget.query.source === undefined
+      ? {}
+      : {
+          source: {
+            id: widget.query.source,
+            ...(widget.sourceFilters ? { filters: widget.sourceFilters } : {}),
+          },
+        }),
+  });
   return query === widget.query ? widget : { ...widget, query };
 }
 

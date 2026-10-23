@@ -623,6 +623,7 @@ function walkWhereClause(
       }
       continue;
     }
+    if (heldAsSourceFilter(key, value, depth, scope)) continue;
     if (
       isWorkflowKey(key) &&
       sourceKindFromId(scope.source.id) === "collection"
@@ -657,6 +658,40 @@ function assertWorkflowCondition(
   }
   const problem = workflowKeyProblem(key, value);
   if (problem !== undefined) fail(`where condition ${problem.message}`);
+}
+
+/**
+ * Whether `key` is a filter the source declares, judged and so held apart from
+ * the field conditions. A declared filter is one of the source's own TOP-LEVEL
+ * keys, read by the source itself rather than compiled as a field condition,
+ * so it is held to its own value and never admitted inside a combinator.
+ */
+function heldAsSourceFilter(
+  key: string,
+  value: unknown,
+  depth: number,
+  scope: WhereScope
+): boolean {
+  const filters: readonly string[] = scope.source.filters ?? [];
+  if (depth !== 0 || !filters.includes(key)) return false;
+  assertFilterValue(key, value, scope.source.id);
+  return true;
+}
+
+/**
+ * Confirms a source filter's value is the one it takes: a collection by its
+ * slug, Only mine as true or false. Who "mine" is, is never in the query: the
+ * source reads it from the caller.
+ */
+function assertFilterValue(key: string, value: unknown, source: string): void {
+  if (key === "collection" && (typeof value !== "string" || value === "")) {
+    fail(
+      `where filter "collection" on "${source}" must be a collection's slug`
+    );
+  }
+  if (key === "onlyMine" && typeof value !== "boolean") {
+    fail(`where filter "onlyMine" on "${source}" must be true or false`);
+  }
 }
 
 /**

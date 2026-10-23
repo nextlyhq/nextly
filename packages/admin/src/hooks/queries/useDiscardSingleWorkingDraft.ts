@@ -14,7 +14,11 @@
  * @see hooks/queries/useDiscardWorkingDraft.ts - the collection equivalent
  */
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueryClient,
+  type UseMutationResult,
+} from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
 import {
@@ -54,7 +58,12 @@ export function useDiscardSingleWorkingDraft({
   onSuccess,
   onError,
   showToast = true,
-}: UseDiscardSingleWorkingDraftOptions) {
+}: UseDiscardSingleWorkingDraftOptions): UseMutationResult<
+  DiscardWorkingDraftResponse,
+  Error,
+  void,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<DiscardWorkingDraftResponse, Error, void>({

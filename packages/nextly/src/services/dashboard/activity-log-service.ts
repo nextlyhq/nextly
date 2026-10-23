@@ -38,7 +38,7 @@ import {
 import { existingDocumentIds } from "../lib/readable-documents";
 import type { Logger } from "../shared";
 
-import { activityMetadataOf } from "./activity-changes";
+import { activityMetadataOf, isContentSave } from "./activity-changes";
 import {
   afterRun,
   isSettingsNamespace,
@@ -363,6 +363,39 @@ function collectionsKeptOffClause(
       { column: "collection", op: "NOT IN", value: [...keptOff] },
     ],
   };
+}
+
+/** Options for the documents most recently saved; see `getRecentEdits`. */
+export interface RecentEditsOptions {
+  /** How many documents the card shows; clamped as every widget query is. */
+  limit?: number;
+  /** Which resources the caller may read; omitted, it denies, as the feed's does. */
+  scope?: ReadableResources;
+  /** WHO is reading, so each save's document can be authorized; omitted, nothing is answered. */
+  caller?: ReadCaller;
+  singles?: ActivitySingles;
+  keptOffCollections?: ActivityKeptOffCollections;
+  /** Only this collection's entries: never a Single, which may share its slug. */
+  collection?: string;
+  /**
+   * Only saves this person made. A PERSON's id: a row whose actor is an API
+   * key never matches it, though a key's id and a person's could be equal.
+   */
+  savedBy?: string;
+}
+
+/**
+ * One document's latest save, as the feed maps a row, with the language it was
+ * saved in: null for a document's only or default language.
+ */
+export type RecentEdit = ActivityLogEntry & { locale: string | null };
+
+/** The documents most recently saved, newest first, one row each. */
+export interface RecentEdits {
+  /** Each document's latest save the caller may see. */
+  edits: RecentEdit[];
+  /** Whether another document lies past them, read and authorized like the rest. */
+  hasMore: boolean;
 }
 
 /** Options for counting recent activity; see `countRecentActivity`. */
@@ -897,6 +930,32 @@ function feedWhere(
   return conditions.length > 0 ? { and: conditions } : undefined;
 }
 
+/**
+ * Each document's newest save among `rows`, newest first: rows that are not a
+ * save are passed over, and a document is the kind, the slug and the id
+ * together, since a Single and a collection may share a slug. A row whose id
+ * was redacted names no document, and is passed over too.
+ */
+function latestSaves(
+  rows: readonly Record<string, unknown>[]
+): Record<string, unknown>[] {
+  const seen = new Set<string>();
+  const latest: Record<string, unknown>[] = [];
+  for (const row of rows) {
+    if (typeof row.entryId !== "string" || row.entryId.length === 0) continue;
+    if (!isContentSave(row.action, row.metadata)) continue;
+    const document = JSON.stringify([
+      row.subjectKind ?? "collection",
+      row.collection,
+      row.entryId,
+    ]);
+    if (seen.has(document)) continue;
+    seen.add(document);
+    latest.push(row);
+  }
+  return latest;
+}
+
 /** One page of the feed, from the runs the walk read. */
 interface FeedPage {
   shown: ActivityRun[];
@@ -1235,6 +1294,106 @@ export class ActivityLogService extends BaseService {
       () => false
     );
     return { count: visible.rows.length, atLeast: !visible.end };
+  }
+
+  /**
+   * The documents most recently saved, newest first: one row per document, its
+   * latest save this caller may see.
+   *
+   * The same walk as the feed, read and authorized row by row, so a save the
+   * caller may not see never stands for its document, and saves they may not
+   * read never leave the card short while readable ones lie further back: the
+   * walk pages on until the card is full or its rounds run out, as the feed's
+   * does. Checked, THEN collapsed: a document's newest readable save is its
+   * row, which keeps a readable save behind a newer one the caller may not
+   * read (another language's, say).
+   *
+   * A save is what `isContentSave` says it is. A publish or an unpublish on its
+   * own never takes the row of the person who made the edits, and a deletion
+   * and the redacted history of a removed document name no document to list.
+   * Settings changes name none either, and are left out by kind.
+   */
+  async getRecentEdits(options: RecentEditsOptions): Promise<RecentEdits> {
+    const limit = effectiveWidgetLimit(options.limit);
+    const starting = feedConditions(
+      options.scope ?? someResources([]),
+      options.singles,
+      options.keptOffCollections
+    );
+    if (starting === null) return { edits: [], hasMore: false };
+    const where: WhereClause = {
+      and: [
+        ...starting,
+        // Deletions are never a save; filtered by the database, not the walk.
+        { column: "action", op: "IN", value: ["create", "update"] },
+        { column: "entryId", op: "IS NOT NULL" },
+        // A row that states no kind is a collection's, as the feed reads it.
+        {
+          or: [
+            { column: "subjectKind", op: "IS NULL" },
+            {
+              column: "subjectKind",
+              op: "IN",
+              value: ["collection", "single"],
+            },
+          ],
+        },
+        ...(options.collection === undefined
+          ? []
+          : [
+              {
+                column: "collection",
+                op: "=" as const,
+                value: options.collection,
+              },
+              {
+                or: [
+                  { column: "subjectKind", op: "IS NULL" as const },
+                  {
+                    column: "subjectKind",
+                    op: "=" as const,
+                    value: "collection",
+                  },
+                ],
+              },
+            ]),
+        ...(options.savedBy === undefined
+          ? []
+          : [
+              { column: "userId", op: "=" as const, value: options.savedBy },
+              // A row written before the kind was recorded is a person's.
+              {
+                or: [
+                  { column: "actorType", op: "IS NULL" as const },
+                  { column: "actorType", op: "=" as const, value: "user" },
+                ],
+              },
+            ]),
+      ],
+    };
+    try {
+      // Read until one document PAST the card is in hand, which is what makes
+      // `hasMore` an observation rather than a guess.
+      const visible = await this.visibleActivity(
+        where,
+        0,
+        options.caller,
+        rows => latestSaves(rows).length > limit
+      );
+      const saves = latestSaves(visible.rows);
+      return {
+        edits: saves.slice(0, limit).map(row => ({
+          ...this.mapRow(row, options.singles?.labels),
+          locale: toNullableString(row.locale),
+        })),
+        hasMore: saves.length > limit,
+      };
+    } catch (error) {
+      this.logger.error("Failed to query recent edits", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
   }
 
   /**

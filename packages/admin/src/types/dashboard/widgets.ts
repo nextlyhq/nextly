@@ -32,6 +32,7 @@ import type {
   WidgetQueryCell,
   WidgetStatCell,
   WidgetChrome,
+  WidgetDefinition,
   WidgetWidth,
 } from "nextly/config";
 
@@ -158,6 +159,12 @@ export interface DashboardWidget {
    * more. Unstated, a custom widget is asked exactly its declared query.
    */
   sizedQuery?: boolean;
+  /**
+   * The settings this widget's source narrows by rather than being replaced
+   * by, as core published them for a registered widget; the knobs read them
+   * when they apply the reader's settings to the query.
+   */
+  sourceFilters?: WidgetDefinition["sourceFilters"];
 }
 
 /**

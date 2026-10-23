@@ -183,7 +183,7 @@ export function SavePatternDialog({
   onSave,
   error,
   returnFocusTo,
-}: SavePatternDialogProps) {
+}: SavePatternDialogProps): React.JSX.Element {
   const [title, setTitle] = React.useState("");
   const [granularity, setGranularity] = React.useState<PatternGranularity | "">(
     ""

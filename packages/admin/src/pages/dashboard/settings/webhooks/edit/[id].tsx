@@ -182,7 +182,7 @@ const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
   );
 };
 
-export default function EditWebhookPage() {
+export default function EditWebhookPage(): React.JSX.Element {
   const { route } = useRouter();
   const id =
     route?.params?.id && typeof route.params.id === "string"

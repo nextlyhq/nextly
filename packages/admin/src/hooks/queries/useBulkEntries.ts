@@ -17,7 +17,11 @@
  * @see lib/api/response-types.ts for `BulkResponse<T>` definition
  */
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueryClient,
+  type UseMutationResult,
+} from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
 import type { BulkResponse, PerItemError } from "@admin/lib/api/response-types";
@@ -171,7 +175,14 @@ export function useBulkDeleteEntries({
   onSuccess,
   onError,
   showToast = true,
-}: UseBulkDeleteEntriesOptions) {
+}: UseBulkDeleteEntriesOptions): UseMutationResult<
+  BulkResponse<{
+    id: string;
+  }>,
+  Error,
+  string[],
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -254,7 +265,15 @@ export function useBulkUpdateEntries({
   onSuccess,
   onError,
   showToast = true,
-}: UseBulkUpdateEntriesOptions) {
+}: UseBulkUpdateEntriesOptions): UseMutationResult<
+  BulkResponse<Entry>,
+  Error,
+  {
+    ids: string[];
+    data: UpdateEntryPayload;
+  },
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation({

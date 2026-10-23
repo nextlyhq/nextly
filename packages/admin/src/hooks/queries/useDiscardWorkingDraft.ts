@@ -14,7 +14,11 @@
  * @see hooks/queries/useDeleteEntry.ts - reference mutation pattern
  */
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueryClient,
+  type UseMutationResult,
+} from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
 import { entryKeys } from "@admin/services/entryApi";
@@ -50,7 +54,12 @@ export function useDiscardWorkingDraft({
   onSuccess,
   onError,
   showToast = true,
-}: UseDiscardWorkingDraftOptions) {
+}: UseDiscardWorkingDraftOptions): UseMutationResult<
+  DiscardWorkingDraftResponse,
+  Error,
+  void,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<DiscardWorkingDraftResponse, Error, void>({

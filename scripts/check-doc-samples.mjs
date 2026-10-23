@@ -38,9 +38,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+
+import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
+
+import { topLevelOnly } from "./top-level-text.mjs";
+import { compile as compileWithTsc } from "./tsc-cli.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -277,15 +282,13 @@ export const SUPPLIED_BY_THE_READER = [
  */
 export const isModule = (code, extension = "tsx") => {
   const parsed = parseSample(code, extension);
-  // The compiler's own answer, rather than a list of the node kinds that count.
-  // `externalModuleIndicator` is what TypeScript itself sets when it decides a
-  // file is a module, and it is the answer that governs how this fence would be
-  // compiled. Listing the kinds instead left the list one short in both
-  // directions: `import.meta.url` alone is a module to TypeScript and was read
-  // here as a fragment, and `import A = N.M` is an alias for a namespace rather
-  // than a load and was read here as a module. A list has a next omission and
-  // this does not.
-  if (ts.isExternalModule(parsed)) return true;
+  // What makes TypeScript compile a file as a module: an import or export
+  // declaration, `import.meta`, `import x = require("…")` or `export =`. Top-level
+  // `await` alone does not, so the parser's own "has module syntax", which
+  // counts it, is not this question: it called sixty Direct API fragments
+  // modules. `import A = N.M` aliases a namespace rather than loading anything,
+  // and is not one either.
+  if (hasModuleIndicator(parsed)) return true;
 
   // A call to `require` or to `import`, anywhere in the tree. Both load a
   // package exactly as a declaration does, and a fence opening
@@ -300,20 +303,19 @@ export const isModule = (code, extension = "tsx") => {
   // audit compile a block it deliberately excludes. A property access named
   // `require` or `import` is not a load either, and is not an identifier call.
   let loads = false;
-  const walk = node => {
-    if (loads) return;
+  walk(parsed.program, node => {
+    if (loads) return false;
     if (
-      ts.isCallExpression(node) &&
-      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(node.expression) &&
-          node.expression.text === "require"))
+      node.type === "ImportExpression" ||
+      (node.type === "CallExpression" &&
+        node.callee.type === "Identifier" &&
+        node.callee.name === "require")
     ) {
       loads = true;
-      return;
+      return false;
     }
-    ts.forEachChild(node, walk);
-  };
-  ts.forEachChild(parsed, walk);
+    return true;
+  });
   if (loads) return true;
 
   // A fence whose only module syntax is `export as namespace X` stays a
@@ -610,6 +612,72 @@ function linkResolutionTree(dir) {
   }
 }
 
+/**
+ * The compiler options the samples are checked under, as a tsconfig spells
+ * them: the command line reads them from a written tsconfig, and the program
+ * the deprecation audit asks is converted from the same object.
+ */
+function samplesCompilerOptions(dir) {
+  return {
+    noEmit: true,
+    strict: true,
+    target: "es2022",
+    jsx: "react-jsx",
+    module: "esnext",
+    moduleResolution: "bundler",
+    skipLibCheck: true,
+    lib: ["es2022", "dom"],
+    // Named explicitly, because `typeRoots` otherwise resolves by walking up
+    // from the process's directory rather than from the files being
+    // compiled, and this workspace keeps type packages under `.pnpm/` with
+    // no `@types` at the root. Without it every run reported "Cannot find
+    // type definition file for 'node'" as a finding against the docs.
+    typeRoots: [join(dir, "node_modules", "@types")],
+    // Node's globals, and nothing else. These samples are Next.js and Node
+    // files: they read `process.env.DATABASE_URL`, which every reader's
+    // project types and this harness did not, so the audit reported `process`
+    // as an error a reader would hit when the reader is the one person who
+    // never sees it. Named rather than left open, because `types` with no
+    // entry pulls in every @types package this site happens to install and
+    // would start excusing globals a reader's project does not have.
+    types: ["node"],
+  };
+}
+
+/**
+ * A file compiled beside the samples with one error only type-checking finds,
+ * so a run says whether it type-checked at all.
+ */
+const SEMANTIC_PROBE = {
+  file: "__semantic_probe__.ts",
+  source: 'const probe: number = "";\nexport {};\n',
+  code: "TS2322",
+};
+
+/**
+ * Whether a run type-checked, and the diagnostics that are not the probe's.
+ *
+ * tsc stops before type-checking when any file fails to parse, and reports the
+ * parse errors alone. Which of the two happened is read off the probe: its one
+ * type error appears exactly when type-checking ran. Asked of the run rather
+ * than guessed from the codes, as the compiler API's own split into syntactic
+ * and semantic diagnostics was. A run that did neither is refused.
+ */
+function readProbe(reported, isProbe) {
+  const inProbe = d => d.file !== undefined && isProbe(d.file);
+  const checked = reported.some(
+    d => inProbe(d) && d.code === SEMANTIC_PROBE.code
+  );
+  const ownDiagnostics = reported.filter(d => !inProbe(d));
+  if (!checked && !ownDiagnostics.some(d => d.file !== undefined)) {
+    throw new Error(
+      `doc samples: tsc neither type-checked the samples nor reported a parse error:\n` +
+        reported.map(d => `${d.code} ${d.message}`).join("\n")
+    );
+  }
+  return { checked, ownDiagnostics };
+}
+
 function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
   const dir = mkdtempSync(join(tmpdir(), `nextly-${label}-`));
   // Flattened temp names are unreadable in a diagnostic, so keep the way back
@@ -642,41 +710,31 @@ function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
     }
     linkResolutionTree(dir);
 
-    const program = ts.createProgram(fileNames, {
-      noEmit: true,
-      strict: true,
-      target: ts.ScriptTarget.ES2022,
-      jsx: ts.JsxEmit.ReactJSX,
-      module: ts.ModuleKind.ESNext,
-      moduleResolution: ts.ModuleResolutionKind.Bundler,
-      skipLibCheck: true,
-      lib: ["lib.es2022.d.ts", "lib.dom.d.ts"],
-      // Named explicitly, because `typeRoots` otherwise resolves by walking up
-      // from the process's directory rather than from the files being
-      // compiled, and this workspace keeps type packages under `.pnpm/` with
-      // no `@types` at the root. Without it every run reported "Cannot find
-      // type definition file for 'node'" as a finding against the docs.
-      typeRoots: [join(dir, "node_modules", "@types")],
-      // Node's globals, and nothing else. These samples are Next.js and Node
-      // files: they read `process.env.DATABASE_URL`, which every reader's
-      // project types and this harness did not, so the audit reported `process`
-      // as an error a reader would hit when the reader is the one person who
-      // never sees it. Named rather than left open, because `types` with no
-      // entry pulls in every @types package this site happens to install and
-      // would start excusing globals a reader's project does not have.
-      types: ["node"],
-    });
+    const options = samplesCompilerOptions(dir);
+    const probe = join(dir, SEMANTIC_PROBE.file);
+    writeFileSync(probe, SEMANTIC_PROBE.source);
+    const config = join(dir, "tsconfig.json");
+    writeFileSync(
+      config,
+      JSON.stringify({ compilerOptions: options, files: [...fileNames, probe] })
+    );
+    // The compiler's command line, which every TypeScript version answers the
+    // same way, rather than its JavaScript API.
+    const { checked, ownDiagnostics } = readProbe(
+      compileWithTsc(["-p", config], dir),
+      file => resolve(dir, file) === probe
+    );
 
     const render = d => {
-      const where = origin.get(d.file?.fileName) ?? d.file?.fileName ?? "?";
-      const line =
-        d.file && d.start !== undefined
-          ? d.file.getLineAndCharacterOfPosition(d.start).line + 1
-          : 0;
-      const message = ts.flattenDiagnosticMessageText(d.messageText, " ");
+      const file = d.file === undefined ? undefined : resolve(dir, d.file);
+      const where = file === undefined ? "?" : (origin.get(file) ?? file);
+      // The chain on one line, each step after the first keeping its depth,
+      // as the compiler API's `flattenDiagnosticMessageText(text, " ")` wrote
+      // it: identities in the baseline are read from this text.
+      const message = [d.message.split("\n")[0], ...d.chain].join(" ");
       return {
         origin: where,
-        text: `${where}:${String(line)}  error TS${String(d.code)}: ${message}`,
+        text: `${where}:${String(d.line ?? 0)}  error ${d.code}: ${message}`,
       };
     };
 
@@ -695,27 +753,32 @@ function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
       return false;
     };
 
-    // The compiler's own complaints about its setup, which neither of the two
-    // collections below carries. A production-only install without @types/node
-    // reports TS2688 here and nothing anywhere else, so an otherwise simple
-    // sample would compile to an empty diagnostics list and the gate would
-    // report success having loaded neither the Node types it asked for nor the
-    // standard library.
-    const setup = [
-      ...program.getOptionsDiagnostics(),
-      ...program.getGlobalDiagnostics(),
-    ]
+    // The compiler's own complaints about its setup, which name no file. A
+    // production-only install without @types/node reports TS2688 here and
+    // nothing anywhere else, so an otherwise simple sample would compile to an
+    // empty diagnostics list and the gate would report success having loaded
+    // neither the Node types it asked for nor the standard library.
+    const setup = ownDiagnostics
+      .filter(d => d.file === undefined)
       .map(render)
       .filter(keep);
-
-    // The API's own split. Nothing here guesses from the error code.
-    const unparsed = program.getSyntacticDiagnostics().map(render).filter(keep);
+    const inFiles = ownDiagnostics
+      .filter(d => d.file !== undefined)
+      .map(render)
+      .filter(keep);
+    // A run that never reached type-checking reported parse errors only.
+    const unparsed = checked ? [] : inFiles;
     // Deprecations, asked of the checker rather than read off the diagnostics,
     // for the reason written on `deprecatedPropertiesIn`. Rendered in the same
     // shape as everything else and put in the same list, so the classifier
     // charges the page and the conservation count downstream sees it without a
     // bucket of its own. TS6385 is TypeScript's own code for this sentence,
-    // used rather than an invented one so a reader can look it up.
+    // used rather than an invented one so a reader can look it up. The program
+    // is built from the same options the command line compiled with.
+    const program = ts.createProgram(
+      fileNames,
+      ts.convertCompilerOptionsFromJson(options, dir).options
+    );
     const checker = program.getTypeChecker();
     const deprecated = fileNames.flatMap(file => {
       const sourceFile = program.getSourceFile(file);
@@ -731,12 +794,7 @@ function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
     });
     const diagnostics = [
       ...setup.map(d => d.text),
-      ...unparsed.map(d => d.text),
-      ...program
-        .getSemanticDiagnostics()
-        .map(render)
-        .filter(keep)
-        .map(d => d.text),
+      ...inFiles.map(d => d.text),
       ...deprecated.filter(keep).map(d => d.text),
     ];
     return { unparsed, diagnostics };
@@ -1155,145 +1213,44 @@ export function declaresName(code, name, extension = "tsx") {
  * rebuild, which is reported rather than swallowed.
  */
 /**
- * The lines of a fence that are at the top level, with deeper ones blanked.
+ * A sample parsed under the grammar its extension names: the parser's whole
+ * result, `program` and `module` (its import and export record).
  *
- * The declaration patterns below anchor at a line start, which a declaration
- * nested inside a function also has. The comment on `declaredNamesIn` said it
- * was deliberately shallow and the code never enforced it: `init(ctx) { const
- * handler = ... }` recorded `handler` as though the next fence could see it,
- * and an undefined reference in that fence was then filed as merely unchecked
- * rather than reported.
- *
- * Depth is counted rather than parsed, so a brace inside a string or a comment
- * misleads it. That mistake blanks a line that was really top level, which
- * turns a name the page does define into one it appears not to — loud, and
- * caught by the continuation pass — rather than excusing one it does not.
- */
-const OPENS = new Set([
-  ts.SyntaxKind.OpenBraceToken,
-  ts.SyntaxKind.OpenParenToken,
-  ts.SyntaxKind.OpenBracketToken,
-]);
-const CLOSES = new Set([
-  ts.SyntaxKind.CloseBraceToken,
-  ts.SyntaxKind.CloseParenToken,
-  ts.SyntaxKind.CloseBracketToken,
-]);
-
-/**
- * Tokens after which a `/` is division, so everything else means a regex can
- * start there. The scanner returns `SlashToken` either way and only rescans
- * when asked, so without this `const re = /}/` contributes a closing brace and
- * the rest of the enclosing block reads as top level.
- */
-const DIVISION_FOLLOWS = new Set([
-  ts.SyntaxKind.Identifier,
-  ts.SyntaxKind.NumericLiteral,
-  ts.SyntaxKind.BigIntLiteral,
-  ts.SyntaxKind.StringLiteral,
-  ts.SyntaxKind.NoSubstitutionTemplateLiteral,
-  ts.SyntaxKind.TemplateTail,
-  ts.SyntaxKind.RegularExpressionLiteral,
-  ts.SyntaxKind.CloseParenToken,
-  ts.SyntaxKind.CloseBracketToken,
-  ts.SyntaxKind.CloseBraceToken,
-  ts.SyntaxKind.ThisKeyword,
-  ts.SyntaxKind.SuperKeyword,
-  ts.SyntaxKind.TrueKeyword,
-  ts.SyntaxKind.FalseKeyword,
-  ts.SyntaxKind.NullKeyword,
-  ts.SyntaxKind.PlusPlusToken,
-  ts.SyntaxKind.MinusMinusToken,
-]);
-
-/**
- * Brackets that are really brackets, from the TypeScript scanner rather than
- * from counting characters.
- *
- * Counting characters read a closing brace inside a string or a comment as a
- * real one. The comment here used to argue that the mistake was safe because it
- * fires loudly: over-closing blanks a line that was top level, so a name the
- * page defines looks undefined and becomes a finding. That is only one
- * direction. `function setup() { const marker = "}"; const hidden = {}; }`
- * closes early on the string, which leaves `hidden` looking page-scoped, and a
- * later import-free fence calling `hidden.nonexistent()` is then treated as a
- * continuation and filed as unchecked instead of as a finding. The quiet
- * direction was the one that mattered.
- *
- * Trivia is skipped, so comments contribute nothing. A template literal's text
- * is inside its own token, and `${`/`}` are part of the head/middle/tail
- * tokens, so template expressions balance without special handling. A regex
- * literal still needs `reScanSlashToken` to be recognised and does not get it,
- * so a `}` inside one is read as a brace; that is the same hazard the character
- * count had, narrowed from every string and comment to regex literals alone.
- */
-function topLevelOnly(code) {
-  const scanner = ts.createScanner(
-    ts.ScriptTarget.Latest,
-    true,
-    ts.LanguageVariant.JSX,
-    code
-  );
-  // UTF-16 units, because that is what the scanner's offsets count. Splitting
-  // by code point desynchronises on the first non-ASCII character, and these
-  // pages have plenty.
-  const chars = code.split("");
-  const blank = (from, to) => {
-    for (let i = from; i < to && i < chars.length; i += 1) {
-      if (chars[i] !== "\n") chars[i] = " ";
-    }
-  };
-
-  // Per token, not per line. Blanking whole lines cannot see
-  // `function setup() { const hidden = {}; }`, where the nesting opens and
-  // closes within one line and the line therefore starts at depth 0.
-  let depth = 0;
-  let prevEnd = 0;
-  let previous = ts.SyntaxKind.Unknown;
-  for (
-    let kind = scanner.scan();
-    kind !== ts.SyntaxKind.EndOfFileToken;
-    kind = scanner.scan()
-  ) {
-    // A regex literal is one token or several, depending on whether anybody
-    // asks. Unasked, `/}/ ` scans as slash, brace, slash, and the brace closes a
-    // block it was never in.
-    if (
-      (kind === ts.SyntaxKind.SlashToken ||
-        kind === ts.SyntaxKind.SlashEqualsToken) &&
-      !DIVISION_FOLLOWS.has(previous)
-    ) {
-      kind = scanner.reScanSlashToken();
-    }
-    previous = kind;
-    const end = scanner.getTokenEnd();
-    // A closing bracket belongs to the depth it returns to, and an opening one
-    // to the depth it leaves, so both stay visible while their contents do not.
-    if (CLOSES.has(kind)) depth = Math.max(0, depth - 1);
-    if (depth > 0) blank(prevEnd, end);
-    if (OPENS.has(kind)) depth += 1;
-    prevEnd = end;
-  }
-  return chars.join("");
-}
-
-/**
- * The import declarations a source actually has.
- *
- * Parsed as TSX, because these samples are, and a parse never throws here: on
- * malformed input TypeScript produces a tree with diagnostics rather than an
- * exception, and a statement list that is short of a broken import is the right
- * answer anyway.
+ * A sample that does not parse is a program with no statements. Documentation
+ * holds fragments that are not programs, a `{ ... }` placeholder or a partial
+ * snippet, and the parser answers those with nothing at all rather than a
+ * partial tree. Nothing is lost by it here: across the 72 fences of the docs
+ * that do not parse, the compiler's recovering parser found no import and no
+ * module syntax either. The one place a sample is parsed.
  */
 export function parseSample(source, extension = "tsx") {
-  return ts.createSourceFile(
-    `sample.${extension}`,
-    source,
-    ts.ScriptTarget.Latest,
-    // Parents, because asking whether a mention sits in a type position means
-    // walking up from it. Still the one place a sample is parsed.
-    true,
-    extension === "tsx" ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  try {
+    return parseSource(source, `sample.${extension}`);
+  } catch {
+    return UNPARSED;
+  }
+}
+
+/** What a sample that does not parse declares, imports and loads: nothing. */
+const UNPARSED = Object.freeze({
+  program: { type: "Program", body: [] },
+  module: { staticImports: [], staticExports: [], importMetas: [] },
+});
+
+/** Whether a parsed sample has what makes TypeScript compile it as a module. */
+function hasModuleIndicator({ program, module }) {
+  if (
+    module.staticImports.length > 0 ||
+    module.staticExports.length > 0 ||
+    module.importMetas.length > 0
+  ) {
+    return true;
+  }
+  return program.body.some(
+    statement =>
+      (statement.type === "TSImportEqualsDeclaration" &&
+        statement.moduleReference.type === "TSExternalModuleReference") ||
+      statement.type === "TSExportAssignment"
   );
 }
 
@@ -1309,48 +1266,21 @@ export function parseSample(source, extension = "tsx") {
  * undefined rather than rebuilt with its context.
  */
 function importsIn(source, extension) {
-  return parseSample(source, extension).statements.filter(
-    ts.isImportDeclaration
+  return parseSample(source, extension).program.body.filter(
+    statement => statement.type === "ImportDeclaration"
   );
 }
 
 export function declaredNamesIn(source, extension = "tsx") {
-  const code = topLevelOnly(source);
-  const names = new Set();
-  const add = n => {
-    if (n) names.add(n);
-  };
-  // Modifiers are a run, in any order and any number: `export default async
-  // function Foo`, `export abstract class Bar`, `declare const baz`. Naming only
-  // `export` and `declare` lost every one of those, and the lookup this replaced
-  // had found them, so unifying the two turned working pages into findings. The
-  // separator after the keyword takes an asterisk so `function* gen` and
-  // `function *gen` are both read.
-  // Anchored at a line start OR after a semicolon, because
-  // `const first = 1; const second = 2;` declares both and reading only the
-  // first turned a page that was correct into a finding.
-  for (const m of code.matchAll(
-    /(?:^|;)[ \t]*(?:(?:export|default|declare|abstract|async)[ \t]+)*(?:const|let|var|function|class|interface|type|enum)\b[\s*]+([A-Za-z_$][\w$]*)/gm
-  )) {
-    add(m[1]);
-  }
-  // Binding patterns: `const { nextly } = await createClient()` and
-  // `const [first] = rows` declare names too. Requiring an identifier straight
-  // after the keyword recorded neither, so a later fence using the value looked
-  // like it inherited nothing and was never compiled.
-  for (const m of code.matchAll(
-    /^\s*(?:export\s+)?(?:const|let|var)\s+([[{][^=]*?[\]}])\s*=/gm
-  )) {
-    const pattern = m[1];
-    // `{ a, b: c, d = 1, ...rest }` binds a, c, d and rest; the key in `b: c`
-    // is not a binding, so only what follows a colon counts.
-    for (const part of pattern.replace(/^[[{]|[\]}]$/g, "").split(",")) {
-      const piece = part.trim().replace(/^\.\.\./, "");
-      if (!piece) continue;
-      const renamed = piece.match(/:\s*([A-Za-z_$][\w$]*)/);
-      add(renamed ? renamed[1] : piece.match(/^[A-Za-z_$][\w$]*/)?.[0]);
-    }
-  }
+  const parsed = parseSample(source, extension);
+  // From the program's own top-level statements when the sample parses, which
+  // is exact: what reading the text has to infer about strings, regular
+  // expressions, JSX text and comments, the parse has already decided. Only a
+  // fence that is not a program falls back to the text.
+  const declared =
+    parsed === UNPARSED
+      ? namesInText(source, NAME_KEYWORDS)
+      : programDeclarations(parsed.program).flatMap(entry => entry.names);
   // Imports come from the PARSE, not from a pattern over the text. They cannot
   // be read from the top-level view either: an import clause opens a brace, so
   // masking by depth erases the middle of `import {\n  defineConfig,\n} from
@@ -1360,17 +1290,100 @@ export function declaredNamesIn(source, extension = "tsx") {
   // fence that used `ghost` as a continuation of a page that never bound it. A
   // parser has neither problem: a comment produces no statement, and a wrapped
   // clause is one statement however it is laid out.
-  for (const statement of importsIn(source, extension)) {
-    const clause = statement.importClause;
-    if (!clause) continue;
-    if (clause.name) add(clause.name.text);
-    const bindings = clause.namedBindings;
-    if (!bindings) continue;
-    if (ts.isNamespaceImport(bindings)) add(bindings.name.text);
-    else for (const element of bindings.elements) add(element.name.text);
-  }
-  return [...names];
+  // Default, namespace and named bindings alike: each specifier's local name.
+  const imported = importsIn(source, extension).flatMap(statement =>
+    statement.specifiers.map(specifier => specifier.local.name)
+  );
+  return [...new Set([...declared, ...imported].filter(Boolean))];
 }
+
+/**
+ * What each top-level statement of a parsed sample declares: `{ names, value }`,
+ * `value` saying whether those names can supply a value. An `export` is read
+ * through to the declaration it carries. The kinds are the ones a declaration
+ * keyword introduces: `const`, `let`, `var`, `function` and `class` declare
+ * values, and `interface`, `type` and `enum` declare names only.
+ */
+function programDeclarations(program) {
+  return program.body
+    .map(statement =>
+      statement.type.startsWith("Export") ? statement.declaration : statement
+    )
+    .map(
+      declaration => declaration && DECLARES[declaration.type]?.(declaration)
+    )
+    .filter(Boolean);
+}
+
+/** A declaration with one `id`, which a default export can leave out. */
+function namedDeclaration(value) {
+  return declaration => ({
+    names: declaration.id ? [declaration.id.name] : [],
+    value,
+  });
+}
+
+const DECLARES = {
+  VariableDeclaration: declaration => ({
+    names: declaration.declarations.flatMap(declarator =>
+      boundNames(declarator.id)
+    ),
+    value: true,
+  }),
+  FunctionDeclaration: namedDeclaration(true),
+  TSDeclareFunction: namedDeclaration(true),
+  ClassDeclaration: namedDeclaration(true),
+  TSInterfaceDeclaration: namedDeclaration(false),
+  TSTypeAliasDeclaration: namedDeclaration(false),
+  TSEnumDeclaration: namedDeclaration(false),
+};
+
+/**
+ * The names a binding binds, through any depth of pattern: `{ a, b: c, d = 1,
+ * ...rest }` binds a, c, d and rest, the key in `b: c` being no binding.
+ */
+function boundNames(binding) {
+  const children = PATTERN_CHILDREN[binding.type];
+  return children ? children(binding).flatMap(boundNames) : [binding.name];
+}
+
+const PATTERN_CHILDREN = {
+  ObjectPattern: pattern =>
+    pattern.properties.map(property =>
+      property.type === "RestElement" ? property : property.value
+    ),
+  ArrayPattern: pattern => pattern.elements.filter(Boolean),
+  AssignmentPattern: pattern => [pattern.left],
+  RestElement: pattern => [pattern.argument],
+};
+
+/**
+ * The names a fence that does not parse declares with one of `keywords`, read
+ * from its top-level text. No reading of a fragment is exact, since it is not a
+ * program: this one sees through brackets, strings, comments and template
+ * literals by tokenising, and so sees no name a destructuring pattern binds,
+ * which are inside its brackets.
+ */
+function namesInText(source, keywords) {
+  // Modifiers are a run, in any order and any number: `export default async
+  // function Foo`, `export abstract class Bar`, `declare const baz`. Naming only
+  // `export` and `declare` lost every one of those, and the lookup this replaced
+  // had found them, so unifying the two turned working pages into findings. The
+  // separator after the keyword takes an asterisk so `function* gen` and
+  // `function *gen` are both read.
+  // Anchored at a line start OR after a semicolon, because
+  // `const first = 1; const second = 2;` declares both and reading only the
+  // first turned a page that was correct into a finding.
+  const declaration = new RegExp(
+    `(?:^|;)[ \\t]*(?:(?:export|default|declare|abstract|async)[ \\t]+)*(?:${keywords})\\b[\\s*]+([A-Za-z_$][\\w$]*)`,
+    "gm"
+  );
+  return [...topLevelOnly(source).matchAll(declaration)].map(m => m[1]);
+}
+
+/** The declaration keywords that introduce a name, and those that introduce a value. */
+const NAME_KEYWORDS = "const|let|var|function|class|interface|type|enum";
+const VALUE_KEYWORDS = "const|let|var|function|class";
 
 /**
  * Which of an earlier fence's names does this one use?
@@ -1391,25 +1404,16 @@ export function declaredNamesIn(source, extension = "tsx") {
  * program a reader pastes. `await nextly.logout()` calls a value an earlier
  * fence built, and is.
  */
-export function declaredValuesIn(source, _extension = "tsx") {
-  const code = topLevelOnly(source);
-  const names = new Set();
-  for (const m of code.matchAll(
-    /(?:^|;)[ \t]*(?:(?:export|default|declare|abstract|async)[ \t]+)*(?:const|let|var|function|class)\b[\s*]+([A-Za-z_$][\w$]*)/gm
-  )) {
-    names.add(m[1]);
-  }
-  for (const m of code.matchAll(
-    /^\s*(?:export\s+)?(?:const|let|var)\s+([[{][^=]*?[\]}])\s*=/gm
-  )) {
-    for (const part of m[1].replace(/^[[{]|[\]}]$/g, "").split(",")) {
-      const piece = part.trim().replace(/^\.\.\./, "");
-      const bound = piece.includes(":") ? piece.split(":").pop() : piece;
-      const name = bound?.trim().match(/^[A-Za-z_$][\w$]*/)?.[0];
-      if (name) names.add(name);
-    }
-  }
-  return [...names];
+export function declaredValuesIn(source, extension = "tsx") {
+  const parsed = parseSample(source, extension);
+  // From the parse when there is one, as `declaredNamesIn` reads it.
+  const values =
+    parsed === UNPARSED
+      ? namesInText(source, VALUE_KEYWORDS)
+      : programDeclarations(parsed.program)
+          .filter(entry => entry.value)
+          .flatMap(entry => entry.names);
+  return [...new Set(values)];
 }
 
 export function inheritedNames(sample, samples) {
@@ -1650,7 +1654,9 @@ const exportedValues = new Set();
 
 /** `./dist/shell.d.ts` as its source, since that is what is always present. */
 function sourceCandidatesFor(typesPath) {
-  const built = typesPath.replace(/^\.\//, "").match(/^dist\/(.+)\.d\.[cm]?ts$/);
+  const built = typesPath
+    .replace(/^\.\//, "")
+    .match(/^dist\/(.+)\.d\.[cm]?ts$/);
   return built ? [`src/${built[1]}.ts`, `src/${built[1]}.tsx`] : [];
 }
 
@@ -1674,52 +1680,65 @@ function localModuleCandidates(base) {
  * package, because a config may keep its entry map in a module beside it.
  */
 function buildConfigEntries(packageDir) {
-  let names;
-  try {
-    names = readdirSync(packageDir);
-  } catch {
-    return [];
-  }
-  const queue = names
-    .filter(name => /^tsdown(\..+)?\.config\.[cm]?[jt]s$/.test(name))
-    .map(name => join(packageDir, name));
+  const queue = buildConfigFiles(packageDir);
   const seen = new Set();
   const found = new Set();
   while (queue.length > 0) {
     const file = queue.pop();
     if (seen.has(file) || !existsSync(file)) continue;
     seen.add(file);
-    const source = ts.createSourceFile(
-      file,
-      readFileSync(file, "utf-8"),
-      ts.ScriptTarget.ES2022,
-      false,
-      ts.ScriptKind.TS
-    );
-    const visit = node => {
-      if (ts.isStringLiteral(node) && /^src\/.+\.tsx?$/.test(node.text)) {
-        const full = join(packageDir, node.text);
-        if (existsSync(full)) found.add(full);
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(source);
-    for (const statement of source.statements) {
-      if (!ts.isImportDeclaration(statement)) continue;
-      const specifier = statement.moduleSpecifier;
-      if (!ts.isStringLiteral(specifier)) continue;
-      if (!specifier.text.startsWith(".")) continue;
-      for (const candidate of localModuleCandidates(
-        join(dirname(file), specifier.text)
-      )) {
-        if (existsSync(candidate)) {
-          queue.push(candidate);
-          break;
-        }
-      }
-    }
+    const { entries, imports } = configReferences(file, packageDir);
+    entries.forEach(entry => found.add(entry));
+    queue.push(...imports);
   }
   return [...found];
+}
+
+/** A package's tsdown configs; none for a directory that cannot be read. */
+function buildConfigFiles(packageDir) {
+  try {
+    return readdirSync(packageDir)
+      .filter(name => /^tsdown(\..+)?\.config\.[cm]?[jt]s$/.test(name))
+      .map(name => join(packageDir, name));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The `src/` entry files a build config names that exist, and the local
+ * modules it imports, which may name more.
+ *
+ * A config that does not parse is refused rather than read as naming no
+ * entries: every entry it would have named would go unchecked.
+ */
+function configReferences(file, packageDir) {
+  const { program } = parseSource(readFileSync(file, "utf-8"), file);
+  const entries = [];
+  walk(program, node => {
+    const named =
+      node.type === "Literal" && typeof node.value === "string"
+        ? node.value
+        : "";
+    const full = join(packageDir, named);
+    if (/^src\/.+\.tsx?$/.test(named) && existsSync(full)) entries.push(full);
+    return true;
+  });
+  const imports = program.body.flatMap(statement =>
+    statement.type === "ImportDeclaration"
+      ? localModuleOf(file, statement.source.value)
+      : []
+  );
+  return { entries, imports };
+}
+
+/** The file a relative import from `file` loads, as a one-item list, or none. */
+function localModuleOf(file, specifier) {
+  if (!specifier.startsWith(".")) return [];
+  const found = localModuleCandidates(join(dirname(file), specifier)).find(
+    candidate => existsSync(candidate)
+  );
+  return found === undefined ? [] : [found];
 }
 
 /** Every typed entry a package declares, resolved to a file that exists. *
@@ -1852,25 +1871,53 @@ export function workspaceValueExports() {
 export function usedOnlyAsValue(code, name, extension = "tsx") {
   let mentioned = false;
   let asType = false;
-  const visit = node => {
-    if (ts.isIdentifier(node) && node.text === name) {
-      mentioned = true;
-      for (let at = node.parent; at; at = at.parent) {
-        // `typeof X` is written in a type position and reads X out of the
-        // VALUE namespace, so it is a value use however it looks. Asked before
-        // the general test below, because a type query is itself a type node.
-        if (ts.isTypeQueryNode(at)) break;
-        if (ts.isTypeNode(at)) {
-          asType = true;
-          break;
-        }
-        if (ts.isExpression(at) || ts.isStatement(at)) break;
+  walk(parseSample(code, extension).program, (node, ancestors) => {
+    const isName =
+      (node.type === "Identifier" || node.type === "JSXIdentifier") &&
+      node.name === name;
+    if (!isName) return true;
+    mentioned = true;
+    for (const at of [...ancestors].reverse()) {
+      // `typeof X` is written in a type position and reads X out of the
+      // VALUE namespace, so it is a value use however it looks. Asked before
+      // the general test below, because a type query is itself a type node.
+      if (at.type === "TSTypeQuery") break;
+      if (isTypeNode(at)) {
+        asType = true;
+        break;
       }
+      if (isExpressionOrStatement(at)) break;
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(parseSample(code, extension));
+    return true;
+  });
   return mentioned && !asType;
+}
+
+/**
+ * Whether a node is written in a type position.
+ *
+ * Every TypeScript type node, and the two heritage clauses that name a type
+ * where an interface extends or a class implements one. Expressions that carry
+ * a type (`as`, `satisfies`, `!`) and the declarations that hold one are not
+ * types themselves.
+ */
+function isTypeNode(node) {
+  return (
+    TYPE_POSITIONS.has(node.type) || /^TS\w*(?:Type|Keyword)$/.test(node.type)
+  );
+}
+
+const TYPE_POSITIONS = new Set([
+  "TSTypeReference",
+  "TSInterfaceHeritage",
+  "TSClassImplements",
+]);
+
+/** Whether a node is an expression or a statement, declarations included. */
+function isExpressionOrStatement(node) {
+  return /(?:Expression|Statement|Declaration|Literal)$|^JSX(?:Element|Fragment)$/.test(
+    node.type
+  );
 }
 
 /** Whether a block ever constructs this name. */
@@ -1887,29 +1934,33 @@ function constructorRoot(expression) {
   // a property or element access reaches through its object, and parentheses,
   // `as`, `satisfies`, a non-null `!` and an angle-bracket assertion all wrap an
   // expression without changing which binding it needs.
-  while (
-    ts.isPropertyAccessExpression(at) ||
-    ts.isElementAccessExpression(at) ||
-    ts.isParenthesizedExpression(at) ||
-    ts.isAsExpression(at) ||
-    ts.isSatisfiesExpression(at) ||
-    ts.isNonNullExpression(at) ||
-    ts.isTypeAssertionExpression(at)
-  ) {
-    at = at.expression;
+  for (;;) {
+    if (at.type === "MemberExpression") at = at.object;
+    else if (TRANSPARENT.has(at.type)) at = at.expression;
+    else break;
   }
-  return ts.isIdentifier(at) ? at.text : undefined;
+  return at.type === "Identifier" ? at.name : undefined;
 }
+
+const TRANSPARENT = new Set([
+  "ParenthesizedExpression",
+  "TSAsExpression",
+  "TSSatisfiesExpression",
+  "TSNonNullExpression",
+  "TSTypeAssertion",
+]);
 
 export function constructedInBlock(code, name, extension = "tsx") {
   let constructed = false;
-  const visit = node => {
-    if (ts.isNewExpression(node) && constructorRoot(node.expression) === name) {
+  walk(parseSample(code, extension).program, node => {
+    if (
+      node.type === "NewExpression" &&
+      constructorRoot(node.callee) === name
+    ) {
       constructed = true;
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(parseSample(code, extension));
+    return !constructed;
+  });
   return constructed;
 }
 

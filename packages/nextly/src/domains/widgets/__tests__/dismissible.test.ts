@@ -11,12 +11,20 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { registerRecentEditsWidgetSource } from "../../../services/dashboard/recent-edits-widget-source";
 import { declaredWidgets } from "../canonical";
 import { CORE_WIDGETS } from "../core-widgets";
 import { clearWidgets, registerWidget } from "../registry";
+import { clearSources } from "../sources";
+import { clearSystemResolvers } from "../system-sources";
 
 beforeEach(() => {
   clearWidgets();
+  // As boot orders it: the sources first, since a card's settings are admitted
+  // against the filters its source declares.
+  clearSources();
+  clearSystemResolvers();
+  registerRecentEditsWidgetSource();
   for (const definition of CORE_WIDGETS) registerWidget(definition);
 });
 

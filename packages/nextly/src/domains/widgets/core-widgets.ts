@@ -63,13 +63,14 @@ import { IN_RELEASE_KEY } from "../collections/query/reserved-filter-keys";
 import { settings } from "./declaration/setting-builders";
 import type { WidgetDefinition, WidgetSetting } from "./definition";
 import { MAX_WIDGET_LIMIT } from "./query-limits";
+import type { AnyWidgetSetting } from "./settings";
 import {
   ACTIVITY_SOURCE_ID,
   ATTENTION_SOURCE_ID,
   CONTENT_SOURCE_ID,
+  RECENT_EDITS_SOURCE_ID,
   RELEASES_SOURCE_ID,
   TEAM_SOURCE_ID,
-  VERSIONS_SOURCE_ID,
 } from "./system-source-ids";
 import { TEAM_GATE } from "./team-gate";
 
@@ -85,6 +86,32 @@ const RECENT_ACTIVITY_ITEMS: WidgetSetting = {
   name: "limit",
   label: "Number of items",
   ...settings.items(),
+};
+
+/** Recently edited's "Number of items", the same offer under the same name. */
+const RECENTLY_EDITED_ITEMS: WidgetSetting = RECENT_ACTIVITY_ITEMS;
+
+/**
+ * Recently edited's "Only mine": the reader's own saves alone. Its source
+ * narrows by it (`onlyMine` among its filters), so the knob sets the query's
+ * `where` rather than the card's source.
+ */
+const RECENTLY_EDITED_ONLY_MINE: WidgetSetting = {
+  name: "onlyMine",
+  label: "Only mine",
+  ...settings.onlyMine(),
+};
+
+/**
+ * Recently edited's "Collection": one collection's saves, or every collection
+ * the reader may read when none is chosen, which is the default. Its source
+ * reads across collections and narrows by one, so the knob sets the query's
+ * `where` and the card keeps its source.
+ */
+const RECENTLY_EDITED_COLLECTION: AnyWidgetSetting = {
+  name: "collection",
+  label: "Collection",
+  ...settings.collection(),
 };
 
 /**
@@ -270,40 +297,27 @@ const CORE_WIDGET_LITERALS = [
     id: "core/recently-edited",
     title: "Recently edited",
     description:
-      "The documents most recently left with unpublished edits, newest first.",
+      "The entries and Singles most recently saved, newest first, one row each.",
     archetype: "list",
     defaultSize: "md",
     // The narrowest width it still draws at: a list whose rows need at least a third.
     minSize: "md",
     defaultOrder: 35,
-    /*
-     * Two fields, because the `list` archetype draws the first two and silently
-     * drops the rest -- see `core/upcoming-releases`. This card selected three,
-     * so `updatedAt` was never drawn on a card whose own description promises
-     * "most recently ... newest first".
-     *
-     * 🔴 `entryId` is KEPT and `scopeSlug` is the one dropped, and the first
-     * attempt at this had it the other way round. Dropping the id looked right
-     * -- it is a uuid, and the collection name reads better -- but two pending
-     * edits in the same collection then render as the same two values, so a
-     * card describing a list of DOCUMENTS could not tell one from another. A
-     * row that cannot name its subject is worse than one naming it awkwardly.
-     *
-     * The uuid is still the wrong thing to show a person, and nothing better is
-     * selectable: `VERSION_FIELDS` publishes `scopeSlug`, `entryId`, `locale`
-     * and `updatedAt`, so `entryId` is the only document identity this source
-     * has. A readable row needs the source to publish a title first, and that
-     * is an access-control change rather than a formatting one -- an entry
-     * title is field content, and `readable-documents.ts` selects `id` alone
-     * precisely so a visibility probe cannot carry field values into a surface
-     * that never asked for them.
-     */
+    // From the activity trail, one row per document at its latest save the
+    // reader may see, across every collection they may read; the same trail
+    // Recent activity reads, grouped by document rather than by run. The title
+    // and when it was saved, the two fields a list draws.
     query: {
-      source: VERSIONS_SOURCE_ID,
+      source: RECENT_EDITS_SOURCE_ID,
       op: "list",
-      select: ["entryId", "updatedAt"],
+      select: ["entryTitle", "createdAt"],
       limit: 5,
     },
+    settings: [
+      RECENTLY_EDITED_ONLY_MINE,
+      RECENTLY_EDITED_COLLECTION,
+      RECENTLY_EDITED_ITEMS,
+    ],
   },
   {
     id: "core/upcoming-releases",

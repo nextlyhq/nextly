@@ -1,12 +1,13 @@
 "use client";
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { ArrowLeft, LayoutDashboard, Settings } from "@admin/components/icons";
 import { ROUTES } from "@admin/constants/routes";
 import { navigateTo } from "@admin/lib/navigation";
 
-export function MaintenancePage() {
+export function MaintenancePage(): JSX.Element {
   return (
     <div className="flex flex-col items-center justify-center min-h-[80vh] w-full bg-background p-4">
       {/* Container */}

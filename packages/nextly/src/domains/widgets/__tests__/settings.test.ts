@@ -638,6 +638,16 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
     expect(list).toContain('setting "where" is typed "filter"');
   });
 
+  it("admits a Collection setting at registration over a collection source, or none", () => {
+    // The collection a card reads becomes its query's source, so the setting
+    // changes what the card shows and is drawn rather than refused.
+    expect(widgetSettingsProblem([content[0]])).toBeUndefined();
+    expect(
+      widgetSettingsProblem([content[0]], false, { id: "collection:posts" })
+    ).toBeUndefined();
+    expect(() => validateWidgetSettings([content[0]], "core/x")).not.toThrow();
+  });
+
   it("refuses a content setting at registration over a source no knob drives it on", () => {
     // Every content knob reads a collection: on a system source the setting
     // would be drawn and saved and change nothing, so it is refused with the

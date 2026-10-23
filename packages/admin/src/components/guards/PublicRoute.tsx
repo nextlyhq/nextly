@@ -12,7 +12,7 @@ interface PublicRouteProps {
   children: React.ReactNode;
 }
 
-export function PublicRoute({ children }: PublicRouteProps) {
+export function PublicRoute({ children }: PublicRouteProps): React.JSX.Element {
   const [isChecking, setIsChecking] = useState(true);
   // Track whether this component instance is still mounted.
   // Prevents stale async callbacks from calling navigateTo after

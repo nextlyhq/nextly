@@ -17,7 +17,7 @@
  * install showing 404 looked broken.
  */
 
-import { useEffect } from "react";
+import { useEffect, type JSX } from "react";
 
 import { EmptyEntitiesState } from "@admin/components/features/dashboard/EmptyEntitiesState";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
@@ -30,7 +30,7 @@ import { pickCollectionsLandingTarget } from "@admin/lib/sidebar-landing";
 // Same key as DynamicCollectionNav — they MUST share the pinned set.
 const PINNED_COLLECTIONS_STORAGE_KEY = "nextly:sidebar:pinned-collections";
 
-export default function CollectionsLandingRedirect() {
+export default function CollectionsLandingRedirect(): JSX.Element {
   const branding = useBranding();
   const { capabilities } = useCurrentUserPermissions();
   const { pinned: pinnedCollections } = useSidebarPins({

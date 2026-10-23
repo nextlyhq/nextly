@@ -94,33 +94,39 @@ function identityOptions(
 }
 
 /**
- * The ids among `entryIds` that `collection` returns for the given read.
+ * The documents among `entryIds` that `collection` returns for the given read,
+ * each with the columns `select` names beside its id.
  *
- * 🔴 One loop for both questions this module asks, because they differ ONLY in
- * whether access is enforced — and the parts they share are each load-bearing:
- * the chunking keeps a large set inside the lowest per-statement parameter limit
- * of the three dialects, `limit: chunk.length` stops a default page reporting
- * the remainder as missing, and `status: "all"` keeps a draft from reading as
- * absent. Written twice, those are three chances for the two answers to stop
- * being comparable — and the whole point is to subtract one from the other.
+ * 🔴 One loop for every question this module asks, because they differ ONLY in
+ * whether access is enforced and in which columns come back — and the parts
+ * they share are each load-bearing: the chunking keeps a large set inside the
+ * lowest per-statement parameter limit of the three dialects,
+ * `limit: chunk.length` stops a default page reporting the remainder as
+ * missing, and `status: "all"` keeps a draft from reading as absent. Written
+ * twice, those are three chances for the answers to stop being comparable —
+ * and the whole point is to subtract one from the other.
  */
-async function idsReturnedBy(
+async function documentsReturnedBy(
   collection: string,
   entryIds: readonly string[],
   locale: string | null | undefined,
-  access: { overrideAccess: boolean; caller?: ReadCaller }
-): Promise<Set<string>> {
-  const found = new Set<string>();
+  access: { overrideAccess: boolean; caller?: ReadCaller },
+  columns: readonly string[] = []
+): Promise<Map<string, Record<string, unknown>>> {
+  const found = new Map<string, Record<string, unknown>>();
   if (entryIds.length === 0) return found;
 
   // Built once: nothing here varies per chunk, and assembling it inside the
   // loop put the identity and locale decisions on every iteration.
   const scoped = identityOptions(locale, access);
+  const select = Object.fromEntries(
+    ["id", ...columns].map(column => [column, true])
+  );
   for (const chunk of chunked(entryIds)) {
     const result = await requireNextly().find({
       collection,
       where: { id: { in: chunk } },
-      select: { id: true },
+      select,
       // The whole chunk can legitimately come back; a smaller page would report
       // the remainder as absent.
       limit: chunk.length,
@@ -128,11 +134,73 @@ async function idsReturnedBy(
       ...scoped,
     });
     for (const item of result.items ?? []) {
-      const id = (item as { id?: unknown }).id;
-      if (typeof id === "string") found.add(id);
+      const document = item;
+      if (typeof document.id === "string") found.set(document.id, document);
     }
   }
   return found;
+}
+
+/** The ids among `entryIds` that `collection` returns for the given read. */
+async function idsReturnedBy(
+  collection: string,
+  entryIds: readonly string[],
+  locale: string | null | undefined,
+  access: { overrideAccess: boolean; caller?: ReadCaller }
+): Promise<Set<string>> {
+  return new Set(
+    (await documentsReturnedBy(collection, entryIds, locale, access)).keys()
+  );
+}
+
+/**
+ * The status of each of `entryIds` this caller may read, as the ordinary read
+ * path returns it: `"published"`, `"draft"`, or whatever else the collection
+ * stores. A document the caller may not read, or one that is gone, is absent,
+ * and so is the status of a collection with no lifecycle.
+ *
+ * Derived from the same read as {@link readableDocumentIds}, so a document
+ * this says something about is exactly one that read would call readable.
+ */
+export async function readableDocumentStatuses(
+  collection: string,
+  entryIds: readonly string[],
+  caller: ReadCaller,
+  locale?: string | null
+): Promise<Map<string, string>> {
+  const documents = await documentsReturnedBy(
+    collection,
+    entryIds,
+    locale,
+    { overrideAccess: false, caller },
+    ["status"]
+  );
+  const statuses = new Map<string, string>();
+  for (const [id, document] of documents) {
+    if (typeof document.status === "string") statuses.set(id, document.status);
+  }
+  return statuses;
+}
+
+/**
+ * A Single's status as this caller reads it in `locale`, or `undefined` when
+ * it records none. A refused read throws, as the Singles read path does.
+ *
+ * Asked only for a Single already known to exist: the Singles read path
+ * creates a missing Single, so asking it about one that might not exist would
+ * make reading a label perform a write. The same identity as every read here.
+ */
+export async function readableSingleStatus(
+  slug: string,
+  caller: ReadCaller,
+  locale?: string | null
+): Promise<string | undefined> {
+  const document = (await requireNextly().findSingle({
+    slug,
+    select: { status: true },
+    ...identityOptions(locale, { overrideAccess: false, caller }),
+  })) as { status?: unknown } | null;
+  return typeof document?.status === "string" ? document.status : undefined;
 }
 
 /**

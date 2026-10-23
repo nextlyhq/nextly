@@ -22,7 +22,11 @@ export default defineConfig({
   // `.js` and `.d.ts`, the names the exports map already publishes.
   fixedExtension: false,
   // Declarations without a type check: `check-types` is the type check.
-  dts: { sourcemap: false, compilerOptions: { noCheck: true } },
+  // oxc writes the declarations from the source's own annotations
+  // (`isolatedDeclarations` in tsconfig.json). Named rather than left to the
+  // plugin's choice, which picks `tsc` (or `tsgo` under TypeScript 7) without
+  // saying so when the flag is off.
+  dts: { generator: "oxc", sourcemap: false },
   clean: true,
   sourcemap: true,
   minify: false,

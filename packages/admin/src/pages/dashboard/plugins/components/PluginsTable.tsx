@@ -1,7 +1,7 @@
 "use client";
 
 import { Badge, Button } from "@nextlyhq/ui";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type JSX } from "react";
 
 import { PluginIcon } from "@admin/components/shared/plugin-icon";
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
@@ -36,7 +36,11 @@ const ALWAYS_VISIBLE = new Set(["name"]);
  * config, so the admin reports it rather than offering a toggle that the next
  * deploy would silently revert.
  */
-export function PluginStatusPill({ enabled }: { enabled: boolean }) {
+export function PluginStatusPill({
+  enabled,
+}: {
+  enabled: boolean;
+}): JSX.Element {
   return (
     <Badge
       variant="outline"
@@ -66,7 +70,7 @@ export function PluginStatusPill({ enabled }: { enabled: boolean }) {
  * page. Plugins are installed and updated through npm + the Nextly config, so
  * the table exposes no mutation actions.
  */
-export default function PluginsTable() {
+export default function PluginsTable(): JSX.Element {
   // Read through the provider rather than a second query of its own. The
   // plugin list is served by the session-gated route, and a duplicate reader
   // pointed at the public one shares the same cache key while asking a

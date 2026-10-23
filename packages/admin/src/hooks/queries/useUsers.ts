@@ -6,6 +6,8 @@ import {
   useQuery,
   useQueryClient,
   type UseQueryOptions,
+  type UseMutationResult,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 
 import {
@@ -16,6 +18,7 @@ import {
   updateUser,
   type CreatedUser,
 } from "@admin/services/userApi";
+import type { UseBulkMutationReturn } from "@admin/types/hooks/bulk-mutation";
 import type {
   User,
   UserApiResponse,
@@ -113,7 +116,7 @@ export function useUsers(
     UseQueryOptions<ListResponse<UserApiResponse>, Error>,
     "queryKey" | "queryFn"
   >
-) {
+): UseQueryResult<ListResponse<UserApiResponse>, Error> {
   return useQuery<ListResponse<UserApiResponse>, Error>({
     queryKey: ["users", params],
     queryFn: async () => {
@@ -163,7 +166,7 @@ export function useUsers(
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useQuery
  */
-export function useUser(userId?: string) {
+export function useUser(userId?: string): UseQueryResult<User, Error> {
   return useQuery<User, Error>({
     queryKey: ["users", userId],
     queryFn: async () => {
@@ -226,7 +229,12 @@ export function useUser(userId?: string) {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  */
-export function useCreateUser() {
+export function useCreateUser(): UseMutationResult<
+  CreatedUser,
+  Error,
+  CreateUserPayload,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<CreatedUser, Error, CreateUserPayload>({
@@ -298,7 +306,17 @@ export function useCreateUser() {
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  * @see https://tanstack.com/query/v5/docs/react/guides/optimistic-updates
  */
-export function useUpdateUser() {
+export function useUpdateUser(): UseMutationResult<
+  void,
+  Error,
+  {
+    userId: string;
+    updates: Partial<User>;
+  },
+  {
+    previousUser: unknown;
+  }
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -393,7 +411,12 @@ export function useUpdateUser() {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  */
-export function useDeleteUser() {
+export function useDeleteUser(): UseMutationResult<
+  void,
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<void, Error, string>({
@@ -475,7 +498,12 @@ export function useDeleteUser() {
  * @see {@link useBulkMutation} - Generic bulk mutation hook
  * @see {@link useBulkAssignRole} - Specialized hook for role assignment
  */
-export function useBulkUpdateUsers() {
+export function useBulkUpdateUsers(): UseBulkMutationReturn<
+  string,
+  void,
+  Error,
+  Partial<User>
+> {
   const queryClient = useQueryClient();
 
   return useBulkMutation<string, void, Error, Partial<User>>({
@@ -581,7 +609,12 @@ export function useBulkUpdateUsers() {
  * @see {@link useBulkMutation} - Generic bulk mutation hook
  * @see {@link useDeleteUser} - Single user deletion hook
  */
-export function useBulkDeleteUsers() {
+export function useBulkDeleteUsers(): UseBulkMutationReturn<
+  string,
+  void,
+  Error,
+  void
+> {
   const queryClient = useQueryClient();
 
   return useBulkMutation<string, void, Error, void>({
@@ -708,7 +741,14 @@ export function useBulkDeleteUsers() {
  * @see {@link useBulkMutation} - Generic bulk mutation hook
  * @see {@link useBulkUpdateUsers} - General-purpose bulk update hook
  */
-export function useBulkAssignRole() {
+export function useBulkAssignRole(): UseBulkMutationReturn<
+  string,
+  void,
+  Error,
+  {
+    roleId: string;
+  }
+> {
   const queryClient = useQueryClient();
 
   return useBulkMutation<string, void, Error, { roleId: string }>({

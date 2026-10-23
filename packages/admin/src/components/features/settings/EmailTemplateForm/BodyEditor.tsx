@@ -22,22 +22,16 @@
  * `useVariableInsertion`, which owns that rule.
  */
 import type { EditorView } from "@codemirror/view";
-import type { JSX } from "react";
-import { Suspense, lazy } from "react";
+import { useState, type JSX } from "react";
 import { useFormState, type useForm } from "react-hook-form";
 
 import { FormField } from "@admin/components/ui/form";
 
+import { LazyLiquidEditor } from "./liquid/LazyLiquidEditor";
+import type { CompletionData } from "./liquid/liquid-completion";
+import type { LiquidProblem } from "./liquid/liquid-problems";
 import type { TemplateFormValues } from "./schema";
 import { Segmented } from "./Segmented";
-
-// CodeMirror reaches for browser globals on import, so it loads on demand
-// rather than during SSR.
-const CodeMirrorEditor = lazy(() =>
-  import(
-    "@admin/components/features/entries/fields/text/CodeMirrorEditor"
-  ).then(m => ({ default: m.CodeMirrorEditor }))
-);
 
 /**
  * Why a save was refused, for the two body fields.
@@ -75,27 +69,58 @@ function BodyRefusal({
   );
 }
 
+/**
+ * Each problem in the body, by line, under the editor: the marker in the text
+ * says where, and this says what, without hovering for it.
+ */
+function ProblemList({ problems }: { problems: LiquidProblem[] }) {
+  if (problems.length === 0) return null;
+  return (
+    <div
+      role="alert"
+      data-testid="body-problems"
+      className="shrink-0 border-t border-destructive bg-destructive/5 px-3 py-2 text-xs"
+    >
+      {problems.map(problem => (
+        <p
+          key={`${problem.from}:${problem.message}`}
+          className="text-destructive"
+        >
+          <span className="font-mono">Line {problem.line}</span>{" "}
+          {problem.message}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 export function BodyEditor({
   control,
   editorTab,
   onEditorTabChange,
   isPending,
-  editorWrapRef,
-  htmlEditorViewRef,
+  bodyViewRef,
   chips,
   readOnly,
+  completion,
+  liquid,
 }: {
   control: ReturnType<typeof useForm<TemplateFormValues>>["control"];
   editorTab: "html" | "text";
   onEditorTabChange: (tab: "html" | "text") => void;
   isPending: boolean;
-  editorWrapRef: React.RefObject<HTMLDivElement | null>;
-  htmlEditorViewRef: React.RefObject<EditorView | null>;
+  /** The mounted body editor, either tab's: where a variable is inserted. */
+  bodyViewRef: React.RefObject<EditorView | null>;
   /** The variable chips, rendered beside the tab toggle. */
   chips?: React.ReactNode;
   /** The bodies are the owner's until the site overrides them. */
   readOnly: boolean;
+  /** What the editor completes: the template's variables and test data. */
+  completion: CompletionData;
+  /** False for a template kept on the previous engine, sent without Liquid. */
+  liquid: boolean;
 }): JSX.Element {
+  const [problems, setProblems] = useState<LiquidProblem[]>([]);
   return (
     <>
       {/* Bounded and scrollable. The strip is `shrink-0` and the editor is the
@@ -132,63 +157,43 @@ export function BodyEditor({
         <div className="shrink-0 border-b border-border pb-2" />
       )}
       {/* Editor body */}
-      <div
-        ref={editorWrapRef}
-        className="html-code-editor min-h-0 flex-1 overflow-auto bg-background"
-      >
-        {editorTab === "html" ? (
-          <FormField
-            // Distinct key so React mounts a fresh Controller per tab.
-            // Without it, one Controller's `name` would flip between
-            // htmlContent/plainTextContent on toggle and react-hook-form
-            // leaks/blanks the values after repeated switches.
-            key="editor-html"
-            control={control}
-            name="htmlContent"
-            render={({ field }) => (
-              <Suspense
-                fallback={
-                  <div className="h-full w-full animate-pulse bg-muted/30" />
-                }
-              >
-                <CodeMirrorEditor
-                  value={field.value ?? ""}
-                  onChange={val => {
-                    if (!isPending) field.onChange(val);
-                  }}
-                  onCreateEditor={view => {
-                    htmlEditorViewRef.current = view;
-                  }}
-                  language="html"
-                  disabled={isPending}
-                  readOnly={readOnly}
-                  minHeight={380}
-                  editorOptions={{ tabSize: 2 }}
-                  placeholder={
-                    "<h1>Hello {{userName}}</h1>\n<p>Welcome to {{appName}}.</p>"
-                  }
-                />
-              </Suspense>
-            )}
-          />
-        ) : (
-          <FormField
-            key="editor-text"
-            control={control}
-            name="plainTextContent"
-            render={({ field }) => (
-              <textarea
-                {...field}
-                value={field.value ?? ""}
-                disabled={isPending}
-                readOnly={readOnly}
-                placeholder="Plain-text fallback sent alongside the HTML…"
-                className="h-full w-full resize-none bg-background p-3.5 font-mono text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
-              />
-            )}
-          />
-        )}
+      <div className="min-h-0 flex-1 overflow-auto bg-background p-2">
+        <FormField
+          // Distinct key so React mounts a fresh Controller per tab. Without
+          // it, one Controller's `name` would flip between htmlContent and
+          // plainTextContent on toggle, and react-hook-form leaks or blanks the
+          // values after repeated switches.
+          key={editorTab === "html" ? "editor-html" : "editor-text"}
+          control={control}
+          name={editorTab === "html" ? "htmlContent" : "plainTextContent"}
+          render={({ field }) => (
+            <LazyLiquidEditor
+              mode={editorTab}
+              label={editorTab === "html" ? "HTML body" : "Plain text body"}
+              value={field.value ?? ""}
+              onChange={value => {
+                if (!isPending) field.onChange(value);
+              }}
+              onCreateEditor={view => {
+                bodyViewRef.current = view;
+                // So a refused save can put the author in the body.
+                field.ref({ focus: () => view.focus() });
+              }}
+              onProblems={setProblems}
+              readOnly={readOnly}
+              disabled={isPending}
+              completion={completion}
+              liquid={liquid}
+              placeholder={
+                editorTab === "html"
+                  ? "<h1>Hello {{userName}}</h1>\n<p>Welcome to {{appName}}.</p>"
+                  : "The plain-text version sent beside the HTML…"
+              }
+            />
+          )}
+        />
       </div>
+      <ProblemList problems={problems} />
     </>
   );
 }

@@ -17,6 +17,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type JSX,
 } from "react";
 
 import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
@@ -35,7 +36,7 @@ interface RestartContextValue {
 
 const RestartContext = createContext<RestartContextValue | null>(null);
 
-export function useRestart() {
+export function useRestart(): RestartContextValue {
   const ctx = useContext(RestartContext);
   if (!ctx) {
     throw new Error("useRestart must be used within RestartProvider");
@@ -51,7 +52,11 @@ export function useRestart() {
 // visually but short enough not to feel sluggish.
 const MIN_OVERLAY_DISPLAY_MS = 800;
 
-export function RestartProvider({ children }: { children: ReactNode }) {
+export function RestartProvider({
+  children,
+}: {
+  children: ReactNode;
+}): JSX.Element {
   const [isRestarting, setIsRestarting] = useState(false);
   const [statusMessage, setStatusMessage] = useState("Applying schema changes");
   const [statusDetail, setStatusDetail] = useState(
