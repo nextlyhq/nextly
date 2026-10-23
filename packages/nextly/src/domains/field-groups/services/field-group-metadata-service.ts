@@ -381,6 +381,20 @@ export class FieldGroupMetadataService {
     // turns a silent wrong result into an actionable error.
     await this.assertNoUnappliableSchemaChange({ existing, fields, localized });
 
+    // A field leaving, joining or replaced in translation has preconditions of its own, asked by
+    // the same preflight as the collection and Single settings saves, before the companion changes.
+    // The check above judges only fields that render a companion column, so a translated field
+    // replaced by a nested field group (which renders none) passes it, and the companion reconcile
+    // would then drop the removed field's column with every language's value.
+    if (input.fields !== undefined && (wasLocalized || localized)) {
+      await this.assertFieldsMayLeaveTranslation({
+        existing,
+        fields,
+        wasLocalized,
+        localized,
+      });
+    }
+
     // 2. MOVE the physical schema, when this edit implies one. A `localized` toggle alone does:
     // enabling seeds the companion from the main table and drops those columns, disabling restores
     // and archives them. A save that skipped that would persist the flag while the content stayed
@@ -757,6 +771,42 @@ export class FieldGroupMetadataService {
         slug: args.existing.slug,
         fields: names,
       },
+    });
+  }
+
+  /**
+   * The first step of a field leaving translation (`archiveFieldsLeavingTranslation`) for a
+   * settings save, which has no schema dialog to answer a rename: the preflight decides by the
+   * main table's rule and refuses what it must, before the companion changes. Nothing is asked
+   * with no adapter, as nothing moves then.
+   */
+  private async assertFieldsMayLeaveTranslation(args: {
+    existing: DynamicFieldGroupRecord;
+    fields: FieldDefinition[];
+    wasLocalized: boolean;
+    localized: boolean;
+  }): Promise<void> {
+    const adapter = this.adapter;
+    if (!adapter) return;
+    // Imported when needed, as this service does for its other collaborators. The same default
+    // locale the companion reconcile reads.
+    const [{ archiveFieldsLeavingTranslation }, { getConfigFromDI }] =
+      await Promise.all([
+        import("../../i18n/migration/archive-preflight"),
+        import("../../../dispatcher/helpers/di"),
+      ]);
+    await archiveFieldsLeavingTranslation({
+      // A field group's own table, which decides the column bounds compared.
+      builtBy: "fieldGroup",
+      tableName: args.existing.tableName,
+      defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+      adapter,
+      entity: args.existing.slug,
+      kind: "fieldGroup",
+      oldFields: (args.existing.fields ?? []) as unknown as FieldDefinition[],
+      newFields: args.fields,
+      wasLocalized: args.wasLocalized,
+      isLocalized: args.localized,
     });
   }
 
