@@ -21,6 +21,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { executeWidgetQuery } from "../../../domains/widgets/execute";
+import type { WidgetResult } from "../../../domains/widgets/result";
 import { readActivitySingles } from "../activity-singles";
 import { ACTIVITY_SOURCE_ID } from "../activity-widget-source";
 import {
@@ -169,6 +170,10 @@ async function feed(
   });
 }
 
+/** The rows a widget answer holds; none when it is not a list, which the test then reports. */
+const listRows = (answer: WidgetResult) =>
+  answer.op === "list" ? answer.items : [];
+
 const as = (person: { id: string }): ReadCaller => ({
   user: { id: person.id, roles: [] },
 });
@@ -268,10 +273,12 @@ describe.each(getConfiguredTestDialects())(
       await written(t, at(1), () => logSave(t, BEN, NOTES, note));
 
       for (const reader of [as(ANA), as(BOSS)]) {
-        const card = (await executeWidgetQuery(
-          { source: ACTIVITY_SOURCE_ID, op: "list", limit: 10 },
-          reader
-        )) as { items: { id: string; count: number }[] };
+        const card = listRows(
+          await executeWidgetQuery(
+            { source: ACTIVITY_SOURCE_ID, op: "list", limit: 10 },
+            reader
+          )
+        );
         const endpoint = await t
           .getService("activityLogService")
           .getRecentActivity({
@@ -280,16 +287,18 @@ describe.each(getConfiguredTestDialects())(
             caller: reader,
             singles: await readActivitySingles(),
           });
-        expect(card.items.map(row => [row.id, row.count])).toEqual(
+        expect(card.map(row => [row.id, row.count])).toEqual(
           endpoint.activities.map(row => [row.id, row.count])
         );
       }
       // The must-differ half: the two readers really are shown different feeds.
-      const forAna = (await executeWidgetQuery(
-        { source: ACTIVITY_SOURCE_ID, op: "list", limit: 10 },
-        as(ANA)
-      )) as { items: { entryId: string }[] };
-      expect(forAna.items.map(row => row.entryId)).toEqual([note, note]);
+      const forAna = listRows(
+        await executeWidgetQuery(
+          { source: ACTIVITY_SOURCE_ID, op: "list", limit: 10 },
+          as(ANA)
+        )
+      );
+      expect(forAna.map(row => row.entryId)).toEqual([note, note]);
     });
 
     it("lists status only when it changed, so a plain save of a live entry joins and an unpublish does not", async () => {
