@@ -19,7 +19,10 @@ import {
 } from "drizzle-orm/mysql-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { buildWhereClause } from "../../../domains/collections/query/query-operators";
+import {
+  buildWhereClause,
+  type WhereFilter,
+} from "../../../domains/collections/query/query-operators";
 import { buildDesiredTableFromFields } from "../../../domains/schema/pipeline/diff/build-from-fields";
 import { emitDdl } from "../../../domains/schema/pipeline/ddl-emitter";
 import { buildDrizzleCondition } from "../drizzle-condition";
@@ -41,7 +44,7 @@ type Conn = {
 let connection: Conn | undefined;
 
 /** How many probe rows a filter selects at a session zone. */
-async function countAt(zone: string, where: Record<string, unknown>) {
+async function countAt(zone: string, where: WhereFilter) {
   if (!connection) throw new Error("no connection");
   const condition = buildDrizzleCondition(buildWhereClause(where), table);
   if (!condition) throw new Error("the filter compiled to no condition");
