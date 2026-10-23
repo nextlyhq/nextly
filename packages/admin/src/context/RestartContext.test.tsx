@@ -8,6 +8,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { CURRENT_USER_CAPABILITIES_KEY } from "@admin/hooks/current-user-access";
+
 import { RestartProvider, useRestart } from "./RestartContext";
 
 // Minimal wrapper: RestartProvider uses useQueryClient for cache invalidation.
@@ -80,5 +82,32 @@ describe("RestartContext minimum display time", () => {
     });
     // Min display already satisfied, should flip immediately.
     expect(result.current.isRestarting).toBe(false);
+  });
+});
+
+describe("RestartContext after an apply", () => {
+  it("asks again what the user may do with each collection and Single", () => {
+    // A collection just created is missing from that answer, and filtered out
+    // of the navigation, until it is asked again.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const { result } = renderHook(() => useRestart(), {
+      wrapper: ({ children }: { children: React.ReactNode }) => (
+        <QueryClientProvider client={queryClient}>
+          <RestartProvider>{children}</RestartProvider>
+        </QueryClientProvider>
+      ),
+    });
+
+    act(() => {
+      result.current.startRestart();
+      result.current.stopRestart(true, "done");
+    });
+
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: CURRENT_USER_CAPABILITIES_KEY,
+    });
   });
 });
