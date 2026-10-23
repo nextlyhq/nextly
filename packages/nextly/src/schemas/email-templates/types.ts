@@ -11,6 +11,10 @@
  */
 
 import type { EmailAttachmentInput } from "../../domains/email/types";
+import type {
+  TemplateFormat,
+  WrittenDocument,
+} from "../../domains/email/written/document";
 
 // ============================================================
 // Email Template Variable Type
@@ -195,6 +199,22 @@ export interface EmailTemplateInsert {
    * template they own; a site may write one for its own.
    */
   description?: string | null;
+
+  /**
+   * Whether the template is written (blocks) or coded (HTML); coded when
+   * unset. A written template's `htmlContent` and `plainTextContent` are
+   * written from its blocks, never edited directly.
+   *
+   * @experimental
+   */
+  format?: TemplateFormat | null;
+
+  /**
+   * A written template's blocks; absent for a coded one.
+   *
+   * @experimental
+   */
+  blocks?: WrittenDocument | null;
 }
 
 // ============================================================
@@ -274,6 +294,12 @@ export interface EmailTemplateRecord extends EmailTemplateInsert {
 
   /** Row kind (required on record). */
   kind: EmailTemplateKind;
+
+  /** Written or coded (required on record); a row stored before written templates is coded. */
+  format: TemplateFormat;
+
+  /** A written template's blocks (required on record, null for a coded one). */
+  blocks: WrittenDocument | null;
 
   /** Wrapping layout id (required on record, nullable). */
   layoutId: string | null;
