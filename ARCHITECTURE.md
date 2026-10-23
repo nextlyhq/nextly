@@ -50,7 +50,8 @@ packages/
 ├── storage-uploadthing │
 ├── create-nextly-app   scaffolding CLI (consumes /templates)
 ├── telemetry           anonymous CLI telemetry (private)
-└── eslint-config, prettier-config, tsconfig   shared tooling (private)
+├── prettier-config, tsconfig                  shared tooling (private)
+└── eslint-config       empty placeholder until the alpha pre-release ends
 apps/playground         contributor dev harness
 templates/              base, blank, blog, plugin (scaffolded into user apps)
 e2e/                    Playwright suite (boots its own playground on :3100)
