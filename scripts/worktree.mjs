@@ -25,17 +25,19 @@
  * scarce, and slots are a small pool. The same goes for what a checkout causes
  * to be allocated elsewhere: `remove` also takes the base snapshot fallow's
  * audit keeps for the checkout, and `sweep` takes any whose checkout is gone.
+ * `sweep` also reports what idle checkouts hold that could go, and removes it
+ * only with `--apply` (`worktree-sweep.mjs` says what, and what it never does).
  *
  * Usage:
  *   node scripts/worktree.mjs new <branch> [--from <ref>] [--root <dir>]
- *   node scripts/worktree.mjs list
+ *   node scripts/worktree.mjs list [--sizes]
  *   node scripts/worktree.mjs remove <branch|path> [--keep-branch] [--force]
  *   node scripts/worktree.mjs provision
- *   node scripts/worktree.mjs sweep
+ *   node scripts/worktree.mjs sweep [--builds] [--stale] [--apply]
  *   node scripts/worktree.mjs env [--slot <n>]
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync,
   linkSync,
@@ -51,6 +53,22 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import {
+  IDLE_DAYS,
+  answeringPorts,
+  buildOutputIn,
+  diskUsage,
+  errorText,
+  formatBytes,
+  heldCwds,
+  inUseReasons,
+  lastActivity,
+  logRemoval,
+  moveAsideAndRemove,
+  processCwds,
+  staleReasons,
+} from "./worktree-sweep.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -178,6 +196,12 @@ export function worktreeRecords(porcelain) {
       records.push(current);
     } else if (line.startsWith("branch ") && current) {
       current.branch = line.slice("branch ".length).replace(/^refs\/heads\//, "");
+    } else if (current && (line === "locked" || line.startsWith("locked "))) {
+      // Set only when present, so a record reads as before for every caller
+      // that never asks. `sweep` never removes a locked or prunable checkout.
+      current.locked = true;
+    } else if (current && (line === "prunable" || line.startsWith("prunable "))) {
+      current.prunable = true;
     }
   }
   return records;
@@ -894,11 +918,240 @@ function commandProvision() {
   }
 }
 
-/** Clear what outlived its checkout: fallow base snapshots, and slots whose databases survived removal. */
-function commandSweep() {
+/**
+ * Clear what outlived its checkout: fallow base snapshots, and slots whose
+ * databases survived removal. Then report what idle live checkouts hold that
+ * could go, removing it only with `--apply`. Exits 1 while something it set
+ * out to remove is left.
+ */
+async function commandSweep(options) {
   const unremoved = sweepSnapshots();
   const stuck = releaseReservedSlots(claimDir(commonDir()));
-  if (unremoved > 0 || stuck > 0) process.exit(1);
+  const failed = await reclaimIdle(options);
+  if (unremoved > 0 || stuck > 0 || failed > 0) process.exit(1);
+}
+
+/**
+ * The idle fallow snapshots of live checkouts, and with `--stale` and
+ * `--builds` the stale checkouts and the build output of idle ones, in that
+ * order: removing a stale checkout frees its builds too, so build output is
+ * not offered for one already on its way out. Each candidate passes the
+ * in-use gate or is skipped with its reasons. The primary checkout and the one
+ * this runs in are never offered as stale or for their builds. Returns how
+ * many removals failed.
+ */
+async function reclaimIdle(options) {
+  const context = sweepContext();
+  const words = SWEEP_WORDS[String(options.apply)];
+  const tally = { freed: 0, failed: 0 };
+  console.log(words.header);
+  for (const kind of SWEEP_KINDS.filter(entry => entry.always || options[entry.flag])) {
+    reportKind(kind, await kind.candidates(context), options.apply, tally, context.common);
+  }
+  console.log(`${words.freed} ${formatBytes(tally.freed)} in all`);
+  printSweepHint(options);
+  return tally.failed;
+}
+
+const SWEEP_WORDS = {
+  true: { header: "worktree sweep --apply: removing what no one is using", freed: "freed" },
+  false: { header: "worktree sweep: a report — nothing below is removed; --apply removes it", freed: "would free" },
+};
+
+const SWEEP_KINDS = [
+  {
+    always: true,
+    title: `fallow base snapshots of live checkouts, idle ${IDLE_DAYS.snapshot}+ d`,
+    log: "snapshot",
+    candidates: snapshotCandidates,
+    remove: candidate => removedQuietly(() => removeSnapshot(candidate.snapshot)),
+  },
+  {
+    flag: "stale",
+    title: `stale checkouts, idle ${IDLE_DAYS.stale}+ d (--stale)`,
+    log: "checkout",
+    candidates: staleCandidates,
+    remove: candidate => removedThroughRemove(candidate.path),
+  },
+  {
+    flag: "builds",
+    title: `build output in checkouts idle ${IDLE_DAYS.builds}+ d (--builds)`,
+    log: "build",
+    candidates: buildCandidates,
+    remove: candidate => moveAsideAndRemove(candidate.path),
+  },
+];
+
+function printSweepHint({ builds, stale }) {
+  if (!stale || !builds) console.log("  --stale and --builds add stale checkouts and idle build output to this");
+}
+
+/**
+ * What every kind reads once per run: the checkouts, the snapshots, and the
+ * in-use gate. A process that starts after these were read is a race the
+ * trash rename and `worktree remove`'s own refusal still stand behind.
+ */
+function sweepContext() {
+  const records = worktreeRecords(git(["worktree", "list", "--porcelain"]));
+  const common = commonDir();
+  const facts = { processCwds: processCwds(), heldCwds: heldCwds(), now: Date.now() };
+  return {
+    records,
+    common,
+    others: records.slice(1).filter(record => resolve(record.path) !== root),
+    known: fallowSnapshots(fallowTempDir()),
+    gate: inUseGate(readClaims(claimDir(common)), facts),
+    leaving: new Set(),
+  };
+}
+
+/** The gate for one checkout, asking its slot's ports when it holds a slot. */
+function inUseGate(claims, facts) {
+  return async (checkout, idleDays, lastActive) => {
+    const claim = claims.find(entry => resolve(entry.path) === resolve(checkout));
+    const answering = claim ? await answeringPorts(Object.values(portsFor(claim.slot))) : [];
+    return inUseReasons(checkout, { ...facts, answering, lastActive, idleDays });
+  };
+}
+
+async function snapshotCandidates({ records, known, gate }) {
+  const candidates = [];
+  for (const record of records) {
+    for (const snapshot of snapshotsOwnedBy(known, record.path)) {
+      const reasons = await gate(record.path, IDLE_DAYS.snapshot, snapshotUsedAt(snapshot));
+      candidates.push({ path: snapshot.path, what: `of ${record.path}`, snapshot, reasons });
+    }
+  }
+  return candidates;
+}
+
+/** When fallow last used a snapshot: its owner record and its ready marker move then. */
+function snapshotUsedAt(snapshot) {
+  return Math.max(...[".last-used", ".sha"].map(suffix => modifiedTime(`${snapshot.path}${suffix}`)));
+}
+
+async function staleCandidates(context) {
+  const candidates = [];
+  for (const record of context.others) {
+    // Read before anything else runs git there.
+    const lastActive = lastActivity(record.path);
+    const reasons = [
+      ...recordReasons(record),
+      ...staleReasons(record.path),
+      ...(await context.gate(record.path, IDLE_DAYS.stale, lastActive)),
+    ];
+    if (reasons.length === 0) context.leaving.add(record.path);
+    candidates.push({ path: record.path, reasons });
+  }
+  return candidates;
+}
+
+function recordReasons(record) {
+  return [
+    record.locked && "it is locked",
+    record.prunable && "git reports it prunable; `git worktree prune` is the tool for that",
+  ].filter(Boolean);
+}
+
+async function buildCandidates(context) {
+  const candidates = [];
+  for (const record of context.others.filter(entry => !context.leaving.has(entry.path))) {
+    candidates.push(...(await buildCandidatesIn(record, context.gate)));
+  }
+  return candidates;
+}
+
+/** One checkout's build output; a checkout in use is one line, not one per directory it holds. */
+async function buildCandidatesIn(record, gate) {
+  const lastActive = lastActivity(record.path);
+  const found = listedBuildOutput(record.path);
+  if (found === null) return [{ path: record.path, reasons: ["cannot list its ignored files"] }];
+  if (found.length === 0) return [];
+  const reasons = await gate(record.path, IDLE_DAYS.builds, lastActive);
+  if (reasons.length > 0) return [{ path: record.path, what: `${found.length} build output dir(s)`, reasons }];
+  return found.map(relative => ({ path: join(record.path, relative), reasons }));
+}
+
+function listedBuildOutput(checkout) {
+  try {
+    return buildOutputIn(checkout);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Print one kind's candidates, and with `apply` remove the ones the gate let
+ * through. Sizes come from one `du` run per kind, taken before anything goes.
+ */
+function reportKind(kind, candidates, apply, tally, common) {
+  console.log(`${kind.title}:`);
+  if (candidates.length === 0) return console.log("  none");
+  const sizes = diskUsage(candidates.filter(isFree).map(candidate => candidate.path));
+  for (const candidate of candidates) {
+    settle(candidate, sizes.get(candidate.path), { apply, tally, kind, common });
+  }
+}
+
+function isFree(candidate) {
+  return candidate.reasons.length === 0;
+}
+
+function settle(candidate, bytes, run) {
+  if (!isFree(candidate)) return console.log(`  skipped ${candidate.path}${aside(candidate)}: ${candidate.reasons.join("; ")}`);
+  if (!run.apply) return offer(candidate, bytes, run.tally);
+  return removeOne(candidate, bytes, run);
+}
+
+function aside(candidate) {
+  return candidate.what ? ` (${candidate.what})` : "";
+}
+
+function offer(candidate, bytes, tally) {
+  tally.freed += bytes ?? 0;
+  console.log(`  would remove ${candidate.path} (${formatBytes(bytes)})${aside(candidate)}`);
+}
+
+function removeOne(candidate, bytes, { tally, kind, common }) {
+  const outcome = kind.remove(candidate);
+  if (!outcome.removed) {
+    tally.failed += 1;
+    return console.log(`  NOT removed ${candidate.path}: ${outcome.reason}`);
+  }
+  logRemoval(common, kind.log, candidate.path, bytes);
+  tally.freed += bytes ?? 0;
+  console.log(`  removed ${candidate.path} (${formatBytes(bytes)})`);
+}
+
+function modifiedTime(path) {
+  try {
+    return lstatSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+function removedQuietly(act) {
+  try {
+    act();
+    return { removed: true };
+  } catch (error) {
+    return { removed: false, reason: errorText(error) };
+  }
+}
+
+/**
+ * Remove a stale checkout through `worktree remove` itself, never `--force`:
+ * git's refusal to remove a dirty checkout is what protects uncommitted work,
+ * and the slot, databases and snapshot are given back as for any removal. Its
+ * report goes straight to this run's output.
+ */
+function removedThroughRemove(checkout) {
+  const run = spawnSync(process.execPath, [fileURLToPath(import.meta.url), "remove", checkout], {
+    cwd: root,
+    stdio: ["ignore", "inherit", "inherit"],
+  });
+  return run.status === 0 ? { removed: true } : { removed: false, reason: "`worktree remove` refused it" };
 }
 
 /**
@@ -944,22 +1197,30 @@ function stillReserved(dir, claim, drop) {
   return false;
 }
 
-function commandList() {
+/**
+ * Every checkout and the slot it holds; with `--sizes`, the disk each one
+ * takes, from one `du` run so a file hard-linked into several checkouts (as
+ * pnpm links its store) is counted once, under the first listed.
+ */
+function commandList({ sizes }) {
   const records = worktreeRecords(git(["worktree", "list", "--porcelain"]));
   const dir = claimDir(commonDir());
   const claims = readClaims(dir);
+  const usage = sizes ? diskUsage(records.map(record => record.path)) : null;
   for (const record of records) {
     const claim = claims.find(entry => resolve(entry.path) === resolve(record.path));
     const slot = claim?.slot ?? 0;
     const env = slotEnv(slot);
+    const size = usage ? `${formatBytes(usage.get(record.path)).padStart(12)}  ` : "";
     console.log(
       `slot ${String(slot).padEnd(3)} ${PORT_NAMES.map(n => env[n]).join("/")}  ` +
-        `${databaseFor(slot).padEnd(18)} ${record.branch ?? "(detached)"}  ${record.path}`
+        `${databaseFor(slot).padEnd(18)} ${size}${record.branch ?? "(detached)"}  ${record.path}`
     );
   }
   for (const claim of claims.filter(c => c.pendingCleanup)) {
     console.log(`slot ${String(claim.slot).padEnd(3)} RESERVED — databases from ${claim.path} were never dropped`);
   }
+  if (usage) console.log("sizes count a file hard-linked into several checkouts once, under the first listed");
 }
 
 function main() {
@@ -988,9 +1249,15 @@ function main() {
       force: rest.includes("--force"),
     });
   }
-  if (command === "list") return commandList();
+  if (command === "list") return commandList({ sizes: rest.includes("--sizes") });
   if (command === "provision") return commandProvision();
-  if (command === "sweep") return commandSweep();
+  if (command === "sweep") {
+    return commandSweep({
+      apply: rest.includes("--apply"),
+      builds: rest.includes("--builds"),
+      stale: rest.includes("--stale"),
+    });
+  }
   if (command === "env") {
     // `flag` returns null when the option is absent and undefined when it is
     // present with nothing after it, and those mean different things here: no

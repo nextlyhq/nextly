@@ -18,10 +18,11 @@ per-checkout.
 
 ```
 pnpm worktree new <branch> [--from <ref>]   # create, claim a slot, report it
-pnpm worktree list                          # who holds which slot
+pnpm worktree list [--sizes]                # who holds which slot, and the disk each checkout takes
 pnpm worktree remove <branch|path>          # give the slot, ports, databases and fallow snapshot back
 pnpm worktree provision                     # create this slot's databases, after docker start
-pnpm worktree sweep                         # clear slots and fallow snapshots that outlived their checkout
+pnpm worktree sweep [--stale] [--builds]    # clear what outlived its checkout; REPORT what idle ones could free
+pnpm worktree sweep --stale --builds --apply # remove what that report offered
 pnpm worktree env --slot <n>                # the exports, for a plain shell
 ```
 
@@ -83,6 +84,17 @@ If a removal cannot drop its databases, the slot is RESERVED rather than
 released, and `pnpm worktree list` says so. Reissuing it would hand the next
 checkout another run's fixed-name system tables. `pnpm worktree sweep` drops
 them and releases the slot once the containers are back.
+
+**`sweep` only reports what idle checkouts hold until you pass `--apply`.** It
+offers three kinds: the fallow base snapshot of a live checkout idle a day,
+build output (`dist`, `.next*`, `.turbo`, coverage, test reports) in a checkout
+idle three days (`--builds`), and a whole checkout idle seven days whose work is
+all on a remote or already in `main` (`--stale`; a squash-merged branch counts,
+by comparing trees). Each is skipped, with the reason printed, when a process
+runs inside the checkout, a heavy job holds a slot there, its slot's port
+answers, or any of those cannot be read. A stale checkout goes through
+`worktree remove` without `--force`, so uncommitted work stays. Every removal is
+logged to `nextly-sweep.log` in the git common directory.
 
 `NEXTLY_TEST_DB` carries a database NAME, never a URL: Postgres 15 is on 5434
 and Postgres 17 on 5435, so a single `TEST_POSTGRES_URL` in the environment
