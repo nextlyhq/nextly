@@ -23,6 +23,10 @@ const { version: coreVersion } = require("./package.json") as {
  * - spies, stubbed globals or environment, and fake timers, which outlive the
  *   file unless it restores them;
  * - writes to `process.env` or to a global;
+ * - a call to a `reset…` or `clear…` function other than Vitest's own: what it
+ *   empties is state another file in the worker may depend on, as when a file
+ *   cleared the release-check registry a shared helper had filled at import
+ *   and the next file's releases found no checks registered;
  * - a real SQLite database.
  *
  * Read from each file's source when the config loads, so a file that starts
@@ -34,6 +38,7 @@ const LEAVES_STATE = new RegExp(
     String.raw`process\.env(?:\.\w+|\[[^\]]+\])\s*(?:=(?!=)|\?\?=|\|\|=)`,
     String.raw`\bdelete\s+process\.env\b`,
     String.raw`\b(?:globalThis|global|window)(?:\.\w+|\[[^\]]+\])\s*=(?!=)`,
+    String.raw`(?<!vi\.)\b(?:reset|clear)[A-Z]\w*\(`,
     String.raw`better-sqlite3|createTestNextly|:memory:`,
   ].join("|")
 );
@@ -52,7 +57,52 @@ function filesThatLeaveState(): string[] {
     );
 }
 
-const isolatedFiles = filesThatLeaveState();
+/**
+ * Unit files that leave one of nextly's global singletons holding more than
+ * they found, named by the singleton they fill. Nothing in their source says so
+ * where the pattern above can see it: they fill a registry through the code
+ * under test. `shared-module-guards.ts` is what finds them. It fails a shared
+ * file whose run grows a singleton, so a new one is either reset by its tests
+ * or listed here.
+ */
+const FILLS_GLOBAL_SINGLETONS = [
+  // __nextlyFieldFunctionRegistry
+  "src/auth/principal-scope.test.ts",
+  // __nextly_container
+  "src/di/registrations/__tests__/register-users-boot.test.ts",
+  "src/domains/media/__tests__/revalidate-media.test.ts",
+  // __nextly_emailProviderRegistry
+  "src/domains/email/__tests__/built-in-descriptors.test.ts",
+  "src/domains/email/__tests__/is-configured.test.ts",
+  "src/domains/email/__tests__/provider-callback-failures.test.ts",
+  // __nextly_eventBus
+  "src/domains/media/__tests__/media-events.test.ts",
+  // __nextly_pluginRouteRegistry
+  "src/plugins/routes/route-registry.test.ts",
+  // __nextly_pluginSubscriptions
+  "src/hooks/__tests__/hook-registry-provenance.test.ts",
+  // __nextly_systemResolvers, __nextly_widgetDeferredEntities, __nextly_widget_sources, __nextly_widgets
+  "src/di/__tests__/register-widgets.test.ts",
+  // __nextly_systemResolvers, __nextly_widget_sources, __nextly_widgets
+  "src/__tests__/init.test.ts",
+  // __nextly_webhookRecordingPolicy
+  "src/domains/collections/__tests__/collection-registry-service.localized-persist.test.ts",
+  "src/domains/collections/__tests__/collection-registry-service.status-persist.test.ts",
+  "src/domains/dynamic-collections/services/__tests__/dynamic-collection-registry-service.status-persist.test.ts",
+  "src/domains/singles/__tests__/single-registry-service.test.ts",
+  // __nextly_widget_sources
+  "src/domains/widgets/__tests__/built-in-sources.test.ts",
+  "src/domains/widgets/__tests__/query-limits.test.ts",
+  "src/domains/widgets/__tests__/query.test.ts",
+  // __nextly_widgets
+  "src/domains/widgets/__tests__/canonical.test.ts",
+  "src/domains/widgets/__tests__/dismissible.test.ts",
+  "src/domains/widgets/__tests__/publish.test.ts",
+];
+
+const isolatedFiles = [
+  ...new Set([...filesThatLeaveState(), ...FILLS_GLOBAL_SINGLETONS]),
+];
 
 export default defineConfig({
   plugins: [tsconfigPaths()],
