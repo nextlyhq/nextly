@@ -8,7 +8,7 @@
 // to drop the cached runtime Drizzle schema so the next loadDynamicSchema
 // rebuilds against the freshly-written `dynamic_collections.fields` JSON.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
@@ -125,5 +125,26 @@ describe("CollectionFileManager.invalidateSchemaForSlug", () => {
       /not found in registry/
     );
     expect(await fm.loadDynamicSchema("event")).toEqual({ __marker: "event" });
+  });
+});
+
+describe("CollectionFileManager.loadDynamicSchema on a registry hit", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // Every query against a collection resolves its schema here, so a hit has to
+  // stay silent: one line per call is thousands of lines per request burst.
+  it("returns the registered schema without writing to the console", async () => {
+    const fm = makeFileManager();
+    fm.registerSchemas({ dc_job: { __marker: "job" } });
+    const spies = (["debug", "info", "log", "warn", "error"] as const).map(
+      level => vi.spyOn(console, level).mockImplementation(() => undefined)
+    );
+
+    expect(await fm.loadDynamicSchema("job")).toEqual({ __marker: "job" });
+    expect(await fm.loadDynamicSchema("job")).toEqual({ __marker: "job" });
+
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
   });
 });
