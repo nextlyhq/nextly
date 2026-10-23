@@ -317,8 +317,13 @@ describe("when the Release job runs", () => {
     const outputs = outputsOf(step, known, pending).map(([name, value]) => [`${at}.outputs.${name}`, runs ? value : ""]);
     return Object.fromEntries([[`${at}.outcome`, runs ? "success" : "skipped"], ...outputs]);
   };
-  const stepsRun = (event, { pending }) => {
-    const known = { "github.event_name": event, "github.event.head_commit.message": event === "push" ? "chore: version packages (alpha) (#2600)" : null };
+  const stepsRun = (event, { pending, publish = null }) => {
+    const known = {
+      "github.event_name": event,
+      "github.event.head_commit.message": event === "push" ? "chore: version packages (alpha) (#2600)" : null,
+      // A push carries no inputs, so the context reads null there.
+      "inputs.publish": event === "workflow_dispatch" ? publish ?? false : null,
+    };
     expect(decide(release, known), event).toBe("true");
     return job.steps.filter(step => {
       const runs = decide(String(step.if ?? ""), known) === "true";
@@ -349,6 +354,20 @@ describe("when the Release job runs", () => {
     expect(ran.some(publishesDirectly)).toBe(false);
     expect(ran.some(verifies)).toBe(true);
     expect(ran.some(finalizes)).toBe(true);
+  });
+
+  it("on a dispatch asked to publish, publishes the current manifests directly with changesets pending, then verifies and finalizes", () => {
+    // The recovery path after a partial publish: the action would version
+    // the pending changesets instead, and the failed version would never finish.
+    const ran = stepsRun("workflow_dispatch", { pending: true, publish: true });
+    expect(ran.some(publishesDirectly)).toBe(true);
+    expect(ran.some(isChangesetsAction)).toBe(false);
+    expect(ran.some(verifies)).toBe(true);
+    expect(ran.some(finalizes)).toBe(true);
+  });
+
+  it("offers that publish as a dispatch input that is off unless chosen", () => {
+    expect(triggersOf(workflow).workflow_dispatch?.inputs?.publish).toMatchObject({ type: "boolean", default: false });
   });
 
   it("publishes on a push with the environment the action publishes with", () => {

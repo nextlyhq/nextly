@@ -20,10 +20,21 @@ name: Release
 # wait for the next release. Left to `changesets/action`, those changesets
 # would send the run down its versioning path, and the merged version would
 # never publish.
+#
+# A dispatch with "publish" ticked skips the action and publishes the current
+# manifests directly, changesets pending or not. That is the recovery path
+# after a partial publish whose fix needed a commit: a plain dispatch would
+# send the action down its versioning path whenever any changeset is pending,
+# and the failed version would never finish.
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the current manifests now, even with changesets pending (recovery after a partial publish)"
+        type: boolean
+        default: false
 
 # No workflow-level `concurrency`: every run enters a workflow-level group,
 # including each ordinary push to `main` whose job then skips, and entering it
@@ -89,7 +100,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          # .nvmrc pins 24.21.0, whose bundled npm is 11.19.0. Nothing in this
+          # .nvmrc pins the Node release this job runs, and the npm bundled
+          # with it is whatever that release ships. Nothing in this
           # job upgrades npm any more, and re-adding such a step would be cargo
           # cult: `pnpm publish` has been implemented natively since pnpm 11 and
           # no longer delegates to the npm CLI, so the npm on PATH is not what
@@ -142,10 +154,11 @@ jobs:
 
       # A dispatch: the action versions pending changesets into the Version
       # Packages pull request, or publishes when none are pending, which is
-      # the path for publishing a version whose merge push did not.
+      # the path for publishing a version whose merge push did not. A dispatch
+      # with "publish" ticked takes the direct publish below instead.
       - name: Create Release PR or Publish
         id: changesets
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
         with:
           # Run when no changesets are pending. Builds then publishes.
@@ -180,9 +193,14 @@ jobs:
       # registry login is the setup-node .npmrc and the job's OIDC token, as
       # for the action. The action's `published` outputs are not read
       # anywhere in this job.
-      - name: Publish the Version Packages merge
+      #
+      # A dispatch with "publish" ticked runs this step too, for the same
+      # reason: it publishes what the manifests on `main` declare, whatever
+      # changesets are pending. `inputs` is empty on a push, so there the
+      # event alone decides.
+      - name: Publish the current manifests
         id: publish
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || inputs.publish
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
           TURBO_CACHE_DIR: .turbo
