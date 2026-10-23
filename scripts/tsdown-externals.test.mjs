@@ -74,9 +74,12 @@ async function ownSourceKeptOut(config) {
   return {
     asked: predicates.map(({ where }) => where),
     external: predicates.flatMap(({ predicate, importerFile, where }) => {
-      const [importer] = ownSourceIds(config.pkg, importerFile);
+      // Each id is asked with the importer spelled for the same platform, as
+      // rolldown asks there, so a predicate that reads its importer is asked
+      // the pair it would really see.
+      const importers = ownSourceIds(config.pkg, importerFile);
       return ownSourceIds(config.pkg, "layout/RootLayout.tsx")
-        .filter(id => predicate(id, importer, true))
+        .filter((id, platform) => predicate(id, importers[platform], true))
         .map(id => `${where}: ${id}`);
     }),
   };
