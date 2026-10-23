@@ -3043,7 +3043,12 @@ export class SingleMutationService extends BaseService {
               await keepDeniedFieldGroupsInDraft({
                 draft: pending,
                 replaces,
-                names: Object.keys(attemptComponentFields),
+                // The field groups the save wrote, and the containers it
+                // wrote whole, which can hold field groups inline.
+                names: [
+                  ...Object.keys(attemptComponentFields),
+                  ...suppliedFieldNames,
+                ],
                 fields: fieldConfigs,
                 fieldGroupFields: { get: componentResolver },
                 access: {

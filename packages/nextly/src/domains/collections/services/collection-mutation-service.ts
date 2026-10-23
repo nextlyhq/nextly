@@ -7687,7 +7687,12 @@ export class CollectionMutationService extends BaseService {
     await keepDeniedFieldGroupsInDraft({
       draft: draftDocument,
       replaces,
-      names: Object.keys(ctx.componentFieldData ?? {}),
+      // The field groups the save wrote, and the containers it wrote whole,
+      // which can hold field groups inline.
+      names: [
+        ...Object.keys(ctx.componentFieldData ?? {}),
+        ...Object.keys(ctx.updatePayload),
+      ],
       fields: ctx.fields as unknown as FieldConfig[],
       fieldGroupFields: {
         get: slug => splitComponentSchemas?.get(slug)?.fields,
