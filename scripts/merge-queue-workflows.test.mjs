@@ -249,6 +249,254 @@ describe("Integration on request", () => {
   });
 });
 
+describe("when the Release job runs", () => {
+  /*
+   * A push to `main` runs it only for the Version Packages merge, the moment to
+   * publish; a dispatch from `main` runs it on demand, versioning pending
+   * changesets into that pull request or publishing when none are pending.
+   * Release health then skips the runs where Release itself skipped. Each
+   * condition is evaluated for the events it meets, not read by spelling.
+   */
+  const decide = (condition, known) =>
+    String(evaluate(conditionTokens(condition), condition, { "github.repository": "nextlyhq/nextly", "github.ref": "refs/heads/main", ...known }));
+  const workflow = read(".github/workflows/release.yml");
+  const job = workflow.jobs.release;
+  const release = job.if;
+  const health = read(".github/workflows/release-health.yml").jobs.finalized.if;
+
+  it("runs on the Version Packages merge, stable or pre-release", () => {
+    for (const message of ["chore: version packages (#2400)", "chore: version packages (alpha) (#2295)"]) {
+      expect(decide(release, { "github.event_name": "push", "github.event.head_commit.message": message }), message).toBe("true");
+    }
+  });
+
+  it("skips every other push to main, and runs on a dispatch", () => {
+    expect(decide(release, { "github.event_name": "push", "github.event.head_commit.message": "fix(nextly): type the send-test error (#2563)" })).toBe("false");
+    expect(decide(release, { "github.event_name": "workflow_dispatch", "github.event.head_commit.message": "" })).toBe("true");
+  });
+
+  it("runs a dispatch only from main, since the job publishes whatever ref it checks out", () => {
+    for (const ref of ["refs/heads/feature/try-a-release", "refs/tags/v0.0.2-alpha.66"]) {
+      expect(decide(release, { "github.event_name": "workflow_dispatch", "github.ref": ref }), ref).toBe("false");
+    }
+    expect(decide(release, { "github.event_name": "workflow_dispatch", "github.ref": "refs/heads/main" })).toBe("true");
+  });
+
+  it("never runs in a fork", () => {
+    expect(decide(release, { "github.repository": "someone/nextly", "github.event_name": "workflow_dispatch" })).toBe("false");
+  });
+
+  it("queues releases on the job, so a push whose job skips never displaces a waiting release", () => {
+    // A workflow-level group is entered by every run, skipped job or not.
+    expect(workflow.concurrency).toBeUndefined();
+    expect(job.concurrency).toMatchObject({ group: expect.stringMatching(/\S/), "cancel-in-progress": false, queue: "max" });
+  });
+
+  /*
+   * Which of the job's steps a run takes, in order. Each step's `if:` is
+   * evaluated with what the steps before it left: its outcome, the
+   * `hasChangesets` the Changesets action reports (`pending`, on a run that
+   * reaches it), and each `name=$VAR` a run step writes to `$GITHUB_OUTPUT`,
+   * valued from that step's `env:`. A skipped step leaves empty outputs.
+   */
+  const valueOf = (template, known) =>
+    String(template).replace(/\$\{\{([\s\S]*?)\}\}/g, (_, expression) => decide(expression, known));
+  const isChangesetsAction = step => String(step.uses).startsWith("changesets/action@");
+  const publishesDirectly = step => String(step.run).includes("pnpm release:publish");
+  const verifies = step => String(step.run).includes("pnpm release:verify");
+  const finalizes = step => String(step.run).includes("gh release create");
+  const OUTPUT_LINE = /([\w-]+)=\$\{?(\w+)\}?"?\s*>>\s*"?\$GITHUB_OUTPUT/g;
+  /** The outputs a step sets when it runs, by lowercased name. */
+  const outputsOf = (step, known, pending) => [
+    ...(isChangesetsAction(step) ? [["haschangesets", String(pending)]] : []),
+    ...[...String(step.run ?? "").matchAll(OUTPUT_LINE)].map(([, name, variable]) => [name.toLowerCase(), valueOf(step.env?.[variable], known)]),
+  ];
+  /** What a step leaves for the steps after it, under its id: its outcome, and its outputs, empty when it was skipped. */
+  const leftBy = (step, runs, known, pending) => {
+    const at = `steps.${step.id.toLowerCase()}`;
+    const outputs = outputsOf(step, known, pending).map(([name, value]) => [`${at}.outputs.${name}`, runs ? value : ""]);
+    return Object.fromEntries([[`${at}.outcome`, runs ? "success" : "skipped"], ...outputs]);
+  };
+  const stepsRun = (event, { pending, publish = null }) => {
+    const known = {
+      "github.event_name": event,
+      "github.event.head_commit.message": event === "push" ? "chore: version packages (alpha) (#2600)" : null,
+      // A push carries no inputs, so the context reads null there.
+      "inputs.publish": event === "workflow_dispatch" ? publish ?? false : null,
+    };
+    expect(decide(release, known), event).toBe("true");
+    return job.steps.filter(step => {
+      const runs = decide(String(step.if ?? ""), known) === "true";
+      if (step.id) Object.assign(known, leftBy(step, runs, known, pending));
+      return runs;
+    });
+  };
+
+  it("publishes the Version Packages merge whatever changesets landed after it, then verifies and finalizes it", () => {
+    const ran = stepsRun("push", { pending: true });
+    expect(ran.some(publishesDirectly)).toBe(true);
+    expect(ran.some(isChangesetsAction)).toBe(false);
+    expect(ran.some(verifies)).toBe(true);
+    expect(ran.some(finalizes)).toBe(true);
+  });
+
+  it("on a dispatch with changesets pending, versions them and neither publishes nor finalizes", () => {
+    const ran = stepsRun("workflow_dispatch", { pending: true });
+    expect(ran.some(isChangesetsAction)).toBe(true);
+    expect(ran.some(publishesDirectly)).toBe(false);
+    expect(ran.some(verifies)).toBe(false);
+    expect(ran.some(finalizes)).toBe(false);
+  });
+
+  it("on a dispatch with none pending, publishes through the action, then verifies and finalizes", () => {
+    const ran = stepsRun("workflow_dispatch", { pending: false });
+    expect(ran.some(isChangesetsAction)).toBe(true);
+    expect(ran.some(publishesDirectly)).toBe(false);
+    expect(ran.some(verifies)).toBe(true);
+    expect(ran.some(finalizes)).toBe(true);
+  });
+
+  it("on a dispatch asked to publish, publishes the current manifests directly with changesets pending, then verifies and finalizes", () => {
+    // The recovery path after a partial publish: the action would version
+    // the pending changesets instead, and the failed version would never finish.
+    const ran = stepsRun("workflow_dispatch", { pending: true, publish: true });
+    expect(ran.some(publishesDirectly)).toBe(true);
+    expect(ran.some(isChangesetsAction)).toBe(false);
+    expect(ran.some(verifies)).toBe(true);
+    expect(ran.some(finalizes)).toBe(true);
+  });
+
+  it("offers that publish as a dispatch input that is off unless chosen", () => {
+    expect(triggersOf(workflow).workflow_dispatch?.inputs?.publish).toMatchObject({ type: "boolean", default: false });
+  });
+
+  it("publishes on a push with the environment the action publishes with", () => {
+    const direct = job.steps.find(publishesDirectly);
+    const action = job.steps.find(isChangesetsAction);
+    expect(direct?.env).toEqual(action.env);
+    expect(String(direct?.run)).toContain(action.with.publish);
+  });
+
+  /*
+   * A Release run whose only job skipped concludes `success`, as a skipped job
+   * reports success, so Release health tells the runs apart by what started
+   * them: every value below is one a real `workflow_run` payload carries,
+   * conclusion included.
+   */
+  const releaseRun = ({ event = "push", branch = "main", message = "fix(nextly): type the send-test error (#2563)" } = {}) => ({
+    "github.event_name": "workflow_run",
+    "github.event.workflow_run.conclusion": "success",
+    "github.event.workflow_run.event": event,
+    "github.event.workflow_run.head_branch": branch,
+    "github.event.workflow_run.head_commit.message": message,
+  });
+
+  it("runs Release health after a Release run that released, or was dispatched, from main", () => {
+    expect(decide(health, releaseRun({ message: "chore: version packages (alpha) (#2600)" }))).toBe("true");
+    expect(decide(health, releaseRun({ event: "workflow_dispatch", message: "fix(nextly): anything (#1)" }))).toBe("true");
+  });
+
+  it("skips Release health after an ordinary push, whose skipped job still concludes success", () => {
+    expect(decide(health, releaseRun())).toBe("false");
+  });
+
+  it("skips Release health after a dispatch from another ref", () => {
+    for (const branch of ["feature/try-a-release", "v0.0.2-alpha.66"]) {
+      expect(decide(health, releaseRun({ event: "workflow_dispatch", branch })), branch).toBe("false");
+    }
+  });
+
+  it("runs Release health on its schedule and on its own dispatch, and never in a fork", () => {
+    expect(decide(health, { "github.event_name": "schedule" })).toBe("true");
+    expect(decide(health, { "github.event_name": "workflow_dispatch" })).toBe("true");
+    expect(decide(health, { ...releaseRun({ event: "workflow_dispatch" }), "github.repository": "someone/nextly" })).toBe("false");
+  });
+});
+
+describe("a Version Packages pull request that went stale", () => {
+  /*
+   * A public package added to `main` after that pull request was last
+   * refreshed keeps its old version while every other package takes the next
+   * one, and the merge's publish would then refuse the release. The queue's
+   * run checks the combined tree, so the check there keeps it from merging.
+   */
+  const steps = read(".github/workflows/ci.yml").jobs.ci.steps;
+  const step = steps.find(candidate => /\bnode scripts\/release\/check-lockstep\.mjs\b/.test(String(candidate.run)));
+
+  it("checks every pull request's and every queued group's packages share one version", () => {
+    expect(step, "a ci step runs check-lockstep.mjs").toBeDefined();
+    expect(String(step.if)).not.toMatch(/event_name/);
+  });
+});
+
+describe("Turborepo's shared remote cache", () => {
+  /*
+   * Only `main`'s pushes and the merge queue write to it: every later run
+   * starts from what they built, and a pull request's own build must not
+   * become an entry another pull request replays. TURBO_CACHE asks for that,
+   * but the code under test could ask otherwise, so the credentials are
+   * secrets of an environment GitHub admits only those refs to. Each
+   * expression is evaluated for the events it meets, not read by spelling.
+   */
+  const valueOf = (template, known) => {
+    const expression = String(template);
+    return evaluate(conditionTokens(expression), expression, known);
+  };
+  const MAIN = { "github.event_name": "push", "github.ref": "refs/heads/main" };
+  const QUEUE = { "github.event_name": "merge_group", "github.ref": "refs/heads/gh-readonly-queue/main/pr-1-abc" };
+  const PULL = { "github.event_name": "pull_request", "github.ref": "refs/pull/1/merge" };
+  const DISPATCH = { "github.event_name": "workflow_dispatch", "github.ref": "refs/heads/main" };
+  const SECRETS = { "secrets.turbo_token": "t", "secrets.turbo_remote_cache_signature_key": "k".repeat(64) };
+  const CREDENTIAL = /\bsecrets\.TURBO_(TOKEN|REMOTE_CACHE_SIGNATURE_KEY)\b/;
+
+  for (const path of [".github/workflows/ci.yml", ".github/workflows/integration.yml"]) {
+    const workflow = read(path);
+    const holders = Object.entries(workflow.jobs).filter(([, job]) => CREDENTIAL.test(JSON.stringify(job.env ?? {})));
+
+    it(`${path}: main and the queue write, every other run only reads`, () => {
+      expect(valueOf(workflow.env.TURBO_CACHE, MAIN)).toBe("local:rw,remote:rw");
+      expect(valueOf(workflow.env.TURBO_CACHE, QUEUE)).toBe("local:rw,remote:rw");
+      expect(valueOf(workflow.env.TURBO_CACHE, PULL)).toBe("local:rw,remote:r");
+      expect(valueOf(workflow.env.TURBO_CACHE, DISPATCH)).toBe("local:rw,remote:r");
+    });
+
+    it(`${path}: reads the credentials only inside jobs, never at the workflow level`, () => {
+      expect(JSON.stringify(workflow.env ?? {})).not.toMatch(CREDENTIAL);
+      expect(holders.length, "jobs that hold the cache credentials").toBeGreaterThan(0);
+    });
+
+    it(`${path}: every job holding them names the write environment only on main and in the queue`, () => {
+      for (const [name, job] of holders) {
+        expect(job.environment, name).toMatchObject({ deployment: false });
+        expect(valueOf(job.environment.name, MAIN), name).toBe("turbo-cache");
+        expect(valueOf(job.environment.name, QUEUE), name).toBe("turbo-cache");
+        expect(valueOf(job.environment.name, PULL), name).toBe("turbo-cache-read");
+        expect(valueOf(job.environment.name, DISPATCH), name).toBe("turbo-cache-read");
+      }
+    });
+
+    it(`${path}: hands turbo the token only with a signing key beside it`, () => {
+      for (const [name, job] of holders) {
+        expect(valueOf(job.env.TURBO_TOKEN, { ...MAIN, ...SECRETS }), name).toBe("t");
+        expect(valueOf(job.env.TURBO_TOKEN, { ...MAIN, ...SECRETS, "secrets.turbo_remote_cache_signature_key": "" }), name).toBe("");
+      }
+    });
+  }
+
+  it("signs every artifact", () => {
+    const config = load(
+      readFileSync(new URL("../turbo.jsonc", import.meta.url), "utf8")
+        .replace(/^\s*\/\/.*$/gm, "")
+        .replace(/\s\/\/ .*$/gm, "")
+    );
+    expect(config.remoteCache).toMatchObject({ signature: true });
+  });
+
+  it("is never used by a release, which builds what it publishes from its own checkout", () => {
+    expect(readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8")).not.toMatch(/TURBO_(TOKEN|TEAM|API)\b/);
+  });
+});
+
 describe("a dispatched run and the push run of one commit", () => {
   /*
    * main-catch-up.yml dispatches CI and Integration on a commit whose push run
@@ -1130,9 +1378,9 @@ describe("who owns what the required checks run", () => {
   it("owns every manifest, task graph, and test, compiler, lint and build configuration in the repository", () => {
     const definitions = trackedFiles().filter(path => LANE_DEFINITIONS.test(path));
     // The control: the walk finds the repository's manifests and configurations, not nothing,
-    // and a Rollup configuration by its name alone, as `rollup -c` finds one without being told.
+    // and a tsdown configuration by its name alone, as `tsdown` finds one without being told.
     expect(definitions.length).toBeGreaterThan(50);
-    expect(definitions).toContain("packages/nextly/rollup.dts.config.ts");
+    expect(definitions).toContain("packages/nextly/tsdown.config.ts");
     // And every Next.js configuration, wherever it sits: the playground's,
     // which the required build builds, and each template's.
     expect(definitions).toEqual(expect.arrayContaining(["apps/playground/next.config.ts", "templates/base/next.config.ts", "templates/plugin/dev/next.config.ts"]));
@@ -1170,7 +1418,7 @@ describe("who owns what the required checks run", () => {
     const tracked = new Set(files);
     const run = files.filter(path => WORKSPACE_MANIFEST.test(path)).flatMap(manifest => filesTasksRun(manifest, tracked, tasks));
     // The control: the build steps a package runs from its own directory, directly and through `pnpm run`.
-    expect(run).toEqual(expect.arrayContaining(["packages/nextly/scripts/postbuild.cjs", "packages/nextly/rollup.dts.config.ts", "packages/ui/scripts/check-server-safe-artifacts.ts"]));
+    expect(run).toEqual(expect.arrayContaining(["packages/nextly/scripts/postbuild.cjs", "packages/ui/scripts/check-server-safe-artifacts.ts"]));
     for (const path of new Set(run)) expect(ownersOf(rules, path), path).not.toEqual([]);
   });
 
@@ -1429,7 +1677,7 @@ function ownersOf(rules, path) {
 }
 
 /** Manifests, task graphs, and the test, compiler, lint and build configuration the lanes run with. */
-const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|tsup|rollup)[^/]*\.config\.[^/]+)$/;
+const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|tsdown|rollup)[^/]*\.config\.[^/]+)$/;
 
 /** A workspace package's manifest, whose scripts Turbo runs. */
 const WORKSPACE_MANIFEST = /^(?:packages|apps)\/[^/]+\/package\.json$|^e2e\/package\.json$/;

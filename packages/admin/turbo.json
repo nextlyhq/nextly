@@ -2,6 +2,21 @@
   "$schema": "https://turbo.build/schema.json",
   "extends": ["//"],
   "tasks": {
+    "build": {
+      // This build compiles Tailwind, which scans source files for class
+      // names, tests and Markdown included. So unlike the shared build inputs,
+      // this hash keeps them: a class used only in a test still lands in the
+      // compiled sheet, and leaving it out would replay a stale sheet.
+      //
+      // The sheet also scans two plugins' admin components, which this
+      // package does not depend on, so their directories are named here.
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".env*",
+        "$TURBO_ROOT$/packages/plugin-form-builder/src/admin/**",
+        "$TURBO_ROOT$/packages/plugin-page-builder/src/admin/**"
+      ]
+    },
     "test": {
       // `build` because the bundle-report suite reads this package's OWN
       // `dist`, and the root task depends on `^build`, which builds
