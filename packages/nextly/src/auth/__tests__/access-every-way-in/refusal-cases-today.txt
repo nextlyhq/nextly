@@ -7,4 +7,5 @@ visitor  401 AUTH_REQUIRED data  | You must be logged in to access this resource
 address limit  429 RATE_LIMIT_EXCEEDED limit  | Too many requests. Please try again later.
 unresolved-address limit  429 RATE_LIMIT_EXCEEDED limit  | Too many requests. Please try again later.
 key budget  429 - data  | Rate limit exceeded for this API key
+auth route limit  429 RATE_LIMIT_EXCEEDED error  | Too many auth requests from this IP. Please try again later.
 plugin route limit  429 RATE_LIMITED error  | Too many requests. Please try again later.
