@@ -798,9 +798,7 @@ describe.each(getConfiguredTestDialects())(
       expect(await compare({ to: en2, locale: "es" })).toBe("compared");
     }, 120_000);
 
-    // Every active language is offered, so history from when the document was translated reads
-    // again in its language, each still put to the document's read in that language.
-    it("reads every active language of a document no longer localized", async () => {
+    it("reads only the default language of a document no longer localized", async () => {
       const t = await boot(dialect);
       const reader = await personHolding(t, ["read-plain"]);
       const created = await t.nextly.create({
@@ -853,18 +851,18 @@ describe.each(getConfiguredTestDialects())(
 
       const versions = await listVersionsForDocument(document);
       expect(new Set(versions.items.map(v => v.locale))).toEqual(
-        new Set([null, "en", "es"])
+        new Set([null, "en"])
       );
       const events = await t.nextly.contentEvents.list({
         subject,
         ...asPerson(reader),
       });
-      expect(events.items.map(e => e.note)).toContain("in Spanish, before");
+      expect(events.items.map(e => e.note)).not.toContain("in Spanish, before");
       expect([
         await outcome(listVersionsForDocument({ ...document, locale: "es" })),
         await outcome(getVersionForDocument({ ...document, versionNo: 2 })),
         await outcome(getVersionForDocument({ ...document, versionNo: 3 })),
-      ]).toEqual(["readable", "readable", "readable"]);
+      ]).toEqual(["refused", "refused", "readable"]);
     }, 120_000);
 
     it("withholds history recorded in a language once the install configures none", async () => {

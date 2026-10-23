@@ -278,26 +278,28 @@ export async function assertHistoryLocalesReadable(
 }
 
 /**
- * The languages a document's history can be asked about: the site's active
- * languages, for a document that is translated and for one that is not.
- *
- * A save of a document that is not translated is recorded under the default
- * language of the moment when it carries field-group content, so once the
- * default moves, its earlier versions are in another of the site's languages.
- * Narrowed to the current default, they vanished from the history while that
- * language was still active. Every active language is therefore offered, which
- * also brings back versions kept from when the document was translated. None
- * is shown on that account alone: each language is still put to the
- * document's read rules (`readableHistoryLocales`), so a rule that refuses a
- * language keeps that language's versions hidden. A language no longer active
- * stays withheld, as a read in it would answer for the default instead.
+ * The languages a document's history can be asked about: the configured ones
+ * for a localized collection or Single, and for one that is not, the default
+ * language alone. An unlocalized document reads the same in every language, so
+ * no other language can be asked about it, and history it holds from when it
+ * was localized stays withheld. The default language stays, because a save of
+ * an unlocalized document can be recorded under it.
  */
-export function historyLanguagesOf(
-  _scopeKind: VersionScopeKind,
-  _slug: string
+export async function historyLanguagesOf(
+  scopeKind: VersionScopeKind,
+  slug: string
 ): Promise<ReadonlySet<string>> {
-  // Kept a promise, as its callers await it.
-  return Promise.resolve(configuredLocales() ?? new Set<string>());
+  const configured = configuredLocales() ?? new Set<string>();
+  const entity = await registryEntityOf(scopeKind, slug);
+  if ((entity as { localized?: boolean } | null)?.localized === true) {
+    return configured;
+  }
+  const defaultLocale = appLocalization()?.defaultLocale ?? null;
+  return new Set(
+    defaultLocale !== null && configured.has(defaultLocale)
+      ? [defaultLocale]
+      : []
+  );
 }
 
 /**
