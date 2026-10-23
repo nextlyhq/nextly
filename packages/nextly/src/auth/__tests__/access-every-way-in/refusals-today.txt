@@ -391,104 +391,104 @@ service custom-role unpublish single-pub user-is-key-maker at direct  403 FORBID
 service custom-role unpublish single-pub user-is-key-maker at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_pub_user_is_key_maker
 service custom-role unpublish single-pub user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service custom-role update collection async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update collection async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update collection async-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_false
 service custom-role update collection async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service custom-role update collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service custom-role update collection async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update collection async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update collection async-throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_throws
 service custom-role update collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service custom-role update collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service custom-role update collection false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update collection false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update collection false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_false
 service custom-role update collection false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service custom-role update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service custom-role update collection other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update collection other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update collection other-operation at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_other_operation
 service custom-role update collection other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service custom-role update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service custom-role update collection principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update collection principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update collection principal-kind at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_principal_kind
 service custom-role update collection principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service custom-role update collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service custom-role update collection returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update collection returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update collection returns-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_false
 service custom-role update collection returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service custom-role update collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service custom-role update collection returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update collection returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update collection returns-null at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_null
 service custom-role update collection returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service custom-role update collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service custom-role update collection returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update collection returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update collection returns-undefined at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_undefined
 service custom-role update collection returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service custom-role update collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service custom-role update collection role-name at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update collection role-name at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update collection role-name at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_role_name
 service custom-role update collection role-name at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service custom-role update collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service custom-role update collection throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update collection throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update collection throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_throws
 service custom-role update collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service custom-role update collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service custom-role update collection user-is-key-maker at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update collection user-is-key-maker at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update collection user-is-key-maker at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_user_is_key_maker
 service custom-role update collection user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service custom-role update providers none at rest  403 - data  | You do not have the required permissions to access this resource
 service custom-role update providers none at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update single async-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service custom-role update single async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update single async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update single async-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_false
 service custom-role update single async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update single async-throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service custom-role update single async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update single async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update single async-throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_throws
 service custom-role update single async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update single false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service custom-role update single false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update single false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update single false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_false
 service custom-role update single false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update single other-operation at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service custom-role update single other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update single other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update single other-operation at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_other_operation
 service custom-role update single other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update single principal-kind at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service custom-role update single principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update single principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update single principal-kind at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_principal_kind
 service custom-role update single principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update single returns-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service custom-role update single returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update single returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update single returns-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_false
 service custom-role update single returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update single returns-null at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service custom-role update single returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update single returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update single returns-null at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_null
 service custom-role update single returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update single returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service custom-role update single returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update single returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update single returns-undefined at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_undefined
 service custom-role update single returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update single role-name at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service custom-role update single role-name at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update single role-name at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update single role-name at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_role_name
 service custom-role update single role-name at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update single throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service custom-role update single throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update single throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update single throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_throws
 service custom-role update single throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update single user-is-key-maker at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service custom-role update single user-is-key-maker at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service custom-role update single user-is-key-maker at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service custom-role update single user-is-key-maker at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_user_is_key_maker
 service custom-role update single user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role update users none at rest  403 - data NAMES-INTERNALS  | You do not have permission to update users
@@ -804,86 +804,86 @@ service key-full-access unpublish single-pub throws at direct  403 FORBIDDEN thr
 service key-full-access unpublish single-pub throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_pub_throws
 service key-full-access unpublish single-pub throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-full-access update collection async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update collection async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update collection async-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_false
 service key-full-access update collection async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-full-access update collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-full-access update collection async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update collection async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update collection async-throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_throws
 service key-full-access update collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-full-access update collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-full-access update collection false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update collection false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update collection false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_false
 service key-full-access update collection false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-full-access update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-full-access update collection other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update collection other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update collection other-operation at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_other_operation
 service key-full-access update collection other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-full-access update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-full-access update collection principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update collection principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update collection principal-kind at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_principal_kind
 service key-full-access update collection principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-full-access update collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-full-access update collection returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update collection returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update collection returns-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_false
 service key-full-access update collection returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-full-access update collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-full-access update collection returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update collection returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update collection returns-null at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_null
 service key-full-access update collection returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-full-access update collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-full-access update collection returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update collection returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update collection returns-undefined at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_undefined
 service key-full-access update collection returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-full-access update collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-full-access update collection throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update collection throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update collection throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_throws
 service key-full-access update collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-full-access update providers none at rest  403 - data  | You do not have the required permissions to access this resource
 service key-full-access update providers none at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update single async-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-full-access update single async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update single async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update single async-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_false
 service key-full-access update single async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update single async-throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-full-access update single async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update single async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update single async-throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_throws
 service key-full-access update single async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update single false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-full-access update single false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update single false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update single false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_false
 service key-full-access update single false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update single other-operation at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-full-access update single other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update single other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update single other-operation at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_other_operation
 service key-full-access update single other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update single principal-kind at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-full-access update single principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update single principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update single principal-kind at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_principal_kind
 service key-full-access update single principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update single returns-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-full-access update single returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update single returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update single returns-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_false
 service key-full-access update single returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update single returns-null at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-full-access update single returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update single returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update single returns-null at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_null
 service key-full-access update single returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update single returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-full-access update single returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update single returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update single returns-undefined at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_undefined
 service key-full-access update single returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update single throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-full-access update single throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-full-access update single throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-full-access update single throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_throws
 service key-full-access update single throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access update users none at rest  403 - data NAMES-INTERNALS  | You do not have permission to update users
@@ -1365,95 +1365,95 @@ service key-partial unpublish single-pub user-is-key-maker at direct  403 FORBID
 service key-partial unpublish single-pub user-is-key-maker at rest  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial unpublish single-pub user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-partial update collection async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update collection async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update collection async-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_false
 service key-partial update collection async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-partial update collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-partial update collection async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update collection async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update collection async-throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_throws
 service key-partial update collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-partial update collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-partial update collection false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update collection false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update collection false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_false
 service key-partial update collection false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-partial update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-partial update collection other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update collection other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update collection other-operation at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_other_operation
 service key-partial update collection other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-partial update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-partial update collection principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update collection principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update collection principal-kind at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_principal_kind
 service key-partial update collection principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-partial update collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-partial update collection returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update collection returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update collection returns-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_false
 service key-partial update collection returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-partial update collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-partial update collection returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update collection returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update collection returns-null at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_null
 service key-partial update collection returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-partial update collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-partial update collection returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update collection returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update collection returns-undefined at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_undefined
 service key-partial update collection returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-partial update collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-partial update collection role-name at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update collection role-name at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update collection role-name at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_role_name
 service key-partial update collection role-name at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-partial update collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-partial update collection throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update collection throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update collection throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_throws
 service key-partial update collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-partial update providers none at rest  403 - data  | You do not have the required permissions to access this resource
 service key-partial update providers none at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update single async-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-partial update single async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update single async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update single async-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_false
 service key-partial update single async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update single async-throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-partial update single async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update single async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update single async-throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_throws
 service key-partial update single async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update single false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-partial update single false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update single false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update single false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_false
 service key-partial update single false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update single other-operation at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-partial update single other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update single other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update single other-operation at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_other_operation
 service key-partial update single other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update single principal-kind at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-partial update single principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update single principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update single principal-kind at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_principal_kind
 service key-partial update single principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update single returns-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-partial update single returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update single returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update single returns-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_false
 service key-partial update single returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update single returns-null at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-partial update single returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update single returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update single returns-null at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_null
 service key-partial update single returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update single returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-partial update single returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update single returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update single returns-undefined at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_undefined
 service key-partial update single returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update single role-name at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-partial update single role-name at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update single role-name at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update single role-name at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_role_name
 service key-partial update single role-name at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update single throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-partial update single throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-partial update single throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-partial update single throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_throws
 service key-partial update single throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial update users none at rest  403 - data NAMES-INTERNALS  | You do not have permission to update users
@@ -1973,92 +1973,92 @@ service key-read-only unpublish single-pub user-is-key-maker at direct  403 FORB
 service key-read-only unpublish single-pub user-is-key-maker at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_pub_user_is_key_maker
 service key-read-only unpublish single-pub user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection async-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_false
 service key-read-only update collection async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-read-only update collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection async-throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_throws
 service key-read-only update collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-read-only update collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection async-true at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection async-true at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection async-true at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_true
 service key-read-only update collection async-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-read-only update collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_false
 service key-read-only update collection false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-read-only update collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection none at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection none at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection none at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_none
 service key-read-only update collection none at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-read-only update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection other-operation at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_other_operation
 service key-read-only update collection other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-read-only update collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection permission-spelling at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection permission-spelling at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection permission-spelling at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_permission_spelling
 service key-read-only update collection permission-spelling at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-read-only update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection principal-kind at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_principal_kind
 service key-read-only update collection principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-read-only update collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection publish-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection publish-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection publish-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_publish_false
 service key-read-only update collection publish-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-read-only update collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection returns-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_false
 service key-read-only update collection returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-read-only update collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection returns-null at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_null
 service key-read-only update collection returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-read-only update collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection returns-true at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection returns-true at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection returns-true at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_true
 service key-read-only update collection returns-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-read-only update collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection returns-undefined at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_undefined
 service key-read-only update collection returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-read-only update collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection role-name at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection role-name at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection role-name at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_role_name
 service key-read-only update collection role-name at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-read-only update collection role-screen-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection role-screen-spelling at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection role-screen-spelling at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection role-screen-spelling at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_role_screen_spelling
 service key-read-only update collection role-screen-spelling at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection role-screen-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-read-only update collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_throws
 service key-read-only update collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-read-only update collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection true at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection true at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection true at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_true
 service key-read-only update collection true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-read-only update collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-read-only update collection user-is-key-maker at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update collection user-is-key-maker at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update collection user-is-key-maker at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_user_is_key_maker
 service key-read-only update collection user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
@@ -2067,75 +2067,75 @@ service key-read-only update providers none at route  403 FORBIDDEN error  | You
 service key-read-only update roles none at rest  403 - data NAMES-INTERNALS  | You do not have permission to update roles
 service key-read-only update roles none at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single async-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single async-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_false
 service key-read-only update single async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single async-throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single async-throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_throws
 service key-read-only update single async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single async-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single async-true at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single async-true at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single async-true at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_true
 service key-read-only update single async-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_false
 service key-read-only update single false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single none at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single none at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single none at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single none at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_none
 service key-read-only update single none at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single other-operation at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single other-operation at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_other_operation
 service key-read-only update single other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single permission-spelling at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single permission-spelling at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single permission-spelling at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single permission-spelling at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_permission_spelling
 service key-read-only update single permission-spelling at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single principal-kind at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single principal-kind at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_principal_kind
 service key-read-only update single principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single publish-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single publish-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single publish-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single publish-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_publish_false
 service key-read-only update single publish-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single returns-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single returns-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_false
 service key-read-only update single returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single returns-null at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single returns-null at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_null
 service key-read-only update single returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single returns-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single returns-true at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single returns-true at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single returns-true at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_true
 service key-read-only update single returns-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single returns-undefined at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_undefined
 service key-read-only update single returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single role-name at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single role-name at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single role-name at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single role-name at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_role_name
 service key-read-only update single role-name at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single role-screen-spelling at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single role-screen-spelling at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single role-screen-spelling at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single role-screen-spelling at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_role_screen_spelling
 service key-read-only update single role-screen-spelling at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_throws
 service key-read-only update single throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single true at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single true at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single true at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_true
 service key-read-only update single true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update single user-is-key-maker at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-read-only update single user-is-key-maker at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-read-only update single user-is-key-maker at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-read-only update single user-is-key-maker at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_user_is_key_maker
 service key-read-only update single user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only update users none at rest  403 - data NAMES-INTERNALS  | You do not have permission to update users
@@ -2486,95 +2486,95 @@ service key-role-based unpublish single-pub throws at direct  403 FORBIDDEN thro
 service key-role-based unpublish single-pub throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_pub_throws
 service key-role-based unpublish single-pub throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-role-based update collection async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update collection async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update collection async-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_false
 service key-role-based update collection async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-role-based update collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-role-based update collection async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update collection async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update collection async-throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_throws
 service key-role-based update collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-role-based update collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-role-based update collection false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update collection false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update collection false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_false
 service key-role-based update collection false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-role-based update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-role-based update collection other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update collection other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update collection other-operation at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_other_operation
 service key-role-based update collection other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-role-based update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-role-based update collection principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update collection principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update collection principal-kind at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_principal_kind
 service key-role-based update collection principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-role-based update collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-role-based update collection returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update collection returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update collection returns-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_false
 service key-role-based update collection returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-role-based update collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-role-based update collection returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update collection returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update collection returns-null at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_null
 service key-role-based update collection returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-role-based update collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-role-based update collection returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update collection returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update collection returns-undefined at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_undefined
 service key-role-based update collection returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-role-based update collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-role-based update collection role-name at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update collection role-name at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update collection role-name at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_role_name
 service key-role-based update collection role-name at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-role-based update collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-role-based update collection throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update collection throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update collection throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_throws
 service key-role-based update collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-role-based update providers none at rest  403 - data  | You do not have the required permissions to access this resource
 service key-role-based update providers none at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update single async-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-role-based update single async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update single async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update single async-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_false
 service key-role-based update single async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update single async-throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-role-based update single async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update single async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update single async-throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_throws
 service key-role-based update single async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update single false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-role-based update single false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update single false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update single false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_false
 service key-role-based update single false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update single other-operation at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-role-based update single other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update single other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update single other-operation at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_other_operation
 service key-role-based update single other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update single principal-kind at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-role-based update single principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update single principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update single principal-kind at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_principal_kind
 service key-role-based update single principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update single returns-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-role-based update single returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update single returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update single returns-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_false
 service key-role-based update single returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update single returns-null at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-role-based update single returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update single returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update single returns-null at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_null
 service key-role-based update single returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update single returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-role-based update single returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update single returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update single returns-undefined at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_undefined
 service key-role-based update single returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update single role-name at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-role-based update single role-name at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update single role-name at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update single role-name at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_role_name
 service key-role-based update single role-name at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update single throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-role-based update single throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-role-based update single throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-role-based update single throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_throws
 service key-role-based update single throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based update users none at rest  403 - data NAMES-INTERNALS  | You do not have permission to update users
@@ -2954,103 +2954,103 @@ service key-super-admin unpublish single-pub user-is-key-maker at direct  403 FO
 service key-super-admin unpublish single-pub user-is-key-maker at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_pub_user_is_key_maker
 service key-super-admin unpublish single-pub user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-super-admin update collection async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update collection async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update collection async-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_false
 service key-super-admin update collection async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-super-admin update collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-super-admin update collection async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update collection async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update collection async-throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_throws
 service key-super-admin update collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-super-admin update collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-super-admin update collection false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update collection false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update collection false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_false
 service key-super-admin update collection false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-super-admin update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-super-admin update collection other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update collection other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update collection other-operation at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_other_operation
 service key-super-admin update collection other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-super-admin update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-super-admin update collection principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update collection principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update collection principal-kind at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_principal_kind
 service key-super-admin update collection principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-super-admin update collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-super-admin update collection returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update collection returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update collection returns-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_false
 service key-super-admin update collection returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-super-admin update collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-super-admin update collection returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update collection returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update collection returns-null at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_null
 service key-super-admin update collection returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-super-admin update collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-super-admin update collection returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update collection returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update collection returns-undefined at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_undefined
 service key-super-admin update collection returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-super-admin update collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-super-admin update collection role-name at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update collection role-name at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update collection role-name at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_role_name
 service key-super-admin update collection role-name at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-super-admin update collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-super-admin update collection throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update collection throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update collection throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_throws
 service key-super-admin update collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-super-admin update collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service key-super-admin update collection user-is-key-maker at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update collection user-is-key-maker at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update collection user-is-key-maker at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_user_is_key_maker
 service key-super-admin update collection user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service key-super-admin update providers none at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update single async-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-super-admin update single async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update single async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update single async-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_false
 service key-super-admin update single async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update single async-throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-super-admin update single async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update single async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update single async-throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_throws
 service key-super-admin update single async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update single false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-super-admin update single false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update single false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update single false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_false
 service key-super-admin update single false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update single other-operation at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-super-admin update single other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update single other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update single other-operation at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_other_operation
 service key-super-admin update single other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update single principal-kind at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-super-admin update single principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update single principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update single principal-kind at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_principal_kind
 service key-super-admin update single principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update single returns-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-super-admin update single returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update single returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update single returns-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_false
 service key-super-admin update single returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update single returns-null at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-super-admin update single returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update single returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update single returns-null at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_null
 service key-super-admin update single returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update single returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-super-admin update single returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update single returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update single returns-undefined at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_undefined
 service key-super-admin update single returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update single role-name at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-super-admin update single role-name at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update single role-name at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update single role-name at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_role_name
 service key-super-admin update single role-name at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update single throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-super-admin update single throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update single throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update single throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_throws
 service key-super-admin update single throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-super-admin update single user-is-key-maker at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service key-super-admin update single user-is-key-maker at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service key-super-admin update single user-is-key-maker at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service key-super-admin update single user-is-key-maker at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_user_is_key_maker
 service key-super-admin update single user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service principal count collection async-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
@@ -4127,104 +4127,104 @@ service user-partial unpublish single-pub user-is-key-maker at direct  403 FORBI
 service user-partial unpublish single-pub user-is-key-maker at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_pub_user_is_key_maker
 service user-partial unpublish single-pub user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-partial update collection async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update collection async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update collection async-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_false
 service user-partial update collection async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial update collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-partial update collection async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update collection async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update collection async-throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_throws
 service user-partial update collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial update collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-partial update collection false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update collection false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update collection false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_false
 service user-partial update collection false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-partial update collection other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update collection other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update collection other-operation at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_other_operation
 service user-partial update collection other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-partial update collection principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update collection principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update collection principal-kind at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_principal_kind
 service user-partial update collection principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial update collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-partial update collection returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update collection returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update collection returns-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_false
 service user-partial update collection returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial update collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-partial update collection returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update collection returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update collection returns-null at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_null
 service user-partial update collection returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial update collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-partial update collection returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update collection returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update collection returns-undefined at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_undefined
 service user-partial update collection returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial update collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-partial update collection role-name at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update collection role-name at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update collection role-name at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_role_name
 service user-partial update collection role-name at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial update collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-partial update collection throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update collection throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update collection throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_throws
 service user-partial update collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial update collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-partial update collection user-is-key-maker at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update collection user-is-key-maker at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update collection user-is-key-maker at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_user_is_key_maker
 service user-partial update collection user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial update providers none at rest  403 - data  | You do not have the required permissions to access this resource
 service user-partial update providers none at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update single async-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-partial update single async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update single async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update single async-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_false
 service user-partial update single async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update single async-throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-partial update single async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update single async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update single async-throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_throws
 service user-partial update single async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update single false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-partial update single false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update single false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update single false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_false
 service user-partial update single false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update single other-operation at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-partial update single other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update single other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update single other-operation at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_other_operation
 service user-partial update single other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update single principal-kind at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-partial update single principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update single principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update single principal-kind at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_principal_kind
 service user-partial update single principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update single returns-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-partial update single returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update single returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update single returns-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_false
 service user-partial update single returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update single returns-null at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-partial update single returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update single returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update single returns-null at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_null
 service user-partial update single returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update single returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-partial update single returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update single returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update single returns-undefined at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_undefined
 service user-partial update single returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update single role-name at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-partial update single role-name at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update single role-name at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update single role-name at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_role_name
 service user-partial update single role-name at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update single throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-partial update single throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update single throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update single throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_throws
 service user-partial update single throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update single user-is-key-maker at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-partial update single user-is-key-maker at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial update single user-is-key-maker at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-partial update single user-is-key-maker at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_user_is_key_maker
 service user-partial update single user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial update users none at rest  403 - data NAMES-INTERNALS  | You do not have permission to update users
@@ -4540,86 +4540,86 @@ service user-with unpublish single-pub throws at direct  403 FORBIDDEN thrown  |
 service user-with unpublish single-pub throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_pub_throws
 service user-with unpublish single-pub throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-with update collection async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update collection async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update collection async-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_false
 service user-with update collection async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-with update collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-with update collection async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update collection async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update collection async-throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_throws
 service user-with update collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-with update collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-with update collection false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update collection false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update collection false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_false
 service user-with update collection false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-with update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-with update collection other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update collection other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update collection other-operation at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_other_operation
 service user-with update collection other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-with update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-with update collection principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update collection principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update collection principal-kind at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_principal_kind
 service user-with update collection principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-with update collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-with update collection returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update collection returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update collection returns-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_false
 service user-with update collection returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-with update collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-with update collection returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update collection returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update collection returns-null at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_null
 service user-with update collection returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-with update collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-with update collection returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update collection returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update collection returns-undefined at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_undefined
 service user-with update collection returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-with update collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-with update collection throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update collection throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update collection throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_throws
 service user-with update collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-with update providers none at rest  403 - data  | You do not have the required permissions to access this resource
 service user-with update providers none at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update single async-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-with update single async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update single async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update single async-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_false
 service user-with update single async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update single async-throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-with update single async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update single async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update single async-throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_throws
 service user-with update single async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update single false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-with update single false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update single false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update single false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_false
 service user-with update single false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update single other-operation at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-with update single other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update single other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update single other-operation at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_other_operation
 service user-with update single other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update single principal-kind at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-with update single principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update single principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update single principal-kind at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_principal_kind
 service user-with update single principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update single returns-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-with update single returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update single returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update single returns-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_false
 service user-with update single returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update single returns-null at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-with update single returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update single returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update single returns-null at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_null
 service user-with update single returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update single returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-with update single returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update single returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update single returns-undefined at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_undefined
 service user-with update single returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update single throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-with update single throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-with update single throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-with update single throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_throws
 service user-with update single throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with update users none at rest  403 - data NAMES-INTERNALS  | You do not have permission to update users
@@ -5171,77 +5171,77 @@ service user-without unpublish single-pub user-is-key-maker at direct  403 FORBI
 service user-without unpublish single-pub user-is-key-maker at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_pub_user_is_key_maker
 service user-without unpublish single-pub user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-without update collection async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection async-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_false
 service user-without update collection async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-without update collection async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection async-throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_throws
 service user-without update collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-without update collection false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_false
 service user-without update collection false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-without update collection none at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection none at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection none at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_none
 service user-without update collection none at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-without update collection other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection other-operation at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_other_operation
 service user-without update collection other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-without update collection permission-spelling at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection permission-spelling at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection permission-spelling at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_permission_spelling
 service user-without update collection permission-spelling at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-without update collection principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection principal-kind at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_principal_kind
 service user-without update collection principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-without update collection publish-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection publish-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection publish-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_publish_false
 service user-without update collection publish-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-without update collection returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection returns-false at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_false
 service user-without update collection returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-without update collection returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection returns-null at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_null
 service user-without update collection returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-without update collection returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection returns-undefined at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_undefined
 service user-without update collection returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-without update collection role-name at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection role-name at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection role-name at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_role_name
 service user-without update collection role-name at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection role-screen-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-without update collection role-screen-spelling at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection role-screen-spelling at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection role-screen-spelling at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_role_screen_spelling
 service user-without update collection role-screen-spelling at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection role-screen-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-without update collection throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection throws at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_throws
 service user-without update collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
-service user-without update collection user-is-key-maker at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection user-is-key-maker at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection user-is-key-maker at rest  403 - data NAMES-INTERNALS  missing=same  | You do not have permission to update c_user_is_key_maker
 service user-without update collection user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
@@ -5250,63 +5250,63 @@ service user-without update providers none at route  403 FORBIDDEN error  | You 
 service user-without update roles none at rest  403 - data NAMES-INTERNALS  | You do not have permission to update roles
 service user-without update roles none at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single async-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-without update single async-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single async-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single async-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_false
 service user-without update single async-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single async-throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-without update single async-throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single async-throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_async_throws
 service user-without update single async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-without update single false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_false
 service user-without update single false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single none at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-without update single none at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single none at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single none at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_none
 service user-without update single none at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single other-operation at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-without update single other-operation at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single other-operation at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single other-operation at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_other_operation
 service user-without update single other-operation at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single permission-spelling at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-without update single permission-spelling at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single permission-spelling at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single permission-spelling at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_permission_spelling
 service user-without update single permission-spelling at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single principal-kind at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-without update single principal-kind at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single principal-kind at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single principal-kind at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_principal_kind
 service user-without update single principal-kind at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single publish-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-without update single publish-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single publish-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single publish-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_publish_false
 service user-without update single publish-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single returns-false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-without update single returns-false at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single returns-false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single returns-false at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_false
 service user-without update single returns-false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single returns-null at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-without update single returns-null at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single returns-null at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single returns-null at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_null
 service user-without update single returns-null at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-without update single returns-undefined at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single returns-undefined at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_returns_undefined
 service user-without update single returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single role-name at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-without update single role-name at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single role-name at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single role-name at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_role_name
 service user-without update single role-name at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single role-screen-spelling at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-without update single role-screen-spelling at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single role-screen-spelling at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single role-screen-spelling at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_role_screen_spelling
 service user-without update single role-screen-spelling at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-without update single throws at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single throws at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_throws
 service user-without update single throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single user-is-key-maker at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
-service user-without update single user-is-key-maker at lock  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single user-is-key-maker at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single user-is-key-maker at rest  403 - data NAMES-INTERNALS  | You do not have permission to update s_user_is_key_maker
 service user-without update single user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update users none at rest  403 - data NAMES-INTERNALS  | You do not have permission to update users

@@ -195,6 +195,7 @@ export function noteMissingRefusal(answered: Refusal | undefined): void {
   current.missing =
     answered.status === current.status &&
     answered.code === current.code &&
+    answered.shape === current.shape &&
     answered.message === current.message
       ? "same"
       : `${answered.status} ${answered.code}`;

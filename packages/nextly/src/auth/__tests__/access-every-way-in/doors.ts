@@ -791,6 +791,27 @@ async function singleDocumentId(world: World, slug: string): Promise<string> {
  * grant to release with, and a claim it left behind would answer every caller
  * after it `held`.
  */
+/**
+ * Notes how a refused claim compares with the same claim on `absent`. A claim
+ * that one is granted is given straight back, as every acquired claim is.
+ */
+async function noteLockMissing(
+  refused: Response,
+  absent: DocumentRef,
+  who: CallerHandle
+): Promise<void> {
+  const res = await request("POST", ["document-lock"], who.headers, absent);
+  await noteMissing(refused, res);
+  if (res.status !== 200) return;
+  const body = (await res.json()) as { item?: { claimToken?: unknown } };
+  const claimToken = body.item?.claimToken;
+  if (typeof claimToken === "string") {
+    await container
+      .get<DocumentLockService>("documentLockService")
+      .release(absent, claimToken);
+  }
+}
+
 async function lock(world: World, row: Row, who: CallerHandle) {
   const ref: DocumentRef =
     row.target === "single"
@@ -807,6 +828,9 @@ async function lock(world: World, row: Row, who: CallerHandle) {
   const res = await request("POST", ["document-lock"], who.headers, ref);
   if (res.status !== 200) {
     await noteResponse(res);
+    // A claim names one document, so a refused one is compared with the same
+    // claim on a document that does not exist.
+    await noteLockMissing(res, { ...ref, entryId: ABSENT_ID }, who);
     return fromStatus(res.status);
   }
   const body = (await res.json()) as {
