@@ -4,53 +4,10 @@ import { useCallback, useState } from "react";
 
 import { toast } from "@admin/components/ui";
 
-import type { UseRowSelectionOptions } from "../types/hooks/row-selection";
-
-/** What {@link useRowSelection} returns. */
-type RowSelection = {
-  /**
-   * Array of selected row IDs
-   *
-   * Convert Set to Array for easier consumption by components
-   * (e.g., passing to mutation hooks, displaying count)
-   */
-  selectedIds: string[];
-  /**
-   * Total number of selected rows
-   *
-   * Useful for displaying selection count in UI
-   * (e.g., "5 selected", "10 users selected")
-   */
-  selectedCount: number;
-  /**
-   * Toggle selection for a single row
-   */
-  toggleSelection: (id: string) => void;
-  /**
-   * Select all provided IDs (replaces current selection)
-   */
-  selectAll: (ids: string[]) => void;
-  /**
-   * Select all items on current page (additive)
-   */
-  selectAllOnPage: (pageIds: string[]) => void;
-  /**
-   * Deselect all items on current page
-   */
-  deselectAllOnPage: (pageIds: string[]) => void;
-  /**
-   * Clear all selections
-   */
-  clearSelection: () => void;
-  /**
-   * Check if a specific row is selected
-   */
-  isSelected: (id: string) => boolean;
-  /**
-   * Get count of selected items on current page
-   */
-  getSelectedCountOnPage: (pageIds: string[]) => number;
-};
+import type {
+  UseRowSelectionOptions,
+  UseRowSelectionReturn,
+} from "../types/hooks/row-selection";
 
 /**
  * Custom hook for managing bulk row selection state in tables
@@ -155,7 +112,7 @@ type RowSelection = {
  */
 export function useRowSelection(
   options: UseRowSelectionOptions = {}
-): RowSelection {
+): UseRowSelectionReturn {
   const { maxSelections = 1000, onMaxSelectionsReached } = options;
 
   // Internal state: Set for O(1) lookups
@@ -178,7 +135,7 @@ export function useRowSelection(
    * ```
    */
   const toggleSelection = useCallback(
-    (id: string): void => {
+    (id: string) => {
       setSelectedIds(prev => {
         const next = new Set(prev);
         if (next.has(id)) {
@@ -224,7 +181,7 @@ export function useRowSelection(
    * ```
    */
   const selectAll = useCallback(
-    (ids: string[]): void => {
+    (ids: string[]) => {
       // Check maxSelections limit
       if (maxSelections !== undefined && ids.length > maxSelections) {
         // Show warning toast
@@ -263,7 +220,7 @@ export function useRowSelection(
    * ```
    */
   const selectAllOnPage = useCallback(
-    (pageIds: string[]): void => {
+    (pageIds: string[]) => {
       setSelectedIds(prev => {
         const next = new Set(prev);
 
@@ -309,7 +266,7 @@ export function useRowSelection(
    * deselectAllOnPage(pageUserIds);
    * ```
    */
-  const deselectAllOnPage = useCallback((pageIds: string[]): void => {
+  const deselectAllOnPage = useCallback((pageIds: string[]) => {
     setSelectedIds(prev => {
       const next = new Set(prev);
       pageIds.forEach(id => next.delete(id));
@@ -328,7 +285,7 @@ export function useRowSelection(
    * <Button onClick={clearSelection}>Clear Selection</Button>
    * ```
    */
-  const clearSelection = useCallback((): void => {
+  const clearSelection = useCallback(() => {
     setSelectedIds(new Set());
   }, []);
 
