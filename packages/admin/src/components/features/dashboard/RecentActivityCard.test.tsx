@@ -144,6 +144,7 @@ describe("the Recent activity card", () => {
       query: LIST_QUERY,
     });
     expect(titles()).toEqual(["Doc 1"]);
-    expect(screen.getByText(/12/)).toBeInTheDocument();
+    // The count's own words: a bare /12/ also matches a relative time such as "12h ago".
+    expect(screen.getByText(/12 times/)).toBeInTheDocument();
   });
 });

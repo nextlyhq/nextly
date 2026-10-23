@@ -22,6 +22,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { EMAIL_PROVIDER_ACTIVITY_COLLECTION } from "../../../domains/email/provider-activity";
 import { executeWidgetQuery } from "../../../domains/widgets/execute";
 import type { WidgetResult } from "../../../domains/widgets/result";
 import { readActivitySingles } from "../activity-singles";
@@ -310,6 +311,19 @@ describe.each(getConfiguredTestDialects())(
       await written(t, at(3), () => logSave(t, ANA, NOTES, note));
       await written(t, at(2), () => logSave(t, BEN, SECRET, secret));
       await written(t, at(1), () => logSave(t, BEN, NOTES, note));
+      // A settings change has no document to authorize: the reader's SCOPE is
+      // all that keeps it from someone without `read-email-providers`, so the
+      // card must ask within that scope as the endpoint does.
+      await written(t, at(0), () =>
+        t.getService("activityLogService").logActivity({
+          actorType: "user",
+          userId: BEN.id,
+          action: "update",
+          collection: EMAIL_PROVIDER_ACTIVITY_COLLECTION,
+          subjectKind: "settings",
+          metadata: { changedFields: ["host"] },
+        })
+      );
 
       for (const reader of [as(ANA), as(BOSS)]) {
         const card = listRows(

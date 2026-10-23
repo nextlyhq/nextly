@@ -168,6 +168,19 @@ export const getDashboardRecentEntries = withErrorHandler(
 );
 
 /**
+ * The row limit a request's `?limit` asked for, or none.
+ *
+ * Handed on as asked: the service clamps it, for this endpoint and for the
+ * Recent activity card's widget source alike, so the two cannot disagree. Only
+ * a number other than zero is a limit here: `?limit=0` and a value that is not
+ * a number have always meant "the default", and still do.
+ */
+function askedLimit(req: Request): { limit?: number } {
+  const asked = Number(new URL(req.url).searchParams.get("limit") ?? "");
+  return asked ? { limit: asked } : {};
+}
+
+/**
  * GET /api/dashboard/activity?limit=5
  *
  * Returns recent activity log entries (create/update/delete actions).
@@ -188,13 +201,6 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
-  const { searchParams } = new URL(req.url);
-  // Handed on as asked: the service clamps it, for this endpoint and for the
-  // Recent activity card's widget source alike, so the two cannot disagree.
-  // Only a number other than zero is a limit here: `?limit=0` and a value that
-  // is not a number have always meant "the default", and still do.
-  const limitParam = Number(searchParams.get("limit") ?? "");
-
   const service = await getActivityLogService();
   // The caller WHOLE, and resolved ONCE. Both consumers read it: the scope
   // decides which collections are in reach, and the feed then authorizes each
@@ -205,7 +211,7 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
   const scope = await resolveReadableResources(caller);
   const singles = await readActivitySingles();
   const result = await service.getRecentActivity({
-    ...(limitParam ? { limit: limitParam } : {}),
+    ...askedLimit(req),
     scope,
     caller,
     singles,
