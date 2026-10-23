@@ -35,6 +35,7 @@ import {
   noteError,
   noteMissing,
   noteMissingError,
+  noteMissingRefusal,
   noteRefusal,
   noteResponse,
   noteUncaught,
@@ -502,17 +503,18 @@ async function can(_world: World, row: Row, who: CallerHandle) {
   return fromBoolean(may);
 }
 
-async function service(world: World, row: Row, who: CallerHandle) {
-  const { slug, id } = addressOf(world, row, "service");
+/** The service probe's route, asked to make the row's call on entry `id`. */
+function serviceProbe(
+  row: Row,
+  who: CallerHandle,
+  slug: string,
+  id: string
+): Promise<Response> {
   const search = `?id=${encodeURIComponent(id)}`;
   const person = personRoute(row.caller);
-  const res = person
-    ? await runPersonRoute(
-        `${person}/${slug}/${row.action}`,
-        search,
-        who.headers
-      )
-    : await pluginRequest(
+  return person
+    ? runPersonRoute(`${person}/${slug}/${row.action}`, search, who.headers)
+    : pluginRequest(
         [
           "probe",
           row.caller === "visitor" ? "public-service" : "service",
@@ -522,11 +524,38 @@ async function service(world: World, row: Row, who: CallerHandle) {
         who.headers,
         search
       );
+}
+
+async function service(world: World, row: Row, who: CallerHandle) {
+  const { slug, id } = addressOf(world, row, "service");
+  const res = await serviceProbe(row, who, slug, id);
   if (res.status !== 200) {
     await noteResponse(res);
     return String(res.status);
   }
-  return fromProbeReply((await res.json()) as ProbeReply);
+  const reply = (await res.json()) as ProbeReply;
+  const answer = fromProbeReply(reply);
+  // As at REST and the Direct API: a refused call naming one entry is
+  // compared with the same call for an entry that does not exist.
+  if (!reply.ok && BY_ID.has(row.action)) {
+    await noteServiceMissing(row, who, slug);
+  }
+  return answer;
+}
+
+/** Notes how the service answers the same call for an entry that does not exist. */
+async function noteServiceMissing(
+  row: Row,
+  who: CallerHandle,
+  slug: string
+): Promise<void> {
+  const res = await serviceProbe(row, who, slug, ABSENT_ID);
+  if (res.status !== 200) {
+    noteMissingRefusal(await refusalOf(res));
+    return;
+  }
+  const reply = (await res.json()) as ProbeReply;
+  noteMissingRefusal(reply.ok ? undefined : reply.refusal);
 }
 
 /**

@@ -181,11 +181,13 @@ export async function noteMissing(
     : `${missing.status}`;
 }
 
-/** As {@link noteMissing}, for a door that calls and catches. */
-export function noteMissingError(missing: unknown): void {
+/**
+ * As {@link noteMissing}, from the refusal the same request for an entry that
+ * does not exist was answered with: `same` where it matches the noted one,
+ * `found` where that request was not refused at all, else its own answer.
+ */
+export function noteMissingRefusal(answered: Refusal | undefined): void {
   if (!current) return;
-  const answered =
-    missing === undefined ? undefined : refusalFromError(missing);
   if (!answered) {
     current.missing = "found";
     return;
@@ -196,6 +198,13 @@ export function noteMissingError(missing: unknown): void {
     answered.message === current.message
       ? "same"
       : `${answered.status} ${answered.code}`;
+}
+
+/** As {@link noteMissingRefusal}, for a door that calls and catches. */
+export function noteMissingError(missing: unknown): void {
+  noteMissingRefusal(
+    missing === undefined ? undefined : refusalFromError(missing)
+  );
 }
 
 /**
