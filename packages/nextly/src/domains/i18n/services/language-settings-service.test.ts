@@ -118,6 +118,36 @@ describe("LanguageSettingsService.change and the content cache", () => {
     expect(flush).toHaveBeenCalledTimes(1);
   });
 
+  it("flushes the extra tags a collection or Single names, as its writes do", async () => {
+    const flush = vi.fn<CacheRevalidator["flush"]>();
+    const service = new LanguageSettingsService(
+      fakeAdapter([]),
+      new LanguageRegistry({}),
+      undefined,
+      {
+        content: () =>
+          Promise.resolve({
+            collections: [
+              { slug: "posts", revalidate: { tags: ["navigation", "  "] } },
+            ],
+            singles: [{ slug: "homepage", revalidate: { tags: [" footer "] } }],
+          }),
+        revalidator: () => ({ flush }),
+      }
+    );
+
+    await service.change({ kind: "setDefault", code: "fr" });
+
+    expect(flushedTags(flush).sort()).toEqual(
+      [
+        ...nextlyTags("posts"),
+        "navigation",
+        ...nextlySingleTags("homepage"),
+        "footer",
+      ].sort()
+    );
+  });
+
   it("answers with the committed list when the revalidator fails", async () => {
     const warn = vi.fn();
     const service = new LanguageSettingsService(

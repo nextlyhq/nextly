@@ -14,15 +14,15 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../errors/nextly-error";
-import { readRevalidateConfig } from "../../../revalidation/intent-builders";
+import {
+  buildCollectionRevalidationIntent,
+  buildSingleRevalidationIntent,
+  readRevalidateConfig,
+} from "../../../revalidation/intent-builders";
 import type {
   CacheRevalidator,
   RevalidateConfig,
 } from "../../../revalidation/types";
-import {
-  nextlySingleTags,
-  nextlyTags,
-} from "../../../runtime/cache/nextly-tags";
 import { LANGUAGES_TABLE } from "../../../schemas/languages/table-name";
 import type { LanguageDirection } from "../../../schemas/languages/types";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
@@ -212,24 +212,24 @@ export class LanguageSettingsService {
   }
 
   /**
-   * Flushes the cache tags of every collection and Single, as one intent, skipping those whose
-   * `revalidate.disable` opts them out of automatic revalidation as every content write does. The
-   * tags are the ones a cached read carries (`nextlyTags`, `nextlySingleTags`), so a read made
-   * without a locale, which is cached under them alone, is resolved again in the new default.
+   * Flushes the cache tags of every collection and Single, as one intent: the tags their writes
+   * flush, the configured `revalidate.tags` included, through the same intent builders, and none
+   * for one whose `revalidate.disable` opts it out. A read made without a locale is cached under
+   * those tags alone, so it is resolved again in the new default.
    */
   private async flushContentCache(): Promise<void> {
     const revalidator = this.contentCache?.revalidator();
     if (!this.contentCache || !revalidator) return;
     const { collections, singles } = await this.contentCache.content();
-    const tags = new Set<string>();
-    for (const collection of collections) {
-      if (readRevalidateConfig(collection)?.disable) continue;
-      for (const tag of nextlyTags(collection.slug)) tags.add(tag);
-    }
-    for (const single of singles) {
-      if (readRevalidateConfig(single)?.disable) continue;
-      for (const tag of nextlySingleTags(single.slug)) tags.add(tag);
-    }
+    const intents = [
+      ...collections.map(c =>
+        buildCollectionRevalidationIntent(c.slug, readRevalidateConfig(c))
+      ),
+      ...singles.map(s =>
+        buildSingleRevalidationIntent(s.slug, readRevalidateConfig(s))
+      ),
+    ];
+    const tags = new Set(intents.flatMap(intent => intent?.tags ?? []));
     // A site with nothing to flush issues no revalidation, which some backends log as an error.
     if (tags.size === 0) return;
     await revalidator.flush([{ tags: [...tags] }]);
