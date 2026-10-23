@@ -9,6 +9,14 @@
  * rule deciding alone for a person, a key judged on its stored slug, no
  * access-control service). The access-control service is the real one; only
  * the role and permission lookups are faked, from one table of who holds what.
+ *
+ * This is the fast check of how the answer composes the gates, across every
+ * rule kind and setup. It asks the gate the REST routes ask rather than making
+ * the requests: the access table (`__tests__/access-every-way-in`) makes the
+ * real REST request for each cell at its `route` door and the real
+ * `GET /me/capabilities` at its `capabilities` door, and holds both to the
+ * same decision on every dialect, so a route that came to ask something else
+ * shows there.
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
