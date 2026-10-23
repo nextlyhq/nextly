@@ -17,6 +17,7 @@
 import { z } from "zod";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { isAdminRelativePath } from "../admin-path";
 import { isValidWidgetId } from "../definition";
 import { SETTING_NOT_AN_OBJECT, widgetSettingsProblems } from "../settings";
 import { WIDGET_WIDTHS, type WidgetWidth } from "../widths";
@@ -88,49 +89,6 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 /** One line of text: no line break anywhere in it. */
 const oneLine = (text: string): boolean => !/[\r\n]/.test(text);
-
-/**
- * Whether a link is a path inside the admin: no scheme, no host, and not from
- * the root, where it would name the admin's own address. Core resolves it to
- * wherever the admin is served.
- *
- * 🔴 And no segment that climbs out of it. A browser resolves `.` and `..`
- * before it navigates, percent-encoded ones included, so `../logout` under the
- * admin's prefix lands outside the admin however the prefix was written.
- */
-function isAdminRelative(link: unknown): boolean {
-  return (
-    typeof link === "string" &&
-    link.trim() !== "" &&
-    !/^[a-z][a-z0-9+.-]*:/i.test(link) &&
-    !link.startsWith("/") &&
-    !link.includes("\\") &&
-    !leavesItsDirectory(link)
-  );
-}
-
-/**
- * Whether a path's own part (before any query or fragment) has a segment a
- * browser would resolve upward or sideways: `.` or `..` once decoded, one that
- * decodes to a slash or a backslash, or one that cannot be decoded at all.
- */
-function leavesItsDirectory(link: string): boolean {
-  const path = link.split(/[?#]/, 1)[0] ?? "";
-  return path.split("/").some(segment => {
-    let decoded: string;
-    try {
-      decoded = decodeURIComponent(segment);
-    } catch {
-      return true;
-    }
-    return (
-      decoded === "." ||
-      decoded === ".." ||
-      decoded.includes("/") ||
-      decoded.includes("\\")
-    );
-  });
-}
 
 /**
  * Everything wrong with one declaration, in field order.
@@ -399,7 +357,7 @@ function emptyActionProblems(action: unknown): string[] {
   }
   return [
     ...optional(
-      isAdminRelative(action.link)
+      isAdminRelativePath(action.link)
         ? undefined
         : `empty.action.link must be a path relative to the admin, such as "collections/orders", got ${quote(action.link)}`
     ),

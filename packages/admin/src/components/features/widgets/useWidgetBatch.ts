@@ -158,7 +158,15 @@ function questionsFor(card: BatchCard): WidgetQueryRequest[] {
       query: cell.query,
     }));
   }
-  if (!widget.query) return [];
+  return widget.query ? [queryAskFor(card, widget.query)] : [];
+}
+
+/** The one question a card asks by its widget's query, at the card's tier where it is sized. */
+function queryAskFor(
+  card: BatchCard,
+  query: NonNullable<DashboardWidget["query"]>
+): WidgetQueryRequest {
+  const { placementId, widget } = card;
   // Sized for a card the host draws, whose body slices to its tier, and for a custom card
   // that asked to be (`sizedQuery`), whose component draws by the same rule. Any other
   // custom card's component draws the raw answer with no tier, so it is asked exactly as
@@ -168,17 +176,13 @@ function questionsFor(card: BatchCard): WidgetQueryRequest[] {
       ? undefined
       : card.tier;
   // Keyed by the declared question and sent as the settings ask it; see `declaredQuery`.
-  const declared = card.declaredQuery ?? widget.query;
-  return [
-    {
-      placementId,
-      query: declared,
-      ...(declared === widget.query ? {} : { applied: widget.query }),
-      ...(tier
-        ? { sized: { query: queryForTier(widget.query, tier), tier } }
-        : {}),
-    },
-  ];
+  const declared = card.declaredQuery ?? query;
+  return {
+    placementId,
+    query: declared,
+    ...(declared === query ? {} : { applied: query }),
+    ...(tier ? { sized: { query: queryForTier(query, tier), tier } } : {}),
+  };
 }
 
 /**
