@@ -87,7 +87,10 @@ export function filterNavigationItems(
 /**
  * Filter dynamic collection items based on per-collection read permission.
  *
- * A collection is visible if the user has `read-{slug}` permission.
+ * A collection is visible where the server's answer lets the user read it,
+ * a super-admin's answer included, which gives every entity. The permission
+ * list's super-admin flag is not consulted: it is a separate request, and an
+ * older one would otherwise show what a newer answer refuses.
  * This runs AFTER the existing `admin.hidden` / `admin.isPlugin` filters.
  *
  * @param collections - Collections already filtered by hidden/plugin flags
@@ -98,8 +101,6 @@ export function filterCollectionItems<T extends FilterableCollection>(
   collections: T[],
   capabilities: AdminCapabilities
 ): T[] {
-  if (capabilities.isSuperAdmin) return collections;
-
   return collections.filter(collection => {
     const slug = collection.slug || collection.name;
     const collectionCaps = capabilities.collections[slug];
@@ -110,7 +111,8 @@ export function filterCollectionItems<T extends FilterableCollection>(
 /**
  * Filter dynamic single items based on per-single read permission.
  *
- * A single is visible if the user has `read-{slug}` permission.
+ * A single is visible where the server's answer lets the user read it, as
+ * for collections.
  * This runs AFTER the existing `admin.hidden` filter.
  *
  * @param singles - Singles already filtered by hidden flag
@@ -121,8 +123,6 @@ export function filterSingleItems<T extends FilterableSingle>(
   singles: T[],
   capabilities: AdminCapabilities
 ): T[] {
-  if (capabilities.isSuperAdmin) return singles;
-
   return singles.filter(single => {
     const collectionCaps = capabilities.collections[single.slug];
     return collectionCaps?.canRead === true;

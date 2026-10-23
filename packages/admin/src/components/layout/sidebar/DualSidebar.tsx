@@ -44,6 +44,7 @@ import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-hre
 import { resolveActiveSection } from "./lib/resolve-section";
 import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
 import { resolveStandaloneLabel } from "./lib/resolve-standalone-label";
+import { standalonePluginsVisibleTo } from "./lib/standalone-plugins-visible-to";
 import type { MainMenuCategory, MainMenuItem } from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
 import { SubSidebarPanel } from "./SubSidebarPanel";
@@ -80,24 +81,10 @@ export function DualSidebar({
     [branding?.plugins]
   );
 
-  const readableResources = useMemo(() => {
-    const readable = permissions
-      .filter(permission => permission.startsWith("read-"))
-      .map(permission => permission.slice("read-".length));
-    return new Set(readable);
-  }, [permissions]);
-
-  const visibleStandalonePlugins = useMemo(() => {
-    return standalonePlugins.filter(plugin => {
-      const pluginCollections = plugin.collections ?? [];
-      if (pluginCollections.length === 0) {
-        return capabilities.canViewSettings;
-      }
-      return pluginCollections.some(collection =>
-        readableResources.has(collection)
-      );
-    });
-  }, [standalonePlugins, readableResources, capabilities.canViewSettings]);
+  const visibleStandalonePlugins = useMemo(
+    () => standalonePluginsVisibleTo(standalonePlugins, capabilities),
+    [standalonePlugins, capabilities]
+  );
 
   // Standalone plugins take their place in the rail by the anchor they declare.
   // The placement rule lives in `lib/` with the other rail decisions; what stays

@@ -275,6 +275,45 @@ describe("useCurrentUserPermissions", () => {
     expect(result.current.capabilities.canViewCollections).toBe(true);
   });
 
+  it("keeps an ended permission list out, though the content answer's refresh drops the end", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    server.capabilities = answering({ read: true }, Date.now() + 60_000);
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(newClient()),
+    });
+    await waitFor(() => expect(result.current.hasAnswer).toBe(true));
+
+    // The ending assignment is gone: the content answer comes back with no
+    // end at all, while the permission list cannot be had again.
+    server.capabilities = answering({ read: true }, null);
+    server.permissions = new Error("permissions unavailable");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+
+    // POPULATION CONTROL: the content answer did arrive, with no end.
+    expect(result.current.content.hasAnswer).toBe(true);
+    // The permission list from before the end still does not count.
+    expect(result.current.hasAnswer).toBe(false);
+    expect(result.current.hasPermission("read-posts")).toBe(false);
+  });
+
+  it("decides content from the content answer when the permission list fails", async () => {
+    server.permissions = new Error("permissions unavailable");
+    server.capabilities = answering({ read: true });
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(newClient()),
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+
+    expect(result.current.canAccessCollection("posts", "read")).toBe(true);
+    expect(result.current.capabilities.collections.posts?.canRead).toBe(true);
+    // POPULATION CONTROL: the system half has no answer.
+    expect(result.current.hasAnswer).toBe(false);
+  });
+
   it("asks at an end further off than a timer holds, and not before", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     server.capabilities = answering(

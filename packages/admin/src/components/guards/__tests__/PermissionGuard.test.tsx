@@ -363,6 +363,29 @@ describe("PermissionGuard", () => {
       expect(screen.getByText("the page")).toBeTruthy();
     });
 
+    it("opens what the server's answer allows, though the permission list failed", () => {
+      mockPermissions.mockReturnValue({
+        hasPermission: () => false,
+        canAccessCollection: (slug: string, action: string) =>
+          `${action}-${slug}` === "read-posts",
+        isLoading: false,
+        hasAnswer: false,
+        error: new Error("Request failed"),
+        content: { isLoading: false, hasAnswer: true, error: null },
+        retry: vi.fn(),
+      } as unknown as ReturnType<typeof useCurrentUserPermissions>);
+      render(
+        <PermissionGuard
+          requiredPermission="read-posts"
+          subject="collection"
+          entity={POSTS}
+        >
+          <Page />
+        </PermissionGuard>
+      );
+      expect(screen.getByText("the page")).toBeTruthy();
+    });
+
     it("claims no refusal while the server's answer is missing", () => {
       holding(["read-posts"], false, {
         allows: [],
