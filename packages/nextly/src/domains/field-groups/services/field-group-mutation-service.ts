@@ -20,6 +20,7 @@ import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-gro
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import { BaseService } from "../../../shared/base-service";
+import { keepDeniedAtStored } from "../../../shared/lib/denied-change";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
@@ -181,6 +182,11 @@ interface WriteScope {
     readonly FieldConfig[],
     Promise<ComponentFieldResolver | undefined>
   >;
+  /**
+   * The stored rows this write has read, by id: an update of one is judged
+   * against what its container columns hold, since each is written whole.
+   */
+  stored: Map<string, ComponentRow>;
 }
 
 const writeScope = new AsyncLocalStorage<WriteScope>();
@@ -194,7 +200,48 @@ function newWriteScope(
   const grants =
     access.grants ??
     callerAccessGrants(access.user, access.authenticatedScope, executor);
-  return { executor, access: { ...access, grants }, nested: new Map() };
+  return {
+    executor,
+    access: { ...access, grants },
+    nested: new Map(),
+    stored: new Map(),
+  };
+}
+
+/** `rows`, each noted on the current write's scope by its id. */
+function rememberStored(rows: ComponentRow[]): ComponentRow[] {
+  const stored = writeScope.getStore()?.stored;
+  for (const row of rows) stored?.set(row.id, row);
+  return rows;
+}
+
+/**
+ * The container fields (groups and repeaters) a stored row holds, by field
+ * name and parsed from their JSON columns, or nothing when it holds none.
+ */
+function storedContainers(
+  row: ComponentRow | undefined,
+  fields: readonly FieldConfig[]
+): Record<string, unknown> | undefined {
+  if (!row) return undefined;
+  const found: Record<string, unknown> = {};
+  for (const field of fields) {
+    const { name, fields: children } = field as {
+      name?: unknown;
+      fields?: unknown;
+    };
+    if (typeof name !== "string" || !Array.isArray(children)) continue;
+    let value: unknown = (row as Record<string, unknown>)[toSnakeCase(name)];
+    if (typeof value === "string") {
+      try {
+        value = JSON.parse(value);
+      } catch {
+        continue;
+      }
+    }
+    if (value !== null && typeof value === "object") found[name] = value;
+  }
+  return Object.keys(found).length > 0 ? found : undefined;
 }
 
 function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
@@ -1694,10 +1741,12 @@ export class FieldGroupMutationService extends BaseService {
     fieldName: string
   ): Promise<ComponentRow[]> {
     try {
-      return await this.adapter.select<ComponentRow>(tableName, {
-        where: this.whereAnd(instanceKey(parentId, parentTable, fieldName)),
-        orderBy: INSTANCE_ORDER,
-      });
+      return rememberStored(
+        await this.adapter.select<ComponentRow>(tableName, {
+          where: this.whereAnd(instanceKey(parentId, parentTable, fieldName)),
+          orderBy: INSTANCE_ORDER,
+        })
+      );
     } catch (error) {
       this.logger.debug("Could not query component table", {
         tableName,
@@ -1715,10 +1764,12 @@ export class FieldGroupMutationService extends BaseService {
     fieldName: string
   ): Promise<ComponentRow[]> {
     try {
-      return await tx.select<ComponentRow>(tableName, {
-        where: this.whereAnd(instanceKey(parentId, parentTable, fieldName)),
-        orderBy: INSTANCE_ORDER,
-      });
+      return rememberStored(
+        await tx.select<ComponentRow>(tableName, {
+          where: this.whereAnd(instanceKey(parentId, parentTable, fieldName)),
+          orderBy: INSTANCE_ORDER,
+        })
+      );
     } catch (error) {
       this.logger.debug("Could not query component table in tx", {
         tableName,
@@ -1818,7 +1869,13 @@ export class FieldGroupMutationService extends BaseService {
       (mode === "update" && typeof instance.id === "string"
         ? instance.id
         : undefined);
-    await this.applyInstanceWriteRules(instance, mode, slug, ruleId);
+    await this.applyInstanceWriteRules(
+      instance,
+      mode,
+      slug,
+      ruleId,
+      componentFields
+    );
     // A new instance takes its declared defaults before validation, as a new
     // entry does, so a required child with a default is not refused on an
     // instance the caller could not have completed. An existing instance is
@@ -1831,7 +1888,13 @@ export class FieldGroupMutationService extends BaseService {
       );
       // Judged again: a default is a value like any other, so a field the
       // writer may not create does not take one, as an entry's does not.
-      await this.applyInstanceWriteRules(instance, mode, slug, ruleId);
+      await this.applyInstanceWriteRules(
+        instance,
+        mode,
+        slug,
+        ruleId,
+        componentFields
+      );
     }
     // Reduced in place, and before validation, because both halves of the write
     // depend on it. A validator is written against a field's public value, the
@@ -1881,7 +1944,8 @@ export class FieldGroupMutationService extends BaseService {
     instance: ComponentInstanceData,
     mode: "create" | "update",
     slug: string | undefined,
-    storedId: string | undefined
+    storedId: string | undefined,
+    componentFields: readonly FieldConfig[]
   ): Promise<void> {
     const access = writeScope.getStore()?.access;
     if (access === undefined || slug === undefined) {
@@ -1893,20 +1957,42 @@ export class FieldGroupMutationService extends BaseService {
       });
     }
     if (access.overrideAccess) return;
-    await applyFieldWriteAccess({
-      kind: "fieldGroup",
-      slug,
-      data: instance,
-      operation: mode,
-      user: access.user,
-      authenticatedScope: access.authenticatedScope,
-      overrideAccess: false,
-      // The id of the row the save updates, never the one the instance was
-      // sent with: a new instance is stored under an id of its own, and a
-      // single field group's row is updated whatever id is sent.
-      id: mode === "update" ? storedId : undefined,
-      grants: access.grants,
+    const judge = (data: Record<string, unknown>) =>
+      applyFieldWriteAccess({
+        kind: "fieldGroup",
+        slug,
+        data,
+        operation: mode,
+        user: access.user,
+        authenticatedScope: access.authenticatedScope,
+        overrideAccess: false,
+        // The id of the row the save updates, never the one the instance was
+        // sent with: a new instance is stored under an id of its own, and a
+        // single field group's row is updated whatever id is sent.
+        id: mode === "update" ? storedId : undefined,
+        grants: access.grants,
+      });
+    const stored =
+      mode === "update" && storedId !== undefined
+        ? storedContainers(
+            writeScope.getStore()?.stored.get(storedId),
+            componentFields
+          )
+        : undefined;
+    if (!stored) {
+      await judge(instance);
+      return;
+    }
+    // A container column is written whole, so a denied child removed from
+    // the update would be erased from the row: it keeps its stored value, as
+    // a denied top-level field does by not being written.
+    const kept = await keepDeniedAtStored({
+      update: instance,
+      stored,
+      applyRules: judge,
     });
+    for (const key of Object.keys(instance)) delete instance[key];
+    Object.assign(instance, kept);
   }
 
   /**
