@@ -24,8 +24,8 @@ export default defineConfig({
   // Declarations without a type check: `check-types` is the type check.
   // oxc writes the declarations from the source's own annotations
   // (`isolatedDeclarations` in tsconfig.json). Named rather than left to the
-  // plugin's choice, which falls back to `tsc` without saying so when the
-  // flag is off.
+  // plugin's choice, which picks `tsc` (or `tsgo` under TypeScript 7) without
+  // saying so when the flag is off.
   dts: { generator: "oxc", sourcemap: false },
   // Cleaning is done once by the build script, not per-config: the two configs
   // also run as concurrent watchers in dev, where a clean here would wipe the
