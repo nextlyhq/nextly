@@ -1151,12 +1151,12 @@ service returns-null key-manage
   any(read-posts|update-posts):403 You do not have the required permissions to access this resource
   any(delete-posts):403 You do not have the required permissions to access this resource
 service returns-truthy user-with
-  create-posts:A
-  read-posts:A
-  update-posts:A
-  delete-posts:A
-  publish-posts:A
-  unpublish-posts:A
+  create-posts:403 You do not have permission to create posts
+  read-posts:403 You do not have permission to read posts
+  update-posts:403 You do not have permission to update posts
+  delete-posts:403 You do not have permission to delete posts
+  publish-posts:403 You do not have permission to publish posts
+  unpublish-posts:403 You do not have permission to unpublish posts
   export-posts:403 You do not have permission to export posts
   read-settings:A
   manage-settings:A
@@ -1167,12 +1167,12 @@ service returns-truthy user-with
   any(read-posts|update-posts):A
   any(delete-posts):A
 service returns-truthy user-without
-  create-posts:A
-  read-posts:A
-  update-posts:A
-  delete-posts:A
-  publish-posts:A
-  unpublish-posts:A
+  create-posts:403 You do not have permission to create posts
+  read-posts:403 You do not have permission to read posts
+  update-posts:403 You do not have permission to update posts
+  delete-posts:403 You do not have permission to delete posts
+  publish-posts:403 You do not have permission to publish posts
+  unpublish-posts:403 You do not have permission to unpublish posts
   export-posts:403 You do not have permission to export posts
   read-settings:403 You do not have permission to read settings
   manage-settings:403 You do not have permission to manage settings
@@ -1183,12 +1183,12 @@ service returns-truthy user-without
   any(read-posts|update-posts):403 You do not have the required permissions to access this resource
   any(delete-posts):403 You do not have the required permissions to access this resource
 service returns-truthy user-partial
-  create-posts:A
-  read-posts:A
-  update-posts:A
-  delete-posts:A
-  publish-posts:A
-  unpublish-posts:A
+  create-posts:403 You do not have permission to create posts
+  read-posts:403 You do not have permission to read posts
+  update-posts:403 You do not have permission to update posts
+  delete-posts:403 You do not have permission to delete posts
+  publish-posts:403 You do not have permission to publish posts
+  unpublish-posts:403 You do not have permission to unpublish posts
   export-posts:403 You do not have permission to export posts
   read-settings:A
   manage-settings:403 You do not have permission to manage settings

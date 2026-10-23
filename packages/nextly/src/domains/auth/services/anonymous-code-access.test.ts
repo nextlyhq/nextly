@@ -16,7 +16,10 @@
  * so the caller falls through to its public default.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { clearRuleAnswerNotices } from "../../../auth/access/rule-answer-log";
+import { consoleLogger } from "../../../shared/types";
 
 import { RBACAccessControlService } from "./rbac-access-control-service";
 
@@ -109,5 +112,45 @@ describe("code-defined access for a caller with no session", () => {
         },
       })
     ).resolves.toBe(false);
+  });
+});
+
+describe("a function rule's answer for a caller with no session", () => {
+  beforeEach(() => {
+    clearRuleAnswerNotices();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const answerFor = (answer: unknown) =>
+    service().checkAnonymousCodeAccess({
+      operation: "read",
+      resource: "forms",
+      codeAccess: { read: () => answer as boolean },
+    });
+
+  it("refuses on any answer but true: null, undefined and a truthy value alike", async () => {
+    // Before, any answer but `false` let a visitor through, and `undefined`
+    // read as "no rule", so the public default admitted them.
+    for (const answer of [null, undefined, "yes", 1]) {
+      await expect(answerFor(answer)).resolves.toBe(false);
+    }
+    // The control: only `true` allows.
+    await expect(answerFor(true)).resolves.toBe(true);
+  });
+
+  it("names each newly refused rule once, and not one that refused before", async () => {
+    const warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    await answerFor(null);
+    await answerFor(null);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain(
+      'The read rule of "forms" answered null, so a visitor is now refused'
+    );
+    // `false` refused a visitor before too, and `true` still allows.
+    await answerFor(false);
+    await answerFor(true);
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });

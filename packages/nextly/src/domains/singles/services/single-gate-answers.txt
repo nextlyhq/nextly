@@ -399,8 +399,8 @@ service returns-false key-in-the-request
   publish:403 Access denied: insufficient permissions for publish on single "home"
   unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
 service returns-null visitor
-  read:A
-  update:A
+  read:403 Access denied: insufficient permissions for read on single "home"
+  update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: publish on single "home" requires an authenticated user
   unpublish:403 Access denied: unpublish on single "home" requires an authenticated user
 service returns-null user-with
@@ -479,8 +479,8 @@ service returns-null key-in-the-request
   publish:403 Access denied: insufficient permissions for publish on single "home"
   unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
 service returns-undefined visitor
-  read:A
-  update:A
+  read:403 Access denied: insufficient permissions for read on single "home"
+  update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: publish on single "home" requires an authenticated user
   unpublish:403 Access denied: unpublish on single "home" requires an authenticated user
 service returns-undefined user-with
@@ -559,25 +559,25 @@ service returns-undefined key-in-the-request
   publish:403 Access denied: insufficient permissions for publish on single "home"
   unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
 service returns-truthy visitor
-  read:A
-  update:A
+  read:403 Access denied: insufficient permissions for read on single "home"
+  update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: publish on single "home" requires an authenticated user
   unpublish:403 Access denied: unpublish on single "home" requires an authenticated user
 service returns-truthy user-with
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:403 Access denied: insufficient permissions for read on single "home"
+  update:403 Access denied: insufficient permissions for update on single "home"
+  publish:403 Access denied: insufficient permissions for publish on single "home"
+  unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
 service returns-truthy user-without
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:403 Access denied: insufficient permissions for read on single "home"
+  update:403 Access denied: insufficient permissions for update on single "home"
+  publish:403 Access denied: insufficient permissions for publish on single "home"
+  unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
 service returns-truthy user-partial
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:403 Access denied: insufficient permissions for read on single "home"
+  update:403 Access denied: insufficient permissions for update on single "home"
+  publish:403 Access denied: insufficient permissions for publish on single "home"
+  unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
 service returns-truthy super-admin
   read:A
   update:A
@@ -1519,8 +1519,8 @@ route-authorized returns-false key-in-the-request
   publish:A
   unpublish:A
 route-authorized returns-null visitor
-  read:A
-  update:A
+  read:403 Access denied: insufficient permissions for read on single "home"
+  update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: publish on single "home" requires an authenticated user
   unpublish:403 Access denied: unpublish on single "home" requires an authenticated user
 route-authorized returns-null user-with
@@ -1599,8 +1599,8 @@ route-authorized returns-null key-in-the-request
   publish:A
   unpublish:A
 route-authorized returns-undefined visitor
-  read:A
-  update:A
+  read:403 Access denied: insufficient permissions for read on single "home"
+  update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: publish on single "home" requires an authenticated user
   unpublish:403 Access denied: unpublish on single "home" requires an authenticated user
 route-authorized returns-undefined user-with
@@ -1679,8 +1679,8 @@ route-authorized returns-undefined key-in-the-request
   publish:A
   unpublish:A
 route-authorized returns-truthy visitor
-  read:A
-  update:A
+  read:403 Access denied: insufficient permissions for read on single "home"
+  update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: publish on single "home" requires an authenticated user
   unpublish:403 Access denied: unpublish on single "home" requires an authenticated user
 route-authorized returns-truthy user-with
