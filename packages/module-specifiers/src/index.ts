@@ -24,7 +24,17 @@
  *
  * @module @nextlyhq/module-specifiers
  */
-import ts from "typescript";
+import { Visitor } from "oxc-parser";
+import type {
+  BindingPattern,
+  CallExpression,
+  Comment,
+  Expression,
+  ParamPattern,
+  Program,
+} from "oxc-parser";
+
+import { parseSource } from "./parse-source.mjs";
 
 /**
  * Stands in for a module call whose target is not a literal, such as
@@ -51,15 +61,16 @@ export const UNRESOLVABLE_SPECIFIER = "<unresolvable-specifier>";
  *
  * - `import ... from` and `export ... from`, which carry a module specifier.
  * - `import "pkg"`, a bare side-effect import, which carries no bindings.
- * - `import("pkg")` and `require("pkg")`, which are call expressions. A bare
- *   `require` identifier, or `module.require` — the documented CommonJS method,
- *   which resolves exactly as the free function does. `loader.require("x")` is a
- *   method on some other object and is not a module resolve.
+ * - `import("pkg")` and `require("pkg")`. The first is its own node; the second
+ *   is a call. A bare `require` identifier, or `module.require` — the documented
+ *   CommonJS method, which resolves exactly as the free function does.
+ *   `loader.require("x")` is a method on some other object and is not a module
+ *   resolve.
  * - `import x = require("pkg")`, the documented CommonJS-interop spelling, which
  *   is neither of the above.
- * - `typeof import("pkg")` in type position, which the parser gives as an
- *   `ImportTypeNode` rather than a call. It erases at build, so a purely runtime
- *   guard would skip it.
+ * - `typeof import("pkg")` in type position, which the parser gives as a
+ *   `TSImportType` rather than an import expression. It erases at build, so a
+ *   purely runtime guard would skip it.
  * - `/** @import ... *␍/` and `@typedef {import("pkg").T}` in JSDoc, which is
  *   where a JavaScript file keeps its types.
  * - `/// <reference types="pkg" />`, which is not in the node tree at all.
@@ -72,115 +83,12 @@ export const UNRESOLVABLE_SPECIFIER = "<unresolvable-specifier>";
  * internals nobody promised to keep, and it is one rename away from becoming a
  * value import. A caller wanting runtime-only reachability filters afterwards.
  *
- * `fileName` is REQUIRED, and is not merely diagnostic. TypeScript picks its
- * parser from the extension, so reading a `.tsx` file under a `.ts` name parses
- * `<div>` as a type assertion; the malformed tree that follows contains no
- * import nodes, and the file reports as importing nothing. That is a clean green
- * over a file that was never read, and it was a live defect in two of the
- * readers this replaces. A default would let any caller reintroduce it silently.
+ * `fileName` is REQUIRED, and is not merely diagnostic. The parser picks its
+ * language from the extension, so a `.tsx` file read under a `.ts` name parses
+ * `<div>` as a type assertion, and a `.ts` angle-bracket assertion read as
+ * `.tsx` is a syntax error. A default would let any caller read a file as the
+ * wrong language silently.
  */
-/**
- * See through wrappers that change the type or the grouping, never the object.
- *
- * `(module).require(...)`, `(module as NodeModule).require(...)` and
- * `module!.require(...)` all read the same binding. A check on the receiver as
- * written treats each as somebody else's property and reports the file as loading
- * nothing, which is a bypass anyone can reach by accident.
- */
-function unwrapReceiver(expression: ts.Expression): ts.Expression {
-  let current: ts.Expression = expression;
-  while (
-    ts.isParenthesizedExpression(current) ||
-    ts.isAsExpression(current) ||
-    ts.isNonNullExpression(current) ||
-    ts.isSatisfiesExpression(current)
-  ) {
-    current = current.expression;
-  }
-  return current;
-}
-
-/**
- * Whether the file introduces a binding of its own called `module`.
- *
- * 🔴 A file that declares `module` — a parameter, a variable, an import — is not
- * talking about the CommonJS loader when it writes `module.require`, and
- * reporting a dependency it never loads is the FALSE direction for a guard: a
- * rule that fires on correct code stops being read. Renaming the identical
- * receiver to `loader` already makes the report disappear, which is the tell that
- * it was about the name rather than the thing.
- *
- * File-granular rather than scope-precise, and deliberately so: resolving a name
- * to its declaration needs a program and a checker, which this reader exists to
- * work without. The gap it leaves is a file that shadows `module` in one function
- * and uses the real loader in another, where this reports neither.
- */
-/** Every node kind that introduces a name a later expression can read. */
-const BINDING_KINDS: ReadonlySet<ts.SyntaxKind> = new Set([
-  ts.SyntaxKind.VariableDeclaration,
-  ts.SyntaxKind.Parameter,
-  ts.SyntaxKind.BindingElement,
-  ts.SyntaxKind.FunctionDeclaration,
-  ts.SyntaxKind.ClassDeclaration,
-  ts.SyntaxKind.ImportClause,
-  ts.SyntaxKind.ImportSpecifier,
-  ts.SyntaxKind.NamespaceImport,
-]);
-
-/** Whether one node binds the name `module`. */
-function bindsModule(node: ts.Node): boolean {
-  if (!BINDING_KINDS.has(node.kind)) return false;
-  const { name } = node as ts.NamedDeclaration;
-  return name !== undefined && ts.isIdentifier(name) && name.text === "module";
-}
-
-function declaresOwnModule(source: ts.SourceFile): boolean {
-  let declared = false;
-  const visit = (node: ts.Node): void => {
-    if (declared) return;
-    if (bindsModule(node)) {
-      declared = true;
-      return;
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return declared;
-}
-
-/**
- * Whether an expression is `module.require`, however it is spelled.
- *
- * `module.require` is the documented CommonJS method and resolves exactly as the
- * free `require` does, so a reader that recognises only the bare identifier
- * reports a file loading nothing while it loads a driver. `a.b` and `a["b"]` are
- * the same read, and a rule for one is a rule the other walks around.
- *
- * Deliberately narrow: the receiver has to be `module` itself, seen through
- * casts and grouping, and the file must not have introduced a `module` of its
- * own. `loader.require` is a method on somebody else's object, and treating every
- * `.require` as a resolve would report ordinary code as a dependency nobody has.
- */
-function readsModuleRequire(callee: ts.Expression, shadowed: boolean): boolean {
-  if (shadowed) return false;
-  const receiver =
-    ts.isPropertyAccessExpression(callee) ||
-    ts.isElementAccessExpression(callee)
-      ? unwrapReceiver(callee.expression)
-      : null;
-  if (
-    receiver === null ||
-    !ts.isIdentifier(receiver) ||
-    receiver.text !== "module"
-  ) {
-    return false;
-  }
-  if (ts.isPropertyAccessExpression(callee))
-    return callee.name.text === "require";
-  const key = (callee as ts.ElementAccessExpression).argumentExpression;
-  return ts.isStringLiteralLike(key) && key.text === "require";
-}
-
 export function importedSpecifiers(text: string, fileName: string): string[] {
   return moduleSpecifierRefs(text, fileName).map(ref => ref.specifier);
 }
@@ -204,6 +112,159 @@ export interface ModuleSpecifierRef {
   readonly typeOnly: boolean;
 }
 
+/** A reference and where it starts, so references from the tree and from comments merge in source order. */
+interface PlacedRef extends ModuleSpecifierRef {
+  readonly start: number;
+}
+
+/** The text of a string literal or a substitution-free template literal, or null for anything computed. */
+function literalText(node: Expression | null | undefined): string | null {
+  if (!node) return null;
+  if (node.type === "Literal" && typeof node.value === "string") {
+    return node.value;
+  }
+  if (node.type === "TemplateLiteral" && node.expressions.length === 0) {
+    return node.quasis[0]?.value.cooked ?? null;
+  }
+  return null;
+}
+
+/**
+ * See through wrappers that change the type or the grouping, never the object.
+ *
+ * `(module).require(...)`, `(module as NodeModule).require(...)` and
+ * `module!.require(...)` all read the same binding. A check on the receiver as
+ * written treats each as somebody else's property and reports the file as loading
+ * nothing, which is a bypass anyone can reach by accident.
+ */
+function unwrapReceiver(expression: Expression): Expression {
+  let current = expression;
+  while (
+    current.type === "ParenthesizedExpression" ||
+    current.type === "TSAsExpression" ||
+    current.type === "TSNonNullExpression" ||
+    current.type === "TSSatisfiesExpression"
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+/**
+ * Whether a callee is `module.require`, however it is spelled.
+ *
+ * `module.require` is the documented CommonJS method and resolves exactly as the
+ * free `require` does, so a reader that recognises only the bare identifier
+ * reports a file loading nothing while it loads a driver. `a.b` and `a["b"]` are
+ * the same read, and a rule for one is a rule the other walks around.
+ *
+ * Deliberately narrow: the receiver has to be `module` itself, seen through
+ * casts and grouping. `loader.require` is a method on somebody else's object, and
+ * treating every `.require` as a resolve would report ordinary code as a
+ * dependency nobody has. Whether the file shadows `module` is decided after the
+ * walk, by the caller.
+ */
+function isModuleRequire(callee: Expression): boolean {
+  if (callee.type !== "MemberExpression") return false;
+  const receiver = unwrapReceiver(callee.object);
+  if (receiver.type !== "Identifier" || receiver.name !== "module") {
+    return false;
+  }
+  if (!callee.computed) {
+    return callee.property.type === "Identifier"
+      ? callee.property.name === "require"
+      : false;
+  }
+  return literalText(callee.property) === "require";
+}
+
+/** Every name a binding pattern introduces, through destructuring, defaults and rests. */
+function boundNames(pattern: BindingPattern | ParamPattern | null): string[] {
+  if (!pattern) return [];
+  switch (pattern.type) {
+    case "Identifier":
+      return [pattern.name];
+    case "AssignmentPattern":
+      return boundNames(pattern.left);
+    case "RestElement":
+      return boundNames(pattern.argument);
+    case "TSParameterProperty":
+      return boundNames(pattern.parameter);
+    case "ArrayPattern":
+      return pattern.elements.flatMap(element => boundNames(element));
+    case "ObjectPattern":
+      return pattern.properties.flatMap(property =>
+        boundNames(property.type === "RestElement" ? property : property.value)
+      );
+    default:
+      return [];
+  }
+}
+
+/**
+ * The modules a JSDoc block names: an `@import` tag's specifier, and every
+ * `import("...")` inside a tag's `{type}` expression.
+ *
+ * The parser does not build a tree for JSDoc, so this reads the comment's own
+ * grammar: a tag type is the brace-balanced `{...}` after a tag, and an
+ * `@import` tag runs to the next tag. Prose in the description is not a type
+ * expression and is not read, which keeps a sentence that mentions `import()`
+ * from becoming a dependency.
+ */
+function jsDocRefs(comment: Comment): PlacedRef[] {
+  const found: PlacedRef[] = [];
+  const text = comment.value;
+  // `value` excludes the opening `/*`, so offsets inside it start two characters in.
+  const at = (index: number): number => comment.start + 2 + index;
+
+  for (const tag of text.matchAll(/@import\b([^@]*)/g)) {
+    const from = /\bfrom\s*(["'])([^"'\n]*)\1/.exec(tag[1] ?? "");
+    found.push({
+      specifier: from?.[2] ?? UNRESOLVABLE_SPECIFIER,
+      typeOnly: true,
+      start: at(tag.index),
+    });
+  }
+
+  for (const tag of text.matchAll(/@[A-Za-z]+\s*\{/g)) {
+    const open = tag.index + tag[0].length - 1;
+    let depth = 0;
+    let close = open;
+    for (; close < text.length; close++) {
+      if (text[close] === "{") depth++;
+      else if (text[close] === "}" && --depth === 0) break;
+    }
+    const typeExpression = text.slice(open + 1, close);
+    for (const call of typeExpression.matchAll(
+      /\bimport\s*\(\s*(?:(["'`])([^"'`]*)\1\s*\))?/g
+    )) {
+      found.push({
+        specifier: call[2] ?? UNRESOLVABLE_SPECIFIER,
+        typeOnly: true,
+        start: at(open + 1 + call.index),
+      });
+    }
+  }
+  return found;
+}
+
+/**
+ * The `/// <reference types="..." />` directives, which only count before the
+ * first statement: one further down is an ordinary comment to the compiler.
+ */
+function typeReferenceRefs(comments: Comment[], program: Program): PlacedRef[] {
+  const firstStatement = program.body[0]?.start ?? Number.POSITIVE_INFINITY;
+  return comments.flatMap(comment => {
+    if (comment.type !== "Line" || comment.end > firstStatement) return [];
+    const directive = /^\/\s*<reference\s+types\s*=\s*(["'])([^"']*)\1/.exec(
+      comment.value
+    );
+    return directive?.[2]
+      ? [{ specifier: directive[2], typeOnly: true, start: comment.start }]
+      : [];
+  });
+}
+
 /**
  * Every module a source text names, each labelled with whether it reaches runtime.
  *
@@ -217,105 +278,117 @@ export interface ModuleSpecifierRef {
  * silent in the direction that answers "clean" -- which is the defect
  * the `derived-checks` skill exists to prevent, and which this file was already written to
  * fix once.
+ *
+ * Throws on a file the parser cannot read. A failed parse yields an empty
+ * program, which would report as importing nothing: a clean green over a file
+ * that was never read.
  */
 export function moduleSpecifierRefs(
   text: string,
   fileName: string
 ): ModuleSpecifierRef[] {
-  const source = ts.createSourceFile(
-    fileName,
-    text,
-    ts.ScriptTarget.ESNext,
-    true
-  );
-  const found: ModuleSpecifierRef[] = [];
-  const shadowsModule = declaresOwnModule(source);
-  const seen = new Set<ts.Node>();
+  const parsed = parseSource(text, fileName);
 
-  const visit = (node: ts.Node): void => {
-    // A CYCLE guard, not a de-duplicator. The explicit JSDoc descent below and
-    // `forEachChild` reach each other: a `@typedef` attached to a declaration
-    // is reachable from that declaration, and `forEachChild` on the tag walks
-    // back to it, so the walk recurses until the stack overflows. Measured —
-    // removing this throws `RangeError` on
-    // `/** @typedef {import("pkg").T} T */ export const x = 1;` rather than
-    // reporting the specifier twice.
-    if (seen.has(node)) return;
-    seen.add(node);
+  const found: PlacedRef[] = [];
+  const moduleRequires: PlacedRef[] = [];
+  // 🔴 A file that declares `module` — a parameter, a variable, an import — is
+  // not talking about the CommonJS loader when it writes `module.require`, and
+  // reporting a dependency it never loads is the FALSE direction for a guard: a
+  // rule that fires on correct code stops being read. File-granular rather than
+  // scope-precise, and deliberately so: resolving a name to its declaration
+  // needs a checker, which this reader exists to work without. The gap it leaves
+  // is a file that shadows `module` in one function and uses the real loader in
+  // another, where this reports neither.
+  let shadowsModule = false;
+  const bind = (names: string[]): void => {
+    if (names.includes("module")) shadowsModule = true;
+  };
+  const bindParams = (node: { params: ParamPattern[] }): void => {
+    for (const param of node.params) bind(boundNames(param));
+  };
 
-    if (
-      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteralLike(node.moduleSpecifier)
-    ) {
-      found.push({
-        specifier: node.moduleSpecifier.text,
-        typeOnly: ts.isImportDeclaration(node)
-          ? Boolean(node.importClause?.isTypeOnly)
-          : node.isTypeOnly,
-      });
-    } else if (ts.isJSDocImportTag(node)) {
-      const target = node.moduleSpecifier;
-      found.push({
-        specifier:
-          target && ts.isStringLiteralLike(target)
-            ? target.text
-            : UNRESOLVABLE_SPECIFIER,
-        typeOnly: true,
-      });
-    } else if (ts.isImportTypeNode(node)) {
-      const target = node.argument;
-      found.push({
-        specifier:
-          ts.isLiteralTypeNode(target) && ts.isStringLiteralLike(target.literal)
-            ? target.literal.text
-            : UNRESOLVABLE_SPECIFIER,
-        typeOnly: true,
-      });
-    } else if (
-      ts.isImportEqualsDeclaration(node) &&
-      ts.isExternalModuleReference(node.moduleReference)
-    ) {
-      const target = node.moduleReference.expression;
-      found.push({
-        specifier: ts.isStringLiteralLike(target)
-          ? target.text
-          : UNRESOLVABLE_SPECIFIER,
-        typeOnly: false,
-      });
-    } else if (ts.isCallExpression(node)) {
-      const callee = node.expression;
-      const resolvesAModule =
-        callee.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(callee) && callee.text === "require") ||
-        readsModuleRequire(callee, shadowsModule);
-      if (resolvesAModule) {
-        const target = node.arguments[0];
-        found.push({
-          specifier:
-            target && ts.isStringLiteralLike(target)
-              ? target.text
-              : UNRESOLVABLE_SPECIFIER,
+  const add = (
+    start: number,
+    target: Expression | null | undefined,
+    typeOnly: boolean
+  ): void => {
+    found.push({
+      specifier: literalText(target) ?? UNRESOLVABLE_SPECIFIER,
+      typeOnly,
+      start,
+    });
+  };
+
+  new Visitor({
+    ImportDeclaration(node) {
+      add(node.start, node.source, node.importKind === "type");
+    },
+    ExportNamedDeclaration(node) {
+      if (node.source) add(node.start, node.source, node.exportKind === "type");
+    },
+    ExportAllDeclaration(node) {
+      add(node.start, node.source, node.exportKind === "type");
+    },
+    ImportExpression(node) {
+      add(node.start, node.source, false);
+    },
+    TSImportType(node) {
+      add(node.start, node.source, true);
+    },
+    TSImportEqualsDeclaration(node) {
+      if (node.moduleReference.type === "TSExternalModuleReference") {
+        add(node.start, node.moduleReference.expression, false);
+      }
+    },
+    CallExpression(node: CallExpression) {
+      const [first] = node.arguments;
+      const target = first?.type === "SpreadElement" ? undefined : first;
+      if (node.callee.type === "Identifier" && node.callee.name === "require") {
+        add(node.start, target, false);
+      } else if (isModuleRequire(node.callee)) {
+        moduleRequires.push({
+          specifier: literalText(target) ?? UNRESOLVABLE_SPECIFIER,
           typeOnly: false,
+          start: node.start,
         });
       }
+    },
+    VariableDeclarator(node) {
+      bind(boundNames(node.id));
+    },
+    FunctionDeclaration(node) {
+      bind(node.id ? [node.id.name] : []);
+      bindParams(node);
+    },
+    FunctionExpression: bindParams,
+    ArrowFunctionExpression: bindParams,
+    TSDeclareFunction: bindParams,
+    ClassDeclaration(node) {
+      bind(node.id ? [node.id.name] : []);
+    },
+    CatchClause(node) {
+      bind(boundNames(node.param));
+    },
+    ImportDefaultSpecifier(node) {
+      bind([node.local.name]);
+    },
+    ImportSpecifier(node) {
+      bind([node.local.name]);
+    },
+    ImportNamespaceSpecifier(node) {
+      bind([node.local.name]);
+    },
+  }).visit(parsed.program);
+
+  if (!shadowsModule) found.push(...moduleRequires);
+  for (const comment of parsed.comments) {
+    if (comment.type === "Block" && comment.value.startsWith("*")) {
+      found.push(...jsDocRefs(comment));
     }
-
-    ts.forEachChild(node, visit);
-    // JSDoc hangs off a node rather than sitting under it, so `forEachChild`
-    // never enters it. In a JavaScript file that is where the types live:
-    // `@typedef {import("pkg").T}` puts an ImportTypeNode inside the comment,
-    // invisible to every branch above.
-    for (const doc of ts.getJSDocCommentsAndTags(node)) visit(doc);
-  };
-  visit(source);
-
-  // `/// <reference types="pkg" />` is not part of the node tree, so
-  // `forEachChild` never reaches it. The parser puts it here instead, and it is
-  // a dependency on that package's types exactly as an `import type` is.
-  for (const directive of source.typeReferenceDirectives) {
-    found.push({ specifier: directive.fileName, typeOnly: true });
   }
+  found.push(...typeReferenceRefs(parsed.comments, parsed.program));
 
-  return found;
+  return found
+    .sort((a, b) => a.start - b.start)
+    .map(({ specifier, typeOnly }) => ({ specifier, typeOnly }));
 }

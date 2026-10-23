@@ -54,7 +54,7 @@ import {
   moduleSpecifierRefs,
   UNRESOLVABLE_SPECIFIER,
 } from "@nextlyhq/module-specifiers";
-import ts from "typescript";
+import { parseSource } from "@nextlyhq/module-specifiers/parse-source";
 import { describe, expect, it } from "vitest";
 
 import { publishedEntries } from "../../ui/scripts/published-entries";
@@ -280,8 +280,14 @@ type Resolution =
  * is an unwalked subtree, and calling it clean is how a guard passes over the thing it exists to
  * find.
  */
-const asFile = (file: string | null, specifier: string): Resolution =>
-  file ? { kind: "file", file } : { kind: "unresolved", specifier };
+const asFile = (file: string | null, specifier: string): Resolution => {
+  if (!file) return { kind: "unresolved", specifier };
+  // A stylesheet or other asset a module imports by path ends the walk, as a workspace subpath to
+  // one does below: it carries no imports and reaches no driver, and it is not a module to parse.
+  return /\.(tsx?|mts|cts|jsx?|mjs|cjs)$/.test(file)
+    ? { kind: "file", file }
+    : { kind: "asset" };
+};
 
 /** The workspace package a specifier belongs to, longest name first. */
 function ownerOf(
@@ -481,19 +487,11 @@ export function walkClientClosure(
  * skips those, and a guard that skips files reports a clean tree it never read.
  */
 export function declaresUseClient(source: string, fileName: string): boolean {
-  const parsed = ts.createSourceFile(
-    fileName,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
-  );
-  const first = parsed.statements[0];
-  return Boolean(
-    first &&
-      ts.isExpressionStatement(first) &&
-      ts.isStringLiteral(first.expression) &&
-      first.expression.text === "use client"
+  // The parser marks a prologue string as a directive, so this reads the directive the compiler
+  // sees, not any string that happens to open the file.
+  const [first] = parseSource(source, fileName).program.body;
+  return (
+    first?.type === "ExpressionStatement" && first.directive === "use client"
   );
 }
 
@@ -616,31 +614,25 @@ function describeViolations(result: ClosureResult): string[] {
  * so a list it cannot read fails the run instead of being read as empty.
  */
 export function readClientEntries(configSource: string): string[] {
-  const parsed = ts.createSourceFile(
-    "tsdown.config.ts",
-    configSource,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS
-  );
-  for (const statement of parsed.statements) {
-    if (!ts.isVariableStatement(statement)) continue;
-    for (const declaration of statement.declarationList.declarations) {
+  const { program } = parseSource(configSource, "tsdown.config.ts");
+  for (const statement of program.body) {
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declaration of statement.declarations) {
       if (
-        !ts.isIdentifier(declaration.name) ||
-        declaration.name.text !== "clientEntries"
+        declaration.id.type !== "Identifier" ||
+        declaration.id.name !== "clientEntries"
       ) {
         continue;
       }
-      const list = declaration.initializer;
-      if (list === undefined || !ts.isArrayLiteralExpression(list))
-        return refuseClientEntries();
+      const list = declaration.init;
+      if (list?.type !== "ArrayExpression") return refuseClientEntries();
       const paths: string[] = [];
       for (const element of list.elements) {
-        // Narrowed one element at a time: a spread, a variable or a template is a list this
-        // cannot read as written, and is refused below like a missing one.
-        if (!ts.isStringLiteral(element)) return refuseClientEntries();
-        paths.push(element.text);
+        // Narrowed one element at a time: a spread, a variable, a hole or a template is a list
+        // this cannot read as written, and is refused below like a missing one.
+        if (element?.type !== "Literal" || typeof element.value !== "string")
+          return refuseClientEntries();
+        paths.push(element.value);
       }
       return paths;
     }
@@ -894,6 +886,28 @@ describe("the rule can fail", () => {
     );
     expect(result.violations).toEqual([]);
     expect(result.unresolved).toEqual([]);
+  });
+
+  it("ends the walk at a stylesheet a module imports by path", () => {
+    // A stylesheet is not a module, and the reader refuses text it cannot parse, so reaching one
+    // has to be an asset rather than the next file to walk. The CSS here would fail the parse.
+    const { io, resolve } = build({
+      "/repo/packages/admin/src/layout.tsx":
+        'import "../styles/globals.css";\nimport { x } from "@admin/x";',
+      "/repo/packages/admin/styles/globals.css":
+        "@layer base { a { color: red } }",
+      "/repo/packages/admin/src/x.ts": "export const x = 1;",
+    });
+    const result = walkClientClosure(
+      ["/repo/packages/admin/src/layout.tsx"],
+      resolve,
+      io
+    );
+    expect(result.unresolved).toEqual([]);
+    expect([...result.visited]).toEqual([
+      "/repo/packages/admin/src/layout.tsx",
+      "/repo/packages/admin/src/x.ts",
+    ]);
   });
 
   it("fails on a CommonJS load", () => {

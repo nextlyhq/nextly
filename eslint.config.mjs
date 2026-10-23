@@ -82,6 +82,10 @@ export default [
       "packages/nextly/eslint-bare-error-rule.js",
       "packages/nextly/eslint-api-key-scope-rule.js",
       "packages/nextly/eslint-console-rule.js",
+      // reason: the shared source parser is plain JavaScript so the repository's `.mjs` scripts can
+      // load it without type stripping; its types live in the `.d.mts` beside it, which is what
+      // TypeScript resolves, so no tsconfig project contains the `.mjs` itself.
+      "packages/module-specifiers/src/parse-source.mjs",
       // reason: vitest config files aren't in any tsconfig project either.
       // F18 added vitest.integration.config.ts as a sibling of vitest.config.ts
       // to split unit/integration suites; both are config-only and not

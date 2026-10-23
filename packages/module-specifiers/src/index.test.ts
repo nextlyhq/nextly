@@ -92,6 +92,37 @@ describe("the forms this reader must NOT report", () => {
   it("ignores a specifier that appears only inside a string", () => {
     expect(read(`const s = 'from "pkg"';`)).toEqual([]);
   });
+
+  it("ignores an import mentioned in JSDoc prose rather than in a tag's type", () => {
+    // The description is text, not a type expression. The control beside it is
+    // the same words inside `{...}`, which IS read, so this cannot pass by the
+    // JSDoc scan reading nothing at all.
+    expect(read('/** Loads import("pkg") lazily. */', "module.js")).toEqual([]);
+    expect(read('/** @type {import("pkg")} */', "module.js")).toEqual(["pkg"]);
+  });
+
+  it("ignores a reference directive below the first statement", () => {
+    // The compiler honours triple-slash directives only at the top of a file;
+    // further down the same text is an ordinary comment.
+    expect(read('export const x = 1;\n/// <reference types="pkg" />')).toEqual(
+      []
+    );
+    expect(read('/// <reference types="pkg" />\nexport const x = 1;')).toEqual([
+      "pkg",
+    ]);
+  });
+});
+
+describe("a file the parser cannot read", () => {
+  it("throws rather than reporting that it imports nothing", () => {
+    // A failed parse yields an empty program. Returning its (empty) imports
+    // would be a clean green over a file that was never read. `<div>` in a
+    // `.ts` file is the classic way to get there: it is not a type assertion
+    // the parser can finish.
+    expect(() =>
+      importedSpecifiers('import "pkg";\nconst el = <div>x</div>;', "module.ts")
+    ).toThrow(/module\.ts cannot be parsed/);
+  });
 });
 
 describe("a target it cannot resolve is a finding, not an absence", () => {
@@ -131,17 +162,12 @@ describe("the parser follows the filename, not a default", () => {
   });
 });
 
-describe("the JSDoc descent terminates", () => {
-  it("reads a typedef attached to a declaration without recursing forever", () => {
-    // The two descents reach each other. A `@typedef` on a declaration is
-    // reachable from that declaration, and `forEachChild` on the tag walks back
-    // to it, so an unguarded walk overflows the stack rather than returning a
-    // wrong answer.
-    //
-    // The ATTACHED form is what makes this fixture reach the mechanism: a
-    // free-floating `/** @typedef ... */` with no declaration under it has
-    // nothing to cycle through, terminates either way, and passes with the
-    // guard removed. That was the first version of this test.
+describe("a JSDoc block attached to a declaration", () => {
+  it("is read once, not once per node it documents", () => {
+    // JSDoc is read from the comment list, which holds each block once,
+    // whether or not a declaration follows it. A reader that also walked the
+    // block from the declaration it documents would report the specifier twice,
+    // so the exact list is the assertion, and the ATTACHED form is the fixture.
     expect(
       read(
         '/** @typedef {import("pkg").T} T */\nexport const x = 1;',
