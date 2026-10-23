@@ -178,7 +178,16 @@ export async function keepDeniedAtStored(input: {
   }
   // Judged too, so a denied child the update omits is told from an allowed
   // one it deletes: only the first is put back.
-  const permittedStored = detachData(stored);
+  //
+  // Judged on the container as this update LEAVES it, not on the row's own
+  // copy. A rule reads its siblings, so a child whose rule turns on a sibling
+  // the same update changes would be judged against that sibling's old value:
+  // the stale verdict allows it, the restoration leaves it out, and the
+  // whole-column write deletes a value the final document protects.
+  const asLeft = overlay(stored, permitted);
+  const permittedStored = detachData(
+    isRecord(asLeft) ? asLeft : stored
+  ) as Record<string, unknown>;
   await input.applyRules(permittedStored);
   const out = restoreDenied(
     input.update,
@@ -298,14 +307,94 @@ function restoreArray(
 ): unknown {
   // The rules removed the whole list, so the row keeps what it has.
   if (!Array.isArray(permitted)) return live;
-  return before.map((row, index) =>
-    restoreDenied(
+  // Paired by row identity, not by position: a list that is merely reordered
+  // pairs each row with whatever row now sits at its index, and a denied value
+  // taken from there is written onto a row it never belonged to — the
+  // protected value of one row landing on another.
+  const rows = Array.isArray(live) ? live : [];
+  const pairing = rowPairing(before, rows);
+  return before.map((row, index) => {
+    const at = pairing(index);
+    return restoreDenied(
       row,
       permitted[index],
-      itemAt(live, index),
-      itemAt(permittedLive, index)
-    )
-  );
+      at === undefined ? undefined : rows[at],
+      at === undefined ? undefined : itemAt(permittedLive, at)
+    );
+  });
+}
+
+/**
+ * Where each row of `from` sits in `to`: by its own `id` where every row of
+ * `to` carries a distinct one, and by position otherwise.
+ *
+ * Position is the fallback rather than the rule because a list whose rows have
+ * no identity has nothing else to pair on; where they do, identity survives a
+ * reorder, an insertion and a removal, and position survives none of them.
+ */
+function rowPairing(
+  from: readonly unknown[],
+  to: readonly unknown[]
+): (index: number) => number | undefined {
+  const byId = idIndex(to);
+  const byPosition = (index: number) =>
+    index < to.length ? index : undefined;
+  if (byId === undefined) return byPosition;
+  return index => {
+    const id = rowId(from[index]);
+    return id === undefined ? byPosition(index) : byId.get(id);
+  };
+}
+
+/** A row's own identity, where it carries one. */
+function rowId(row: unknown): string | undefined {
+  return isRecord(row) && typeof row.id === "string" ? row.id : undefined;
+}
+
+/**
+ * The rows by id, or nothing when they cannot be told apart that way: a row
+ * without an id, a repeated id, or an empty list all fall back to position.
+ */
+function idIndex(rows: readonly unknown[]): Map<string, number> | undefined {
+  if (rows.length === 0) return undefined;
+  const map = new Map<string, number>();
+  for (const [index, row] of rows.entries()) {
+    const id = rowId(row);
+    if (id === undefined || map.has(id)) return undefined;
+    map.set(id, index);
+  }
+  return map;
+}
+
+/**
+ * The row as an update leaves it: its stored values, with every change the
+ * writer is allowed to make laid over them.
+ *
+ * Only PERMITTED changes are laid over, because a denied one never reaches the
+ * row, and the shape of `stored` is preserved exactly so a caller can still
+ * read this alongside the row key by key and row by row.
+ */
+function overlay(stored: unknown, permitted: unknown): unknown {
+  if (permitted === undefined) return stored;
+  if (Array.isArray(stored)) {
+    if (!Array.isArray(permitted)) return stored;
+    const pairing = rowPairing(stored, permitted);
+    return stored.map((row, index) => {
+      const at = pairing(index);
+      return at === undefined ? row : overlay(row, permitted[at]);
+    });
+  }
+  if (!isRecord(stored)) return isRecord(permitted) ? stored : permitted;
+  if (!isRecord(permitted)) return stored;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(stored)) {
+    assign(
+      out,
+      key,
+      hasOwn(permitted, key) ? overlay(stored[key], permitted[key]) : stored[key]
+    );
+  }
+  return out;
 }
 
 function restoreRecord(

@@ -293,8 +293,22 @@ export async function keepDeniedFieldGroupsInDraft(params: {
     params.fields,
     params.fieldGroupFields
   );
+  const update = pick(params.draft);
+  // A draft that clears a field group, or drops a stored instance from a
+  // list, removes it as an ordinary update would, and no save judges an
+  // instance it is not sent: without this the removal is simply held, and a
+  // later publisher allowed to write the protected child publishes it.
+  if (anyFieldGroupHasAccessRule("update")) {
+    await keepProtectedStoredInstances({
+      data: update,
+      stored,
+      fields: params.fields,
+      fieldGroupFields: params.fieldGroupFields,
+      access: params.access,
+    });
+  }
   const kept = await keepDeniedAtStored({
-    update: pick(params.draft),
+    update,
     stored,
     applyRules: document =>
       judgeFieldGroupInstances({
@@ -511,13 +525,11 @@ async function judgeFieldGroupInstances(params: {
     params.fieldGroupFields,
     async ({ instance, slug, inline }) => {
       if (params.inlineOnly && !inline) return;
-      const isNew =
-        existing !== undefined &&
+      const storedHere =
         !inline &&
-        !(
-          typeof instance.id === "string" &&
-          existing.has(instanceKey(slug, instance.id))
-        );
+        typeof instance.id === "string" &&
+        existing?.has(instanceKey(slug, instance.id)) === true;
+      const isNew = existing !== undefined && !inline && !storedHere;
       await applyFieldWriteAccess({
         kind: "fieldGroup",
         slug,
@@ -526,6 +538,12 @@ async function judgeFieldGroupInstances(params: {
         user: access.user,
         authenticatedScope: access.authenticatedScope,
         overrideAccess: false,
+        // The stored instance's id, so an id-dependent rule is told what the
+        // save will tell it. Only one verified against the live document is
+        // named: a new instance is stored under an id of its own, so the one
+        // it was sent with is the client's, and an inline instance has no row
+        // of its own to name.
+        id: storedHere ? (instance.id as string) : undefined,
         grants: access.grants,
       });
     },
