@@ -35,6 +35,12 @@ type GrantModule = typeof import("../services/super-admin-grant");
 const afterGrantCheck = vi.hoisted(() => ({
   real: undefined as GrantModule | undefined,
   run: undefined as (() => Promise<void>) | undefined,
+  /**
+   * Run once BEFORE the next grant check, which is before it takes the
+   * `super-admin` row's lock. That is the moment a change which locked rows
+   * of its own first would be holding them while it waits for that one.
+   */
+  before: undefined as (() => Promise<void>) | undefined,
 }));
 
 // Pausing a change once its check has decided, inside its transaction and
@@ -53,6 +59,11 @@ vi.mock("../services/super-admin-grant", () => {
         ...args
       )) as GrantModule["rolesConferSuperAdmin"],
     refuseGrantingSuperAdmin: (async (...args) => {
+      const first = afterGrantCheck.before;
+      if (first) {
+        afterGrantCheck.before = undefined;
+        await first();
+      }
       await real().refuseGrantingSuperAdmin(...args);
       const hook = afterGrantCheck.run;
       if (hook) {
@@ -105,6 +116,7 @@ const PASSWORD = "Str0ng-P@ssw0rd!";
 
 afterEach(async () => {
   afterGrantCheck.run = undefined;
+  afterGrantCheck.before = undefined;
   await handle?.destroy();
   handle = undefined;
 });
@@ -812,6 +824,55 @@ describe.each(getConfiguredTestDialects())(
       // account rather than leaving it with an assignment to nothing.
       expect(created.status, await created.text()).toBe(400);
       expect(await userNamed("dangling@example.com")).toBe(false);
+    });
+
+    it("creates an account beside a deletion of the role it asks for", async () => {
+      const install = await boot(dialect);
+      // Both changes want the `super-admin` row and the requested role's row.
+      // Taken in opposite orders they deadlock, and the database aborts one,
+      // so the account creation or the role deletion fails for a reason
+      // neither caller did anything to cause. The account's request is held
+      // inside its transaction at the moment before its grant check there,
+      // having taken every lock it takes before that one; the deletion, which
+      // takes the `super-admin` row first and the role's row last, then runs.
+      // The account's first grant check, made early and outside the
+      // transaction, holds no lock and is let through.
+      let release!: () => void;
+      const released = new Promise<void>(resolve => (release = resolve));
+      let paused!: () => void;
+      const isPaused = new Promise<void>(resolve => (paused = resolve));
+      afterGrantCheck.before = async () => {
+        afterGrantCheck.before = async () => {
+          paused();
+          await released;
+        };
+      };
+
+      const creation = rest({ session: install.first }, "POST", ["users"], {
+        email: "beside@example.com",
+        password: PASSWORD,
+        name: "Beside",
+        roles: [install.staffRole],
+      });
+      await Promise.race([isPaused, creation.then(() => undefined)]);
+      const deletion = rest({ session: install.first }, "DELETE", [
+        "roles",
+        install.staffRole,
+      ]);
+      await untilAnotherWaitsOnALock();
+      release();
+
+      const [created, deleted] = await Promise.all([creation, deletion]);
+      // Neither is aborted. The deletion goes through, and the account is
+      // either created with its role before it, or refused for the role the
+      // deletion removed, and then not created at all.
+      expect(deleted.status, await deleted.text()).toBeLessThan(300);
+      expect(await roleNamed("staff")).toBe(false);
+      const createdText = await created.text();
+      expect([201, 400], createdText).toContain(created.status);
+      expect(await userNamed("beside@example.com")).toBe(
+        created.status === 201
+      );
     });
 
     it("answers an assignment to an account that doesn't exist as not found", async () => {
