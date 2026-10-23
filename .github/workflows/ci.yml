@@ -1264,11 +1264,11 @@ jobs:
       - name: Check what the packed admin gives a production application
         run: pnpm --filter @nextlyhq/admin check:published-build
 
-      # `tsup` alone, without the stylesheet step: the check is asked only for
+      # `tsdown` alone, without the stylesheet step: the check is asked only for
       # the two kinds a development-mode build must be refused for.
       - name: The check refuses a build made in development mode
         run: |
-          NODE_ENV=development pnpm --filter @nextlyhq/admin exec tsup
+          NODE_ENV=development pnpm --filter @nextlyhq/admin exec tsdown
           pnpm --filter @nextlyhq/admin check:published-build --packed . --must-fail-with error-detail,developer-tools
 
       # Only a job whose checks passed publishes what it learned.
@@ -1840,7 +1840,7 @@ jobs:
       # `shell: bash` on every leg, so one script covers all of them — Git Bash
       # ships on the Windows runners. The dev script is still launched through
       # pnpm, which is what puts `node_modules/.bin` on PATH; running the runner
-      # directly would fail to find `tsup` for reasons that have nothing to do
+      # directly would fail to find `tsdown` for reasons that have nothing to do
       # with the property under test.
       #
       # `dist` is removed first so a file found afterwards was produced by THIS
@@ -1855,7 +1855,7 @@ jobs:
           dev_pid=$!
 
           # Wait for the artifacts to exist, which is only enough to take a baseline from. It is
-          # NOT evidence that anything is watching: tsup writes `dist` before it arms its file
+          # NOT evidence that anything is watching: a watcher writes `dist` before it arms its file
           # watcher, so an edit made in this gap is absorbed by chokidar's initial scan and never
           # reported. The probe below is what establishes readiness.
           for _ in $(seq 1 120); do
@@ -1879,15 +1879,15 @@ jobs:
           # colour, so that edit rebuilds `index.mjs` as a side effect and a client command
           # regressed to a one-shot build would still be reported as watching.
           #
-          # An added export rather than a comment: tsup strips comments, so a comment-only edit
+          # An added export rather than a comment: a bundler may strip comments, so a comment-only edit
           # leaves the output byte-identical whether or not a rebuild ran, and the probe could not
           # detect one in either direction.
           before_client=$(cksum dist/index.mjs | awk '{print $1"-"$2}')
           before_server=$(cksum dist/color.mjs | awk '{print $1"-"$2}')
 
           # The edit is REPEATED until a rebuild is seen, rather than made once against a signal
-          # that claims the watcher is ready. tsup logs "Watching for changes" before it expands
-          # the watch path and constructs chokidar, so that line is a proxy: on a slow runner both
+          # that claims the watcher is ready. tsup logged "Watching for changes" before it expanded
+          # the watch path and constructed chokidar, so that line is a proxy: on a slow runner both
           # configs can log it while neither is listening, and a single edit made then is swallowed
           # by the initial scan. Retrying removes the proxy — the first rebuild IS the readiness
           # signal, and nothing has to be assumed about when it arrives.
