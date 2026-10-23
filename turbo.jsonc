@@ -88,12 +88,12 @@
   // Every artifact turbo uploads to the shared remote cache is signed with
   // TURBO_REMOTE_CACHE_SIGNATURE_KEY (HMAC-SHA256) and verified on download;
   // one that fails verification, truncated or altered, counts as a miss. The
-  // remote cache is used only where TURBO_TOKEN is set (CI, see ci.yml), so a
-  // machine without it builds from its local cache as before.
+  // remote cache is used only where a token is set (CI, see ci.yml), so a
+  // machine without one builds from its local cache as before. A key's length
+  // is not made fatal (`futureFlags.longerSignatureKey`): a contributor who
+  // has run `turbo link` holds no key, and would otherwise be unable to run
+  // turbo at all; what such a machine signs, CI's key rejects as a miss.
   "remoteCache": { "signature": true },
-
-  // A signing key under 32 bytes is a fatal error rather than a warning.
-  "futureFlags": { "longerSignatureKey": true },
 
   "globalPassThroughEnv": [
     "npm_config_user_agent", // create-nextly-app reads this to detect the invoking PM

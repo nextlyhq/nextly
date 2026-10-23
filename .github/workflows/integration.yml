@@ -57,11 +57,7 @@ env:
   # Turborepo's shared remote cache, written only by `main` and the merge
   # queue and read everywhere else: the reasons are beside the same block in
   # ci.yml.
-  # The token only with a signing key beside it: turbo would otherwise sign
-  # with an empty key and only warn.
-  TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
   TURBO_TEAM: ${{ vars.TURBO_TEAM }}
-  TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
   TURBO_CACHE: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'local:rw,remote:rw' || 'local:rw,remote:r' }}
 
 # Keyed per commit on `main` for the same reason as the CI workflow: a shared
@@ -193,6 +189,14 @@ jobs:
     # suite; only a cancelled workflow stays cancelled.
     if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     strategy:
       # Each shard's verdict is its own: one that fails does not cancel the
       # other, so a red run still says how the rest of the suite did.
@@ -339,6 +343,14 @@ jobs:
     # suite; only a cancelled workflow stays cancelled.
     if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     strategy:
       # The same split as the postgres leg, for the same reasons.
       fail-fast: false
@@ -492,6 +504,14 @@ jobs:
     # suite; only a cancelled workflow stays cancelled.
     if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     strategy:
       # The same split as the postgres leg, for the same reasons: run whole,
       # this leg's suite ran past INTEGRATION_SUITE_BUDGET on main and on pull
