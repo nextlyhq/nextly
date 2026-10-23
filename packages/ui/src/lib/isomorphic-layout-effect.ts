@@ -19,5 +19,5 @@ import * as React from "react";
  *
  * @experimental
  */
-export const useIsomorphicLayoutEffect =
+export const useIsomorphicLayoutEffect: typeof React.useLayoutEffect =
   typeof document === "undefined" ? React.useEffect : React.useLayoutEffect;

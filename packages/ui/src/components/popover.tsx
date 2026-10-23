@@ -5,18 +5,26 @@ import { cn } from "../lib/utils";
 import { usePortalContainer } from "../providers/portal-provider";
 
 /** @experimental */
-const Popover = PopoverPrimitive.Root;
+const Popover: typeof PopoverPrimitive.Root = PopoverPrimitive.Root;
 
 /** @experimental */
-const PopoverTrigger = PopoverPrimitive.Trigger;
+const PopoverTrigger: typeof PopoverPrimitive.Trigger =
+  PopoverPrimitive.Trigger;
 
 /** @experimental */
-const PopoverAnchor = PopoverPrimitive.Anchor;
+const PopoverAnchor: typeof PopoverPrimitive.Anchor = PopoverPrimitive.Anchor;
+
+type PopoverContentProps = React.ComponentPropsWithoutRef<
+  typeof PopoverPrimitive.Content
+>;
 
 /** @experimental */
-const PopoverContent = React.forwardRef<
+const PopoverContent: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<PopoverContentProps> &
+    React.RefAttributes<React.ElementRef<typeof PopoverPrimitive.Content>>
+> = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
+  PopoverContentProps
 >(({ className, align = "center", sideOffset = 4, ...props }, ref) => {
   const portalContainer = usePortalContainer();
 
