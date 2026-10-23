@@ -22,6 +22,26 @@ on:
 permissions:
   contents: read
 
+# Turborepo's shared remote cache. A task whose inputs another run already
+# built replays that run's output instead of building again. Only `main`'s
+# pushes and the merge queue write to it, since those are what every later
+# run starts from; a pull request reads, so its build replays `main`'s tasks.
+# Entries are content-addressed per task and signed (`remoteCache.signature`
+# in turbo.jsonc), so a cancelled or altered upload is a miss, never a
+# half-built `dist/`. Without TURBO_TOKEN (a fork, or before the secret
+# exists) turbo uses its local cache alone, as before.
+#
+# Write access is enforced by GitHub, not by TURBO_CACHE, which the code under
+# test could override. The token and the signing key are secrets of the
+# `turbo-cache` environment, whose branch policy admits only `main` and the
+# merge queue's `gh-readonly-queue/main/*` refs; each job that builds names it
+# there and `turbo-cache-read` on every other event (`environment:` with
+# `deployment: false`, so no deployment is recorded). A pull request that
+# rewrites its workflow to name `turbo-cache` is refused the secrets.
+env:
+  TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+  TURBO_CACHE: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'local:rw,remote:rw' || 'local:rw,remote:r' }}
+
 # Superseding is right for a branch under review and wrong for `main`.
 #
 # On a pull request a new push makes the previous run's verdict irrelevant, so
@@ -321,6 +341,14 @@ jobs:
     needs: changes
     if: needs.changes.outputs.inert != 'true'
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 45
 
     steps:
@@ -779,6 +807,14 @@ jobs:
     needs: changes
     if: needs.changes.outputs.inert != 'true'
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 30
 
     steps:
@@ -841,6 +877,14 @@ jobs:
     needs: changes
     if: needs.changes.outputs.inert != 'true'
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 30
 
     steps:
@@ -913,6 +957,14 @@ jobs:
     needs: changes
     if: needs.changes.outputs.inert != 'true'
     runs-on: windows-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 45
 
     steps:
@@ -1016,6 +1068,14 @@ jobs:
     needs: changes
     if: needs.changes.outputs.inert != 'true'
     runs-on: windows-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 45
 
     steps:
@@ -1076,6 +1136,14 @@ jobs:
     needs: changes
     if: needs.changes.outputs.inert != 'true'
     runs-on: windows-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 45
 
     steps:
@@ -1148,6 +1216,14 @@ jobs:
     needs: changes
     if: needs.changes.outputs.inert != 'true'
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 20
 
     steps:
@@ -1310,6 +1386,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.inert != 'true'
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
     # 45, not 30. The suite runs on one worker, and at 402 tests a passing run
     # was still going when 30 minutes cancelled it (job 120021242729: setup and
     # build 8 minutes, then 22 minutes of tests, all passing). 45 leaves room for
@@ -1321,6 +1402,8 @@ jobs:
     # Set on the build step alone, that second turbo looked in its default
     # folder, missed every task and rebuilt every package (~100 s).
     env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
       TURBO_CACHE_DIR: .turbo
 
     steps:
@@ -1437,6 +1520,11 @@ jobs:
     needs: [ci]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
     # Higher than `Browser tests` because the build is inside the budget rather
     # than done for it. The suite itself is two specs.
     timeout-minutes: 30
@@ -1446,6 +1534,8 @@ jobs:
     # Set on the build step alone, that second turbo looked in its default
     # folder, missed every task and rebuilt every package (~100 s).
     env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
       TURBO_CACHE_DIR: .turbo
 
     steps:
@@ -1526,6 +1616,14 @@ jobs:
     name: Dev reload applies a saved schema edit
     needs: [ci]
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 25
 
     steps:
@@ -1582,6 +1680,14 @@ jobs:
     name: Scaffold smoke (${{ matrix.os }})
     needs: [ci]
     runs-on: ${{ matrix.os }}
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 15
     strategy:
       fail-fast: false

@@ -429,6 +429,74 @@ describe("a Version Packages pull request that went stale", () => {
   });
 });
 
+describe("Turborepo's shared remote cache", () => {
+  /*
+   * Only `main`'s pushes and the merge queue write to it: every later run
+   * starts from what they built, and a pull request's own build must not
+   * become an entry another pull request replays. TURBO_CACHE asks for that,
+   * but the code under test could ask otherwise, so the credentials are
+   * secrets of an environment GitHub admits only those refs to. Each
+   * expression is evaluated for the events it meets, not read by spelling.
+   */
+  const valueOf = (template, known) => {
+    const expression = String(template);
+    return evaluate(conditionTokens(expression), expression, known);
+  };
+  const MAIN = { "github.event_name": "push", "github.ref": "refs/heads/main" };
+  const QUEUE = { "github.event_name": "merge_group", "github.ref": "refs/heads/gh-readonly-queue/main/pr-1-abc" };
+  const PULL = { "github.event_name": "pull_request", "github.ref": "refs/pull/1/merge" };
+  const DISPATCH = { "github.event_name": "workflow_dispatch", "github.ref": "refs/heads/main" };
+  const SECRETS = { "secrets.turbo_token": "t", "secrets.turbo_remote_cache_signature_key": "k".repeat(64) };
+  const CREDENTIAL = /\bsecrets\.TURBO_(TOKEN|REMOTE_CACHE_SIGNATURE_KEY)\b/;
+
+  for (const path of [".github/workflows/ci.yml", ".github/workflows/integration.yml"]) {
+    const workflow = read(path);
+    const holders = Object.entries(workflow.jobs).filter(([, job]) => CREDENTIAL.test(JSON.stringify(job.env ?? {})));
+
+    it(`${path}: main and the queue write, every other run only reads`, () => {
+      expect(valueOf(workflow.env.TURBO_CACHE, MAIN)).toBe("local:rw,remote:rw");
+      expect(valueOf(workflow.env.TURBO_CACHE, QUEUE)).toBe("local:rw,remote:rw");
+      expect(valueOf(workflow.env.TURBO_CACHE, PULL)).toBe("local:rw,remote:r");
+      expect(valueOf(workflow.env.TURBO_CACHE, DISPATCH)).toBe("local:rw,remote:r");
+    });
+
+    it(`${path}: reads the credentials only inside jobs, never at the workflow level`, () => {
+      expect(JSON.stringify(workflow.env ?? {})).not.toMatch(CREDENTIAL);
+      expect(holders.length, "jobs that hold the cache credentials").toBeGreaterThan(0);
+    });
+
+    it(`${path}: every job holding them names the write environment only on main and in the queue`, () => {
+      for (const [name, job] of holders) {
+        expect(job.environment, name).toMatchObject({ deployment: false });
+        expect(valueOf(job.environment.name, MAIN), name).toBe("turbo-cache");
+        expect(valueOf(job.environment.name, QUEUE), name).toBe("turbo-cache");
+        expect(valueOf(job.environment.name, PULL), name).toBe("turbo-cache-read");
+        expect(valueOf(job.environment.name, DISPATCH), name).toBe("turbo-cache-read");
+      }
+    });
+
+    it(`${path}: hands turbo the token only with a signing key beside it`, () => {
+      for (const [name, job] of holders) {
+        expect(valueOf(job.env.TURBO_TOKEN, { ...MAIN, ...SECRETS }), name).toBe("t");
+        expect(valueOf(job.env.TURBO_TOKEN, { ...MAIN, ...SECRETS, "secrets.turbo_remote_cache_signature_key": "" }), name).toBe("");
+      }
+    });
+  }
+
+  it("signs every artifact", () => {
+    const config = load(
+      readFileSync(new URL("../turbo.jsonc", import.meta.url), "utf8")
+        .replace(/^\s*\/\/.*$/gm, "")
+        .replace(/\s\/\/ .*$/gm, "")
+    );
+    expect(config.remoteCache).toMatchObject({ signature: true });
+  });
+
+  it("is never used by a release, which builds what it publishes from its own checkout", () => {
+    expect(readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8")).not.toMatch(/TURBO_(TOKEN|TEAM|API)\b/);
+  });
+});
+
 describe("a dispatched run and the push run of one commit", () => {
   /*
    * main-catch-up.yml dispatches CI and Integration on a commit whose push run
@@ -1310,9 +1378,9 @@ describe("who owns what the required checks run", () => {
   it("owns every manifest, task graph, and test, compiler, lint and build configuration in the repository", () => {
     const definitions = trackedFiles().filter(path => LANE_DEFINITIONS.test(path));
     // The control: the walk finds the repository's manifests and configurations, not nothing,
-    // and a Rollup configuration by its name alone, as `rollup -c` finds one without being told.
+    // and a tsdown configuration by its name alone, as `tsdown` finds one without being told.
     expect(definitions.length).toBeGreaterThan(50);
-    expect(definitions).toContain("packages/nextly/rollup.dts.config.ts");
+    expect(definitions).toContain("packages/nextly/tsdown.config.ts");
     // And every Next.js configuration, wherever it sits: the playground's,
     // which the required build builds, and each template's.
     expect(definitions).toEqual(expect.arrayContaining(["apps/playground/next.config.ts", "templates/base/next.config.ts", "templates/plugin/dev/next.config.ts"]));
@@ -1350,7 +1418,7 @@ describe("who owns what the required checks run", () => {
     const tracked = new Set(files);
     const run = files.filter(path => WORKSPACE_MANIFEST.test(path)).flatMap(manifest => filesTasksRun(manifest, tracked, tasks));
     // The control: the build steps a package runs from its own directory, directly and through `pnpm run`.
-    expect(run).toEqual(expect.arrayContaining(["packages/nextly/scripts/postbuild.cjs", "packages/nextly/rollup.dts.config.ts", "packages/ui/scripts/check-server-safe-artifacts.ts"]));
+    expect(run).toEqual(expect.arrayContaining(["packages/nextly/scripts/postbuild.cjs", "packages/ui/scripts/check-server-safe-artifacts.ts"]));
     for (const path of new Set(run)) expect(ownersOf(rules, path), path).not.toEqual([]);
   });
 
@@ -1609,7 +1677,7 @@ function ownersOf(rules, path) {
 }
 
 /** Manifests, task graphs, and the test, compiler, lint and build configuration the lanes run with. */
-const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|tsup|rollup)[^/]*\.config\.[^/]+)$/;
+const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|tsup|tsdown|rollup)[^/]*\.config\.[^/]+)$/;
 
 /** A workspace package's manifest, whose scripts Turbo runs. */
 const WORKSPACE_MANIFEST = /^(?:packages|apps)\/[^/]+\/package\.json$|^e2e\/package\.json$/;

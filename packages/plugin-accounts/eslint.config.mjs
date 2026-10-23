@@ -10,11 +10,10 @@ export default [
   ...config,
   {
     ignores: [
-      ".tsup/**",
       "dist/**",
       ".turbo/**",
       "node_modules/**",
-      "tsup.config.ts",
+      "tsdown.config.ts",
     ],
   },
 ];
