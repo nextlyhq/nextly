@@ -26,7 +26,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import { literalText, parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -234,12 +234,10 @@ function trackedPaths() {
  * that gains or loses a pass is covered without anyone editing this.
  */
 function projectConfigs(command) {
-  const configs = [];
-  for (const invocation of String(command).split("&&")) {
-    if (!/\btsc\b/.test(invocation)) continue;
-    const explicit = /(?:-p|--project)\s+(\S+)/.exec(invocation);
-    configs.push(explicit ? explicit[1] : "tsconfig.json");
-  }
+  const configs = String(command)
+    .split("&&")
+    .filter(invocation => /\btsc\b/.test(invocation))
+    .map(invocation => /(?:-p|--project)\s+(\S+)/.exec(invocation)?.[1] ?? "tsconfig.json");
   return configs.length > 0 ? configs : ["tsconfig.json"];
 }
 
@@ -478,16 +476,16 @@ describe("a root script in the global inputs brings its imports with it", () => 
     });
   }
 
-  const isStringLiteral = node => ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
-
-  /** The text of every string literal in the file, from its syntax tree. */
+  /**
+   * The text of every string literal in the file, from its syntax tree: quoted strings and
+   * templates with no substitutions, which are as statically known.
+   */
   function stringLiterals(file) {
     const texts = [];
-    const visit = node => {
-      if (isStringLiteral(node)) texts.push(node.text);
-      ts.forEachChild(node, visit);
-    };
-    visit(ts.createSourceFile(file, readFileSync(join(REPO_ROOT, file), "utf8"), ts.ScriptTarget.Latest, true));
+    walk(parseSource(readFileSync(join(REPO_ROOT, file), "utf8"), file).program, node => {
+      const text = literalText(node);
+      if (text !== null) texts.push(text);
+    });
     return texts;
   }
 
