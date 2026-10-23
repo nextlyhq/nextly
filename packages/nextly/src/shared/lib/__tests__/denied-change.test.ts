@@ -415,6 +415,47 @@ describe("keepDeniedAtStored", () => {
     expect(kept.g).toEqual({ b: "x", a: "old" });
   });
 
+  it("keeps a branch the update leaves out when it holds a denied value", async () => {
+    // The group is written whole without `inner`, whose `locked` the writer
+    // may not change: leaving `inner` out would delete it.
+    const kept = await keepDeniedAtStored({
+      update: { g: { other: "x" } },
+      stored: { g: { other: "o", inner: { heading: "h", locked: "L" } } },
+      applyRules: document => {
+        const group = document.g as Record<string, unknown> | undefined;
+        const inner = group?.inner as Record<string, unknown> | undefined;
+        if (inner) delete inner.locked;
+        return Promise.resolve();
+      },
+    });
+
+    expect(kept.g).toEqual({
+      other: "x",
+      inner: { heading: "h", locked: "L" },
+    });
+  });
+
+  it("keeps a row the update leaves out when it holds a denied value", async () => {
+    // `b` holds a value the writer may not change, so leaving it out of a
+    // list written whole would delete it; `c` holds none, and goes.
+    const kept = await keepDeniedAtStored({
+      update: { rows: [{ id: "a", heading: "a2" }] },
+      stored: {
+        rows: [
+          { id: "a", heading: "a", locked: "locked-a" },
+          { id: "b", heading: "b", locked: "locked-b" },
+          { id: "c", heading: "c" },
+        ],
+      },
+      applyRules: deniesLockedRows,
+    });
+
+    expect(kept.rows).toEqual([
+      { id: "a", heading: "a2", locked: "locked-a" },
+      { id: "b", heading: "b", locked: "locked-b" },
+    ]);
+  });
+
   it("pairs rows by position when they carry no id", async () => {
     // The control: rows that cannot be told apart keep the value at their
     // index, as they always have.

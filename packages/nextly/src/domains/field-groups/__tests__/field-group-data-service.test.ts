@@ -1381,6 +1381,59 @@ describe("FieldGroupDataService", () => {
       expect(row.code ?? null).toBeNull();
     });
 
+    it("keeps a denied child of a container column at its stored value", async () => {
+      // `meta` is one JSON column, written whole: a denied child removed from
+      // the update would be erased from the row.
+      ctx.registry.registerComponent("boxed", {
+        slug: "boxed",
+        tableName: "comp_boxed",
+        fields: [
+          {
+            name: "meta",
+            type: "group",
+            fields: [
+              { name: "public", type: "text" },
+              { name: "secret", type: "text" },
+            ],
+          },
+        ],
+      });
+      registerFieldFunctions("fieldGroup", "boxed", [
+        {
+          name: "meta",
+          type: "group",
+          fields: [
+            { name: "public", type: "text" },
+            { name: "secret", type: "text", access: { update: () => false } },
+          ],
+        },
+      ]);
+      ctx.adapter.select.mockResolvedValue([
+        {
+          id: "b-1",
+          _parent_id: "e1",
+          _order: 0,
+          meta: JSON.stringify({ public: "old", secret: "S" }),
+        },
+      ]);
+
+      await ctx.service.saveComponentData({
+        parentId: "e1",
+        parentTable: "dc_pages",
+        access: CHECKED,
+        fields: [{ name: "boxed", type: "component", component: "boxed" }],
+        data: { boxed: { meta: { public: "new", secret: "forged" } } },
+      });
+
+      const meta = (
+        ctx.adapter.update.mock.calls[0][1] as Record<string, unknown>
+      ).meta;
+      expect(typeof meta === "string" ? JSON.parse(meta) : meta).toEqual({
+        public: "new",
+        secret: "S",
+      });
+    });
+
     describe("a single field group's stored instance", () => {
       /** A stored `owned` instance, and a rule writable only for `allowedId`. */
       function storedOwned(allowedId: string) {
