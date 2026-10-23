@@ -127,6 +127,7 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^22.20.5",
     "@vitejs/plugin-react": "^5.1.0",
     "@vitest/coverage-v8": "^5.0.5",
     "@vitest/ui": "^5.0.5",
@@ -149,7 +150,7 @@
   "prettier": "@nextlyhq/prettier-config",
   "packageManager": "pnpm@12.5.1",
   "engines": {
-    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+    "node": "^22.12.0 || >=24.0.0"
   },
   "dependencies": {
     "@mdx-js/mdx": "3.1.1",

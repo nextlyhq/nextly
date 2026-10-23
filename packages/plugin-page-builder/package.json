@@ -38,8 +38,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
+    "build": "tsdown",
+    "dev": "tsdown --watch",
     "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
@@ -76,7 +76,7 @@
     "@tanstack/react-query": "^5.62.0",
     "@testing-library/react": "^16.3.0",
     "@types/css-tree": "^2.3.4",
-    "@types/node": "^20.19.17",
+    "@types/node": "^22.20.5",
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
     "@types/semver": "^7.5.8",
@@ -87,12 +87,12 @@
     "react-dom": "19.2.0",
     "react-hook-form": "^7.66.0",
     "semver": "^7.6.0",
-    "tsup": "^8.5.0",
+    "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
     "vitest": "^5.0.5"
   },
   "engines": {
-    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+    "node": "^22.12.0 || >=24.0.0"
   },
   "keywords": [
     "nextly",

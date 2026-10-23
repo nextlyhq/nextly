@@ -1,7 +1,7 @@
 import { cpSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 
-import { defineConfig } from "tsup";
+import { defineConfig } from "tsdown";
 
 /**
  * Publishable entries, kept separate so `"use client"` never leaks into the
@@ -15,8 +15,8 @@ import { defineConfig } from "tsup";
  * with the renderer itself: blocks draw through `@nextlyhq/blocks-react`, which
  * owns that boundary now, so this package emits no renderer to isolate.
  *
- * Peers (nextly, admin, react, …) are external by default (tsup externalizes
- * node_modules).
+ * Peers (nextly, admin, react, …) are external by default (tsdown externalizes
+ * dependencies and peer dependencies).
  */
 // The removed renderer's error boundary was the one client island whose
 // `"use client"` directive did not survive the build, so `onSuccess` re-applied
@@ -33,7 +33,10 @@ export default defineConfig({
   // component — the blocks field's summary — where it used to carry the editor.
   entry: ["src/index.ts", "src/blocks/index.ts", "src/admin/index.ts"],
   format: ["esm"],
-  dts: true,
+  // `.js` and `.d.ts`, the names the exports map already publishes.
+  fixedExtension: false,
+  // Declarations without a type check: `check-types` is the type check.
+  dts: { sourcemap: false, compilerOptions: { noCheck: true } },
   clean: true,
   sourcemap: true,
   minify: false,

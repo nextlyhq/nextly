@@ -5,7 +5,7 @@ import path from "path";
 import tsconfigPaths from "vite-tsconfig-paths";
 import { defineConfig } from "vitest/config";
 
-// Mirror the tsup `define` so `getCoreVersion()` resolves under test (D6).
+// Mirror the tsdown `define` so `getCoreVersion()` resolves under test (D6).
 const require = createRequire(import.meta.url);
 const { version: coreVersion } = require("./package.json") as {
   version: string;
@@ -160,8 +160,11 @@ export default defineConfig({
     // local gate for reasons unrelated to the code under test. Fewer workers
     // trades suite wall-time for per-test CPU, which is what the timeouts
     // actually measure.
+    // `maxWorkers`, not `poolOptions.forks.maxForks`: Vitest 4 removed
+    // `poolOptions` and ignores it, so the cap above had silently stopped
+    // applying and a plain `pnpm test` took a worker per core.
     fileParallelism: true,
-    poolOptions: { forks: { maxForks: 3 } },
+    maxWorkers: 3,
     // Why explicit exclude of integration tests: F18 runs unit and integration
     // suites separately. Unit run skips *.integration.test.ts so the suite
     // stays green without a database. Integration run uses

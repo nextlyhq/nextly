@@ -55,11 +55,11 @@ export default defineConfig({
 
 ## Compatibility
 
-| Tool          | Version               |
-| ------------- | --------------------- |
-| Node.js       | 20.19+, 22.12+ or 24+ |
-| `uploadthing` | peer                  |
-| `nextly`      | 0.0.x                 |
+| Tool          | Version       |
+| ------------- | ------------- |
+| Node.js       | 22.12+ or 24+ |
+| `uploadthing` | peer          |
+| `nextly`      | 0.0.x         |
 
 ## Documentation
 

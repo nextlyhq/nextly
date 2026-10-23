@@ -18,8 +18,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
+    "build": "tsdown",
+    "dev": "tsdown --watch",
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
@@ -30,7 +30,7 @@
     "clean": "rimraf dist"
   },
   "engines": {
-    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+    "node": "^22.12.0 || >=24.0.0"
   },
   "dependencies": {
     "@vercel/blob": "^2.0.0"
@@ -38,12 +38,12 @@
   "devDependencies": {
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
-    "@types/node": "^20.19.17",
+    "@types/node": "^22.20.5",
     "@vitest/coverage-v8": "^5.0.5",
     "@vitest/ui": "^5.0.5",
     "eslint": "^9.39.1",
     "nextly": "workspace:*",
-    "tsup": "^8.5.0",
+    "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^5.0.5"

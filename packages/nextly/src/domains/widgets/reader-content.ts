@@ -36,7 +36,7 @@ import {
 import { requireNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
-import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
+import { readableSlugsOfKind } from "../../services/lib/readable-slug-allowlist";
 
 import { isKeptOffDashboard } from "./kept-off-dashboard";
 import { listSources, sourceKindFromId, sourceTarget } from "./sources";
@@ -78,11 +78,32 @@ function readArgs(caller: ReadCaller) {
 export async function readableCollectionSlugs(
   caller: ReadCaller
 ): Promise<string[]> {
-  const readable =
-    (await readableSlugAllowlist(readAccessCaller(caller), "collection")) ?? [];
-  // A collection kept off the dashboard does not make a content card worth offering: the card
-  // would leave it out and draw empty.
-  return readable.filter(slug => !isKeptOffDashboard("collection", slug));
+  return (await readableOfKind(caller, "collection")).slugs;
+}
+
+/**
+ * The reader's slugs of one kind as the dashboard counts them, and whether the
+ * registry could be read.
+ *
+ * 🔴 `reachable` is kept rather than folded into an empty list. An unreadable
+ * registry reads as "nothing here" to anything that sees only the slugs, and
+ * "nothing here" is the answer that offers the empty-install cards and ticks
+ * no setup step: a registry outage would tell an established site that it had
+ * no content. Whoever decides what to tell the reader reads `reachable`.
+ *
+ * Less what the dashboard keeps off: a collection or Single kept off it does
+ * not make a card worth offering, since the card would leave it out and draw
+ * empty.
+ */
+export async function readableOfKind(
+  caller: ReadCaller,
+  kind: "collection" | "single"
+): Promise<{ slugs: string[]; reachable: boolean }> {
+  const read = await readableSlugsOfKind(readAccessCaller(caller), kind);
+  return {
+    slugs: read.slugs.filter(slug => !isKeptOffDashboard(kind, slug)),
+    reachable: read.reachable,
+  };
 }
 
 /**
@@ -95,10 +116,7 @@ export async function readableCollectionSlugs(
 export async function readableSingleSlugs(
   caller: ReadCaller
 ): Promise<string[]> {
-  const readable =
-    (await readableSlugAllowlist(readAccessCaller(caller), "single")) ?? [];
-  // Kept off the dashboard, for the reason the collections' are.
-  return readable.filter(slug => !isKeptOffDashboard("single", slug));
+  return (await readableOfKind(caller, "single")).slugs;
 }
 
 /**
@@ -145,20 +163,23 @@ export async function readerMayCreateEntry(
 }
 
 /**
- * Of the reader's collections, the ones a widget may QUERY.
+ * Of the reader's collections or Singles, the ones a widget may QUERY.
  *
- * A published `collection:` source is what says a collection's stored shape is
- * not known to be ahead of its table: the source builder withholds one whose
- * DDL a reload refused, and one whose migration label declines to claim the
- * table. A count over a collection outside this set may throw -- the table
- * can be absent -- and a condition that throws goes unanswered, which HIDES
- * its widget; so the walk below stays inside it, and a fresh install whose one
- * collection is mid-migration keeps its onboarding card.
+ * A published source is what says an entity's stored shape is not known to be
+ * ahead of its table: the source builder withholds one whose DDL a reload
+ * refused, and one whose migration label declines to claim the table. A read
+ * of an entity outside this set may throw -- the table can be absent -- and a
+ * condition that throws goes unanswered, which HIDES its widget; so the walks
+ * here stay inside it, and a fresh install whose one collection is
+ * mid-migration keeps its onboarding card.
  */
-function queryableCollectionSlugs(readable: readonly string[]): string[] {
+export function queryableSlugs(
+  kind: "collection" | "single",
+  readable: readonly string[]
+): string[] {
   const published = new Set(
     listSources()
-      .filter(source => sourceKindFromId(source.id) === "collection")
+      .filter(source => sourceKindFromId(source.id) === kind)
       .map(source => sourceTarget(source.id))
   );
   return readable.filter(slug => published.has(slug));
@@ -214,7 +235,8 @@ export async function readerHasContent(
    */
   resolved?: readonly string[]
 ): Promise<ContentAnswer> {
-  const slugs = queryableCollectionSlugs(
+  const slugs = queryableSlugs(
+    "collection",
     resolved ?? (await readableCollectionSlugs(caller))
   );
   return anyHoldsEntry(slugs, async slug => {

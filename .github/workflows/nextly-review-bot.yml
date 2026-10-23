@@ -320,8 +320,9 @@ jobs:
           git sparse-checkout disable
           # Counted over the whole listing: a `grep -q` that stops at the first
           # match can end `git ls-files` on a broken pipe, which `pipefail`
-          # would then read as no match.
-          skipped=$(git ls-files -t | awk '$1 == "S"' | wc -l)
+          # would then read as no match. BSD `wc` pads its count with spaces,
+          # so they are stripped wherever a count lands in a message.
+          skipped=$(git ls-files -t | awk '$1 == "S"' | wc -l | tr -d ' ')
           if [ "$skipped" -ne 0 ]; then
             echo "::error::the checkout still leaves $skipped files of the pull request out"
             exit 1
@@ -333,7 +334,7 @@ jobs:
           git ls-files -z | { grep -zE "$instructions" || true; } | xargs -0 -r rm -f --
           git ls-tree -r -z --name-only "origin/$BASE" | { grep -zE "$instructions" || true; } |
             xargs -0 -r git checkout "origin/$BASE" --
-          links=$(find . -path ./.git -prune -o -type l -print | wc -l)
+          links=$(find . -path ./.git -prune -o -type l -print | wc -l | tr -d ' ')
           if [ "$links" -ne 0 ]; then
             echo "::error::$links symbolic links are still in the checkout"
             exit 1
@@ -795,7 +796,9 @@ jobs:
             exit 1
           fi
           count=$(jq length "$out/file-comments.json")
-          for i in $(seq 0 $((count - 1))); do
+          # A counted loop rather than `seq 0 $((count - 1))`: BSD `seq` counts
+          # down from 0 to -1 when there is nothing to post, GNU prints nothing.
+          for ((i = 0; i < count; i++)); do
             jq -r ".[$i].body" "$out/file-comments.json" > "$out/file-$i.md"
             "$gateway" post-file-comment "$NUMBER" "$SHA" "$(jq -r ".[$i].path" "$out/file-comments.json")" "$out/file-$i.md" "$GITHUB_RUN_ID" "$i"
           done
@@ -810,7 +813,7 @@ jobs:
               echo "::warning::the review threads could not be read, so no reply was posted"
               count=0
             fi
-            for i in $(seq 0 $((count - 1))); do
+            for ((i = 0; i < count; i++)); do
               target=$(jq -r ".[$i].in_reply_to" "$PAYLOAD/replies.json")
               # A comment in the reply's thread, by anyone but this bot, made at
               # or after the prefetch. The same second counts as after: GitHub's
