@@ -18,6 +18,7 @@
  */
 
 import { CollectionQuickLinks } from "@admin/components/features/dashboard/CollectionQuickLinks";
+import { CountCard } from "@admin/components/features/dashboard/CountCard";
 import { NeedsAttention } from "@admin/components/features/dashboard/NeedsAttention";
 import { OnboardingChecklist } from "@admin/components/features/dashboard/OnboardingChecklist";
 import { QuickCreate } from "@admin/components/features/dashboard/QuickCreate";
@@ -46,4 +47,5 @@ export function registerCoreWidgetComponents(): void {
   registerCoreComponent("core#NeedsAttention", NeedsAttention);
   registerCoreComponent("core#RecentActivity", RecentActivityCard);
   registerCoreComponent("core#UpcomingReleases", UpcomingReleasesCard);
+  registerCoreComponent("core#Count", CountCard);
 }

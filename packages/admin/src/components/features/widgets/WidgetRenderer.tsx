@@ -36,6 +36,7 @@ import { resolveIconName } from "./archetypes/icon";
 import type { CellSlotLookup } from "./archetypes/types";
 import type { SkeletonShape } from "./frame/states";
 import { resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
+import { sourcedQuery } from "./widget-as-asked";
 import { WidgetCard, type WidgetCardProps } from "./WidgetCard";
 
 /**
@@ -246,7 +247,10 @@ function sharedCardProps(
     skeletonItems: skeletonItemsFor(definition),
     skeletonFields: skeletonFieldsFor(definition),
     awaitsFreshness: awaitsFreshnessFor(definition, slot),
-    skeletonCells: definition.cells?.map(cell => cell.label),
+    // A stats card's labels; a custom card's cells draw no skeleton of their own.
+    skeletonCells: definition.cells?.flatMap(cell =>
+      "label" in cell ? [cell.label] : []
+    ),
   };
 }
 
@@ -264,21 +268,42 @@ function componentPropsFor(
   definition: WidgetRendererProps["definition"],
   slot: WidgetRendererProps["slot"],
   placement: WidgetRendererProps["placement"],
-  live: { isFetching: boolean; onRetry?: () => void }
+  live: {
+    isFetching: boolean;
+    onRetry?: () => void;
+    cells?: Record<string, WidgetSlot>;
+  }
 ): WidgetComponentProps {
   return {
     widgetId: definition.id,
     placementId: placement?.id ?? definition.id,
     settings: placement?.settings ?? {},
     slot,
+    // Each declared read's answer by key, for a custom card that declares
+    // several; absent for every other card.
+    ...(live.cells === undefined ? {} : { cells: live.cells }),
     isFetching: live.isFetching,
     // The Retry a framed card's error offers: a self-drawn card draws its own error, so it is
     // handed the same callback rather than left with nothing to offer.
     ...(live.onRetry ? { onRetry: live.onRetry } : {}),
     // The query as asked, which `definition` already is: the grid draws each card
-    // from the same declaration the batch sent.
-    ...(definition.query ? { query: definition.query } : {}),
+    // from the same declaration the batch sent. One with no source yet was not
+    // asked, so it is not handed on.
+    ...(sourcedQuery(definition.query) ? { query: definition.query } : {}),
   };
+}
+
+/** Each cell's answer by key, leaving out the keys with none yet. */
+function cellAnswersOf(
+  keys: readonly string[],
+  slotFor: CellSlotLookup | undefined
+): Record<string, WidgetSlot> {
+  const answers: Record<string, WidgetSlot> = Object.create(null);
+  for (const key of keys) {
+    const answer = slotFor?.(key);
+    if (answer !== undefined) answers[key] = answer;
+  }
+  return answers;
 }
 
 export function WidgetRenderer({
@@ -304,10 +329,20 @@ export function WidgetRenderer({
   });
 
   const outcome = resolveWidgetOutcome(definition, slot, slotFor);
+  // A custom card that declares several reads is handed each answer by key; a
+  // key with no answer yet is left out, as `slot` is.
+  const cellAnswers =
+    definition.archetype === "custom" && definition.cells?.length
+      ? cellAnswersOf(
+          definition.cells.map(cell => cell.key),
+          slotFor
+        )
+      : undefined;
 
   // Built once, so the two `chrome` branches below cannot drift into handing a
   // component different props depending on whether its card is framed.
   const componentProps = componentPropsFor(definition, slot, placement, {
+    ...(cellAnswers === undefined ? {} : { cells: cellAnswers }),
     isFetching,
     onRetry,
   });

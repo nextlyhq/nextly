@@ -58,6 +58,8 @@
  * @module domains/widgets/core-widgets
  */
 
+import { IN_RELEASE_KEY } from "../collections/query/reserved-filter-keys";
+
 import { settings } from "./declaration/setting-builders";
 import type { WidgetDefinition, WidgetSetting } from "./definition";
 import { MAX_WIDGET_LIMIT } from "./query-limits";
@@ -392,6 +394,67 @@ const CORE_WIDGET_LITERALS = [
     // card can say more exist at every size.
     sizedQuery: true,
     settings: [RECENT_ACTIVITY_ITEMS],
+  },
+  {
+    id: "core/count",
+    title: "Count",
+    description:
+      "How many entries a collection holds, published and draft, and how that is changing.",
+    archetype: "custom",
+    component: "core#Count",
+    // Added from a collection's group of the add panel, once per collection,
+    // and never placed on the default dashboard.
+    offered: "per-collection",
+    // A quarter by default; up to two thirds, where the trend is drawn.
+    defaultSize: "sm",
+    maxSize: "xl",
+    settings: [
+      { name: "collection", type: "collection", label: "Collection" },
+      { name: "filter", type: "filter", of: "collection", label: "Filter" },
+    ],
+    // Each read on its own path. The number is ONE read either way: the status
+    // split for a collection with a lifecycle (the total is its buckets'
+    // sum), a plain count for one without.
+    cells: [
+      {
+        key: "split",
+        when: "lifecycle",
+        query: { op: "groupBy", groupBy: "status", status: "all" },
+      },
+      {
+        key: "total",
+        when: "no-lifecycle",
+        query: { op: "count", status: "all" },
+      },
+      {
+        key: "trend",
+        query: {
+          op: "timeseries",
+          dateField: "createdAt",
+          interval: "day",
+          status: "all",
+          limit: 30,
+          since: "30d",
+        },
+      },
+      {
+        key: "prior",
+        query: { op: "count", status: "all", since: "60d", until: "30d" },
+      },
+      {
+        // The entries a scheduled release will publish, through the entry
+        // list's own condition, so the figure and the list it links to are
+        // one read. A caller with no release to read is answered "not
+        // available", and the card leaves the figure out.
+        key: "scheduled",
+        when: "lifecycle",
+        query: {
+          op: "count",
+          status: "all",
+          where: { [IN_RELEASE_KEY]: true },
+        },
+      },
+    ],
   },
 ] as const satisfies readonly WidgetDefinition[];
 

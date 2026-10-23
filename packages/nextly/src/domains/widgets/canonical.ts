@@ -117,6 +117,14 @@ export interface CanonicalWidget {
   defaultWidth?: WidgetWidth;
   allowsSeveral?: boolean;
   /**
+   * Where the add panel offers this widget, as its definition states it:
+   * `"per-collection"` keeps it off the default dashboard and offers it per
+   * collection, any number of times.
+   *
+   * @experimental
+   */
+  offered?: "per-collection";
+  /**
    * How long the widget stays, and the condition it stays under.
    *
    * Carried through because the LAYOUT endpoint is where a transient card is
@@ -185,6 +193,7 @@ const REGISTRATION_FIELDS = [
   "lifecycle",
   "visibleWhen",
   "dismissible",
+  "offered",
 ] as const satisfies ReadonlyArray<
   keyof WidgetDefinition & keyof CanonicalWidget
 >;
@@ -495,9 +504,12 @@ export interface WidgetWidthFacts {
  * plugin may put one is its suggestion, which the site may decline, and an
  * unsuggested one stays in the add panel. Until suggestions are placed, no
  * declared widget enters it at all.
+ *
+ * Nor does a widget offered per collection: it reads the collection a card is
+ * set to, and the default arrangement places a widget once, set to nothing.
  */
 export function placedByDefault(widget: CanonicalWidget): boolean {
-  return widget.serverData !== true;
+  return widget.serverData !== true && widget.offered !== "per-collection";
 }
 
 /**
@@ -521,6 +533,8 @@ export function widthFacts(widget: CanonicalWidget): WidgetWidthFacts {
   return {
     allowedWidths: allowed,
     defaultWidth: widget.defaultWidth ?? widthFromSize(widget.defaultSize),
-    allowsSeveral: widget.allowsSeveral ?? false,
+    // A widget offered per collection is added once for each collection, so a
+    // dashboard holds several of it by design.
+    allowsSeveral: widget.allowsSeveral ?? widget.offered === "per-collection",
   };
 }

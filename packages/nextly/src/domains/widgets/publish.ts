@@ -64,6 +64,12 @@ export function publishableWidgets(): WidgetDefinition[] {
 export interface PublishedContentSource {
   collection: string;
   label: string;
+  /**
+   * Whether the collection has a draft and published lifecycle: the source's
+   * own `lifecycleStatus`, so a card asks a status split only of a collection
+   * that has one. @experimental
+   */
+  lifecycle: boolean;
   fields: Pick<
     WidgetSourceField,
     "name" | "label" | "type" | "choices" | "groupable"
@@ -102,6 +108,7 @@ export function publishableContentSources(
     published.push({
       collection: slug,
       label: source.label,
+      lifecycle: source.lifecycleStatus === true,
       fields: source.fields
         .filter(field => field.offered !== false)
         .map(({ name, label, type, choices, groupable }) => ({

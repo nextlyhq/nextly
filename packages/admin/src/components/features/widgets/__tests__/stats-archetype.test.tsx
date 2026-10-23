@@ -129,7 +129,13 @@ describe("a stats card", () => {
         definition={{
           ...card,
           id: "core/a#b",
-          cells: [{ key: "b", label: "B", query: card.cells![0].query }],
+          cells: [
+            {
+              key: "b",
+              label: "B",
+              query: { source: "collection:posts", op: "count", status: "all" },
+            },
+          ],
         }}
         slot={undefined}
         slotFor={key => (key === "b" ? count(7) : undefined)}

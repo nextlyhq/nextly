@@ -24,10 +24,12 @@ import type { FindArgs } from "../../direct-api/types/collections";
 import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { WhereFilter } from "../collections/query/query-operators";
+import { IN_RELEASE_KEY } from "../collections/query/reserved-filter-keys";
+import { callerHasReadableRelease } from "../releases/releases-widget-source";
 
 import { answerAsAsked } from "./answer-as-asked";
 import { resolveExecutableSource } from "./executable-source";
-import type { WidgetQuery } from "./query";
+import { relativeSpanStart, type WidgetQuery } from "./query";
 import type { ResolverOptions } from "./resolved-sources";
 import type { WidgetResult, WidgetResultField } from "./result";
 import {
@@ -103,14 +105,44 @@ function sharedReadArgs(query: WidgetQuery, caller: ReadCaller) {
   };
 }
 
+/**
+ * The query's `where` with its window added, on `field`: rows from `since` on
+ * and, with `until`, before it, measured from the batch's `now`. Half-open, so
+ * a row exactly at a boundary belongs to the window that starts there.
+ *
+ * Added to a top-level `and` rather than merged into the filter's keys, so a
+ * condition the filter already places on the same field still applies, and a
+ * reserved top-level condition keeps its place.
+ */
+function windowedQuery(
+  query: WidgetQuery,
+  field: string,
+  now: Date
+): WidgetQuery {
+  if (query.since === undefined) return query;
+  const window: Record<string, string> = {
+    greater_than_equal: relativeSpanStart(query.since, now).toISOString(),
+    ...(query.until === undefined
+      ? { less_than: now.toISOString() }
+      : { less_than: relativeSpanStart(query.until, now).toISOString() }),
+  };
+  const where = query.where ?? {};
+  const and = Array.isArray(where.and) ? where.and : [];
+  return {
+    ...query,
+    where: { ...where, and: [...and, { [field]: window }] },
+  };
+}
+
 async function runCount(
   collection: string,
   query: WidgetQuery,
-  caller: ReadCaller
+  caller: ReadCaller,
+  now: Date
 ): Promise<WidgetResult> {
   const result = await requireNextly().count({
     collection,
-    ...sharedReadArgs(query, caller),
+    ...sharedReadArgs(windowedQuery(query, "createdAt", now), caller),
   });
   return { op: "count", total: result.total };
 }
@@ -185,7 +217,8 @@ function describeGroupedField(
 async function runTimeseries(
   collection: string,
   query: WidgetQuery,
-  caller: ReadCaller
+  caller: ReadCaller,
+  now: Date
 ): Promise<WidgetResult> {
   // `validateWidgetQuery` refuses a `timeseries` op carrying neither key, so by
   // the time a query reaches execution both are present. The fallbacks keep
@@ -201,7 +234,10 @@ async function runTimeseries(
     // and defaults it, so ignoring it here would let a card asking for a week
     // receive a month.
     intervals: query.limit,
-    ...sharedReadArgs(query, caller),
+    // The batch's instant ends the chart's last interval, as it ends every
+    // window here, so the bars and a span's bounds come from one clock.
+    now,
+    ...sharedReadArgs(windowedQuery(query, dateField, now), caller),
   });
   return { op: "timeseries", points: result.points, interval: result.interval };
 }
@@ -313,6 +349,9 @@ const SINGLE_QUERY_FIELD_USE: Record<
   groupBy: "refused",
   dateField: "refused",
   interval: "refused",
+  // A Single is one document; there are no rows to bound by when they were made.
+  since: "refused",
+  until: "refused",
 };
 
 /**
@@ -404,6 +443,32 @@ function projectedTo(
   );
 }
 
+/** Whether a read keeps entries by the releases that hold them. */
+function namesReleaseCondition(query: WidgetQuery): boolean {
+  return (
+    query.where !== undefined &&
+    Object.prototype.hasOwnProperty.call(query.where, IN_RELEASE_KEY)
+  );
+}
+
+/** The scope key the answer below is kept under, once per source per batch. */
+const READABLE_RELEASE_KEY = "has-readable-release";
+
+/**
+ * Whether the caller has a release to read, asked once per source in a batch:
+ * every card reading this collection's release condition shares one answer.
+ */
+function hasReadableRelease(
+  caller: ReadCaller,
+  opts: ResolverOptions | undefined
+): Promise<boolean> {
+  return opts?.scope
+    ? opts.scope.getOrCompute(READABLE_RELEASE_KEY, () =>
+        callerHasReadableRelease(caller)
+      )
+    : callerHasReadableRelease(caller);
+}
+
 export async function executeWidgetQuery(
   query: WidgetQuery,
   caller: ReadCaller,
@@ -445,13 +510,29 @@ export async function executeWidgetQuery(
 
   const collection = sourceTarget(source.id);
 
-  if (query.op === "count") return runCount(collection, query, caller);
+  // A release condition reads releases as well as entries, so it is asked only
+  // of a caller with a release to read. For anyone else the read is not
+  // available, in the words every unavailable read uses: a caller barred from
+  // releases and a site without releases answer alike, and neither as zero.
+  if (
+    namesReleaseCondition(query) &&
+    !(await hasReadableRelease(caller, opts))
+  ) {
+    failUnavailableSourceOrOp(
+      `"${IN_RELEASE_KEY}" asked by a caller with no release to read`
+    );
+  }
+
+  // One instant for the batch, so a window and its neighbour are measured from
+  // the same moment.
+  const now = opts?.now ?? new Date();
+  if (query.op === "count") return runCount(collection, query, caller, now);
   if (query.op === "list") return runList(collection, query, caller, source);
   if (query.op === "groupBy") {
     return runGroupBy(collection, query, caller, source);
   }
   if (query.op === "timeseries") {
-    return runTimeseries(collection, query, caller);
+    return runTimeseries(collection, query, caller, now);
   }
 
   // Every declared op now has an arm, so the compiler narrows `query.op` to

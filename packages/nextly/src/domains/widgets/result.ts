@@ -281,6 +281,14 @@ export type WidgetComponentProps = {
    */
   slot: WidgetSlot | undefined;
   /**
+   * The answer to each of this card's cells, by key, for a card that declares
+   * several reads (`cells`); absent for one that declares none. A key with no
+   * answer yet is absent from it, as `slot` is.
+   *
+   * @experimental While the content widgets are being built.
+   */
+  cells?: Readonly<Record<string, WidgetSlot>>;
+  /**
    * Whether this card's question is in flight, the FIRST request included: its
    * query, or the data core builds for a widget that declares its own.
    *

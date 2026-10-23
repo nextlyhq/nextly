@@ -40,7 +40,9 @@
  */
 
 import { NextlyError } from "../../errors/nextly-error";
+import { SLUG_PATTERN } from "../../shared/slug-pattern";
 
+import { whereFieldNames, type RelativeSpan } from "./query";
 import { sourceKindFromId } from "./sources";
 
 /** What every setting carries, whatever kind it is. */
@@ -129,8 +131,7 @@ export type WidgetSetting =
  * (`CONTENT_SETTING_NOT_DRAWN`), for a reason about the QUERY rather than the
  * sheet: a registered widget's settings reach its query only through those
  * knobs, so a setting no knob drives would be drawn and saved and change
- * nothing the card shows. Only a declared widget, whose card query is built
- * from these settings, may hold the others until knobs carry them.
+ * nothing the card shows.
  *
  * @experimental The shape may still change while the settings sheet's
  * content controls are built.
@@ -372,13 +373,24 @@ function fail(message: string): never {
 export function widgetSettingsProblem(
   settings: unknown,
   queryBuiltByCore = false,
-  source?: KnobSource
+  // The widget's declared source; `undefined` for a query with none, which a
+  // Collection setting supplies; `null` for a widget that asks nothing a knob
+  // could drive (no query and no cells), where no content setting drives.
+  source?: KnobSource | null
 ): string | undefined {
   const [problem] = widgetSettingsProblems(settings);
   if (problem !== undefined) return problem;
   // A widget whose query core builds from its declaration reads its content
   // settings there, so they reach the data it shows: nothing to refuse.
   if (queryBuiltByCore) return undefined;
+  // One Collection setting decides the source: a second would be drawn and
+  // saved and always lose to the other.
+  const collections = (settings as readonly AnyWidgetSetting[] | undefined)
+    ?.filter(setting => setting.type === "collection")
+    .map(setting => setting.name);
+  if (collections !== undefined && collections.length > 1) {
+    return `declares ${collections.length} Collection settings (${collections.map(name => `"${name}"`).join(", ")}), and one decides the source its query reads`;
+  }
   // Every setting is now known to be well formed, so each has a type. Any
   // other widget's content setting is admitted exactly when a knob drives it
   // on the widget's own source, so a setting that would change nothing the
@@ -651,7 +663,7 @@ export function validateWidgetSettings(
   settings: unknown,
   widgetId: string,
   queryBuiltByCore = false,
-  source?: KnobSource
+  source?: KnobSource | null
 ): asserts settings is AnyWidgetSetting[] | undefined {
   const problem = widgetSettingsProblem(settings, queryBuiltByCore, source);
   if (problem !== undefined) fail(`${widgetId}: ${problem}`);
@@ -719,16 +731,24 @@ export function resolveWidgetSettings(
   return resolved;
 }
 
-/** The parts of a card's query a setting may set. */
-interface KnobQuery {
-  source?: string;
-  limit?: number;
+/**
+ * A field a collection offers this reader for a card's settings, as its
+ * source publishes it.
+ *
+ * @experimental
+ */
+export interface KnobField {
+  name: string;
+  /** False when a read rule could refuse the field to this reader. */
+  offered?: boolean;
+  /** False when the field cannot be grouped by. */
+  groupable?: boolean;
 }
 
 /**
  * The source a widget declares, as its knobs see it. A knob may drive a setting
- * on one kind of source and not another, and set a different part of the query
- * on each, so both questions are asked of the source too.
+ * on one kind of source and not another, so that question is asked of the
+ * source too.
  *
  * @experimental The shape may grow while the content widgets are built.
  */
@@ -745,12 +765,33 @@ export interface KnobSource {
 export interface KnobContext {
   /** The widget's declared source; the query's own when absent. */
   source?: KnobSource;
+  /**
+   * The fields a collection offers this reader, or `undefined` when they are
+   * not known. Unknown, a stored value is applied as it is and the server
+   * judges the query, as it judges every query.
+   */
+  fieldsOf?: (collection: string) => readonly KnobField[] | undefined;
+}
+
+/** The parts of a widget query a setting may drive. */
+interface KnobQuery {
+  source?: string;
+  limit?: number;
+  since?: RelativeSpan;
+  where?: Record<string, unknown>;
+  sort?: string;
+  groupBy?: string;
 }
 
 /** How one kind of setting becomes part of a card's query. */
 interface QueryKnob {
   /** Whether this knob drives `setting` on `source`, or on no source. */
   drives(setting: AnyWidgetSetting, source: KnobSource | undefined): boolean;
+  /**
+   * Whether `value` names only fields the reader may use as this knob uses
+   * them. Absent, every value fits: the knob names no field.
+   */
+  fits?(value: unknown, fields: readonly KnobField[]): boolean;
   /** `query` with `value` applied on `source`: a copy, never the query itself. */
   apply<T extends KnobQuery>(
     query: T,
@@ -765,7 +806,46 @@ function knobSourceOf(query: KnobQuery): KnobSource | undefined {
 }
 
 /**
- * Query knobs a setting may drive: ONE closed list from a kind of setting to
+ * Whether a content knob may drive on `source`: a collection's, or none yet.
+ * Each content setting reads a collection's entries and fields, so on another
+ * kind of source it would mean something else, and drives nothing there.
+ */
+function readsACollection(source: KnobSource | undefined): boolean {
+  return source === undefined || sourceKindFromId(source.id) === "collection";
+}
+
+/**
+ * A declared `where` narrowed further by the reader's Filter. The declared
+ * clause keeps its top-level keys, where a collection's workflow conditions
+ * must stay to be read, and the Filter joins them under `and`; with nothing
+ * declared, the Filter is the clause.
+ */
+function withReaderFilter(
+  declared: Record<string, unknown> | undefined,
+  filter: Record<string, unknown>
+): Record<string, unknown> {
+  if (declared === undefined) return filter;
+  const joined = Array.isArray(declared.and) ? declared.and : [];
+  return { ...declared, and: [...joined, filter] };
+}
+
+/** The field a sort names, without its direction. */
+function sortField(sort: string): string {
+  return sort.startsWith("-") ? sort.slice(1) : sort;
+}
+
+/** Whether every name is a field offered to this reader. */
+function allOffered(
+  names: readonly string[],
+  fields: readonly KnobField[]
+): boolean {
+  return names.every(name =>
+    fields.some(field => field.name === name && field.offered !== false)
+  );
+}
+
+/**
+ * Query knobs a setting may drive: ONE closed map from a kind of setting to
  * how it becomes part of the card's query.
  *
  * 🔴 Closed, and the only way a setting reaches a query. A setting no knob
@@ -774,11 +854,8 @@ function knobSourceOf(query: KnobQuery): KnobSource | undefined {
  *
  * `limit` is matched by NAME as well as type, as it always was: a number
  * setting called `limit` sets how many rows the card asks for, and a number
- * setting of any other name drives nothing. A content kind is matched by type
- * alone, since each type has one meaning for a query.
- *
- * A value reaches a knob only after `resolveWidgetSettings` has judged it by
- * its type, so each knob applies a value of the type it drives.
+ * setting of any other name drives nothing. The content kinds are matched by
+ * type alone, since each type has one meaning for a query.
  */
 const QUERY_KNOBS: readonly QueryKnob[] = [
   {
@@ -787,26 +864,96 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
   },
   {
     // The collection a card reads becomes its source, replacing the one the
-    // widget declared, so one widget can read whichever collection its card
-    // is set to. The reader's access to it is the server's to judge, as for
-    // any source a query names. Only over a collection source, or none: on
-    // another kind of source the same setting would mean something else.
+    // widget declared, which is how a widget offered per collection reads the
+    // one it was added from. The reader's access to it is the server's to
+    // judge, as for any source a query names.
     drives: (setting, source) =>
-      setting.type === "collection" &&
-      (source === undefined || sourceKindFromId(source.id) === "collection"),
+      setting.type === "collection" && readsACollection(source),
+    apply: (query, value) => {
+      // Only a value shaped like a collection slug names one, read before any
+      // use of it: a special default such as "*" leaves the query as it is.
+      if (typeof value !== "string" || !SLUG_PATTERN.test(value)) return query;
+      return { ...query, source: `collection:${value}` };
+    },
+  },
+  {
+    // A card's Date range is how far back its read reaches: the range's value
+    // is a span of the query's own vocabulary, so it becomes `since` as is.
+    drives: (setting, source) =>
+      setting.type === "select" &&
+      setting.name === "dateRange" &&
+      readsACollection(source),
+    apply: (query, value) => ({ ...query, since: value as RelativeSpan }),
+  },
+  {
+    drives: (setting, source) =>
+      setting.type === "filter" && readsACollection(source),
+    fits: (value, fields) =>
+      allOffered(whereFieldNames(value as Record<string, unknown>), fields),
     apply: (query, value) => ({
       ...query,
-      source: `collection:${value as string}`,
+      where: withReaderFilter(query.where, value as Record<string, unknown>),
     }),
+  },
+  {
+    drives: (setting, source) =>
+      setting.type === "sort" && readsACollection(source),
+    fits: (value, fields) => allOffered([sortField(value as string)], fields),
+    apply: (query, value) => ({ ...query, sort: value as string }),
+  },
+  {
+    drives: (setting, source) =>
+      setting.type === "groupBy" && readsACollection(source),
+    fits: (value, fields) =>
+      fields.some(
+        field =>
+          field.name === value &&
+          field.offered !== false &&
+          field.groupable !== false
+      ),
+    apply: (query, value) => ({ ...query, groupBy: value as string }),
   },
 ];
 
 /** The knob that drives a setting on a source, or `undefined` when none does. */
 function knobFor(
   setting: AnyWidgetSetting,
-  source: KnobSource | undefined
+  source: KnobSource | null | undefined
 ): QueryKnob | undefined {
+  // A widget that asks nothing a knob could drive has no knob for any setting.
+  if (source === null) return undefined;
   return QUERY_KNOBS.find(knob => knob.drives(setting, source));
+}
+
+/**
+ * The value a setting drives its knob with: the resolved one, or its default
+ * when the resolved one names a field this reader may not use, or nothing when
+ * the default does too.
+ *
+ * Decided BEFORE the query is built, so a card whose stored Filter, Sort or
+ * Group by names a field a read rule now withholds is asked as its author
+ * intended by default rather than refused: the reader did not necessarily
+ * choose that field, and a card that will not draw is the worse answer. The
+ * server still refuses any query naming such a field, so this is the first
+ * answer, not the only guard.
+ */
+function fittingValue(
+  setting: AnyWidgetSetting,
+  knob: QueryKnob,
+  resolved: Record<string, unknown>,
+  ctx: KnobContext | undefined
+): unknown {
+  const value = resolved[setting.name];
+  if (value === undefined || knob.fits === undefined || !isDependent(setting))
+    return value;
+  const collection = resolved[setting.of];
+  const fields =
+    typeof collection === "string" ? ctx?.fieldsOf?.(collection) : undefined;
+  if (fields === undefined || knob.fits(value, fields)) return value;
+  const fallback = declaredDefault(setting);
+  return fallback !== undefined && knob.fits(fallback, fields)
+    ? fallback
+    : undefined;
 }
 
 /**
@@ -818,7 +965,9 @@ function knobFor(
  * admin, whose requests go through exactly that gate. Re-checking here would be
  * a second implementation of a rule this module cannot see, agreeing on the day
  * it is written and drifting afterwards, which is the mistake
- * `executeWidgetQuery` warns about for filters.
+ * `executeWidgetQuery` warns about for filters. The one judgement made here is
+ * which stored value to use ({@link fittingValue}), and the server still makes
+ * its own.
  *
  * Returns the query UNCHANGED when nothing applies, so a caller can use the
  * result unconditionally without asking whether it needed to.
@@ -827,11 +976,11 @@ export function applyWidgetSettings<T extends KnobQuery>(
   query: T,
   settings: readonly AnyWidgetSetting[] | undefined,
   stored: Record<string, unknown> | undefined,
-  context: KnobContext = {}
+  ctx: KnobContext = {}
 ): T {
   if (!settings || settings.length === 0) return query;
   // Judged on the DECLARED source, read once before any knob may replace it.
-  const source = context.source ?? knobSourceOf(query);
+  const source = ctx.source ?? knobSourceOf(query);
 
   const resolved = resolveWidgetSettings(settings, stored);
   let next = query;
@@ -839,7 +988,7 @@ export function applyWidgetSettings<T extends KnobQuery>(
   for (const setting of settings) {
     const knob = knobFor(setting, source);
     if (knob === undefined) continue;
-    const value = resolved[setting.name];
+    const value = fittingValue(setting, knob, resolved, ctx);
     if (value === undefined) continue;
     // Each knob hands back a copy, so a card whose settings drive no knob
     // keeps the query it was given, which is what lets a caller apply this to

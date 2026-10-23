@@ -32,6 +32,7 @@ const sources: PublishedContentSource[] = [
   {
     collection: "posts",
     label: "Posts",
+    lifecycle: false,
     fields: [
       { name: "title", type: "string", label: "Title" },
       { name: "updatedAt", type: "date", label: "Updated" },
@@ -51,6 +52,7 @@ const sources: PublishedContentSource[] = [
   {
     collection: "pages",
     label: "Pages",
+    lifecycle: false,
     fields: [{ name: "title", type: "string", label: "Title" }],
   },
 ];
