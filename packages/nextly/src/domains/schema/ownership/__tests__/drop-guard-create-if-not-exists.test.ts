@@ -358,14 +358,12 @@ describe("CREATE TABLE IF NOT EXISTS where a table of the name may stand, on pos
     ).toMatch(vacated);
   });
 
-  it("fills the name after unrelated DDL that runs no query", () => {
+  it("fills the name after statements that cannot place a relation", () => {
     expect(() =>
       guard(
         [
-          "CREATE TABLE app_other (id INT)",
-          "ALTER TABLE app_other ADD COLUMN note INT",
-          "COMMENT ON TABLE app_other IS 'notes'",
-          "GRANT SELECT ON app_other TO reader",
+          "COMMENT ON TABLE fx__notes IS 'notes'",
+          "GRANT SELECT ON fx__notes TO reader",
           "REVOKE EXECUTE ON FUNCTION make_shadow() FROM reader",
           "DROP TABLE legacy_orders",
           "CREATE TABLE IF NOT EXISTS legacy_orders (id INT)",
@@ -377,19 +375,50 @@ describe("CREATE TABLE IF NOT EXISTS where a table of the name may stand, on pos
     ).not.toThrow();
   });
 
-  it("fills the name after an unrelated CREATE that runs no query", () => {
-    expect(() =>
-      guard(
-        [
-          "CREATE TABLE app_other (id INT)",
-          "DROP TABLE legacy_orders",
-          "CREATE TABLE IF NOT EXISTS legacy_orders (id INT)",
-          "ALTER TABLE legacy_orders ADD COLUMN note INT",
-        ],
-        "app",
-        "postgresql"
+  it.each([
+    [
+      "a CREATE, whose generated names the text may not spell",
+      "CREATE TABLE scratch.legacy (orders SERIAL)",
+    ],
+    [
+      "an ALTER, which may add a generated name",
+      "ALTER TABLE fx__notes ADD COLUMN serial_no SERIAL",
+    ],
+    [
+      "a packed entry starting with a statement that places nothing",
+      "COMMENT ON TABLE fx__notes IS 'x'; CREATE TEMP TABLE legacy_orders (id int)",
+    ],
+  ])("fills nothing after %s", (_form, earlier) => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            earlier,
+            "DROP TABLE legacy_orders",
+            "CREATE TABLE IF NOT EXISTS legacy_orders (id INT)",
+            "ALTER TABLE legacy_orders ADD COLUMN note INT",
+          ],
+          "app",
+          "postgresql"
+        )
       )
-    ).not.toThrow();
+    ).toMatch(vacated);
+  });
+
+  it("fills nothing for a name an index drop vacated, whose schema may differ", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "DROP INDEX scratch.legacy_orders",
+            "CREATE TABLE IF NOT EXISTS legacy_orders (id INT)",
+            "ALTER TABLE legacy_orders ADD COLUMN note INT",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatch(vacated);
   });
 
   it("is the control: a plain CREATE fills the name", () => {

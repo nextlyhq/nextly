@@ -621,58 +621,24 @@ const MAY_PLACE_ANY_NAME = new Set(["DO", "CALL", "EXECUTE", "IMPORT"]);
 
 /**
  * The only statements, by the word that opens them, that this guard reads
- * on PostgreSQL as running no code of their own. Any other may run a query,
- * a function or a trigger that creates a relation under any name.
+ * on PostgreSQL as putting no relation under any name. Any other may: a
+ * query, function or trigger it runs can create one, and a CREATE or ALTER
+ * may make a sequence or index under a name it generates rather than spells.
  */
-const POSTGRES_PLAIN_DDL = new Set([
-  "CREATE",
+const POSTGRES_PLACES_NOTHING = new Set([
   "DROP",
-  "ALTER",
   "COMMENT",
   "GRANT",
   "REVOKE",
   "SET",
   "RESET",
-]);
-
-/**
- * Plain DDL that only names privileges, comments or settings: words such
- * as `SELECT` or `EXECUTE` in it name a privilege, not a query to run.
- */
-const POSTGRES_RUNS_NOTHING = new Set([
-  "GRANT",
-  "REVOKE",
-  "COMMENT",
-  "SET",
-  "RESET",
-]);
-
-/**
- * Words that make a PostgreSQL relation temporary. A temporary relation, or
- * one PostgreSQL derives from it (a serial column's sequence, an index),
- * shadows a permanent one of the same name under a name the text may not
- * spell.
- */
-const POSTGRES_TEMPORARY_WORDS = new Set(["TEMP", "TEMPORARY"]);
-
-/**
- * Words that run a query or code wherever they stand in a PostgreSQL
- * statement, such as `CREATE TABLE ... AS SELECT`: the query may call a
- * function that runs DDL under any name.
- */
-const POSTGRES_RUNS_A_QUERY = new Set([
-  "SELECT",
-  "VALUES",
-  "EXECUTE",
-  "CALL",
-  "PERFORM",
 ]);
 
 /**
  * Whether a statement may put a relation under a name: under any name
- * (`MAY_PLACE_ANY_NAME`, or on PostgreSQL one that may run code,
- * `postgresMayRunCode`), under the names it spells (`MAY_PLACE_A_NAME`, or
- * an `ALTER ... RENAME`), or under none.
+ * (`MAY_PLACE_ANY_NAME`, or on PostgreSQL any statement but those
+ * `POSTGRES_PLACES_NOTHING` lists), under the names it spells
+ * (`MAY_PLACE_A_NAME`, or an `ALTER ... RENAME`), or under none.
  */
 function placesNames(
   tokens: readonly Token[],
@@ -681,58 +647,13 @@ function placesNames(
   const first = tokens.find(token => token.kind === "word");
   const opener = first?.kind === "word" ? first.upper : "";
   if (MAY_PLACE_ANY_NAME.has(opener)) return "any";
-  if (dialect === "postgresql" && postgresMayRunCode(opener, tokens)) {
-    return "any";
+  if (dialect === "postgresql") {
+    return POSTGRES_PLACES_NOTHING.has(opener) ? undefined : "any";
   }
   if (MAY_PLACE_A_NAME.has(opener)) return "spelled";
   const renames =
     opener === "ALTER" && tokens.some(token => isWord(token, "RENAME"));
   return renames ? "spelled" : undefined;
-}
-
-/**
- * Whether a PostgreSQL statement may put a relation under a name it does
- * not spell: it is not plain DDL (`POSTGRES_PLAIN_DDL`); or, unless it only
- * names privileges, comments or settings (`POSTGRES_RUNS_NOTHING`), it runs a
- * query anywhere in it (`POSTGRES_RUNS_A_QUERY`, or `startsATableQuery`), or it makes
- * or names a temporary relation (`POSTGRES_TEMPORARY_WORDS`, `pg_temp`). A function called from a
- * column's default, a check or a `USING` expression is not counted, as
- * everywhere else in this guard.
- */
-function postgresMayRunCode(opener: string, tokens: readonly Token[]): boolean {
-  if (!POSTGRES_PLAIN_DDL.has(opener)) return true;
-  if (POSTGRES_RUNS_NOTHING.has(opener)) return false;
-  return tokens.some(
-    (token, at) =>
-      (token.kind === "word" &&
-        (POSTGRES_RUNS_A_QUERY.has(token.upper) ||
-          POSTGRES_TEMPORARY_WORDS.has(token.upper) ||
-          startsATableQuery(tokens, at))) ||
-      writtenName(token)?.toLowerCase() === "pg_temp"
-  );
-}
-
-/** Words after which PostgreSQL's `TABLE r` is a query, not a table's kind. */
-const BEFORE_A_TABLE_QUERY = new Set([
-  "AS",
-  "UNION",
-  "INTERSECT",
-  "EXCEPT",
-  "ALL",
-  "DISTINCT",
-]);
-
-/**
- * Whether the `TABLE` at `at` heads a query reading a relation, which may
- * be a view calling a function: after `AS`, a set operation, or a bracket,
- * as in `AS WITH q AS (TABLE v) TABLE q`.
- */
-function startsATableQuery(tokens: readonly Token[], at: number): boolean {
-  if (!isWord(tokens[at], "TABLE")) return false;
-  const before = tokens[at - 1];
-  if (before?.kind === "punct")
-    return before.char === "(" || before.char === ")";
-  return before?.kind === "word" && BEFORE_A_TABLE_QUERY.has(before.upper);
 }
 
 /**
@@ -1019,8 +940,8 @@ class DropReader {
   private readonly vacatedIn = new Map<string, number>();
   /** Statements that may have put a relation under each name (`notePlacing`). */
   private readonly placingIn = new Map<string, number[]>();
-  /** The first statement that may have put a relation under any name. */
-  private placingAnyIn: number | undefined;
+  /** Statements that may have put a relation under any name, by count. */
+  private readonly placingAnyIn: number[] = [];
   /** Entries of the list holding more than one statement, by count (`reads`). */
   private readonly packedReads = new Set<number>();
   /**
@@ -1133,8 +1054,12 @@ class DropReader {
    * EXISTS` may find such a relation standing (`fillIfVacated`).
    */
   private notePlacing(tokens: readonly Token[]): void {
-    const places = placesNames(tokens, this.dialect);
-    if (places === "any") this.placingAnyIn ??= this.reads;
+    // An entry holding more than one statement may place a name after its
+    // first, which its opener does not show.
+    const places = this.packedReads.has(this.reads)
+      ? "any"
+      : placesNames(tokens, this.dialect);
+    if (places === "any") this.placingAnyIn.push(this.reads);
     if (places !== "spelled") return;
     for (const token of tokens) {
       const written =
@@ -1243,8 +1168,9 @@ class DropReader {
     const placedEarlier = (this.placingIn.get(name) ?? []).some(
       read => read < this.reads && read !== emptiedIn
     );
-    const placedAnyEarlier =
-      this.placingAnyIn !== undefined && this.placingAnyIn < this.reads;
+    const placedAnyEarlier = this.placingAnyIn.some(
+      read => read < this.reads && read !== emptiedIn
+    );
     return (
       placedEarlier ||
       placedAnyEarlier ||
@@ -1486,7 +1412,8 @@ class DropReader {
     // is dropped or renamed its name may reach a relation it shadowed.
     if (table === undefined) {
       this.lookUp(name);
-      this.vacate(name);
+      // Its schema is not carried here, so it is read as if it named one.
+      this.vacate(name, false);
     }
     if (table?.local && this.created.has(table.name)) return;
     this.elements.push({
