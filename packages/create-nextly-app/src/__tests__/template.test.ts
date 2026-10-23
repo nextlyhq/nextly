@@ -2,6 +2,7 @@
  * Tests for template copy utility and package.json generation
  */
 
+import { readFileSync } from "node:fs";
 import path from "path";
 
 import fs from "fs-extra";
@@ -130,6 +131,24 @@ describe("generatePackageJson", () => {
     expect(result.devDependencies["@types/node"]).toBeDefined();
     expect(result.devDependencies["@types/react"]).toBeDefined();
     expect(result.devDependencies["eslint"]).toBeDefined();
+  });
+
+  // A scaffolded project's Node types follow the oldest Node this CLI supports,
+  // so an API newer than that floor fails the project's type-check rather than
+  // its first run on the floor. The app and the plugin take different paths.
+  it("types scaffolded apps and plugins against the oldest supported Node", async () => {
+    const engines: string = JSON.parse(
+      readFileSync(new URL("../../package.json", import.meta.url), "utf8")
+    ).engines.node;
+    const floor = Math.min(
+      ...engines.split("||").map(clause => Number(/\d+/.exec(clause)?.[0]))
+    );
+    for (const projectType of ["blank", "plugin"] as const) {
+      const result = JSON.parse(
+        await generatePackageJson("test", pgDatabase, undefined, projectType)
+      );
+      expect(result.devDependencies["@types/node"]).toBe(`^${floor}`);
+    }
   });
 
   it("should output valid JSON", async () => {

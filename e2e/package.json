@@ -23,7 +23,7 @@
     "@nextlyhq/plugin-page-builder": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@playwright/test": "^1.58.2",
-    "@types/node": "^24.10.0",
+    "@types/node": "^22.20.5",
     "nextly": "workspace:*",
     "typescript": "^5.9.3"
   }
