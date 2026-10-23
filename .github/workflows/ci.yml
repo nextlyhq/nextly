@@ -112,6 +112,11 @@ jobs:
     outputs:
       inert: ${{ steps.decide.outputs.inert }}
       superseded: ${{ steps.newer.outputs.superseded }}
+      # Whether the Windows and macOS legs run: always off a pull request (on
+      # `main`, in the merge queue, for a dispatch), and on a pull request only
+      # when it changes a path where the platforms differ or carries the
+      # `ci:all-os` label. An empty answer, a step that failed, runs them.
+      all-os: ${{ github.event_name != 'pull_request' || steps.os.outputs.inert != 'true' || contains(github.event.pull_request.labels.*.name, 'ci:all-os') }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -196,6 +201,37 @@ jobs:
           # change that could not compile reached production because no check
           # built the app.
           ALWAYS_RUN_PATHS: '^(AGENTS(\.measured)?\.md$|docs/)'
+        run: node scripts/change-scope.mjs
+
+      # The Windows and macOS legs (the Windows pre-push gates, and the
+      # non-Linux legs of the scaffold, dev-script and entry-guard smokes) are
+      # a quarter of a pull request's jobs, and GitHub starts this
+      # organisation's jobs slowly: about four a minute, with five to ten
+      # running against a limit of twenty while a hundred and fifty runs wait
+      # (measured 2026-10-22). Over 2026-10-15 to 10-22 the macOS scaffold leg
+      # passed 168 of 168 runs, and of 21 Windows-only gate failures 11 were a
+      # process failing to start or a package build failing on Windows alone,
+      # with no change of the pull request's own to blame.
+      #
+      # So a pull request runs them only when it changes a path where the
+      # platforms behave differently: the scaffolder and its templates, the
+      # CLI and its entry points, the scripts and hooks (the root's and each
+      # package's and app's, where the platform checks outside the CLI live),
+      # the build, test and lint configs, every manifest, line endings
+      # (`.gitattributes`) and this repository's workflows. Every other run,
+      # `main` and the merge queue included, runs them all, so nothing reaches
+      # `main` untested on them. Every path is inert here except those, which
+      # is what reading `ALWAYS_RUN_PATHS` against an inert-everything pattern
+      # answers through the same script as the scope above. It runs on every
+      # event, the queue's included, so no step a required check stands on is
+      # skipped there; the `all-os` output reads its answer for pull requests
+      # alone.
+      - name: Decide whether a pull request needs the Windows and macOS legs
+        id: os
+        env:
+          SCOPE_TITLE: Operating-system scope
+          INERT_PATHS: "."
+          ALWAYS_RUN_PATHS: '^(packages/create-nextly-app/|templates/|packages/nextly/src/cli/|packages/[^/]+/bin/|scripts/|(packages|apps)/[^/]+/scripts/|\.husky/|\.github/|(.*/)?package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|turbo\.jsonc$|\.npmrc$|\.nvmrc$|\.gitattributes$|(packages/[^/]+/)?[^/]+\.config\.[cm]?[jt]s$)'
         run: node scripts/change-scope.mjs
 
   comments:
@@ -955,7 +991,7 @@ jobs:
   windows-gates:
     name: Pre-push gates (windows-latest)
     needs: changes
-    if: needs.changes.outputs.inert != 'true'
+    if: needs.changes.outputs.inert != 'true' && needs.changes.outputs.all-os == 'true'
     runs-on: windows-latest
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
@@ -1066,7 +1102,7 @@ jobs:
   windows-gates-nextly:
     name: Pre-push gates (windows-latest, nextly tests)
     needs: changes
-    if: needs.changes.outputs.inert != 'true'
+    if: needs.changes.outputs.inert != 'true' && needs.changes.outputs.all-os == 'true'
     runs-on: windows-latest
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
@@ -1134,7 +1170,7 @@ jobs:
   windows-gates-admin:
     name: Pre-push gates (windows-latest, admin tests)
     needs: changes
-    if: needs.changes.outputs.inert != 'true'
+    if: needs.changes.outputs.inert != 'true' && needs.changes.outputs.all-os == 'true'
     runs-on: windows-latest
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
@@ -1678,7 +1714,7 @@ jobs:
   # the core tree is broken.
   scaffold-smoke:
     name: Scaffold smoke (${{ matrix.os }})
-    needs: [ci]
+    needs: [changes, ci]
     runs-on: ${{ matrix.os }}
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
@@ -1692,7 +1728,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Linux alone on a pull request that touches no platform-sensitive
+        # path; every platform otherwise (the `all-os` output of `changes`).
+        os: ${{ fromJSON(needs.changes.outputs.all-os == 'true' && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]') }}
 
     steps:
       - name: Checkout
@@ -1793,13 +1831,15 @@ jobs:
   # Windows in particular.
   dev-script-smoke:
     name: Dev script starts every watcher (${{ matrix.os }})
-    needs: [ci]
+    needs: [changes, ci]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Linux alone on a pull request that touches no platform-sensitive
+        # path; Windows too otherwise (the `all-os` output of `changes`).
+        os: ${{ fromJSON(needs.changes.outputs.all-os == 'true' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest"]') }}
 
     steps:
       - name: Checkout
@@ -1984,7 +2024,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Linux alone on a pull request that touches no platform-sensitive
+        # path; Windows too otherwise (the `all-os` output of `changes`).
+        os: ${{ fromJSON(needs.changes.outputs.all-os == 'true' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest"]') }}
 
     steps:
       - name: Checkout

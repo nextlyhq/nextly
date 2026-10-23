@@ -19,6 +19,8 @@ import ts from "typescript";
 
 import { describe, expect, it } from "vitest";
 
+import { filesThatRun } from "./change-scope.mjs";
+
 const read = path => load(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
 /** A JSON file of the repository, such as a package manifest. */
 const readJson = path => JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
@@ -107,6 +109,94 @@ describe("the last commit Integration tested", () => {
     // A floor, so a reader that found no jobs cannot pass by comparing nothing.
     expect(legs.length).toBeGreaterThanOrEqual(3);
     expect(ask.with["substantive-job"].split("\n").map(name => name.trim()).filter(Boolean).sort()).toEqual(legs.sort());
+  });
+});
+
+describe("the Windows and macOS legs", () => {
+  /*
+   * A pull request runs them only when it changes a platform-sensitive path or
+   * asks with the `ci:all-os` label; every other event runs them all, so the
+   * merge queue and `main` never skip a platform. Held on the expression
+   * itself, evaluated, and on every job that can land on a non-Linux runner.
+   */
+  const ci = read(".github/workflows/ci.yml");
+  const allOs = ci.jobs.changes.outputs["all-os"];
+  const answer = (event, { inert = "true", labels = [] } = {}) =>
+    String(
+      evaluate(conditionTokens(allOs.replace(/^\$\{\{|\}\}$/g, "")), allOs, {
+        "github.event_name": event,
+        "steps.os.outputs.inert": inert,
+        "github.event.pull_request.labels.*.name": labels,
+      })
+    );
+
+  it("runs every platform off a pull request, whatever the change", () => {
+    for (const event of ["push", "merge_group", "workflow_dispatch"]) expect(answer(event, { inert: "true" }), event).toBe("true");
+  });
+
+  it("runs Linux alone on a pull request that touches no platform-sensitive path", () => {
+    expect(answer("pull_request", { inert: "true" })).toBe("false");
+  });
+
+  it("runs every platform on a pull request that touches one, asks with the label, or could not be decided", () => {
+    expect(answer("pull_request", { inert: "false" })).toBe("true");
+    expect(answer("pull_request", { inert: "true", labels: ["ci:all-os"] })).toBe("true");
+    // A step that failed or never ran has no output.
+    expect(answer("pull_request", { inert: "" })).toBe("true");
+  });
+
+  // The step's own patterns, read by the same function `change-scope.mjs` runs
+  // them through: each platform-sensitive path asks for the legs on its own,
+  // and a pull request of product code and docs asks for none.
+  it("asks for them from the paths where the platforms differ, and only those", () => {
+    const { env } = ci.jobs.changes.steps.find(step => step.id === "os");
+    const running = files => filesThatRun(files, { inert: new RegExp(env.INERT_PATHS), alwaysRun: new RegExp(env.ALWAYS_RUN_PATHS) });
+    const sensitive = [
+      "packages/create-nextly-app/src/utils/template.ts",
+      "templates/blank/package.json",
+      "packages/nextly/src/cli/commands/add.ts",
+      "packages/admin-css/bin/nextly-build-admin-css.mjs",
+      "scripts/bounded.mjs",
+      ".husky/pre-push",
+      ".github/workflows/ci.yml",
+      "package.json",
+      "apps/playground/package.json",
+      "e2e/package.json",
+      "pnpm-lock.yaml",
+      "turbo.jsonc",
+      ".gitattributes",
+      "packages/ui/scripts/build-css.mjs",
+      "apps/playground/scripts/provision-empty.ts",
+      "packages/nextly/tsdown.config.ts",
+      "packages/admin/tsup.config.ts",
+      "packages/ui/vitest.config.ts",
+      "vitest.config.ts",
+      "eslint.config.mjs",
+    ];
+    for (const file of sensitive) expect(running([file]), file).toEqual([file]);
+    const neutral = [
+      "packages/nextly/src/domains/schema/pipeline/classifier/type-widening.ts",
+      "packages/admin/src/components/features/dashboard/TeamSummary.tsx",
+      "packages/ui/src/components/button.tsx",
+      "packages/nextly/src/domains/schema/services/field-column-descriptor.ts",
+      "docs/guides/deployment.mdx",
+      "AGENTS.md",
+      ".changeset/a-change.md",
+    ];
+    expect(running(neutral)).toEqual([]);
+  });
+
+  /** Everything that decides where a job runs and whether it does: its `if:`, `runs-on` and matrix. */
+  const placement = job => `${job.if ?? ""} ${job["runs-on"]} ${JSON.stringify(job.strategy?.matrix ?? {})}`;
+
+  it("gates every job that can land on Windows or macOS by that answer", () => {
+    const nonLinux = Object.entries(ci.jobs).filter(([, job]) => /windows|macos/.test(placement(job)));
+    // A floor, so a reader that matched no jobs cannot pass by checking none.
+    expect(nonLinux.length).toBeGreaterThanOrEqual(6);
+    for (const [id, job] of nonLinux) {
+      expect(placement(job), id).toContain("needs.changes.outputs.all-os");
+      expect([job.needs].flat(), id).toContain("changes");
+    }
   });
 });
 
