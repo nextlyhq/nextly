@@ -10,9 +10,13 @@ import {
   registerBlocks,
   type BlockDocument,
   type DocumentKind,
+  type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import {
+  type NoticeQueue,
+  type EditorState,
+  type UseInlineEditingResult,
   CANVAS_ROOT_CLASS,
   useEditorState,
   useInlineEditing,
@@ -29,7 +33,10 @@ import {
 import { toast } from "@nextlyhq/ui";
 import { useCallback, useMemo, useState } from "react";
 
-import { useComponentLibrary } from "../component-library-client";
+import {
+  useComponentLibrary,
+  type ComponentLibraryRead,
+} from "../component-library-client";
 import { readDocumentLimits } from "../page-render-inputs";
 import { useMayCreatePattern } from "../pattern-capability-client";
 
@@ -175,7 +182,7 @@ export function useEditorMount(
   initialValue: unknown,
   /** The kinds the field accepts, so a seeded document is one it will take. */
   kinds: readonly DocumentKind[] | undefined
-) {
+): EditorMount {
   // Before anything reads the registry. Inside the component that mounts the
   // editor rather than at module scope: this file is imported by the field
   // control, which every entry form holding a blocks field renders whether or
@@ -283,4 +290,21 @@ export function useEditorMount(
 }
 
 /** What mounting the editor produced, for the hooks that build on it. */
-export type EditorMount = ReturnType<typeof useEditorMount>;
+export type EditorMount = {
+  initialDocument: BlockDocument;
+  clientConfig: Record<string, unknown> | undefined;
+  documentLimits: DocumentLimits;
+  componentLibrary: ComponentLibraryRead;
+  notices: NoticeQueue;
+  editor: EditorState;
+  inline: UseInlineEditingResult;
+  savePattern: {
+    /** The document to save from, or `null` when the author has not asked. */
+    readonly document: BlockDocument | null;
+    /** Where focus should go when the form closes, asked at that moment. */
+    readonly returnFocusTo: () => HTMLElement | null;
+    readonly open: () => void;
+    readonly close: () => void;
+  };
+  mayCreatePattern: boolean;
+};

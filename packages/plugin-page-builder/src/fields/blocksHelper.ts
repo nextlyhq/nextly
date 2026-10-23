@@ -9,9 +9,19 @@
  * @module fields/blocksHelper
  */
 
-import { pluginField } from "@nextlyhq/plugin-sdk";
+import {
+  pluginField,
+  type PluginDataFieldConfig,
+  type FieldAdminOptions,
+  type RequestContext,
+} from "@nextlyhq/plugin-sdk";
+import type { FieldAccess, FieldHooks } from "nextly";
 
-import type { BlocksFieldConfig } from "./blocks-options";
+import type {
+  BlocksFieldConfig,
+  BlocksFieldValue,
+  BlocksFieldOptions,
+} from "./blocks-options";
 import { BLOCKS_TYPE } from "./blocksField";
 
 /**
@@ -28,7 +38,33 @@ import { BLOCKS_TYPE } from "./blocksField";
  * blocks({ name: "content", blocks: { allow: ["core/*"] } })
  * ```
  */
-export const blocks = (config: Omit<BlocksFieldConfig, "type">) =>
+export const blocks = (
+  config: Omit<BlocksFieldConfig, "type">
+): {
+  readonly type: "blocks";
+  readonly name: string;
+  readonly validate?: (
+    value: BlocksFieldValue,
+    args: {
+      data: Record<string, unknown>;
+      req: RequestContext;
+    }
+  ) => string | true | Promise<string | true>;
+  readonly defaultValue?:
+    | BlocksFieldValue
+    | ((data: Record<string, unknown>) => BlocksFieldValue);
+  readonly admin?: FieldAdminOptions;
+  readonly label?: string;
+  readonly required?: boolean;
+  readonly virtual?: boolean;
+  readonly unique?: boolean;
+  readonly index?: boolean;
+  readonly access?: FieldAccess;
+  readonly hooks?: FieldHooks;
+  readonly custom?: Record<string, unknown>;
+  readonly localized?: boolean;
+  readonly blocks?: BlocksFieldOptions;
+} & PluginDataFieldConfig =>
   // Marked, so the declaration is admissible where a collection's fields are
   // typed. `FieldConfig` is a closed union of the built-in shapes — which is
   // what makes a malformed built-in a compile error — and a contributed type

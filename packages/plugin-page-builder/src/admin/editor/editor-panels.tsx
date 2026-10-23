@@ -14,6 +14,7 @@ import {
   type SavedPattern,
 } from "@nextlyhq/builder";
 import {
+  type UseBuilderChecklistResult,
   ClassManagerPanel,
   InsertPanel,
   LayersPanel,
@@ -25,7 +26,14 @@ import {
   useDocumentIdentity,
   useEntryFieldsPanel,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useCallback, useMemo, useState } from "react";
+import {
+  useCallback,
+  useMemo,
+  useState,
+  type SetStateAction,
+  type ReactNode,
+  type Dispatch,
+} from "react";
 
 import type { ComponentLibraryRead } from "../component-library-client";
 import {
@@ -223,7 +231,7 @@ function useOfferedLibrary({
    * panel is open — so the RULE comes down and the rows stay there.
    */
   const offerablePatterns = useCallback(
-    (patterns: readonly SavedPattern[]) =>
+    (patterns: readonly SavedPattern[]): readonly SavedPattern[] =>
       withoutSelfPatterns(patterns, initialDocument, identity, componentGraph),
     [initialDocument, identity, componentGraph]
   );
@@ -253,13 +261,13 @@ function usePanelRequests() {
   const [openPanelRequest, setOpenPanelRequest] = useState<
     { panel: LeftPanel; count: number } | undefined
   >(undefined);
-  const requestPanel = useCallback((panel: LeftPanel) => {
+  const requestPanel = useCallback((panel: LeftPanel): void => {
     setOpenPanelRequest(current => ({
       panel,
       count: (current?.count ?? 0) + 1,
     }));
   }, []);
-  const openInsertPanel = useCallback(() => {
+  const openInsertPanel = useCallback((): void => {
     requestPanel("insert");
   }, [requestPanel]);
 
@@ -291,7 +299,10 @@ function usePanelRequests() {
  * The panels' side of the editor: what the rail offers, the entry's own
  * fields, the getting-started card, the offered library and the requests.
  */
-export function useEditorPanels(mount: EditorMount, name: string) {
+export function useEditorPanels(
+  mount: EditorMount,
+  name: string
+): EditorPanels {
   const { editor, clientConfig } = mount;
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
@@ -331,7 +342,27 @@ export function useEditorPanels(mount: EditorMount, name: string) {
 }
 
 /** The panels' side of the editor, as `useEditorPanels` reads it. */
-export type EditorPanels = ReturnType<typeof useEditorPanels>;
+export type EditorPanels = {
+  openPanelRequest:
+    | {
+        panel: LeftPanel;
+        count: number;
+      }
+    | undefined;
+  requestPanel: (panel: LeftPanel) => void;
+  openInsertPanel: () => void;
+  showEmptyElements: boolean;
+  setShowEmptyElements: Dispatch<SetStateAction<boolean>>;
+  offered: ComponentLibraryRead;
+  offerablePatterns: (
+    patterns: readonly SavedPattern[]
+  ) => readonly SavedPattern[];
+  entryFields: ReactNode;
+  checklist: UseBuilderChecklistResult;
+  availablePanels:
+    | readonly ["insert", "layers", "tokens", "fonts", "classes"]
+    | readonly ["insert", "layers", "tokens", "fonts", "classes", "settings"];
+};
 
 /**
  * What the shell renders into the open panel.

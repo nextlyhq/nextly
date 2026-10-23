@@ -8,7 +8,9 @@ import {
   definePlugin,
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
+  type PluginDefinition,
 } from "@nextlyhq/plugin-sdk";
+import type { AnyWidget } from "nextly";
 import type { PreviewViewportsDeclaration } from "nextly/config";
 
 // Imported rather than read at runtime so it can never drift from the published
@@ -731,7 +733,9 @@ function installContext(
   };
 }
 
-export const pageBuilder = (opts: PageBuilderOptions = {}) => {
+export const pageBuilder = (
+  opts: PageBuilderOptions = {}
+): PluginDefinition<AnyWidget> => {
   /**
    * The installed context, published by `init` for the backfill job to read.
    *
