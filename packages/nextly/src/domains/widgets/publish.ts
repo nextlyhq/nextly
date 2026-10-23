@@ -25,6 +25,7 @@ import { jsonOnly, unserializableKeys } from "../../plugins/json-round-trip";
 
 import type { WidgetDefinition } from "./definition";
 import { listWidgets } from "./registry";
+import { knobSourceFor } from "./settings";
 import { getSource, type WidgetSourceField } from "./sources";
 
 /**
@@ -48,10 +49,26 @@ export function publishableWidgets(): WidgetDefinition[] {
       });
       continue;
     }
-    publishable.push(serializable as unknown as WidgetDefinition);
+    publishable.push(
+      withSourceFilters(serializable as unknown as WidgetDefinition)
+    );
   }
 
   return publishable;
+}
+
+/**
+ * `definition` with the filters its source takes, read from the source
+ * registry now that every source is registered, in place of any it stated.
+ * Absent when its source takes none, as on every widget not reading one.
+ */
+function withSourceFilters(definition: WidgetDefinition): WidgetDefinition {
+  const rest: WidgetDefinition = { ...definition };
+  delete rest.sourceFilters;
+  const source = definition.query?.source;
+  const filters =
+    typeof source === "string" ? knobSourceFor(source).filters : undefined;
+  return filters === undefined ? rest : { ...rest, sourceFilters: filters };
 }
 
 /**

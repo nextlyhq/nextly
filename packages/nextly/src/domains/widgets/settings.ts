@@ -41,7 +41,11 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 
-import { sourceKindFromId } from "./sources";
+import {
+  getSource,
+  sourceKindFromId,
+  type WidgetSourceFilter,
+} from "./sources";
 
 /** What every setting carries, whatever kind it is. */
 export interface WidgetSettingBase {
@@ -723,6 +727,7 @@ export function resolveWidgetSettings(
 interface KnobQuery {
   source?: string;
   limit?: number;
+  where?: Record<string, unknown>;
 }
 
 /**
@@ -734,6 +739,35 @@ interface KnobQuery {
  */
 export interface KnobSource {
   id: string;
+  /**
+   * The settings the source narrows its answer by rather than being replaced
+   * by (`WidgetSource.filters`): each one a knob sets as a key of the query's
+   * `where`, on this source alone.
+   */
+  filters?: readonly WidgetSourceFilter[];
+}
+
+/**
+ * A source as its knobs see it, its filters read from the source registry.
+ *
+ * The one place a widget's knob source is built on the server: admission reads
+ * it when a widget registers, and the payload carries its filters to the admin,
+ * whose knobs build the query from them. A source not registered yet has none,
+ * which is why core's system sources register before core's widgets.
+ *
+ * @experimental The shape may grow while the content widgets are built.
+ */
+export function knobSourceFor(id: string): KnobSource {
+  const filters = getSource(id)?.filters;
+  return filters === undefined ? { id } : { id, filters: [...filters] };
+}
+
+/** Whether `source` declares that it narrows by `filter`. */
+function narrowsBy(
+  source: KnobSource | undefined,
+  filter: WidgetSourceFilter
+): boolean {
+  return source?.filters?.includes(filter) === true;
 }
 
 /**
@@ -789,15 +823,34 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
     // The collection a card reads becomes its source, replacing the one the
     // widget declared, so one widget can read whichever collection its card
     // is set to. The reader's access to it is the server's to judge, as for
-    // any source a query names. Only over a collection source, or none: on
-    // another kind of source the same setting would mean something else.
+    // any source a query names. Over a collection source, or none. A source
+    // reading across collections that narrows by one (`filters`) is not
+    // replaced: the collection becomes its `where.collection` instead.
     drives: (setting, source) =>
       setting.type === "collection" &&
-      (source === undefined || sourceKindFromId(source.id) === "collection"),
-    apply: (query, value) => ({
-      ...query,
-      source: `collection:${value as string}`,
-    }),
+      (source === undefined ||
+        sourceKindFromId(source.id) === "collection" ||
+        narrowsBy(source, "collection")),
+    apply: (query, value, source) =>
+      source !== undefined &&
+      sourceKindFromId(source.id) !== "collection" &&
+      narrowsBy(source, "collection")
+        ? { ...query, where: { ...query.where, collection: value as string } }
+        : { ...query, source: `collection:${value as string}` },
+  },
+  {
+    // Only mine: the reader's own rows, on a source that narrows by it. The
+    // query says only that it is on; who "mine" is, the source reads from the
+    // caller, so no id travels in it. Matched by NAME as well as type, as
+    // `limit` is, since a checkbox has no meaning of its own for a query.
+    drives: (setting, source) =>
+      setting.type === "checkbox" &&
+      setting.name === "onlyMine" &&
+      narrowsBy(source, "onlyMine"),
+    apply: (query, value) =>
+      value === true
+        ? { ...query, where: { ...query.where, onlyMine: true } }
+        : { ...query },
   },
 ];
 

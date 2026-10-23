@@ -33,3 +33,6 @@ export const TEAM_SOURCE_ID = "system:team";
 
 /** The Content card's collections, each with its entries and how many are drafts. */
 export const CONTENT_SOURCE_ID = "system:content";
+
+/** The documents most recently saved, one row each: the saves this caller may see. */
+export const RECENT_EDITS_SOURCE_ID = "system:recent-edits";

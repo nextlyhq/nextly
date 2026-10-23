@@ -27,6 +27,48 @@ import { computeChangedFields } from "../webhooks/envelope";
 
 import { recordableActor } from "./record-settings-activity";
 
+/**
+ * What a write did to whether its document is live, as the write path knows it.
+ *
+ * Facts rather than a verdict: each write path states what it read and what it
+ * wrote, and {@link publishesDocument} alone decides whether that was a
+ * publish. Five paths can publish (an entry's update, its all-languages
+ * publish, its transaction path, a Single's save and a Single's publish-all),
+ * and five copies of the rule would disagree about the cases that are hard to
+ * tell apart: a promotion of pending edits, an unpublish that promotes, and a
+ * restore.
+ */
+export interface PublicationFacts {
+  /** The document's status once the write commits, in the language it wrote. */
+  statusAfter: string | null | undefined;
+  /** Its status before the write, as the write read it under its lock. */
+  statusBefore: string | null | undefined;
+  /** Whether the write promoted pending edits onto the live document. */
+  promotedPendingEdits?: boolean;
+  /** Whether the write restores an earlier version. */
+  restores?: boolean;
+}
+
+/**
+ * Whether a write published its document: it leaves the document published,
+ * and either the document was not published before or the write promoted
+ * pending edits onto it.
+ *
+ * The trail has no publish action of its own, and its changed fields cannot
+ * say this alone: a promotion leaves the status published, so its row lists
+ * only the fields the pending edits changed and reads like a save. A restore is
+ * never a publish, even one that lands published: it puts back an earlier
+ * version's content, which is an edit. An unpublish is never one either, even
+ * when it promotes the pending edits as it withdraws the page.
+ */
+export function publishesDocument(facts: PublicationFacts): boolean {
+  if (facts.restores === true) return false;
+  if (facts.statusAfter !== "published") return false;
+  return (
+    facts.statusBefore !== "published" || facts.promotedPendingEdits === true
+  );
+}
+
 /** What one mutation records, as the choke point already knows it. */
 export interface RecordMutationActivityInput {
   /** The language this write was made in; see `RecordMutationEventArgs`. */
@@ -40,6 +82,8 @@ export interface RecordMutationActivityInput {
   /** Prior state for an update; null on create and delete. */
   previous?: Record<string, unknown> | null;
   actor?: RequestActor | null;
+  /** What the write did to whether the entry is live, from a path that can publish. */
+  publication?: PublicationFacts;
 }
 
 /**
@@ -109,13 +153,16 @@ function collectionViews(): CollectionViews {
  */
 function feedHeading(
   collection: string,
-  data: Record<string, unknown>,
-  entryId: string | undefined
+  data: Record<string, unknown>
 ): string | undefined {
+  // No title is stored when the entry has none. Its id once stood in, which
+  // every reader then drew as though it were the entry's name; the readers say
+  // "Untitled" themselves, and treat a stored title equal to the row's id the
+  // same way, so rows written before this read alike.
   return entryHeading(
     data,
     collectionViews().titleFields.get(collection),
-    entryId
+    undefined
   );
 }
 
@@ -147,18 +194,37 @@ export function willRecordMutationActivity(
 }
 
 /**
- * Which fields an update touched, as NAMES.
+ * What an update's row says about the write: which fields it touched, as
+ * NAMES, and whether it published the document.
  *
  * Only for an update: a create reports every key it wrote and a delete every
  * key it removed, neither of which distinguishes anything, so both would cost
- * a column's worth of storage per row to say what the action already says.
+ * a column's worth of storage per row to say what the action already says. A
+ * create straight into published is not marked either: a create never joins
+ * another row, and its action already says it is new.
+ *
+ * One builder for an entry's row and a Single's, so the two kinds of row say
+ * the same things in the same shape.
  */
-function changedFieldNames(
-  input: RecordMutationActivityInput
-): Record<string, unknown> | undefined {
-  if (input.action !== "update" || !input.previous) return undefined;
-  const changed = computeChangedFields(input.previous, input.data);
-  return changed.length > 0 ? { changedFields: changed } : undefined;
+function updateMetadata(input: {
+  action: ActivityLogAction;
+  /** Absent when the write could not assemble its documents: no fields are named. */
+  data?: Record<string, unknown>;
+  previous?: Record<string, unknown> | null;
+  publication?: PublicationFacts;
+}): Record<string, unknown> | undefined {
+  if (input.action !== "update") return undefined;
+  const changed =
+    input.previous && input.data
+      ? computeChangedFields(input.previous, input.data)
+      : [];
+  const published =
+    input.publication !== undefined && publishesDocument(input.publication);
+  if (changed.length === 0 && !published) return undefined;
+  return {
+    ...(changed.length > 0 ? { changedFields: changed } : {}),
+    ...(published ? { published: true } : {}),
+  };
 }
 
 /**
@@ -189,7 +255,7 @@ export async function recordMutationActivity(
   const service = registeredActivityLogService();
   if (!service) return;
 
-  const metadata = changedFieldNames(input);
+  const metadata = updateMetadata(input);
   // No name or email is passed: the write resolves both from the account under
   // the same lock that decides whether it still exists. The alternative — the
   // session's copy, carried down from the request — is a snapshot taken before
@@ -208,7 +274,7 @@ export async function recordMutationActivity(
     subjectKind: "collection" as const,
     ...(input.entryId !== undefined ? { entryId: input.entryId } : {}),
     ...(() => {
-      const heading = feedHeading(input.collection, input.data, input.entryId);
+      const heading = feedHeading(input.collection, input.data);
       return heading !== undefined ? { entryTitle: heading } : {};
     })(),
     ...(metadata !== undefined ? { metadata } : {}),
@@ -246,6 +312,33 @@ export interface RecordSingleActivityInput {
   /** The language this save was made in; null or absent for every language. */
   locale?: string | null;
   actor?: RequestActor | null;
+  /**
+   * The saved document and the one it replaced, compared by value for the
+   * fields the save changed, as an entry's are. Absent, the row names none.
+   */
+  data?: Record<string, unknown>;
+  previous?: Record<string, unknown> | null;
+  /** What the save did to whether the Single is live. */
+  publication?: PublicationFacts;
+}
+
+/**
+ * Whether a save of a Single by this actor will produce a row, so the save
+ * knows to assemble the documents its changed fields are compared from.
+ *
+ * The Single's counterpart of {@link willRecordMutationActivity}, and the same
+ * rule: the trail records every save by a person, on every install, so a save
+ * that assembled its documents only for webhooks or audit would compare
+ * nothing on an install with neither, and a component-only edit would read as
+ * no change at all.
+ */
+export function willRecordSingleActivity(
+  actor?: RequestActor | null
+): actor is RequestActor & { id: string } {
+  return (
+    recordableActor(actor) !== null &&
+    registeredActivityLogService() !== undefined
+  );
 }
 
 /**
@@ -269,6 +362,12 @@ export async function recordSingleActivity(
   if (!actor) return;
   const service = registeredActivityLogService();
   if (!service) return;
+  const metadata = updateMetadata({
+    action: "update",
+    data: input.data,
+    previous: input.previous,
+    publication: input.publication,
+  });
   await service.logActivityInTx(db(), {
     actorType: actor.type,
     userId: actor.id,
@@ -278,5 +377,6 @@ export async function recordSingleActivity(
     subjectKind: "single" as const,
     entryId: input.entryId,
     entryTitle: input.label,
+    ...(metadata !== undefined ? { metadata } : {}),
   });
 }

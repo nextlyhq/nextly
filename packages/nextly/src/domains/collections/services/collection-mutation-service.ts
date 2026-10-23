@@ -6273,6 +6273,24 @@ export class CollectionMutationService extends BaseService {
             tx.getDrizzle()
           );
           const publishActor = actorForWrite(params.actor, params.user);
+          // The trail's status before this write, across every language it
+          // moves: the main row's and each companion's, read under the lock.
+          // Publishing every language puts each one live, so it publishes the
+          // entry whenever ANY of them was not, even with the main row already
+          // live, when the changed fields name no status at all.
+          const priorLanguageStatuses = [
+            (preImageRow as { status?: unknown }).status as
+              | string
+              | null
+              | undefined,
+            ...priorCompanionStatuses.values(),
+          ];
+          const statusBeforeEveryLanguage = priorLanguageStatuses.every(
+            status => status === "published"
+          )
+            ? "published"
+            : (priorLanguageStatuses.find(status => status !== "published") ??
+              null);
           const baseRecorded = await recordMutationEvent(tx, {
             type: "entry.updated",
             resource: {
@@ -6284,6 +6302,10 @@ export class CollectionMutationService extends BaseService {
             previous: previousDocument,
             fields: publishEventFields,
             actor: publishActor,
+            publication: {
+              statusAfter: direction.nextStatus,
+              statusBefore: statusBeforeEveryLanguage,
+            },
           });
           eventRecorded = baseRecorded || eventRecorded;
           // Whether the default locale's own companion row transitions to
@@ -9627,6 +9649,21 @@ export class CollectionMutationService extends BaseService {
                   previous: previousDocument,
                   fields: webhookFields,
                   actor: actorForWrite(params.actor, params.user),
+                  // Whether this write published the entry, for the trail: the
+                  // status it persists, the one the lock read, and whether it
+                  // promoted the pending edits, which leaves the status
+                  // published and so cannot be read from the changed fields.
+                  publication: {
+                    // The companion `_status` is unparsed input, so only a
+                    // string is a status the trail can judge.
+                    statusAfter:
+                      typeof transitionNextStatus === "string"
+                        ? transitionNextStatus
+                        : undefined,
+                    statusBefore: draftLiveStatus,
+                    promotedPendingEdits: promotedDraft,
+                    restores: isRestoreWrite,
+                  },
                 });
               } else {
                 // A working-draft save changes no live document, so there is no
@@ -12155,6 +12192,20 @@ export class CollectionMutationService extends BaseService {
         previous: previousDocument,
         fields: eventFields,
         actor: eventActor,
+        // Whether this write published the entry, for the trail. This path
+        // promotes no working draft, so the facts are the status the row is
+        // left in and whether it was live before, as the lock read it.
+        publication: {
+          statusAfter:
+            (collection as { status?: boolean }).status === true
+              ? (finalData.status as string | null | undefined)
+              : undefined,
+          statusBefore: alreadyLive
+            ? "published"
+            : existingEntry.status !== "published"
+              ? (existingEntry.status as string | null | undefined)
+              : previousCompanionStatus,
+        },
       });
       if ((collection as { status?: boolean }).status === true) {
         // A write can move the published state in two places that move

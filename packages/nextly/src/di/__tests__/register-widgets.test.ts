@@ -42,6 +42,7 @@ import {
   ACTIVITY_SOURCE_ID,
   ATTENTION_SOURCE_ID,
   CONTENT_SOURCE_ID,
+  RECENT_EDITS_SOURCE_ID,
   TEAM_SOURCE_ID,
 } from "../../domains/widgets/system-source-ids";
 import { resetWidgetRegistries } from "../registrations/register-widgets";
@@ -94,6 +95,7 @@ describe("resetWidgetRegistries", () => {
         ACTIVITY_SOURCE_ID,
         ATTENTION_SOURCE_ID,
         CONTENT_SOURCE_ID,
+        RECENT_EDITS_SOURCE_ID,
         RELEASES_SOURCE_ID,
         TEAM_SOURCE_ID,
         VERSIONS_SOURCE_ID,
@@ -235,6 +237,20 @@ describe("resetWidgetRegistries", () => {
     for (const source of queried) {
       expect(getSource(String(source))).toBeDefined();
     }
+  });
+
+  it("registers core's sources before core's cards, so a card's filter settings are admitted", () => {
+    // 🔴 Recently edited's Collection and Only mine settings are admitted only
+    // because its source declares those filters, which admission reads from the
+    // source registry. With the sources registered after the cards, as they
+    // once were, the source is not there yet and this boot refuses the card.
+    expect(() => resetWidgetRegistries()).not.toThrow();
+    const settings = listWidgets()
+      .find(widget => widget.id === "core/recently-edited")
+      ?.settings?.map(setting => setting.name);
+    expect(settings).toEqual(
+      expect.arrayContaining(["collection", "onlyMine", "limit"])
+    );
   });
 
   it("still refuses a genuine duplicate WITHIN one boot", () => {
