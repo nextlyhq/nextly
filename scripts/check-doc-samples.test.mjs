@@ -792,41 +792,39 @@ describe("unterminatedFences and closing lines", () => {
   });
 });
 
-describe("isModule asks the compiler rather than listing node kinds", () => {
-  /**
-   * The kinds this used to enumerate, as the control.
-   *
-   * A list answers only for what somebody thought of, and this one was short in
-   * both directions at once, which is the shape a list always fails in.
-   */
-  const byKindList = (code, extension = "ts") =>
-    parseSample(code, extension).statements.some(
-      statement =>
-        ts.isImportDeclaration(statement) ||
-        ts.isImportEqualsDeclaration(statement) ||
-        ts.isExportDeclaration(statement) ||
-        ts.isExportAssignment(statement) ||
-        (ts.getModifiers?.(statement) ?? statement.modifiers ?? []).some(
-          modifier => modifier.kind === ts.SyntaxKind.ExportKeyword
-        )
-    );
-
+describe("isModule answers as TypeScript decides a file is a module", () => {
   it("compiles a fence whose only module syntax is import.meta", () => {
-    // TypeScript sets its module indicator for `import.meta`, so this fence is
-    // a module to the compiler that would compile it while the list read it as
-    // a fragment. Neither the reviewer nor the list found this one.
+    // TypeScript calls a file with `import.meta` a module, so the compiler that
+    // would compile this fence treats it as one. A list of declaration kinds
+    // read it as a fragment.
     const code = "const here = import.meta.url;\nconsole.log(here);\n";
     expect(isModule(code, "ts")).toBe(true);
-    expect(byKindList(code)).toBe(false);
   });
 
-  it("leaves a namespace alias alone", () => {
+  it("leaves a namespace alias alone, and loads through an import equals", () => {
     // `import A = N.M` names an existing namespace rather than loading a
-    // module, and TypeScript does not call the file a module for it. The list
-    // matched every ImportEqualsDeclaration, so it read this as a program.
-    const code = "import A = N.M;\n";
+    // module, and TypeScript does not call the file a module for it; the
+    // `require` form loads one, and it does.
+    expect(isModule("import A = N.M;\n", "ts")).toBe(false);
+    expect(isModule('import fs = require("node:fs");\n', "ts")).toBe(true);
+    expect(isModule("const a = 1;\nexport = a;\n", "ts")).toBe(true);
+  });
+
+  it("does not take top-level await for module syntax", () => {
+    // The parser's own "has module syntax" counts top-level `await`, which
+    // TypeScript does not, and the Direct API pages are full of fragments that
+    // await a call. Read that way, sixty of them became modules.
+    const code = "const posts = await nextly.find({ collection: 'posts' });\n";
     expect(isModule(code, "ts")).toBe(false);
-    expect(byKindList(code)).toBe(true);
+    expect(parseSample(code, "ts").module.hasModuleSyntax).toBe(true);
+  });
+
+  it("reads a fence that does not parse as declaring and loading nothing", () => {
+    // The parser answers a syntax error with an empty program, not a partial
+    // one, so a placeholder fragment is a fragment.
+    const code = 'import { a } from "b";\nconst c = { ... };\n';
+    expect(parseSample(code, "ts").program.body).toEqual([]);
+    expect(isModule(code, "ts")).toBe(false);
   });
 
   it("still answers for the cases the list got right", () => {
