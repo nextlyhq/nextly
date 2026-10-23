@@ -389,11 +389,16 @@ async function keepProtectedStoredInstances(params: {
     const { single, many } = extractFieldGroupReferences(field);
     const slugOf = (row: Record<string, unknown>) =>
       many !== undefined ? readFieldGroupType(row) : single;
-    const holdsOne =
-      many === undefined &&
-      (field as { repeatable?: unknown }).repeatable !== true;
+    // A field that is not repeatable holds one instance, as an object: a
+    // dynamic zone too, whose block is judged by the type it is stored as.
+    const holdsOne = (field as { repeatable?: unknown }).repeatable !== true;
     const kept = holdsOne
-      ? await keptSingleInstance(sent, storedRows[0], single, params)
+      ? await keptSingleInstance(
+          sent,
+          storedRows[0],
+          storedRows[0] ? slugOf(storedRows[0]) : undefined,
+          params
+        )
       : await keptInstanceList(sent, storedRows, slugOf, params);
     if (kept !== undefined) params.data[name] = kept;
   }
