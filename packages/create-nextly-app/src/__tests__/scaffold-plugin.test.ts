@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import {
   mkdir,
   mkdtemp,
@@ -24,7 +25,17 @@ import {
 } from "vitest";
 
 import type { DatabaseConfig } from "../types";
+import { PLUGIN_NODE_ENGINES, satisfiesNodeRange } from "../utils/plugin-node";
 import { copyTemplate } from "../utils/template";
+
+const requireFromHere = createRequire(import.meta.url);
+
+/** The `engines.node` an installed package declares. */
+function enginesOf(name: string): string {
+  return (
+    requireFromHere(`${name}/package.json`) as { engines: { node: string } }
+  ).engines.node;
+}
 
 /*
  * Scaffolded source is checked by its syntax tree rather than its text: a
@@ -284,6 +295,37 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     // `pnpm` field (pnpm 11 ignores that field). Without this, `pnpm install` aborts
     // on better-sqlite3 (the dev playground's native dep) with ERR_PNPM_IGNORED_BUILDS.
     expect(pkg.pnpm).toBeUndefined();
+
+    // The Node it promises is the one its build and test tools both run on,
+    // read from the installed tools so a bump that moves either fails here.
+    expect(pkg.engines.node).toBe(PLUGIN_NODE_ENGINES);
+    const tools = ["tsdown", "vitest"].map(enginesOf);
+    // Every version where a comparator starts, a patch either side of it,
+    // and the start of every major in between: where the answer can change.
+    const starts = [PLUGIN_NODE_ENGINES, ...tools]
+      .flatMap(range => [...range.matchAll(/(\d+)\.(\d+)\.(\d+)/g)])
+      .map(([, major, minor, patch]) => [
+        Number(major),
+        Number(minor),
+        Number(patch),
+      ]);
+    const samples = starts.flatMap(([major, minor, patch]) => [
+      `${major}.${minor}.${patch}`,
+      `${major}.${minor}.${patch + 1}`,
+      patch > 0
+        ? `${major}.${minor}.${patch - 1}`
+        : `${major}.${Math.max(minor - 1, 0)}.99`,
+      `${major}.0.0`,
+      `${major + 1}.0.0`,
+    ]);
+    const disagreements = samples.filter(
+      version =>
+        satisfiesNodeRange(version, PLUGIN_NODE_ENGINES) !==
+        tools.every(range => satisfiesNodeRange(version, range))
+    );
+    expect(disagreements, `tsdown: ${tools[0]}; vitest: ${tools[1]}`).toEqual(
+      []
+    );
 
     /*
      * The scaffolded suite boots a real instance, so its budget is asserted

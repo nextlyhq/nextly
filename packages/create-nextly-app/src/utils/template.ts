@@ -20,6 +20,7 @@ import type {
 } from "../types";
 
 import { binaryRunner, scriptRunner } from "./package-manager-commands";
+import { PLUGIN_NODE_ENGINES } from "./plugin-node";
 
 /**
  * Templates whose `nextly.config.ts` registers `formBuilderPlugin`. The
@@ -1586,6 +1587,9 @@ async function generatePluginPackageJson(
     // Only the built library ships. The dev/ playground is never published.
     files: ["dist"],
     keywords: ["nextly", "nextly-plugin"],
+    // The Node its build and test tools both run on, so a plugin never
+    // promises one its own `build` or `test` script refuses.
+    engines: { node: PLUGIN_NODE_ENGINES },
     scripts: {
       build: "tsdown",
       // Runs the embedded playground (next dev with dev/ as the project root).

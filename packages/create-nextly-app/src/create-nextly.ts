@@ -71,6 +71,7 @@ import {
 } from "./utils/detect";
 import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
 import { scriptRunner } from "./utils/package-manager-commands";
+import { pluginNodeRefusal } from "./utils/plugin-node";
 import { copyTemplate, resolveTemplatePath } from "./utils/template";
 
 /**
@@ -269,6 +270,17 @@ export async function createNextly(
 
     // If user selects the disabled "coming soon" hint, fall back to blank
     projectType = isValidTemplateSelection(template) ? template : "blank";
+  }
+
+  // A plugin builds and tests on tools with a higher Node floor than the
+  // packages', so it is refused here, before anything is written, rather
+  // than scaffolded into a project whose first build fails.
+  if (projectType === "plugin") {
+    const refusal = pluginNodeRefusal(process.versions.node);
+    if (refusal) {
+      p.cancel(refusal);
+      process.exit(1);
+    }
   }
 
   // --- Step 3: Schema approach (only for content templates with approaches) ---
