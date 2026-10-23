@@ -15,6 +15,8 @@
  */
 import { z } from "zod";
 
+import { writtenDocumentSchema } from "./written/document";
+
 /**
  * The fields a render needs, and nothing else.
  *
@@ -41,6 +43,12 @@ export const draftPreviewSchema = z.object({
      * whatever the saved template uses.
      */
     legacy: z.boolean().optional(),
+    /**
+     * A written draft's blocks, previewed from the blocks as they are typed.
+     * Checked by the same rules a save of them is.
+     */
+    format: z.enum(["code", "written"]).optional(),
+    blocks: writtenDocumentSchema.nullable().optional(),
   }),
   data: z.record(z.string(), z.unknown()),
 });
