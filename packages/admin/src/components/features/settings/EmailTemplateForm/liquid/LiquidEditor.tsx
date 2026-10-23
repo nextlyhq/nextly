@@ -33,6 +33,7 @@ import {
   type MutableRefObject,
 } from "react";
 
+import { xmlLinter } from "@admin/components/features/entries/fields/text/CodeMirrorEditor";
 import { useTheme } from "@admin/context/providers/ThemeProvider";
 import {
   nextlyEditorChrome,
@@ -132,10 +133,15 @@ const inputLike = EditorView.theme({
   ".cm-scroller": { overflowX: "auto", overflowY: "hidden" },
 });
 
-/** Completion and live problems, for text that is Liquid. */
+/**
+ * Completion and live problems, for text that is Liquid. In the HTML body the
+ * marks also include the admin's HTML tag check, which the body had before it
+ * read Liquid; the problem list stays Liquid's, the ones a save refuses.
+ */
 function liquidTooling(
   completionRef: MutableRefObject<CompletionData>,
-  problemsRef: MutableRefObject<LiquidEditorProps["onProblems"]>
+  problemsRef: MutableRefObject<LiquidEditorProps["onProblems"]>,
+  mode: LiquidEditorProps["mode"]
 ) {
   return [
     autocompletion({
@@ -147,7 +153,7 @@ function liquidTooling(
       view => {
         const problems = liquidProblems(view.state.doc.toString());
         problemsRef.current?.(problems);
-        return problems.map(
+        const liquidMarks = problems.map(
           (problem): Diagnostic => ({
             from: problem.from,
             to: problem.to,
@@ -155,6 +161,9 @@ function liquidTooling(
             message: problem.message,
           })
         );
+        return mode === "html"
+          ? [...liquidMarks, ...xmlLinter(view)]
+          : liquidMarks;
       },
       { delay: 300 }
     ),
@@ -243,7 +252,7 @@ function useLiquidExtensions(
   return useMemo(
     () => [
       language(isLiquid, mode),
-      ...(isLiquid ? liquidTooling(completionRef, problemsRef) : []),
+      ...(isLiquid ? liquidTooling(completionRef, problemsRef, mode) : []),
       EditorView.contentAttributes.of(
         contentAttributes({ label, id, describedBy, invalid, disabled })
       ),

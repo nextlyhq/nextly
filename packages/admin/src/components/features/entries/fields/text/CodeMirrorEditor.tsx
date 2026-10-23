@@ -99,9 +99,10 @@ function jsonLinter(view: EditorView): Diagnostic[] {
 }
 
 /**
- * XML/HTML linter - validates tag matching
+ * XML/HTML linter - validates tag matching. The email editor's HTML body runs
+ * it beside its Liquid checks, so the body keeps the warnings it had here.
  */
-function xmlLinter(view: EditorView): Diagnostic[] {
+export function xmlLinter(view: EditorView): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
   const content = view.state.doc.toString();
 

@@ -10,6 +10,7 @@
 import { currentCompletions, startCompletion } from "@codemirror/autocomplete";
 import { htmlLanguage } from "@codemirror/lang-html";
 import { forceParsing } from "@codemirror/language";
+import { forEachDiagnostic } from "@codemirror/lint";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { EditorView } from "@uiw/react-codemirror";
 import { useRef } from "react";
@@ -191,6 +192,39 @@ describe("the email editor", () => {
 
     type(view(), "Hi {{ userName }}");
     await waitFor(() => expect(onProblems).toHaveBeenLastCalledWith([]));
+  });
+
+  it("marks broken HTML in the HTML body, as the code editor did", async () => {
+    // The body's editor marked mismatched and unclosed tags before it read
+    // Liquid; reading Liquid must not take that warning away.
+    const { view } = mountEditor({
+      mode: "html",
+      label: "HTML body",
+      value: "<p>Hi {{ userName }}</div>",
+    });
+    const messages = () => {
+      const found: string[] = [];
+      forEachDiagnostic(view().state, diagnostic =>
+        found.push(diagnostic.message)
+      );
+      return found;
+    };
+    await waitFor(() =>
+      expect(messages()).toEqual(
+        expect.arrayContaining([expect.stringMatching(/Mismatched tags/)])
+      )
+    );
+  });
+
+  it("marks no HTML in a text field", async () => {
+    const onProblems = vi.fn();
+    const { view } = mountEditor({ value: "Hi <b>{{ userName }}", onProblems });
+    await waitFor(() => expect(onProblems).toHaveBeenCalled());
+    let count = 0;
+    forEachDiagnostic(view().state, () => {
+      count++;
+    });
+    expect(count).toBe(0);
   });
 
   it("offers no Liquid for a template kept on the previous engine", async () => {
