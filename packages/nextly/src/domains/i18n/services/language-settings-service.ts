@@ -5,13 +5,24 @@
  * refused with where the list is set. Otherwise a change is decided whole before anything is
  * written (`planLanguageChange`), the rows it changes are written in one transaction, and the
  * registry is read again at once, so this instance serves the new list on its next request and
- * every other instance within the registry's interval.
+ * every other instance within the registry's interval. The cache tags of every collection and
+ * Single are flushed too, since a public read made without a locale is cached under them alone and
+ * serves the default language as it was when cached.
  *
  * @module domains/i18n/services/language-settings-service
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { readRevalidateConfig } from "../../../revalidation/intent-builders";
+import type {
+  CacheRevalidator,
+  RevalidateConfig,
+} from "../../../revalidation/types";
+import {
+  nextlySingleTags,
+  nextlyTags,
+} from "../../../runtime/cache/nextly-tags";
 import { LANGUAGES_TABLE } from "../../../schemas/languages/table-name";
 import type { LanguageDirection } from "../../../schemas/languages/types";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
@@ -78,12 +89,38 @@ const IMPLICIT_ENGLISH: LanguageView = {
   active: true,
 };
 
+/** A collection or Single as a language change flushes it: its slug, and whether it opted out. */
+export interface CachedContentRef {
+  slug: string;
+  revalidate?: RevalidateConfig | null;
+}
+
+/**
+ * What a language change needs to bust the cached content reads. Every read of every collection
+ * and Single can change with the language list, and no content row is written, so no ordinary
+ * write busts them.
+ */
+export interface LanguageChangeContentCache {
+  /** Every registered collection and Single, read when a change has committed. */
+  content(): Promise<{
+    collections: readonly CachedContentRef[];
+    singles: readonly CachedContentRef[];
+  }>;
+  /**
+   * The revalidator, resolved when a change has committed rather than at construction, so a
+   * cache adapter registered after boot is the one flushed.
+   */
+  revalidator(): CacheRevalidator | undefined;
+}
+
 export class LanguageSettingsService {
   constructor(
     private readonly adapter: DrizzleAdapter,
     private readonly registry: LanguageRegistry,
-    /** Told when the registry cannot be read again after a change has committed. */
-    private readonly logger?: Pick<Logger, "warn">
+    /** Told when the registry cannot be read again, or the cache flushed, after a commit. */
+    private readonly logger?: Pick<Logger, "warn">,
+    /** Absent where nothing caches content reads, so nothing is flushed. */
+    private readonly contentCache?: LanguageChangeContentCache
   ) {}
 
   /** The languages, the removed ones included so they can be added back. */
@@ -164,7 +201,38 @@ export class LanguageSettingsService {
         }. It reads it again within a second.`
       );
     });
+    await this.flushContentCache().catch((error: unknown) => {
+      this.logger?.warn(
+        `[languages] The language list was saved, but cached pages could not be refreshed: ${
+          error instanceof Error ? error.message : String(error)
+        }. Pages cached without a time limit keep their previous language until their content changes.`
+      );
+    });
     return viewOf(written);
+  }
+
+  /**
+   * Flushes the cache tags of every collection and Single, as one intent, skipping those whose
+   * `revalidate.disable` opts them out of automatic revalidation as every content write does. The
+   * tags are the ones a cached read carries (`nextlyTags`, `nextlySingleTags`), so a read made
+   * without a locale, which is cached under them alone, is resolved again in the new default.
+   */
+  private async flushContentCache(): Promise<void> {
+    const revalidator = this.contentCache?.revalidator();
+    if (!this.contentCache || !revalidator) return;
+    const { collections, singles } = await this.contentCache.content();
+    const tags = new Set<string>();
+    for (const collection of collections) {
+      if (readRevalidateConfig(collection)?.disable) continue;
+      for (const tag of nextlyTags(collection.slug)) tags.add(tag);
+    }
+    for (const single of singles) {
+      if (readRevalidateConfig(single)?.disable) continue;
+      for (const tag of nextlySingleTags(single.slug)) tags.add(tag);
+    }
+    // A site with nothing to flush issues no revalidation, which some backends log as an error.
+    if (tags.size === 0) return;
+    await revalidator.flush([{ tags: [...tags] }]);
   }
 
   /**
