@@ -8,6 +8,9 @@
  * the dashboard down for the people with the fewest grants. So a missing count
  * is not drawn at all.
  *
+ * The Team card is no longer a reader of the summary: it reads `system:team`,
+ * and its absent figures are held in `TeamSummary.test.tsx`.
+ *
  * @module components/features/dashboard/stats-counts-absent.test
  */
 
@@ -16,8 +19,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { useDashboardStats } from "@admin/hooks/queries/useDashboardStats";
 import type { DashboardStats } from "@admin/types/dashboard/stats";
-
-import { UNAVAILABLE_TITLE } from "../widgets/frame/states";
 
 const statsHook = vi.fn<typeof useDashboardStats>();
 
@@ -31,7 +32,6 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({}),
 }));
 
-const { TeamSummary } = await import("./TeamSummary");
 const { ProjectStatsGrid } = await import("./ProjectStatsGrid");
 const { ContentStatsGrid } = await import("./ContentStatsGrid");
 
@@ -78,37 +78,6 @@ function answers(data: DashboardStats) {
 
 afterEach(() => {
   vi.clearAllMocks();
-});
-
-describe("the Team card", () => {
-  it("draws both counts when both are given", () => {
-    // The control for every absence below.
-    answers(FULL);
-    render(<TeamSummary />);
-    expect(screen.getByText("Users")).toBeInTheDocument();
-    expect(screen.getByText("21")).toBeInTheDocument();
-    expect(screen.getByText("Roles")).toBeInTheDocument();
-    expect(screen.getByText("22")).toBeInTheDocument();
-  });
-
-  it("leaves out a count it is not given, rather than drawing 0", () => {
-    const { users: _users, ...rest } = FULL;
-    answers(rest);
-    render(<TeamSummary />);
-    expect(screen.queryByText("Users")).toBeNull();
-    expect(screen.queryByText("0")).toBeNull();
-    expect(screen.getByText("Roles")).toBeInTheDocument();
-  });
-
-  it("says it is not available when it is given neither", () => {
-    answers(withoutAdminCounts());
-    render(<TeamSummary />);
-    expect(screen.queryByText("Users")).toBeNull();
-    expect(screen.queryByText("Roles")).toBeNull();
-    expect(screen.queryByText("0")).toBeNull();
-    // The frame's one unavailable state, worded the same whatever the reason.
-    expect(screen.getByText(UNAVAILABLE_TITLE)).toBeInTheDocument();
-  });
 });
 
 describe("the project statistics grid", () => {

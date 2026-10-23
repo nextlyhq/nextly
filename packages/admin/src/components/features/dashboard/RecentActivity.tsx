@@ -35,7 +35,7 @@ import {
   Spinner,
 } from "@nextlyhq/ui";
 import { Clock } from "lucide-react";
-import type { WidgetComponentProps, WidgetSlot } from "nextly/widget-result";
+import type { WidgetComponentProps } from "nextly/widget-result";
 import type React from "react";
 
 import { MoreExist } from "@admin/components/features/widgets/archetypes/more-exist";
@@ -43,7 +43,7 @@ import {
   CardEmpty,
   CardError,
   CardSkeleton,
-  CardUnavailable,
+  CardSlotFailure,
 } from "@admin/components/features/widgets/frame/states";
 import {
   rowsDrawn,
@@ -212,24 +212,6 @@ const ActivityRows: React.FC<{
 );
 
 /**
- * A refused answer in the frame's own words: "not available" when the source is
- * not this reader's, and otherwise the error with the Retry a framed card offers.
- */
-const ActivityFailure: React.FC<{
-  slot: Extract<WidgetSlot, { ok: false }>;
-  onRetry: (() => void) | undefined;
-}> = ({ slot, onRetry }) =>
-  slot.code === "unavailable" ? (
-    <CardUnavailable />
-  ) : (
-    <CardError
-      message={slot.error}
-      title="Recent activity"
-      {...(onRetry ? { onRetry } : {})}
-    />
-  );
-
-/**
  * The dashboard's Recent activity card, answered by `system:activity` in the
  * dashboard's batch: framed, so the heading and the size are the card's.
  *
@@ -258,7 +240,11 @@ export const RecentActivityCard: React.FC<WidgetComponentProps> = ({
       <CardSkeleton shape="rows" rows={drawn} layout={{ kind: "list" }} />
     ) : null;
   }
-  if (!slot.ok) return <ActivityFailure slot={slot} onRetry={onRetry} />;
+  if (!slot.ok) {
+    return (
+      <CardSlotFailure slot={slot} title="Recent activity" onRetry={onRetry} />
+    );
+  }
   if (slot.result.op !== "list") {
     return (
       <CardError

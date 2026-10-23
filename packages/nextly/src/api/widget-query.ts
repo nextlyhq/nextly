@@ -14,7 +14,10 @@
  * @module api/widget-query
  */
 
-import { authorizationGroups, canReadEntity } from "../auth/entity-read-access";
+import {
+  authorizationScheduler,
+  canReadEntity,
+} from "../auth/entity-read-access";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { MAX_QUERIES_PER_REQUEST } from "../domains/widgets/batch-limit";
@@ -209,16 +212,24 @@ async function assertSourceReadable(
  * than its result, so concurrent slots share the one in-flight decision.
  *
  * Per request, never across requests: the verdicts belong to this caller.
+ *
+ * 🔴 Every decision it starts goes through ONE bounded schedule, the order
+ * `authorizationGroups` prescribes, and not only the ones the batch named in
+ * advance. A declared widget's data function reads collections nobody named
+ * beforehand, and each is decided as its read arrives, from every card at
+ * once; started on arrival, a cold session fanned out up to a batch's worth of
+ * permission reads together, around the bound the warm-up below exists to keep.
  */
 function readDecisionsFor(
   caller: ReadCaller
 ): (slug: string) => Promise<boolean> {
   const accessCaller = readAccessCaller(caller);
   const verdicts = new Map<string, Promise<boolean>>();
+  const scheduled = authorizationScheduler();
   return slug => {
     const pending = verdicts.get(slug);
     if (pending) return pending;
-    const verdict = canReadEntity(slug, accessCaller);
+    const verdict = scheduled(() => canReadEntity(slug, accessCaller));
     verdicts.set(slug, verdict);
     return verdict;
   };
@@ -350,9 +361,11 @@ function batchSlugs(prepared: readonly PreparedQuery[]): string[] {
  * `canReadEntity` resolves a session caller through a shared per-user TTL
  * cache, so firing them together makes every one of them a miss.
  *
- * The grouping is `authorizationGroups`', not a second one written here: it
- * owns both the bound and the lone warm-up round that converts N cold misses
- * into one miss and N-1 hits, and a copy of that reasoning would drift from it.
+ * The order is `authorizationGroups`', not a second one written here: every
+ * decision goes through the schedule `readDecisionsFor` keeps
+ * (`authorizationScheduler`), which owns both the bound and the lone warm-up
+ * that converts N cold misses into one miss and N-1 hits, and a copy of that
+ * reasoning would drift from it.
  *
  * `allSettled`, so a decision that REJECTS still fails only the slots that
  * named it. `Promise.all` would throw out of the warm-up and answer the whole
@@ -364,9 +377,7 @@ async function warmReadDecisions(
   slugs: readonly string[],
   mayRead: (slug: string) => Promise<boolean>
 ): Promise<void> {
-  for (const group of authorizationGroups(slugs)) {
-    await Promise.allSettled(group.map(mayRead));
-  }
+  await Promise.allSettled(slugs.map(mayRead));
 }
 
 /** Runs one prepared query's preconditions: the caller may read its source, and it is valid. */
