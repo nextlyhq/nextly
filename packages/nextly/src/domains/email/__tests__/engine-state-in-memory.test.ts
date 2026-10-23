@@ -32,6 +32,10 @@ const DATA = { vip: true, name: "Priya" };
 
 let adapter: DrizzleAdapter;
 let clock = 1_000_000;
+const advance = (ms: number) => {
+  clock = clock + ms;
+  vi.setSystemTime(clock);
+};
 let transactionOpen = false;
 
 /** Create `tables`, on a database that already has `existing`. */
@@ -62,7 +66,8 @@ let kept: EmailTemplateRecord;
 beforeEach(async () => {
   clock = 1_000_000;
   transactionOpen = false;
-  vi.spyOn(Date, "now").mockImplementation(() => clock);
+  // Date itself, so rows are stamped by the same clock the copy is read by.
+  vi.useFakeTimers({ toFake: ["Date"], now: clock });
   adapter = createSqliteAdapter({ memory: true }) as unknown as DrizzleAdapter;
   await adapter.connect();
   Object.assign(adapter, { transactionOpenInFlow: () => transactionOpen });
@@ -79,9 +84,12 @@ beforeEach(async () => {
     useLayout: false,
   });
   await createTables(nextlyMetaTables("sqlite"), { emailTemplatesSqlite });
+  // Later boots read the engine state well after the template was written.
+  advance(60_000);
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   await adapter.disconnect();
 });
@@ -106,22 +114,36 @@ describe("the template engine state", () => {
     expect(first.html).toBe("<p>Members: {% if vip %}VIP{% endif %} Priya</p>");
   });
 
-  it("sees another instance's confirmation once its copy is older than the window", async () => {
+  it("judges a row another instance rewrote against a fresh copy, at once", async () => {
     const site = await boot();
     const other = await boot();
+    // The other instance rewrites the row and records the change of engine,
+    // as an owner's new version or a confirmation does.
+    advance(1_000);
     await other.updateTemplate(kept.id, { htmlContent: REWRITTEN });
     await other.confirmLiquid(kept.id);
     const rewritten = await site.getTemplate(kept.id);
 
-    // Within the window this instance still reads it as kept.
-    clock += SNAPSHOT_MAX_AGE_MS;
+    // Within the window, but the row is newer than this instance's copy, so
+    // the copy is read again before the row is judged.
     expect((await site.renderStored(rewritten, DATA)).html).toBe(
-      "<p>Members: {% if vip %}VIP{% endif %} Priya</p>"
+      "<p>Members: VIP Priya</p>"
+    );
+  });
+
+  it("sees a change to the engine state alone once its copy is older than the window", async () => {
+    const site = await boot();
+    // Another instance changes the state without writing the row.
+    await new MetaService(adapter, silentLogger).delete(
+      `email.templates.liquid.kept.${kept.id}`
     );
 
-    // Past it, the next send reads the state again and renders it as Liquid.
-    clock += 1;
-    expect((await site.renderStored(rewritten, DATA)).html).toBe(
+    advance(SNAPSHOT_MAX_AGE_MS);
+    expect((await site.renderStored(kept, DATA)).html).toBe(
+      "<p>Members: {% if vip %}VIP{% endif %} Priya</p>"
+    );
+    advance(1);
+    expect((await site.renderStored(kept, DATA)).html).toBe(
       "<p>Members: VIP Priya</p>"
     );
   });
@@ -134,12 +156,23 @@ describe("the template engine state", () => {
     expect(
       (await site.renderStored(await site.getTemplate(kept.id), DATA)).html
     ).toBe("<p>Members: VIP Priya</p>");
-    expect(reads()).toBe(0);
+    // The row it just wrote is newer than its copy, so the copy is read
+    // again before the row is judged, until a read lands further from the
+    // row's write than clocks between instances could disagree; after that,
+    // a send reads nothing.
+    expect(reads()).toBe(1);
+    advance(6_000);
+    const row = await site.getTemplate(kept.id);
+    await site.renderStored(row, DATA);
+    const settled = reads();
+    await site.renderStored(row, DATA);
+    await site.renderStored(row, DATA);
+    expect(reads()).toBe(settled);
   });
 
   it("makes one read of the meta table for a burst of sends after the copy expires", async () => {
     const site = await boot();
-    clock += SNAPSHOT_MAX_AGE_MS + 1;
+    advance(SNAPSHOT_MAX_AGE_MS + 1);
     const getAll = vi.spyOn(MetaService.prototype, "getAll");
     await Promise.all(
       Array.from({ length: 5 }, () => site.renderStored(kept, DATA))
@@ -149,7 +182,7 @@ describe("the template engine state", () => {
 
   it("reads nothing from the meta table inside an open transaction, however old its copy", async () => {
     const site = await boot();
-    clock += SNAPSHOT_MAX_AGE_MS * 10;
+    advance(SNAPSHOT_MAX_AGE_MS * 10);
     transactionOpen = true;
     const reads = watchMetaReads();
 

@@ -54,7 +54,11 @@ export class EmailBrandStore extends BaseService {
    */
   private generation = 0;
   /** The read of the table in flight, which every caller arriving meanwhile joins. */
-  private refreshing: Promise<BrandSettings> | null = null;
+  private refreshing: {
+    read: Promise<BrandSettings>;
+    /** The save generation it began under (see generation). */
+    generation: number;
+  } | null = null;
   /**
    * The end of the last save queued. Saves on one instance run one after
    * another, so the order they write in is the order they started in, and the
@@ -99,7 +103,11 @@ export class EmailBrandStore extends BaseService {
    * of sends after the copy expires makes one read, not one each.
    */
   private refresh(): Promise<BrandSettings> {
-    if (this.refreshing) return this.refreshing;
+    // Joined only while no save has started or landed since it began: a read
+    // from before a save could carry the settings the save replaced.
+    if (this.refreshing && this.refreshing.generation === this.generation) {
+      return this.refreshing.read;
+    }
     const started = this.generation;
     const readAt = Date.now();
     const read = this.readTable()
@@ -108,9 +116,9 @@ export class EmailBrandStore extends BaseService {
         return settings;
       })
       .finally(() => {
-        if (this.refreshing === read) this.refreshing = null;
+        if (this.refreshing?.read === read) this.refreshing = null;
       });
-    this.refreshing = read;
+    this.refreshing = { read, generation: started };
     return read;
   }
 

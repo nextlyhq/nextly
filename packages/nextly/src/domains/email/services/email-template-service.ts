@@ -404,6 +404,12 @@ function prefersCode(
  */
 type EngineRead = "render" | "decide";
 
+/**
+ * How far apart two instances' clocks may be when one judges whether a row
+ * the other wrote is newer than its copy of the engine state.
+ */
+const CLOCK_MARGIN_MS = 5_000;
+
 /** Union of all dialect-specific email_templates table definitions. */
 type EmailTemplatesTable =
   | typeof emailTemplatesPg
@@ -764,6 +770,29 @@ export class EmailTemplateService extends BaseService {
   }
 
   /**
+   * Bring the copy up to a row a render is about to judge. Every change to the
+   * engine state comes with a write of the row it concerns (an owner's new
+   * version kept on the previous engine, a template confirmed as Liquid), and
+   * the state is recorded before the row. So a row written after the copy was
+   * read may carry a change the copy hasn't seen, and the copy is read again
+   * first, outside a transaction. CLOCK_MARGIN_MS covers clocks that differ
+   * between instances.
+   */
+  private async engineStateCovers(writtenAt: unknown): Promise<void> {
+    const state = this.engineState;
+    if (!state || transactionOpenInFlow(this.adapter)) return;
+    const at =
+      writtenAt instanceof Date
+        ? writtenAt.getTime()
+        : typeof writtenAt === "number"
+          ? writtenAt
+          : Number.NaN;
+    if (Number.isFinite(at) && at + CLOCK_MARGIN_MS >= state.readAt) {
+      await this.reloadEngineState();
+    }
+  }
+
+  /**
    * Read the engine state again for an expired copy. Sends arriving while the
    * read is in flight share it, so a burst after the copy expires makes one
    * read of the meta table, not one each.
@@ -870,9 +899,11 @@ export class EmailTemplateService extends BaseService {
    * the meantime.
    */
   private async keptOnOldEngine(
-    template: Pick<EmailTemplateRecord, "id"> & LiquidFieldValues,
+    template: Pick<EmailTemplateRecord, "id"> &
+      LiquidFieldValues & { updatedAt?: unknown },
     mode: EngineRead = "decide"
   ): Promise<boolean> {
+    if (mode === "render") await this.engineStateCovers(template.updatedAt);
     const adopted = await this.liquidAdopted(mode);
     if (adopted) {
       return this.engineKeyPresent(keptKey(template.id), mode);

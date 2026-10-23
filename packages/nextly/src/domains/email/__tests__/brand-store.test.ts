@@ -130,6 +130,29 @@ describe("the copy of the settings a render inside a transaction reads", () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
+  it("gives an editor reading after a save the saved settings, not a read from before it", async () => {
+    const store = new EmailBrandStore(adapter, silentLogger);
+    await store.load();
+    let release: (settings: BrandSettings) => void = () => {};
+    const slow = new Promise<BrandSettings>(resolve => {
+      release = resolve;
+    });
+    const reader = store as unknown as TableReader;
+    const original = reader.readTable.bind(store);
+    vi.spyOn(reader, "readTable")
+      .mockImplementationOnce(() => slow)
+      .mockImplementation(original);
+
+    // A render past the window starts a read, still in flight when a save lands.
+    clock += SNAPSHOT_MAX_AGE_MS + 1;
+    const pending = store.read();
+    await store.update({ accentColor: "#ff0066" });
+
+    expect((await store.readCurrent()).accentColor).toBe("#ff0066");
+    release({ ...STARTING_BRAND, footerLinks: [] });
+    await pending;
+  });
+
   it("reads the table for an editor, whatever the copy's age", async () => {
     const store = new EmailBrandStore(adapter, silentLogger);
     await store.load();
