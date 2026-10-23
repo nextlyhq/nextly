@@ -6,7 +6,6 @@ import {
   Fallback as AvatarFallbackPrimitive,
 } from "@radix-ui/react-avatar";
 import { cva } from "class-variance-authority";
-import type { ClassProp } from "class-variance-authority/types";
 import {
   createContext,
   forwardRef,
@@ -17,18 +16,23 @@ import {
 } from "react";
 
 import { cn } from "../lib/utils";
+import type { VariantsFn } from "../lib/variants";
 import type {
   AvatarFallbackProps,
   AvatarImageProps,
   AvatarProps,
 } from "../types/avatar";
 
-/** What `avatarVariants` accepts: its variants, and `class` or `className`. */
-type AvatarVariantsFn = (
-  props?: {
-    size?: "sm" | "md" | "lg" | "xl" | "2xl" | null | undefined;
-  } & ClassProp
-) => string;
+/** The arms `avatarVariants` is built from. Its type is read from them: {@link VariantsFn}. */
+export const AVATAR_VARIANT_MAP = {
+  size: {
+    sm: "h-8 w-8",
+    md: "h-10 w-10",
+    lg: "h-12 w-12",
+    xl: "h-16 w-16",
+    "2xl": "h-20 w-20",
+  },
+};
 
 /**
  * Avatar Component - Design System Specification
@@ -93,18 +97,10 @@ type AvatarVariantsFn = (
  * @see {@link https://github.com/nextlyhq/nextly/blob/main/ui-revamp/04-design-system-specification.md Design System Specification}
  * @experimental
  */
-export const avatarVariants: AvatarVariantsFn = cva(
+export const avatarVariants: VariantsFn<typeof AVATAR_VARIANT_MAP> = cva(
   "relative inline-flex shrink-0 overflow-hidden rounded-full items-center justify-center bg-primary/5 text-muted-foreground",
   {
-    variants: {
-      size: {
-        sm: "h-8 w-8",
-        md: "h-10 w-10",
-        lg: "h-12 w-12",
-        xl: "h-16 w-16",
-        "2xl": "h-20 w-20",
-      },
-    },
+    variants: AVATAR_VARIANT_MAP,
     defaultVariants: {
       size: "md",
     },

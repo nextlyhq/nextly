@@ -1,6 +1,5 @@
 import * as SelectPrimitive from "@radix-ui/react-select";
 import { cva, type VariantProps } from "class-variance-authority";
-import type { ClassProp } from "class-variance-authority/types";
 import { Check, ChevronDown, ChevronUp } from "lucide-react";
 import {
   forwardRef,
@@ -12,6 +11,7 @@ import {
 } from "react";
 
 import { cn } from "../lib/utils";
+import type { VariantsFn } from "../lib/variants";
 import { usePortalContainer } from "../providers/portal-provider";
 
 /**
@@ -69,32 +69,31 @@ function SelectValue({
   return <SelectPrimitive.Value data-slot="select-value" {...props} />;
 }
 
-/** What `selectTriggerVariants` accepts: its variants, and `class` or `className`. */
-type SelectTriggerVariantsFn = (
-  props?: { size?: "default" | "sm" | "lg" | null | undefined } & ClassProp
-) => string;
+/** The arms `selectTriggerVariants` is built from. Its type is read from them: {@link VariantsFn}. */
+export const SELECT_TRIGGER_VARIANT_MAP = {
+  size: {
+    // `-md`, matching Button and Input: one height for one size name. A
+    // select sitting beside a small button in a filter row is the case that
+    // makes a 4px difference visible.
+    sm: "h-[var(--nx-control-height-md)] text-sm",
+    default: "h-[var(--nx-control-height)] text-sm",
+    lg: "h-[var(--nx-control-height-lg)] text-base",
+  },
+};
 
 /** @experimental */
-const selectTriggerVariants: SelectTriggerVariantsFn = cva(
-  // hover:border-primary (full strength) keeps the hover boundary more visible
-  // than the resting border-input, not a fainter alpha of it.
-  "flex w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-sm text-foreground cursor-pointer transition-all duration-150 focus:border-primary! focus-visible:border-primary! focus:outline-none hover:border-primary disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-primary/5 data-[placeholder]:text-muted-foreground aria-[invalid=true]:border-destructive aria-[invalid=true]:focus:border-destructive! [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4",
-  {
-    variants: {
-      size: {
-        // `-md`, matching Button and Input: one height for one size name. A
-        // select sitting beside a small button in a filter row is the case that
-        // makes a 4px difference visible.
-        sm: "h-[var(--nx-control-height-md)] text-sm",
-        default: "h-[var(--nx-control-height)] text-sm",
-        lg: "h-[var(--nx-control-height-lg)] text-base",
+const selectTriggerVariants: VariantsFn<typeof SELECT_TRIGGER_VARIANT_MAP> =
+  cva(
+    // hover:border-primary (full strength) keeps the hover boundary more visible
+    // than the resting border-input, not a fainter alpha of it.
+    "flex w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-sm text-foreground cursor-pointer transition-all duration-150 focus:border-primary! focus-visible:border-primary! focus:outline-none hover:border-primary disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-primary/5 data-[placeholder]:text-muted-foreground aria-[invalid=true]:border-destructive aria-[invalid=true]:focus:border-destructive! [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4",
+    {
+      variants: SELECT_TRIGGER_VARIANT_MAP,
+      defaultVariants: {
+        size: "default",
       },
-    },
-    defaultVariants: {
-      size: "default",
-    },
-  }
-);
+    }
+  );
 
 /** @public */
 export interface SelectTriggerProps

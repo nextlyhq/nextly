@@ -52,17 +52,19 @@
  */
 
 import { cva, type VariantProps } from "class-variance-authority";
-import type { ClassProp } from "class-variance-authority/types";
 import * as React from "react";
 
 import { cn } from "../lib/utils";
+import type { VariantsFn } from "../lib/variants";
 
-/** What `progressVariants` accepts: its variants, and `class` or `className`. */
-type ProgressVariantsFn = (
-  props?: {
-    variant?: "default" | "success" | "error" | null | undefined;
-  } & ClassProp
-) => string;
+/** The arms `progressVariants` is built from. Its type is read from them: {@link VariantsFn}. */
+export const PROGRESS_VARIANT_MAP = {
+  variant: {
+    default: "bg-primary-500",
+    success: "bg-success-500",
+    error: "bg-destructive",
+  },
+};
 
 /**
  * Progress variants using CVA
@@ -74,16 +76,10 @@ type ProgressVariantsFn = (
 // Square corners: the capsule track clips the trailing edge already, so a radius
 // here would only round the leading edge, tapering low percentages into a sliver
 // narrower than the value they represent.
-export const progressVariants: ProgressVariantsFn = cva(
+export const progressVariants: VariantsFn<typeof PROGRESS_VARIANT_MAP> = cva(
   "h-full rounded-none transition-all",
   {
-    variants: {
-      variant: {
-        default: "bg-primary-500",
-        success: "bg-success-500",
-        error: "bg-destructive",
-      },
-    },
+    variants: PROGRESS_VARIANT_MAP,
     defaultVariants: {
       variant: "default",
     },

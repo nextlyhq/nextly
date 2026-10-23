@@ -1,6 +1,5 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { cva, type VariantProps } from "class-variance-authority";
-import type { ClassProp } from "class-variance-authority/types";
 import { X } from "lucide-react";
 import {
   forwardRef,
@@ -13,6 +12,7 @@ import {
 } from "react";
 
 import { cn } from "../lib/utils";
+import type { VariantsFn } from "../lib/variants";
 import { usePortalContainer } from "../providers/portal-provider";
 
 /**
@@ -109,12 +109,16 @@ const DialogOverlay: ForwardRefExoticComponent<
 );
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
-/** What `dialogContentVariants` accepts: its variants, and `class` or `className`. */
-type DialogContentVariantsFn = (
-  props?: {
-    size?: "sm" | "md" | "lg" | "xl" | "full" | null | undefined;
-  } & ClassProp
-) => string;
+/** The arms `dialogContentVariants` is built from. Its type is read from them: {@link VariantsFn}. */
+export const DIALOG_CONTENT_VARIANT_MAP = {
+  size: {
+    sm: "max-w-sm",
+    md: "max-w-lg",
+    lg: "max-w-2xl",
+    xl: "max-w-4xl",
+    full: "max-w-[calc(100vw-2rem)] sm:max-w-[calc(100vw-4rem)]",
+  },
+};
 
 /**
  * Dialog content size variants using CVA.
@@ -126,20 +130,13 @@ type DialogContentVariantsFn = (
  * @variant full - Full width with margin (responsive) - fullscreen on mobile
  * @experimental
  */
-const dialogContentVariants: DialogContentVariantsFn = cva("", {
-  variants: {
-    size: {
-      sm: "max-w-sm",
-      md: "max-w-lg",
-      lg: "max-w-2xl",
-      xl: "max-w-4xl",
-      full: "max-w-[calc(100vw-2rem)] sm:max-w-[calc(100vw-4rem)]",
+const dialogContentVariants: VariantsFn<typeof DIALOG_CONTENT_VARIANT_MAP> =
+  cva("", {
+    variants: DIALOG_CONTENT_VARIANT_MAP,
+    defaultVariants: {
+      size: "md",
     },
-  },
-  defaultVariants: {
-    size: "md",
-  },
-});
+  });
 
 /** @public */
 export type DialogContentProps = ComponentPropsWithoutRef<

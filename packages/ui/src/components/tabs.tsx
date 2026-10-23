@@ -2,7 +2,6 @@
 
 import { Root, List, Trigger, Content } from "@radix-ui/react-tabs";
 import { cva, type VariantProps } from "class-variance-authority";
-import type { ClassProp } from "class-variance-authority/types";
 import {
   forwardRef,
   type ComponentPropsWithoutRef,
@@ -12,6 +11,7 @@ import {
 } from "react";
 
 import { cn } from "../lib/utils";
+import type { VariantsFn } from "../lib/variants";
 import type {
   TabsListProps as TabsListBaseProps,
   TabsListRef,
@@ -130,12 +130,12 @@ const TABS_LIST_VARIANTS = {
   ghost: "h-8 bg-transparent",
 } as const;
 
-/** What `tabsListVariants` accepts: its variants, and `class` or `className`. */
-type TabsListVariantsFn = (
-  props?: { variant?: "default" | "ghost" | null | undefined } & ClassProp
-) => string;
+/** The arms `tabsListVariants` is built from. Its type is read from them: {@link VariantsFn}. */
+export const TABS_LIST_VARIANT_MAP: { variant: typeof TABS_LIST_VARIANTS } = {
+  variant: TABS_LIST_VARIANTS,
+};
 
-const tabsListVariants: TabsListVariantsFn = cva(
+const tabsListVariants: VariantsFn<typeof TABS_LIST_VARIANT_MAP> = cva(
   // Square corners: underline tabs, so the list never draws a rounded surface.
   // `gap-1` and `p-0` are invariant across the variants, so they belong here —
   // repeating them in each arm gives any future adjustment two sites to change
@@ -155,7 +155,7 @@ const tabsListVariants: TabsListVariantsFn = cva(
   // fixed bottom rail draws a horizontal line beneath a vertical list.
   "inline-flex items-center justify-center gap-1 rounded-none border-b border-border p-0 text-muted-foreground data-[orientation=vertical]:flex-col data-[orientation=vertical]:items-stretch data-[orientation=vertical]:border-b-0 data-[orientation=vertical]:border-r",
   {
-    variants: { variant: TABS_LIST_VARIANTS },
+    variants: TABS_LIST_VARIANT_MAP,
     defaultVariants: { variant: "default" },
   }
 );
@@ -242,12 +242,12 @@ const TABS_TRIGGER_SIZES = {
   sm: "text-xs",
 } as const;
 
-/** What `tabsTriggerVariants` accepts: its variants, and `class` or `className`. */
-type TabsTriggerVariantsFn = (
-  props?: { size?: "default" | "sm" | null | undefined } & ClassProp
-) => string;
+/** The arms `tabsTriggerVariants` is built from. Its type is read from them: {@link VariantsFn}. */
+export const TABS_TRIGGER_VARIANT_MAP: { size: typeof TABS_TRIGGER_SIZES } = {
+  size: TABS_TRIGGER_SIZES,
+};
 
-const tabsTriggerVariants: TabsTriggerVariantsFn = cva(
+const tabsTriggerVariants: VariantsFn<typeof TABS_TRIGGER_VARIANT_MAP> = cva(
   // Square corners: the active state is a 2px border on the trailing edge that
   // has to run the full length of the trigger and stay flush with its ends.
   //
@@ -265,7 +265,7 @@ const tabsTriggerVariants: TabsTriggerVariantsFn = cva(
   // on one axis and the line it sits on the other.
   "inline-flex items-center justify-center whitespace-nowrap rounded-none bg-transparent px-4 py-2 font-medium cursor-pointer transition-all duration-200 border-b-2 relative -mb-0.5 data-[state=active]:border-b-primary data-[state=active]:text-primary data-[state=inactive]:border-transparent data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed data-[orientation=vertical]:border-b-0 data-[orientation=vertical]:mb-0 data-[orientation=vertical]:border-r-2 data-[orientation=vertical]:-mr-0.5 data-[orientation=vertical]:data-[state=active]:border-r-primary",
   {
-    variants: { size: TABS_TRIGGER_SIZES },
+    variants: TABS_TRIGGER_VARIANT_MAP,
     defaultVariants: { size: "default" },
   }
 );

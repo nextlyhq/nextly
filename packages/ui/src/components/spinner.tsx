@@ -1,5 +1,4 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import type { ClassProp } from "class-variance-authority/types";
 import { Loader2, type LucideProps } from "lucide-react";
 import {
   forwardRef,
@@ -9,11 +8,16 @@ import {
 } from "react";
 
 import { cn } from "../lib/utils";
+import type { VariantsFn } from "../lib/variants";
 
-/** What `spinnerVariants` accepts: its variants, and `class` or `className`. */
-type SpinnerVariantsFn = (
-  props?: { size?: "sm" | "md" | "lg" | null | undefined } & ClassProp
-) => string;
+/** The arms `spinnerVariants` is built from. Its type is read from them: {@link VariantsFn}. */
+export const SPINNER_VARIANT_MAP = {
+  size: {
+    sm: "h-4 w-4",
+    md: "h-5 w-5",
+    lg: "h-6 w-6",
+  },
+};
 
 /**
  * Spinner Component - Design System Specification
@@ -60,16 +64,10 @@ type SpinnerVariantsFn = (
  * <Spinner className="text-primary" />
  * @experimental
  */
-const spinnerVariants: SpinnerVariantsFn = cva(
+const spinnerVariants: VariantsFn<typeof SPINNER_VARIANT_MAP> = cva(
   "animate-spin motion-reduce:animate-none",
   {
-    variants: {
-      size: {
-        sm: "h-4 w-4",
-        md: "h-5 w-5",
-        lg: "h-6 w-6",
-      },
-    },
+    variants: SPINNER_VARIANT_MAP,
     defaultVariants: {
       size: "md",
     },

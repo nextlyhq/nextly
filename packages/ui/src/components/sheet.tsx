@@ -2,10 +2,10 @@
 
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { cva, type VariantProps } from "class-variance-authority";
-import type { ClassProp } from "class-variance-authority/types";
 import * as React from "react";
 
 import { cn } from "../lib/utils";
+import type { VariantsFn } from "../lib/variants";
 import { usePortalContainer } from "../providers/portal-provider";
 import type { SheetProps } from "../types/sheet";
 
@@ -148,12 +148,17 @@ const SheetOverlay: React.ForwardRefExoticComponent<
 ));
 SheetOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
-/** What `sheetVariants` accepts: its variants, and `class` or `className`. */
-type SheetVariantsFn = (
-  props?: {
-    side?: "left" | "top" | "right" | "bottom" | null | undefined;
-  } & ClassProp
-) => string;
+/** The arms `sheetVariants` is built from. Its type is read from them: {@link VariantsFn}. */
+export const SHEET_VARIANT_MAP = {
+  side: {
+    top: "inset-x-0 top-0  border-b border-border data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top",
+    bottom:
+      "inset-x-0 bottom-0  border-t border-border data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom",
+    left: "inset-y-0 left-0 h-full w-3/4  border-r border-border data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm",
+    right:
+      "inset-y-0 right-0 h-full w-3/4  border-l border-border data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm",
+  },
+};
 
 /**
  * Sheet Content Variants
@@ -161,19 +166,10 @@ type SheetVariantsFn = (
  * Defines slide-in animations for each side and size options.
  * @experimental
  */
-const sheetVariants: SheetVariantsFn = cva(
+const sheetVariants: VariantsFn<typeof SHEET_VARIANT_MAP> = cva(
   "fixed z-50 gap-4 bg-background p-6 shadow-lg will-change-transform transition ease-in-out data-[state=closed]:duration-150 data-[state=open]:duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out",
   {
-    variants: {
-      side: {
-        top: "inset-x-0 top-0  border-b border-border data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top",
-        bottom:
-          "inset-x-0 bottom-0  border-t border-border data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom",
-        left: "inset-y-0 left-0 h-full w-3/4  border-r border-border data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm",
-        right:
-          "inset-y-0 right-0 h-full w-3/4  border-l border-border data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm",
-      },
-    },
+    variants: SHEET_VARIANT_MAP,
     defaultVariants: {
       side: "right",
     },

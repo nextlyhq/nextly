@@ -1,5 +1,4 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import type { ClassProp } from "class-variance-authority/types";
 import {
   forwardRef,
   type HTMLAttributes,
@@ -9,13 +8,16 @@ import {
 } from "react";
 
 import { cn } from "../lib/utils";
+import type { VariantsFn } from "../lib/variants";
 
-/** What `cardVariants` accepts: its variants, and `class` or `className`. */
-type CardVariantsFn = (
-  props?: {
-    variant?: "default" | "interactive" | "elevated" | null | undefined;
-  } & ClassProp
-) => string;
+/** The arms `cardVariants` is built from. Its type is read from them: {@link VariantsFn}. */
+export const CARD_VARIANT_MAP = {
+  variant: {
+    default: "",
+    interactive: "cursor-pointer hover:border-primary active:scale-[0.99]",
+    elevated: "shadow-md",
+  },
+};
 
 /**
  * Card Component - Design System Specification
@@ -68,16 +70,10 @@ type CardVariantsFn = (
  * - Use aria-label or aria-labelledby for cards without visible text labels
  * @experimental
  */
-const cardVariants: CardVariantsFn = cva(
+const cardVariants: VariantsFn<typeof CARD_VARIANT_MAP> = cva(
   "bg-card text-foreground rounded-lg  border border-border   transition-all duration-200",
   {
-    variants: {
-      variant: {
-        default: "",
-        interactive: "cursor-pointer hover:border-primary active:scale-[0.99]",
-        elevated: "shadow-md",
-      },
-    },
+    variants: CARD_VARIANT_MAP,
     defaultVariants: {
       variant: "default",
     },
