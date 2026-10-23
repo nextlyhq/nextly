@@ -8,8 +8,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // narrows it. Mocked so the case can put any slugs in reach without the RBAC stack.
 const { allowlist } = vi.hoisted(() => ({ allowlist: vi.fn() }));
 vi.mock("../../../services/lib/readable-slug-allowlist", () => ({
-  readableSlugAllowlist: (caller: unknown, kind: string) =>
-    allowlist(caller, kind) as unknown,
+  readableSlugsOfKind: async (caller: unknown, kind: string) => ({
+    slugs: (await allowlist(caller, kind)) as string[],
+    reachable: true,
+  }),
 }));
 
 import { recordKeptOffDashboard } from "../kept-off-dashboard";
