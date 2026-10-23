@@ -38,9 +38,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+
+import { compile as compileWithTsc } from "./tsc-cli.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -610,6 +612,72 @@ function linkResolutionTree(dir) {
   }
 }
 
+/**
+ * The compiler options the samples are checked under, as a tsconfig spells
+ * them: the command line reads them from a written tsconfig, and the program
+ * the deprecation audit asks is converted from the same object.
+ */
+function samplesCompilerOptions(dir) {
+  return {
+    noEmit: true,
+    strict: true,
+    target: "es2022",
+    jsx: "react-jsx",
+    module: "esnext",
+    moduleResolution: "bundler",
+    skipLibCheck: true,
+    lib: ["es2022", "dom"],
+    // Named explicitly, because `typeRoots` otherwise resolves by walking up
+    // from the process's directory rather than from the files being
+    // compiled, and this workspace keeps type packages under `.pnpm/` with
+    // no `@types` at the root. Without it every run reported "Cannot find
+    // type definition file for 'node'" as a finding against the docs.
+    typeRoots: [join(dir, "node_modules", "@types")],
+    // Node's globals, and nothing else. These samples are Next.js and Node
+    // files: they read `process.env.DATABASE_URL`, which every reader's
+    // project types and this harness did not, so the audit reported `process`
+    // as an error a reader would hit when the reader is the one person who
+    // never sees it. Named rather than left open, because `types` with no
+    // entry pulls in every @types package this site happens to install and
+    // would start excusing globals a reader's project does not have.
+    types: ["node"],
+  };
+}
+
+/**
+ * A file compiled beside the samples with one error only type-checking finds,
+ * so a run says whether it type-checked at all.
+ */
+const SEMANTIC_PROBE = {
+  file: "__semantic_probe__.ts",
+  source: 'const probe: number = "";\nexport {};\n',
+  code: "TS2322",
+};
+
+/**
+ * Whether a run type-checked, and the diagnostics that are not the probe's.
+ *
+ * tsc stops before type-checking when any file fails to parse, and reports the
+ * parse errors alone. Which of the two happened is read off the probe: its one
+ * type error appears exactly when type-checking ran. Asked of the run rather
+ * than guessed from the codes, as the compiler API's own split into syntactic
+ * and semantic diagnostics was. A run that did neither is refused.
+ */
+function readProbe(reported, isProbe) {
+  const inProbe = d => d.file !== undefined && isProbe(d.file);
+  const checked = reported.some(
+    d => inProbe(d) && d.code === SEMANTIC_PROBE.code
+  );
+  const ownDiagnostics = reported.filter(d => !inProbe(d));
+  if (!checked && !ownDiagnostics.some(d => d.file !== undefined)) {
+    throw new Error(
+      `doc samples: tsc neither type-checked the samples nor reported a parse error:\n` +
+        reported.map(d => `${d.code} ${d.message}`).join("\n")
+    );
+  }
+  return { checked, ownDiagnostics };
+}
+
 function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
   const dir = mkdtempSync(join(tmpdir(), `nextly-${label}-`));
   // Flattened temp names are unreadable in a diagnostic, so keep the way back
@@ -642,41 +710,31 @@ function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
     }
     linkResolutionTree(dir);
 
-    const program = ts.createProgram(fileNames, {
-      noEmit: true,
-      strict: true,
-      target: ts.ScriptTarget.ES2022,
-      jsx: ts.JsxEmit.ReactJSX,
-      module: ts.ModuleKind.ESNext,
-      moduleResolution: ts.ModuleResolutionKind.Bundler,
-      skipLibCheck: true,
-      lib: ["lib.es2022.d.ts", "lib.dom.d.ts"],
-      // Named explicitly, because `typeRoots` otherwise resolves by walking up
-      // from the process's directory rather than from the files being
-      // compiled, and this workspace keeps type packages under `.pnpm/` with
-      // no `@types` at the root. Without it every run reported "Cannot find
-      // type definition file for 'node'" as a finding against the docs.
-      typeRoots: [join(dir, "node_modules", "@types")],
-      // Node's globals, and nothing else. These samples are Next.js and Node
-      // files: they read `process.env.DATABASE_URL`, which every reader's
-      // project types and this harness did not, so the audit reported `process`
-      // as an error a reader would hit when the reader is the one person who
-      // never sees it. Named rather than left open, because `types` with no
-      // entry pulls in every @types package this site happens to install and
-      // would start excusing globals a reader's project does not have.
-      types: ["node"],
-    });
+    const options = samplesCompilerOptions(dir);
+    const probe = join(dir, SEMANTIC_PROBE.file);
+    writeFileSync(probe, SEMANTIC_PROBE.source);
+    const config = join(dir, "tsconfig.json");
+    writeFileSync(
+      config,
+      JSON.stringify({ compilerOptions: options, files: [...fileNames, probe] })
+    );
+    // The compiler's command line, which every TypeScript version answers the
+    // same way, rather than its JavaScript API.
+    const { checked, ownDiagnostics } = readProbe(
+      compileWithTsc(["-p", config], dir),
+      file => resolve(dir, file) === probe
+    );
 
     const render = d => {
-      const where = origin.get(d.file?.fileName) ?? d.file?.fileName ?? "?";
-      const line =
-        d.file && d.start !== undefined
-          ? d.file.getLineAndCharacterOfPosition(d.start).line + 1
-          : 0;
-      const message = ts.flattenDiagnosticMessageText(d.messageText, " ");
+      const file = d.file === undefined ? undefined : resolve(dir, d.file);
+      const where = file === undefined ? "?" : (origin.get(file) ?? file);
+      // The chain on one line, each step after the first keeping its depth,
+      // as the compiler API's `flattenDiagnosticMessageText(text, " ")` wrote
+      // it: identities in the baseline are read from this text.
+      const message = [d.message.split("\n")[0], ...d.chain].join(" ");
       return {
         origin: where,
-        text: `${where}:${String(line)}  error TS${String(d.code)}: ${message}`,
+        text: `${where}:${String(d.line ?? 0)}  error ${d.code}: ${message}`,
       };
     };
 
@@ -695,27 +753,32 @@ function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
       return false;
     };
 
-    // The compiler's own complaints about its setup, which neither of the two
-    // collections below carries. A production-only install without @types/node
-    // reports TS2688 here and nothing anywhere else, so an otherwise simple
-    // sample would compile to an empty diagnostics list and the gate would
-    // report success having loaded neither the Node types it asked for nor the
-    // standard library.
-    const setup = [
-      ...program.getOptionsDiagnostics(),
-      ...program.getGlobalDiagnostics(),
-    ]
+    // The compiler's own complaints about its setup, which name no file. A
+    // production-only install without @types/node reports TS2688 here and
+    // nothing anywhere else, so an otherwise simple sample would compile to an
+    // empty diagnostics list and the gate would report success having loaded
+    // neither the Node types it asked for nor the standard library.
+    const setup = ownDiagnostics
+      .filter(d => d.file === undefined)
       .map(render)
       .filter(keep);
-
-    // The API's own split. Nothing here guesses from the error code.
-    const unparsed = program.getSyntacticDiagnostics().map(render).filter(keep);
+    const inFiles = ownDiagnostics
+      .filter(d => d.file !== undefined)
+      .map(render)
+      .filter(keep);
+    // A run that never reached type-checking reported parse errors only.
+    const unparsed = checked ? [] : inFiles;
     // Deprecations, asked of the checker rather than read off the diagnostics,
     // for the reason written on `deprecatedPropertiesIn`. Rendered in the same
     // shape as everything else and put in the same list, so the classifier
     // charges the page and the conservation count downstream sees it without a
     // bucket of its own. TS6385 is TypeScript's own code for this sentence,
-    // used rather than an invented one so a reader can look it up.
+    // used rather than an invented one so a reader can look it up. The program
+    // is built from the same options the command line compiled with.
+    const program = ts.createProgram(
+      fileNames,
+      ts.convertCompilerOptionsFromJson(options, dir).options
+    );
     const checker = program.getTypeChecker();
     const deprecated = fileNames.flatMap(file => {
       const sourceFile = program.getSourceFile(file);
@@ -731,12 +794,7 @@ function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
     });
     const diagnostics = [
       ...setup.map(d => d.text),
-      ...unparsed.map(d => d.text),
-      ...program
-        .getSemanticDiagnostics()
-        .map(render)
-        .filter(keep)
-        .map(d => d.text),
+      ...inFiles.map(d => d.text),
       ...deprecated.filter(keep).map(d => d.text),
     ];
     return { unparsed, diagnostics };
@@ -1650,7 +1708,9 @@ const exportedValues = new Set();
 
 /** `./dist/shell.d.ts` as its source, since that is what is always present. */
 function sourceCandidatesFor(typesPath) {
-  const built = typesPath.replace(/^\.\//, "").match(/^dist\/(.+)\.d\.[cm]?ts$/);
+  const built = typesPath
+    .replace(/^\.\//, "")
+    .match(/^dist\/(.+)\.d\.[cm]?ts$/);
   return built ? [`src/${built[1]}.ts`, `src/${built[1]}.tsx`] : [];
 }
 
