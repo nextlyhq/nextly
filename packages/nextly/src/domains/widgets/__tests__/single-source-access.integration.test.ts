@@ -22,6 +22,7 @@ import { allWidgets } from "../canonical";
 import { refreshCollectionWidgets } from "../collection-widgets";
 import { executeWidgetQuery } from "../execute";
 import { validateWidgetQuery } from "../query";
+import { CONTENT_SOURCE_ID } from "../system-source-ids";
 import { widgetAudience } from "../visibility";
 
 let current: TestNextly | undefined;
@@ -138,28 +139,43 @@ describe("a single: query against a real instance", () => {
     ).rejects.toThrow();
   });
 
-  it("derives a status card per single, offered only for the singles the reader may read", async () => {
-    // The card exists for both -- derivation is about the install -- and the
-    // audience decision the layout places with and the workspace payload
-    // ships from withholds the one over the refused single, by the same entity
-    // read the query would have been refused on.
+  it("derives no card per single, whose Singles the Content card lists, and keeps their sources", async () => {
+    // 🔴 A per-Single card was generated for every Single. Content lists them
+    // now, and a saved per-Single card converts into it, so none is derived:
+    // not on the install, and not in what the workspace payload ships. The
+    // sources stay, since Content and queries naming a Single read them.
     current = await boot();
 
-    const cards = allWidgets().filter(widget => widget.generated === true);
-    expect(cards.map(widget => widget.id)).toEqual(
-      expect.arrayContaining([
-        `single/${SETTINGS}-status`,
-        `single/${PRIVATE}-status`,
-      ])
-    );
+    const generated = allWidgets()
+      .filter(widget => widget.generated === true)
+      .map(widget => widget.id);
+    expect(generated.filter(id => id.startsWith("single/"))).toEqual([]);
 
     const audience = await widgetAudience(readAccessCaller(editor));
-    const placed = audience.visible.map(widget => widget.id);
-    expect(placed).toContain(`single/${SETTINGS}-status`);
-    expect(placed).not.toContain(`single/${PRIVATE}-status`);
-    // And the definition the workspace payload ships is the same one.
-    const shipped = audience.generated.map(widget => widget.id);
-    expect(shipped).toContain(`single/${SETTINGS}-status`);
-    expect(shipped).not.toContain(`single/${PRIVATE}-status`);
+    expect(
+      audience.generated.filter(widget => widget.id.startsWith("single/"))
+    ).toEqual([]);
+
+    // Where a Single shows now: the Content card's source lists the one this
+    // reader may read, as a Single, and leaves out the one they may not.
+    const content = await executeWidgetQuery(
+      validateWidgetQuery({ source: CONTENT_SOURCE_ID, op: "list" }),
+      editor
+    );
+    const singles =
+      content.op === "list"
+        ? content.items
+            .filter(row => row.kind === "single")
+            .map(row => row.slug)
+        : [];
+    expect(singles).toContain(SETTINGS);
+    expect(singles).not.toContain(PRIVATE);
+
+    // The control: the readable Single's own source still answers its reader.
+    const answer = await executeWidgetQuery(
+      validateWidgetQuery({ source: `single:${SETTINGS}`, op: "list" }),
+      editor
+    );
+    expect(answer.op).toBe("list");
   });
 });

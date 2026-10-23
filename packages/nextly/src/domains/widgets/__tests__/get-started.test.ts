@@ -64,6 +64,8 @@ function probeOf(world: World): ConditionProbe {
     hasContent: async () => world.content ?? false,
     mayCreateEntry: async () => world.createEntry ?? false,
     mayCreateCollection: async () => world.createCollection ?? false,
+    mayReadReleases: async () => false,
+    releasesExist: async () => false,
     getStarted: () => {
       throw new Error("not under test");
     },

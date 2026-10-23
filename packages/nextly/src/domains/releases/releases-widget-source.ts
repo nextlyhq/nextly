@@ -303,21 +303,16 @@ export function callerMayReadReleases(caller: ReadCaller): Promise<boolean> {
 }
 
 /**
- * Whether this dashboard caller has a release to read: false for a caller who
- * may not read releases, and false on a site with no release they may read.
+ * Whether a release exists that this dashboard caller may read: the releases
+ * domain's own answer (`anyReadable`), one id read rather than a count.
  *
- * For a reader that leaves a release-derived figure out, rather than show it
- * as zero, where its caller has no release to look at, so a caller barred from
- * releases and a site without releases read alike. Where there is one, the
- * figure is shown, and reads zero when no release holds what it counts.
+ * Refused, as every release read is, for a caller who may not read releases;
+ * ask {@link callerMayReadReleases} first to answer "no" instead.
  *
  * @experimental
  */
-export async function callerHasReadableRelease(
-  caller: ReadCaller
-): Promise<boolean> {
-  if (!(await callerMayReadReleases(caller))) return false;
-  return (await service().count({}, actorFor(caller))) > 0;
+export function callerMayReadAnyRelease(caller: ReadCaller): Promise<boolean> {
+  return service().anyReadable(actorFor(caller));
 }
 
 /**

@@ -25,7 +25,10 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { WhereFilter } from "../collections/query/query-operators";
 import { IN_RELEASE_KEY } from "../collections/query/reserved-filter-keys";
-import { callerHasReadableRelease } from "../releases/releases-widget-source";
+import {
+  callerMayReadAnyRelease,
+  callerMayReadReleases,
+} from "../releases/releases-widget-source";
 
 import { answerAsAsked } from "./answer-as-asked";
 import { resolveExecutableSource } from "./executable-source";
@@ -464,9 +467,21 @@ function hasReadableRelease(
 ): Promise<boolean> {
   return opts?.scope
     ? opts.scope.getOrCompute(READABLE_RELEASE_KEY, () =>
-        callerHasReadableRelease(caller)
+        hasReleaseToRead(caller)
       )
-    : callerHasReadableRelease(caller);
+    : hasReleaseToRead(caller);
+}
+
+/**
+ * Whether the caller has a release to read, asked of the releases domain: false
+ * for a caller who may not read releases, and false where none exists they may
+ * read, so a caller barred from releases and a site without releases read alike.
+ */
+async function hasReleaseToRead(caller: ReadCaller): Promise<boolean> {
+  return (
+    (await callerMayReadReleases(caller)) &&
+    (await callerMayReadAnyRelease(caller))
+  );
 }
 
 export async function executeWidgetQuery(

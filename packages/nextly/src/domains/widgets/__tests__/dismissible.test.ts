@@ -45,7 +45,7 @@ describe("what the admin is told about dismissal", () => {
     // Absent rather than `false`, matching how every other optional field on
     // the summary travels -- a reader of the payload sees which cards made a
     // claim instead of inferring it from a default.
-    expect(summaryFor("core/collections")).not.toHaveProperty("dismissible");
+    expect(summaryFor("core/content")).not.toHaveProperty("dismissible");
   });
 
   it("travels beside a lifecycle without being implied by it", () => {
