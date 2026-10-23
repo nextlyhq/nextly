@@ -92,6 +92,16 @@ function inlineEditProblem(outcome: InlineEditOutcome): string | null {
     : "Your text could not be saved into this page. Shortening it may help.";
 }
 
+/** What {@link useSavePatternVerb} returns, and what the editor hands on as `savePattern`. */
+type SavePatternVerb = {
+  /** The document to save from, or `null` when the author has not asked. */
+  readonly document: BlockDocument | null;
+  /** Where focus should go when the form closes, asked at that moment. */
+  readonly returnFocusTo: () => HTMLElement | null;
+  readonly open: () => void;
+  readonly close: () => void;
+};
+
 /**
  * Raising the save-as-pattern form, and everything that has to be true first.
  *
@@ -106,14 +116,7 @@ function inlineEditProblem(outcome: InlineEditOutcome): string | null {
 function useSavePatternVerb(
   editor: { document: BlockDocument },
   inline: { commit: () => InlineEditOutcome }
-): {
-  /** The document to save from, or `null` when the author has not asked. */
-  readonly document: BlockDocument | null;
-  /** Where focus should go when the form closes, asked at that moment. */
-  readonly returnFocusTo: () => HTMLElement | null;
-  readonly open: () => void;
-  readonly close: () => void;
-} {
+): SavePatternVerb {
   const [document, setDocument] = useState<BlockDocument | null>(null);
   /*
    * The opener, read at the GESTURE.
@@ -298,13 +301,6 @@ export type EditorMount = {
   notices: NoticeQueue;
   editor: EditorState;
   inline: UseInlineEditingResult;
-  savePattern: {
-    /** The document to save from, or `null` when the author has not asked. */
-    readonly document: BlockDocument | null;
-    /** Where focus should go when the form closes, asked at that moment. */
-    readonly returnFocusTo: () => HTMLElement | null;
-    readonly open: () => void;
-    readonly close: () => void;
-  };
+  savePattern: SavePatternVerb;
   mayCreatePattern: boolean;
 };
