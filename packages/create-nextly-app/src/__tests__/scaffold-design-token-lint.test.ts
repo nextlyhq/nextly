@@ -114,12 +114,22 @@ describe("a scaffolded plugin enforces the design-token rules", () => {
 
     // Only the lint packages, at the scaffold's own ranges. The full manifest
     // would install the plugin's runtime too, which this lint does not load.
-    const specs = LINT_PACKAGES.map(
-      name => `${name}@${manifest.devDependencies[name]}`
-    );
+    // The ranges go in the manifest rather than on npm's command line: on
+    // Windows npm runs through cmd.exe, which reads `^` as its escape
+    // character and drops it, so `typescript-eslint@^8.0.0` would install
+    // 8.0.0 exactly, a release that cannot load its rules under ESLint 9.
+    const devDependencies = Object.fromEntries([
+      ...LINT_PACKAGES.map(name => [name, manifest.devDependencies[name]]),
+      ["@nextlyhq/eslint-plugin", `file:${path.join(workdir, tarball)}`],
+    ]);
     await writeFile(
       path.join(target, "package.json"),
-      JSON.stringify({ name: "lint-under-test", private: true, type: "module" })
+      JSON.stringify({
+        name: "lint-under-test",
+        private: true,
+        type: "module",
+        devDependencies,
+      })
     );
     execFileSync(
       "npm",
@@ -129,8 +139,6 @@ describe("a scaffolded plugin enforces the design-token rules", () => {
         "--no-fund",
         "--ignore-scripts",
         "--no-package-lock",
-        ...specs,
-        path.join(workdir, tarball),
       ],
       { cwd: target, stdio: "ignore", shell: process.platform === "win32" }
     );
