@@ -265,6 +265,7 @@ describe("the requests a dashboard sends as it is sized", () => {
   it("sizes a custom widget's list query when it asks to be, as core's lists are sized", async () => {
     // The opt-in: a component that draws by the card's tier is asked the rows it draws and
     // the one more that says more exist, where an unsized custom card above gets exactly 8.
+    // At this width the card is small: three rows, and one more.
     mockBranding = {
       plugins: [
         {
@@ -293,7 +294,7 @@ describe("the requests a dashboard sends as it is sized", () => {
     renderGrid();
     await waitFor(() => expect(sentQueries()).toHaveLength(1));
     expect(sentQueries()[0]).toEqual([
-      expect.objectContaining({ source: "collection:posts", limit: 9 }),
+      expect.objectContaining({ source: "collection:posts", limit: 4 }),
     ]);
   });
 
