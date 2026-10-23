@@ -268,7 +268,9 @@ The seeded `Super Admin` role bypasses every check. Other roles you create are g
 
 ### Checking access in code
 
-Ask whether the user may do something, rather than which roles they hold: a custom role, or an API key, that holds the permission is then allowed too. `nextly.access.check` asks the same access decision every route uses, collection and Single rules included.
+Ask whether the user may do something, rather than which roles they hold: a user whose custom role holds the permission is then allowed too. `nextly.access.check` asks the same access decision every route uses, collection and Single rules included.
+
+The example below authenticates a signed-in session, so a request carrying only an API key is answered `401` before any check. `nextly.access.check` judges the user named by `userId`: it doesn't know about an API key's own scope, which can be narrower than the user who made the key.
 
 ```typescript
 import { getNextly } from "nextly";
