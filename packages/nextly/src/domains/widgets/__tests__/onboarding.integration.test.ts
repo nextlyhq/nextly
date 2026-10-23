@@ -20,7 +20,7 @@ import {
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import { refreshCollectionSources } from "../collection-sources";
 import { conditionProbe } from "../condition-probe";
-import { onboardingIsIncomplete, onboardingSteps } from "../onboarding";
+import { onboardingIsIncomplete, onboardingProgress } from "../onboarding";
 
 const NOTES = "notes";
 /** A collection whose rows the reader under test may NOT read. */
@@ -137,7 +137,7 @@ async function bootReadOnly(mayCreate: boolean): Promise<TestNextly> {
 
 /** The steps as a map, so a case names the step it is about. */
 async function stepsFor(caller: ReadCaller): Promise<Record<string, boolean>> {
-  const steps = await onboardingSteps(conditionProbe(caller));
+  const { steps } = await onboardingProgress(conditionProbe(caller));
   return Object.fromEntries(steps.map(step => [step.id, step.complete]));
 }
 
@@ -467,7 +467,7 @@ describe("onboarding steps against a real instance", () => {
   });
 
   // No case asserts that the condition agrees with the steps it reports.
-  // `onboardingIsIncomplete` CALLS `onboardingSteps`, so the two cannot
+  // `onboardingIsIncomplete` CALLS `onboardingProgress`, so the two cannot
   // disagree and any such test would pass on every implementation, including a
   // broken one -- it would compare one derivation against itself. The agreement
   // is structural rather than observable, which is the reason for deriving the

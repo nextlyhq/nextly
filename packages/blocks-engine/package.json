@@ -34,8 +34,8 @@
     "!dist/metafile-*.json"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
+    "build": "tsdown",
+    "dev": "tsdown --watch",
     "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -55,7 +55,7 @@
     "@types/node": "^20.19.17",
     "@types/picomatch": "^4.0.3",
     "rimraf": "^6.1.3",
-    "tsup": "^8.5.0",
+    "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.0"
   },

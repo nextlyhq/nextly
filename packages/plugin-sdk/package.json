@@ -67,8 +67,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
+    "build": "tsdown",
+    "dev": "tsdown --watch",
     "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
     "clean": "rimraf dist",
     "test": "vitest run",
@@ -105,7 +105,7 @@
     "nextly": "workspace:*",
     "react": "19.2.0",
     "react-dom": "19.2.0",
-    "tsup": "^8.5.0",
+    "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.0"
   },

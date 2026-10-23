@@ -229,6 +229,18 @@
       // `updateEntryWrite` and `deleteEntryWrite`, each of which the
       // transaction API and the batch worker both delegate to.
       "dup:c77b3abb6f87acd9-2:2",
+
+      // packages/{adapter-mysql,adapter-postgres,adapter-sqlite,storage-s3,
+      // storage-uploadthing,storage-vercel-blob}/tsdown.config.ts — the same
+      // 17-line build config: one ESM and CommonJS entry, the published file
+      // names, declarations without a type check.
+      //
+      // tsdown reads a config from each package's own directory, and turbo
+      // hashes a package's build by that directory's files. A shared module
+      // outside it would change all six builds without changing their hashes,
+      // so a cached build would survive an edit to how it is built. Six small
+      // copies that turbo can see are the safer repetition.
+      "dup:aecdfbd0:6",
     ],
   },
 }

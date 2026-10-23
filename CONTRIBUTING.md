@@ -87,7 +87,7 @@ The dev super-admin is `dev@nextly.local` / `DevPassword123!` if you ever need t
 | Side             | Packages                                                           | How they're loaded in dev                                                                                                                                         |
 | ---------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Client (browser) | `@nextlyhq/ui`, `@nextlyhq/admin`, `@nextlyhq/plugin-form-builder` | Turbopack reads `src/` directly — see [`apps/playground/next.config.ts`](apps/playground/next.config.ts) `turbopack.resolveAlias`. Edits HMR through immediately. |
-| Server (Node)    | `nextly`, all 4 adapters, all 3 storage packages                   | `serverExternalPackages` + each package's `tsup --watch` keeps `dist/` fresh. Edits round-trip through dist (~1-2 s rebuild).                                     |
+| Server (Node)    | `nextly`, all 4 adapters, all 3 storage packages                   | `serverExternalPackages` + each package's `tsdown --watch` keeps `dist/` fresh. Edits round-trip through dist (~1-2 s rebuild).                                   |
 
 Pick `pnpm dev` when you are actively editing a published package's source AND want the playground to reflect those edits without you running a build by hand. Pick `pnpm dev:app` for everything else; it boots faster.
 

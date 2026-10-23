@@ -36,6 +36,7 @@ tsconfig*.json               @mobeenabdullah
 eslint*.config.*             @mobeenabdullah
 oxlint*.config.*             @mobeenabdullah
 tsup*.config.*               @mobeenabdullah
+tsdown*.config.*             @mobeenabdullah
 rollup*.config.*             @mobeenabdullah
 next.config.*                @mobeenabdullah
 /.nvmrc                      @mobeenabdullah
