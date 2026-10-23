@@ -17,74 +17,7 @@ import {
 } from "../services/render-template";
 import { defaultLayoutTemplate } from "../services/templates";
 import type { WrittenBlock } from "../written/document";
-
-/** One of each block, with each mark and chip form a block can carry. */
-export const SAMPLE_BLOCKS: Record<string, WrittenBlock> = {
-  heading: {
-    type: "heading",
-    text: [
-      { type: "text", text: "Order " },
-      { type: "chip", variable: "order.number", fallback: "pending" },
-    ],
-  },
-  text: {
-    type: "text",
-    text: [
-      { type: "text", text: "Hi " },
-      { type: "chip", variable: "name", fallback: "there", bold: true },
-      { type: "text", text: ", thanks for your order.\nRead the " },
-      {
-        type: "text",
-        text: "terms",
-        italic: true,
-        link: { url: "https://shop.example/terms" },
-      },
-      { type: "text", text: " or " },
-      {
-        type: "text",
-        text: "track it",
-        link: { chip: { variable: "trackUrl" } },
-      },
-      { type: "text", text: "." },
-    ],
-  },
-  button: {
-    type: "button",
-    label: [{ type: "text", text: "View your order" }],
-    link: {
-      chip: { variable: "orderUrl", fallback: "https://shop.example/orders" },
-    },
-  },
-  image: {
-    type: "image",
-    src: { url: "https://shop.example/banner.png" },
-    alt: [{ type: "text", text: "Spring sale" }],
-    width: 480,
-  },
-  divider: { type: "divider" },
-  spacer: { type: "spacer", height: 32 },
-  list: {
-    type: "list",
-    variable: "lines",
-    blocks: [
-      {
-        type: "text",
-        text: [
-          { type: "chip", variable: "item.name" },
-          { type: "text", text: " × " },
-          { type: "chip", variable: "item.quantity" },
-          { type: "text", text: " — " },
-          { type: "chip", variable: "item.total" },
-        ],
-      },
-    ],
-  },
-  conditional: {
-    type: "text",
-    text: [{ type: "text", text: "Your coupon has been applied." }],
-    show: { variable: "coupon", when: "present" },
-  },
-};
+import { WRITTEN_SAMPLES } from "../written/samples";
 
 const DATASETS: Record<string, Record<string, unknown>> = {
   typical: {
@@ -128,9 +61,9 @@ describe("every written block renders as pinned", () => {
   it("matches the pinned output, alone and all together", async () => {
     const cases: Record<string, WrittenBlock[]> = {
       ...Object.fromEntries(
-        Object.entries(SAMPLE_BLOCKS).map(([k, b]) => [k, [b]])
+        Object.entries(WRITTEN_SAMPLES).map(([k, b]) => [k, [b]])
       ),
-      everything: Object.values(SAMPLE_BLOCKS),
+      everything: Object.values(WRITTEN_SAMPLES),
     };
     const out: Record<string, Record<string, unknown>> = {};
     for (const [name, blocks] of Object.entries(cases)) {
@@ -156,7 +89,7 @@ describe("every written block renders as pinned", () => {
     // The control: a block kind added without a sample would be one whose
     // output nobody pinned.
     const kinds = new Set(
-      Object.values(SAMPLE_BLOCKS).map(block => block.type)
+      Object.values(WRITTEN_SAMPLES).map(block => block.type)
     );
     expect([...kinds].sort()).toEqual(
       ["button", "divider", "heading", "image", "list", "spacer", "text"].sort()
