@@ -701,13 +701,19 @@ export class SingleMetadataService {
   /**
    * The first step of a field leaving translation (`archiveFieldsLeavingTranslation`), for a
    * save whose flags were derived inside the exclusion. Nothing is asked when the save sends no
-   * fields or the Single was not translated before it; a save that turns translation off is
-   * asked too, since a field renamed in it would lose its value (the preflight decides).
+   * fields or the Single is translated neither before nor after it; a save that turns translation
+   * off or on is asked too, since a field renamed in it would be left under a name no field has
+   * (the preflight decides).
    */
   private async assertFieldsMayLeaveTranslation(
     input: UpdateSingleSchemaInput
   ): Promise<void> {
-    if (input.fields === undefined || !input.wasLocalized) return;
+    if (
+      input.fields === undefined ||
+      (!input.wasLocalized && !input.isLocalized)
+    ) {
+      return;
+    }
     if (!this.adapter) {
       throw NextlyError.internal({
         logContext: {
