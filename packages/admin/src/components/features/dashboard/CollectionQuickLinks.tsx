@@ -2,23 +2,22 @@
 
 import { Card, CardContent, Skeleton } from "@nextlyhq/ui";
 import { Database, FileCheck, Layout, Puzzle } from "lucide-react";
+import { MAX_WIDGET_LIMIT } from "nextly/config";
+import type { WidgetComponentProps, WidgetSlot } from "nextly/widget-result";
 import type React from "react";
 import { useMemo } from "react";
 
+import { MoreExist } from "@admin/components/features/widgets/archetypes/more-exist";
 import * as Icons from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
-import {
-  NAV_COLLECTIONS_PARAMS,
-  useCollections,
-  useDashboardStats,
-} from "@admin/hooks/queries";
+import { NAV_COLLECTIONS_PARAMS, useCollections } from "@admin/hooks/queries";
 import { cn } from "@admin/lib/utils";
 import type { CollectionCount } from "@admin/types/dashboard/stats";
 import type { ApiCollection } from "@admin/types/entities";
 
 import { CardFigure } from "../widgets/frame/figure";
-import { CardError, CardSkeleton } from "../widgets/frame/states";
+import { CardSkeleton, CardSlotFailure } from "../widgets/frame/states";
 
 import { keptOffDashboard } from "./kept-off-dashboard";
 
@@ -26,7 +25,43 @@ import { keptOffDashboard } from "./kept-off-dashboard";
  * One tile: a collection and its count, or `null` while the counts are on their way. The tile is
  * drawn either way, so the counts landing fill tiles already in place rather than inserting them.
  */
-type CollectionTile = Omit<CollectionCount, "count"> & { count: number | null };
+type CollectionTile = Omit<CollectionCount, "count"> & {
+  count: number | null;
+  /** How many of its entries are drafts, once counted; absent until then. */
+  draft?: number;
+};
+
+/**
+ * The most tiles the card draws: one fewer than it asks for, so the one more says more exist, the
+ * rule core's lists follow. The card asks the most any widget query returns, so this is reached
+ * only by an install with that many collections.
+ */
+const TILES_DRAWN = MAX_WIDGET_LIMIT - 1;
+
+/** One collection as `system:content` answers it: its entries, and how many are drafts. */
+type ContentRow = CollectionCount & { draft: number };
+
+/**
+ * The rows of a `system:content` answer, or `undefined` while there is none. A row this build
+ * cannot read is left out rather than drawn from guesses.
+ */
+function contentRowsOf(slot: WidgetSlot | undefined): ContentRow[] | undefined {
+  if (!slot?.ok || slot.result.op !== "list") return undefined;
+  return slot.result.items.flatMap(row => {
+    const { slug, label, group, count, draft } = row;
+    if (typeof slug !== "string" || typeof label !== "string") return [];
+    if (typeof count !== "number") return [];
+    return [
+      {
+        slug,
+        label,
+        group: typeof group === "string" ? group : null,
+        count,
+        draft: typeof draft === "number" ? draft : 0,
+      },
+    ];
+  });
+}
 
 interface CollectionGroup {
   name: string | null;
@@ -65,7 +100,7 @@ function getGroupDefaultIcon(group: string | null) {
 function collectionTiles(
   list: readonly ApiCollection[] | undefined,
   listPending: boolean,
-  counts: readonly CollectionCount[] | undefined
+  counts: readonly ContentRow[] | undefined
 ): CollectionTile[] | undefined {
   if (list === undefined && listPending) return undefined;
   if (list === undefined || list.length === 0) return counts?.slice();
@@ -87,7 +122,7 @@ function collectionTiles(
  */
 function tileOf(
   collection: ApiCollection,
-  count: CollectionCount | undefined
+  count: ContentRow | undefined
 ): CollectionTile {
   if (count !== undefined) return count;
   return {
@@ -183,6 +218,15 @@ function CollectionCard({
               <span className="block break-words font-medium text-xs tracking-tight transition-colors leading-tight text-muted-foreground group-hover:text-foreground pt-1">
                 {item.label}
               </span>
+              {/* Drafts beside the total, through the same formatter, only when there are any:
+                  "0 drafts" on every tile would be noise, and a collection without the
+                  Draft/Published lifecycle has none to report. */}
+              {item.draft !== undefined && item.draft > 0 && (
+                <span className="block text-xs tabular-nums text-muted-foreground">
+                  <CardFigure value={item.draft} />{" "}
+                  {item.draft === 1 ? "draft" : "drafts"}
+                </span>
+              )}
             </div>
             <div className="text-muted-foreground group-hover:text-foreground transition-colors pt-1">
               <Icon className="h-5 w-5 shrink-0" />
@@ -194,27 +238,32 @@ function CollectionCard({
   );
 }
 
-export const CollectionQuickLinks: React.FC = () => {
-  const {
-    data: statsData,
-    isLoading: statsLoading,
-    error: statsError,
-    refetch: refetchStats,
-  } = useDashboardStats();
+/**
+ * The dashboard's collections card, answered by `system:content` in the dashboard's batch: each
+ * collection's entries and drafts, counted as the reader, in the order and with the icons the
+ * collections list gives them.
+ */
+export const CollectionQuickLinks: React.FC<WidgetComponentProps> = ({
+  slot,
+  isFetching,
+  query,
+  onRetry,
+}) => {
   const { data: collectionsData, isLoading: collectionsLoading } =
     // The sidebar's own request, so the shell has usually filled it before this card is drawn.
     useCollections(NAV_COLLECTIONS_PARAMS);
+  const counts = useMemo(() => contentRowsOf(slot), [slot]);
 
   const tiles = useMemo(
-    () =>
-      collectionTiles(
-        collectionsData?.items,
-        collectionsLoading,
-        statsData?.collectionCounts
-      ),
-    [statsData?.collectionCounts, collectionsData?.items, collectionsLoading]
+    () => collectionTiles(collectionsData?.items, collectionsLoading, counts),
+    [counts, collectionsData?.items, collectionsLoading]
   );
-  const groups = useMemo(() => groupCollections(tiles ?? []), [tiles]);
+  const groups = useMemo(
+    () => groupCollections((tiles ?? []).slice(0, TILES_DRAWN)),
+    [tiles]
+  );
+  // The one row more the card asked for is what says more collections exist than it draws.
+  const moreExist = (counts?.length ?? 0) > TILES_DRAWN;
 
   const collectionsMap = useMemo(() => {
     const map = new Map<string, ApiCollection>();
@@ -227,17 +276,13 @@ export const CollectionQuickLinks: React.FC = () => {
   // The card's frame draws its title, so this is only its body: the collections, grouped, or the
   // frame's own skeleton and error while they are not there. The skeleton only while neither the
   // list nor the counts are known, since either one says which tiles there are.
-  if (statsError) {
+  if (slot && !slot.ok) {
     return (
-      <CardError
-        title="Collections"
-        message="The collection counts couldn't be loaded."
-        onRetry={() => void refetchStats()}
-      />
+      <CardSlotFailure slot={slot} title="Collections" onRetry={onRetry} />
     );
   }
   if (tiles === undefined) {
-    return statsLoading || collectionsLoading ? (
+    return isFetching || collectionsLoading ? (
       <CardSkeleton shape="rows" rows={4} />
     ) : null;
   }
@@ -269,6 +314,7 @@ export const CollectionQuickLinks: React.FC = () => {
           </div>
         </div>
       ))}
+      {moreExist && <MoreExist query={query} />}
     </div>
   );
 };
