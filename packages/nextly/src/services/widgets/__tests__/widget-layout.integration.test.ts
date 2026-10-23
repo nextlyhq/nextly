@@ -35,6 +35,8 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { layoutRowId } from "../../../schemas/widget-layout";
 import { WidgetLayoutService } from "../widget-layout-service";
 
+import { countLayoutRows, deleteRunRows, layoutInternals } from "./layout-rows";
+
 /**
  * This run's own suffix for every scope id below.
  *
@@ -83,7 +85,7 @@ function layoutSuite(
 
     beforeAll(async () => {
       service = await makeService();
-      startingRows = await countRows(service);
+      startingRows = await countLayoutRows(service);
     });
 
     // Server databases outlive the run, so the rows it wrote go with it rather than piling up,
@@ -91,9 +93,9 @@ function layoutSuite(
     // nothing, and has no service to count or delete with.
     afterAll(async () => {
       if (service === undefined || startingRows === undefined) return;
-      await deleteRunRows(service);
-      expect(await countRows(service, RUN)).toBe(0);
-      expect(await countRows(service)).toBe(startingRows);
+      await deleteRunRows(service, RUN);
+      expect(await countLayoutRows(service, RUN)).toBe(0);
+      expect(await countLayoutRows(service)).toBe(startingRows);
     });
 
     it("round-trips an arrangement", async () => {
@@ -414,31 +416,13 @@ function layoutSuite(
   });
 }
 
-/** The service's own database handle and table, for writing what it never would. */
-function internalsOf(service: WidgetLayoutService) {
-  return service as unknown as {
-    db: {
-      update: (t: unknown) => {
-        set: (v: unknown) => { where: (w: unknown) => Promise<unknown> };
-      };
-      select: (fields: unknown) => {
-        from: (t: unknown) => Promise<Array<Record<string, unknown>>> & {
-          where: (w: unknown) => Promise<Array<Record<string, unknown>>>;
-        };
-      };
-      delete: (t: unknown) => { where: (w: unknown) => Promise<unknown> };
-    };
-    table: { id: unknown; scopeId: unknown; layout: unknown; version: unknown };
-  };
-}
-
 /** Writes a raw payload, bypassing the service's own encoder. */
 async function writeRawLayout(
   service: WidgetLayoutService,
   id: string,
   layout: string
 ): Promise<void> {
-  const internals = internalsOf(service);
+  const internals = layoutInternals(service);
   const { eq } = await import("drizzle-orm");
   await internals.db
     .update(internals.table)
@@ -451,7 +435,7 @@ async function readRawLayout(
   service: WidgetLayoutService,
   id: string
 ): Promise<{ layout: unknown; version: unknown }> {
-  const internals = internalsOf(service);
+  const internals = layoutInternals(service);
   const { eq } = await import("drizzle-orm");
   const rows = await internals.db
     .select({
@@ -461,33 +445,6 @@ async function readRawLayout(
     .from(internals.table)
     .where(eq(internals.table.id as never, id));
   return { layout: rows[0]?.layout, version: rows[0]?.version };
-}
-
-/**
- * Deletes every row this run wrote. Each scope id carries `RUN`, while row ids are hashes of it,
- * so the match is on `scope_id`; `RUN` is hex and hyphens, so it holds no `LIKE` wildcard.
- */
-async function deleteRunRows(service: WidgetLayoutService): Promise<void> {
-  const internals = internalsOf(service);
-  const { like } = await import("drizzle-orm");
-  await internals.db
-    .delete(internals.table)
-    .where(like(internals.table.scopeId as never, `%${RUN}%`));
-}
-
-/** How many rows the table holds: all of them, or those whose scope id carries `run`. */
-async function countRows(
-  service: WidgetLayoutService,
-  run?: string
-): Promise<number> {
-  const internals = internalsOf(service);
-  const { count, like } = await import("drizzle-orm");
-  const all = internals.db.select({ rows: count() }).from(internals.table);
-  const rows =
-    run === undefined
-      ? await all
-      : await all.where(like(internals.table.scopeId as never, `%${run}%`));
-  return Number(rows[0]?.rows ?? 0);
 }
 
 /** Writes a payload the decoder must refuse, bypassing the service's own guard. */

@@ -123,7 +123,7 @@ const ALLOWED_IN_TESTS = [
 /**
  * Extensions the bundler will follow, and therefore the ones this guard must read.
  *
- * Not just `.ts`/`.tsx`. A TypeScript entry can side-effect-import `./bridge.js`, and tsup
+ * Not just `.ts`/`.tsx`. A TypeScript entry can side-effect-import `./bridge.js`, and the bundler
  * bundles it; a scan restricted to TypeScript would walk past the one file free to import
  * anything, with the typecheck none the wiser because `allowJs` is off.
  */

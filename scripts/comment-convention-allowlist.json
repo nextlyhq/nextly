@@ -176,10 +176,6 @@
     "count": 1,
     "digests": ["513d8eab1ebde6a2"]
   },
-  "packages/nextly/eslint.config.js": {
-    "count": 2,
-    "digests": ["bb3c9d25cf31add3", "e33b7f20fdbfeb37"]
-  },
   "packages/nextly/scripts/phase-gate.sh": {
     "count": 1,
     "digests": ["7bd26145a3c95304"]

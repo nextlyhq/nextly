@@ -320,7 +320,7 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
       await choose(user, "Notes", "Settings");
       const sheet = await screen.findByRole("dialog");
       await user.type(within(sheet).getByLabelText(/Heading/), "Mine");
-      await user.click(within(sheet).getByRole("button", { name: "Save" }));
+      await user.click(within(sheet).getByRole("button", { name: "Done" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     },
   ],

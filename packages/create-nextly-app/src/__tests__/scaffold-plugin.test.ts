@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import {
   mkdir,
   mkdtemp,
@@ -25,7 +26,17 @@ import {
 } from "vitest";
 
 import type { DatabaseConfig } from "../types";
+import { PLUGIN_NODE_ENGINES, satisfiesNodeRange } from "../utils/plugin-node";
 import { copyTemplate } from "../utils/template";
+
+const requireFromHere = createRequire(import.meta.url);
+
+/** The `engines.node` an installed package declares. */
+function enginesOf(name: string): string {
+  return (
+    requireFromHere(`${name}/package.json`) as { engines: { node: string } }
+  ).engines.node;
+}
 
 /*
  * Scaffolded source is checked by its syntax tree rather than its text: a
@@ -277,18 +288,64 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     expect(pkg.keywords).toContain("nextly-plugin");
     expect(pkg.scripts.dev).toContain("next dev dev");
 
-    // The UI kit is a HOST peer, not a bundled dependency. tsup externalises
+    // The UI kit is a HOST peer, not a bundled dependency. tsdown externalises
     // peers automatically and bundles devDependencies, so declaring it only as
     // a devDependency ships a second copy of the whole kit inside every
     // published plugin.
     expect(pkg.peerDependencies["@nextlyhq/ui"]).toBeTruthy();
 
-    const tsup = await readFile(path.join(target, "tsup.config.ts"), "utf-8");
-    expect(tsup).toContain('"@nextlyhq/ui"');
+    const buildConfig = await readFile(
+      path.join(target, "tsdown.config.ts"),
+      "utf-8"
+    );
+    expect(buildConfig).toContain('"@nextlyhq/ui"');
     // The native-build allowlist lives in pnpm-workspace.yaml, NOT the package.json
     // `pnpm` field (pnpm 11 ignores that field). Without this, `pnpm install` aborts
     // on better-sqlite3 (the dev playground's native dep) with ERR_PNPM_IGNORED_BUILDS.
     expect(pkg.pnpm).toBeUndefined();
+
+    // The Node it promises is the one its build and test tools both run on,
+    // read from the installed tools so a bump that moves either fails here.
+    expect(pkg.engines.node).toBe(PLUGIN_NODE_ENGINES);
+    const tools = ["tsdown", "vitest"].map(enginesOf);
+    // Every version where a comparator starts, a patch either side of it,
+    // and the start of every major in between: where the answer can change.
+    const starts = [PLUGIN_NODE_ENGINES, ...tools]
+      .flatMap(range => [...range.matchAll(/(\d+)\.(\d+)\.(\d+)/g)])
+      .map(([, major, minor, patch]) => [
+        Number(major),
+        Number(minor),
+        Number(patch),
+      ]);
+    const samples = starts.flatMap(([major, minor, patch]) => [
+      `${major}.${minor}.${patch}`,
+      `${major}.${minor}.${patch + 1}`,
+      patch > 0
+        ? `${major}.${minor}.${patch - 1}`
+        : `${major}.${Math.max(minor - 1, 0)}.99`,
+      `${major}.0.0`,
+      `${major + 1}.0.0`,
+    ]);
+    const disagreements = samples.filter(
+      version =>
+        satisfiesNodeRange(version, PLUGIN_NODE_ENGINES) !==
+        tools.every(range => satisfiesNodeRange(version, range))
+    );
+    expect(disagreements, `tsdown: ${tools[0]}; vitest: ${tools[1]}`).toEqual(
+      []
+    );
+    // The Vite it needs is Vitest's peer, which Yarn does not install on its
+    // own. Read from the installed Vitest, so a Vitest upgrade that moves it
+    // fails here rather than in a plugin author's first `yarn test`.
+    const vitestManifest = requireFromHere("vitest/package.json") as {
+      peerDependencies: { vite: string };
+    };
+    const viteMajor = /^\^(\d+)\./.exec(pkg.devDependencies.vite)?.[1];
+    expect(
+      vitestManifest.peerDependencies.vite
+        .split("||")
+        .map(range => range.trim())
+    ).toContain(`^${viteMajor}.0.0`);
 
     /*
      * The scaffolded suite boots a real instance, so its budget is asserted

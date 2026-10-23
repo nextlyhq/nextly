@@ -778,8 +778,8 @@ export function offencesIn(source, options) {
  * asserts each one contributes files. Paths are de-duplicated in `main`, so the overlap costs a
  * set insertion and nothing else.
  *
- * Without `.` the two tracked config files at the repository root - `eslint.config.mjs` and
- * `lint-staged.config.mjs` - sit outside every named root, so a forbidden comment in either
+ * Without `.` the tracked config files at the repository root - `oxlint.config.mjs` and
+ * `lint-staged.config.mjs` among them - sit outside every named root, so a forbidden comment in either
  * leaves the repository-wide gate reporting clean.
  */
 export const DEFAULT_ROOTS = [

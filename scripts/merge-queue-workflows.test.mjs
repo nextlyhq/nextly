@@ -19,6 +19,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { filesThatRun } from "./change-scope.mjs";
+
 const read = path => load(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
 /** A JSON file of the repository, such as a package manifest. */
 const readJson = path => JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
@@ -107,6 +109,133 @@ describe("the last commit Integration tested", () => {
     // A floor, so a reader that found no jobs cannot pass by comparing nothing.
     expect(legs.length).toBeGreaterThanOrEqual(3);
     expect(ask.with["substantive-job"].split("\n").map(name => name.trim()).filter(Boolean).sort()).toEqual(legs.sort());
+  });
+});
+
+describe("the Windows and macOS legs", () => {
+  /*
+   * A pull request runs them only when it changes a platform-sensitive path or
+   * asks with the `ci:all-os` label; every other event runs them all, so the
+   * merge queue and `main` never skip a platform. Held on the expression
+   * itself, evaluated, and on every job that can land on a non-Linux runner.
+   */
+  const ci = read(".github/workflows/ci.yml");
+  const allOs = ci.jobs.changes.outputs["all-os"];
+  const answer = (event, { inert = "true", labels = [] } = {}) =>
+    String(
+      evaluate(conditionTokens(allOs.replace(/^\$\{\{|\}\}$/g, "")), allOs, {
+        "github.event_name": event,
+        "steps.os.outputs.inert": inert,
+        "github.event.pull_request.labels.*.name": labels,
+      })
+    );
+
+  it("runs every platform off a pull request, whatever the change", () => {
+    for (const event of ["push", "merge_group", "workflow_dispatch"]) expect(answer(event, { inert: "true" }), event).toBe("true");
+  });
+
+  it("runs Linux alone on a pull request that touches no platform-sensitive path", () => {
+    expect(answer("pull_request", { inert: "true" })).toBe("false");
+  });
+
+  it("runs every platform on a pull request that touches one, asks with the label, or could not be decided", () => {
+    expect(answer("pull_request", { inert: "false" })).toBe("true");
+    expect(answer("pull_request", { inert: "true", labels: ["ci:all-os"] })).toBe("true");
+    // A step that failed or never ran has no output.
+    expect(answer("pull_request", { inert: "" })).toBe("true");
+  });
+
+  // What a Windows gate job decides, from both answers it reads, evaluated as
+  // the job's own `if:`: the label adds the legs to a pull request whose CI
+  // runs, and an inert change runs no test job on any operating system.
+  it("adds the Windows gate jobs to a pull request's CI when it carries the label", () => {
+    const gate = ci.jobs["windows-gates"].if;
+    const runs = ({ inert, osInert, labels = [] }) =>
+      String(
+        evaluate(conditionTokens(gate), gate, {
+          "needs.changes.outputs.inert": inert,
+          "needs.changes.outputs.all-os": answer("pull_request", { inert: osInert, labels }),
+        })
+      );
+    expect(runs({ inert: "false", osInert: "true" })).toBe("false");
+    expect(runs({ inert: "false", osInert: "true", labels: ["ci:all-os"] })).toBe("true");
+    expect(runs({ inert: "false", osInert: "false" })).toBe("true");
+    expect(runs({ inert: "true", osInert: "true", labels: ["ci:all-os"] })).toBe("false");
+  });
+
+  // The step's own patterns, read by the same function `change-scope.mjs` runs
+  // them through: each platform-sensitive path asks for the legs on its own,
+  // and a pull request of product code and docs asks for none.
+  it("asks for them from the paths where the platforms differ, and only those", () => {
+    const { env } = ci.jobs.changes.steps.find(step => step.id === "os");
+    const running = files => filesThatRun(files, { inert: new RegExp(env.INERT_PATHS), alwaysRun: new RegExp(env.ALWAYS_RUN_PATHS) });
+    const sensitive = [
+      "packages/create-nextly-app/src/utils/template.ts",
+      "templates/blank/package.json",
+      "packages/nextly/src/cli/commands/add.ts",
+      "packages/admin-css/bin/nextly-build-admin-css.mjs",
+      "scripts/bounded.mjs",
+      ".husky/pre-push",
+      ".github/workflows/ci.yml",
+      "package.json",
+      "apps/playground/package.json",
+      "e2e/package.json",
+      "pnpm-lock.yaml",
+      "turbo.jsonc",
+      ".gitattributes",
+      "packages/ui/scripts/build-css.mjs",
+      "apps/playground/scripts/provision-empty.ts",
+      "packages/nextly/tsdown.config.ts",
+      "packages/admin/tsup.config.ts",
+      "packages/ui/vitest.config.ts",
+      "vitest.config.ts",
+      "eslint.config.mjs",
+      "apps/playground/vitest.config.ts",
+      "apps/playground/next.config.ts",
+      "packages/telemetry/src/environment.ts",
+      "packages/nextly/src/storage/adapters/local-adapter.ts",
+      "packages/nextly/src/shared/lib/generated-output-paths.ts",
+      "packages/nextly/src/plugins/codegen/component-import-map.ts",
+      "packages/nextly/src/domains/widgets/declaration/component-map-check.ts",
+    ];
+    for (const file of sensitive) expect(running([file]), file).toEqual([file]);
+    const neutral = [
+      "packages/nextly/src/domains/schema/pipeline/classifier/type-widening.ts",
+      "packages/admin/src/components/features/dashboard/TeamSummary.tsx",
+      "packages/ui/src/components/button.tsx",
+      "packages/nextly/src/domains/schema/services/field-column-descriptor.ts",
+      "docs/guides/deployment.mdx",
+      "AGENTS.md",
+      ".changeset/a-change.md",
+    ];
+    expect(running(neutral)).toEqual([]);
+  });
+
+  /** Everything that decides where a job runs and whether it does: its `if:`, `runs-on` and matrix. */
+  const placement = job => `${job.if ?? ""} ${job["runs-on"]} ${JSON.stringify(job.strategy?.matrix ?? {})}`;
+
+  it("gates every job that can land on Windows or macOS by that answer", () => {
+    const nonLinux = Object.entries(ci.jobs).filter(([, job]) => /windows|macos/.test(placement(job)));
+    // A floor, so a reader that matched no jobs cannot pass by checking none.
+    expect(nonLinux.length).toBeGreaterThanOrEqual(6);
+    for (const [id, job] of nonLinux) {
+      expect(placement(job), id).toContain("needs.changes.outputs.all-os");
+      expect([job.needs].flat(), id).toContain("changes");
+    }
+  });
+});
+
+describe("the labels the workflows read", () => {
+  // `labels-sync.yml` creates every label in this file, and GitHub's label API
+  // refuses a description over 100 characters, which fails the whole sync: a
+  // label a workflow reads, such as `ci:all-os`, then never exists to apply.
+  it("each fit GitHub's 100-character description limit", () => {
+    const labels = read(".github/labels.yml");
+    expect(labels.length).toBeGreaterThan(0);
+    const over = labels
+      .filter(label => (label.description ?? "").length > 100)
+      .map(label => `${label.name}: ${label.description.length}`);
+    expect(over).toEqual([]);
   });
 });
 
@@ -1395,9 +1524,9 @@ describe("who owns what the required checks run", () => {
     const shared = files.filter(path => SHARING_CONFIGURATION.test(path)).flatMap(path => sharedConfigurationOf(path, packages));
     // The control: the walk reaches the shared packages, not nothing.
     expect(shared.some(path => path.startsWith("packages/tsconfig/"))).toBe(true);
-    expect(shared.some(path => path.startsWith("packages/eslint-config/"))).toBe(true);
-    // And a relative import, as the nextly package's lint configuration makes of its own rule.
-    expect(shared.some(path => path.startsWith("packages/nextly/"))).toBe(true);
+    // And the lint configuration's plugins, a workspace package by name and a
+    // module of the repository's own by path.
+    expect(shared).toEqual(expect.arrayContaining(["packages/eslint-plugin/package.json", "lint/guards.mjs"]));
     for (const path of new Set(shared)) expect(ownersOf(rules, path), path).not.toEqual([]);
   });
 
@@ -1407,7 +1536,7 @@ describe("who owns what the required checks run", () => {
   it("owns every file a package's own scripts run for the tasks the required checks run", () => {
     const tasks = tasksRequiredChecksRun();
     // The control: the lanes' tasks, and what the task graph adds to them, but no task only a developer runs.
-    expect([...tasks]).toEqual(expect.arrayContaining(["build", "lint", "check-types", "test", "test:integration", "build:surface-declarations"]));
+    expect([...tasks]).toEqual(expect.arrayContaining(["build", "check-types", "test", "test:integration", "build:surface-declarations"]));
     expect(tasks.has("dev")).toBe(false);
     // Every task reached is one the task graph defines: a dependency on
     // another package's task (`^build`) or a named package's (`nextly#build`)
@@ -1429,8 +1558,8 @@ describe("who owns what the required checks run", () => {
     const files = trackedFiles();
     const tracked = new Set(files);
     const loaded = loadedThrough(files.filter(path => LINT_CONFIGURATION.test(path)), tracked);
-    // The control: the nextly package's rule, the rule it imports and the allowlist it reads.
-    expect(loaded).toEqual(expect.arrayContaining(["packages/nextly/eslint-bare-error-rule.js", "packages/nextly/eslint-api-key-scope-rule.js", "packages/nextly/eslint-bare-error-allowlist.json"]));
+    // The control: the repository's own rules, which oxlint loads as a plugin, and the allowlists the configuration reads.
+    expect(loaded).toEqual(expect.arrayContaining(["lint/guards.mjs", "packages/nextly/bare-error-allowlist.json", "packages/nextly/console-allowlist.json"]));
     for (const path of loaded) expect(ownersOf(rules, path), path).not.toEqual([]);
   });
 
@@ -1493,6 +1622,21 @@ describe("who owns what the required checks run", () => {
     expect(loads.map(load => load.target).sort()).toEqual(["dynamic.mjs", "list.json", "re-export.js", "required.cjs", "rule.js", "side-effect.js"].map(file => `packages/a/${file}`));
     // A file it reads is not an import, and is not held to resolving.
     expect(loads.filter(load => !load.imported).map(load => load.specifier)).toEqual(["././list.json"]);
+  });
+
+  it("reads an oxlint configuration's JS plugins as imports, and not the names they are given", () => {
+    const text = [
+      "export default defineConfig({",
+      "  jsPlugins: [",
+      '    "eslint-plugin-turbo",',
+      '    // "./commented-out.mjs"',
+      '    { name: "renamed", specifier: "./renamed.mjs" },',
+      '    "./guards.mjs",',
+      "  ],",
+      "});",
+    ].join("\n");
+    expect(jsPluginsIn(text)).toEqual(["eslint-plugin-turbo", "./renamed.mjs", "./guards.mjs"]);
+    expect(loadsIn(text, "oxlint.config.mjs").map(load => [load.target, load.imported])).toEqual([["renamed.mjs", true], ["guards.mjs", true]]);
   });
 
   it("takes nothing for an import that sits in a comment or a string", () => {
@@ -1629,10 +1773,10 @@ const CHECK_CONFIGURATION = [
   ".commitlintrc.json",
   ".fallowrc.jsonc",
   ".gitleaks.toml",
-  "eslint.config.mjs",
-  "eslint.scripts.config.mjs",
   "fallow-health-baseline.json",
   "lint-staged.config.mjs",
+  "oxlint.config.mjs",
+  "oxlint.scripts.config.mjs",
   "tsconfig.base.json",
   "vitest.config.ts",
 ];
@@ -1677,11 +1821,11 @@ function ownersOf(rules, path) {
 }
 
 /** Manifests, task graphs, and the test, compiler, lint and build configuration the lanes run with. */
-const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|tsup|tsdown|rollup)[^/]*\.config\.[^/]+)$/;
+const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|oxlint|tsdown|rollup)[^/]*\.config\.[^/]+)$/;
 
 /** A workspace package's manifest, whose scripts Turbo runs. */
 const WORKSPACE_MANIFEST = /^(?:packages|apps)\/[^/]+\/package\.json$|^e2e\/package\.json$/;
-const LINT_CONFIGURATION = /(?:^|\/)eslint[^/]*\.config\.[^/]+$/;
+const LINT_CONFIGURATION = /(?:^|\/)(?:eslint|oxlint)[^/]*\.config\.[^/]+$/;
 const TEST_CONFIGURATION = /(?:^|\/)(?:vitest|playwright)[^/]*\.config\.[^/]+$/;
 /** A file a package script names from the package's own directory, as a program in any JavaScript or TypeScript form, a shell script or data. */
 const LOCAL_FILE = /(?:^|[\s="'])(\.{0,2}\/?[\w./-]+\.(?:[cm]?js|jsx|[cm]?ts|tsx|sh|json))(?=$|[\s"';&|)])/g;
@@ -1831,7 +1975,8 @@ function toolingImportedBy(roots, tracked, readFile = readRepositoryFile) {
 function loadsIn(text, path) {
   const beside = imported => specifier => ({ specifier, target: repositoryPathOf(specifier, path, new Map()), imported });
   const read = [...text.matchAll(/readFileSync\(([^;]*?)["']utf-?8["']/g)].flatMap(match => [...match[1].matchAll(/["']([^"']+)["']/g)].map(literal => `./${literal[1]}`));
-  return [...importsIn(text, path).filter(specifier => specifier.startsWith(".")).map(beside(true)), ...read.map(beside(false))];
+  const modules = [...importsIn(text, path), ...jsPluginsIn(text)];
+  return [...modules.filter(specifier => specifier.startsWith(".")).map(beside(true)), ...read.map(beside(false))];
 }
 
 /** The modules a test configuration's setup keys name, as repository paths. */
@@ -1860,7 +2005,7 @@ const SETUP_SHORTHAND = /\b(setupFiles|globalSetup|globalTeardown)\s*[,}]/;
 const SETUP_VALUE = /^(?:\[\s*(?:["'][^"'\n]+["']\s*,?\s*)*\]|["'][^"'\n]+["'])/;
 
 /** Compiler and lint configuration, which may extend or import shared configuration. */
-const SHARING_CONFIGURATION = /(?:^|\/)(?:tsconfig[^/]*\.json|eslint[^/]*\.config\.[^/]+)$/;
+const SHARING_CONFIGURATION = /(?:^|\/)(?:tsconfig[^/]*\.json|(?:eslint|oxlint)[^/]*\.config\.[^/]+)$/;
 const EXTENDS = /"extends"\s*:\s*(\[[^\]]*\]|"[^"]*")/;
 /**
  * The modules a module's text imports, as written: `import … from`,
@@ -1872,6 +2017,18 @@ const EXTENDS = /"extends"\s*:\s*(\[[^\]]*\]|"[^"]*")/;
  */
 function importsIn(text, path) {
   return importedSpecifiers(text, path);
+}
+
+/**
+ * The modules an oxlint configuration's `jsPlugins` names, which oxlint loads
+ * as surely as an import: each string, or an entry's `specifier`, but never
+ * the `name` an entry gives its plugin. Comments are set aside first, so one
+ * naming a module is not taken for it.
+ */
+function jsPluginsIn(text) {
+  const list = /\bjsPlugins\s*:\s*\[([\s\S]*?)\]/.exec(text)?.[1] ?? "";
+  const entries = list.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, "").replace(/\bname\s*:\s*["'][^"']*["']/g, "");
+  return [...entries.matchAll(/["']([^"']+)["']/g)].map(match => match[1]);
 }
 
 function readRepositoryFile(path) {
@@ -1888,9 +2045,10 @@ function workspacePackages(files) {
 function sharedConfigurationOf(path, packages) {
   const text = readRepositoryFile(path);
   const extended = EXTENDS.exec(text)?.[1] ?? "";
-  // A JSON configuration shares only through `extends`; it is not a module and imports nothing.
+  // A JSON configuration is not a module: it has no imports to parse, though its
+  // `jsPlugins` are read like any configuration's.
   const imported = path.endsWith(".json") ? [] : importsIn(text, path);
-  const specifiers = [...[...extended.matchAll(/"([^"]+)"/g)].map(match => match[1]), ...imported];
+  const specifiers = [...[...extended.matchAll(/"([^"]+)"/g)].map(match => match[1]), ...imported, ...jsPluginsIn(text)];
   return specifiers.map(specifier => repositoryPathOf(specifier, path, packages)).filter(Boolean);
 }
 

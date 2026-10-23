@@ -21,9 +21,9 @@ import { isValidWidgetId } from "../definition";
 import { SETTING_NOT_AN_OBJECT, widgetSettingsProblems } from "../settings";
 import { WIDGET_WIDTHS, type WidgetWidth } from "../widths";
 
-import { CORE_DISPLAYS, displayDataProblem, isCoreDisplay } from "./displays";
+import { cardAnswerProblem } from "./card-answer";
+import { CORE_DISPLAYS, isCoreDisplay } from "./displays";
 import { quote } from "./quote";
-import { transportableProblem } from "./transportable";
 
 /** One thing wrong with one declaration, said where an author reads it. */
 export interface WidgetDeclarationFault {
@@ -186,24 +186,20 @@ function requiredTextProblem(
 }
 
 /**
- * An example must reach the browser as itself, since the admin draws it as a
- * preview, and a core display's example must have the shape that display
- * draws.
+ * An example is drawn as the card's preview, so it is held to the rule every
+ * card's data is held to (`cardAnswerProblem`): it reaches the browser as
+ * itself, and a core display's example has the shape that display draws.
  */
 function exampleProblem(
   example: unknown,
   display: unknown
 ): string | undefined {
   if (example === undefined) return undefined;
-  const untransportable = transportableProblem(example);
-  if (untransportable !== undefined) {
-    return `example cannot be sent to the browser as it is: ${untransportable.replace("the value", "example")}`;
-  }
-  if (!isCoreDisplay(display)) return undefined;
-  const mismatch = displayDataProblem(display, example);
-  return mismatch === undefined
-    ? undefined
-    : `example does not have the shape the "${display}" display draws (${mismatch})`;
+  const problem = cardAnswerProblem(display, example);
+  if (problem === undefined) return undefined;
+  return problem.kind === "untransportable"
+    ? `example cannot be sent to the browser as it is: ${problem.detail.replace("the value", "example")}`
+    : `example does not have the shape the "${problem.display}" display draws (${problem.detail})`;
 }
 
 function idProblem(id: unknown): string | undefined {

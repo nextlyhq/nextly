@@ -236,7 +236,7 @@ describe("package scripts run on every supported platform", () => {
 
   it("recognises the construct it exists to reject, spaced or not", () => {
     for (const command of [
-      "tsup --watch & tsup --config other.ts --watch & wait",
+      "tsdown --watch & tsdown --config other.ts --watch & wait",
       "node a.mjs & node b.mjs & wait",
       "node a.mjs &wait",
       "node a.mjs&wait",
@@ -250,7 +250,7 @@ describe("package scripts run on every supported platform", () => {
     for (const command of [
       "node scripts/dev.mjs",
       "pnpm run wait-for-db && vitest",
-      "tsup && tsup --config tsup.server-safe.config.ts",
+      "tsdown && tsdown --config tsdown.server-safe.config.ts",
       "echo waiting && next build",
     ]) {
       expect(BACKGROUND_THEN_WAIT.test(command), command).toBe(false);

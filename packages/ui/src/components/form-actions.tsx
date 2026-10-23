@@ -1,3 +1,5 @@
+import type { JSX } from "react";
+
 import { cn } from "../lib/utils";
 import type { FormActionsProps } from "../types/form-layout";
 
@@ -10,7 +12,11 @@ import type { FormActionsProps } from "../types/form-layout";
  * first as soon as either changed.
  * @experimental
  */
-export function FormActions({ dirty, className, children }: FormActionsProps) {
+export function FormActions({
+  dirty,
+  className,
+  children,
+}: FormActionsProps): JSX.Element {
   return (
     <div
       className={cn(

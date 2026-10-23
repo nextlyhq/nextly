@@ -3,7 +3,7 @@
 /**
  * Admin dev orchestrator.
  *
- * Runs `tsup --watch` (JS/TS bundling) and `build-css-watch.mjs`
+ * Runs `tsdown --watch` (JS/TS bundling) and `build-css-watch.mjs`
  * (Tailwind compile + .nextly-admin scoping post-process) as parallel
  * children of a single Node process, so admin's package.json can expose
  * one command (`dev`) that Turborepo runs alongside the playground's
@@ -26,7 +26,7 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 
-// `shell: true` lets npm workspaces resolve `tsup` cross-platform
+// `shell: true` lets npm workspaces resolve `tsdown` cross-platform
 // (npx is a `.cmd` shim on Windows). The command is a single static
 // string with no interpolated input, which is the form Node's
 // child_process docs recommend when `shell: true` is needed —
@@ -34,13 +34,13 @@ const rootDir = path.resolve(__dirname, "..");
 // separately under shell: true.
 const children = [
   {
-    name: "tsup",
-    // NODE_ENV is set explicitly because tsup.config.ts folds
+    name: "tsdown",
+    // NODE_ENV is set explicitly because tsdown.config.ts folds
     // `process.env.NODE_ENV` into the bundle, defaulting an unset value to
     // production — correct for release builds, wrong for this watcher,
     // whose output exists so contributors can run the admin in dev mode
     // (dev-only branches like the dev-reload stream compile ON here).
-    proc: spawn("npx tsup --watch", {
+    proc: spawn("npx tsdown --watch", {
       cwd: rootDir,
       stdio: "inherit",
       shell: true,

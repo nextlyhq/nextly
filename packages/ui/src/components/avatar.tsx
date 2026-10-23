@@ -6,14 +6,33 @@ import {
   Fallback as AvatarFallbackPrimitive,
 } from "@radix-ui/react-avatar";
 import { cva } from "class-variance-authority";
-import { createContext, forwardRef, useContext } from "react";
+import {
+  createContext,
+  forwardRef,
+  useContext,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
+import type { VariantsFn } from "../lib/variants";
 import type {
   AvatarFallbackProps,
   AvatarImageProps,
   AvatarProps,
 } from "../types/avatar";
+
+/** The arms `avatarVariants` is built from. Its type is read from them: {@link VariantsFn}. */
+export const AVATAR_VARIANT_MAP = {
+  size: {
+    sm: "h-8 w-8",
+    md: "h-10 w-10",
+    lg: "h-12 w-12",
+    xl: "h-16 w-16",
+    "2xl": "h-20 w-20",
+  },
+};
 
 /**
  * Avatar Component - Design System Specification
@@ -78,18 +97,10 @@ import type {
  * @see {@link https://github.com/nextlyhq/nextly/blob/main/ui-revamp/04-design-system-specification.md Design System Specification}
  * @experimental
  */
-export const avatarVariants = cva(
+export const avatarVariants: VariantsFn<typeof AVATAR_VARIANT_MAP> = cva(
   "relative inline-flex shrink-0 overflow-hidden rounded-full items-center justify-center bg-primary/5 text-muted-foreground",
   {
-    variants: {
-      size: {
-        sm: "h-8 w-8",
-        md: "h-10 w-10",
-        lg: "h-12 w-12",
-        xl: "h-16 w-16",
-        "2xl": "h-20 w-20",
-      },
-    },
+    variants: AVATAR_VARIANT_MAP,
     defaultVariants: {
       size: "md",
     },
@@ -122,7 +133,9 @@ const AvatarSizeContext = createContext<AvatarProps["size"]>("md");
  * AvatarFallback for reliable text scaling.
  * @experimental
  */
-const Avatar = forwardRef<HTMLSpanElement, AvatarProps>(
+const Avatar: ForwardRefExoticComponent<
+  PropsWithoutRef<AvatarProps> & RefAttributes<HTMLSpanElement>
+> = forwardRef<HTMLSpanElement, AvatarProps>(
   ({ className, size = "md", ...props }, ref) => {
     return (
       <AvatarSizeContext.Provider value={size}>
@@ -153,7 +166,9 @@ Avatar.displayName = "Avatar";
  * <AvatarImage src="/users/john-doe.jpg" alt="John Doe" />
  * @experimental
  */
-const AvatarImage = forwardRef<HTMLImageElement, AvatarImageProps>(
+const AvatarImage: ForwardRefExoticComponent<
+  PropsWithoutRef<AvatarImageProps> & RefAttributes<HTMLImageElement>
+> = forwardRef<HTMLImageElement, AvatarImageProps>(
   ({ className, ...props }, ref) => {
     return (
       <AvatarImagePrimitive
@@ -199,7 +214,9 @@ AvatarImage.displayName = "AvatarImage";
  * <AvatarFallback delayMs={300}>AB</AvatarFallback>
  * @experimental
  */
-const AvatarFallback = forwardRef<HTMLSpanElement, AvatarFallbackProps>(
+const AvatarFallback: ForwardRefExoticComponent<
+  PropsWithoutRef<AvatarFallbackProps> & RefAttributes<HTMLSpanElement>
+> = forwardRef<HTMLSpanElement, AvatarFallbackProps>(
   ({ className, children, ...props }, ref) => {
     const size = useContext(AvatarSizeContext) || "md";
     const textSize = fallbackTextSizeMap[size];

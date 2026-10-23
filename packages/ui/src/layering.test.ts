@@ -78,7 +78,7 @@ const FORBIDDEN = "@nextlyhq/blocks-engine";
  * Every module extension the bundler follows.
  *
  * Pinned as a literal, and wider than the `.ts`/`.tsx` a source tree usually
- * holds: tsup follows a local `.mts` or `.cts` bridge as readily as a `.ts`
+ * holds: the bundler follows a local `.mts` or `.cts` bridge as readily as a `.ts`
  * one, so a scan that reads only the common two leaves a route into the bundle
  * unwatched. The `.js` family is here for the same reason — nothing stops a
  * shipped entry importing one.
