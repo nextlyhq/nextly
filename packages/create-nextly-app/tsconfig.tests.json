@@ -1,0 +1,12 @@
+// Type-checks the tests and their stubs. `tsconfig.json` checks what the
+// package SHIPS, with `isolatedDeclarations` on; tests publish no
+// declarations, so the flag is off here. Both run in `check-types`.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "isolatedDeclarations": false
+  },
+  "include": ["src/**/*"],
+  "exclude": ["dist", "node_modules", "**/*.test.ts", "**/*.spec.ts"]
+}
