@@ -68,6 +68,9 @@ export default defineConfig({
             "scripts/**/*.test.mjs",
           ],
           exclude: nodeFiles,
+          // One project at a time, so the workers `local-limits` sized for are
+          // the only ones running.
+          sequence: { groupOrder: 0 },
         },
       },
       {
@@ -76,6 +79,7 @@ export default defineConfig({
           name: "admin (node)",
           environment: "node",
           include: nodeFiles,
+          sequence: { groupOrder: 1 },
         },
       },
     ],

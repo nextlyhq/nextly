@@ -110,8 +110,31 @@ const CHANGES_GLOBAL_SINGLETONS = [
   "src/domains/widgets/__tests__/publish.test.ts",
 ];
 
+/**
+ * Files that need their own module graph for state the guard cannot see:
+ * module-local registries, and files that failed when run after others in a
+ * shared worker although no singleton on `globalThis` changed.
+ *
+ * `shared-module-guards.ts` reads only `globalThis`, so this list is kept by
+ * hand. The nightly shuffled-order run (`Unit test order`) is what finds a new
+ * entry for it.
+ */
+const KEEPS_MODULE_STATE = [
+  // Registers a baseline in the module-local Map in `comparison-baselines.ts`.
+  "src/domains/versions/__tests__/comparison-baselines.test.ts",
+  // Failed with an internal error in place of CONFLICT after other files in
+  // one shuffled order each (seeds 57, 101 and 505); no global had changed.
+  "src/domains/releases/__tests__/blocking-reasons.test.ts",
+  "src/domains/releases/__tests__/readiness-refusals.test.ts",
+  "src/domains/releases/__tests__/releases-service.test.ts",
+];
+
 const isolatedFiles = [
-  ...new Set([...filesThatLeaveState(), ...CHANGES_GLOBAL_SINGLETONS]),
+  ...new Set([
+    ...filesThatLeaveState(),
+    ...CHANGES_GLOBAL_SINGLETONS,
+    ...KEEPS_MODULE_STATE,
+  ]),
 ];
 
 export default defineConfig({
@@ -167,6 +190,11 @@ export default defineConfig({
           // resident in one worker; capped at 2 GB it stays near 2.3 GB, every
           // file order tried passes, and a 1.5 GB cap ran out of memory.
           execArgv: ["--max-old-space-size=2048"],
+          // Projects run at the same time unless ordered, each with its own
+          // workers, so the shared workers and the isolated ones would add up
+          // past what `local-limits` sized for. This one runs first and
+          // finishes before the isolated project starts.
+          sequence: { groupOrder: 0 },
         },
       },
       {
@@ -174,6 +202,7 @@ export default defineConfig({
         test: {
           name: "nextly (isolated)",
           include: isolatedFiles,
+          sequence: { groupOrder: 1 },
         },
       },
     ],
