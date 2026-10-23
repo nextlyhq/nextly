@@ -10,7 +10,7 @@
  * on, so the shape is checked here, before it is.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { posix } from "node:path";
 
 import { load } from "js-yaml";
@@ -20,6 +20,8 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const read = path => load(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
+/** A JSON file of the repository, such as a package manifest. */
+const readJson = path => JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
 /** js-yaml reads the bare key `on` as the boolean `true`, as YAML 1.1 does. */
 const triggersOf = workflow => workflow.on ?? workflow[true];
 
@@ -286,10 +288,11 @@ describe("a sharded leg", () => {
           .filter(([, job]) => (job.steps ?? []).some(step => String(step.run).includes(MATRIX_SHARD.trim())))
           .map(([id, job]) => [`${name}#${id}`, job])
       );
-    // A floor: the postgres and mysql legs are sharded.
+    // A floor: every integration leg is sharded.
     expect(sharded.map(([id]) => id).sort()).toEqual([
       "integration.yml#integration-mysql-shards",
       "integration.yml#integration-postgres-shards",
+      "integration.yml#integration-sqlite-shards",
     ]);
     for (const [id, job] of sharded) {
       const matrix = job.strategy?.matrix ?? {};
@@ -300,7 +303,59 @@ describe("a sharded leg", () => {
       expect(job.strategy["fail-fast"], id).toBe(false);
     }
   });
+
+  /*
+   * Turbo hands every package of the lane the same `--shard`, and vitest
+   * refuses a shard count larger than a package's number of test files unless
+   * the package passes with none: a one-file suite fails each shard before a
+   * test runs. So each package either has a file for every shard or lets an
+   * empty shard pass. The packages are read from the lane's own `--filter`s.
+   */
+  it("hands the shard only to packages that have a file for every shard, or pass with none", async () => {
+    const { MATRIX_SHARD } = await import("./check-test-lanes.mjs");
+    const lanes = readJson("package.json").scripts;
+    const dirs = packageDirsByName();
+    const legs = Object.values(read(".github/workflows/integration.yml").jobs).flatMap(job => shardedLane(job, MATRIX_SHARD.trim()));
+    const checked = [];
+    for (const { lane, shards } of legs) {
+      for (const [, name] of String(lanes[lane]).matchAll(/--filter=['"]?([^'"\s]+)/g)) {
+        const dir = dirs.get(name);
+        expect(dir, `${lane} names ${name}, which no package is`).toBeDefined();
+        const suite = integrationSuite(dir);
+        // The one include every integration config uses, so the count is the
+        // set vitest shards; another pattern fails here, not silently.
+        expect(suite.config, dir).toMatch(/include: \["src\/\*\*\/\*\.integration\.test\.ts"\]/);
+        expect(suite.files >= shards || suite.passesWithNone, `${dir}: ${suite.files} file(s) for ${shards} shards of ${lane}`).toBe(true);
+        checked.push(dir);
+      }
+    }
+    // A floor, so a reader that matched no lane cannot pass by checking nothing.
+    expect(checked.length).toBeGreaterThanOrEqual(3);
+  });
 });
+
+/** Each workspace package's directory, by the name its manifest gives it. */
+function packageDirsByName() {
+  return new Map(
+    readdirSync(new URL("../packages/", import.meta.url))
+      .filter(dir => existsSync(new URL(`../packages/${dir}/package.json`, import.meta.url)))
+      .map(dir => [readJson(`packages/${dir}/package.json`).name, `packages/${dir}`])
+  );
+}
+
+/** The lane a job hands its matrix shard and how many shards it has, or none. */
+function shardedLane(job, handOff) {
+  const line = (job.steps ?? []).flatMap(step => String(step.run).split("\n")).find(text => text.includes(handOff));
+  return line ? [{ lane: /pnpm (\S+) --/.exec(line)[1], shards: job.strategy.matrix.shard.length }] : [];
+}
+
+/** A package's integration config, its file count, and whether a shard with no file passes. */
+function integrationSuite(dir) {
+  const script = readJson(`${dir}/package.json`).scripts["test:integration"];
+  const config = readFileSync(new URL(`../${dir}/${/--config (\S+)/.exec(script)[1]}`, import.meta.url), "utf8");
+  const files = readdirSync(new URL(`../${dir}/src/`, import.meta.url), { recursive: true }).filter(file => String(file).endsWith(".integration.test.ts"));
+  return { config, files: files.length, passesWithNone: script.includes("--passWithNoTests") || /^\s*passWithNoTests: true\b/m.test(config) };
+}
 
 describe("a sharded leg's required check", () => {
   /*
@@ -315,7 +370,7 @@ describe("a sharded leg's required check", () => {
     const verdicts = Object.entries(workflow.jobs).filter(([, job]) =>
       (job.needs ?? []).some?.(need => String(need).endsWith("-shards"))
     );
-    expect(verdicts.map(([id]) => id).sort()).toEqual(["integration-mysql", "integration-postgres"]);
+    expect(verdicts.map(([id]) => id).sort()).toEqual(["integration-mysql", "integration-postgres", "integration-sqlite"]);
     for (const [id, job] of verdicts) {
       const shards = workflow.jobs[`${id}-shards`];
       expect(String(job.if), id).toMatch(/^\$\{\{\s*always\(\)/);
@@ -1075,9 +1130,9 @@ describe("who owns what the required checks run", () => {
   it("owns every manifest, task graph, and test, compiler, lint and build configuration in the repository", () => {
     const definitions = trackedFiles().filter(path => LANE_DEFINITIONS.test(path));
     // The control: the walk finds the repository's manifests and configurations, not nothing,
-    // and a Rollup configuration by its name alone, as `rollup -c` finds one without being told.
+    // and a tsdown configuration by its name alone, as `tsdown` finds one without being told.
     expect(definitions.length).toBeGreaterThan(50);
-    expect(definitions).toContain("packages/nextly/rollup.dts.config.ts");
+    expect(definitions).toContain("packages/nextly/tsdown.config.ts");
     // And every Next.js configuration, wherever it sits: the playground's,
     // which the required build builds, and each template's.
     expect(definitions).toEqual(expect.arrayContaining(["apps/playground/next.config.ts", "templates/base/next.config.ts", "templates/plugin/dev/next.config.ts"]));
@@ -1115,7 +1170,7 @@ describe("who owns what the required checks run", () => {
     const tracked = new Set(files);
     const run = files.filter(path => WORKSPACE_MANIFEST.test(path)).flatMap(manifest => filesTasksRun(manifest, tracked, tasks));
     // The control: the build steps a package runs from its own directory, directly and through `pnpm run`.
-    expect(run).toEqual(expect.arrayContaining(["packages/nextly/scripts/postbuild.cjs", "packages/nextly/rollup.dts.config.ts", "packages/ui/scripts/check-server-safe-artifacts.ts"]));
+    expect(run).toEqual(expect.arrayContaining(["packages/nextly/scripts/postbuild.cjs", "packages/ui/scripts/check-server-safe-artifacts.ts"]));
     for (const path of new Set(run)) expect(ownersOf(rules, path), path).not.toEqual([]);
   });
 
@@ -1374,7 +1429,7 @@ function ownersOf(rules, path) {
 }
 
 /** Manifests, task graphs, and the test, compiler, lint and build configuration the lanes run with. */
-const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|tsup|rollup)[^/]*\.config\.[^/]+)$/;
+const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|tsup|tsdown|rollup)[^/]*\.config\.[^/]+)$/;
 
 /** A workspace package's manifest, whose scripts Turbo runs. */
 const WORKSPACE_MANIFEST = /^(?:packages|apps)\/[^/]+\/package\.json$|^e2e\/package\.json$/;

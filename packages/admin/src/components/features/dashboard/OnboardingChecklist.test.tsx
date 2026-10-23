@@ -324,6 +324,23 @@ describe("the onboarding checklist", () => {
     expect(screen.queryByText("Create a collection")).not.toBeInTheDocument();
   });
 
+  it("says progress is unavailable, and asks for no fresh layout, when the host could not check setup", async () => {
+    // 🔴 The host sends the rows it could answer, every one of them done here,
+    // and goes on offering the card because the rest could not be checked.
+    // Drawn as rows they read as a finished checklist, and the card would ask
+    // for a layout that only offers it again.
+    protectedGet.mockResolvedValue({ steps: EVERY_STEP, unknown: true });
+    const { readLayout } = await drawBesideLayout(client());
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Setup progress is unavailable/)
+      ).toBeInTheDocument()
+    );
+    expect(screen.queryByText(/of 3 done/)).not.toBeInTheDocument();
+    expect(readLayout).toHaveBeenCalledTimes(1);
+  });
+
   it("asks for a fresh layout once every step is done", async () => {
     // Finishing the last step is the moment the host stops offering this card,
     // and the layout query neither polls nor refetches except on focus -- so

@@ -24,8 +24,8 @@
     "templates"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
+    "build": "tsdown --config-loader tsx",
+    "dev": "tsdown --config-loader tsx --watch",
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
@@ -63,7 +63,7 @@
     "jsdom": "^27.1.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
-    "tsup": "^8.5.0",
+    "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^4.1.0"

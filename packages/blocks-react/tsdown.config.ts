@@ -1,4 +1,4 @@
-import { defineConfig } from "tsup";
+import { defineConfig } from "tsdown";
 
 /**
  * Two entries, and the split is the package's central contract.
@@ -21,14 +21,16 @@ import { defineConfig } from "tsup";
 export default defineConfig({
   entry: ["src/index.ts", "src/next.ts", "src/blocks/index.ts"],
   format: ["esm"],
-  dts: true,
+  // Declarations without a type check: `check-types` is the type check.
+  dts: { sourcemap: false, compilerOptions: { noCheck: true } },
   clean: true,
   sourcemap: true,
   treeshake: true,
   // React and Next are the consumer's; bundling either would produce a second
   // copy of React in the tree, which breaks hooks and RSC alike.
-  external: ["react", "react/jsx-runtime", "next"],
-  outExtension() {
-    return { js: ".mjs" };
+  deps: { neverBundle: ["react", "react/jsx-runtime", "next"] },
+  // Keep the file names the exports map already publishes.
+  outExtensions() {
+    return { js: ".mjs", dts: ".d.ts" };
   },
 });
