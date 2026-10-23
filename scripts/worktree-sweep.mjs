@@ -4,24 +4,24 @@
  *
  * A worktree per pull request outruns every cleanup that waits for a person:
  * on the machine this was measured on, fourteen worktrees held 1.4–3.5 GB
- * each, and the fallow base snapshots of live ones another 1.3 GB. Three kinds
- * of that are safe to take back once a checkout has gone quiet:
+ * each. Two kinds of that are safe to take back once a checkout has gone
+ * quiet:
  *
- * - the base snapshot fallow's audit keeps for a live checkout, which fallow
- *   rebuilds on the next audit (`sweep` already takes the ones whose checkout
- *   is gone);
- * - build output in an idle checkout — `dist`, `.next`, `.turbo`, coverage and
- *   test reports — which the next build writes again;
- * - a stale checkout whose work is all on a remote or already in `main`.
+ * - build output in an idle checkout, as its `turbo.jsonc` declares it, plus
+ *   turbo's logs and the browser suites' reports, which the next build or run
+ *   writes again;
+ * - a stale checkout whose work is all on a remote or already in `main`, and
+ *   which holds no ignored file that might be someone's work.
  *
  * 🔴 Each is reported and nothing is removed until `--apply`. Removing is the
  * one direction that cannot be undone, so a run that was not told to apply
  * changes nothing on disk, whatever it finds.
  *
  * And with `--apply`, a checkout is touched only when every in-use question
- * has an answer and every answer is no: no process runs inside it, no heavy
- * job holds a `bounded.mjs` slot there, none of its slot's ports answers, and
- * it has been idle for the kind's threshold. A question that cannot be
+ * has an answer and every answer is no, asked once to find it and again just
+ * before it goes: no process runs inside it, no heavy job holds a
+ * `bounded.mjs` slot there, none of its slot's ports answers, and it — and its
+ * build output — has been idle for the kind's threshold. A question that cannot be
  * answered — no `lsof`, an unreadable git state — counts as yes, so the
  * checkout is skipped with the reason. "I cannot tell" is not "nobody".
  *
@@ -33,8 +33,10 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   appendFileSync,
+  existsSync,
   lstatSync,
   readdirSync,
+  readFileSync,
   readlinkSync,
   realpathSync,
   renameSync,
@@ -42,32 +44,124 @@ import {
   statSync,
 } from "node:fs";
 import { connect } from "node:net";
-import { join, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 import { heldRecords } from "./bounded.mjs";
+import { parseJsonc } from "./jsonc.mjs";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** How long each kind must have been left alone before it is offered. */
-export const IDLE_DAYS = { snapshot: 1, builds: 3, stale: 7 };
+export const IDLE_DAYS = { builds: 3, stale: 7 };
 
 /** The ref a stale checkout's work must already be in, when it is on no remote. */
 const MAIN_REF = "origin/main";
 
 /**
- * Ignored directories that a build or a test run writes and the next one
- * writes again. Only these: an ignored `.env` or a local database is work,
- * not output, and `node_modules` is a reinstall rather than a rebuild.
+ * What a checkout's builds and tools write and write again, so a sweep may
+ * take it. Build output comes from the checkout's own `turbo.jsonc`: each
+ * task's declared `outputs`, matched against the package an ignored path sits
+ * in, with a `name#task` entry applying to that package alone. The
+ * declaration is where the repository says what a build makes, so an output
+ * declared there is covered here without a second list to keep in step. A
+ * checkout whose config cannot be read declares nothing, and its build output
+ * then reads as work: the safe direction.
  */
-const BUILD_OUTPUT = new Set(["dist", ".next", ".turbo", "coverage", "playwright-report", "test-results", "blob-report"]);
+export function outputClassifier(checkout) {
+  const declared = declaredOutputs(checkout);
+  const packages = new Map();
+  const isBuildOutput = path =>
+    !inDependencies(path) && (isOtherOutput(path) || isDeclaredOutput(checkout, path, declared, packages));
+  return { isBuildOutput, isRegenerated: path => isBuildOutput(path) || isToolCache(path) };
+}
 
-/** Whether a path git reports as ignored is build output this may remove. */
-export function isBuildOutput(relativePath) {
-  const parts = relativePath.replace(/\/$/, "").split("/");
-  if (parts.includes("node_modules")) return false;
-  const name = parts.at(-1);
-  // `.next-e2e` and `.next-lighthouse` are the playground's throwaway distDirs.
-  return BUILD_OUTPUT.has(name) || name.startsWith(".next-");
+/**
+ * Output no turbo task declares: turbo's own logs, the browser suites'
+ * reports and saved session, Lighthouse's reports, and the playground's extra
+ * distDirs (`.next-e2e`, `.next-lighthouse`) the browser suites build.
+ */
+const OTHER_OUTPUT = new Set([".turbo", "playwright-report", "test-results", "blob-report", "lighthouse-reports", ".playwright"]);
+
+function isOtherOutput(path) {
+  const name = path.split("/").at(-1);
+  return OTHER_OUTPUT.has(name) || name.startsWith(".next-");
+}
+
+/** Regenerated, but not build output: dependencies, husky's hook shims and fallow's cache. */
+function isToolCache(path) {
+  return inDependencies(path) || path.startsWith(".husky/_") || path === ".fallow" || path.startsWith(".fallow/");
+}
+
+function inDependencies(path) {
+  return path.split("/").includes("node_modules");
+}
+
+/** Every task's `outputs` in the checkout's turbo config: those for any package, and those for one by name. */
+function declaredOutputs(checkout) {
+  const declared = { generic: [], byPackage: new Map() };
+  for (const [task, settings] of turboTasks(checkout)) addOutputs(declared, task, outputsOf(settings));
+  return declared;
+}
+
+function turboTasks(checkout) {
+  for (const name of ["turbo.jsonc", "turbo.json"]) {
+    const config = readJsoncQuietly(join(checkout, name));
+    if (config !== null) return Object.entries(config.tasks ?? {});
+  }
+  return [];
+}
+
+/** A task's output patterns, without its exclusions: an excluded cache is regenerated all the same. */
+function outputsOf(settings) {
+  return Array.isArray(settings?.outputs) ? settings.outputs.filter(pattern => !String(pattern).startsWith("!")) : [];
+}
+
+function addOutputs(declared, task, outputs) {
+  const at = task.indexOf("#");
+  if (at === -1) return declared.generic.push(...outputs);
+  const name = task.slice(0, at);
+  declared.byPackage.set(name, [...(declared.byPackage.get(name) ?? []), ...outputs]);
+}
+
+function readJsoncQuietly(file) {
+  try {
+    return parseJsonc(readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a declared output covers `path`, read relative to the package it sits in. */
+function isDeclaredOutput(checkout, path, declared, packages) {
+  const pkg = packageOf(checkout, path, packages);
+  const patterns = [...declared.generic, ...(declared.byPackage.get(pkg.name) ?? [])];
+  const inPackage = relative(pkg.dir, join(checkout, path)).split(sep).join("/");
+  return patterns.some(pattern => globCovers(pattern, inPackage));
+}
+
+/** The nearest directory above `path` holding a `package.json`, and that package's name. */
+function packageOf(checkout, path, cache) {
+  let dir = dirname(join(checkout, path));
+  while (dir !== checkout && !existsSync(join(dir, "package.json"))) dir = dirname(dir);
+  return packageAt(dir, cache);
+}
+
+function packageAt(dir, cache) {
+  if (!cache.has(dir)) cache.set(dir, { dir, name: readJsoncQuietly(join(dir, "package.json"))?.name ?? null });
+  return cache.get(dir);
+}
+
+/**
+ * Whether `pattern` covers `path`, for the two shapes turbo's outputs take
+ * here: `dir/**`, the directory or anything under it, and `**` + `/*.ext`, a
+ * file of that extension anywhere. Any other shape covers nothing, so an
+ * output declared in a shape this does not read is treated as work and kept.
+ */
+export function globCovers(pattern, path) {
+  const under = pattern.match(/^([^*?[\]{}!]+)\/\*\*$/);
+  if (under) return path === under[1] || path.startsWith(`${under[1]}/`);
+  const anywhere = pattern.match(/^\*\*\/\*(\.[^*?/[\]{}]+)$/);
+  return Boolean(anywhere) && path.endsWith(anywhere[1]);
 }
 
 /** `path` itself or anything below it, compared resolved so a link still finds its target. */
@@ -201,6 +295,11 @@ function git(args, cwd) {
   return execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
+/** Git's output untouched: `-z` output must not lose a name's leading or trailing spaces to a trim. */
+function gitRaw(args, cwd) {
+  return execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "pipe"] });
+}
+
 function gitEnv() {
   const env = { ...process.env };
   delete env.GIT_DIR;
@@ -242,18 +341,20 @@ export function lastActivity(checkout) {
  * holding only the slot's settings must be judged by that file. Regenerated
  * directories such as `node_modules` stay one entry and are never walked.
  */
-export function ignoredIn(checkout) {
+export function ignoredIn(checkout, isRegenerated) {
   const entries = lsIgnored(checkout, ["--directory"]);
-  return [...new Set(entries.flatMap(entry => (opaque(entry) ? lsIgnored(checkout, ["--", entry]) : [entry])))].map(
-    withoutSlash
-  );
+  const expanded = entries.flatMap(entry => (opaque(entry, isRegenerated) ? lsIgnored(checkout, ["--", entry]) : [entry]));
+  return [...new Set(expanded)].map(withoutSlash);
 }
 
+/** Ignored paths, NUL-separated, so a name git would quote in line output is read as it is. */
 function lsIgnored(checkout, args) {
-  return git(["ls-files", "--others", "--ignored", "--exclude-standard", ...args], checkout).split("\n").filter(Boolean);
+  return gitRaw(["ls-files", "-z", "--others", "--ignored", "--exclude-standard", ...args], checkout)
+    .split("\0")
+    .filter(Boolean);
 }
 
-function opaque(entry) {
+function opaque(entry, isRegenerated) {
   return entry.endsWith("/") && !isRegenerated(withoutSlash(entry));
 }
 
@@ -261,27 +362,8 @@ function withoutSlash(path) {
   return path.replace(/\/$/, "");
 }
 
-export function buildOutputOf(ignored) {
+export function buildOutputOf(ignored, isBuildOutput) {
   return ignored.filter(isBuildOutput);
-}
-
-/**
- * Ignored paths something regenerates without anyone's input: build output,
- * dependencies, husky's hook shims, TypeScript's build info and fallow's
- * cache. Everything else ignored may be someone's work — an `.env`, a local
- * database, uploads, a generated migration being inspected — and
- * `git worktree remove` deletes ignored files even without `--force`.
- */
-const REGENERATED = [
-  isBuildOutput,
-  path => path.split("/").includes("node_modules"),
-  path => path.startsWith(".husky/_"),
-  path => path.endsWith(".tsbuildinfo"),
-  path => path === ".fallow" || path.startsWith(".fallow/"),
-];
-
-function isRegenerated(path) {
-  return REGENERATED.some(test => test(path));
 }
 
 /**
@@ -289,7 +371,7 @@ function isRegenerated(path) {
  * regenerated. `isOwnSettings` says whether a path is a settings file this
  * tooling wrote and nobody added to, which `worktree new` leaves in each.
  */
-export function ignoredWorkReason(checkout, ignored, isOwnSettings) {
+export function ignoredWorkReason(checkout, ignored, { isOwnSettings, isRegenerated }) {
   const work = ignored.filter(path => !isRegenerated(path) && !isOwnSettings(join(checkout, path)));
   if (work.length === 0) return null;
   const more = work.length > 3 ? ` and ${work.length - 3} more` : "";
@@ -378,27 +460,25 @@ function aheadReason(checkout, { ahead }, mainRef) {
 /**
  * Whether every path the branch changed since it left `mainRef` is the same in
  * `mainRef` as in HEAD; null when git cannot say. Only reads: a comparison
- * that wrote a merged tree would leave an object behind on a report run. A
- * path `main` has changed again since reads as different, which keeps the
- * checkout — the safe direction.
+ * that wrote a merged tree would leave an object behind on a report run. Both
+ * lists are read NUL-separated, since line output C-quotes a name with a
+ * non-ASCII byte, a tab or a newline, and a quoted name matches no real path.
+ * A path `main` has changed again since reads as different, which keeps the
+ * checkout: the safe direction.
  */
 function contentInMain(checkout, mainRef) {
   try {
     const base = git(["merge-base", mainRef, "HEAD"], checkout);
-    const changed = git(["diff", "--name-only", "--no-renames", base, "HEAD"], checkout).split("\n").filter(Boolean);
-    return changed.length === 0 || samePaths(checkout, mainRef, changed);
+    const differing = new Set(changedNames(checkout, mainRef, "HEAD"));
+    return !changedNames(checkout, base, "HEAD").some(path => differing.has(path));
   } catch {
     return null;
   }
 }
 
-/** `git diff --quiet` over exactly these paths, literally: exit 0 is the same, 1 is different. */
-function samePaths(checkout, mainRef, paths) {
-  const args = ["--literal-pathspecs", "diff", "--quiet", "--no-renames", mainRef, "HEAD", "--", ...paths];
-  const run = spawnSync("git", args, { cwd: checkout, env: gitEnv() });
-  if (run.status === 0) return true;
-  if (run.status === 1) return false;
-  throw new Error(`git diff exited ${run.status}`);
+/** The paths that differ between two commits, as git stores them. */
+function changedNames(checkout, from, to) {
+  return gitRaw(["diff", "-z", "--name-only", "--no-renames", from, to], checkout).split("\0").filter(Boolean);
 }
 
 /**
@@ -422,6 +502,18 @@ function duSizes(paths) {
     .map(line => line.match(/^(\d+)\t(.+)$/))
     .filter(Boolean)
     .map(match => [match[2], Number(match[1]) * 1024]);
+}
+
+/** Add one removal's size to the run's total, keeping count of the ones no size was read for. */
+export function countFreed(tally, bytes) {
+  if (bytes === null || bytes === undefined) tally.unknown += 1;
+  else tally.freed += bytes;
+}
+
+/** The run's total, saying how many removals it could not size rather than counting them as nothing. */
+export function describeFreed(verb, tally) {
+  const unknown = tally.unknown > 0 ? `, plus ${tally.unknown} of unknown size` : "";
+  return `${verb} ${formatBytes(tally.freed)} in all${unknown}`;
 }
 
 export function formatBytes(bytes) {
@@ -464,7 +556,7 @@ export async function removeIfStillFree(candidate, { recheck, remove }) {
   return remove(candidate);
 }
 
-export function errorText(error) {
+function errorText(error) {
   return error.code ?? error.message;
 }
 

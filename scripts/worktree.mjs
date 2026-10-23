@@ -59,8 +59,9 @@ import {
   answeringPorts,
   buildActivityReason,
   buildOutputOf,
+  countFreed,
+  describeFreed,
   diskUsage,
-  errorText,
   formatBytes,
   heldCwds,
   ignoredIn,
@@ -69,6 +70,7 @@ import {
   lastActivity,
   logRemoval,
   moveAsideAndRemove,
+  outputClassifier,
   processCwds,
   removeIfStillFree,
   staleReasons,
@@ -936,24 +938,27 @@ async function commandSweep(options) {
 }
 
 /**
- * The idle fallow snapshots of live checkouts, and with `--stale` and
- * `--builds` the stale checkouts and the build output of idle ones, in that
- * order: removing a stale checkout frees its builds too, so build output is
- * not offered for one already on its way out. Each candidate passes the
- * in-use gate or is skipped with its reasons. The primary checkout and the one
- * this runs in are never offered as stale or for their builds. Returns how
- * many removals failed.
+ * With `--stale` and `--builds`, the stale checkouts and the build output of
+ * idle ones, in that order: removing a stale checkout frees its builds too,
+ * so build output is not offered for one already on its way out. Each
+ * candidate passes the in-use gate or is skipped with its reasons, and is
+ * asked again just before it goes. The primary checkout and the one this runs
+ * in are never offered. Returns how many removals failed.
+ *
+ * The base snapshots fallow keeps for live checkouts are not offered: fallow
+ * locks one while an audit reads it, and Node has no portable way to take that
+ * lock, so removing one could pull it from under a running audit. Snapshots
+ * of checkouts that are gone are cleared above, as before.
  */
 async function reclaimIdle(options) {
+  const kinds = SWEEP_KINDS.filter(kind => options[kind.flag]);
+  if (kinds.length === 0) return printSweepHint();
   const context = sweepContext();
   const words = SWEEP_WORDS[String(options.apply)];
-  const tally = { freed: 0, failed: 0 };
+  const tally = { freed: 0, unknown: 0, failed: 0 };
   console.log(words.header);
-  for (const kind of SWEEP_KINDS.filter(entry => entry.always || options[entry.flag])) {
-    await reportKind(kind, await kind.candidates(context), { apply: options.apply, tally, kind, context });
-  }
-  console.log(`${words.freed} ${formatBytes(tally.freed)} in all`);
-  printSweepHint(options);
+  for (const kind of kinds) await reportKind(kind, await kind.candidates(context), { apply: options.apply, tally, kind, context });
+  console.log(describeFreed(words.freed, tally));
   return tally.failed;
 }
 
@@ -963,13 +968,6 @@ const SWEEP_WORDS = {
 };
 
 const SWEEP_KINDS = [
-  {
-    always: true,
-    title: `fallow base snapshots of live checkouts, idle ${IDLE_DAYS.snapshot}+ d`,
-    log: "snapshot",
-    candidates: snapshotCandidates,
-    remove: candidate => removedQuietly(() => removeSnapshot(candidate.snapshot)),
-  },
   {
     flag: "stale",
     title: `stale checkouts, idle ${IDLE_DAYS.stale}+ d (--stale)`,
@@ -986,14 +984,15 @@ const SWEEP_KINDS = [
   },
 ];
 
-function printSweepHint({ builds, stale }) {
-  if (!stale || !builds) console.log("  --stale and --builds add stale checkouts and idle build output to this");
+function printSweepHint() {
+  console.log("worktree sweep: --stale and --builds report what idle checkouts hold; --apply removes it");
+  return 0;
 }
 
 /**
- * What every kind reads once per run to find its candidates: the checkouts,
- * the snapshots, and the in-use facts. Those facts are minutes old by the time
- * a removal comes, so `recheck` reads them again just before each one.
+ * What every kind reads once per run to find its candidates: the checkouts
+ * and the in-use facts. Those facts are minutes old by the time a removal
+ * comes, so `recheck` reads them again just before each one.
  */
 function sweepContext() {
   const records = worktreeRecords(git(["worktree", "list", "--porcelain"]));
@@ -1001,11 +1000,9 @@ function sweepContext() {
   const claims = readClaims(claimDir(common));
   const facts = currentFacts();
   return {
-    records,
     common,
     now: facts.now,
     others: records.slice(1).filter(record => resolve(record.path) !== root),
-    known: fallowSnapshots(fallowTempDir()),
     gate: inUseGate(claims, facts),
     recheck: recheckGate(claims),
     leaving: new Set(),
@@ -1017,19 +1014,17 @@ function currentFacts() {
 }
 
 /**
- * The gate asked again with facts read now, for the candidate about to go.
- * Removals inside one checkout follow each other within milliseconds, so one
- * answer serves a checkout for a second rather than reading every process
- * again per directory.
+ * The gate asked again for the candidate about to go, with every fact read at
+ * that moment and nothing remembered from an earlier candidate: a shell that
+ * entered the checkout a millisecond after the last removal must stop the
+ * next one. A candidate's own late reasons, such as build output written
+ * since it was found, are read again too.
  */
-function recheckGate(claims) {
-  let last = { checkout: null, at: 0, reasons: [] };
+export function recheckGate(claims, readFacts = currentFacts) {
   return async candidate => {
-    if (last.checkout !== candidate.checkout || Date.now() - last.at > 1000) {
-      const reasons = await inUseGate(claims, currentFacts())(candidate.checkout, candidate.idleDays, candidate.readLastActive());
-      last = { checkout: candidate.checkout, at: Date.now(), reasons };
-    }
-    return last.reasons;
+    const lastActive = candidate.readLastActive();
+    const reasons = await inUseGate(claims, readFacts())(candidate.checkout, candidate.idleDays, lastActive);
+    return [...reasons, ...candidate.lateReasons()];
   };
 }
 
@@ -1042,26 +1037,9 @@ function inUseGate(claims, facts) {
   };
 }
 
-async function snapshotCandidates({ records, known, gate }) {
-  const candidates = [];
-  for (const record of records) {
-    for (const snapshot of snapshotsOwnedBy(known, record.path)) {
-      const reasons = await gate(record.path, IDLE_DAYS.snapshot, snapshotUsedAt(snapshot));
-      const usedAt = () => snapshotUsedAt(snapshot);
-      candidates.push({ ...owned(record.path, IDLE_DAYS.snapshot, usedAt), path: snapshot.path, what: `of ${record.path}`, snapshot, reasons });
-    }
-  }
-  return candidates;
-}
-
-/** What `recheck` needs to ask the gate again about the checkout a candidate belongs to. */
-function owned(checkout, idleDays, readLastActive) {
-  return { checkout, idleDays, readLastActive };
-}
-
-/** When fallow last used a snapshot: its owner record and its ready marker move then. */
-function snapshotUsedAt(snapshot) {
-  return Math.max(...[".last-used", ".sha"].map(suffix => modifiedTime(`${snapshot.path}${suffix}`)));
+/** What `recheck` needs to ask about a candidate again: its checkout, its threshold, and its own late reasons. */
+function owned(checkout, idleDays, lateReasons) {
+  return { checkout, idleDays, readLastActive: () => lastActivity(checkout), lateReasons };
 }
 
 async function staleCandidates(context) {
@@ -1069,15 +1047,15 @@ async function staleCandidates(context) {
   for (const record of context.others) {
     // Read before anything else runs git there.
     const lastActive = lastActivity(record.path);
+    const classifier = outputClassifier(record.path);
+    const late = () => [...staleReasons(record.path), ...ignoredReasons(record.path, classifier, Date.now())];
     const reasons = [
       ...recordReasons(record),
-      ...staleReasons(record.path),
-      ...ignoredReasons(record.path, listedIgnored(record.path), context.now),
+      ...late(),
       ...(await context.gate(record.path, IDLE_DAYS.stale, lastActive)),
     ];
     if (reasons.length === 0) context.leaving.add(record.path);
-    const readLastActive = () => lastActivity(record.path);
-    candidates.push({ ...owned(record.path, IDLE_DAYS.stale, readLastActive), path: record.path, reasons });
+    candidates.push({ ...owned(record.path, IDLE_DAYS.stale, late), path: record.path, reasons });
   }
   return candidates;
 }
@@ -1087,31 +1065,34 @@ async function staleCandidates(context) {
  * be work, which `git worktree remove` would delete even without `--force`,
  * and whether its build output was written lately.
  */
-function ignoredReasons(checkout, ignored, now) {
+function ignoredReasons(checkout, classifier, now) {
+  const ignored = listedIgnored(checkout, classifier);
   if (ignored === null) return ["cannot list its ignored files"];
   return [
-    ignoredWorkReason(checkout, ignored, isOwnSettings),
-    buildActivityReason(checkout, buildOutputOf(ignored), IDLE_DAYS.stale, now),
+    ignoredWorkReason(checkout, ignored, { isOwnSettings, isRegenerated: classifier.isRegenerated }),
+    buildActivityReason(checkout, buildOutputOf(ignored, classifier.isBuildOutput), IDLE_DAYS.stale, now),
   ].filter(Boolean);
 }
 
-/**
- * Whether `file` is the settings file `worktree new` writes and holds nothing
- * anyone added: only `env`, and only the slot's own variables in it.
- */
+/** Whether `file` is the settings file `worktree new` wrote, exactly as it wrote it. */
 function isOwnSettings(file) {
   if (!file.endsWith(join(".claude", "settings.local.json"))) return false;
   try {
-    return onlySlotEnv(JSON.parse(readFileSync(file, "utf8")));
+    return isWrittenForSlot(JSON.parse(readFileSync(file, "utf8")));
   } catch {
     return false;
   }
 }
 
-function onlySlotEnv(settings) {
-  const slotKeys = Object.keys(slotEnv(0));
-  const envOnly = Object.keys(settings).every(key => key === "env");
-  return envOnly && Object.keys(settings.env ?? {}).every(key => slotKeys.includes(key));
+/**
+ * Whether settings are exactly what `worktree new` writes for the slot they
+ * name: every one of the slot's variables, each with the slot's value, and
+ * nothing else. A changed port, a missing variable or an added key is
+ * someone's configuration, and it keeps the checkout.
+ */
+export function isWrittenForSlot(settings) {
+  const slot = parseSlot(String(settings?.env?.NEXTLY_WORKTREE_SLOT));
+  return slot !== null && JSON.stringify(settings) === JSON.stringify(settingsWithEnv(null, slotEnv(slot)));
 }
 
 function recordReasons(record) {
@@ -1135,20 +1116,20 @@ async function buildCandidates(context) {
  */
 async function buildCandidatesIn(record, { gate, now }) {
   const lastActive = lastActivity(record.path);
-  const ignored = listedIgnored(record.path);
+  const classifier = outputClassifier(record.path);
+  const ignored = listedIgnored(record.path, classifier);
   if (ignored === null) return [{ path: record.path, reasons: ["cannot list its ignored files"] }];
-  const found = buildOutputOf(ignored);
+  const found = buildOutputOf(ignored, classifier.isBuildOutput);
   if (found.length === 0) return [];
-  const activity = buildActivityReason(record.path, found, IDLE_DAYS.builds, now);
-  const reasons = [...(await gate(record.path, IDLE_DAYS.builds, lastActive)), activity].filter(Boolean);
-  if (reasons.length > 0) return [{ path: record.path, what: `${found.length} build output dir(s)`, reasons }];
-  const readLastActive = () => lastActivity(record.path);
-  return found.map(relative => ({ ...owned(record.path, IDLE_DAYS.builds, readLastActive), path: join(record.path, relative), reasons }));
+  const late = (at = Date.now()) => [buildActivityReason(record.path, found, IDLE_DAYS.builds, at)].filter(Boolean);
+  const reasons = [...(await gate(record.path, IDLE_DAYS.builds, lastActive)), ...late(now)];
+  if (reasons.length > 0) return [{ path: record.path, what: `${found.length} build output path(s)`, reasons }];
+  return found.map(relative => ({ ...owned(record.path, IDLE_DAYS.builds, late), path: join(record.path, relative), reasons }));
 }
 
-function listedIgnored(checkout) {
+function listedIgnored(checkout, classifier) {
   try {
-    return ignoredIn(checkout);
+    return ignoredIn(checkout, classifier.isRegenerated);
   } catch {
     return null;
   }
@@ -1182,7 +1163,7 @@ function aside(candidate) {
 }
 
 function offer(candidate, bytes, tally) {
-  tally.freed += bytes ?? 0;
+  countFreed(tally, bytes);
   console.log(`  would remove ${candidate.path} (${formatBytes(bytes)})${aside(candidate)}`);
 }
 
@@ -1194,25 +1175,8 @@ async function removeOne(candidate, bytes, { tally, kind, context }) {
     return console.log(`  NOT removed ${candidate.path}: ${outcome.reason}`);
   }
   logRemoval(context.common, kind.log, candidate.path, bytes);
-  tally.freed += bytes ?? 0;
+  countFreed(tally, bytes);
   console.log(`  removed ${candidate.path} (${formatBytes(bytes)})`);
-}
-
-function modifiedTime(path) {
-  try {
-    return lstatSync(path).mtimeMs;
-  } catch {
-    return 0;
-  }
-}
-
-function removedQuietly(act) {
-  try {
-    act();
-    return { removed: true };
-  } catch (error) {
-    return { removed: false, reason: errorText(error) };
-  }
 }
 
 /**

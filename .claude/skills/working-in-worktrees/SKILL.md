@@ -86,18 +86,20 @@ checkout another run's fixed-name system tables. `pnpm worktree sweep` drops
 them and releases the slot once the containers are back.
 
 **`sweep` only reports what idle checkouts hold until you pass `--apply`.** It
-offers three kinds: the fallow base snapshot of a live checkout idle a day,
-build output (`dist`, `.next*`, `.turbo`, coverage, test reports) in a checkout
-idle three days (`--builds`), and a whole checkout idle seven days whose work is
+offers two kinds: build output in a checkout idle three days (`--builds`) — what
+that checkout's `turbo.jsonc` declares as task `outputs`, plus turbo's logs and
+the browser suites' reports — and a whole checkout idle seven days whose work is
 all on a remote or already in `main` (`--stale`; a squash-merged branch counts,
-by comparing trees). Each is skipped, with the reason printed, when a process
-runs inside the checkout, a heavy job holds a slot there, its slot's port
-answers, or any of those cannot be read, and each is asked again just before
-its removal. A stale checkout goes through `worktree remove` without `--force`,
-so uncommitted work stays; git still deletes ignored files, so one holding any
-ignored file that is not regenerated (an `.env`, a local database, uploads) is
-never offered. Build output written lately counts as use. Every removal is
-logged to `nextly-sweep.log` in the git common directory.
+by comparing the paths it changed). Each is skipped, with the reason printed,
+when a process runs inside the checkout, a heavy job holds a slot there, its
+slot's port answers, its build output was written lately, or any of those
+cannot be read, and each is asked again just before its removal. A stale
+checkout goes through `worktree remove` without `--force`, so uncommitted work
+stays; git still deletes ignored files, so one holding any ignored file that is
+not regenerated (an `.env`, a local database, uploads, a settings file someone
+edited) is never offered. The fallow snapshot of a live checkout is never
+touched: fallow locks it while an audit reads it. Every removal is logged to
+`nextly-sweep.log` in the git common directory.
 
 `NEXTLY_TEST_DB` carries a database NAME, never a URL: Postgres 15 is on 5434
 and Postgres 17 on 5435, so a single `TEST_POSTGRES_URL` in the environment

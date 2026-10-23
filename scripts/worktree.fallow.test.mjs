@@ -89,7 +89,7 @@ function scratch() {
   mkdirSync(join(world.repo, "scripts"));
   mkdirSync(world.temp);
   // `worktree.mjs` and the modules it imports, so the copy runs as the original does.
-  for (const name of ["worktree.mjs", "worktree-sweep.mjs", "bounded.mjs", "local-limits.mjs"]) {
+  for (const name of ["worktree.mjs", "worktree-sweep.mjs", "bounded.mjs", "local-limits.mjs", "jsonc.mjs"]) {
     copyFileSync(join(HERE, name), join(world.repo, "scripts", name));
   }
   writeFileSync(join(world.repo, "package.json"), '{"name":"scratch","type":"module","main":"src/index.js"}\n');

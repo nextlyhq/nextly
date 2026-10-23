@@ -41,20 +41,37 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { worktreeRecords } from "./worktree.mjs";
+import { isWrittenForSlot, recheckGate, settingsWithEnv, slotEnv, worktreeRecords } from "./worktree.mjs";
 import {
   DAY_MS,
   buildActivityReason,
+  countFreed,
+  describeFreed,
+  globCovers,
   ignoredWorkReason,
   inUseReasons,
-  isBuildOutput,
+  outputClassifier,
   parseLsofCwds,
   removeIfStillFree,
   writtenSince,
 } from "./worktree-sweep.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SCRIPTS = ["worktree.mjs", "worktree-sweep.mjs", "bounded.mjs", "local-limits.mjs"];
+const SCRIPTS = ["worktree.mjs", "worktree-sweep.mjs", "bounded.mjs", "local-limits.mjs", "jsonc.mjs"];
+
+/**
+ * The scratch repository's turbo config: `dist` for every package, as the
+ * repository declares builds, and `templates` for one package by name, as
+ * create-nextly-app's build declares its own.
+ */
+const SCRATCH_TURBO = `{
+  // Declared outputs are what the sweep counts as build output.
+  "tasks": {
+    "build": { "outputs": ["dist/**", "!dist/cache/**"] },
+    "scratch-cli#build": { "outputs": ["dist/**", "templates/**"] }
+  }
+}
+`;
 
 const scratchDirs = [];
 const children = [];
@@ -84,7 +101,13 @@ function scratch() {
   mkdirSync(join(world.repo, "scripts"), { recursive: true });
   for (const name of SCRIPTS) copyFileSync(join(HERE, name), join(world.repo, "scripts", name));
   writeFileSync(join(world.repo, "package.json"), '{"name":"scratch","type":"module"}\n');
-  writeFileSync(join(world.repo, ".gitignore"), "dist\nnode_modules\n.env.local\n.claude/settings.local.json\n");
+  writeFileSync(join(world.repo, "turbo.jsonc"), SCRATCH_TURBO);
+  mkdirSync(join(world.repo, "tools", "cli"), { recursive: true });
+  writeFileSync(join(world.repo, "tools", "cli", "package.json"), '{"name":"scratch-cli"}\n');
+  writeFileSync(
+    join(world.repo, ".gitignore"),
+    "dist\nnode_modules\n.env.local\n.claude/settings.local.json\ntemplates\n"
+  );
   writeFileSync(join(world.repo, "index.js"), "export const a = 1;\n");
   git(world, dir, "init", "-q", "--bare", world.origin);
   git(world, world.repo, "init", "-q", "-b", "main");
@@ -158,16 +181,66 @@ function treeHash(dir) {
   return hash.digest("hex");
 }
 
-describe("which ignored paths are build output", () => {
-  it.each(["packages/nextly/dist/", "apps/playground/.next", "apps/playground/.next-e2e/", ".turbo", "coverage/"])(
-    "takes %s",
-    path => expect(isBuildOutput(path)).toBe(true)
-  );
+describe("which turbo output patterns cover a path", () => {
+  it.each([
+    ["dist/**", "dist"],
+    ["dist/**", "dist/index.js"],
+    ["templates/**", "templates/base/page.tsx"],
+    ["**/*.tsbuildinfo", "src/.tsbuildinfo"],
+  ])("%s covers %s", (pattern, path) => expect(globCovers(pattern, path)).toBe(true));
 
-  it.each([".env.local", "data/dev.db", "node_modules/", "packages/x/node_modules/pkg/dist/", ".nextly-local"])(
-    "never takes %s, which is work, a reinstall, or someone else's",
-    path => expect(isBuildOutput(path)).toBe(false)
+  it.each([
+    ["dist/**", "distant"],
+    ["dist/**", "src/dist"],
+    ["**/*.tsbuildinfo", "tsbuildinfo.json"],
+    ["dist/*.js", "dist/index.js"],
+    ["{dist,out}/**", "dist"],
+  ])("%s does not cover %s, so an unread shape keeps the path", (pattern, path) =>
+    expect(globCovers(pattern, path)).toBe(false)
   );
+});
+
+describe("what a checkout's own turbo config calls build output", () => {
+  const checkout = () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "worktree-sweep-turbo-")));
+    scratchDirs.push(dir);
+    writeFileSync(join(dir, "package.json"), '{"name":"root"}\n');
+    writeFileSync(join(dir, "turbo.jsonc"), SCRATCH_TURBO);
+    mkdirSync(join(dir, "tools", "cli"), { recursive: true });
+    writeFileSync(join(dir, "tools", "cli", "package.json"), '{"name":"scratch-cli"}\n');
+    mkdirSync(join(dir, "tools", "other"), { recursive: true });
+    writeFileSync(join(dir, "tools", "other", "package.json"), '{"name":"other"}\n');
+    return dir;
+  };
+
+  it("takes a package's declared output, and another package's only where that one declares it too", () => {
+    const { isBuildOutput } = outputClassifier(checkout());
+    expect(isBuildOutput("dist")).toBe(true);
+    expect(isBuildOutput("tools/cli/templates")).toBe(true);
+    expect(isBuildOutput("tools/other/templates")).toBe(false);
+    expect(isBuildOutput("tools/other/dist")).toBe(true);
+  });
+
+  it("takes turbo's logs, the browser reports and the extra distDirs no task declares", () => {
+    const { isBuildOutput } = outputClassifier(checkout());
+    for (const path of [".turbo", "e2e/.playwright", "e2e/test-results", "lighthouse-reports", "apps/x/.next-e2e"]) {
+      expect(isBuildOutput(path), path).toBe(true);
+    }
+  });
+
+  it("calls dependencies and tool caches regenerated but never build output, and work neither", () => {
+    const { isBuildOutput, isRegenerated } = outputClassifier(checkout());
+    expect(isBuildOutput("tools/cli/node_modules")).toBe(false);
+    expect(isRegenerated("tools/cli/node_modules")).toBe(true);
+    expect(isRegenerated(".husky/_")).toBe(true);
+    for (const path of [".env.local", "data/dev.db", "uploads"]) expect(isRegenerated(path), path).toBe(false);
+  });
+
+  it("declares nothing where the config cannot be read, so build output reads as work", () => {
+    const dir = checkout();
+    writeFileSync(join(dir, "turbo.jsonc"), "{ not json");
+    expect(outputClassifier(dir).isBuildOutput("dist")).toBe(false);
+  });
 });
 
 describe("the in-use gate", () => {
@@ -232,23 +305,54 @@ describe("reading the facts the gate is given", () => {
 });
 
 describe("ignored files that may be work", () => {
-  const own = path => path.endsWith(".claude/settings.local.json");
+  const regenerated = path => ["dist", ".turbo", "node_modules"].includes(path);
+  const judges = { isOwnSettings: path => path.endsWith(".claude/settings.local.json"), isRegenerated: regenerated };
 
   it("finds none where every ignored path is regenerated", () => {
-    const ignored = ["dist", "packages/x/node_modules", ".husky/_", "packages/x/.tsbuildinfo", ".fallow", ".turbo"];
-    expect(ignoredWorkReason("/w/one", ignored, own)).toBeNull();
+    expect(ignoredWorkReason("/w/one", ["dist", ".turbo", "node_modules"], judges)).toBeNull();
   });
 
   it("names the paths that may be work, and counts the rest", () => {
     const ignored = [".env.local", "packages/nextly/data", "dist", "uploads", "notes.md"];
-    expect(ignoredWorkReason("/w/one", ignored, own)).toBe(
+    expect(ignoredWorkReason("/w/one", ignored, judges)).toBe(
       "it holds ignored files that may be work: .env.local, packages/nextly/data, uploads and 1 more"
     );
   });
 
   it("lets the slot's own settings file through only when the predicate says it is untouched", () => {
-    expect(ignoredWorkReason("/w/one", [".claude/settings.local.json"], own)).toBeNull();
-    expect(ignoredWorkReason("/w/one", [".claude/settings.local.json"], () => false)).toMatch(/settings\.local\.json/);
+    expect(ignoredWorkReason("/w/one", [".claude/settings.local.json"], judges)).toBeNull();
+    const untouched = { ...judges, isOwnSettings: () => false };
+    expect(ignoredWorkReason("/w/one", [".claude/settings.local.json"], untouched)).toMatch(/settings\.local\.json/);
+  });
+});
+
+describe("the slot settings `worktree new` writes", () => {
+  const written = settingsWithEnv(null, slotEnv(3));
+
+  it("are recognised exactly as written", () => {
+    expect(isWrittenForSlot(JSON.parse(JSON.stringify(written)))).toBe(true);
+  });
+
+  it.each([
+    ["a port someone changed", { env: { ...written.env, PORT: "4000" } }],
+    ["a variable missing", { env: { NEXTLY_WORKTREE_SLOT: "3", PORT: written.env.PORT } }],
+    ["an empty env", { env: {} }],
+    ["a key someone added", { ...written, permissions: { allow: ["Bash"] } }],
+    ["another slot's values under this slot's number", { env: { ...slotEnv(4), NEXTLY_WORKTREE_SLOT: "3" } }],
+  ])("are not recognised with %s", (_, settings) => expect(isWrittenForSlot(settings)).toBe(false));
+});
+
+describe("the size a run reports", () => {
+  it("counts a removal it could not size as unknown, not as nothing", () => {
+    const tally = { freed: 0, unknown: 0 };
+    countFreed(tally, 2 * 1024 ** 3);
+    countFreed(tally, null);
+    countFreed(tally, undefined);
+    expect(describeFreed("would free", tally)).toBe("would free 2.0 GB in all, plus 2 of unknown size");
+  });
+
+  it("says nothing of unknown sizes when every size was read", () => {
+    expect(describeFreed("freed", { freed: 0, unknown: 0 })).toBe("freed 0 MB in all");
   });
 });
 
@@ -288,6 +392,34 @@ describe("asking again just before a removal", () => {
     );
     expect(remove).not.toHaveBeenCalled();
     expect(outcome).toEqual({ removed: false, skipped: true, reason: "in use by now: a process runs inside it (/w/one)" });
+  });
+
+  it("reads every fact again for each candidate, even two in one checkout a moment apart", async () => {
+    const facts = [
+      { processCwds: [], heldCwds: [], now: Date.now() },
+      { processCwds: ["/w/one"], heldCwds: [], now: Date.now() },
+    ];
+    const recheck = recheckGate([], () => facts.shift());
+    const candidate = path => ({
+      path,
+      checkout: "/w/one",
+      idleDays: 3,
+      readLastActive: () => Date.now() - 10 * DAY_MS,
+      lateReasons: () => [],
+    });
+    expect(await recheck(candidate("/w/one/dist"))).toEqual([]);
+    expect(await recheck(candidate("/w/one/coverage"))).toEqual(["a process runs inside it (/w/one)"]);
+  });
+
+  it("asks a candidate's own late reasons again, such as build output written since it was found", async () => {
+    const recheck = recheckGate([], () => ({ processCwds: [], heldCwds: [], now: Date.now() }));
+    const reasons = await recheck({
+      checkout: "/w/one",
+      idleDays: 3,
+      readLastActive: () => Date.now() - 10 * DAY_MS,
+      lateReasons: () => ["its build output was written within 3 d"],
+    });
+    expect(reasons).toEqual(["its build output was written within 3 d"]);
   });
 
   it("removes it when the second look still finds nothing", async () => {
@@ -453,21 +585,58 @@ describe.runIf(process.platform !== "win32")("worktree sweep on real checkouts",
     expect(stdout).toContain(`skipped ${kept.path}: it holds ignored files that may be work: .env.local`);
   }, 60_000);
 
-  it("removes a stale checkout whose only ignored file is the slot settings `worktree new` wrote", () => {
+  it("removes a stale checkout whose only ignored file is the slot settings exactly as written, and keeps edited ones", () => {
     const world = scratch();
-    const merged = checkout(world, "merged");
-    mkdirSync(join(merged.path, ".claude"));
-    writeFileSync(join(merged.path, ".claude", "settings.local.json"), '{"env":{"NEXTLY_WORKTREE_SLOT":"3","PORT":"3220"}}\n');
-    merged.age();
-    const edited = checkout(world, "edited");
-    mkdirSync(join(edited.path, ".claude"));
-    writeFileSync(join(edited.path, ".claude", "settings.local.json"), '{"env":{"PORT":"3230"},"permissions":{"allow":["Bash"]}}\n');
-    edited.age();
+    const withSettings = (branch, settings) => {
+      const made = checkout(world, branch);
+      mkdirSync(join(made.path, ".claude"));
+      writeFileSync(join(made.path, ".claude", "settings.local.json"), `${JSON.stringify(settings, null, 2)}\n`);
+      made.age();
+      return made;
+    };
+    const written = settingsWithEnv(null, slotEnv(3));
+    const merged = withSettings("merged", written);
+    const port = withSettings("port", { env: { ...written.env, PORT: "4000" } });
+    const partial = withSettings("partial", { env: { NEXTLY_WORKTREE_SLOT: "3", PORT: written.env.PORT } });
 
     const { stdout } = worktreeCommand(world, "sweep", "--stale", "--apply");
 
     expect(existsSync(merged.path), stdout).toBe(false);
-    expect(existsSync(join(edited.path, ".claude", "settings.local.json"))).toBe(true);
+    for (const kept of [port, partial]) {
+      expect(existsSync(join(kept.path, ".claude", "settings.local.json")), kept.path).toBe(true);
+    }
+  }, 60_000);
+
+  it("leaves a checkout whose only unpushed change is a file git quotes in line output", () => {
+    const world = scratch();
+    const quoted = checkout(world, "quoted");
+    writeFileSync(join(quoted.path, "café.js"), "export const only = 'here';\n");
+    git(world, quoted.path, "add", "café.js");
+    git(world, quoted.path, "commit", "-q", "-m", "a name git quotes");
+    quoted.age();
+    const merged = checkout(world, "merged");
+    merged.age();
+
+    const { stdout } = worktreeCommand(world, "sweep", "--stale", "--apply");
+
+    expect(existsSync(merged.path), stdout).toBe(false);
+    expect(existsSync(join(quoted.path, "café.js"))).toBe(true);
+    expect(stdout).toContain(`skipped ${quoted.path}: 1 commit(s) on no remote and not in origin/main`);
+  }, 60_000);
+
+  it("removes the output a package's own build declares, and keeps the same name in a package that does not", () => {
+    const world = scratch();
+    const idle = checkout(world, "idle");
+    mkdirSync(join(idle.path, "tools", "cli", "templates"), { recursive: true });
+    writeFileSync(join(idle.path, "tools", "cli", "templates", "page.tsx"), "copied\n");
+    mkdirSync(join(idle.path, "templates"), { recursive: true });
+    writeFileSync(join(idle.path, "templates", "mine.tsx"), "someone's own\n");
+    idle.age();
+
+    const { stdout } = worktreeCommand(world, "sweep", "--builds", "--apply");
+
+    expect(existsSync(join(idle.path, "tools", "cli", "templates")), stdout).toBe(false);
+    expect(existsSync(join(idle.path, "templates", "mine.tsx"))).toBe(true);
   }, 60_000);
 
   it("leaves build output rebuilt in place in a checkout whose git state is old", () => {
@@ -483,5 +652,23 @@ describe.runIf(process.platform !== "win32")("worktree sweep on real checkouts",
 
     expect(existsSync(join(rebuilt.path, "dist", "index.js")), stdout).toBe(true);
     expect(stdout).toContain("its build output was written within 3 d");
+  }, 60_000);
+  it("never touches the fallow snapshot of a live checkout, however long it has sat idle", () => {
+    const world = scratch();
+    const live = checkout(world, "live");
+    writeFileSync(join(live.path, "index.js"), "export const a = 'in progress';\n");
+    // A snapshot fallow keeps for the live checkout: its directory and the
+    // owner record naming that checkout, both long untouched.
+    const snapshot = join(world.dir, "tmp", "fallow-audit-base-cache-live");
+    mkdirSync(join(snapshot, "src"), { recursive: true });
+    writeFileSync(join(snapshot, "src", "index.js"), "base\n");
+    writeFileSync(`${snapshot}.last-used`, live.path);
+    live.age();
+    ageTree(join(world.dir, "tmp"), new Date(Date.now() - 10 * DAY_MS));
+
+    const { stdout } = worktreeCommand(world, "sweep", "--stale", "--builds", "--apply");
+
+    expect(existsSync(join(snapshot, "src", "index.js")), stdout).toBe(true);
+    expect(existsSync(`${snapshot}.last-used`)).toBe(true);
   }, 60_000);
 });
