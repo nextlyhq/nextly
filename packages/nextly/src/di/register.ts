@@ -947,17 +947,6 @@ async function registerServicesOnce(
 
   installConfigFieldFunctions(transformedConfig);
 
-  await reconcileBuilderTargets({
-    adapter,
-    logger: resolvedLogger,
-    schemaRegistry,
-    transformedConfig,
-    transformedPlugins,
-    deferredExtends,
-    unresolvedRelations,
-    unresolvedPermissions,
-  });
-
   // F8 PR 3: SchemaChangeService + DrizzlePushService DI registration
   // removed. The legacy preview path now uses pipeline/preview.ts +
   // legacy-preview/translate.ts (no DI lookup); the apply path uses
@@ -1033,10 +1022,27 @@ async function registerServicesOnce(
 
   registerDomainServices(ctx);
 
+  // After the services are registered, so the workflows can be judged from
+  // inside the reconcile: on the definitions it is about to write, before it
+  // writes them, and before the code-first syncs below.
+  const workflows = await reconcileBuilderTargets({
+    adapter,
+    logger: resolvedLogger,
+    schemaRegistry,
+    transformedConfig,
+    transformedPlugins,
+    deferredExtends,
+    unresolvedRelations,
+    unresolvedPermissions,
+    beforeWrites: changedComponents =>
+      judgeWorkflows(transformedConfig, changedComponents),
+  });
+
   const { databaseNotSetUp } = await syncCodeFirstEntities(
     adapter,
     resolvedLogger,
-    transformedConfig
+    transformedConfig,
+    workflows
   );
 
   // Declared widgets' starting queries, against the content just synced: the
@@ -1646,9 +1652,14 @@ interface BuilderReconcileArgs {
  * row, leaving the physical column orphaned (data-safe). A target in NEITHER
  * code/plugin NOR the Builder set is unresolved (handled per strict/graceful).
  */
-async function reconcileBuilderTargets(
-  args: BuilderReconcileArgs
-): Promise<void> {
+async function reconcileBuilderTargets<T>(
+  args: BuilderReconcileArgs & {
+    /** Runs once the merged definitions are known, before any is written. */
+    beforeWrites: (
+      changedComponents: ReadonlyArray<ReconciledBuilderEntity>
+    ) => Promise<T>;
+  }
+): Promise<T> {
   const { adapter, logger, transformedConfig } = args;
   // Always reconcile (no outer guard) so a REMOVED plugin's stale fields are
   // stripped on the next boot even when this boot has no deferred
@@ -1715,6 +1726,8 @@ async function reconcileBuilderTargets(
     ),
   };
 
+  const judged = await args.beforeWrites(changed.components);
+
   if (
     changed.collections.length +
       changed.singles.length +
@@ -1732,6 +1745,7 @@ async function reconcileBuilderTargets(
   }
 
   finalizeBuilderTargets(args, builderEntities);
+  return judged;
 }
 
 /** A reconciled Builder entity: its slug and merged fields. */
@@ -2074,15 +2088,13 @@ function registerBootMediaStorage(
 async function syncCodeFirstEntities(
   adapter: DrizzleAdapter,
   logger: Logger,
-  transformedConfig: NextlyServiceConfig
+  transformedConfig: NextlyServiceConfig,
+  /**
+   * Judged before the Builder reconcile wrote anything: a configuration whose
+   * workflows are refused leaves the registries and tables as it found them.
+   */
+  workflows: ReadonlyMap<string, RegisteredWorkflow>
 ): Promise<{ databaseNotSetUp: boolean }> {
-  // ----------------------------------------
-  // Layer 3.9: Judge the workflows
-  // ----------------------------------------
-  // Before anything below writes: a configuration whose workflows are refused
-  // must leave the registries and tables as it found them.
-  const workflows = await judgeWorkflows(transformedConfig);
-
   // ----------------------------------------
   // Layer 4: Sync Code-First Collections
   // ----------------------------------------
@@ -3161,13 +3173,33 @@ function registerCodeDefinedAccess(
  * Each attached workflow, with its definition hash and the configuration file
  * that registers it, refusing the boot when an attachment cannot keep drafts.
  * Reads only: a component the configuration defines is judged as written,
- * before the sync stores it, and any other from the registry.
+ * before the sync stores it; a Builder component the reconcile is about to
+ * change, with the fields it is about to store; and any other from the
+ * registry.
  */
 async function judgeWorkflows(
-  transformedConfig: NextlyServiceConfig
+  transformedConfig: NextlyServiceConfig,
+  changedBuilderComponents: ReadonlyArray<ReconciledBuilderEntity>
 ): Promise<ReadonlyMap<string, RegisteredWorkflow>> {
+  // Whether such a component is translated is the stored row's: the
+  // reconcile changes its fields only.
+  const builderComponents = await Promise.all(
+    changedBuilderComponents.map(async component => {
+      const stored = await container
+        .get<FieldGroupRegistryService>("fieldGroupRegistryService")
+        .getComponentBySlug(component.slug);
+      return {
+        slug: component.slug,
+        fields: component.fields ?? [],
+        localized: stored?.localized === true,
+      };
+    })
+  );
   return buildWorkflowRegistry(transformedConfig, await bootConfigPath(), {
-    components: transformedConfig.fieldGroups ?? [],
+    components: [
+      ...(transformedConfig.fieldGroups ?? []),
+      ...builderComponents,
+    ],
   });
 }
 
