@@ -43,6 +43,7 @@ import {
   hasPermission,
   invalidateAllPermissionCaches,
   isSuperAdmin,
+  listEffectiveGrants,
   listEffectivePermissions,
   listRoleSlugsForUser,
   resolveUserRoles,
@@ -473,6 +474,48 @@ describe.each(getConfiguredTestDialects())(
         });
       }
     );
+
+    it("keeps the roles it read when reading the grants fails", async () => {
+      // A reader that takes whichever half of a caller it could read relies
+      // on a failed grants read leaving the roles it read standing.
+      const holder = await newHolder("partial-read", readerId);
+      await invalidateAllPermissionCaches();
+      const { result, failed } = await failingFirstRead(
+        t,
+        "role_permissions",
+        () =>
+          runWithAccessMemo(() =>
+            Promise.allSettled([
+              listRoleSlugsForUser(holder),
+              listEffectiveGrants(holder),
+            ])
+          )
+      );
+      // POPULATION CONTROL: the grants read failed.
+      expect(failed).toBe(true);
+      expect(result[0]).toEqual({ status: "fulfilled", value: ["reader"] });
+    });
+
+    it("reads a caller's access again in a request that outlives what it kept", async () => {
+      // No role the caller holds expires, so only the kept access's own life
+      // bounds how long one request may go on answering from it.
+      const holder = await newHolder("long-request", readerId);
+      await invalidateAllPermissionCaches();
+      await runWithAccessMemo(async () => {
+        expect(await hasPermission(holder, "read", "notes")).toBe(true);
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(Date.now() + 6 * 60_000);
+        try {
+          const later = await tablesRead(t, () =>
+            hasPermission(holder, "read", "notes")
+          );
+          expect(later.result).toBe(true);
+          expect(later.tables).toContain("user_roles");
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
 
     it("drops what it kept when another request takes the role away", async () => {
       const holder = await newHolder("revoked", readerId);
