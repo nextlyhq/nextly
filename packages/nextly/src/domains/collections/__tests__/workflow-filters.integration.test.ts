@@ -522,6 +522,67 @@ describe.each(getConfiguredTestDialects())(
       expect(updated.successCount).toBe(2);
     });
 
+    it("refuses a bulk write selecting by either workflow key to a caller who may write but not read the collection", async () => {
+      const { t, posts } = await seed();
+      const handler = t.getService("collectionsHandler") as CollectionsHandler;
+      // A super admin's key scoped to update and delete posts and to read
+      // releases, but not to read posts: which entries hold drafts, and which
+      // a release holds, are facts about documents it may not read.
+      const owner = { id: "admin", roles: ["super-admin"] };
+      const writeOnly = {
+        actorType: "apiKey" as const,
+        permissions: ["update-posts", "delete-posts", "read-content-releases"],
+      };
+      const unknownField = {
+        statusCode: 400,
+        publicData: {
+          errors: [expect.objectContaining({ code: "FILTER_UNKNOWN_FIELD" })],
+        },
+      };
+      for (const key of ["_pendingChange", "_inRelease"]) {
+        await expect(
+          handler.bulkUpdateByQuery({
+            collectionName: "posts",
+            where: clientWhere({ [key]: true }),
+            data: { title: "Selected unseen" },
+            user: owner,
+            authenticatedScope: writeOnly,
+          }),
+          key
+        ).rejects.toMatchObject(unknownField);
+        await expect(
+          handler.bulkDeleteByQuery({
+            collectionName: "posts",
+            where: clientWhere({ [key]: true }),
+            user: owner,
+            authenticatedScope: writeOnly,
+          }),
+          key
+        ).rejects.toMatchObject(unknownField);
+      }
+      // Nothing was written or removed.
+      const after = await handler.listEntries({
+        collectionName: "posts",
+        overrideAccess: true,
+        status: "all",
+        limit: 100,
+      });
+      const titles = (after.data?.docs ?? []) as { title: string }[];
+      expect(titles).toHaveLength(Object.keys(posts).length);
+      expect(titles.map(row => row.title)).not.toContain("Selected unseen");
+
+      // The guard is the workflow keys' alone: the same caller's bulk write by
+      // an ordinary field condition still goes through.
+      const updated = await handler.bulkUpdateByQuery({
+        collectionName: "posts",
+        where: clientWhere({ title: { equals: "Untouched" } }),
+        data: { title: "Untouched, renamed" },
+        user: owner,
+        authenticatedScope: writeOnly,
+      });
+      expect(updated.successCount).toBe(1);
+    });
+
     it("refuses either key inside and/or", async () => {
       const { keys } = await seed();
       const nested = await refusedWith(

@@ -199,6 +199,7 @@ import {
 import {
   extractWorkflowFilter,
   IN_RELEASE_KEY,
+  PENDING_CHANGE_KEY,
   type WorkflowFilter,
 } from "../query/workflow-filter";
 
@@ -2238,6 +2239,45 @@ export class CollectionQueryService extends BaseService {
       accessUser: params.overrideAccess ? undefined : params.user,
       authenticatedScope: params.authenticatedScope,
     });
+  }
+
+  /**
+   * Refuse a by-query WRITE's workflow conditions from a caller who may not
+   * read this collection, then judge `_inRelease` as every read does.
+   *
+   * A write by query finds its rows with a trusted read, so nothing on that
+   * path asks whether the caller may read them. A field condition is held to
+   * the caller's field rules beside this; a workflow condition reads another
+   * table instead: which entries hold unpublished drafts, which documents a
+   * release holds. A caller allowed to update or delete but not to read would
+   * otherwise select exactly those entries and learn them from the rows the
+   * write reached. Both facts are readable only to someone who may read the
+   * documents, so the decision is the collection's own read gate, the one a
+   * list asks, refused in the words an unknown condition gets.
+   */
+  async assertWorkflowFilterReadable(params: {
+    collectionName: string;
+    where?: unknown;
+    overrideAccess?: boolean;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<void> {
+    if (!isPlainObject(params.where)) return;
+    const where = params.where;
+    const used = [PENDING_CHANGE_KEY, IN_RELEASE_KEY].find(key =>
+      Object.prototype.hasOwnProperty.call(where, key)
+    );
+    if (used === undefined) return;
+    const denied = await this.denyCollectionRead({
+      collectionName: params.collectionName,
+      accessUser: params.overrideAccess ? undefined : params.user,
+      overrideAccess: params.overrideAccess,
+      authenticatedScope: params.authenticatedScope,
+    });
+    if (denied !== null) {
+      refuseFilterProblems([unknownFieldProblem(`where.${used}`, used)]);
+    }
+    await this.assertReleaseFilterReadable(params);
   }
 
   /**
