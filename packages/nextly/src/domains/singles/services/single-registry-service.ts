@@ -619,7 +619,11 @@ export class SingleRegistryService extends BaseRegistryService<
               this.whereEq("slug", slug),
               { returning: "*" }
             )
-          : await this.renameSingleRow(slug, targetSlug, updateData);
+          : await this.renameSingleRow(
+              { id: existing.id, slug },
+              targetSlug,
+              updateData
+            );
 
       if (results.length === 0) {
         // §13.8: generic "Not found." — slug in logContext only.
@@ -681,12 +685,16 @@ export class SingleRegistryService extends BaseRegistryService<
    * Read back by the new slug inside the transaction: MySQL has no RETURNING,
    * and re-reading by the old slug would find nothing once the row has moved.
    * An empty result means no row held the old slug, and nothing was moved.
+   * The row is matched by the id read before the rename as well as the slug:
+   * a Single deleted and another registered under the slug since then is not
+   * the one asked for, and is treated as gone.
    */
   private async renameSingleRow(
-    from: string,
+    fetched: { id: string; slug: string },
     to: string,
     updateData: Record<string, unknown>
   ): Promise<DynamicSingleRecord[]> {
+    const from = fetched.slug;
     const row = await renameEntity(this.adapter, {
       dialect: this.dialect,
       move: { kind: "single", from, to },
@@ -694,7 +702,12 @@ export class SingleRegistryService extends BaseRegistryService<
         const written = await tx.updateCount(
           this.registryTableName,
           { ...updateData, slug: to },
-          this.whereEq("slug", from)
+          {
+            and: [
+              { column: "slug", op: "=", value: from },
+              { column: "id", op: "=", value: fetched.id },
+            ],
+          }
         );
         if (written === 0) return null;
         return tx.selectOne<DynamicSingleRecord>(this.registryTableName, {

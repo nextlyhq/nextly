@@ -345,11 +345,19 @@ export class DynamicCollectionRegistryService extends BaseService {
 
     // The one statement that writes the row, on whichever handle it is given:
     // the pooled one for an ordinary update, the rename's transaction below.
+    // Matched by the id read above as well as the slug: a collection deleted
+    // and another registered under the slug since then is not the one asked
+    // for, and is left alone, as a row that is gone is.
     const writeRow = (db: DatabaseAdapter["db"]) =>
       db
         .update(this.dynamicCollections)
         .set(updateData)
-        .where(eq(this.dynamicCollections.slug, collectionSlug));
+        .where(
+          and(
+            eq(this.dynamicCollections.slug, collectionSlug),
+            eq(this.dynamicCollections.id, existing[0].id)
+          )
+        );
 
     const move = {
       kind: "collection" as const,
@@ -377,9 +385,10 @@ export class DynamicCollectionRegistryService extends BaseService {
                 resolveRelations(this.dialect)
               )
             );
-            // No row under the old slug any more (deleted, or renamed by
-            // another request, since the lookup above): nothing is moved, so
-            // no history follows a registry row that did not move.
+            // No row under the old slug with the id read above any more
+            // (deleted, replaced, or renamed by another request, since the
+            // lookup): nothing is moved, so no history follows a registry row
+            // that did not move.
             return affectedRowCount(written, this.dialect) === 0 ? null : move;
           },
         });

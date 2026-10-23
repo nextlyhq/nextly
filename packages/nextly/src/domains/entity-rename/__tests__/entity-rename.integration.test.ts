@@ -1241,6 +1241,56 @@ describe.each(getConfiguredTestDialects())(
       ).toBe(true);
     }, 120_000);
 
+    it("refuses a rename whose fetched entity was replaced under the same slug before its transaction, moving nothing", async () => {
+      await boot(dialect);
+      const noteId = await writeNote();
+      await seedHistory("collection", "notes", noteId);
+      const mastheadId = await writeMasthead();
+      await seedHistory("single", "masthead", mastheadId);
+      for (const [kind, from, to] of [
+        ["collection", "notes", "journal"],
+        ["single", "masthead", "header"],
+      ] as const) {
+        const before = await rowsNaming(kind, from);
+        const [fetched] = (await rowsOf(REGISTRY[kind])).filter(
+          row => row.slug === from
+        );
+        expect(fetched).toBeDefined();
+        // The entity the rename looked up is deleted, and another registered
+        // under the same slug, after the lookup and before the rename's
+        // transaction writes the row: the row under the old slug is then
+        // another entity's, with an id of its own.
+        const adapter = t().adapter;
+        const original = adapter.transaction.bind(adapter);
+        vi.spyOn(adapter, "transaction").mockImplementationOnce(
+          <T>(
+            work: (tx: TransactionContext) => Promise<T>,
+            options?: TransactionOptions
+          ) =>
+            original(async tx => {
+              await tx.update(
+                REGISTRY[kind],
+                { id: randomUUID() },
+                { and: [{ column: "slug", op: "=", value: from }] }
+              );
+              return work(tx);
+            }, options)
+        );
+
+        await expect(rename(kind, from, to)).rejects.toMatchObject({
+          code: "NOT_FOUND",
+        });
+
+        vi.restoreAllMocks();
+        // Nothing moved, and the entity now under the old slug was not
+        // renamed: it is not the one the caller asked to rename.
+        expect([kind, await rowsNaming(kind, from)]).toEqual([kind, before]);
+        expect(
+          (await rowsOf(REGISTRY[kind])).filter(row => row.slug === to)
+        ).toEqual([]);
+      }
+    }, 120_000);
+
     it("moves a custom permission's resource without respelling it, and keeps a name an administrator chose", async () => {
       await boot(dialect);
       const now = new Date();
