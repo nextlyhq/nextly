@@ -62,8 +62,11 @@ export function isErrorResponse(value: unknown): value is ErrorResponse {
  * For session auth: delegates to RBAC service.
  * For API key auth: checks pre-resolved permissions map.
  *
- * @deprecated Use `nextly.access.check({ userId, resource, operation })`,
- * which asks the one access decision. Removed in the next release.
+ * @deprecated For a signed-in user, use
+ * `nextly.access.check({ userId, resource, operation })`, which asks the one
+ * access decision. For an API key, check the key's own permissions, which
+ * `nextly.access.checkApiKey({ rawKey })` returns: `nextly.access.check`
+ * judges the key's maker, not the key. Removed in the next release.
  */
 export async function checkPermission(
   context: AuthContext,

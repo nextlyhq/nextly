@@ -12,8 +12,11 @@ import { createErrorResponse, type ErrorResponse } from "./require-permission";
  * Returns ErrorResponse if token is present but invalid/expired/rate-limited.
  * Returns AuthContext on success.
  *
- * @deprecated Use `nextly.access.checkApiKey({ rawKey })`. Removed in the
- * next release.
+ * @deprecated Use `nextly.access.checkApiKey({ rawKey })`, which
+ * authenticates the key and returns its own permissions and roles. It applies
+ * no rate limit, and neither does this function: it only passes on the
+ * refusal the `validateApiKey` given to it reports. Removed in the next
+ * release.
  */
 export async function authenticateApiKey(
   request: Request,

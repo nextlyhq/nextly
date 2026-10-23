@@ -18,7 +18,10 @@ import type { ContentEventsNamespace } from "../direct-api/namespaces/content-ev
 import type { FieldGroupsNamespace } from "../direct-api/namespaces/index";
 import type { JobsNamespace } from "../direct-api/namespaces/jobs";
 import type { NoticesNamespace } from "../direct-api/namespaces/notices";
-import type { ApiKeysNamespace } from "../direct-api/namespaces/rbac";
+import type {
+  AccessNamespace,
+  ApiKeysNamespace,
+} from "../direct-api/namespaces/rbac";
 import type { ReleasesNamespace } from "../direct-api/namespaces/releases";
 import type {
   AuthResult,
@@ -26,7 +29,6 @@ import type {
   BulkDeleteMediaArgs,
   BulkOperationResult,
   ChangePasswordArgs,
-  CheckAccessArgs,
   CollectionSlug,
   CountArgs,
   CountResult,
@@ -1073,11 +1075,15 @@ export interface Nextly {
    *   resource: 'posts',
    *   operation: 'read',
    * });
+   *
+   * // Authenticate an API key, with the permissions and roles it holds
+   * const key = await nextly.access.checkApiKey({ rawKey });
    * ```
+   *
+   * The namespace's own type, so every method the runtime namespace offers is
+   * declared here too.
    */
-  access: {
-    check: (args: CheckAccessArgs) => Promise<boolean>;
-  };
+  access: AccessNamespace;
 
   /**
    * API keys: list, read, create, rename and revoke.

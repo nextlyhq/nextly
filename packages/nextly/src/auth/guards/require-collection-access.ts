@@ -33,8 +33,11 @@ export interface CollectionAccessDeps {
  * Check if the auth context has access to a collection operation.
  * Priority: super-admin bypass > code-defined access > database RBAC.
  *
- * @deprecated Use `nextly.access.check({ userId, resource, operation })`,
- * which asks the one access decision. Removed in the next release.
+ * @deprecated For a signed-in user, use
+ * `nextly.access.check({ userId, resource, operation })`, which asks the one
+ * access decision. For an API key, check the key's own permissions, which
+ * `nextly.access.checkApiKey({ rawKey })` returns: `nextly.access.check`
+ * judges the key's maker, not the key. Removed in the next release.
  */
 export async function checkCollectionAccess(
   context: AuthContext,
