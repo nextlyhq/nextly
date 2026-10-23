@@ -150,6 +150,36 @@ describe("a written template", () => {
   });
 });
 
+describe("the same written email, wherever it is rendered", () => {
+  it("renders identically for a send, a preview of the saved template and a preview of its draft", async () => {
+    const created = await written();
+    const data = { name: "Priya" };
+
+    const sent = await service.renderStored(created, data);
+    const previewed = await service.previewTemplate(created.id, data);
+    const drafted = await service.previewDraft(
+      {
+        subject: created.subject,
+        htmlContent: "",
+        plainTextContent: null,
+        preheader: created.preheader,
+        useLayout: created.useLayout,
+        kind: created.kind,
+        layoutId: created.layoutId,
+        format: "written",
+        blocks: created.blocks,
+      },
+      data
+    );
+
+    expect(previewed).toEqual({ subject: sent.subject, html: sent.html });
+    expect(drafted).toEqual(sent);
+    // The control: it is the written body, in the layout.
+    expect(sent.html).toContain(">Thanks, Priya.</p>");
+    expect(sent.html).toContain("<!DOCTYPE html>");
+  });
+});
+
 describe("a coded template", () => {
   it("is what a template is unless it is written", async () => {
     const coded = await service.createTemplate({
