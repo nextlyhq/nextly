@@ -12,7 +12,6 @@
  * that the value never crossed between them — a mocked context would have
  * carried it perfectly and proved nothing.
  */
-import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

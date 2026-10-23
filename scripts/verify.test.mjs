@@ -1,9 +1,25 @@
 /**
  * What each verification scope runs, and in what order.
  */
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { phasesFor } from "./verify.mjs";
+
+/** The tasks a `turbo run <task>… <flags>` argument list names: those before its first flag. */
+function turboTasksOf(argv) {
+  const rest = argv.slice(2);
+  const firstFlag = rest.findIndex(arg => arg.startsWith("-"));
+  return firstFlag === -1 ? rest : rest.slice(0, firstFlag);
+}
+
+/** The tasks turbo.jsonc defines, read the way turbo reads it. */
+function definedTasks() {
+  const text = readFileSync(new URL("../turbo.jsonc", import.meta.url), "utf8");
+  const withoutComments = text.replace(/("(?:\\.|[^"\\])*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (match, string) => string ?? "");
+  return Object.keys(JSON.parse(withoutComments.replace(/,(\s*[}\]])/g, "$1")).tasks);
+}
 
 const limits = { concurrency: 2, maxWorkers: 2 };
 const names = scope => phasesFor(scope, limits).map(phase => phase.name);
@@ -20,9 +36,29 @@ describe("the phases a verification scope runs", () => {
     expect(names("full")).toContain("script tests");
   });
 
-  it("builds before typechecking, because check-types reads what build produced", () => {
+  it("builds before lint and typechecking, because both read what build produced", () => {
     const phases = names("pr");
-    expect(phases.indexOf("build")).toBeLessThan(phases.indexOf("lint + types"));
+    expect(phases.indexOf("build")).toBeLessThan(phases.indexOf("lint"));
+    expect(phases.indexOf("build")).toBeLessThan(phases.indexOf("types"));
+  });
+
+  /*
+   * turbo refuses a run that names a task the graph does not define, so a
+   * phase left naming a removed task stops the whole verification there,
+   * before the tests it was meant to reach.
+   */
+  it("names only tasks turbo.jsonc defines in each turbo phase", () => {
+    const defined = new Set(definedTasks());
+    expect(defined.has("build")).toBe(true);
+    const turboPhases = phasesFor("full", limits).filter(phase => phase.argv[0] === "turbo");
+    expect(turboPhases.length).toBeGreaterThan(0);
+    for (const phase of turboPhases) {
+      const tasks = turboTasksOf(phase.argv);
+      expect(tasks.length, `phase '${phase.name}' names no task`).toBeGreaterThan(0);
+      for (const task of tasks) {
+        expect(defined.has(task), `phase '${phase.name}' runs '${task}'`).toBe(true);
+      }
+    }
   });
 
   /*

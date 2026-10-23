@@ -129,7 +129,7 @@ describe("plugin package.json generation (D44/D45)", () => {
       ])
     );
     // Scripts cover build + the dev playground + test.
-    expect(pkg.scripts.build).toBe("tsup");
+    expect(pkg.scripts.build).toBe("tsdown");
     expect(pkg.scripts.dev).toContain("next dev dev");
     expect(pkg.scripts.test).toBe("vitest run");
     // Not an app: no Next.js `start`/`db:migrate` app scripts, not private.

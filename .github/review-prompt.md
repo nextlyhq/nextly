@@ -246,7 +246,7 @@ Numbers stay fixed, so a finding's `lens:A<k>` keeps its meaning; a missing numb
 
 **Correctness conventions** 7. Use `NextlyError` inside `packages/admin` (it consumes the envelope via `parseApiError`). 8. Inline an HTTP status number instead of registering a code in `src/errors/error-codes.ts`. 9. Invent a response shape; lists are `{ items, meta }`, mutations `{ message, item }`, never `docs`/`totalDocs`. 10. Use raw SQL in product code, or hand-copy CREATE TABLE into a fixture instead of the production DDL helpers. 11. Add a field type without touching every layer (union, factory, guard, `VALID_FIELD_TYPES`, `DynamicFieldType`, catalog, column descriptor, zod, type generator, admin renderer), or hand-maintain a field list a catalog should render. 12. Use `Object.keys(schema)` where SQL table names are needed (use `drizzleTableNames`). 13. Re-enable `fileParallelism` in `packages/nextly` integration config, or resurrect removed CLI commands (`migrate:reset`/`rollback`/`refresh`).
 
-**Typing / lint** 14. Add `eslint-disable` or an unjustified `design-lint-ok` to silence a diagnostic.
+**Typing / lint** 14. Add an `eslint-disable` or `oxlint-disable` comment, or an unjustified `design-lint-ok` to silence a diagnostic.
 
 **Admin / UI** 17. Ship a light-mode-only visual change or a control without a focus state. 18. Break table invariants: pagination reset on search/page-size change, `getRowId` set, cross-page selection preserved.
 

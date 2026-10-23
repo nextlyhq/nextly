@@ -3,7 +3,6 @@
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist",
-    "baseUrl": ".",
     "paths": {
       "nextly": ["../nextly/dist/index.d.ts"],
       "nextly/storage": ["../nextly/dist/storage/index.d.ts"]

@@ -27,7 +27,7 @@ only so you can exercise the plugin in a real admin.
 ```bash
 {{runCommand}} dev            # the embedded playground → http://localhost:3000/admin
 {{runCommand}} test           # vitest, against a real Nextly on in-memory SQLite
-{{runCommand}} build          # tsup → dist/
+{{runCommand}} build          # tsdown → dist/
 {{runCommand}} check-types    # tsc --noEmit
 {{runCommand}} lint           # eslint
 ```
