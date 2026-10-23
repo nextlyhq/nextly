@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  GIB_PER_PROCESS,
   GIB_PER_VITEST_WORKER,
   MAX_CONCURRENCY,
   MAX_WORKERS,
@@ -29,10 +30,16 @@ describe("budgeting a machine", () => {
    * formula has to reproduce that without having been told it, which is what
    * makes it evidence rather than a fitted constant.
    */
+  /*
+   * The 2 x 2 measurement predates workers that share their modules. The
+   * concurrency it measured still holds; the workers drop to 1, because two
+   * shared nextly workers beside two ordinary ones plan about 7.5 GiB against
+   * this profile's 6.8 usable.
+   */
   it("reproduces the measured-safe budget for a 9.7 GiB / 8-core profile", () => {
     const limits = machine(9.7, 8);
     expect(limits.concurrency).toBe(2);
-    expect(limits.maxWorkers).toBe(2);
+    expect(limits.maxWorkers).toBe(1);
   });
 
   /*
@@ -49,7 +56,7 @@ describe("budgeting a machine", () => {
     );
   });
 
-  it("never plans more workers for one task than usable memory holds", () => {
+  it("never plans more test workers than usable memory holds, with every task running", () => {
     for (const [gib, cpus] of [
       [8, 4],
       [9.7, 8],
@@ -59,9 +66,12 @@ describe("budgeting a machine", () => {
       [48, 14],
     ]) {
       const limits = machine(gib, cpus);
-      expect(limits.maxWorkers * GIB_PER_VITEST_WORKER).toBeLessThanOrEqual(
-        limits.usableGiB
-      );
+      // One task's workers at a shared worker's size, every other task's at an
+      // ordinary process's.
+      const planned =
+        limits.maxWorkers *
+        (GIB_PER_VITEST_WORKER + (limits.concurrency - 1) * GIB_PER_PROCESS);
+      expect(planned).toBeLessThanOrEqual(limits.usableGiB);
     }
   });
 
