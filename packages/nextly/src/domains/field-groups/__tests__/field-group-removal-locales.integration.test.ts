@@ -43,7 +43,13 @@ describe.each(getConfiguredTestDialects())(
     beforeAll(async () => {
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
-        localization: { locales: ["en", "es"], defaultLocale: "en" },
+        // No fallback: a language shows only its own values, so a value held
+        // in one language is not seen from another.
+        localization: {
+          locales: ["en", "es"],
+          defaultLocale: "en",
+          fallback: false,
+        },
         fieldGroups: [
           defineFieldGroup({
             slug: "lnote",
@@ -75,6 +81,25 @@ describe.each(getConfiguredTestDialects())(
             fields: [
               text({ name: "title" }),
               fieldGroup({ name: "one", component: "lnote" }),
+            ],
+          }),
+          // The same, published, whose status-less updates are held as drafts.
+          defineCollection({
+            slug: "ldrafted",
+            status: true,
+            versions: { drafts: true },
+            access: {
+              create: () => true,
+              read: () => true,
+              update: () => true,
+            },
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({
+                name: "many",
+                component: "lnote",
+                repeatable: true,
+              }),
             ],
           }),
         ],
@@ -173,6 +198,47 @@ describe.each(getConfiguredTestDialects())(
         } as never)) as Doc
       ).one as Doc;
       expect(after.box).toEqual({ open: "o2", kept: "K" });
+    });
+
+    it("keeps it in a held draft that leaves it out of a list", async () => {
+      const { item } = await trusted.create({
+        collection: "ldrafted",
+        data: {
+          title: "d",
+          status: "published",
+          many: [{ heading: "a" }, { heading: "b" }],
+        },
+      } as never);
+      const id = String(item.id);
+      const read = async (args: Doc = {}) =>
+        (
+          (await trusted.findByID({
+            collection: "ldrafted",
+            id,
+            depth: 1,
+            ...args,
+          } as never)) as Doc
+        ).many as Doc[];
+      const [first, second] = await read();
+      // Published with it, so the Spanish value is stored rather than held.
+      await trusted.update({
+        collection: "ldrafted",
+        id,
+        locale: "es",
+        data: {
+          status: "published",
+          many: [{ id: first.id }, { id: second.id, secret: "es-only" }],
+        },
+      } as never);
+      // Held, since the entry is published: no save judges what it removes.
+      await checked.update({
+        collection: "ldrafted",
+        id,
+        data: { many: [{ id: first.id, heading: "a" }] },
+      } as never);
+
+      const draft = await read({ draft: true });
+      expect(draft.map(instance => instance.id)).toEqual([first.id, second.id]);
     });
 
     it("removes one that holds no protected value in any language", async () => {

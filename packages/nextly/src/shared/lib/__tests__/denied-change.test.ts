@@ -456,6 +456,49 @@ describe("keepDeniedAtStored", () => {
     ]);
   });
 
+  it("judges a stored row with its own siblings when an id-less row is inserted ahead of it", async () => {
+    // `child` may be written only while its row's `mode` is open. The update
+    // inserts a new row first and closes `a`'s mode, leaving `child` out of a
+    // list written whole: judged with `a`'s own new mode, it is denied and
+    // stays, rather than judged with the inserted row's.
+    const kept = await keepDeniedAtStored({
+      update: {
+        rows: [{ heading: "new" }, { id: "a", mode: "closed" }],
+      },
+      stored: { rows: [{ id: "a", mode: "open", child: "keep" }] },
+      applyRules: document => {
+        const rows = document.rows;
+        for (const row of Array.isArray(rows) ? rows : []) {
+          const record = row as Record<string, unknown>;
+          if (record.mode !== "open") delete record.child;
+        }
+        return Promise.resolve();
+      },
+    });
+
+    expect(kept.rows).toEqual([
+      { heading: "new" },
+      { id: "a", mode: "closed", child: "keep" },
+    ]);
+  });
+
+  it("lets a write drop a row whose denied field holds nothing", async () => {
+    // `c` carries `locked` only as an empty value: there is nothing the writer
+    // may not change, so leaving `c` out removes it.
+    const kept = await keepDeniedAtStored({
+      update: { rows: [{ id: "a", heading: "a2" }] },
+      stored: {
+        rows: [
+          { id: "a", heading: "a" },
+          { id: "c", heading: "c", locked: null },
+        ],
+      },
+      applyRules: deniesLockedRows,
+    });
+
+    expect(kept.rows).toEqual([{ id: "a", heading: "a2" }]);
+  });
+
   it("pairs rows by position when they carry no id", async () => {
     // The control: rows that cannot be told apart keep the value at their
     // index, as they always have.

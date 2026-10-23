@@ -1481,6 +1481,61 @@ describe("FieldGroupDataService", () => {
       expect(parsed.inner).not.toHaveProperty("secret");
     });
 
+    it("keeps a denied password in a container column as the stored hash", async () => {
+      const storedHash =
+        "$2b$12$storedhashstoredhashstoredhashstoredhashstoredhashstor";
+      ctx.registry.registerComponent("pw", {
+        slug: "pw",
+        tableName: "comp_pw",
+        fields: [
+          {
+            name: "meta",
+            type: "group",
+            fields: [
+              { name: "label", type: "text" },
+              { name: "pass", type: "password" },
+            ],
+          },
+        ],
+      });
+      registerFieldFunctions("fieldGroup", "pw", [
+        {
+          name: "meta",
+          type: "group",
+          fields: [
+            { name: "label", type: "text" },
+            { name: "pass", type: "password", access: { update: () => false } },
+          ],
+        },
+      ]);
+      ctx.adapter.select.mockResolvedValue([
+        {
+          id: "p-1",
+          _parent_id: "e1",
+          _order: 0,
+          meta: JSON.stringify({ label: "old", pass: storedHash }),
+        },
+      ]);
+
+      await ctx.service.saveComponentData({
+        parentId: "e1",
+        parentTable: "dc_pages",
+        access: CHECKED,
+        fields: [{ name: "pw", type: "component", component: "pw" }],
+        data: { pw: { meta: { label: "new" } } },
+      });
+
+      const meta = (
+        ctx.adapter.update.mock.calls[0][1] as Record<string, unknown>
+      ).meta;
+      // Kept as stored, not hashed again: a hash of the hash would never
+      // verify the password it was made from.
+      expect(typeof meta === "string" ? JSON.parse(meta) : meta).toEqual({
+        label: "new",
+        pass: storedHash,
+      });
+    });
+
     describe("a single field group's stored instance", () => {
       /** A stored `owned` instance, and a rule writable only for `allowedId`. */
       function storedOwned(allowedId: string) {
