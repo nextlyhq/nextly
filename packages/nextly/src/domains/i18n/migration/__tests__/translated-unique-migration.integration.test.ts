@@ -15,6 +15,7 @@ import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { throwawayDatabase } from "../../../../cli/commands/__tests__/helpers/sync-target";
 import { runFileMigrations } from "../../../../cli/commands/migrate";
 import { createLogger } from "../../../../cli/utils/logger";
 import { reconcileCore } from "../../../schema/migrate/core-reconcile";
@@ -68,6 +69,9 @@ for (const entry of DIALECTS) {
 
       let adapter: TestAdapter;
       let migrationsDir: string;
+      // A database of its own for each test on a server dialect: `nextly migrate` judges the whole
+      // database against its history, so a table another test left in a shared one reads as drift.
+      let dropDatabase: () => Promise<void> = async () => {};
       // Per-run names, so a shared database cannot let two runs collide.
       let table: string;
       let companion: string;
@@ -85,7 +89,14 @@ for (const entry of DIALECTS) {
           fields: [{ name: "handle", type: "text", localized: true, unique }],
         });
         created = 0;
-        adapter = entry.make(entry.url ?? "");
+        if (dialect === "sqlite") {
+          adapter = entry.make("");
+          dropDatabase = async () => {};
+        } else {
+          const own = await throwawayDatabase(dialect);
+          adapter = entry.make(own.url);
+          dropDatabase = own.drop;
+        }
         await adapter.connect();
         // What `nextly migrate` creates first: the ledger, the owner registry and the archive.
         await reconcileCore({
@@ -100,6 +111,7 @@ for (const entry of DIALECTS) {
         await adapter.executeQuery(`DROP TABLE IF EXISTS ${q(companion)}`);
         await adapter.executeQuery(`DROP TABLE IF EXISTS ${q(table)}`);
         await adapter.disconnect();
+        await dropDatabase();
         await rm(migrationsDir, { recursive: true, force: true });
       });
 
