@@ -208,18 +208,30 @@ function exited(state, reader, status) {
 
 /**
  * Shuts the server down, waiting for it to exit, and stops it if it does not.
- * A server that has already failed is only stopped: the failure was reported
- * where it happened, and a `close` in a `finally` must not replace it.
  *
- * Nor does a failure to shut down: every answer the caller asked for has
- * arrived by now, and only the shutdown itself goes unanswered. The compiler's
- * server can panic while shutting down, in its file watcher, after answering
- * everything.
+ * Only once every request has its whole answer: closing with one still
+ * waiting is refused, and that request rejects, since its answer would go with
+ * the server. A server that has already failed is only stopped. The failure
+ * was reported where it happened, and a `close` in a `finally` must not
+ * replace it.
+ *
+ * Past that point, a failed shutdown is no failure, because nothing is left to
+ * answer. typescript-go 7.0.2's server can panic while handling `shutdown`
+ * ("assignment to entry in nil map" in `lspwatcher.WatchFiles`) after it has
+ * answered everything else. An exit before the last answer still rejects that
+ * request, however it happens.
  */
 async function close(state, timeoutMs) {
   if (state.failure !== undefined) {
     state.server.kill();
     return;
+  }
+  if (state.pending.size > 0) {
+    const error = new Error(
+      `language server: closed with ${String(state.pending.size)} request(s) unanswered`
+    );
+    fail(state, error);
+    throw error;
   }
   const gone = new Promise(resolve => state.server.once("exit", resolve));
   // No `params` at all: the compiler's server refuses `shutdown` with any,

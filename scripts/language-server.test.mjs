@@ -147,6 +147,15 @@ describe("startLanguageServer", () => {
     await expect(server.close()).resolves.toBeUndefined();
   });
 
+  it("refuses to close with a request still waiting, which rejects too", async () => {
+    const server = startLanguageServer({ command: fakeServer("") });
+    const waiting = server.request("textDocument/hover", {});
+    await expect(server.close()).rejects.toThrow(
+      /closed with 1 request\(s\) unanswered/
+    );
+    await expect(waiting).rejects.toThrow(/closed with 1 request/);
+  });
+
   it("rejects a request with no reply once its time is up", async () => {
     const server = startLanguageServer({
       command: fakeServer(""),
