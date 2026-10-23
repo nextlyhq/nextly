@@ -68,6 +68,16 @@ function LoadingSkeleton() {
   );
 }
 
+/**
+ * The colours of the Published and Draft marks, one value for the ring's
+ * segment and the legend's dot alike. Published is the brand's chart slot, not
+ * `--nx-primary`: a brand's primary is the colour it gave, while
+ * `--nx-chart-1` is that colour held to 3:1 on the card in each mode, which a
+ * mark drawn on the card needs to be seen.
+ */
+const PUBLISHED_MARK = "var(--nx-chart-1)";
+const DRAFT_MARK = "var(--nx-chart-4)";
+
 export const ContentStatusWidget: React.FC = () => {
   const { data, isLoading, error } = useDashboardStats();
 
@@ -78,11 +88,11 @@ export const ContentStatusWidget: React.FC = () => {
   const publishedPct = total > 0 ? Math.round((published / total) * 100) : 0;
   const draftPct = total > 0 ? Math.round((draft / total) * 100) : 0;
 
-  // Both swatches come from theme tokens so a rebrand moves the chart with the
-  // rest of the admin; the draft segment uses the amber slot of the chart ramp.
+  // Both swatches come from the chart ramp, so a rebrand moves the chart with
+  // the rest of the admin; the draft segment uses its amber slot.
   const segments = [
-    { label: "Published", value: published, color: "var(--nx-primary)" },
-    { label: "Draft", value: draft, color: "var(--nx-chart-4)" },
+    { label: "Published", value: published, color: PUBLISHED_MARK },
+    { label: "Draft", value: draft, color: DRAFT_MARK },
   ];
 
   return (
@@ -148,13 +158,13 @@ export const ContentStatusWidget: React.FC = () => {
                 label="Published"
                 count={published}
                 percentage={publishedPct}
-                color="var(--nx-primary)"
+                color={PUBLISHED_MARK}
               />
               <StatusItem
                 label="Draft"
                 count={draft}
                 percentage={draftPct}
-                color="var(--nx-chart-4)"
+                color={DRAFT_MARK}
               />
             </div>
             <p className="text-xs text-center text-muted-foreground font-black uppercase tracking-[0.2em] opacity-80 px-4">

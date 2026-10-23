@@ -246,6 +246,14 @@ export function brandingCss(
       .filter(Boolean)
       .join(" ");
 
+  // The chart slots' selectors repeat the class, so they outrank the
+  // server-rendered `getBrandingCss` stylesheet, which writes the unadjusted
+  // slots at the specificity of one `.nextly-admin` (or `.nextly-admin.dark`)
+  // and is usually LATER in the document than this sheet, which lives in the
+  // head: at equal specificity it would win, and the adjustment would never
+  // show. A dark card matches the light rule too; the dark rule's extra class
+  // decides it.
+  //
   // Scoped to .nextly-admin so we never leak styles to the host application.
   // The brand tokens are the same in both modes; the chart slots alone are
   // written per mode, each adjusted for that mode's surfaces. Keep this
@@ -255,8 +263,8 @@ export function brandingCss(
   // the client, by when these have replaced them.
   return (
     `.nextly-admin, .nextly-admin.dark { ${rules.join(" ")} } ` +
-    `.nextly-admin { ${chartRules("light")} } ` +
-    `.nextly-admin.dark { ${chartRules("dark")} }`
+    `.nextly-admin.nextly-admin { ${chartRules("light")} } ` +
+    `.nextly-admin.nextly-admin.dark { ${chartRules("dark")} }`
   );
 }
 
