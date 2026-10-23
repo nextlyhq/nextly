@@ -158,18 +158,26 @@ export function routeGateVerdict(
   );
 }
 
-/** The actions a collection's capabilities answer. */
-const COLLECTION_ACTIONS = [
-  "create",
-  "read",
-  "update",
-  "delete",
-  "publish",
-  "unpublish",
-] as const;
+/**
+ * The actions a collection's capabilities answer: every access operation, so
+ * an operation the gates gain is answered here without an edit.
+ */
+const COLLECTION_ACTIONS = ACCESS_OPERATIONS;
 
-/** The actions a Single's capabilities answer: it has no create or delete. */
-const SINGLE_ACTIONS = ["read", "update", "publish", "unpublish"] as const;
+/** The operations a Single does not have: it is never created or deleted. */
+const NOT_ON_A_SINGLE = ["create", "delete"] as const;
+
+/** An action a Single's capabilities answer. */
+type SingleAction = Exclude<
+  (typeof ACCESS_OPERATIONS)[number],
+  (typeof NOT_ON_A_SINGLE)[number]
+>;
+
+/** The actions a Single's capabilities answer: the rest of the operations. */
+const SINGLE_ACTIONS: readonly SingleAction[] = ACCESS_OPERATIONS.filter(
+  (operation): operation is SingleAction =>
+    !NOT_ON_A_SINGLE.some(missing => missing === operation)
+);
 
 /**
  * The actions a REST request reaches through the entry's update route: a
@@ -183,9 +191,7 @@ export type EntityCapabilities =
   | ({ readonly kind: "collection" } & Readonly<
       Record<(typeof COLLECTION_ACTIONS)[number], boolean>
     >)
-  | ({ readonly kind: "single" } & Readonly<
-      Record<(typeof SINGLE_ACTIONS)[number], boolean>
-    >);
+  | ({ readonly kind: "single" } & Readonly<Record<SingleAction, boolean>>);
 
 /**
  * What the caller may do with each collection and Single. System resources

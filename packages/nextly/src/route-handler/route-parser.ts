@@ -128,6 +128,7 @@ export function getActionFromOperation(operation: string): string {
 function parseMeRoutes(
   httpMethod: string,
   subresource: string | undefined,
+  hasMoreSegments: boolean,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
   // GET /api/me/permissions → get current user's resolved permissions
@@ -141,8 +142,13 @@ function parseMeRoutes(
   }
 
   // GET /api/me/capabilities → what the current caller may do with each
-  // collection, Single and system resource, as the route gates decide it
-  if (subresource === "capabilities" && httpMethod === "GET") {
+  // collection and Single, as the route gates decide it. Nothing may follow:
+  // a longer path is another route, not this one with its tail ignored.
+  if (
+    subresource === "capabilities" &&
+    !hasMoreSegments &&
+    httpMethod === "GET"
+  ) {
     return {
       service: "users",
       operation: "list",
@@ -2931,7 +2937,12 @@ export function parseRestRoute(
   // Handle /api/me endpoint for current user
   // For /api/me/permissions, id = "permissions" (sub-resource)
   if (resource === "me") {
-    const result = parseMeRoutes(httpMethod, id, routeParams);
+    const result = parseMeRoutes(
+      httpMethod,
+      id,
+      params.length > 2,
+      routeParams
+    );
     if (result) return result;
   }
 
