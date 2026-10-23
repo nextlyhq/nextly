@@ -49,7 +49,7 @@
   },
   "dependencies": {
     "css-tree": "^2.3.1",
-    "picomatch": "^4.0.5"
+    "picomatch": "^4.0.7"
   },
   "devDependencies": {
     "@nextlyhq/eslint-config": "workspace:*",
