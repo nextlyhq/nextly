@@ -97,7 +97,7 @@ describe("the providers table, by grant", () => {
   it("offers a test send to someone who may create providers", async () => {
     holding(["read-email-providers", "create-email-providers"]);
     render(<EmailProviderTable />);
-    expect(await rowActions()).toEqual(["Send Test"]);
+    expect(await rowActions()).toEqual(["Send a test"]);
   });
 
   it("offers a manager every action", async () => {
@@ -106,7 +106,7 @@ describe("the providers table, by grant", () => {
     expect(await rowActions()).toEqual([
       "Edit",
       "Set Default",
-      "Send Test",
+      "Send a test",
       "Delete",
     ]);
   });

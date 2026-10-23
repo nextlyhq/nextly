@@ -38,7 +38,7 @@ export interface ClassifiedEmailError extends Error {
 export const UNCLASSIFIED_REASON = "The email provider failed.";
 
 /** The reason given when the provider could not be reached. */
-const UNREACHABLE_REASON = "The email provider could not be reached.";
+export const UNREACHABLE_REASON = "The email provider could not be reached.";
 
 /**
  * Whether `reason` is core's own sentence for this classification.

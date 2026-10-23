@@ -1631,8 +1631,36 @@ export class EmailService extends BaseService {
     throw new NextlyError({
       code: "BUSINESS_RULE_VIOLATION",
       publicMessage:
-        "No email provider configured. Add a provider in Settings > Email Providers, or configure one in defineConfig({ email: { providerConfig } }).",
+        "No email provider configured. Add a provider in Email > Sending, or configure one in defineConfig({ email: { providerConfig } }).",
     });
+  }
+
+  /**
+   * How email goes out when no database provider is chosen, for the admin's
+   * Sending tab: the default From address and the provider set in the site's
+   * code, if any, by type and label only (never its configuration), and
+   * whether the server runs in development, where the Log provider is meant.
+   */
+  sendingSettings(): {
+    from: string | null;
+    codeProvider: { type: string; label: string } | null;
+    development: boolean;
+  } {
+    const providerConfig = this.emailConfig?.providerConfig;
+    let codeProvider: { type: string; label: string } | null = null;
+    if (providerConfig) {
+      const type = providerConfig.provider;
+      const registry = getEmailProviderRegistry();
+      codeProvider = {
+        type,
+        label: registry.has(type) ? registry.get(type).label : type,
+      };
+    }
+    return {
+      from: this.emailConfig?.from ?? null,
+      codeProvider,
+      development: process.env.NODE_ENV === "development",
+    };
   }
 
   // ============================================================

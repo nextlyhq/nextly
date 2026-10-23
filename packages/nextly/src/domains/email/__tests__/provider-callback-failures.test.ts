@@ -132,8 +132,9 @@ describe("a probe that RETURNS a failure", () => {
 
     // The wrapper itself still forwards the shape; the service is what decides
     // what reaches a caller, and its test covers that. What this pins is that
-    // the detail is present here to be logged rather than lost.
-    expect(result).toEqual({ ok: false, detail: `Invalid key ${SECRET}` });
+    // the detail is present here to be logged rather than lost, with the
+    // declared credential taken out as a thrown failure's cause has it.
+    expect(result).toEqual({ ok: false, detail: "Invalid key [secret]" });
   });
 });
 

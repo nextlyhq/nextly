@@ -7,9 +7,58 @@ Nextly's email system supports three providers -- Resend, SMTP, and SendLayer --
 
 For local development, Nextly ships a **Mailpit** profile in `docker-compose.yml` so you can test email flows without sending anything over the internet -- see [Local email testing with Mailpit](#local-email-testing-with-mailpit) below.
 
+## The Email hub
+
+Everything about email lives in one place in the admin: **Email**, in the main navigation. Its tabs run across the top:
+
+- **Messages** lists every email the site sends, grouped by who owns it (Nextly, each plugin, then the site), with what sends each one and its state: default, customised, update available, off, or kept as before. Search by name or what sends it, filter by owner and state, and start a new email from **New email**.
+- **Design** lists the layouts emails are sent in, and the partials they share.
+- **Sending** shows how email goes out: the default sender, every provider with whether it is on and which is the default, a provider set in `nextly.config.ts` (read-only), and a warning when the default is the Log provider on a site that is not in development.
+
+Each tab shows to anyone allowed to read what it shows: `read-email-templates` or `manage-email-templates` for Messages and Design, `read-email-providers` or `manage-email-providers` for Sending. A change needs the permission the server checks for it, so someone who may only read sees the lists without the actions they would be refused.
+
+The email pages that used to live under Settings (`/admin/settings/email-templates` and `/admin/settings/email-providers`, with their create and edit pages) redirect to their place in the hub, so bookmarks and links keep working.
+
+### Adding a provider
+
+**Email -> Sending -> Add provider** guides a new provider through three steps:
+
+1. **Choose** the provider type. Log is marked as for development: it writes each email to the server log and delivers nothing.
+2. **Connect** it with only that type's settings. Where the provider can be asked without sending (an SMTP server's sign-in, a Resend key), Nextly checks the settings with it before saving and says plainly what failed. SendLayer can't be checked without sending, so the test in the next step is its check. A provider whose transport package isn't installed yet (SMTP without `nodemailer`) is saved without a check, and the form shows the command to install it.
+3. **Send a test**, a real email to your own address. A provider's test always goes to the address of the person who sends it, so it can't be pointed at anyone else.
+
+A new provider is saved **off**, and never as the default, until its test is accepted or you turn it on. Turning it on is an edit, so it needs permission to edit providers: someone who may only add providers can send the test and leave the provider off for someone who can. An accepted test is reported as accepted by the provider, not as delivered: check the inbox. A test through Log is reported as logged, not sent.
+
+When a check or a test fails, the hub says what to check:
+
+| What went wrong                  | What to check                                                                                       |
+| -------------------------------- | --------------------------------------------------------------------------------------------------- |
+| The sign-in was refused          | The API key, or the username and password. Google Workspace and Microsoft 365 need an app password. |
+| The sender isn't allowed         | That the From address uses a domain verified with the provider.                                     |
+| The recipient was refused        | Your own address, on your account, and whether the provider is blocking it.                         |
+| The provider is rate limiting    | Wait a minute, then send again.                                                                     |
+| The provider couldn't be reached | The host and port, and that the server can reach the internet.                                      |
+| Anything else                    | The reason is in the server log.                                                                    |
+
+Fix the settings and send again without starting over. **Send a test** is also on every provider's row and page. Saving changed sign-in settings on a provider's page checks them first too; **Save anyway** keeps them if you know better.
+
+Only a provider that is on can be made the default. A default your site already has is left as it is.
+
+Where a provider reports the status of your sending domain (Resend does), the provider's page shows it, verified, pending or failed, with the DNS records it expects, each copyable. Nextly never changes DNS itself.
+
+### Linking to an email from a plugin
+
+A plugin's own screens link to an email in the hub rather than editing it themselves. An email opens for editing at:
+
+```text
+/admin/email/messages/edit/<template id>
+```
+
+The form builder does this from a form's **Notifications** tab, opening the chosen email in a new tab so the form's unsaved changes are kept. The link shows only to someone allowed to edit templates.
+
 ## Provider configuration
 
-Configure your email provider in `nextly.config.ts` as a code-first fallback. Database-managed providers (configured in the admin UI at **Settings -> Email Providers**) take priority over code-defined config.
+Configure your email provider in `nextly.config.ts` as a code-first fallback. Database-managed providers (added in the admin at **Email -> Sending**, see [Adding a provider](#adding-a-provider)) take priority over code-defined config.
 
 > **Note:** `email.providerConfig` is **required** when the `email` block is set. If you only want database-managed providers, you can omit the `email` block entirely.
 
@@ -112,7 +161,7 @@ export default defineConfig({
 When sending an email, Nextly resolves the provider in this order:
 
 1. **Specific provider ID** -- if the call passes a `providerId`.
-2. **Database default provider** -- the provider marked as default in admin Settings.
+2. **Database default provider** -- the provider marked as default on the admin's **Email -> Sending** tab, when it is on.
 3. **Code-first config** -- the `providerConfig` from `defineConfig()`.
 4. **The log transport** -- if none of the above resolve, the message is written to the server log instead of being sent, so a fresh install's password-reset flow still works. A `providerId` that doesn't resolve is still an error.
 
@@ -134,7 +183,7 @@ Nextly automatically creates three email templates on first startup:
 | Password Reset     | `password-reset`     | Contains the reset link.        |
 | Email Verification | `email-verification` | Contains the verification link. |
 
-Templates are stored in the database and edited through the admin UI (**Settings -> Email Templates**) using a Lexical-based rich-text editor. They support `{{variable}}` placeholder syntax with HTML escaping.
+Templates are stored in the database and edited through the admin UI (**Email -> Messages**) using a Lexical-based rich-text editor. They support `{{variable}}` placeholder syntax with HTML escaping.
 
 The editor's **Send test** sends the saved template, with its sample data, to the signed-in user's own address and nowhere else. It needs the `update-email-templates` permission.
 
