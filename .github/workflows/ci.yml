@@ -22,6 +22,22 @@ on:
 permissions:
   contents: read
 
+# Turborepo's shared remote cache. A task whose inputs another run already
+# built replays that run's output instead of building again. Only `main`'s
+# pushes and the merge queue write to it, since those are what every later
+# run starts from; a pull request reads, so its build replays `main`'s tasks.
+# Entries are content-addressed per task and signed (`remoteCache.signature`
+# in turbo.jsonc), so a cancelled or altered upload is a miss, never a
+# half-built `dist/`. Without TURBO_TOKEN (a fork, or before the secret
+# exists) turbo uses its local cache alone, as before.
+env:
+  # The token only with a signing key beside it: turbo would otherwise sign
+  # with an empty key and only warn.
+  TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+  TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+  TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
+  TURBO_CACHE: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'local:rw,remote:rw' || 'local:rw,remote:r' }}
+
 # Superseding is right for a branch under review and wrong for `main`.
 #
 # On a pull request a new push makes the previous run's verdict irrelevant, so

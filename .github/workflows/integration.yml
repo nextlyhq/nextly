@@ -54,6 +54,15 @@ permissions:
 # drifts back into firing on variance.
 env:
   INTEGRATION_SUITE_BUDGET: 55m
+  # Turborepo's shared remote cache, written only by `main` and the merge
+  # queue and read everywhere else: the reasons are beside the same block in
+  # ci.yml.
+  # The token only with a signing key beside it: turbo would otherwise sign
+  # with an empty key and only warn.
+  TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+  TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+  TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
+  TURBO_CACHE: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'local:rw,remote:rw' || 'local:rw,remote:r' }}
 
 # Keyed per commit on `main` for the same reason as the CI workflow: a shared
 # `github.ref` group cancelled the previous commit's run on every merge, and

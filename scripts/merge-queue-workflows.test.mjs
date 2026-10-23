@@ -249,6 +249,54 @@ describe("Integration on request", () => {
   });
 });
 
+describe("Turborepo's shared remote cache", () => {
+  /*
+   * Only `main`'s pushes and the merge queue write to it: every later run
+   * starts from what they built, and a pull request's own build must not
+   * become an entry another pull request replays. Each workflow's env is
+   * evaluated for the events it meets, not read by spelling.
+   */
+  const valueOf = (template, known) => {
+    const expression = String(template);
+    return evaluate(conditionTokens(expression), expression, known);
+  };
+  const MAIN = { "github.event_name": "push", "github.ref": "refs/heads/main" };
+  const QUEUE = { "github.event_name": "merge_group", "github.ref": "refs/heads/gh-readonly-queue/main/pr-1-abc" };
+  const PULL = { "github.event_name": "pull_request", "github.ref": "refs/pull/1/merge" };
+  const DISPATCH = { "github.event_name": "workflow_dispatch", "github.ref": "refs/heads/main" };
+  const SECRETS = { "secrets.turbo_token": "t", "secrets.turbo_remote_cache_signature_key": "k".repeat(64) };
+
+  for (const path of [".github/workflows/ci.yml", ".github/workflows/integration.yml"]) {
+    const env = read(path).env;
+
+    it(`${path}: main and the queue write, every other run only reads`, () => {
+      expect(valueOf(env.TURBO_CACHE, MAIN)).toBe("local:rw,remote:rw");
+      expect(valueOf(env.TURBO_CACHE, QUEUE)).toBe("local:rw,remote:rw");
+      expect(valueOf(env.TURBO_CACHE, PULL)).toBe("local:rw,remote:r");
+      expect(valueOf(env.TURBO_CACHE, DISPATCH)).toBe("local:rw,remote:r");
+    });
+
+    it(`${path}: hands turbo the token only with a signing key beside it`, () => {
+      expect(valueOf(env.TURBO_TOKEN, { ...PULL, ...SECRETS })).toBe("t");
+      expect(valueOf(env.TURBO_TOKEN, { ...PULL, ...SECRETS, "secrets.turbo_remote_cache_signature_key": "" })).toBe("");
+    });
+  }
+
+  it("signs every artifact and refuses a short key", () => {
+    const config = load(
+      readFileSync(new URL("../turbo.jsonc", import.meta.url), "utf8")
+        .replace(/^\s*\/\/.*$/gm, "")
+        .replace(/\s\/\/ .*$/gm, "")
+    );
+    expect(config.remoteCache).toMatchObject({ signature: true });
+    expect(config.futureFlags).toMatchObject({ longerSignatureKey: true });
+  });
+
+  it("is never used by a release, which builds what it publishes from its own checkout", () => {
+    expect(readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8")).not.toMatch(/TURBO_(TOKEN|TEAM|API)\b/);
+  });
+});
+
 describe("a dispatched run and the push run of one commit", () => {
   /*
    * main-catch-up.yml dispatches CI and Integration on a commit whose push run

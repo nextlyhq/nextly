@@ -85,6 +85,16 @@
 
   // Runtime env vars referenced from package source (not build-time inputs).
   // Listed here so eslint-plugin-turbo's no-undeclared-env-vars rule passes.
+  // Every artifact turbo uploads to the shared remote cache is signed with
+  // TURBO_REMOTE_CACHE_SIGNATURE_KEY (HMAC-SHA256) and verified on download;
+  // one that fails verification, truncated or altered, counts as a miss. The
+  // remote cache is used only where TURBO_TOKEN is set (CI, see ci.yml), so a
+  // machine without it builds from its local cache as before.
+  "remoteCache": { "signature": true },
+
+  // A signing key under 32 bytes is a fatal error rather than a warning.
+  "futureFlags": { "longerSignatureKey": true },
+
   "globalPassThroughEnv": [
     "npm_config_user_agent", // create-nextly-app reads this to detect the invoking PM
     "BLOB_READ_WRITE_TOKEN", // @nextlyhq/storage-vercel-blob runtime config
