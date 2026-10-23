@@ -88,6 +88,15 @@ describe("the forms this reader claims to see", () => {
     ).toEqual(["pg"]);
   });
 
+  it("reads a JSDoc type wherever it starts: after a parameter's name, or on the next line", () => {
+    expect(
+      read('/** @param value {import("forbidden").T} */', "module.js")
+    ).toContain("forbidden");
+    expect(
+      read('/**\n * @type\n * {import("forbidden").T}\n */', "module.js")
+    ).toContain("forbidden");
+  });
+
   it("reads past a quoted brace inside a JSDoc type, which is a character, not its end", () => {
     expect(
       read('/** @type {"}" | import("forbidden").T} */', "module.js")

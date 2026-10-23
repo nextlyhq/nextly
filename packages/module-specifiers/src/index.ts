@@ -195,8 +195,8 @@ function boundNames(pattern: BindingPattern | ParamPattern | null): string[] {
  * `import("...")` inside a tag's `{type}` expression.
  *
  * The parser does not build a tree for JSDoc, so this reads the comment's own
- * grammar: a tag type is the brace-balanced `{...}` after a tag, its quoted
- * strings skipped whole, and an `@import` tag runs to the next tag, which starts
+ * grammar: a type is any brace-balanced `{...}`, its quoted strings skipped
+ * whole, wherever it starts, and an `@import` tag runs to the next tag, which starts
  * after whitespace. An `@` inside the tag, as in a scoped package's quoted name,
  * does not end it. A specifier is the value its quoted literal spells, escapes
  * decoded. Prose in the description is not a type expression and is not read,
@@ -225,9 +225,11 @@ function jsDocRefs(comment: Comment): PlacedRef[] {
     });
   }
 
-  for (const tag of text.matchAll(/@[A-Za-z]+\s*\{/g)) {
-    const open = tag.index + tag[0].length - 1;
-    const typeExpression = text.slice(open + 1, closingBrace(text, open));
+  // Every brace-balanced group is a type expression, wherever it starts: after
+  // its tag, after a parameter's name, or on a line of its own.
+  for (let open = text.indexOf("{"); open !== -1; ) {
+    const close = closingBrace(text, open);
+    const typeExpression = text.slice(open + 1, close);
     for (const call of typeExpression.matchAll(
       new RegExp(String.raw`\bimport\s*\(\s*(?:(${QUOTED})\s*\))?`, "g")
     )) {
@@ -237,6 +239,7 @@ function jsDocRefs(comment: Comment): PlacedRef[] {
         start: at(open + 1 + call.index),
       });
     }
+    open = text.indexOf("{", close + 1);
   }
   return found;
 }
