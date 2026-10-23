@@ -512,6 +512,40 @@ describe.each(getConfiguredTestDialects())(
       expect(messages.map(m => m.options.to)).toEqual([A, B, B]);
     }, 120_000);
 
+    it("honours an earlier version's accepted call when the retry goes through a provider that groups recipients", async () => {
+      const { t, keyedOneAtATime } = await boot(dialect);
+      behaviour.failures = 1;
+      behaviour.failFor = B;
+      const keyed = {
+        to: [A, B],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: KEY,
+      };
+      await t.nextly.email.send({ ...keyed, providerId: keyedOneAtATime });
+      // As an earlier version wrote it: the one-recipient call to A.
+      await t.adapter.update(
+        "email_send_claims",
+        {
+          result: JSON.stringify({
+            acceptedLegs: [messages[0].options.idempotencyKey],
+          }),
+        },
+        { and: [{ column: "state", op: "=", value: "partial" }] }
+      );
+
+      // The default provider sends both in one message.
+      await t.nextly.email.send(keyed);
+
+      expect(
+        messages.map(m => [m.provider, m.options.toList ?? [m.options.to]])
+      ).toEqual([
+        ["capturing-keyed-one", [A]],
+        ["capturing-keyed-one", [B]],
+        ["capturing-keyed", [B]],
+      ]);
+    }, 120_000);
+
     it("writes a partly delivered claim's accepted calls too, for an instance of the earlier version", async () => {
       const { t, keyedOneAtATime } = await boot(dialect);
       behaviour.failures = 1;

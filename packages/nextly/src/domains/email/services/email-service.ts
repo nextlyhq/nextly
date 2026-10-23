@@ -859,8 +859,7 @@ export class EmailService extends BaseService {
     // key had not reached. With none, this is the envelope itself.
     const previouslyAccepted = this.acceptedBefore(
       claimed?.keyed.claim,
-      envelope,
-      maxToPerMessage
+      envelope
     );
     const messages = messagesFor(
       pendingEnvelope(envelope, previouslyAccepted),
@@ -954,8 +953,7 @@ export class EmailService extends BaseService {
    */
   private acceptedBefore(
     claim: HeldClaim | undefined,
-    envelope: SendEnvelope,
-    maxToPerMessage: number | undefined
+    envelope: SendEnvelope
   ): ReadonlySet<string> {
     // Calls are read only from a claim the earlier version wrote, which has no
     // recipients: a claim that records both is read by its recipients, which
@@ -967,7 +965,14 @@ export class EmailService extends BaseService {
     ) {
       return claim?.acceptedRecipients ?? new Set<string>();
     }
-    const calls = messagesFor(envelope, maxToPerMessage).filter(message =>
+    // The calls are matched in both shapes a send can take, whole and one
+    // message per `to`, whatever the provider now: the earlier attempt may
+    // have gone through a provider that groups recipients differently.
+    const candidates = [
+      envelope,
+      ...(envelope.to.length > 1 ? messagesFor(envelope, 1) : []),
+    ];
+    const calls = candidates.filter(message =>
       claim.acceptedCalls.has(claim.providerKey(message))
     );
     return new Set([...claim.acceptedRecipients, ...slotsOf(envelope, calls)]);
