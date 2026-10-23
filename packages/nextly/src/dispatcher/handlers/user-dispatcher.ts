@@ -28,6 +28,8 @@ import {
 } from "../../auth/caller-scope";
 import { getRBACService } from "../../auth/code-access";
 import { requestLanguage } from "../../auth/middleware";
+import { container } from "../../di/container";
+import type { ApiKeyService } from "../../domains/auth/services/api-key-service";
 import { NextlyError } from "../../errors/nextly-error";
 import { permissionSlug } from "../../schemas/_zod/rbac";
 import type { ServiceContainer } from "../../services";
@@ -62,6 +64,34 @@ function capabilitiesCaller(userId: string): GateCaller {
   const actor = currentRequestCaller()?.actor;
   const keyId = actor?.type === "apiKey" ? actor.id : undefined;
   return { userId, key: scope, ...(keyId === undefined ? {} : { keyId }) };
+}
+
+/**
+ * When the capabilities answer stops holding, in epoch ms, or null.
+ *
+ * A session's answer holds until its soonest role assignment ends. A key's
+ * holds until the key expires; a read-only or full-access key follows its
+ * owner's roles, so it also ends when the owner's soonest assignment does,
+ * while a role-based key carries a role of its own, which no assignment of
+ * the owner's bounds.
+ */
+async function capabilitiesValidUntil(
+  caller: GateCaller
+): Promise<number | null> {
+  const ownerUntil = async (): Promise<number | undefined> =>
+    (await resolveUserRoles(caller.userId)).validUntil;
+  if (!caller.key) return (await ownerUntil()) ?? null;
+  const key =
+    caller.keyId === undefined
+      ? null
+      : await container
+          .get<ApiKeyService>("apiKeyService")
+          .getApiKeyById(caller.keyId, caller.userId);
+  const ends = [
+    key?.expiresAt ? Date.parse(key.expiresAt) : undefined,
+    key?.tokenType === "role-based" ? undefined : await ownerUntil(),
+  ].filter((end): end is number => end !== undefined && Number.isFinite(end));
+  return ends.length > 0 ? Math.min(...ends) : null;
 }
 
 const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
@@ -217,9 +247,9 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
     execute: async (_svc, p) => {
       const userId = requireParam(p, "userId", "UserId");
       const caller = capabilitiesCaller(userId);
-      const [{ kinds, degraded }, roles] = await Promise.all([
+      const [{ kinds, degraded }, validUntil] = await Promise.all([
         registeredContentSnapshot(),
-        resolveUserRoles(userId),
+        capabilitiesValidUntil(caller),
       ]);
       // The answer states what the caller may do with EVERY entity, so a
       // registry that could not be enumerated leaves a floor rather than the
@@ -250,8 +280,7 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
         {
           // A key never carries super-admin authority through the gates.
           isSuperAdmin: caller.key ? false : await isSuperAdmin(userId),
-          // When the answer stops holding: the soonest role assignment to end.
-          validUntil: roles.validUntil ?? null,
+          validUntil,
           ...capabilities,
         },
         { headers: { "Cache-Control": "private, no-store" } }

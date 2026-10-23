@@ -60,6 +60,8 @@ describe.each(getConfiguredTestDialects())(
     let superAdminId: string;
     let readerKey: string;
     let visitingId: string;
+    /** The visiting reader's read-only and role-based keys, and when each ends. */
+    let visitingKeys: { readOnly: string; roleBased: string; keyEnds: number };
     /** When the visiting reader's one role assignment ends. */
     const visitEnds = new Date(Date.now() + 60 * 60 * 1000);
 
@@ -196,6 +198,22 @@ describe.each(getConfiguredTestDialects())(
       ).assignRoleToUser(visitingId, readerRoleId, { expiresAt: visitEnds });
       expect(assigned.success).toBe(true);
       const keys = t.getService("apiKeyService") as unknown as ApiKeyService;
+      const readOnly = await keys.createApiKey(visitingId, {
+        name: "follows the visitor",
+        tokenType: "read-only",
+        expiresIn: "7d",
+      });
+      const roleBased = await keys.createApiKey(visitingId, {
+        name: "carries the readers role",
+        tokenType: "role-based",
+        roleId: readerRoleId,
+        expiresIn: "7d",
+      });
+      visitingKeys = {
+        readOnly: readOnly.key,
+        roleBased: roleBased.key,
+        keyEnds: Date.parse(roleBased.meta.expiresAt ?? ""),
+      };
       readerKey = (
         await keys.createApiKey(readerId, {
           name: "reads posts",
@@ -321,6 +339,28 @@ describe.each(getConfiguredTestDialects())(
       expect(Math.abs((validUntil ?? 0) - visitEnds.getTime())).toBeLessThan(
         1000
       );
+    });
+
+    it("ends a key's answer with the key, and with its owner's role only where the key follows it", async () => {
+      // A read-only key follows its owner's roles, so it ends when the
+      // visitor's role does, an hour from now, before the key's seven days.
+      const followed = await ask({
+        authorization: `Bearer ${visitingKeys.readOnly}`,
+      });
+      expect(
+        Math.abs((followed.validUntil ?? 0) - visitEnds.getTime())
+      ).toBeLessThan(1000);
+
+      // A role-based key carries a role of its own, so the owner's
+      // assignment does not bound it: it ends with the key.
+      const ownRole = await ask({
+        authorization: `Bearer ${visitingKeys.roleBased}`,
+      });
+      // POPULATION CONTROL: the key really ends later than the visit.
+      expect(visitingKeys.keyEnds).toBeGreaterThan(visitEnds.getTime());
+      expect(
+        Math.abs((ownRole.validUntil ?? 0) - visitingKeys.keyEnds)
+      ).toBeLessThan(1000);
     });
 
     it("refuses, rather than naming only some entities, when a registry cannot be read", async () => {

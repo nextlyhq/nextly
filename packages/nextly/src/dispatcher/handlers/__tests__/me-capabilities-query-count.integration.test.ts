@@ -1,22 +1,19 @@
 /**
- * What `GET /me/capabilities` costs as an install grows: one read per cell it
- * answers, and nothing about the caller read a second time.
+ * What `GET /me/capabilities` costs as an install grows: nothing more.
  *
  * Every cell is the route gate's own verdict, and the gate answers a cell
- * whose collection declares no rule from the targeted permission check — one
- * read per permission, the same read a REST request asking that one cell
- * makes. What must NOT grow with the install is everything else: the caller's
- * roles, grants and super-admin authority, which are read once for the whole
- * dispatch and shared by every cell. Asked without that sharing, each added
- * cell would cost its permission AND another look at the caller.
+ * whose collection declares no rule from the caller's permission. Asked one
+ * resource at a time, that is a read per cell, so an install of a hundred
+ * collections would cost hundreds of reads for one answer. The caller's
+ * permissions, roles and super-admin authority are read once instead and
+ * every cell is answered from them.
  *
- * So the property is a SLOPE, not a ceiling: adding collections adds exactly
- * as many reads as it adds cells. A ceiling would be met by an endpoint that
- * answers about nothing, and a single measurement cannot tell a shared lookup
- * from a cheap one — so two installs are measured, the larger is shown to
- * answer about more, and the growth has to be one read per added cell
- * exactly. Two instances, one at a time, because the entities an answer names
- * are the installation's.
+ * So the property is a SLOPE, not a ceiling: adding collections adds no read
+ * at all. A ceiling would be met by an endpoint that answers about nothing,
+ * and a single measurement cannot tell a shared lookup from a cheap one — so
+ * two installs are measured, the larger is shown to answer about more, and
+ * both have to cost the same reads. Two instances, one at a time, because the
+ * entities an answer names are the installation's.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -189,7 +186,7 @@ describe.each(getConfiguredTestDialects())(
       }
     }
 
-    it("reads the caller once for the whole answer, and each added cell only its own permission", async () => {
+    it("reads the caller once for the whole answer, however many cells it has", async () => {
       const one = await measure(1);
       const many = await measure(12);
 
@@ -200,10 +197,10 @@ describe.each(getConfiguredTestDialects())(
       expect(many.cells).toBeGreaterThan(one.cells);
       expect(one.reads).toBeGreaterThan(0);
 
-      // One read per added cell: its permission, and nothing about the
-      // caller looked at again. Re-resolving the caller per cell would
-      // make this several times the added cells.
-      expect(many.reads - one.reads).toBe(many.cells - one.cells);
+      // No read per added cell: every cell is answered from the caller as it
+      // was read once. Asking each cell's permission on its own would add a
+      // read per cell, and re-resolving the caller several.
+      expect(many.reads).toBe(one.reads);
     }, 240_000);
   }
 );

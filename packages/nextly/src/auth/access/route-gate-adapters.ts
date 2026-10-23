@@ -55,6 +55,7 @@ import {
   actorForUserFailingClosed,
   userHoldsPermission,
   userIsSuperAdmin,
+  withHeldPermissions,
 } from "./resolve-actor";
 import { withRuleLanguage, type RuleLanguage } from "./rule-language";
 
@@ -224,12 +225,23 @@ const OPERATION_OF: Record<"collection" | "single", Record<string, string>> = {
  * `languageOf` gives the languages the REST operation behind an action is
  * told, so a rule hears the languages that request would.
  *
- * Asked one at a time: the caller's lookups are kept for the request, so the
- * first answer reads them and the rest are worked out from what was read. A
- * lookup that fails throws, as it does at the route gate, rather than being
- * answered as a refusal.
+ * The caller is read once for the whole answer: a key from its scope, and a
+ * signed-in user's permissions held for every cell, so an added entity adds
+ * no question about the caller. A lookup that fails throws, as it does at the
+ * route gate, rather than being answered as a refusal.
  */
-export async function routeGateCapabilities(
+export function routeGateCapabilities(
+  caller: GateCaller,
+  entities: ReadonlyMap<string, "collection" | "single">,
+  rules: RouteRules,
+  languageOf: (operation: string) => RuleLanguage
+): Promise<RouteCapabilities> {
+  const answer = (): Promise<RouteCapabilities> =>
+    entityCapabilities(caller, entities, rules, languageOf);
+  return caller.key ? answer() : withHeldPermissions(caller.userId, answer);
+}
+
+async function entityCapabilities(
   caller: GateCaller,
   entities: ReadonlyMap<string, "collection" | "single">,
   rules: RouteRules,
@@ -240,17 +252,17 @@ export async function routeGateCapabilities(
     const actions = kind === "single" ? SINGLE_ACTIONS : COLLECTION_ACTIONS;
     const answered: Record<string, boolean> = {};
     for (const action of actions) {
+      // Update is answered before either lifecycle action in both lists. A
+      // refused update closes the door a publish is sent through, so its own
+      // check, and any rule it would run, is never asked.
+      if (THROUGH_UPDATE.has(action) && answered.update !== true) {
+        answered[action] = false;
+        continue;
+      }
       answered[action] = await withRuleLanguage(
         languageOf(OPERATION_OF[kind][action] ?? action),
         () => capability(caller, action, slug, rules)
       );
-    }
-    // Update is answered before either lifecycle action in both lists.
-    for (const action of THROUGH_UPDATE) {
-      if (action in answered) {
-        answered[action] =
-          answered.update === true && answered[action] === true;
-      }
     }
     byEntity[slug] = { kind, ...answered } as EntityCapabilities;
   }
@@ -266,7 +278,7 @@ async function capability(
 ): Promise<boolean> {
   const verdict = await aboutSubject(permissionSlug(action, resource), () =>
     gateVerdict(caller, action, resource, rules, () =>
-      hasPermission(caller.userId, action, resource)
+      userHoldsPermission(caller.userId, action, resource)
     )
   );
   if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;

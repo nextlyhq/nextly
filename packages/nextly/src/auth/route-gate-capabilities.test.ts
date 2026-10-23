@@ -343,6 +343,38 @@ describe("routeGateCapabilities", () => {
     expect(alone.allowed).toBe(true);
   });
 
+  it("asks no publish check, and runs no publish rule, once the update it goes through is refused", async () => {
+    const publishRule = vi.fn(() => true);
+    const rbac = new RBACAccessControlService();
+    rbac.registerCollectionAccess(POSTS, {
+      publish: publishRule,
+      unpublish: publishRule,
+    });
+    registered.rbac = rbac;
+
+    const { entities } = await routeGateCapabilities(
+      { userId: "viewer" },
+      ENTITIES,
+      rbac,
+      LANGUAGE_OF
+    );
+    expect(entities[POSTS]).toMatchObject({
+      update: false,
+      publish: false,
+      unpublish: false,
+    });
+    expect(publishRule).not.toHaveBeenCalled();
+
+    // POPULATION CONTROL: for a caller who may update, the rule is asked.
+    await routeGateCapabilities(
+      { userId: "editor" },
+      ENTITIES,
+      rbac,
+      LANGUAGE_OF
+    );
+    expect(publishRule).toHaveBeenCalled();
+  });
+
   it("records each cell's deviation under that cell's own subject", async () => {
     registered.rbac = serviceFor("service", RULES["returns-true"]);
     const { bySubject } = await recordingDeviations(() =>
