@@ -27,6 +27,8 @@ const server = vi.hoisted(() => ({
   permissionsDelayMs: 0,
   /** The same, for the next capabilities request. */
   capabilitiesDelayMs: 0,
+  /** Held until released, for the next capabilities request. */
+  capabilitiesGate: null as Promise<void> | null,
 }));
 
 /** The content language the screen's `?locale=` names, if any. */
@@ -50,8 +52,11 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
       if (path.split("?")[0] === "/me/capabilities") {
         const asAsked = server.capabilities;
         const delay = server.capabilitiesDelayMs;
+        const gate = server.capabilitiesGate;
         server.capabilitiesDelayMs = 0;
+        server.capabilitiesGate = null;
         if (delay > 0) await new Promise(done => setTimeout(done, delay));
+        if (gate) await gate;
         if (asAsked instanceof Error) throw asAsked;
         return asAsked;
       }
@@ -129,6 +134,7 @@ beforeEach(() => {
   server.asked = [];
   server.permissionsDelayMs = 0;
   server.capabilitiesDelayMs = 0;
+  server.capabilitiesGate = null;
   onScreen.locale = undefined;
 });
 
@@ -346,35 +352,101 @@ describe("useCurrentUserPermissions", () => {
     expect(result.current.hasPermission("read-posts")).toBe(false);
   });
 
-  it("keeps an end an answer named, though a later answer drops it before it arrives", async () => {
+  it("keeps an end an answer named, though an answer given after it drops it before its timer runs", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    server.capabilities = answering({ read: true }, Date.now() + 60_000);
+    const end = Date.now() + 60_000;
+    server.capabilities = answering({ read: true }, end);
     const { result } = renderHook(() => useCurrentUserPermissions(), {
       wrapper: wrapperFor(newClient()),
     });
     await waitFor(() => expect(result.current.hasAnswer).toBe(true));
-
-    // A refresh a second before the end: the content answer comes back at
-    // once with no end, and the permission list, as it stood then, after it.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(59_000);
+    });
+
+    // A refresh a second before the end. Its content answer, with no end, is
+    // held until the clock has passed the end while the end's own timer has
+    // not run, as in a throttled tab; its permission list, as the role stood
+    // when asked, comes later still.
+    let release = (): void => {};
+    server.capabilitiesGate = new Promise(done => {
+      release = done;
     });
     server.capabilities = answering({ read: true }, null);
     server.permissionsDelayMs = 2_000;
     await act(async () => {
       result.current.retry();
     });
-    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
-    // POPULATION CONTROL: the end is gone from the answer that named it.
-    expect(capabilityAsks()).toBeGreaterThan(1);
-
+    vi.setSystemTime(end + 500);
     server.permissions = new Error("permissions unavailable");
+    await act(async () => {
+      release();
+    });
+    // POPULATION CONTROL: the answer given after the end, with none, landed.
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+
     await act(async () => {
       await vi.advanceTimersByTimeAsync(4_000);
     });
     await waitFor(() => expect(result.current.error).not.toBeNull());
-
     expect(result.current.hasAnswer).toBe(false);
+  });
+
+  it("retires an end that a newer answer, given before it, no longer names", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    server.capabilities = answering({ read: true }, Date.now() + 60_000);
+    const client = newClient();
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(result.current.hasAnswer).toBe(true));
+
+    // Half-way there, the ending assignment is extended: the new answer
+    // names no end.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    server.capabilities = answering({ read: true }, null);
+    await act(async () => {
+      invalidateCurrentUserAccess(client);
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+    await waitFor(() => expect(result.current.hasAnswer).toBe(true));
+
+    // Past the old end, nothing is asked again: the answers in hand stand.
+    server.permissions = new Error("permissions unavailable");
+    const asked = capabilityAsks();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(40_000);
+    });
+    expect(capabilityAsks()).toBe(asked);
+    expect(result.current.hasAnswer).toBe(true);
+    expect(result.current.hasPermission("read-posts")).toBe(true);
+  });
+
+  it("asks once at an end, however many callers are mounted", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    server.capabilities = answering({ read: true }, Date.now() + 60_000);
+    const client = newClient();
+    const guard = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    const sidebar = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(guard.result.current.hasAnswer).toBe(true));
+    await waitFor(() => expect(sidebar.result.current.hasAnswer).toBe(true));
+    const before = capabilityAsks();
+
+    server.capabilities = answering({ read: true }, null);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await waitFor(() =>
+      expect(guard.result.current.content.hasAnswer).toBe(true)
+    );
+
+    expect(capabilityAsks()).toBe(before + 1);
   });
 
   it("lets the slower half of a refresh at the end finish rather than restarting it", async () => {

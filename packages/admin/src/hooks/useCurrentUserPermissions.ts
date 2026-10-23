@@ -1,9 +1,10 @@
 import {
   useQuery,
   useQueryClient,
+  type QueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
 import { LOCALE_PARAM } from "../constants/search-params";
@@ -265,11 +266,19 @@ function contentUnanswered(
   return state?.data === undefined && state?.error != null;
 }
 
+/**
+ * When a refresh for a reached end was last asked, per query client: every
+ * mounted caller of the hook decides the same step at the same moment, and the
+ * first to act asks for all of them, so they do not replace one another's
+ * requests or each ask the whole matrix again.
+ */
+const deadlineAsks = new WeakMap<QueryClient, number>();
+
 /** What the deadline effect does now, for the answers and ends it has. */
 type DeadlineStep =
-  | { kind: "ask-both" }
+  | { kind: "ask-both"; since: number }
   | { kind: "ask-stale"; list: boolean; answer: boolean }
-  | { kind: "wait"; at: number }
+  | { kind: "wait"; at: number; since: number }
   | { kind: "none" };
 
 /**
@@ -282,30 +291,48 @@ type DeadlineStep =
  * - otherwise wait for the next end to come, or, for an answer the server
  *   gave after its own end, check again at most once a second.
  */
-function nextDeadlineStep(state: {
+/** What the deadline effect knows when it decides. */
+interface DeadlineState {
   ends: readonly number[];
   validUntil: number | null;
   answeredAt: number;
   permissionsAnsweredAt: number;
   askedAt: number | null;
   now: number;
-}): DeadlineStep {
-  const { ends, validUntil, now } = state;
-  const passed = latestPassed(ends, now);
-  if (passed !== null) {
-    const list = state.permissionsAnsweredAt < passed;
-    const answer = state.answeredAt < passed;
-    if (list || answer) {
-      return state.askedAt === null || state.askedAt < passed
-        ? { kind: "ask-both" }
-        : { kind: "ask-stale", list, answer };
-    }
-  }
-  const upcoming = ends.filter(end => end > now);
+}
+
+function nextDeadlineStep(state: DeadlineState): DeadlineStep {
+  return passedEndStep(state) ?? waitingStep(state);
+}
+
+/**
+ * An end has passed and an answer is from before it: ask both again, unless a
+ * refresh for that end was already asked after it, in which case ask only the
+ * halves still from before it. Null when no answer is from before a passed end.
+ */
+function passedEndStep(state: DeadlineState): DeadlineStep | null {
+  const passed = latestPassed(state.ends, state.now);
+  if (passed === null) return null;
+  const list = state.permissionsAnsweredAt < passed;
+  const answer = state.answeredAt < passed;
+  if (!list && !answer) return null;
+  return state.askedAt === null || state.askedAt < passed
+    ? { kind: "ask-both", since: passed }
+    : { kind: "ask-stale", list, answer };
+}
+
+/**
+ * The next end to come, or, for an answer the server gave after its own end,
+ * a check at most once a second, whichever is sooner.
+ */
+function waitingStep({ ends, validUntil, now }: DeadlineState): DeadlineStep {
+  const next = Math.min(...ends.filter(end => end > now));
   const recheck =
     validUntil !== null && validUntil <= now ? now + MIN_RECHECK_MS : Infinity;
-  const at = Math.min(...upcoming, recheck);
-  return at === Infinity ? { kind: "none" } : { kind: "wait", at };
+  if (recheck < next) return { kind: "wait", at: recheck, since: now };
+  return next === Infinity
+    ? { kind: "none" }
+    : { kind: "wait", at: next, since: next };
 }
 
 /** The latest of `ends` that has passed by `now`, or null. */
@@ -434,33 +461,39 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   const validUntil = answer.data?.validUntil ?? null;
   const answeredAt = answer.dataUpdatedAt;
   // Every end an answer has named, kept apart from the answer that named it:
-  // a later answer can drop an end (with null, once the ending assignment is
-  // gone) before that end arrives, and the other request's answer from before
-  // it must still not count once it passes. Recorded in the render that first
-  // sees it, so no ordering of responses and timers can lose one.
+  // an answer given after an end can drop it (with null, once the ending
+  // assignment is gone) before that end's timer has run, and the other
+  // request's answer from before it must still not count. An end still to
+  // come when a newer answer that no longer names it was given is retired:
+  // that answer says no such end remains, the assignment having been removed
+  // or extended. Kept in the render that first sees it, so no ordering of
+  // responses and timers can lose one.
   const [ends, setEnds] = useState<readonly number[]>([]);
-  if (validUntil !== null && !ends.includes(validUntil)) {
-    setEnds([...ends, validUntil]);
+  const knownEnds = useMemo(() => {
+    const kept = ends.filter(end => end === validUntil || end <= answeredAt);
+    return validUntil === null || kept.includes(validUntil)
+      ? kept
+      : [...kept, validUntil];
+  }, [ends, validUntil, answeredAt]);
+  if (
+    knownEnds.length !== ends.length ||
+    knownEnds.some((end, index) => end !== ends[index])
+  ) {
+    setEnds(knownEnds);
   }
-  const knownEnds = useMemo(
-    () =>
-      validUntil === null || ends.includes(validUntil)
-        ? ends
-        : [...ends, validUntil],
-    [ends, validUntil]
-  );
   // The latest end that has passed, read at render, so an answer already past
   // its end when this mounts never counts, not even until a timer fires.
   const endedAt = latestPassed(knownEnds, Date.now());
   const permissionsAnsweredAt = permissionsQuery.dataUpdatedAt;
   const [, setEndsReached] = useState(0);
-  // When the last refresh for a reached end was asked, so that once one half
-  // of it lands the other is not restarted.
-  const askedAt = useRef<number | null>(null);
   useEffect(() => {
-    const askAgain = (): void => {
-      askedAt.current = Date.now();
+    // `since`: the moment the step was due. Another caller that asked after it
+    // has asked for this one too.
+    const askAgain = (since: number): void => {
       setEndsReached(reached => reached + 1);
+      const last = deadlineAsks.get(queryClient);
+      if (last !== undefined && last >= since) return;
+      deadlineAsks.set(queryClient, Date.now());
       // A refresh already under way may have been asked before the end, and
       // its answer would arrive after it looking current, so it is replaced
       // rather than joined: only an answer asked after the end counts.
@@ -472,11 +505,11 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
       validUntil,
       answeredAt,
       permissionsAnsweredAt,
-      askedAt: askedAt.current,
+      askedAt: deadlineAsks.get(queryClient) ?? null,
       now: Date.now(),
     });
     if (step.kind === "ask-both") {
-      askAgain();
+      askAgain(step.since);
       return undefined;
     }
     if (step.kind === "ask-stale") {
@@ -489,7 +522,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
       return undefined;
     }
     if (step.kind === "none") return undefined;
-    const { at } = step;
+    const { at, since } = step;
     let timer: ReturnType<typeof setTimeout>;
     const arm = (): void => {
       const remaining = at - Date.now();
@@ -499,7 +532,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
         timer = setTimeout(arm, MAX_TIMER_MS);
         return;
       }
-      timer = setTimeout(askAgain, Math.max(remaining, 0));
+      timer = setTimeout(() => askAgain(since), Math.max(remaining, 0));
     };
     arm();
     return () => clearTimeout(timer);

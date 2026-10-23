@@ -40,8 +40,9 @@ import type { Permission } from "@admin/types/entities";
 
 import { CURRENT_USER_CAPABILITIES_KEY } from "../../current-user-access";
 import { useUpdatePermission } from "../usePermissions";
+import { currentUserKey } from "../../useDashboardUser";
 import { useBulkUpdateRoles, useUpdateRole } from "../useRoles";
-import { useUpdateUser } from "../useUsers";
+import { useBulkUpdateUsers, useUpdateUser } from "../useUsers";
 
 const wrapperFor =
   (client: QueryClient) =>
@@ -153,6 +154,61 @@ describe("a bulk role edit given its own onComplete", () => {
     expect(own).toHaveBeenCalled();
     expect(
       asksAccessAgain(invalidate.mock.calls.map(([f]) => [f?.queryKey]))
+    ).toBe(true);
+  });
+});
+
+describe("a user edit, by whom it edits", () => {
+  /** The keys a successful edit of `userIds` invalidated, signed in as `me`. */
+  async function keysAfterEditing(
+    me: string,
+    edit: "one" | "bulk",
+    userIds: string[]
+  ): Promise<unknown[][]> {
+    vi.mocked(updateUser).mockResolvedValue(undefined);
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    client.setQueryData(currentUserKey, { id: me, name: me, email: "" });
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const one = renderHook(() => useUpdateUser(), {
+      wrapper: wrapperFor(client),
+    });
+    const bulk = renderHook(() => useBulkUpdateUsers(), {
+      wrapper: wrapperFor(client),
+    });
+    await act(async () => {
+      if (edit === "one") {
+        await one.result.current.mutateAsync({
+          userId: userIds[0] ?? "",
+          updates: {},
+        });
+      } else {
+        await bulk.result.current.mutateAsync(userIds, {});
+      }
+    });
+    return invalidate.mock.calls.map(([f]) => [f?.queryKey]);
+  }
+
+  it("asks nothing again for an edit of someone else", async () => {
+    const keys = await keysAfterEditing("me", "one", ["someone"]);
+    // POPULATION CONTROL: the edit's own caches are still reconciled.
+    expect(keys.length).toBeGreaterThan(0);
+    expect(asksAccessAgain(keys)).toBe(false);
+    expect(
+      asksAccessAgain(await keysAfterEditing("me", "bulk", ["a", "b"]))
+    ).toBe(false);
+  });
+
+  it("asks again for an edit of the signed-in user", async () => {
+    expect(asksAccessAgain(await keysAfterEditing("me", "one", ["me"]))).toBe(
+      true
+    );
+    expect(
+      asksAccessAgain(await keysAfterEditing("me", "bulk", ["a", "me"]))
     ).toBe(true);
   });
 });
