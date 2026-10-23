@@ -291,11 +291,12 @@ export function VersionHistorySheet({
       // A restore can succeed while leaving parts behind: a field the schema no
       // longer has, one the restorer may not read, or one they may not write.
       // Saying so beats a clean success message that overstates what came
-      // back. The message names no single cause, since the list mixes them.
+      // back. The message names no cause and no outcome, since the list mixes
+      // them: a field the schema dropped has no current value to keep.
       if (result.droppedFields.length > 0) {
         toast.success(
           `Restored version ${result.restoredFrom}. ` +
-            `${result.droppedFields.length} field(s) were not restored and keep their current values: ` +
+            `${result.droppedFields.length} field(s) were not restored: ` +
             result.droppedFields.join(", ")
         );
         return;

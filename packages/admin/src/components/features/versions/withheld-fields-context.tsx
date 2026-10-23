@@ -43,10 +43,21 @@ export function WithheldFieldsProvider({
 }
 
 /**
+ * The question below, for a caller that must call its hooks before it knows
+ * the field's path: it reads the context now and asks of a path later.
+ */
+export function useWithheldFields(): (
+  fieldPath: string | undefined
+) => boolean {
+  const withheld = useContext(WithheldFieldsContext);
+  return fieldPath =>
+    fieldPath !== undefined && fieldPath !== "" && withheld.has(fieldPath);
+}
+
+/**
  * Whether this field's value was held back from the reader. Answered by the
  * field's full path, so only the row that lost the field is told it did.
  */
 export function useFieldWithheld(fieldPath: string | undefined): boolean {
-  const withheld = useContext(WithheldFieldsContext);
-  return fieldPath !== undefined && fieldPath !== "" && withheld.has(fieldPath);
+  return useWithheldFields()(fieldPath);
 }

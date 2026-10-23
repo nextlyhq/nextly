@@ -101,6 +101,38 @@ describe("a withheld field of a version", () => {
     expect(screen.getByRole("textbox", { name: "Secret" })).toBeInTheDocument();
   });
 
+  it("says so on a withheld component, which otherwise draws its own card", () => {
+    // A component skips the wrapper to draw its own header, so drawn as usual
+    // a withheld one would read as a component holding nothing.
+    const component = (name: string, label: string) =>
+      ({
+        type: "component",
+        name,
+        label,
+        component: name,
+        repeatable: false,
+        componentFields: [
+          { type: "text", name: "metaTitle", label: `${label} title` },
+        ],
+      }) as never;
+    render(
+      <WithheldFieldsProvider paths={["seo"]}>
+        <Form>
+          <FieldRenderer field={component("seo", "SEO")} />
+          <FieldRenderer field={component("hero", "Hero")} />
+        </Form>
+      </WithheldFieldsProvider>
+    );
+
+    expect(screen.getAllByText(HIDDEN)).toHaveLength(1);
+    expect(screen.getByRole("group", { name: "SEO" })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "SEO title" })).toBeNull();
+    // The readable component beside it is drawn whole.
+    expect(
+      screen.getByRole("textbox", { name: "Hero title" })
+    ).toBeInTheDocument();
+  });
+
   it("withholds nothing in the live editor, which has no version on screen", () => {
     render(
       <Form>

@@ -40,6 +40,8 @@ import { useFormContext, useWatch } from "react-hook-form";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { usePluginFieldType } from "@admin/lib/plugins/plugin-field-type";
 
+import { useWithheldFields } from "../../versions/withheld-fields-context";
+
 import {
   conditionSourcePath,
   effectiveFieldGate,
@@ -294,6 +296,8 @@ export function FieldRenderer({
     { shown: true, readOnly: Boolean(readOnly), disabled: Boolean(disabled) },
     conditionFieldValue
   );
+  // Read before the early return below, as every hook here must be.
+  const isWithheld = useWithheldFields();
   if (!gate.shown) return null;
   const isReadOnly = gate.readOnly;
   const isDisabled = gate.disabled;
@@ -322,8 +326,11 @@ export function FieldRenderer({
   // Asked through the shared predicate: stored definitions rewritten by the
   // storage migration carry `fieldGroup`, and a dispatch against one literal
   // rendered the migrated field as an unknown type.
+  // A component a viewed version withheld from the reader takes the wrapper's
+  // path instead, which names it and says it is held back: drawn as a
+  // component it would read as one that holds nothing.
   const fieldType = field.type as string;
-  if (isFieldGroupFieldType(fieldType)) {
+  if (isFieldGroupFieldType(fieldType) && !isWithheld(fieldPath)) {
     return (
       <ComponentInput
         {...commonProps}
