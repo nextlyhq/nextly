@@ -43,7 +43,7 @@ export function FolderTreeView({
   onEditFolder,
   onDeleteFolder,
   className,
-}: FolderTreeViewProps) {
+}: FolderTreeViewProps): React.JSX.Element {
   const { data: rootFolders, isLoading } = useRootFolders();
   const [expandedIds, setExpandedIds] = React.useState<Set<string>>(new Set());
 

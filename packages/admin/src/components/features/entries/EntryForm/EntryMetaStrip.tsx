@@ -1,6 +1,7 @@
 "use client";
 
 import type { FieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useFormContext } from "react-hook-form";
 
@@ -47,7 +48,7 @@ export function EntryMetaStrip({
   isRailCollapsed,
   lockSlug = false,
   hasPublicAddress = false,
-}: EntryMetaStripProps) {
+}: EntryMetaStripProps): JSX.Element | null {
   const showStatusPill = hasStatus && !!status;
   const showSlug = !!slugField;
 

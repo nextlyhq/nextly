@@ -29,6 +29,7 @@ import type {
   TextareaFieldConfig,
   TextFieldConfig,
 } from "nextly/config";
+import type { JSX } from "react";
 import { useMemo } from "react";
 import type { Control, FieldErrors, FieldValues } from "react-hook-form";
 
@@ -176,7 +177,7 @@ export function UserCustomFields({
   errors,
   disabled = false,
   groupLabel = "Additional Information",
-}: UserCustomFieldsProps) {
+}: UserCustomFieldsProps): JSX.Element | null {
   const { data, isLoading, isError } = useUserFields();
 
   // The fields this form draws: active, not declared hidden, in sortOrder.

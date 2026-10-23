@@ -20,7 +20,7 @@
  * @module components/features/widgets/edit/ArrangedGrid
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
-import type { RefObject } from "react";
+import type { JSX, RefObject } from "react";
 
 import type { CellSlots } from "@admin/hooks/queries/useWidgetQueries";
 import type {
@@ -228,7 +228,7 @@ export function ArrangedGrid({
   focus,
   gridRef,
   on,
-}: ArrangedGridProps) {
+}: ArrangedGridProps): JSX.Element {
   return (
     // The cards' spans answer to the `@container/dashboard` element `WidgetGrid` draws around
     // this, the one element the dashboard's width is measured from.

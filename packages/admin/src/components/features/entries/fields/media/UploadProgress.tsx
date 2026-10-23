@@ -9,6 +9,7 @@
  */
 
 import { Progress } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { cn } from "@admin/lib/utils";
 
@@ -82,7 +83,7 @@ export function UploadProgress({
   isComplete = false,
   isError = false,
   className,
-}: UploadProgressProps) {
+}: UploadProgressProps): JSX.Element {
   // Determine progress bar variant based on state
   const variant = isError ? "error" : isComplete ? "success" : "default";
 

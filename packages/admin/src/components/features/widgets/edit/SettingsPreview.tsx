@@ -8,6 +8,8 @@
  * @module components/features/widgets/edit/SettingsPreview
  */
 
+import type { JSX } from "react";
+
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { WidgetRenderer } from "../WidgetRenderer";
@@ -23,7 +25,7 @@ export function SettingsPreview(props: {
   /** The sheet's current values, as `toStoredConfig` builds them. */
   draft: Record<string, unknown>;
   shown: ShownAnswer;
-}) {
+}): JSX.Element {
   const preview = useSettingsPreview(props);
   return (
     <section

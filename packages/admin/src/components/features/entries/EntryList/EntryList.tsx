@@ -13,6 +13,7 @@
 
 import { Button } from "@nextlyhq/ui";
 import { useState, useCallback, useMemo, useRef } from "react";
+import type { JSX } from "react";
 
 import { Code, Plus } from "@admin/components/icons";
 import { Breadcrumbs } from "@admin/components/shared";
@@ -232,7 +233,7 @@ const DEFAULT_SORT = "-createdAt";
  * }
  * ```
  */
-export function EntryList({ collectionSlug }: EntryListProps) {
+export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // ---------------------------------------------------------------------------
   // Refs
   // ---------------------------------------------------------------------------

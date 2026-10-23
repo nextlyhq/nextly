@@ -48,7 +48,7 @@
  */
 
 import { Card, CardContent, CardFooter, CardHeader } from "@nextlyhq/ui";
-import { useId, useRef, type ReactNode } from "react";
+import { useId, useRef, type ReactNode, type JSX } from "react";
 
 import { Link } from "@admin/components/ui/link";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
@@ -241,7 +241,7 @@ function bodyClassName(refreshing: boolean, customizing: boolean): string {
   );
 }
 
-export function WidgetCard(props: WidgetCardProps) {
+export function WidgetCard(props: WidgetCardProps): JSX.Element {
   const { title, cardId } = props;
   const generatedId = useId();
   const titleId = cardId ? frameIds(cardId).titleId : generatedId;

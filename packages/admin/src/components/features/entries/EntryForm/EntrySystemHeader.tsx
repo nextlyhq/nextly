@@ -2,6 +2,7 @@
 
 import { Button } from "@nextlyhq/ui";
 import { isFieldLocalized, type FieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useFormContext } from "react-hook-form";
 
@@ -242,7 +243,7 @@ export function EntrySystemHeader({
   previewPaneOpen = false,
   isLinkAvailable = false,
   shareDocument,
-}: EntrySystemHeaderProps) {
+}: EntrySystemHeaderProps): JSX.Element | null {
   const form = useFormContext();
   // The share popover, opened by the preview control on a wide screen and by
   // the document menu's row on a narrow one.

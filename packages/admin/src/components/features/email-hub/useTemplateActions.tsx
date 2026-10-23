@@ -47,7 +47,11 @@ export function editRouteFor(record: Pick<EmailTemplateRecord, "id">): string {
  * read-only reader sees the list and no action they would be refused. The
  * server still refuses each one on its own: this hides, it doesn't guard.
  */
-export function useTemplateActions() {
+export function useTemplateActions(): {
+  actionsFor: (record: EmailTemplateRecord) => TemplateAction[];
+  canOpen: boolean;
+  dialogs: React.JSX.Element;
+} {
   const { hasPermission } = useCurrentUserPermissions();
   const can = {
     open: holdsAny(hasPermission, EMAIL_TEMPLATE_UPDATE_PERMISSIONS),

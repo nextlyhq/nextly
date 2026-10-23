@@ -15,6 +15,7 @@
 
 import { Button, Skeleton } from "@nextlyhq/ui";
 import type { WidgetSlot } from "nextly/widget-result";
+import type { JSX } from "react";
 
 import { Lock, RefreshCw, XCircle } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
@@ -176,7 +177,7 @@ export function CardSkeleton({
   layout?: RowsLayout;
   /** A stats card's cell labels, which are known before any of its numbers. */
   cells?: readonly string[];
-}) {
+}): JSX.Element {
   if (shape === "stats") {
     return (
       <div data-testid="card-skeleton" data-shape={shape}>
@@ -249,7 +250,11 @@ export interface CardEmptyContent {
 /** The frame's own empty state, for a card whose body says nothing more particular. */
 export const EMPTY_DEFAULT: CardEmptyContent = { title: "Nothing to show yet" };
 
-export function CardEmpty({ title, detail, action }: CardEmptyContent) {
+export function CardEmpty({
+  title,
+  detail,
+  action,
+}: CardEmptyContent): JSX.Element {
   return (
     <div className="grid justify-items-start gap-1" data-testid="card-empty">
       <p className="text-sm font-semibold text-foreground">{title}</p>
@@ -275,7 +280,7 @@ export const UNAVAILABLE_TITLE = "Not available to you";
 export const UNAVAILABLE_DETAIL =
   "What this card shows isn't available to your account.";
 
-export function CardUnavailable() {
+export function CardUnavailable(): JSX.Element {
   return (
     <div
       className="grid justify-items-start gap-1"
@@ -303,7 +308,7 @@ export function CardError({
   /** The card's title, for Retry's accessible name. */
   title: string;
   onRetry?: () => void;
-}) {
+}): JSX.Element {
   return (
     <div
       className="grid justify-items-start gap-1"
@@ -346,7 +351,7 @@ export function CardSlotFailure({
   slot: Extract<WidgetSlot, { ok: false }>;
   title: string;
   onRetry?: (() => void) | undefined;
-}) {
+}): JSX.Element {
   return slot.code === "unavailable" ? (
     <CardUnavailable />
   ) : (

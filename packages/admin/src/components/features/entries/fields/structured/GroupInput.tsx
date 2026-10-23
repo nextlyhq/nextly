@@ -23,6 +23,7 @@ import {
   CollapsibleTrigger,
 } from "@nextlyhq/ui";
 import type { GroupFieldConfig, FieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import { useState } from "react";
 
 import { FieldRow } from "@admin/components/features/entries/EntryForm/FieldRow";
@@ -141,7 +142,7 @@ export function GroupInput({
   basePath = "",
   disabled,
   readOnly,
-}: GroupInputProps) {
+}: GroupInputProps): JSX.Element {
   const [isOpen, setIsOpen] = useState(
     !(field as GroupFieldConfig & { admin?: { initCollapsed?: boolean } }).admin
       ?.initCollapsed

@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useState } from "react";
 import { FormProvider } from "react-hook-form";
 
@@ -75,7 +76,7 @@ export function SetInitialPassword({
   pendingToken,
   onDone,
   onCredentialRejected,
-}: SetInitialPasswordProps) {
+}: SetInitialPasswordProps): JSX.Element {
   const { api } = useApi();
   const [isLoading, setIsLoading] = useState(false);
   // A refused submission is shown in the form, where it stays while the

@@ -10,6 +10,7 @@
 
 import { Textarea } from "@nextlyhq/ui";
 import type { TextareaFieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import {
   useController,
   type Control,
@@ -150,7 +151,7 @@ export function TextareaInput<TFieldValues extends FieldValues = FieldValues>({
   disabled = false,
   readOnly = false,
   className,
-}: TextareaInputProps<TFieldValues>) {
+}: TextareaInputProps<TFieldValues>): JSX.Element {
   // Get default value - handle function default values
   const defaultValue =
     typeof field.defaultValue === "function"

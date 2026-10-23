@@ -16,6 +16,7 @@ import {
   DialogTitle,
   Input,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useMemo, useState } from "react";
 
 import { usePluginFieldTypeEntries } from "@admin/components/field-ui";
@@ -62,7 +63,7 @@ export function FieldPickerModal({
   onCancel,
   onSelect,
   title = "Add field",
-}: Props) {
+}: Props): JSX.Element {
   const [query, setQuery] = useState("");
 
   // Plugin field types that opted into the entry/single editing surface, merged

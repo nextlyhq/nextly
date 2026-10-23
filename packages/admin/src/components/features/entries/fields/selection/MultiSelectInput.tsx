@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@nextlyhq/ui";
 import type { SelectFieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import {
   useController,
   type Control,
@@ -60,7 +61,7 @@ export function MultiSelectInput<
   disabled = false,
   readOnly = false,
   className,
-}: MultiSelectInputProps<TFieldValues>) {
+}: MultiSelectInputProps<TFieldValues>): JSX.Element {
   // Scoped, so a second rendering of the same document on one page cannot
   // duplicate this id and steal the first rendering's label.
   const elementId = useFieldElementId(name);
