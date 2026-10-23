@@ -62,4 +62,36 @@ describe("applyFieldGroupWriteAccessToDocument", () => {
 
     expect(document).toEqual({ one: { heading: "h", box: { inner: {} } } });
   });
+
+  it("does not take an instance in one field for one stored in another", async () => {
+    // Fields `a` and `b` hold the same field group. A new instance in `b`
+    // sent with the id of `a`'s stored instance is still new: the save looks
+    // for it among `b`'s own rows, finds none, and creates it.
+    registerFieldFunctions("fieldGroup", "notey", [
+      { name: "secret", access: { create: () => false } },
+    ]);
+    const schemas = new Map<string, readonly FieldConfig[]>([
+      ["notey", fields({ name: "secret", type: "text" })],
+    ]);
+    const list = (name: string) => ({
+      name,
+      type: "component",
+      component: "notey",
+      repeatable: true,
+    });
+    const document: Record<string, unknown> = {
+      a: [],
+      b: [{ id: "x-1", secret: "S" }],
+    };
+
+    await applyFieldGroupWriteAccessToDocument({
+      document,
+      fields: fields(list("a"), list("b")),
+      fieldGroupFields: schemas,
+      access: CHECKED,
+      live: { a: [{ id: "x-1", secret: "stored" }], b: [] },
+    });
+
+    expect(document.b).toEqual([{ id: "x-1" }]);
+  });
 });
