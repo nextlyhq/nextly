@@ -83,6 +83,28 @@ describe.each(getConfiguredTestDialects())(
               fieldGroup({ name: "one", component: "lnote" }),
             ],
           }),
+          // A localized collection whose own translated group carries a field
+          // no update may change.
+          defineCollection({
+            slug: "lcoll",
+            localized: true,
+            access: {
+              create: () => true,
+              read: () => true,
+              update: () => true,
+            },
+            fields: [
+              text({ name: "title" }),
+              group({
+                name: "meta",
+                localized: true,
+                fields: [
+                  text({ name: "open" }),
+                  text({ name: "kept", access: { update: false } }),
+                ],
+              }),
+            ],
+          }),
           // The same, published, whose status-less updates are held as drafts.
           defineCollection({
             slug: "ldrafted",
@@ -239,6 +261,25 @@ describe.each(getConfiguredTestDialects())(
 
       const draft = await read({ draft: true });
       expect(draft.map(instance => instance.id)).toEqual([first.id, second.id]);
+    });
+
+    it("keeps a denied child of the collection's own translated group", async () => {
+      const { item } = await trusted.create({
+        collection: "lcoll",
+        data: { title: "c", meta: { open: "o", kept: "K" } },
+      } as never);
+      const id = String(item.id);
+      await checked.update({
+        collection: "lcoll",
+        id,
+        data: { meta: { open: "o2", kept: "forged" } },
+      } as never);
+
+      const after = (await trusted.findByID({
+        collection: "lcoll",
+        id,
+      } as never)) as Doc;
+      expect(after.meta).toEqual({ open: "o2", kept: "K" });
     });
 
     it("removes one that holds no protected value in any language", async () => {
