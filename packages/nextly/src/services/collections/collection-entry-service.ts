@@ -22,6 +22,13 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { HookRegistry } from "@nextly/hooks/hook-registry";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 
+import {
+  everyLanguageOf,
+  readLanguagesFor,
+  withRuleLanguage,
+  writeAsNamedLanguagesFor,
+  writeLanguagesFor,
+} from "../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
@@ -104,6 +111,33 @@ function refusedFilter<T>(where: unknown): CollectionServiceResult<T> | null {
   }
 }
 
+/** What publishing or unpublishing every language of an entry takes. */
+type EveryLanguageLifecycleParams = {
+  collectionName: string;
+  /**
+   * Skip cache revalidation for this write (the outbox drain still runs).
+   * Set by callers that own their cache strategy — a CLI, seed, or
+   * bulk-import write — so it does not fan out a revalidation per row.
+   */
+  disableRevalidate?: boolean;
+  entryId: string;
+  user?: UserContext;
+  overrideAccess?: boolean;
+  /**
+   * Which collections a trusted read may reach as relationships are expanded.
+   * Absent means every populated target inherits the caller's trust. Only ever
+   * narrows, and never admits a target's drafts.
+   */
+  trusted?: TrustBound;
+  /**
+   * Set by the REST dispatcher: the route already authorized this POST as
+   * `update`, so the preliminary update gate skips its redundant RBAC re-check.
+   */
+  routeAuthorized?: boolean;
+  /** API-key scope; gates the unconditional publish or unpublish check. */
+  authenticatedScope?: AuthenticatedScope;
+};
+
 /**
  * CollectionEntryService handles all entry-level CRUD operations for dynamic collections.
  *
@@ -128,8 +162,16 @@ export class CollectionEntryService extends BaseService {
     hookRegistry: HookRegistry,
     fieldGroupDataService?: FieldGroupDataService,
     rbacAccessControlService?: RBACAccessControlService,
-    /** Normalized localization config (i18n M4) — forwarded to the query service. */
-    localization?: SanitizedLocalizationConfig,
+    /**
+     * The normalized localization config, forwarded to the services below. Kept here too: every operation runs inside `withRuleLanguage`
+     * with the languages it involves, so each rule it asks is told them. A
+     * read is told its language and the ones it falls back to, a write the
+     * language it writes (the default one when it takes no locale, as a bulk
+     * write and a write on a caller's transaction do; a duplicate also the
+     * languages its source read falls back to), and an operation on the whole
+     * entry every language.
+     */
+    private readonly localization?: SanitizedLocalizationConfig,
     /**
      * Offers a retention pass after a write — both of them: the webhook event
      * ledger and the audit trails, each on its own window and its own gate. The
@@ -207,6 +249,24 @@ export class CollectionEntryService extends BaseService {
     );
   }
 
+  /**
+   * The languages a read of `params` involves: its own and its fallbacks, or
+   * every language where it also reads translation states.
+   */
+  private readLanguages(params: {
+    locale?: string;
+    fallbackLocale?: string | false;
+    translationStatus?: boolean;
+    where?: unknown;
+  }) {
+    return readLanguagesFor(
+      this.localization,
+      params.locale,
+      params.fallbackLocale,
+      params
+    );
+  }
+
   async listEntries(params: {
     collectionName: string;
     user?: UserContext;
@@ -239,7 +299,12 @@ export class CollectionEntryService extends BaseService {
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
-    return refusedFilter(params.where) ?? this.queryService.listEntries(params);
+    return (
+      refusedFilter(params.where) ??
+      withRuleLanguage(this.readLanguages(params), () =>
+        this.queryService.listEntries(params)
+      )
+    );
   }
 
   async countEntries(params: {
@@ -275,7 +340,10 @@ export class CollectionEntryService extends BaseService {
     status?: "published" | "draft" | "all";
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     return (
-      refusedFilter(params.where) ?? this.queryService.countEntries(params)
+      refusedFilter(params.where) ??
+      withRuleLanguage(this.readLanguages(params), () =>
+        this.queryService.countEntries(params)
+      )
     );
   }
 
@@ -290,7 +358,10 @@ export class CollectionEntryService extends BaseService {
     params: Parameters<CollectionQueryService["groupEntries"]>[0]
   ): ReturnType<CollectionQueryService["groupEntries"]> {
     return (
-      refusedFilter(params.where) ?? this.queryService.groupEntries(params)
+      refusedFilter(params.where) ??
+      withRuleLanguage(this.readLanguages(params), () =>
+        this.queryService.groupEntries(params)
+      )
     );
   }
 
@@ -299,7 +370,10 @@ export class CollectionEntryService extends BaseService {
     params: Parameters<CollectionQueryService["timeseriesEntries"]>[0]
   ): ReturnType<CollectionQueryService["timeseriesEntries"]> {
     return (
-      refusedFilter(params.where) ?? this.queryService.timeseriesEntries(params)
+      refusedFilter(params.where) ??
+      withRuleLanguage(this.readLanguages(params), () =>
+        this.queryService.timeseriesEntries(params)
+      )
     );
   }
 
@@ -342,7 +416,9 @@ export class CollectionEntryService extends BaseService {
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
     authenticatedScope?: AuthenticatedScope;
   }) {
-    return this.queryService.getEntry(params);
+    return withRuleLanguage(this.readLanguages(params), () =>
+      this.queryService.getEntry(params)
+    );
   }
 
   /**
@@ -578,7 +654,10 @@ export class CollectionEntryService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ) {
-    const result = await this.mutationService.createEntry(params, body, depth);
+    const result = await withRuleLanguage(
+      writeLanguagesFor(this.localization, params.locale),
+      () => this.mutationService.createEntry(params, body, depth)
+    );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
@@ -614,7 +693,26 @@ export class CollectionEntryService extends BaseService {
     user: UserContext;
     action: "publish" | "unpublish";
   }): Promise<Map<string, ValidationIssue[]>> {
-    return this.mutationService.releasePublishIssues(params);
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.releasePublishIssues(params)
+    );
+  }
+
+  /**
+   * Bring a language's pending change up to date with the shared values
+   * someone else published since it began. See the mutation service.
+   *
+   * @experimental
+   */
+  async takeLiveSharedValues(
+    params: Parameters<CollectionMutationService["takeLiveSharedValues"]>[0]
+  ): ReturnType<CollectionMutationService["takeLiveSharedValues"]> {
+    // A write to one language's change: its rules see that language, as a
+    // save of it does.
+    return withRuleLanguage(
+      writeLanguagesFor(this.localization, params.locale ?? undefined),
+      () => this.mutationService.takeLiveSharedValues(params)
+    );
   }
 
   /**
@@ -653,7 +751,9 @@ export class CollectionEntryService extends BaseService {
     collectionName: string;
     entryIds: readonly string[];
   }): Promise<Map<string, string[]>> {
-    return this.mutationService.releaseHeldDraftLocales(params);
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.releaseHeldDraftLocales(params)
+    );
   }
 
   async updateEntry(
@@ -695,38 +795,20 @@ export class CollectionEntryService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ) {
-    const result = await this.mutationService.updateEntry(params, body, depth);
+    const result = await withRuleLanguage(
+      writeLanguagesFor(this.localization, params.locale),
+      () => this.mutationService.updateEntry(params, body, depth)
+    );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
   /** i18n M7: publish every language of an entry at once (spec §10). */
-  async publishAllLocales(params: {
-    collectionName: string;
-    /**
-     * Skip cache revalidation for this write (the outbox drain still runs).
-     * Set by callers that own their cache strategy — a CLI, seed, or
-     * bulk-import write — so it does not fan out a revalidation per row.
-     */
-    disableRevalidate?: boolean;
-    entryId: string;
-    user?: UserContext;
-    overrideAccess?: boolean;
-    /**
-     * Which collections a trusted read may reach as relationships are expanded.
-     * Absent means every populated target inherits the caller's trust. Only ever
-     * narrows, and never admits a target's drafts.
-     */
-    trusted?: TrustBound;
-    /**
-     * Set by the REST dispatcher: the route already authorized this POST as
-     * `update`, so the preliminary update gate skips its redundant RBAC re-check.
-     */
-    routeAuthorized?: boolean;
-    /** API-key scope; gates the unconditional publish check. */
-    authenticatedScope?: AuthenticatedScope;
-  }) {
-    const result = await this.mutationService.publishAllLocales(params);
+  async publishAllLocales(params: EveryLanguageLifecycleParams) {
+    const result = await withRuleLanguage(
+      everyLanguageOf(this.localization),
+      () => this.mutationService.publishAllLocales(params)
+    );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
@@ -738,32 +820,11 @@ export class CollectionEntryService extends BaseService {
    * Same shape deliberately: a caller that can publish every language should not
    * have to learn a different call to reverse it.
    */
-  async unpublishAllLocales(params: {
-    collectionName: string;
-    /**
-     * Skip cache revalidation for this write (the outbox drain still runs).
-     * Set by callers that own their cache strategy — a CLI, seed, or
-     * bulk-import write — so it does not fan out a revalidation per row.
-     */
-    disableRevalidate?: boolean;
-    entryId: string;
-    user?: UserContext;
-    overrideAccess?: boolean;
-    /**
-     * Which collections a trusted read may reach as relationships are expanded.
-     * Absent means every populated target inherits the caller's trust. Only ever
-     * narrows, and never admits a target's drafts.
-     */
-    trusted?: TrustBound;
-    /**
-     * Set by the REST dispatcher: the route already authorized this POST as
-     * `update`, so the preliminary update gate skips its redundant RBAC re-check.
-     */
-    routeAuthorized?: boolean;
-    /** API-key scope; gates the unconditional unpublish check. */
-    authenticatedScope?: AuthenticatedScope;
-  }) {
-    const result = await this.mutationService.unpublishAllLocales(params);
+  async unpublishAllLocales(params: EveryLanguageLifecycleParams) {
+    const result = await withRuleLanguage(
+      everyLanguageOf(this.localization),
+      () => this.mutationService.unpublishAllLocales(params)
+    );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
@@ -794,7 +855,10 @@ export class CollectionEntryService extends BaseService {
     /** API-key scope; judges the delete gate on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
   }) {
-    const result = await this.mutationService.deleteEntry(params);
+    const result = await withRuleLanguage(
+      everyLanguageOf(this.localization),
+      () => this.mutationService.deleteEntry(params)
+    );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
@@ -827,7 +891,23 @@ export class CollectionEntryService extends BaseService {
   async discardWorkingDraft(
     params: Parameters<CollectionMutationService["discardWorkingDraft"]>[0]
   ): Promise<void> {
-    return this.mutationService.discardWorkingDraft(params);
+    await this.discardWorkingDraftCounted(params);
+  }
+
+  /**
+   * {@link discardWorkingDraft}, answering how many drafts it removed, counted
+   * by the delete made under the document's lock. A separate method so the
+   * published `discardWorkingDraft` keeps its contract.
+   */
+  async discardWorkingDraftCounted(
+    params: Parameters<CollectionMutationService["discardWorkingDraft"]>[0]
+  ): Promise<number> {
+    // The draft is deleted under the language as named, so one the site no
+    // longer configures is told every language, not the default.
+    return withRuleLanguage(
+      writeAsNamedLanguagesFor(this.localization, params.locale ?? undefined),
+      () => this.mutationService.discardWorkingDraft(params)
+    );
   }
 
   // Params are taken from the method being delegated to rather than restated here. Restating them
@@ -841,7 +921,10 @@ export class CollectionEntryService extends BaseService {
     >[1],
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
-    return this.mutationService.createEntryInTransaction(tx, params, body);
+    return withRuleLanguage(
+      writeLanguagesFor(this.localization, undefined),
+      () => this.mutationService.createEntryInTransaction(tx, params, body)
+    );
   }
 
   async updateEntryInTransaction(
@@ -851,7 +934,10 @@ export class CollectionEntryService extends BaseService {
     >[1],
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
-    return this.mutationService.updateEntryInTransaction(tx, params, body);
+    return withRuleLanguage(
+      writeLanguagesFor(this.localization, undefined),
+      () => this.mutationService.updateEntryInTransaction(tx, params, body)
+    );
   }
 
   async deleteEntryInTransaction(
@@ -875,7 +961,9 @@ export class CollectionEntryService extends BaseService {
       request?: Request;
     }
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
-    return this.mutationService.deleteEntryInTransaction(tx, params);
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.deleteEntryInTransaction(tx, params)
+    );
   }
 
   async duplicateEntry(params: {
@@ -904,7 +992,13 @@ export class CollectionEntryService extends BaseService {
     /** API-key scope; judges the create-as-published on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
   }) {
-    const result = await this.bulkService.duplicateEntry(params);
+    // A duplicate writes the default language, copying what a read of the
+    // source shows there, which falls back to other languages where it has
+    // no value; so it is told the default and each language it falls back to.
+    const result = await withRuleLanguage(
+      readLanguagesFor(this.localization, undefined),
+      () => this.bulkService.duplicateEntry(params)
+    );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
@@ -937,7 +1031,10 @@ export class CollectionEntryService extends BaseService {
     /** API-key scope; judges each per-id delete on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<{ id: string }>> {
-    const result = await this.bulkService.bulkDeleteEntries(params);
+    const result = await withRuleLanguage(
+      everyLanguageOf(this.localization),
+      () => this.bulkService.bulkDeleteEntries(params)
+    );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
@@ -969,7 +1066,10 @@ export class CollectionEntryService extends BaseService {
     /** API-key scope; judges each per-id transition on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
-    const result = await this.bulkService.bulkUpdateEntries(params);
+    const result = await withRuleLanguage(
+      writeLanguagesFor(this.localization, undefined),
+      () => this.bulkService.bulkUpdateEntries(params)
+    );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
@@ -1008,7 +1108,13 @@ export class CollectionEntryService extends BaseService {
     // Thrown, as the bulk service throws any request-level refusal: there are
     // no items yet to report a partial failure on.
     assertWellFormedFilter(params.where, { allowTranslated: true });
-    const result = await this.bulkService.bulkUpdateByQuery(params, options);
+    // It writes the default language, but its filter may choose the rows by
+    // any language's translation state, so it is told every language: the
+    // REST gate, which cannot see the filter in the body, tells the same.
+    const result = await withRuleLanguage(
+      everyLanguageOf(this.localization),
+      () => this.bulkService.bulkUpdateByQuery(params, options)
+    );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
@@ -1043,7 +1149,10 @@ export class CollectionEntryService extends BaseService {
     options?: { limit?: number }
   ): Promise<BulkOperationResult<{ id: string }>> {
     assertWellFormedFilter(params.where, { allowTranslated: true });
-    const result = await this.bulkService.bulkDeleteByQuery(params, options);
+    const result = await withRuleLanguage(
+      everyLanguageOf(this.localization),
+      () => this.bulkService.bulkDeleteByQuery(params, options)
+    );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
@@ -1074,10 +1183,9 @@ export class CollectionEntryService extends BaseService {
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    const result = await this.bulkService.createEntries(
-      params,
-      entries,
-      options
+    const result = await withRuleLanguage(
+      writeLanguagesFor(this.localization, undefined),
+      () => this.bulkService.createEntries(params, entries, options)
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
@@ -1093,11 +1201,15 @@ export class CollectionEntryService extends BaseService {
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    return this.bulkService.createEntriesInTransaction(
-      tx,
-      params,
-      entries,
-      options
+    return withRuleLanguage(
+      writeLanguagesFor(this.localization, undefined),
+      () =>
+        this.bulkService.createEntriesInTransaction(
+          tx,
+          params,
+          entries,
+          options
+        )
     );
   }
 
@@ -1117,10 +1229,9 @@ export class CollectionEntryService extends BaseService {
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    const result = await this.bulkService.updateEntries(
-      params,
-      entries,
-      options
+    const result = await withRuleLanguage(
+      writeLanguagesFor(this.localization, undefined),
+      () => this.bulkService.updateEntries(params, entries, options)
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
@@ -1136,11 +1247,15 @@ export class CollectionEntryService extends BaseService {
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    return this.bulkService.updateEntriesInTransaction(
-      tx,
-      params,
-      entries,
-      options
+    return withRuleLanguage(
+      writeLanguagesFor(this.localization, undefined),
+      () =>
+        this.bulkService.updateEntriesInTransaction(
+          tx,
+          params,
+          entries,
+          options
+        )
     );
   }
 
@@ -1160,7 +1275,10 @@ export class CollectionEntryService extends BaseService {
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    const result = await this.bulkService.deleteEntries(params, ids, options);
+    const result = await withRuleLanguage(
+      everyLanguageOf(this.localization),
+      () => this.bulkService.deleteEntries(params, ids, options)
+    );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
@@ -1176,11 +1294,8 @@ export class CollectionEntryService extends BaseService {
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    return this.bulkService.deleteEntriesInTransaction(
-      tx,
-      params,
-      ids,
-      options
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.bulkService.deleteEntriesInTransaction(tx, params, ids, options)
     );
   }
 }

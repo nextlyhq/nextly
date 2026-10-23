@@ -1,0 +1,61 @@
+name: Chromium for the browser tests
+description: >
+  Puts Playwright's Chromium on the runner, from the cache when the lockfile
+  has not moved, and installs its system libraries with apt only when Chromium
+  cannot start without them. Both browser jobs use it, so they cannot provision
+  Chromium in two different ways.
+
+runs:
+  using: composite
+  steps:
+    # Keyed on the lockfile: the browser build only has to change when the
+    # Playwright version does.
+    - name: Cache Playwright browsers
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      id: playwright-cache
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+    # When apt runs, it fetches ~21MB of CJK and legacy font packages that
+    # `ubuntu-latest` does not ship, so its mirrors can stall a job.
+    #
+    # These two knobs are NARROWER than they look. `Acquire::Timeout` fires on
+    # INACTIVITY and `Acquire::Retries` retries a FAILED item. In all four
+    # 2026-08-19 incidents the queue was ADVANCING — `Get:2` 16:11:37,
+    # `Get:3` 16:16:25, `Get:4` 16:26:55 — at roughly 10 kB/s, so nothing
+    # failed and nothing went quiet: apt's own 120s default `Timeout` was in
+    # force throughout and never fired. What these buy is a bounded STALLED
+    # connection, not a bounded slow one; the `timeout` below bounds the rest.
+    - name: Harden apt before any Chromium dependency install
+      shell: bash
+      run: |
+        sudo tee /etc/apt/apt.conf.d/99-ci-retries >/dev/null <<'APT'
+        Acquire::Retries "5";
+        Acquire::http::Timeout "15";
+        Acquire::https::Timeout "15";
+        APT
+
+    # A composite step cannot set `timeout-minutes`, so each install is bounded
+    # by `timeout 480`: eight minutes, shorter than either job's budget, so a
+    # stuck mirror fails here and named rather than as a cancellation of the
+    # whole job. Eight because green runs have spent over three minutes in apt.
+    - name: Install Chromium
+      if: steps.playwright-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: timeout 480 pnpm --filter @nextlyhq/e2e exec playwright install chromium
+
+    # apt dominated these jobs, at 15 seconds to the full 8 minutes (2 of 15
+    # runs on 2026-10-22). Playwright refuses to launch a browser whose system
+    # libraries are missing, so a launch that opens a page is the check that
+    # apt has nothing to add; only a runner that fails it pays for apt. The
+    # libraries live in /usr and no cache carries them, so the check runs on a
+    # cache hit too.
+    - name: Install Chromium's system dependencies if it cannot start
+      shell: bash
+      run: |
+        if pnpm --filter @nextlyhq/e2e exec node -e "require('@playwright/test').chromium.launch().then(b => b.newPage().then(p => p.setContent('<p>ok</p>')).then(() => b.close()))"; then
+          echo "Chromium starts on the runner's own libraries; apt skipped."
+        else
+          timeout 480 pnpm --filter @nextlyhq/e2e exec playwright install-deps chromium
+        fi

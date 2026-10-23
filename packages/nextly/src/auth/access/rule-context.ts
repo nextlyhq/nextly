@@ -27,6 +27,8 @@ import type {
 } from "../../shared/types/access";
 import type { GrantedPermission } from "../authenticated-scope";
 
+import { currentRuleLanguage, languagesOfContent } from "./rule-language";
+
 /**
  * One permission a caller holds: its row, or its stored slug alone where the
  * caller's scope never carried the row. A slug alone is handed as stored and
@@ -53,6 +55,13 @@ export interface RuleCaller {
 export interface RuleQuestion {
   operation: AccessRuleOperation;
   target: AccessRuleTarget;
+  /** The language this answer is for, where the operation is in one. */
+  locale?: string;
+  /**
+   * Every language the operation involves. Defaults to `locale` alone, or
+   * to none.
+   */
+  locales?: readonly string[];
 }
 
 /**
@@ -147,6 +156,34 @@ function permissionList(
 }
 
 /**
+ * The languages a question names, or, where it names none, those of the
+ * operation it is asked inside (every configured language where that names
+ * none either); every language where the target stores the same content in
+ * each, see `languagesOfContent`. Each rule gets a list of its own, so a rule
+ * that changes it changes nothing else.
+ */
+function languageOf(
+  question: RuleQuestion
+): Pick<AccessRuleContext, "locale" | "locales"> {
+  const named = question.locale !== undefined || question.locales !== undefined;
+  const { locale, locales } = languagesOfContent(
+    question.target,
+    named
+      ? {
+          locale: question.locale,
+          locales:
+            question.locales ??
+            (question.locale !== undefined ? [question.locale] : []),
+        }
+      : currentRuleLanguage()
+  );
+  return {
+    ...(locale !== undefined ? { locale } : {}),
+    locales: [...locales],
+  };
+}
+
+/**
  * The context `rule` is handed for this caller and question, with the entry
  * where one is known. `rule` identifies the rule, so an earlier spelling is
  * warned about once per rule however often it runs.
@@ -175,6 +212,7 @@ export function buildRuleContext(
     operation: question.operation,
     target: { kind: question.target.kind, slug: question.target.slug },
     collection: question.target.slug,
+    ...languageOf(question),
   };
   if (entry) {
     Object.defineProperties(context, Object.getOwnPropertyDescriptors(entry));

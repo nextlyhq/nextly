@@ -22,6 +22,7 @@ vi.mock("../../../domains/versions/restore-version", () => ({
 vi.mock("../../../api/versions-access", () => ({
   assertVersionDocumentReadable: readableSpy,
   assertHistoryLocalesReadable: () => Promise.resolve(),
+  assertVersionLanguageReadable: () => Promise.resolve(null),
   resolveSingleDocumentId: vi.fn(),
 }));
 

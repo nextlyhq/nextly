@@ -105,15 +105,7 @@ import { boot, type World } from "./world";
  * then on every row it asks must give the one answer. Until then, each of its
  * rows that disagrees is an expected failure named `NOT YET ONE ANSWER`.
  */
-const NOT_YET_ONE_ANSWER: ReadonlySet<Door> = new Set<Door>([
-  "rest",
-  "can",
-  "entity",
-  "schema",
-  "population",
-  "system",
-  "widget",
-]);
+const NOT_YET_ONE_ANSWER: ReadonlySet<Door> = new Set<Door>(["rest"]);
 
 /**
  * The ways in that ask the one decision, keeping today's answer through named
@@ -127,6 +119,12 @@ const ASKS_THE_DECISION: ReadonlySet<Door> = new Set<Door>([
   "website",
   "route",
   "lock",
+  "system",
+  "entity",
+  "population",
+  "can",
+  "schema",
+  "widget",
 ]);
 
 const ANSWERS_FILE = join(__dirname, "answers-today.txt");

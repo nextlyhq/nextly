@@ -53,8 +53,6 @@ import {
   releaseLock,
   renewLock,
 } from "./api/document-lock";
-import { POST as emailSend } from "./api/email-send";
-import { POST as emailSendWithTemplate } from "./api/email-send-template";
 import {
   getGeneralSettings,
   updateGeneralSettings,
@@ -373,7 +371,6 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "documentLock",
   "translations",
   "schema",
-  "email",
   "contentEvents",
 ]);
 
@@ -629,35 +626,6 @@ async function handleSchemaRequest(
 }
 
 // ============================================================================
-// Email Direct Dispatch
-// ============================================================================
-
-/**
- * Delegate an email request directly to the existing email POST handlers.
- *
- * The handlers manage their own auth (requireAuthentication), body parsing,
- * Zod validation, and NextlyError mapping. Intercepting here —
- * before req.text() in handleServiceRequest — keeps the request body
- * stream available for the handler to consume.
- */
-async function handleEmailRequest(
-  req: Request,
-  method: string
-): Promise<Response> {
-  switch (method) {
-    case "send":
-      return emailSend(req);
-    case "sendWithTemplate":
-      return emailSendWithTemplate(req);
-    default:
-      return new Response(
-        JSON.stringify({ error: "Unknown email operation" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      );
-  }
-}
-
-// ============================================================================
 // Authorization Helpers
 // ============================================================================
 
@@ -705,6 +673,9 @@ export const COLLECTION_ENTRY_METHODS = new Set([
   // route parser marks it an `update` operation, so it resolves to the
   // `update-{slug}` permission rather than a definition mutation's manage-settings.
   "discardWorkingDraft",
+  // Taking the live shared values rewrites the pending change, as a discard
+  // does, so it is authorized as an update of the entry too.
+  "takeLiveSharedValues",
   // Storing a recovery point writes the entry's content into history, so it is
   // authorized as an update of the entry like a discard is.
   "autosaveEntry",
@@ -749,6 +720,8 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
   // of the read branch below so it resolves to `update-{slug}`: a caller who may
   // not update the document may not throw away its pending edits either.
   "discardSingleWorkingDraft",
+  // Taking the live shared values rewrites the pending change: an update too.
+  "takeLiveSingleSharedValues",
 ]);
 
 /**
@@ -853,11 +826,17 @@ async function resolveAuthorization(
       // Entry operations → {action}-{collectionSlug}
       const action = getActionFromOperation(operation);
       const slug = routeParams?.collectionName || "";
-      return requireCollectionAccess(req, action, slug);
+      return requireCollectionAccess(req, action, slug, {
+        method,
+        params: routeParams ?? {},
+      });
     }
     if (method === "getCollection") {
       const slug = routeParams?.collectionName || "";
-      return requireCollectionAccess(req, "read", slug);
+      return requireCollectionAccess(req, "read", slug, {
+        method,
+        params: routeParams ?? {},
+      });
     }
     // Definition mutations (create/update/delete collection). The grant is
     // declared once, in `auth/collection-definition-policy`, because the
@@ -887,11 +866,17 @@ async function resolveAuthorization(
           ? "read"
           : "update";
       const slug = routeParams?.slug || "";
-      return requireCollectionAccess(req, action, slug);
+      return requireCollectionAccess(req, action, slug, {
+        method,
+        params: routeParams ?? {},
+      });
     }
     if (method === "getSingleSchema") {
       const slug = routeParams?.slug || "";
-      return requireCollectionAccess(req, "read", slug);
+      return requireCollectionAccess(req, "read", slug, {
+        method,
+        params: routeParams ?? {},
+      });
     }
     // Definition mutations (create/delete single, update schema) → manage-settings
     return requirePermission(req, "manage", "settings");
@@ -1497,13 +1482,6 @@ async function handleServiceRequest(
   // super-admin gate). Read-only GET — no body to consume.
   if (service === "schema") {
     return handleSchemaRequest(req, method);
-  }
-
-  // ==================== EMAIL DIRECT DISPATCH ====================
-  // Email handlers own their auth (requireAuthentication) + body parsing.
-  // Intercepting before req.text() keeps the body stream available.
-  if (service === "email") {
-    return handleEmailRequest(req, method);
   }
 
   // ==================== AUTHENTICATION & AUTHORIZATION ====================

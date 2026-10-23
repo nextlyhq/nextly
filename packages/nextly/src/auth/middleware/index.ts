@@ -3,6 +3,10 @@ import type { ApiKeyService } from "@nextly/domains/auth/services/api-key-servic
 import type { RBACAccessControlService } from "@nextly/domains/auth/services/rbac-access-control-service";
 import { env } from "@nextly/lib/env";
 
+import {
+  isTruthyParam,
+  parseWhereParam,
+} from "../../dispatcher/helpers/validation";
 import { presentedApiKey } from "../../middleware/rest-callers";
 import { currentRestLimitGate } from "../../middleware/rest-limit-gate";
 // getSession from ../session is a backward-compat wrapper that delegates
@@ -11,6 +15,14 @@ import {
   anyPermissionVerdict,
   routeGateVerdict,
 } from "../access/route-gate-adapters";
+import {
+  everyLanguage,
+  registeredReadLanguagesFor,
+  registeredWriteAsNamedLanguagesFor,
+  registeredWriteLanguagesFor,
+  type RuleLanguage,
+  withRuleLanguage,
+} from "../access/rule-language";
 import { type GrantedPermission } from "../authenticated-scope";
 import { getSession } from "../session";
 
@@ -428,6 +440,176 @@ export async function authorizeCallerForAny(
   return authResult;
 }
 
+/** How a REST operation's languages are worked out from its request. */
+type OperationLanguage =
+  | "read"
+  | "write"
+  | "as-named"
+  | "default-write"
+  | "duplicate"
+  | "filtered-history";
+
+/**
+ * The REST operations whose languages the request names, and how. Every
+ * other operation, and a caller that names none, is judged in every language:
+ * it acts on the whole entry, or on content the request does not choose.
+ *
+ * - `read`: a read of one language's content, the language `?locale=` names
+ *   (every language for `all`) or the default, with the languages
+ *   `?fallback-locale=` and the site's fallbacks add. A schema read is one,
+ *   read in the language the admin shows it in. An autosave read is not: it
+ *   returns the caller's latest autosave in whatever language it was saved.
+ *   A read that also reads translation states, `?translation-status=` or a
+ *   `_translated` filter, is told every language; see `readLanguagesFor`.
+ * - `write`: a write of one language's content, `?locale=` (every language
+ *   for `*`) or the default.
+ * - `as-named`: an autosave, discarding a working draft, or sharing a preview
+ *   link to one language, which keep the language as the request names it: a
+ *   language the site does not configure is told every language, not the
+ *   default a write resolves it to. A preview link naming no language is
+ *   shared with no operation named, so it is told every language.
+ * - `default-write`: a bulk update of named entries, which takes no locale
+ *   and writes the default language. A bulk update by query is not one: its
+ *   filter, in the request body, may choose its rows by any language's
+ *   translation state, so it is told every language.
+ * - `duplicate`: writes the default language, copying what a read of the
+ *   source shows there, so it is told the default and its fallbacks.
+ * - `filtered-history`: a history list, which `?locale=` filters to one
+ *   language's versions; unfiltered, it lists every language's.
+ */
+const OPERATION_LANGUAGES: ReadonlyMap<string, OperationLanguage> = new Map([
+  ["listEntries", "read"],
+  ["getEntry", "read"],
+  ["countEntries", "read"],
+  ["getCollection", "read"],
+  ["getSingleDocument", "read"],
+  ["getSingleSchema", "read"],
+  ["createEntry", "write"],
+  ["updateEntry", "write"],
+  ["discardWorkingDraft", "as-named"],
+  ["autosaveEntry", "as-named"],
+  ["updateSingleDocument", "write"],
+  ["autosaveSingle", "as-named"],
+  ["discardSingleWorkingDraft", "as-named"],
+  ["sharePreviewLink", "as-named"],
+  ["bulkUpdateEntries", "default-write"],
+  ["duplicateEntry", "duplicate"],
+  ["listEntryVersions", "filtered-history"],
+  ["listSingleVersions", "filtered-history"],
+]);
+
+/** What a request names about its languages, as it is dispatched. */
+interface RequestedLanguage {
+  locale: string | undefined;
+  fallbackLocale: string | undefined;
+  translationStatus: boolean;
+  /** Its filter, or `UNREADABLE` where the dispatcher will refuse it. */
+  where: unknown;
+}
+
+const UNREADABLE = Symbol("unreadable filter");
+
+/** The languages each kind of operation is told, from what its request names. */
+const LANGUAGES_OF: Record<
+  OperationLanguage,
+  (asked: RequestedLanguage) => RuleLanguage
+> = {
+  // A filter the dispatcher refuses is never run, so it is told every
+  // language rather than read a second way here.
+  read: asked =>
+    asked.where === UNREADABLE
+      ? everyLanguage()
+      : registeredReadLanguagesFor(asked.locale, asked.fallbackLocale, asked),
+  write: asked => registeredWriteLanguagesFor(asked.locale),
+  "as-named": asked => registeredWriteAsNamedLanguagesFor(asked.locale),
+  "default-write": () => registeredWriteLanguagesFor(undefined),
+  duplicate: () => registeredReadLanguagesFor(undefined),
+  // A history list filters by language and falls back to none.
+  "filtered-history": asked =>
+    asked.locale === undefined
+      ? everyLanguage()
+      : registeredReadLanguagesFor(asked.locale, false),
+};
+
+/**
+ * The reads that consume a translation overview or a filter, each read as its
+ * handler reads it. Only these widen what the rule is told: a control a
+ * handler ignores reads nothing, and told every language for it, a rule that
+ * admits by what `locales` includes would pass a read it should refuse.
+ */
+/** How a read reads its overview and filter controls, where it reads them. */
+interface ReadControls {
+  translationStatus?: (params: Readonly<Record<string, string>>) => boolean;
+  where?: true;
+}
+
+const READ_CONTROLS: ReadonlyMap<string, ReadControls> = new Map<
+  string,
+  ReadControls
+>([
+  [
+    "listEntries",
+    {
+      translationStatus: params => isTruthyParam(params["translation-status"]),
+      where: true,
+    },
+  ],
+  ["countEntries", { where: true }],
+  [
+    "getEntry",
+    {
+      translationStatus: params => isTruthyParam(params["translation-status"]),
+    },
+  ],
+  // The Single handler attaches its overview for `1` alone.
+  [
+    "getSingleDocument",
+    { translationStatus: params => params["translation-status"] === "1" },
+  ],
+]);
+
+/**
+ * What the route's parameters name about its languages: the values the
+ * dispatcher acts on, read the way it reads them, so a request that names a
+ * language twice is judged in the one it is dispatched in.
+ */
+function requestedLanguage({
+  method,
+  params,
+}: RouteOperation): RequestedLanguage {
+  const controls = READ_CONTROLS.get(method);
+  let where: unknown;
+  try {
+    where = controls?.where
+      ? parseWhereParam(params.where, params.whereBrackets)
+      : undefined;
+  } catch {
+    where = UNREADABLE;
+  }
+  return {
+    // An empty value (`?locale=`) names nothing, as the handlers read it: a
+    // history list then lists every language's versions.
+    locale: params.locale || undefined,
+    fallbackLocale: params["fallback-locale"] || undefined,
+    translationStatus: controls?.translationStatus?.(params) ?? false,
+    where,
+  };
+}
+
+/** The languages the rule asked for a REST operation is told. */
+function requestLanguage(operation: RouteOperation | undefined): RuleLanguage {
+  if (operation === undefined) return everyLanguage();
+  const kind = OPERATION_LANGUAGES.get(operation.method);
+  if (kind === undefined) return everyLanguage();
+  return LANGUAGES_OF[kind](requestedLanguage(operation));
+}
+
+/** A REST route's method name, and the parameters it is dispatched with. */
+export interface RouteOperation {
+  method: string;
+  params: Readonly<Record<string, string>>;
+}
+
 /**
  * Collection-specific authorization middleware.
  *
@@ -437,11 +619,17 @@ export async function authorizeCallerForAny(
  *
  * Use this for dynamic collection entry routes where the collection slug
  * is extracted from the URL (e.g., `/api/collections/:slug/entries`).
+ *
+ * `operation` is the route's method name and the parameters it is
+ * dispatched with, which decide the languages the rule is told; see
+ * {@link requestLanguage}. On REST this is the only place
+ * an entry's rule is asked, so it is told them here.
  */
 export async function requireCollectionAccess(
   req: Request,
   action: string,
-  collectionSlug: string
+  collectionSlug: string,
+  operation?: RouteOperation
 ): Promise<AuthContext | ErrorResponse> {
   const authResult = await requireAuthentication(req);
 
@@ -449,9 +637,14 @@ export async function requireCollectionAccess(
     return authResult;
   }
 
-  // The same question `requirePermission` asks, about the collection or
-  // Single the URL names.
-  return authorizeCaller(authResult, action, collectionSlug);
+  // Worked out after authentication, never before: on a cold worker the
+  // first request's authentication is what registers the site's languages,
+  // and worked out earlier a rule would be told none. Inside it, the same
+  // question `requirePermission` asks, about the collection or Single the
+  // URL names.
+  return withRuleLanguage(requestLanguage(operation), () =>
+    authorizeCaller(authResult, action, collectionSlug)
+  );
 }
 
 /**

@@ -24,12 +24,18 @@
  * @module api/preview-access
  */
 
+import {
+  everyLanguage,
+  registeredWriteAsNamedLanguagesFor,
+  withRuleLanguage,
+} from "../auth/access/rule-language";
 import { buildUserContext } from "../auth/user-context";
 import { getService } from "../di";
 import {
   previewCallerAuthorized,
   type AuthorizedPreviewCaller,
 } from "../domains/collections/services/preview-redirect-resolver";
+import { EVERY_TRANSLATION } from "../domains/i18n/locale-selector";
 import {
   singleDocumentEditable,
   singleDocumentReadable,
@@ -105,15 +111,29 @@ export async function assertEntryPreviewable(
      * direction nobody notices.
      */
     routeAuthorized: boolean;
+    /**
+     * The language the link is to, when it names one. The entry is read in it,
+     * at the mint and at every open, and the grant names it, so the grant
+     * answers for that translation and no other. A link naming no language
+     * is read as it always was.
+     */
+    locale?: string | undefined;
   }
 ): Promise<AuthorizedPreviewCaller> {
   const collections = getService("collectionsHandler");
+  const { locale } = options;
 
   // Enforced and as the caller, which is the same evaluation the bearer's read
   // will face. `status: "all"` is the part a plain by-id read cannot express: a
   // status-enabled collection otherwise filters to published only, so an entry
   // that has never been published reports as missing — exactly the entry an
   // editor most wants to share for review.
+  //
+  // Read in the language the link is to, which its grant then names. A link
+  // naming none is to the entry in every language, so it is read in every
+  // language and holds only where the read rule admits each of them: a rule
+  // that closes one refuses the link rather than being asked about the
+  // default language alone.
   const read = await collections.getEntry({
     collectionName: collection,
     entryId,
@@ -121,6 +141,7 @@ export async function assertEntryPreviewable(
     overrideAccess: false,
     user,
     status: "all",
+    locale: locale ?? EVERY_TRANSLATION,
   });
 
   if (!readVerdict(read)) {
@@ -159,12 +180,23 @@ export async function assertEntryPreviewable(
   // the flag that must not be decided here: skipping a gate that DID run costs
   // nothing, and skipping one that did not is the difference between enforcing
   // a withdrawn role and ignoring it.
-  const mayEdit = await collections.canUpdateEntry({
-    collectionName: collection,
-    entryId,
-    user,
-    routeAuthorized: options.routeAuthorized,
-  });
+  //
+  // Asked in the same languages as the read: the link's own, or every
+  // language for a link naming none. The edit check sets no languages of its
+  // own, so they are set here rather than left to whatever the caller set. A
+  // language the site does not configure is judged in every language.
+  const mayEdit = await withRuleLanguage(
+    locale === undefined
+      ? everyLanguage()
+      : registeredWriteAsNamedLanguagesFor(locale),
+    () =>
+      collections.canUpdateEntry({
+        collectionName: collection,
+        entryId,
+        user,
+        routeAuthorized: options.routeAuthorized,
+      })
+  );
 
   if (!mayEdit) {
     throw NextlyError.forbidden({
@@ -182,7 +214,13 @@ export async function assertEntryPreviewable(
    * exists to establish; minted here it cannot exist unless every refusal above
    * was passed for THIS document.
    */
-  return previewCallerAuthorized(user, { collection, entryId });
+  return previewCallerAuthorized(user, {
+    collection,
+    entryId,
+    // The language the read above was made in, so the grant claims no more
+    // than was checked.
+    ...(locale === undefined ? {} : { locale }),
+  });
 }
 
 /**
@@ -399,9 +437,21 @@ export async function authorizePreviewSharer(
   purpose: "mint" | "manage"
 ): Promise<AuthorizedSharer> {
   const slug = "single" in document ? document.single : document.collection;
+  // The language every question below is asked in. A mint makes a link to
+  // that one language, so it is judged there. Listing and revoking act on
+  // every link to the document, whatever language each is to, so they are
+  // judged in every language, whatever language the request names.
+  const locale = purpose === "mint" ? document.locale : undefined;
   // The gate is per COLLECTION or Single, so a caller who may edit posts
-  // cannot act on another collection's links by naming it here.
-  const auth = await requireRouteCollectionAccess(req, "update", slug);
+  // cannot act on another collection's links by naming it here. It is asked
+  // in that language, as the checks below are; with none, in every language.
+  const auth =
+    locale === undefined
+      ? await requireRouteCollectionAccess(req, "update", slug)
+      : await requireRouteCollectionAccess(req, "update", slug, {
+          method: "sharePreviewLink",
+          params: { locale },
+        });
   refuseApiKey(auth);
 
   // Booted first because the gates below resolve services from the container,
@@ -414,20 +464,18 @@ export async function authorizePreviewSharer(
   const grant =
     "single" in document
       ? purpose === "mint"
-        ? await assertSinglePreviewable(
-            document.single,
-            document.locale,
-            user,
-            {
-              routeAuthorized: true,
-            }
-          )
-        : await assertSingleManageable(document.single, document.locale, user)
+        ? await assertSinglePreviewable(document.single, locale, user, {
+            routeAuthorized: true,
+          })
+        : await assertSingleManageable(document.single, locale, user)
       : await assertEntryPreviewable(
           document.collection,
           document.entryId,
           user,
-          { routeAuthorized: true }
+          {
+            routeAuthorized: true,
+            ...(locale === undefined ? {} : { locale }),
+          }
         );
 
   return { auth, user, grant };

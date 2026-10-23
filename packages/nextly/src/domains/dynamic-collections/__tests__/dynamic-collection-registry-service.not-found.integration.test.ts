@@ -62,7 +62,13 @@ describe("DynamicCollectionRegistryService — a collection that is not there", 
         maxParamsPerQuery: 999,
         maxIdentifierLength: 128,
       }),
-    } satisfies Pick<DrizzleAdapter, "getDrizzle" | "getCapabilities">;
+      // No transaction is open: a read goes through the row cache, which keys
+      // its rows by this adapter, new for each test.
+      transactionOpenInFlow: () => false,
+    } satisfies Pick<
+      DrizzleAdapter,
+      "getDrizzle" | "getCapabilities" | "transactionOpenInFlow"
+    >;
 
     registry = new DynamicCollectionRegistryService(
       adapter as unknown as DrizzleAdapter,

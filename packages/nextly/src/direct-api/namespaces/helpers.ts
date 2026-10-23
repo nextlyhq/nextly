@@ -147,7 +147,10 @@ export function directApiActor(
   defaultConfig: DirectAPIConfig,
   args: DirectAPIConfig
 ): RequestActor | undefined {
-  const config = mergeConfig(defaultConfig, args);
+  // Read as the access check reads the call (`suppliedByCall`): a call naming a
+  // user without a key is that person, not the instance's key, so the record
+  // names whoever the check judged.
+  const config = mergeConfig(defaultConfig, suppliedByCall(args));
   if (config.actor?.actorType === "apiKey") return { type: "apiKey" };
 
   const id = config.user?.id;
@@ -288,6 +291,20 @@ export function checkedCaller(
 export type { RouteGrant };
 
 /**
+ * The key scope a call is checked with: the instance's and the call's, read
+ * as `checkedCaller` reads them, so a call naming a user without a key has
+ * none. A write runs what it sets going under this, so a handler it starts
+ * cannot use grants the call gave up.
+ */
+export function checkedScope(
+  defaultConfig: DirectAPIConfig,
+  args: DirectAPIConfig
+): AuthenticatedScope | undefined {
+  return accessOptions(mergeConfig(defaultConfig, suppliedByCall(args)))
+    .authenticatedScope;
+}
+
+/**
  * Whether `caller` holds `grant`, asked of the decision the REST route asks,
  * so one caller gets one answer through either door: `authorizeCaller` (the
  * `requirePermission` decision) for one permission, `authorizeCallerForAny`
@@ -318,6 +335,13 @@ export async function checkWrite(
   if (caller) await authorizeChecked(caller, grant);
   return caller;
 }
+
+/**
+ * The check a read of a system resource runs first: a write's, asked with the
+ * grant REST's read route asks, so a checked read is refused before anything
+ * is read and a trusted one is untouched.
+ */
+export const checkRead = checkWrite;
 
 /**
  * A write that may change who holds which role, run as REST runs it: checked

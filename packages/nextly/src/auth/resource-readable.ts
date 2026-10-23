@@ -12,27 +12,39 @@
  */
 
 import { container } from "../di/container";
-import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 
+import { holdsPermission } from "./access/actor";
+import { decidePermission } from "./access/decide";
+import { deviate } from "./access/deviations";
+import {
+  actorForKey,
+  actorForScope,
+  actorForUserFailingClosed,
+  actorForVisitor,
+} from "./access/resolve-actor";
+import { readsSystemResource } from "./access/system-resource-read";
 import {
   apiKeyScopeAllows,
+  scopeRowsAgree,
+  slugGrants,
   type AuthenticatedScope,
 } from "./authenticated-scope";
 
 /**
- * Whether a caller may read a system resource such as `media` or `users`.
+ * Whether a caller may read a system resource such as `media` or `users`,
+ * answered by the one access decision.
  *
- * A scoped API key is judged on its OWN `read-<resource>` grant and never on
- * its owner's roles, so a narrowly scoped key belonging to a super-admin cannot
- * read a resource its scope excludes. A session or system caller (`null` scope)
- * falls through to the role-based RBAC check.
+ * The caller becomes an actor: a scoped API key from its OWN scope, never its
+ * owner's roles, so a narrowly scoped key belonging to a super-admin cannot
+ * read a resource its scope excludes; a caller with no id a visitor, who holds
+ * no grant; anyone else the signed-in user, whose grant decides and whose
+ * super-admin authority passes. A system resource declares no code rule, so
+ * the permission is the whole decision.
  *
- * Answers `false` when there is no caller to hold a grant, and when the RBAC
- * service is not registered to answer at all. A boot may legitimately omit it,
- * and a grant that cannot be checked is not a grant that was given: the callers
- * above use this to decide whether to WIDEN what they return, so the
- * unauthorized answer is the one that keeps an unanswerable question from
- * widening anything.
+ * Without the RBAC service a signed-in user is refused, as before: a boot may
+ * legitimately omit it, and the callers above use this to decide whether to
+ * WIDEN what they return, so the unauthorized answer is the one that keeps an
+ * unanswerable question from widening anything.
  *
  * @param resource - Resource name as it appears in a permission slug (`media`).
  * @param userId - Caller's user id, or undefined for an anonymous read.
@@ -43,20 +55,56 @@ export async function canReadSystemResource(
   userId: string | undefined,
   authenticatedScope?: AuthenticatedScope
 ): Promise<boolean> {
-  const scopeAllows = apiKeyScopeAllows(authenticatedScope, "read", resource);
-  if (scopeAllows !== null) return scopeAllows;
-  if (userId === undefined) return false;
-
   // Resolved from the container rather than through `getService`, which lives
   // in the module that registers every service: importing it from here would
   // pull the whole service graph into anything that reads a media row.
-  if (!container.has("rbacAccessControlService")) return false;
-  const rbac = container.get<RBACAccessControlService>(
-    "rbacAccessControlService"
-  );
-  return rbac.checkAccess({
-    userId,
-    operation: "read",
+  const read = {
     resource,
-  });
+    serviceRegistered: container.has("rbacAccessControlService"),
+  };
+  if (authenticatedScope?.actorType === "apiKey") {
+    const user = { id: userId ?? "" };
+    const rows = scopeRowsAgree(authenticatedScope);
+    const actor = rows
+      ? actorForScope(authenticatedScope, user)
+      : // A scope without rows is compared with the grants its slugs name,
+        // which is what the decision would judge if it could read them.
+        actorForKey({
+          keyId: "",
+          userId: user.id,
+          grants: slugGrants(authenticatedScope.permissions),
+          roles: authenticatedScope.roles ?? [],
+        });
+    // A key holds the read by its stored slug, `read-<resource>`. The
+    // decision reads a grant's action and resource, which agree with the slug
+    // unless the scope carries no rows or the grant was stored under a slug of
+    // its own; then the stored slug answers, as before.
+    const today =
+      apiKeyScopeAllows(authenticatedScope, "read", resource) === true;
+    if (!rows || today !== holdsPermission(actor, "read", resource)) {
+      return deviate("key-slug-string-match", today, () =>
+        readsSystemResource(actor, read)
+      );
+    }
+    return readsSystemResource(actor, read);
+  }
+  if (userId === undefined) return readsSystemResource(actorForVisitor(), read);
+  if (!read.serviceRegistered) {
+    // Without the service a signed-in user is refused whatever they hold, as
+    // before, so nothing is looked up to say so. The decision it is compared
+    // with is the one the service's presence would give.
+    return deviate(
+      "no-service",
+      false,
+      async () =>
+        decidePermission(
+          await actorForUserFailingClosed(userId),
+          "read",
+          resource
+        ).allowed
+    );
+  }
+  // Each lookup that fails refuses only what it would have given, so a
+  // relationship withholds the row and the read goes on rather than failing.
+  return readsSystemResource(await actorForUserFailingClosed(userId), read);
 }
