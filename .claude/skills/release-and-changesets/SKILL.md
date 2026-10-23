@@ -27,13 +27,16 @@ file by hand under `.changeset/` following an existing one.
 
 1. PRs with changesets merge to `main`.
 2. When a release is wanted, a maintainer runs the Release workflow from the
-   Actions tab ("Run workflow"). With changesets pending it opens or refreshes
-   the Version PR ("chore: version packages (alpha)"), which bumps every
-   package in lockstep and updates changelogs. A push to `main` does not
-   refresh it: only that PR's own merge runs the Release job on a push.
+   Actions tab ("Run workflow" on `main`; the job runs from no other branch or
+   tag). With changesets pending it opens or refreshes the Version PR
+   ("chore: version packages (alpha)"), which bumps every package in lockstep
+   and updates changelogs. A push to `main` does not refresh it: only that
+   PR's own merge runs the Release job on a push.
 3. **Merging the Version PR publishes**: the release workflow builds and
    publishes all packages to npm via trusted publishing (OIDC) in the
-   protected environment. Every real version is published this way; never run
+   protected environment. It publishes the version that merge carries even
+   when other changesets reached `main` after the PR was last refreshed; those
+   wait for the next run of the workflow. Every real version is published this way; never run
    `changeset publish` or `npm publish` yourself. The one exception is the
    `0.0.0` placeholder that claims a brand-new package name: a maintainer with
    publish rights on npm runs `scripts/release/bootstrap-package.mjs` once,
@@ -83,11 +86,18 @@ already has, so a re-run only attempts the missing packages.
 
 1. `pnpm release:verify` to list exactly which packages are missing and why.
 2. Fix the cause per package (metadata, npm access, trusted publisher).
-3. Land a commit on `main` that adds no new changeset. In prerelease mode the
-   `.changeset/*.md` files stay on disk after versioning, but the ones already
-   recorded in `pre.json.changesets` do not count as pending, so the action takes
-   the publish path and retries the current version. Adding a changeset instead
-   opens a Version PR and moves the train to the next version.
+3. Retry the publish. When the fix is outside the repository (npm access, a
+   trusted publisher), re-run the Release run that failed
+   (`gh run rerun <id> --failed`). A re-run uses the same commit, and a re-run
+   of the Version PR merge's push publishes that commit's version whatever is
+   pending on `main`. When the fix is a commit, land it on
+   `main` with no new changeset, then run the Release workflow from the
+   Actions tab on `main`. In prerelease mode the `.changeset/*.md` files stay
+   on disk after versioning, but the ones already recorded in
+   `pre.json.changesets` do not count as pending, so with nothing else pending
+   the run takes the publish path and retries the current version. With any
+   changeset pending, it versions instead: it opens a Version PR and moves the
+   train to the next version.
 4. Do not bump the version to "get a clean run": that abandons the partial
    version permanently, leaving a hole where some packages exist at a version
    and their siblings never do.
@@ -138,7 +148,8 @@ For each new package name, in order:
    rejoins the train. Preflight reads the list from the commit being released,
    so the entry has to be on `main` first. Re-running the blocked workflow run
    reuses its old commit and is refused again; land the change on `main` with
-   no new changeset instead, as in "Recovering a partial release" above.
+   no new changeset instead, then run the Release workflow from the Actions
+   tab, as in "Recovering a partial release" above.
 
 There is no CI-only path for step 2, and no override for it: OIDC cannot perform
 a package's first publish, and giving CI a long-lived npm token just to claim a

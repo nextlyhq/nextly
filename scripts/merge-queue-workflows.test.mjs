@@ -250,13 +250,16 @@ describe("Integration on request", () => {
 describe("when the Release job runs", () => {
   /*
    * A push to `main` runs it only for the Version Packages merge, the moment to
-   * publish; a dispatch runs it on demand, versioning pending changesets into
-   * that pull request or publishing when none are pending. Release health
-   * then skips the runs where Release itself skipped. Each condition is
-   * evaluated for the events it meets, not read by spelling.
+   * publish; a dispatch from `main` runs it on demand, versioning pending
+   * changesets into that pull request or publishing when none are pending.
+   * Release health then skips the runs where Release itself skipped. Each
+   * condition is evaluated for the events it meets, not read by spelling.
    */
-  const decide = (condition, known) => String(evaluate(conditionTokens(condition), condition, { "github.repository": "nextlyhq/nextly", ...known }));
-  const release = read(".github/workflows/release.yml").jobs.release.if;
+  const decide = (condition, known) =>
+    String(evaluate(conditionTokens(condition), condition, { "github.repository": "nextlyhq/nextly", "github.ref": "refs/heads/main", ...known }));
+  const workflow = read(".github/workflows/release.yml");
+  const job = workflow.jobs.release;
+  const release = job.if;
   const health = read(".github/workflows/release-health.yml").jobs.finalized.if;
 
   it("runs on the Version Packages merge, stable or pre-release", () => {
@@ -270,8 +273,87 @@ describe("when the Release job runs", () => {
     expect(decide(release, { "github.event_name": "workflow_dispatch", "github.event.head_commit.message": "" })).toBe("true");
   });
 
+  it("runs a dispatch only from main, since the job publishes whatever ref it checks out", () => {
+    for (const ref of ["refs/heads/feature/try-a-release", "refs/tags/v0.0.2-alpha.66"]) {
+      expect(decide(release, { "github.event_name": "workflow_dispatch", "github.ref": ref }), ref).toBe("false");
+    }
+    expect(decide(release, { "github.event_name": "workflow_dispatch", "github.ref": "refs/heads/main" })).toBe("true");
+  });
+
   it("never runs in a fork", () => {
     expect(decide(release, { "github.repository": "someone/nextly", "github.event_name": "workflow_dispatch" })).toBe("false");
+  });
+
+  it("queues releases on the job, so a push whose job skips never displaces a waiting release", () => {
+    // A workflow-level group is entered by every run, skipped job or not.
+    expect(workflow.concurrency).toBeUndefined();
+    expect(job.concurrency).toMatchObject({ group: expect.stringMatching(/\S/), "cancel-in-progress": false, queue: "max" });
+  });
+
+  /*
+   * Which of the job's steps a run takes, in order. Each step's `if:` is
+   * evaluated with what the steps before it left: its outcome, the
+   * `hasChangesets` the Changesets action reports (`pending`, on a run that
+   * reaches it), and each `name=$VAR` a run step writes to `$GITHUB_OUTPUT`,
+   * valued from that step's `env:`. A skipped step leaves empty outputs.
+   */
+  const valueOf = (template, known) =>
+    String(template).replace(/\$\{\{([\s\S]*?)\}\}/g, (_, expression) => decide(expression, known));
+  const isChangesetsAction = step => String(step.uses).startsWith("changesets/action@");
+  const publishesDirectly = step => String(step.run).includes("pnpm release:publish");
+  const verifies = step => String(step.run).includes("pnpm release:verify");
+  const finalizes = step => String(step.run).includes("gh release create");
+  const OUTPUT_LINE = /([\w-]+)=\$\{?(\w+)\}?"?\s*>>\s*"?\$GITHUB_OUTPUT/g;
+  /** The outputs a step sets when it runs, by lowercased name. */
+  const outputsOf = (step, known, pending) => [
+    ...(isChangesetsAction(step) ? [["haschangesets", String(pending)]] : []),
+    ...[...String(step.run ?? "").matchAll(OUTPUT_LINE)].map(([, name, variable]) => [name.toLowerCase(), valueOf(step.env?.[variable], known)]),
+  ];
+  /** What a step leaves for the steps after it, under its id: its outcome, and its outputs, empty when it was skipped. */
+  const leftBy = (step, runs, known, pending) => {
+    const at = `steps.${step.id.toLowerCase()}`;
+    const outputs = outputsOf(step, known, pending).map(([name, value]) => [`${at}.outputs.${name}`, runs ? value : ""]);
+    return Object.fromEntries([[`${at}.outcome`, runs ? "success" : "skipped"], ...outputs]);
+  };
+  const stepsRun = (event, { pending }) => {
+    const known = { "github.event_name": event, "github.event.head_commit.message": event === "push" ? "chore: version packages (alpha) (#2600)" : null };
+    expect(decide(release, known), event).toBe("true");
+    return job.steps.filter(step => {
+      const runs = decide(String(step.if ?? ""), known) === "true";
+      if (step.id) Object.assign(known, leftBy(step, runs, known, pending));
+      return runs;
+    });
+  };
+
+  it("publishes the Version Packages merge whatever changesets landed after it, then verifies and finalizes it", () => {
+    const ran = stepsRun("push", { pending: true });
+    expect(ran.some(publishesDirectly)).toBe(true);
+    expect(ran.some(isChangesetsAction)).toBe(false);
+    expect(ran.some(verifies)).toBe(true);
+    expect(ran.some(finalizes)).toBe(true);
+  });
+
+  it("on a dispatch with changesets pending, versions them and neither publishes nor finalizes", () => {
+    const ran = stepsRun("workflow_dispatch", { pending: true });
+    expect(ran.some(isChangesetsAction)).toBe(true);
+    expect(ran.some(publishesDirectly)).toBe(false);
+    expect(ran.some(verifies)).toBe(false);
+    expect(ran.some(finalizes)).toBe(false);
+  });
+
+  it("on a dispatch with none pending, publishes through the action, then verifies and finalizes", () => {
+    const ran = stepsRun("workflow_dispatch", { pending: false });
+    expect(ran.some(isChangesetsAction)).toBe(true);
+    expect(ran.some(publishesDirectly)).toBe(false);
+    expect(ran.some(verifies)).toBe(true);
+    expect(ran.some(finalizes)).toBe(true);
+  });
+
+  it("publishes on a push with the environment the action publishes with", () => {
+    const direct = job.steps.find(publishesDirectly);
+    const action = job.steps.find(isChangesetsAction);
+    expect(direct?.env).toEqual(action.env);
+    expect(String(direct?.run)).toContain(action.with.publish);
   });
 
   it("leaves Release health to skip a skipped Release, and to run on its schedule", () => {

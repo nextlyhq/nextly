@@ -10,19 +10,25 @@ name: Release
 # minutes per reset inside a release window) for a pull request that only
 # matters when someone decides to release.
 #
-# So the pull request is created or refreshed on demand, from the Actions tab
-# ("Run workflow"): with changesets pending the run versions them into the
-# pull request, and with none pending it publishes, which is also the way to
-# publish if that merge's message was ever edited away from the title.
+# So that pull request is created or refreshed on demand, from the Actions tab
+# ("Run workflow" on `main`): with changesets pending the run versions them
+# into that pull request, and with none pending it publishes, which is also the
+# way to publish if that merge's message was ever edited away from the title.
+#
+# The merge's own push publishes what that merge versioned even when other
+# changesets reached `main` after that pull request was last refreshed: they
+# wait for the next release. Left to `changesets/action`, those changesets
+# would send the run down its versioning path, and the merged version would
+# never publish.
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-# Only one release can run at a time. Never cancel a running publish.
-concurrency:
-  group: release-${{ github.workflow }}
-  cancel-in-progress: false
+# No workflow-level `concurrency`: every run enters a workflow-level group,
+# including each ordinary push to `main` whose job then skips, and entering it
+# replaces whatever run is pending there. The release job holds its own group
+# below, which a job skipped by its `if:` never enters.
 
 jobs:
   release:
@@ -32,11 +38,30 @@ jobs:
 
     # Block publishing from forks, and run on a push only for the Version
     # Packages merge (see `on:` above).
+    # Only from `main`: "Run workflow" offers every branch and tag, and the
+    # job versions or publishes whatever ref it checks out, so a dispatch from
+    # any other ref would release that ref's packages. A push reaches here
+    # only from `main` already (`on.push.branches`); the ref test holds for
+    # both events.
     # A block scalar, since the title's ": " would end a plain YAML value.
     if: >-
       github.repository == 'nextlyhq/nextly' &&
+      github.ref == 'refs/heads/main' &&
       (github.event_name == 'workflow_dispatch' ||
-      startsWith(github.event.head_commit.message, 'chore: version packages'))
+      (github.event_name == 'push' &&
+      startsWith(github.event.head_commit.message, 'chore: version packages')))
+
+    # One release at a time, and never cancel a running publish. On the job
+    # rather than the workflow, so only runs that release ever wait here: an
+    # ordinary push to `main` skips the job and never enters the group.
+    # `queue: max` keeps every waiting release, up to 100, in order, where the
+    # default keeps one pending and cancels it for the next: a dispatch would
+    # otherwise replace a Version Packages merge waiting to publish, and that
+    # merge's publish would be lost.
+    concurrency:
+      group: release-${{ github.workflow }}
+      cancel-in-progress: false
+      queue: max
 
     # Reads RELEASE_BOT_TOKEN from the Production environment. Also enables
     # environment protection rules (required reviewers, wait timers).
@@ -115,11 +140,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # A dispatch: the action versions pending changesets into the Version
+      # Packages pull request, or publishes when none are pending, which is
+      # the path for publishing a version whose merge push did not.
       - name: Create Release PR or Publish
         id: changesets
+        if: github.event_name == 'workflow_dispatch'
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
         with:
-          # Run when Version PR is merged. Builds then publishes.
+          # Run when no changesets are pending. Builds then publishes.
           publish: pnpm release:publish
           # Run when changesets exist. Creates the Version PR.
           version: pnpm release:version
@@ -136,26 +165,64 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
           TURBO_CACHE_DIR: .turbo
 
+      # The Version Packages merge's push: publish what it versioned. Not the
+      # action, which counts changesets first and versions instead whenever
+      # any are pending, and a changeset can reach `main` between the Version
+      # Packages pull request's last refresh and its merge.
+      #
+      # This is everything the action's publish path does with the inputs
+      # above: it runs the `publish` command with GITHUB_TOKEN set to the
+      # token it was given, and fails the step when the command fails. With
+      # `createGithubReleases: false` it pushes no tag and creates no release,
+      # so per-package tags only ever existed on the runner. The git identity
+      # it configures is set here too, so the per-package tags
+      # `changeset publish` creates locally are made the same way. The
+      # registry login is the setup-node .npmrc and the job's OIDC token, as
+      # for the action. The action's `published` outputs are not read
+      # anywhere in this job.
+      - name: Publish the Version Packages merge
+        id: publish
+        if: github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          TURBO_CACHE_DIR: .turbo
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          pnpm release:publish
+
+      # Whether this run took a publish path: the merge's push published, or a
+      # dispatch found nothing pending and the action published. A dispatch
+      # that versioned took neither. The two steps below read this one
+      # output, so both publish paths are verified and finalized alike.
+      - name: Record whether this run published
+        id: path
+        env:
+          PUBLISHED: ${{ steps.publish.outcome == 'success' || steps.changesets.outputs.hasChangesets == 'false' }}
+        run: echo "publish=$PUBLISHED" >> "$GITHUB_OUTPUT"
+
       # `changeset publish` pushes packages one at a time and reports success
       # even when some of them failed, so the only way to know a release is
       # whole is to ask the registry afterwards. Failing here stops the tag and
       # the GitHub Release from being created, which is what keeps npm, git and
       # the Releases page describing the same release.
       #
-      # Gated on `hasChangesets == 'false'` (this run took the publish path)
-      # rather than on `published == 'true'` (this run published something new).
-      # The two differ during recovery: publishing is resumable, so a re-run
-      # after a partial release skips the versions npm already has and reports
-      # nothing newly published. Keying off `published` would then skip both
-      # verification and finalization forever, leaving a complete npm release
-      # with no tag and no GitHub Release. Both steps below are idempotent, so
-      # running them on an already-finalized release is a no-op.
+      # Gated on `steps.path.outputs.publish` (this run took a publish path)
+      # rather than on the action's `published == 'true'` (this run published
+      # something new). The two differ during recovery: publishing is
+      # resumable, so a re-run after a partial release skips the versions npm
+      # already has and reports nothing newly published. Keying off `published`
+      # would then skip both verification and finalization forever, leaving a
+      # complete npm release with no tag and no GitHub Release. Both steps below
+      # are idempotent, so running them on an already-finalized release is a
+      # no-op.
       - name: Verify every package reached the registry
-        if: steps.changesets.outputs.hasChangesets == 'false'
+        if: steps.path.outputs.publish == 'true'
         run: pnpm release:verify
 
       - name: Create consolidated GitHub Release
-        if: steps.changesets.outputs.hasChangesets == 'false'
+        if: steps.path.outputs.publish == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
         run: |
@@ -198,9 +265,9 @@ jobs:
             RELEASE_FLAG="--latest"
           fi
 
-          # Idempotent: skip if the release already exists. This step now also
-          # runs on pushes after a release is finalized, so "already done" is a
-          # normal outcome rather than a sign something went wrong.
+          # Idempotent: skip if the release already exists. This step also runs
+          # on a dispatch or a re-run after a release is finalized, so "already
+          # done" is a normal outcome rather than a sign something went wrong.
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists; nothing to finalize"
           else
