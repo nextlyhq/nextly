@@ -20,6 +20,7 @@ process.env.NEXTLY_SECRET =
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../../config";
+import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -695,6 +696,10 @@ describe.each(getConfiguredTestDialects())(
         { status: false },
         { and: [{ column: "slug", op: "=", value: "seasonal" }] }
       );
+      // A raw registry write is a change made outside this process, which
+      // readers see once the cached registry row's second is up; clearing the
+      // cache is that change being seen now, without waiting the second out.
+      clearCollectionRowCache();
       // The write itself now refuses the document-wide move.
       const written = await (
         t.getService("collectionsHandler") as CollectionsHandler

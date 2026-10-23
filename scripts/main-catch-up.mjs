@@ -33,7 +33,7 @@ import { commandText } from "./workflow-context.mjs";
 /**
  * The workflows to keep tested on `main`, each with the jobs its verdict stands
  * on: for CI, every job `CI gate` needs; for Integration, every job that runs
- * a suite (each shard of a sharded leg, and the SQLite leg). A name
+ * a suite (each shard of every leg, since all three are sharded). A name
  * ending in " (" stands for a matrix job's every instance, whose names add the
  * matrix value. A test holds each list to the workflow file.
  */
@@ -50,9 +50,13 @@ export const WORKFLOWS = {
   "integration.yml": [
     "Integration (postgres) shard (1)",
     "Integration (postgres) shard (2)",
+    "Integration (postgres) shard (3)",
     "Integration (mysql) shard (1)",
     "Integration (mysql) shard (2)",
-    "Integration (sqlite)",
+    "Integration (mysql) shard (3)",
+    "Integration (sqlite) shard (1)",
+    "Integration (sqlite) shard (2)",
+    "Integration (sqlite) shard (3)",
   ],
 };
 
