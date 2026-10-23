@@ -4,7 +4,7 @@ import react from "@vitejs/plugin-react";
 import tsconfigPaths from "vite-tsconfig-paths";
 import { defineConfig } from "vitest/config";
 
-// Mirror the tsup `define` so `adminVersion()` resolves under test.
+// Mirror the tsdown `define` so `adminVersion()` resolves under test.
 const require = createRequire(import.meta.url);
 const { version: adminVersion } = require("./package.json") as {
   version: string;

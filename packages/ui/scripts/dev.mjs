@@ -13,12 +13,12 @@
  *
  * ## No shell, so the child IS the watcher
  *
- * `spawn("tsup", …, { shell: true })` is the obvious way to find the binary, and it makes the
- * spawned process the SHELL rather than tsup. Killing it then kills `/bin/sh` or `cmd.exe` and can
+ * `spawn("tsdown", …, { shell: true })` is the obvious way to find the binary, and it makes the
+ * spawned process the SHELL rather than tsdown. Killing it then kills `/bin/sh` or `cmd.exe` and can
  * leave the watcher underneath running — so a failure in one watcher would tear down its sibling's
  * shell while the sibling kept writing into `dist`, and Ctrl-C would leave processes behind.
  *
- * Resolving tsup's own entry and running it under this same Node removes the intermediary: the
+ * Resolving tsdown's own entry and running it under this same Node removes the intermediary: the
  * process this file holds a handle to is the one doing the work, `kill()` reaches it directly, and
  * nothing depends on how a platform's shell resolves a name or forwards a signal.
  *
@@ -41,19 +41,19 @@ const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(join(packageRoot, "package.json"));
 
 /**
- * The file tsup's `tsup` command actually runs.
+ * The file tsdown's `tsdown` command actually runs.
  *
- * Read from the package's own manifest rather than assumed, because the path is tsup's to change
+ * Read from the package's own manifest rather than assumed, because the path is tsdown's to change
  * between versions and a hard-coded one would break on an upgrade with a `MODULE_NOT_FOUND` that
  * names this file instead of the cause.
  */
-function tsupEntry() {
-  const manifestPath = require.resolve("tsup/package.json");
+function tsdownEntry() {
+  const manifestPath = require.resolve("tsdown/package.json");
   const { bin } = require(manifestPath);
-  const relative = typeof bin === "string" ? bin : bin?.tsup;
+  const relative = typeof bin === "string" ? bin : bin?.tsdown;
   if (typeof relative !== "string") {
     throw new Error(
-      "tsup's manifest declares no `tsup` binary, so there is nothing to run. Its `bin` field is " +
+      "tsdown's manifest declares no `tsdown` binary, so there is nothing to run. Its `bin` field is " +
         `${JSON.stringify(bin)}.`
     );
   }
@@ -69,23 +69,33 @@ function tsupEntry() {
 /**
  * `--watch src`, not a bare `--watch`.
  *
- * tsup's default watch root is the package directory, and from there it notices nothing: measured
- * on this package, an edit to `src/lib/color/index.ts` produced no rebuild and the artifact was
- * byte-identical 25 seconds later. Pointing the root at `src` makes the same edit rebuild.
+ * The watch root is named rather than left to the bundler's default. Under tsup the default was the
+ * package directory, and from there it noticed nothing: measured on this package, an edit to
+ * `src/lib/color/index.ts` produced no rebuild and the artifact was byte-identical 25 seconds
+ * later. Pointing the root at `src` makes the same edit rebuild, whatever the default is.
  *
  * The failure it removes is silent, which is why the argument is worth a comment: the watcher
  * prints `Watching for changes in "."` and keeps running, so a contributor has positive evidence
  * that it works while consuming a `dist` that stopped changing.
  */
+// `--config-loader tsx` because the configs import their entry list from a TypeScript module by
+// its `.js` name, as `build:js` loads them.
 const WATCHERS = [
-  { label: "client", args: ["--watch", "src"] },
+  { label: "client", args: ["--config-loader", "tsx", "--watch", "src"] },
   {
     label: "server-safe",
-    args: ["--config", "tsup.server-safe.config.ts", "--watch", "src"],
+    args: [
+      "--config-loader",
+      "tsx",
+      "--config",
+      "tsdown.server-safe.config.ts",
+      "--watch",
+      "src",
+    ],
   },
 ];
 
-const entry = tsupEntry();
+const entry = tsdownEntry();
 const children = [];
 let stopping = false;
 

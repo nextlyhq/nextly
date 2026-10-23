@@ -53,6 +53,20 @@ export interface RecentActivityProps {
 }
 
 /**
+ * How many saves one row stands for: "· 12 times", or "· 1000+ times" when the
+ * server stopped reading inside the run. The dot is drawn and not read; a
+ * screen reader hears "updated Site style, 12 times".
+ */
+const RepeatCount: React.FC<{ activity: Activity }> = ({ activity }) => (
+  <span className="text-muted-foreground font-medium">
+    <span aria-hidden="true"> · </span>
+    <span className="sr-only">, </span>
+    {activity.count ?? 1}
+    {activity.countAtLeast === true ? "+" : ""} times
+  </span>
+);
+
+/**
  * Single Activity Item Component
  *
  * Displays a single activity entry with avatar, description, and badge.
@@ -123,6 +137,10 @@ const ActivityItem: React.FC<{ activity: Activity; now: number }> = ({
             <span className="font-bold text-foreground tracking-tight">
               {activity.target}
             </span>
+          )}
+          {/* A floor is drawn even at one: "1+" says the server stopped reading inside it. */}
+          {((activity.count ?? 1) > 1 || activity.countAtLeast === true) && (
+            <RepeatCount activity={activity} />
           )}
         </p>
 
