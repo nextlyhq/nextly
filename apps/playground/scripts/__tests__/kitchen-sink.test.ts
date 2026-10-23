@@ -234,7 +234,7 @@ describe("the kitchen-sink document", () => {
         partClass: () => "",
         ctx: context,
         renderSlot: () => null,
-      });
+      } as unknown as BlockRenderArgs<never>);
 
       const markup =
         element === null || element === undefined
@@ -284,7 +284,7 @@ describe("the kitchen-sink document", () => {
         resolveEntryPath: () => Promise.resolve(null),
       },
       renderSlot: () => ITEM,
-    });
+    } as unknown as BlockRenderArgs<never>);
 
     const markup =
       element === null || element === undefined
