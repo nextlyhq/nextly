@@ -56,11 +56,11 @@ import { parseTurboPlan } from "./turbo-plan.mjs";
 
 const PROBE_TIMEOUT_MS = 180_000;
 
-function dryRun() {
+function dryRun(env = process.env) {
   const raw = execFileSync(
     "pnpm",
     ["exec", "turbo", "run", "check-types", "--dry=json"],
-    { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
+    { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env }
   );
   // Located rather than assumed: pnpm emits config warnings and turbo a
   // version banner, and which stream each uses varies between a terminal and a
@@ -424,6 +424,23 @@ describe("a package's hash covers the program it actually compiles", () => {
     expect(writesNoBuildInfo("tsc --noEmit")).toBe(false);
     expect(writesNoBuildInfo("tsc --noEmit --incremental false && tsc --noEmit -p tsconfig.tests.json")).toBe(false);
     expect(writesNoBuildInfo("next typegen")).toBe(false);
+  });
+});
+
+describe("the runner's platform is hashed", () => {
+  // The shared remote cache serves Linux, macOS and Windows jobs. A task
+  // hashed without the platform would let a Linux output skip the Windows
+  // job that exists to catch what differs there.
+  it("gives the same task a different hash on another operating system or architecture", () => {
+    const hashOf = (os, arch) => {
+      const plan = dryRun({ ...process.env, RUNNER_OS: os, RUNNER_ARCH: arch });
+      return plan.tasks.find(task => task.taskId === "nextly#check-types")?.hash;
+    };
+    const linux = hashOf("Linux", "X64");
+    expect(linux).toBeTruthy();
+    expect(hashOf("Windows", "X64")).not.toBe(linux);
+    expect(hashOf("Linux", "ARM64")).not.toBe(linux);
+    expect(hashOf("Linux", "X64")).toBe(linux);
   });
 });
 
