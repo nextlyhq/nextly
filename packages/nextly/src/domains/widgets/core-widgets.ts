@@ -298,21 +298,43 @@ const CORE_WIDGET_LITERALS = [
     title: "Recently edited",
     description:
       "The entries and Singles most recently saved, newest first, one row each.",
-    archetype: "list",
+    // Its own component, because a row is a link to its document and a line of
+    // what the list draws no room for: its collection, who saved it, when, and
+    // its status. Framed, so the heading, the size tiers and the empty state are
+    // the card's like any other's.
+    archetype: "custom",
+    component: "core#RecentlyEdited",
     defaultSize: "md",
     // The narrowest width it still draws at: a list whose rows need at least a third.
     minSize: "md",
     defaultOrder: 35,
     // From the activity trail, one row per document at its latest save the
     // reader may see, across every collection they may read; the same trail
-    // Recent activity reads, grouped by document rather than by run. The title
-    // and when it was saved, the two fields a list draws.
+    // Recent activity reads, grouped by document rather than by run. Every
+    // field a row is drawn from, and nothing the card does not draw.
     query: {
       source: RECENT_EDITS_SOURCE_ID,
       op: "list",
-      select: ["entryTitle", "createdAt"],
+      select: [
+        "id",
+        "entryId",
+        "entryTitle",
+        "collection",
+        "subjectKind",
+        "locale",
+        "actorType",
+        "userId",
+        "userName",
+        "identityErasedAt",
+        "createdAt",
+        "status",
+        "pendingChanges",
+      ],
       limit: 5,
     },
+    // Asked like core's own lists: the rows its size draws and one more, so the
+    // card can say more exist at every size.
+    sizedQuery: true,
     settings: [
       RECENTLY_EDITED_ONLY_MINE,
       RECENTLY_EDITED_COLLECTION,

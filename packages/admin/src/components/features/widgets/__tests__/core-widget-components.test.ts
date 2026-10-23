@@ -140,18 +140,20 @@ describe("core list cards select only fields that get drawn", () => {
     widget => widget.archetype === "list"
   ).map(widget => [widget.id, widget.query?.select ?? []] as const);
 
-  // The population: `filter` returning nothing would make `it.each` register no
-  // cases at all, and a describe block with no tests reports as passing.
-  // Upcoming releases is no longer one of them: its own component draws the
-  // attention line from `kind`, `reason` and `count`, and its rows' title and
-  // date through the same `TieredRows` a list card uses.
-  it("finds the list cards to check", () => {
-    expect(listCards.map(([id]) => id)).toEqual(
-      expect.arrayContaining(["core/recently-edited"])
-    );
+  /*
+   * The population, pinned rather than merely non-empty. Core declares no
+   * list card today: Recently edited and Upcoming releases each draw through a
+   * component of their own. Pinned, a card that becomes a list card fails here
+   * until it is named, and is then checked below; a bare loop over an empty
+   * list would pass having checked nothing.
+   */
+  it("knows which core cards are list cards", () => {
+    expect(listCards.map(([id]) => id)).toEqual([]);
   });
 
-  it.each(listCards)("%s selects at most what is drawn", (_id, select) => {
-    expect(select.length).toBeLessThanOrEqual(LIST_RENDERED_FIELDS);
+  it("holds each core list card to what is drawn", () => {
+    for (const [id, select] of listCards) {
+      expect(select.length, id).toBeLessThanOrEqual(LIST_RENDERED_FIELDS);
+    }
   });
 });

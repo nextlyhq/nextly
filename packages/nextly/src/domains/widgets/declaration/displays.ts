@@ -195,6 +195,8 @@ const RESULT_FIELD = z.looseObject({
 const LIST_DATA = z.looseObject({
   items: z.array(ROW),
   fields: z.array(RESULT_FIELD).optional(),
+  // The span the source looked at, in whole days; absent when unbounded.
+  window: z.looseObject({ days: z.number().int().positive() }).optional(),
 });
 
 const DISPLAY_DATA_SCHEMAS: Record<CoreDisplay, z.ZodType> = {

@@ -23,6 +23,7 @@ import { NeedsAttention } from "@admin/components/features/dashboard/NeedsAttent
 import { OnboardingChecklist } from "@admin/components/features/dashboard/OnboardingChecklist";
 import { QuickCreate } from "@admin/components/features/dashboard/QuickCreate";
 import { RecentActivityCard } from "@admin/components/features/dashboard/RecentActivity";
+import { RecentlyEdited } from "@admin/components/features/dashboard/RecentlyEdited";
 import { SeedDemoContentCard } from "@admin/components/features/dashboard/SeedDemoContentCard";
 import { SinglesQuickLinks } from "@admin/components/features/dashboard/SinglesQuickLinks";
 import { TeamSummary } from "@admin/components/features/dashboard/TeamSummary";
@@ -46,6 +47,7 @@ export function registerCoreWidgetComponents(): void {
   registerCoreComponent("core#TeamSummary", TeamSummary);
   registerCoreComponent("core#NeedsAttention", NeedsAttention);
   registerCoreComponent("core#RecentActivity", RecentActivityCard);
+  registerCoreComponent("core#RecentlyEdited", RecentlyEdited);
   registerCoreComponent("core#UpcomingReleases", UpcomingReleasesCard);
   registerCoreComponent("core#Count", CountCard);
 }

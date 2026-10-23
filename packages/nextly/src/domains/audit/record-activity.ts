@@ -47,6 +47,13 @@ export interface PublicationFacts {
   promotedPendingEdits?: boolean;
   /** Whether the write restores an earlier version. */
   restores?: boolean;
+  /**
+   * Whether the request itself carried content to write with the publish, not
+   * only the status. Merged over the pending edits it promotes, that content
+   * was never recorded by an earlier save, so the row is a save as well as a
+   * publish.
+   */
+  requestEdits?: boolean;
 }
 
 /**
@@ -218,13 +225,28 @@ function updateMetadata(input: {
     input.previous && input.data
       ? computeChangedFields(input.previous, input.data)
       : [];
-  const published =
-    input.publication !== undefined && publishesDocument(input.publication);
-  if (changed.length === 0 && !published) return undefined;
+  const marks = publicationMarks(input.publication);
+  if (changed.length === 0 && marks === undefined) return undefined;
   return {
     ...(changed.length > 0 ? { changedFields: changed } : {}),
-    ...(published ? { published: true } : {}),
+    ...marks,
   };
+}
+
+/**
+ * What a row says about publishing: that the write published, and whether its
+ * request also edited the document, which makes it a save too. `undefined`
+ * for a write that published nothing.
+ */
+function publicationMarks(
+  publication: PublicationFacts | undefined
+): { published: true; publishedWithEdits?: true } | undefined {
+  if (publication === undefined || !publishesDocument(publication)) {
+    return undefined;
+  }
+  return publication.requestEdits === true
+    ? { published: true, publishedWithEdits: true }
+    : { published: true };
 }
 
 /**
