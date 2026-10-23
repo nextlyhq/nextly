@@ -13,10 +13,23 @@ import type { QueryClient } from "@tanstack/react-query";
 /** The query key of the user's permission slugs. */
 export const CURRENT_USER_PERMISSIONS_KEY = ["currentUserPermissions"] as const;
 
-/** The query key of the server's answer about collections and Singles. */
+/**
+ * The query key of the server's answer about collections and Singles, in
+ * every content language: a prefix, so an invalidation by it reaches each.
+ */
 export const CURRENT_USER_CAPABILITIES_KEY = [
   "currentUserCapabilities",
 ] as const;
+
+/**
+ * The query key of the answer in one content language, `undefined` being the
+ * app's default. A rule can answer by language, so each is its own answer.
+ */
+export function currentUserCapabilitiesKey(
+  locale: string | undefined
+): readonly unknown[] {
+  return [...CURRENT_USER_CAPABILITIES_KEY, locale ?? null];
+}
 
 /**
  * Ask again what the current user may do: after a change to roles, their

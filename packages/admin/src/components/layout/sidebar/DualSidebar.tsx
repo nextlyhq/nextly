@@ -63,6 +63,7 @@ export function DualSidebar({
     hasPermission,
     isLoading: isPermissionsLoading,
     error: permissionsError,
+    content,
   } = useCurrentUserPermissions();
   const branding = useBranding();
   const showBuilder = branding?.showBuilder ?? true;
@@ -164,9 +165,12 @@ export function DualSidebar({
     !isHydrated ||
     isPermissionsLoading ||
     (!!permissionsError && permissions.length === 0);
+  // The content sections are decided by the server's answer about collections
+  // and Singles as well, which arrives on its own.
+  const contentAnswerPending = hasPermissionDataPending || content.isLoading;
 
   const hasCollectionsSection = hasCollectionsSectionHelper(capabilities, {
-    isPending: hasPermissionDataPending || isCollectionsLoading,
+    isPending: contentAnswerPending || isCollectionsLoading,
     isError: isCollectionsError,
     permittedCollections,
     placementOf: getCollectionPlacement,
@@ -174,7 +178,7 @@ export function DualSidebar({
 
   const hasSinglesSection =
     capabilities.canViewCollections &&
-    (hasPermissionDataPending ||
+    (contentAnswerPending ||
       isSinglesLoading ||
       isSinglesError ||
       permittedSingles.some(single => !single.admin?.hidden));
@@ -184,7 +188,7 @@ export function DualSidebar({
     // resolve into visible collections, and for a user without
     // `canManageSettings` the panel then has no destination at all, so keeping
     // the rail item would open an empty panel rather than defer a decision.
-    isPending: hasPermissionDataPending || isCollectionsLoading,
+    isPending: contentAnswerPending || isCollectionsLoading,
     hasVisiblePluginCollection: hasVisiblePluginCollection(
       permittedCollections,
       getCollectionPlacement

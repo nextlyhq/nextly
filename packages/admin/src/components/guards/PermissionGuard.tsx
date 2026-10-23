@@ -13,7 +13,7 @@ import {
   DEFAULT_MARK_VIEWBOX,
 } from "@admin/lib/branding/default-mark";
 import { cn } from "@admin/lib/utils";
-import type { AccessSubject } from "@admin/types/access-subject";
+import type { AccessSubject, EntityAccess } from "@admin/types/access-subject";
 
 interface PermissionGuardProps {
   /**
@@ -25,6 +25,12 @@ interface PermissionGuardProps {
   requiredPermission: string | string[];
   /** What the route opens, so a refusal can name it; absent for other pages. */
   subject?: AccessSubject;
+  /**
+   * What a collection or Single route asks of its entity. Given, the route is
+   * decided by the server's answer about that entity, code rules included,
+   * rather than by `requiredPermission`.
+   */
+  entity?: EntityAccess;
   children: React.ReactNode;
 }
 
@@ -43,19 +49,28 @@ interface PermissionGuardProps {
 export function PermissionGuard({
   requiredPermission,
   subject,
+  entity,
   children,
 }: PermissionGuardProps): React.JSX.Element {
-  const {
-    hasPermission,
-    isLoading: permissionsLoading,
-    hasAnswer,
-    error,
-    retry,
-  } = useCurrentUserPermissions();
+  const access = useCurrentUserPermissions();
+  const { hasPermission, canAccessCollection, content, retry } = access;
   const [isForceLoading, setIsForceLoading] = useState(false);
-  const hasAccess = Array.isArray(requiredPermission)
-    ? requiredPermission.some(hasPermission)
-    : hasPermission(requiredPermission);
+  // A collection or Single route needs the server's answer about its entity
+  // as well as the permission list; any other route needs the list alone, so
+  // a content-registry failure leaves the system pages open.
+  const decidedBy = entity
+    ? {
+        isLoading: access.isLoading || content.isLoading,
+        hasAnswer: access.hasAnswer && content.hasAnswer,
+        error: access.error ?? content.error,
+      }
+    : access;
+  const { hasAnswer, error } = decidedBy;
+  const hasAccess = entity
+    ? canAccessCollection(entity.slug, entity.action)
+    : Array.isArray(requiredPermission)
+      ? requiredPermission.some(hasPermission)
+      : hasPermission(requiredPermission);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -66,7 +81,7 @@ export function PermissionGuard({
     }
   }, []);
 
-  const isLoading = permissionsLoading || isForceLoading;
+  const isLoading = decidedBy.isLoading || isForceLoading;
 
   if (isLoading) {
     return (

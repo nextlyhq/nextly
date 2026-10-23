@@ -5,7 +5,7 @@ import { PluginPageHost } from "@admin/components/shared/plugin-page-host";
 
 import { ROUTES } from "../constants/routes";
 import registry, { routeConfig } from "../pages/registry";
-import type { AccessSubject } from "../types/access-subject";
+import type { AccessSubject, EntityAccess } from "../types/access-subject";
 import type { CarriedRouteSection } from "../types/route-section";
 
 import { routedDocumentView } from "./plugins/document-view-registry";
@@ -47,6 +47,12 @@ export interface RouteResult {
    * visit can name it. Set beside `requiredPermission` from the same table.
    */
   accessSubject?: AccessSubject;
+  /**
+   * What the route asks of the collection or Single it opens, which the guard
+   * decides from the server's answer. Set beside `requiredPermission` from the
+   * same table.
+   */
+  entityAccess?: EntityAccess;
   /** Route is part of the schema builder, which is disabled in production. */
   requiresBuilder?: boolean;
   /** Set when the route resolves to a plugin-contributed page (D21). */
@@ -172,7 +178,13 @@ const SLUG_ROUTE_ACCESS: Record<
 function getSlugRouteAccess(
   pattern: string,
   params: Params
-): { requiredPermission: string; accessSubject: AccessSubject } | undefined {
+):
+  | {
+      requiredPermission: string;
+      accessSubject: AccessSubject;
+      entityAccess: EntityAccess;
+    }
+  | undefined {
   const slug = typeof params.slug === "string" ? params.slug : undefined;
   const access = Object.hasOwn(SLUG_ROUTE_ACCESS, pattern)
     ? SLUG_ROUTE_ACCESS[pattern]
@@ -181,6 +193,7 @@ function getSlugRouteAccess(
   return {
     requiredPermission: `${access.action}-${slug}`,
     accessSubject: access.subject,
+    entityAccess: { slug, action: access.action },
   };
 }
 
@@ -251,6 +264,7 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       requiredPermission:
         slugAccess?.requiredPermission ?? dynamic.requiredPermission,
       accessSubject: slugAccess?.accessSubject,
+      entityAccess: slugAccess?.entityAccess,
       requiresBuilder: dynamic.requiresBuilder,
       section: dynamic.section,
     };
