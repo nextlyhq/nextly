@@ -217,6 +217,9 @@ export async function createNextly(
   // "install into existing Next project" path, the user has already
   // consented to using their current directory.
   let allowExistingTarget = false;
+  // Asked now, done later: the directory is emptied only after every check
+  // that can still refuse the scaffold, so a refusal leaves it as it was.
+  let clearTargetDir: string | undefined;
   if (isFreshProject && projectName) {
     const conflictTargetDir = installInCwd ? cwd : path.join(cwd, projectName);
     if (await isDirectoryNotEmpty(conflictTargetDir)) {
@@ -236,7 +239,7 @@ export async function createNextly(
       // flip the flag here.
       allowExistingTarget = true;
       if (choice === "remove") {
-        await emptyDirectory(conflictTargetDir);
+        clearTargetDir = conflictTargetDir;
       }
       // "ignore" falls through — overlay the template on top of
       // existing files (fs.copy overwrites by default).
@@ -282,6 +285,10 @@ export async function createNextly(
       process.exit(1);
     }
   }
+
+  // The answer to the directory conflict, carried out now that nothing left
+  // can refuse the scaffold.
+  if (clearTargetDir) await emptyDirectory(clearTargetDir);
 
   // --- Step 3: Schema approach (only for content templates with approaches) ---
 
