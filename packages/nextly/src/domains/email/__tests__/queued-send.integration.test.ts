@@ -20,8 +20,9 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { container } from "../../../di/container";
 import { runPostInitTasks } from "../../../init/post-init-tasks";
 import { env } from "../../../lib/env";
 import {
@@ -37,6 +38,8 @@ import {
 import type { Logger } from "../../../shared/types";
 import type { JobRegistry } from "../../jobs/job-registry";
 import { runJobsPass } from "../../jobs/jobs-runner";
+import { linkedTransaction } from "../../../plugins/database/plugin-transaction-link";
+import { staffPerson } from "../../../plugins/principals/ref";
 import { pluginSettingsSecrets } from "../../plugins/settings-service";
 import { withEmailFailure } from "../failure";
 import { defineEmailProvider } from "../provider-definition";
@@ -89,6 +92,7 @@ let context: PluginContext | undefined;
 let current: TestNextly | undefined;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await current?.destroy();
   current = undefined;
   context = undefined;
@@ -303,6 +307,35 @@ describe.each(getConfiguredTestDialects())("a queued email (%s)", dialect => {
     expect(calls).toEqual([]);
   });
 
+  it("names a staff user the plugin's own transaction created", async () => {
+    // Read in that transaction: on PostgreSQL and MySQL the pool cannot see
+    // the user until it commits.
+    const t = await boot(dialect);
+    const id = "staff-in-transaction";
+    const result = await plugin().db.transaction(async tx => {
+      await linkedTransaction(tx, "test.user").run(adapterTx =>
+        adapterTx.insert("users", {
+          id,
+          email: "new-staff@example.com",
+          name: "New Staff",
+          isActive: true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+      );
+      return plugin().services.email.queue({
+        ...message,
+        to: "new-staff@example.com",
+        person: staffPerson(id),
+        tx,
+      });
+    });
+
+    expect(result.state).toBe("waiting");
+    expect(calls).toHaveLength(1);
+    expect((await queued(t))[0].state).toBe("sent");
+  });
+
   it("is attempted once the plugin's transaction commits, not before", async () => {
     const t = await boot(dialect);
     let inside: { state: string; calls: number } | undefined;
@@ -339,6 +372,32 @@ describe.each(getConfiguredTestDialects())("a queued email (%s)", dialect => {
     expect(calls).toHaveLength(1);
     expect((await queued(t))[0].state).toBe("sent");
   });
+
+  it("is failed, not left waiting, when every attempt throws before it can record one", async () => {
+    // Here the send service itself cannot be reached, so the attempt throws
+    // past its own failure handling, and the job queue alone counts attempts.
+    const t = await boot(dialect);
+    behaviour.failures = 1;
+    const result = await t.nextly.email.queue(message);
+    expect(result.state).toBe("waiting");
+    const get = container.get.bind(container);
+    vi.spyOn(container, "get").mockImplementation(((name: string) => {
+      if (name === "emailService") {
+        throw new Error("the send service is unavailable");
+      }
+      return get(name);
+    }) as typeof container.get);
+
+    for (let step = 1; step < QUEUED_EMAIL_MAX_ATTEMPTS + 3; step += 1) {
+      await trigger(t, later(step));
+    }
+
+    const [row] = await queued(t);
+    expect(row.state).toBe("failed");
+    expect(row.settledAt).toEqual(expect.any(Number));
+    const [job] = await emailJobs(t);
+    expect(job.state).toBe("failed");
+  }, 120_000);
 
   it("retries a retryable failure with backoff up to the limit, then fails it", async () => {
     const t = await boot(dialect);

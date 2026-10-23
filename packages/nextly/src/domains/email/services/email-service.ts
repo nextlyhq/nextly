@@ -15,6 +15,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { toDbError } from "../../../database/errors";
+import { getStaticRelations } from "../../../database/static-relations";
 import { NextlyError } from "../../../errors";
 import {
   getFilterRegistry,
@@ -312,6 +313,13 @@ function acceptedRow(
         ? refusedRecordError(refusalOf(facts.result, recipient.to))
         : "Send returned unsuccessful",
   };
+}
+
+/** What a queued email is checked for before it is stored. */
+interface QueueChecks {
+  to: string | string[];
+  person: unknown;
+  idempotencyKey: string | undefined;
 }
 
 export class EmailService extends BaseService {
@@ -1290,8 +1298,12 @@ export class EmailService extends BaseService {
       TxOption
   ): Promise<QueuedEmail> {
     const { tx, ...send } = options;
-    await this.assertQueueable(send.to, send.person, send.idempotencyKey);
-    return this.enqueue({ kind: "message", send }, tx, "email.queue");
+    return this.enqueue(
+      { kind: "message", send },
+      { to: send.to, person: send.person, idempotencyKey: send.idempotencyKey },
+      tx,
+      "email.queue"
+    );
   }
 
   /**
@@ -1309,9 +1321,9 @@ export class EmailService extends BaseService {
       TxOption
   ): Promise<QueuedEmail> {
     const { tx, ...rest } = options ?? {};
-    await this.assertQueueable(to, rest.person, rest.idempotencyKey);
     return this.enqueue(
       { kind: "template", slug: templateSlug, to, variables, options: rest },
+      { to, person: rest.person, idempotencyKey: rest.idempotencyKey },
       tx,
       "email.queueWithTemplate"
     );
@@ -1320,21 +1332,27 @@ export class EmailService extends BaseService {
   /**
    * What a send would refuse before anything is resolved, refused when the
    * email is queued rather than at its first attempt: the key, the person,
-   * and the recipients as the caller gave them.
+   * and the recipients as the caller gave them. A staff person is read in
+   * `tx` when the email is queued in a transaction, so a user that
+   * transaction wrote is seen, as the queued email will be.
    */
   private async assertQueueable(
-    to: string | string[],
-    person: unknown,
-    idempotencyKey: string | undefined
+    checks: QueueChecks,
+    tx?: TransactionContext
   ): Promise<void> {
-    if (idempotencyKey !== undefined) assertIdempotencyKey(idempotencyKey);
-    const recorded = await this.personToRecord(person);
-    assertSendable(toAddressList(to), { namesPerson: recorded !== null });
+    if (checks.idempotencyKey !== undefined) {
+      assertIdempotencyKey(checks.idempotencyKey);
+    }
+    const recorded = await this.personToRecord(checks.person, tx);
+    assertSendable(toAddressList(checks.to), {
+      namesPerson: recorded !== null,
+    });
   }
 
   /** Store a queued email, and start its first attempt once it is durable. */
   private async enqueue(
     message: QueuedMessage,
+    checks: QueueChecks,
     tx: TxOption["tx"],
     operation: string
   ): Promise<QueuedEmail> {
@@ -1347,13 +1365,15 @@ export class EmailService extends BaseService {
     };
     if (tx !== undefined) {
       const link = linkedTransaction(tx, operation);
-      const { id, jobId } = await link.run(adapterTx =>
-        storeQueuedEmail(adapterTx, input)
-      );
+      const { id, jobId } = await link.run(async adapterTx => {
+        await this.assertQueueable(checks, adapterTx);
+        return storeQueuedEmail(adapterTx, input);
+      });
       link.afterCommit(() => this.firstAttempt(jobId));
       return { id, state: "waiting" };
     }
     assertNoOpenTransaction(this.adapter, operation);
+    await this.assertQueueable(checks);
     const { id, jobId } = await runAdapterTransaction<
       { id: string; jobId: string },
       TransactionContext
@@ -1872,13 +1892,23 @@ export class EmailService extends BaseService {
    * be matched by the deletion that erases the person's records; and refused
    * when it names a staff user who does not exist, for the same reason.
    */
-  private async personToRecord(value: unknown): Promise<PrincipalRef | null> {
+  private async personToRecord(
+    value: unknown,
+    tx?: TransactionContext
+  ): Promise<PrincipalRef | null> {
     if (value === undefined || value === null) return null;
     const staff = staffPersonOf(value);
     if (!staff) return pluginPersonToRecord(value);
+    // In `tx` when there is one: on PostgreSQL and MySQL the pool is another
+    // connection, which cannot see a user that transaction has written.
+    const db = tx
+      ? tx.drizzleWithRelations<typeof this.db>(
+          getStaticRelations(this.dialect)
+        )
+      : this.db;
     let user: { id: string } | undefined;
     try {
-      user = await this.db.query.users.findFirst({
+      user = await db.query.users.findFirst({
         where: { id: requireFilterValue(staff.id, "person.id") },
         columns: { id: true },
       });

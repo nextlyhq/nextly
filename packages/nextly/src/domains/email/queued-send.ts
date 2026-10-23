@@ -588,9 +588,51 @@ export function createQueuedEmailJob(
       // A row's input is whatever was stored; one without an id names no
       // email, and there is nothing to attempt.
       if (typeof input?.queuedId !== "string") return;
-      await attemptQueuedEmail(deps(), input, context);
+      const resolved = deps();
+      try {
+        await attemptQueuedEmail(resolved, input, context);
+      } catch (error) {
+        // The last attempt threw before it could record an outcome (the send
+        // service, or the queue's own row, could not be reached), and the
+        // job queue will not try again. The email is settled failed too, so
+        // it does not wait for an attempt that never comes, and its message
+        // is pruned with it. Best effort: the job records the error either way.
+        if (context.attempt >= QUEUED_EMAIL_MAX_ATTEMPTS) {
+          await failExhausted(
+            resolved.adapter,
+            input.queuedId,
+            error,
+            context.now
+          ).catch(() => undefined);
+        }
+        throw error;
+      }
     },
   });
+}
+
+/**
+ * Settle a queued email failed when its last attempt threw, unless it has
+ * settled already.
+ */
+async function failExhausted(
+  adapter: DrizzleAdapter,
+  id: string,
+  error: unknown,
+  at: Date
+): Promise<void> {
+  const table = emailQueueTableFor(adapter.getCapabilities().dialect);
+  const failure = thrownAttemptFailure(error);
+  await adapter
+    .getDrizzle<QueueDb>()
+    .update(table)
+    .set({
+      state: "failed",
+      failure: storedFailure(failure),
+      settledAt: at.getTime(),
+      updatedAt: at.getTime(),
+    })
+    .where(and(eq(table.id, id), inArray(table.state, ATTEMPTABLE)));
 }
 
 /**
