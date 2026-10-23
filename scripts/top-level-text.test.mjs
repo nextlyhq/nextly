@@ -49,13 +49,16 @@ describe("topLevelOnly", () => {
 
   it("treats a bracket inside a comment as text", () => {
     // A `}` in a comment would close the function early and expose `hidden`.
-    // The comment before the closing brace belongs to that brace's token, at
-    // the outer depth, so it stays: only what the block nests is blanked.
-    const nested = kept(
-      "function f() { // }\n  const hidden = 1; /* } */ }\nconst top = 2;"
+    expect(
+      kept("function f() { // }\n  const hidden = 1; /* } */ }\nconst top = 2;")
+    ).toBe("function f() { } const top = 2;");
+    // A comment just inside a closing brace is nested too, though the brace is
+    // not: kept, the declaration written in it reads as top level.
+    expect(kept("function f() { /*\nconst ghost = 1;\n*/ }")).toBe(
+      "function f() { }"
     );
-    expect(nested).not.toContain("hidden");
-    expect(nested).toContain("} const top = 2;");
+    // And so is one trailing a bracket that never closes.
+    expect(kept("function f() { // const tail = 1;")).toBe("function f() {");
     // A `{` in a comment would open a block and hide `b`.
     expect(kept("// {\nconst a = 1;\n/* { */\nconst b = 2;")).toBe(
       "// { const a = 1; /* { */ const b = 2;"

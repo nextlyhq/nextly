@@ -3,9 +3,10 @@
  * blanked, so a pattern anchored at a line start reads top-level declarations
  * only.
  *
- * Tokenised here rather than parsed, because the samples it reads are often not
+ * Tokenised here rather than parsed, because the samples it reads are not
  * programs: a fence with a `{ ... }` placeholder or a partial snippet is
- * documentation, and a parser answers it with nothing at all. Only what deciding
+ * documentation, and a parser answers it with nothing at all, so a sample that
+ * does parse is read from its parse instead. Only what deciding
  * bracket depth needs is recognised: brackets, and the tokens whose text can
  * hold a bracket that is not one — strings, comments, template literals and
  * regular expressions. Everything else is a run of characters whose only use is
@@ -259,17 +260,21 @@ function blank(chars, from, to) {
  * The sample with every character nested inside a bracket blanked, newlines
  * kept so line numbers hold. A closing bracket belongs to the depth it returns
  * to and an opening one to the depth it leaves, so both stay visible while
- * their contents, and the comments and whitespace before each nested token, do
- * not.
+ * their contents do not. The comments and whitespace before a token belong to
+ * the depth before it: those ahead of a closing bracket are inside it, though
+ * the bracket is not. An empty token at the end blanks what trails an
+ * unclosed bracket.
  */
 export function topLevelOnly(code) {
   const chars = code.split("");
   let depth = 0;
   let previousEnd = 0;
-  for (const token of tokens(code)) {
+  const end = { text: "", start: code.length, end: code.length };
+  for (const token of [...tokens(code), end]) {
     const delta = bracketDelta(token.text);
     const at = Math.max(0, depth + Math.min(delta, 0));
-    if (at > 0) blank(chars, previousEnd, token.end);
+    if (depth > 0) blank(chars, previousEnd, token.start);
+    if (at > 0) blank(chars, token.start, token.end);
     depth = at + Math.max(delta, 0);
     previousEnd = token.end;
   }

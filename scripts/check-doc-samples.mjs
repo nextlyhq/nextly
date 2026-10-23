@@ -1214,49 +1214,16 @@ function importsIn(source, extension) {
   );
 }
 
-/**
- * The names a destructuring pattern binds. `{ a, b: c, d = 1, ...rest }` binds
- * a, c, d and rest; the key in `b: c` is not a binding, so only what follows a
- * colon counts.
- */
-function patternBindings(pattern) {
-  return pattern
-    .replace(/^[[{]|[\]}]$/g, "")
-    .split(",")
-    .map(part => part.trim().replace(/^\.\.\./, ""))
-    .filter(Boolean)
-    .map(
-      piece =>
-        piece.match(/:\s*([A-Za-z_$][\w$]*)/)?.[1] ??
-        piece.match(/^[A-Za-z_$][\w$]*/)?.[0]
-    );
-}
-
 export function declaredNamesIn(source, extension = "tsx") {
-  const code = topLevelOnly(source);
-  // Modifiers are a run, in any order and any number: `export default async
-  // function Foo`, `export abstract class Bar`, `declare const baz`. Naming only
-  // `export` and `declare` lost every one of those, and the lookup this replaced
-  // had found them, so unifying the two turned working pages into findings. The
-  // separator after the keyword takes an asterisk so `function* gen` and
-  // `function *gen` are both read.
-  // Anchored at a line start OR after a semicolon, because
-  // `const first = 1; const second = 2;` declares both and reading only the
-  // first turned a page that was correct into a finding.
-  const declared = [
-    ...code.matchAll(
-      /(?:^|;)[ \t]*(?:(?:export|default|declare|abstract|async)[ \t]+)*(?:const|let|var|function|class|interface|type|enum)\b[\s*]+([A-Za-z_$][\w$]*)/gm
-    ),
-  ].map(m => m[1]);
-  // Binding patterns: `const { nextly } = await createClient()` and
-  // `const [first] = rows` declare names too. Requiring an identifier straight
-  // after the keyword recorded neither, so a later fence using the value looked
-  // like it inherited nothing and was never compiled.
-  const destructured = [
-    ...code.matchAll(
-      /^\s*(?:export\s+)?(?:const|let|var)\s+([[{][^=]*?[\]}])\s*=/gm
-    ),
-  ].flatMap(m => patternBindings(m[1]));
+  const parsed = parseSample(source, extension);
+  // From the program's own top-level statements when the sample parses, which
+  // is exact: what reading the text has to infer about strings, regular
+  // expressions, JSX text and comments, the parse has already decided. Only a
+  // fence that is not a program falls back to the text.
+  const declared =
+    parsed === UNPARSED
+      ? namesInText(source, NAME_KEYWORDS)
+      : programDeclarations(parsed.program).flatMap(entry => entry.names);
   // Imports come from the PARSE, not from a pattern over the text. They cannot
   // be read from the top-level view either: an import clause opens a brace, so
   // masking by depth erases the middle of `import {\n  defineConfig,\n} from
@@ -1270,10 +1237,96 @@ export function declaredNamesIn(source, extension = "tsx") {
   const imported = importsIn(source, extension).flatMap(statement =>
     statement.specifiers.map(specifier => specifier.local.name)
   );
-  return [
-    ...new Set([...declared, ...destructured, ...imported].filter(Boolean)),
-  ];
+  return [...new Set([...declared, ...imported].filter(Boolean))];
 }
+
+/**
+ * What each top-level statement of a parsed sample declares: `{ names, value }`,
+ * `value` saying whether those names can supply a value. An `export` is read
+ * through to the declaration it carries. The kinds are the ones a declaration
+ * keyword introduces: `const`, `let`, `var`, `function` and `class` declare
+ * values, and `interface`, `type` and `enum` declare names only.
+ */
+function programDeclarations(program) {
+  return program.body
+    .map(statement =>
+      statement.type.startsWith("Export") ? statement.declaration : statement
+    )
+    .map(
+      declaration => declaration && DECLARES[declaration.type]?.(declaration)
+    )
+    .filter(Boolean);
+}
+
+/** A declaration with one `id`, which a default export can leave out. */
+function namedDeclaration(value) {
+  return declaration => ({
+    names: declaration.id ? [declaration.id.name] : [],
+    value,
+  });
+}
+
+const DECLARES = {
+  VariableDeclaration: declaration => ({
+    names: declaration.declarations.flatMap(declarator =>
+      boundNames(declarator.id)
+    ),
+    value: true,
+  }),
+  FunctionDeclaration: namedDeclaration(true),
+  TSDeclareFunction: namedDeclaration(true),
+  ClassDeclaration: namedDeclaration(true),
+  TSInterfaceDeclaration: namedDeclaration(false),
+  TSTypeAliasDeclaration: namedDeclaration(false),
+  TSEnumDeclaration: namedDeclaration(false),
+};
+
+/**
+ * The names a binding binds, through any depth of pattern: `{ a, b: c, d = 1,
+ * ...rest }` binds a, c, d and rest, the key in `b: c` being no binding.
+ */
+function boundNames(binding) {
+  const children = PATTERN_CHILDREN[binding.type];
+  return children ? children(binding).flatMap(boundNames) : [binding.name];
+}
+
+const PATTERN_CHILDREN = {
+  ObjectPattern: pattern =>
+    pattern.properties.map(property =>
+      property.type === "RestElement" ? property : property.value
+    ),
+  ArrayPattern: pattern => pattern.elements.filter(Boolean),
+  AssignmentPattern: pattern => [pattern.left],
+  RestElement: pattern => [pattern.argument],
+};
+
+/**
+ * The names a fence that does not parse declares with one of `keywords`, read
+ * from its top-level text. No reading of a fragment is exact, since it is not a
+ * program: this one sees through brackets, strings, comments and template
+ * literals by tokenising, and so sees no name a destructuring pattern binds,
+ * which are inside its brackets.
+ */
+function namesInText(source, keywords) {
+  // Modifiers are a run, in any order and any number: `export default async
+  // function Foo`, `export abstract class Bar`, `declare const baz`. Naming only
+  // `export` and `declare` lost every one of those, and the lookup this replaced
+  // had found them, so unifying the two turned working pages into findings. The
+  // separator after the keyword takes an asterisk so `function* gen` and
+  // `function *gen` are both read.
+  // Anchored at a line start OR after a semicolon, because
+  // `const first = 1; const second = 2;` declares both and reading only the
+  // first turned a page that was correct into a finding.
+  const declaration = new RegExp(
+    `(?:^|;)[ \\t]*(?:(?:export|default|declare|abstract|async)[ \\t]+)*(?:${keywords})\\b[\\s*]+([A-Za-z_$][\\w$]*)`,
+    "gm"
+  );
+  return [...topLevelOnly(source).matchAll(declaration)].map(m => m[1]);
+}
+
+/** The declaration keywords that introduce a name, and those that introduce a value. */
+const NAME_KEYWORDS = "const|let|var|function|class|interface|type|enum";
+const VALUE_KEYWORDS = "const|let|var|function|class";
 
 /**
  * Which of an earlier fence's names does this one use?
@@ -1294,25 +1347,16 @@ export function declaredNamesIn(source, extension = "tsx") {
  * program a reader pastes. `await nextly.logout()` calls a value an earlier
  * fence built, and is.
  */
-export function declaredValuesIn(source, _extension = "tsx") {
-  const code = topLevelOnly(source);
-  const names = new Set();
-  for (const m of code.matchAll(
-    /(?:^|;)[ \t]*(?:(?:export|default|declare|abstract|async)[ \t]+)*(?:const|let|var|function|class)\b[\s*]+([A-Za-z_$][\w$]*)/gm
-  )) {
-    names.add(m[1]);
-  }
-  for (const m of code.matchAll(
-    /^\s*(?:export\s+)?(?:const|let|var)\s+([[{][^=]*?[\]}])\s*=/gm
-  )) {
-    for (const part of m[1].replace(/^[[{]|[\]}]$/g, "").split(",")) {
-      const piece = part.trim().replace(/^\.\.\./, "");
-      const bound = piece.includes(":") ? piece.split(":").pop() : piece;
-      const name = bound?.trim().match(/^[A-Za-z_$][\w$]*/)?.[0];
-      if (name) names.add(name);
-    }
-  }
-  return [...names];
+export function declaredValuesIn(source, extension = "tsx") {
+  const parsed = parseSample(source, extension);
+  // From the parse when there is one, as `declaredNamesIn` reads it.
+  const values =
+    parsed === UNPARSED
+      ? namesInText(source, VALUE_KEYWORDS)
+      : programDeclarations(parsed.program)
+          .filter(entry => entry.value)
+          .flatMap(entry => entry.names);
+  return [...new Set(values)];
 }
 
 export function inheritedNames(sample, samples) {

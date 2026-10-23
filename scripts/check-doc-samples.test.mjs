@@ -12,6 +12,7 @@ import {
   contextOnlyWorthRecording,
   deprecatedPropertiesIn,
   declaredNamesIn,
+  declaredValuesIn,
   extensionFor,
   extractFrom,
   identityOf,
@@ -34,6 +35,7 @@ import {
   unterminatedFences,
   withEarlierContext,
 } from "./check-doc-samples.mjs";
+import { topLevelOnly } from "./top-level-text.mjs";
 
 /**
  * Each guard is asserted against a CONTROL that reproduces what the checker did
@@ -733,6 +735,52 @@ describe("declaredNamesIn under the right grammar", () => {
     expect(declaredNamesIn(code, "ts").sort()).toEqual(["defineConfig", "id"]);
     // The control: the grammar this used unconditionally loses the import.
     expect(declaredNamesIn(code, "tsx")).toEqual(["id"]);
+  });
+});
+
+describe("declaredNamesIn on a sample that parses", () => {
+  // Each sample is a program the text reading gets wrong about one name, which
+  // the control shows: a slash after `!` that a later slash on the line makes
+  // look like a regular expression, an apostrophe in JSX text read as opening
+  // a string, and a declaration written inside a top-level template literal.
+  it.each([
+    [
+      "function f(value: number) { const x = (value! / 2) / 3; }\nconst pageValue = 1;",
+      ["f", "pageValue"],
+      "pageValue",
+    ],
+    [
+      "function f() { return <p>Don't</p>; }\nconst pageValue = 1;",
+      ["f", "pageValue"],
+      "pageValue",
+    ],
+    ["const doc = `\nconst ghost = 1;\n`;", ["doc"], "ghost"],
+  ])(
+    "reads its top-level declarations from the parse: %s",
+    (code, names, misread) => {
+      expect(declaredNamesIn(code).sort()).toEqual(names);
+      // The control: the top-level text has the name exactly when the program
+      // does not declare it there.
+      expect(new RegExp(`\\b${misread}\\b`).test(topLevelOnly(code))).toBe(
+        !names.includes(misread)
+      );
+    }
+  );
+
+  it("reads every binding of a pattern and which names are values", () => {
+    const code = [
+      "const { a, b: { c }, ...rest } = obj;",
+      "export default function Shown() {}",
+      "interface Shape {}",
+      "enum Mode { A }",
+    ].join("\n");
+
+    expect(declaredNamesIn(code).sort()).toEqual(
+      ["Mode", "Shape", "Shown", "a", "c", "rest"].sort()
+    );
+    expect(declaredValuesIn(code).sort()).toEqual(
+      ["Shown", "a", "c", "rest"].sort()
+    );
   });
 });
 
