@@ -55,6 +55,19 @@ describe("check-access-rule-role-names", () => {
     ).toEqual(["templates/t/src/users.ts:3 read"]);
   });
 
+  it("reports a role read by bracket, which a dotted-only reader walks past", () => {
+    expect(
+      scan({
+        "packages/plugin-x/src/pages.ts": [
+          "export const Pages = defineCollection({",
+          '  slug: "pages",',
+          '  access: { delete: ctx => ctx["roles"].includes("admin") },',
+          "});",
+        ].join("\n"),
+      })
+    ).toEqual(["packages/plugin-x/src/pages.ts:3 delete"]);
+  });
+
   it("follows an untyped rule imported into a collection's access", () => {
     expect(
       scan({

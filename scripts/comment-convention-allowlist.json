@@ -1152,13 +1152,12 @@
     "digests": ["92615760254a3a7f"]
   },
   "scripts/check-comment-convention.mjs": {
-    "count": 5,
+    "count": 4,
     "digests": [
       "1d96a703ff67f6d2",
       "2421cd2ab9b9214b",
       "91e112e4507fb8ee",
-      "bdbe7173f0ca3a3f",
-      "dc84b3f296521a00"
+      "bdbe7173f0ca3a3f"
     ]
   }
 }

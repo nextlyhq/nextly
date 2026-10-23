@@ -132,6 +132,28 @@ describe("the comment extractor", () => {
       commentText('const url = "https://example.com/pull-request";')
     ).toEqual([]);
   });
+
+  it("reads a JSX file as JSX, and a plain file as plain TypeScript", () => {
+    // Rendered text is data: `https://x` between tags holds `//` and is not a comment.
+    expect(
+      commentText("export const A = () => <span>https://x</span>;", {
+        jsx: true,
+      })
+    ).toEqual([]);
+    // The control: a comment inside markup IS one.
+    expect(
+      commentText("export const A = () => <div>{/* note */}</div>;", {
+        jsx: true,
+      })
+    ).toEqual(["/* note */"]);
+    // And the other direction: an angle-bracket cast is valid TypeScript and a syntax error in
+    // TSX, so a plain file read as JSX would be refused rather than read.
+    expect(
+      commentText("const el = <HTMLElement>document.body; // note", {
+        jsx: false,
+      })
+    ).toEqual(["// note"]);
+  });
 });
 
 describe("the file walk", () => {
@@ -270,7 +292,9 @@ describe("the allowlist", () => {
   // its test no longer exist, and both entries emptied (221 -> 219).
   // 485 -> 484: one recorded offence in `collection-entry-service.ts` no longer
   // exists; its entry remains, so the count above does not move.
-  const EXPECTED_TOTAL = 484;
+  // 484 -> 483: one recorded offence in `check-comment-convention.mjs` itself, in
+  // the scanner it no longer has, no longer exists; its entry remains.
+  const EXPECTED_TOTAL = 483;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
