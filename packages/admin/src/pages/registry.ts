@@ -29,18 +29,18 @@ import "../hooks/useUnsavedChanges";
 // entry editor was this module's only eager consumer before pages loaded on
 // demand, so the module is imported above for that side effect. Ordering is
 // the point: the import pulls no page code with it.
-import { lazyRoute } from "./lazy-route";
 
-// Every non-builder page loads through the same wrapper as the builders:
-// its chunk is fetched when its route renders, so opening one screen does
-// not download the other 58.
-const AcceptInvitePage = lazyRoute(() => import("./(auth)/accept-invite"));
-const ForgotPasswordPage = lazyRoute(() => import("./(auth)/forgot-password"));
-const LoginPage = lazyRoute(() => import("./(auth)/login"));
-const RegisterPage = lazyRoute(() => import("./(auth)/register"));
-const ResetPasswordPage = lazyRoute(() => import("./(auth)/reset-password"));
-const SetupPage = lazyRoute(() => import("./(auth)/setup"));
-const VerifyEmailPage = lazyRoute(() => import("./(auth)/verify-email"));
+import AcceptInvitePage from "./(auth)/accept-invite";
+import ForgotPasswordPage from "./(auth)/forgot-password";
+import LoginPage from "./(auth)/login";
+import RegisterPage from "./(auth)/register";
+import ResetPasswordPage from "./(auth)/reset-password";
+import SetupPage from "./(auth)/setup";
+import VerifyEmailPage from "./(auth)/verify-email";
+import { lazyRoute } from "./lazy-route";
+// The other pages load through the same wrapper as the builders:
+// each chunk is fetched when its route renders, so opening one screen
+// does not download the other pages.
 const CollectionsPage = lazyRoute(() => import("./dashboard/collection/index"));
 const EmailDesignPage = lazyRoute(() => import("./dashboard/email/design"));
 const EmailMessagesPage = lazyRoute(() => import("./dashboard/email/index"));
