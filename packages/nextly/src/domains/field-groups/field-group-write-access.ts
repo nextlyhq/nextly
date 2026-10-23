@@ -400,8 +400,7 @@ async function keepProtectedStoredInstances(params: {
     const kept = holdsOne
       ? await keptSingleInstance(
           sent,
-          storedRows[0],
-          storedRows[0] ? slugOf(storedRows[0]) : undefined,
+          { row: storedRows[0], slugOf, zone: many !== undefined },
           params
         )
       : await keptInstanceList(name, sent, storedRows, slugOf, params);
@@ -410,23 +409,42 @@ async function keepProtectedStoredInstances(params: {
 }
 
 /**
- * The value a field holding ONE instance keeps: the stored instance where a
- * clear would remove a value the writer may not change, and nothing
- * otherwise. Any instance sent replaces the stored one in place, so only a
- * clear can remove it.
+ * The value a field holding ONE instance keeps: the stored instance where the
+ * write would remove it and it holds a value the writer may not change, and
+ * nothing otherwise. A single field group's instance is replaced in place by
+ * any instance sent, so only a clear removes it; a single dynamic zone's
+ * block is also removed by a block that is not it (another id or type),
+ * which the save adds in its place.
  */
 async function keptSingleInstance(
   sent: unknown,
-  storedRow: Record<string, unknown> | undefined,
-  slug: string | undefined,
+  stored: {
+    row: Record<string, unknown> | undefined;
+    slugOf: (row: Record<string, unknown>) => string | undefined;
+    zone: boolean;
+  },
   params: ProtectedInstanceParams
 ): Promise<unknown> {
-  if (sent !== null || storedRow === undefined || slug === undefined) {
-    return undefined;
+  const { row, slugOf, zone } = stored;
+  const slug = row ? slugOf(row) : undefined;
+  if (row === undefined || slug === undefined) return undefined;
+  const removes = sent === null || (zone && !isStoredBlock(sent, row, slugOf));
+  if (!removes) return undefined;
+  return (await holdsProtectedValue(row, slug, params)) ? row : undefined;
+}
+
+/** Whether `sent` names the stored block `row`: its id, as its type. */
+function isStoredBlock(
+  sent: unknown,
+  row: Record<string, unknown>,
+  slugOf: (row: Record<string, unknown>) => string | undefined
+): boolean {
+  if (sent === undefined) return true;
+  if (sent === null || typeof sent !== "object" || Array.isArray(sent)) {
+    return false;
   }
-  return (await holdsProtectedValue(storedRow, slug, params))
-    ? storedRow
-    : undefined;
+  const block = sent as Record<string, unknown>;
+  return block.id === row.id && slugOf(block) === slugOf(row);
 }
 
 /**
