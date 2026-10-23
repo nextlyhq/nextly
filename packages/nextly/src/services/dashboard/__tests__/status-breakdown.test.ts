@@ -151,7 +151,15 @@ describe("the status breakdown honours the caller's row-level access", () => {
 
   it("is the sum of the per-collection rows the Content card reads", async () => {
     // One reading, two consumers: the summary's breakdown is derived from the
-    // rows `system:content` answers, never counted beside them.
+    // rows `system:content` answers, never counted beside them. Counts where
+    // the total is neither sum, as a due release can leave them: summing the
+    // totals instead of the published counts must not pass.
+    count.mockImplementation(
+      ({ status }: { status?: "all" | "published" | "draft" }) =>
+        Promise.resolve({
+          total: status === "published" ? 3 : status === "draft" ? 2 : 6,
+        })
+    );
     const service = makeService(adapter);
     const options = { scope: someResources(["posts"]), caller: CALLER };
     const rows = await service.getContentByCollection(options);
@@ -160,9 +168,9 @@ describe("the status breakdown honours the caller's row-level access", () => {
     expect(rows).toEqual([
       expect.objectContaining({
         slug: "posts",
-        count: ALICE_VISIBLE_TOTAL,
-        published: ALICE_VISIBLE_PUBLISHED,
-        draft: ALICE_VISIBLE_DRAFT,
+        count: 6,
+        published: 3,
+        draft: 2,
       }),
     ]);
     expect(stats.status).toEqual({
