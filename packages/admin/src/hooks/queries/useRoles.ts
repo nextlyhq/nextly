@@ -9,6 +9,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
+
 import {
   createRole,
   deleteRole,
@@ -19,6 +20,7 @@ import {
 import type { Role } from "@admin/types/entities";
 import type { UseBulkMutationReturn } from "@admin/types/hooks/bulk-mutation";
 
+import { invalidateCurrentUserAccess } from "../current-user-access";
 import { useBulkMutation } from "../useBulkMutation";
 
 /**
@@ -336,6 +338,7 @@ export function useUpdateRole(): UseMutationResult<
     onSettled: (_, __, { roleId }) => {
       // Always refetch after mutation (success or error) to ensure cache is up-to-date
       void queryClient.invalidateQueries({ queryKey: ["roles"] });
+      invalidateCurrentUserAccess(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["roles", roleId] });
     },
   });
@@ -406,6 +409,7 @@ export function useDeleteRole(): UseMutationResult<
     onSuccess: () => {
       // Invalidate all roles queries to refetch data
       void queryClient.invalidateQueries({ queryKey: ["roles"] });
+      invalidateCurrentUserAccess(queryClient);
     },
   });
 }
@@ -518,6 +522,7 @@ export function useBulkDeleteRoles(): UseBulkMutationReturn<
     defaultOptions: {
       onComplete: () => {
         void queryClient.invalidateQueries({ queryKey: ["roles"] });
+        invalidateCurrentUserAccess(queryClient);
       },
     },
   });
@@ -660,6 +665,7 @@ export function useBulkUpdateRoles(): UseBulkMutationReturn<
     defaultOptions: {
       onComplete: () => {
         void queryClient.invalidateQueries({ queryKey: ["roles"] });
+        invalidateCurrentUserAccess(queryClient);
       },
     },
   });

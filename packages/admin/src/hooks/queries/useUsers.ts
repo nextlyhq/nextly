@@ -10,6 +10,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
+
 import {
   createUser,
   deleteUser,
@@ -26,6 +27,7 @@ import type {
   UpdateUserPayload,
 } from "@admin/types/user";
 
+import { invalidateCurrentUserAccess } from "../current-user-access";
 import { useBulkMutation } from "../useBulkMutation";
 import { currentUserKey } from "../useDashboardUser";
 
@@ -358,6 +360,7 @@ export function useUpdateUser(): UseMutationResult<
       // avatar and name are now stale. /me is small, so refresh it either way
       // rather than plumb the current user's id in here to compare.
       void queryClient.invalidateQueries({ queryKey: currentUserKey });
+      invalidateCurrentUserAccess(queryClient);
     },
   });
 }
@@ -515,6 +518,7 @@ export function useBulkUpdateUsers(): UseBulkMutationReturn<
         // Invalidate users cache after all mutations complete
         // This triggers a refetch of the users list to show updated data
         void queryClient.invalidateQueries({ queryKey: ["users"] });
+        invalidateCurrentUserAccess(queryClient);
       },
     },
   });
@@ -763,6 +767,7 @@ export function useBulkAssignRole(): UseBulkMutationReturn<
       onComplete: () => {
         // Invalidate users cache after all mutations complete
         void queryClient.invalidateQueries({ queryKey: ["users"] });
+        invalidateCurrentUserAccess(queryClient);
       },
     },
   });

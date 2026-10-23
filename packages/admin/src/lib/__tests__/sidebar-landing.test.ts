@@ -18,7 +18,7 @@ import type { AdminCapabilities } from "@admin/types/permissions";
 // a literal keeps passing after the deriver stops setting a flag it still sets
 // for itself. These tests are about ordering, so the permission filter is
 // deliberately made to exclude nothing.
-const superAdmin: AdminCapabilities = buildCapabilities([], true);
+const superAdmin: AdminCapabilities = buildCapabilities([], true, undefined);
 
 const noBranding: AdminBranding = {};
 

@@ -195,6 +195,10 @@ function hasCapabilityForPermission(
           return collectionCaps.canUpdate;
         case "delete":
           return collectionCaps.canDelete;
+        case "publish":
+          return collectionCaps.canPublish;
+        case "unpublish":
+          return collectionCaps.canUnpublish;
         default:
           return false;
       }

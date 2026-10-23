@@ -7,6 +7,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
+
 import {
   deletePermission,
   fetchPermissions,
@@ -14,6 +15,8 @@ import {
   updatePermission,
 } from "@admin/services/permissionApi";
 import type { Permission } from "@admin/types/entities";
+
+import { invalidateCurrentUserAccess } from "../current-user-access";
 
 /**
  * Query Keys:
@@ -267,6 +270,7 @@ export function useUpdatePermission(): UseMutationResult<
     onSettled: (_, __, { permissionId }) => {
       // Always refetch after mutation (success or error) to ensure cache is up-to-date
       void queryClient.invalidateQueries({ queryKey: ["permissions"] });
+      invalidateCurrentUserAccess(queryClient);
       void queryClient.invalidateQueries({
         queryKey: ["permissions", permissionId],
       });
@@ -339,6 +343,7 @@ export function useDeletePermission(): UseMutationResult<
     onSuccess: () => {
       // Invalidate all permissions queries to refetch data
       void queryClient.invalidateQueries({ queryKey: ["permissions"] });
+      invalidateCurrentUserAccess(queryClient);
     },
   });
 }

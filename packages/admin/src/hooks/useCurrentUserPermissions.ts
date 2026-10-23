@@ -1,42 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
 
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
-import { SYSTEM_RESOURCE_SET } from "../constants/permissions";
 import { protectedApi } from "../lib/api/protectedApi";
 import type {
   AdminCapabilities,
+  CapabilitiesResponse,
   CollectionCapabilities,
   UserPermissionsResponse,
 } from "../types/permissions";
 
+import {
+  CURRENT_USER_CAPABILITIES_KEY,
+  CURRENT_USER_PERMISSIONS_KEY,
+} from "./current-user-access";
 import { useRouter } from "./useRouter";
 
-/**
- * System resources that are NOT dynamic collections.
- * Permissions for these resources map to dedicated capability flags
- * rather than per-collection capabilities.
- */
-/**
- * Built-in resources, derived from the single admin definition.
- *
- * Was a hand-kept copy; see `constants/permissions` for why there is now one.
- */
-export const SYSTEM_RESOURCES: ReadonlySet<string> = SYSTEM_RESOURCE_SET;
-
-/**
- * Build AdminCapabilities from a flat list of permission slugs.
- *
- * Permission slugs follow the format "{action}-{resource}"
- * (e.g., "read-users", "create-posts", "manage-settings").
- */
-/**
- * The capability shape the admin actually runs on, from a permission list.
- *
- * Exported so a test can derive it the way the product does. A hand-built
- * `AdminCapabilities` literal in a test asserts against a shape nothing
- * produces, and would go on passing after this function stopped setting a flag
- * the test still sets for itself.
- */
 /** The flags derived purely from which permission slugs are held. */
 type SystemCapabilities = Omit<
   AdminCapabilities,
@@ -110,6 +89,8 @@ const SUPER_ADMIN_CAPABILITIES: AdminCapabilities = Object.freeze({
         canCreate: true,
         canUpdate: true,
         canDelete: true,
+        canPublish: true,
+        canUnpublish: true,
       }),
     }
   ),
@@ -121,43 +102,50 @@ const SUPER_ADMIN_CAPABILITIES: AdminCapabilities = Object.freeze({
   canManageEmailTemplates: true,
 });
 
+/**
+ * What the user may do with each collection and Single, as the server's
+ * answer states it. No answer yet means nothing is known, so nothing is
+ * offered: the map stays empty rather than guessed from permission slugs,
+ * which cannot see a collection's code rules.
+ */
+function collectionsFrom(
+  answer: CapabilitiesResponse | undefined
+): Record<string, CollectionCapabilities> {
+  const collections: Record<string, CollectionCapabilities> = {};
+  for (const [slug, entity] of Object.entries(answer?.entities ?? {})) {
+    collections[slug] = {
+      canRead: entity.read,
+      canCreate: entity.create ?? false,
+      canUpdate: entity.update,
+      canDelete: entity.delete ?? false,
+      canPublish: entity.publish,
+      canUnpublish: entity.unpublish,
+    };
+  }
+  return collections;
+}
+
+/**
+ * The capabilities the admin runs on: the collection and Single answers from
+ * the server's `answer`, and the system flags from the permission slugs, which
+ * also name resources the answer does not (webhooks, releases, the settings
+ * panels).
+ *
+ * Exported so a test can derive it the way the product does. A hand-built
+ * `AdminCapabilities` literal in a test asserts against a shape nothing
+ * produces, and would go on passing after this function stopped setting a flag
+ * the test still sets for itself.
+ */
 export function buildCapabilities(
   permissions: string[],
-  isSuperAdmin: boolean
+  isSuperAdmin: boolean,
+  answer: CapabilitiesResponse | undefined
 ): AdminCapabilities {
   // Super-admin gets everything.
   if (isSuperAdmin) return SUPER_ADMIN_CAPABILITIES;
 
   const permSet = new Set(permissions);
-  const collections: Record<string, CollectionCapabilities> = {};
-
-  // Parse permissions to build per-collection capabilities
-  for (const perm of permissions) {
-    // Match "action-resource" format, where resource can contain hyphens
-    const dashIdx = perm.indexOf("-");
-    if (dashIdx === -1) continue;
-
-    const action = perm.slice(0, dashIdx);
-    const resource = perm.slice(dashIdx + 1);
-
-    // Skip system resources — they map to dedicated flags
-    if (SYSTEM_RESOURCES.has(resource)) continue;
-
-    // Build collection capabilities
-    if (!collections[resource]) {
-      collections[resource] = {
-        canRead: false,
-        canCreate: false,
-        canUpdate: false,
-        canDelete: false,
-      };
-    }
-
-    if (action === "read") collections[resource].canRead = true;
-    if (action === "create") collections[resource].canCreate = true;
-    if (action === "update") collections[resource].canUpdate = true;
-    if (action === "delete") collections[resource].canDelete = true;
-  }
+  const collections = collectionsFrom(answer);
 
   // Check if user can view any collection
   const canViewCollections = Object.values(collections).some(c => c.canRead);
@@ -182,6 +170,19 @@ export function buildCapabilities(
     ) as SystemCapabilities),
   };
 }
+
+/** The longest delay a browser timer holds without overflowing. */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/** The capability flag each action is answered by. */
+const CAPABILITY_OF_ACTION = {
+  read: "canRead",
+  create: "canCreate",
+  update: "canUpdate",
+  delete: "canDelete",
+  publish: "canPublish",
+  unpublish: "canUnpublish",
+} as const satisfies Record<string, keyof CollectionCapabilities>;
 
 /** Default capabilities (no access) shown while loading */
 const EMPTY_CAPABILITIES: AdminCapabilities = {
@@ -211,18 +212,18 @@ type CurrentUserPermissions = {
   isLoading: boolean;
   error: Error | null;
   /**
-   * Whether any answer has arrived. A failed first request leaves the
+   * Whether both answers have arrived. A failed first request leaves the
    * capabilities empty, which reads exactly like a user who holds nothing,
    * so a guard must ask this before treating "no permission" as a refusal.
    * A failed refresh keeps the last answer, which still counts.
    */
   hasAnswer: boolean;
-  /** Ask for the permissions again, after a failure. */
+  /** Ask for the permissions and capabilities again, after a failure. */
   retry: () => void;
   hasPermission: (slug: string) => boolean;
   canAccessCollection: (
     collectionSlug: string,
-    action: "read" | "create" | "update" | "delete"
+    action: "read" | "create" | "update" | "delete" | "publish" | "unpublish"
   ) => boolean;
 };
 
@@ -264,7 +265,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // permissions payload.
   const { data, isLoading, isPending, error, refetch } =
     useQuery<UserPermissionsResponse>({
-      queryKey: ["currentUserPermissions"],
+      queryKey: CURRENT_USER_PERMISSIONS_KEY,
       queryFn: () =>
         protectedApi.get<UserPermissionsResponse>("/me/permissions"),
       enabled: isPrivateRoute,
@@ -273,12 +274,39 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
       refetchOnWindowFocus: true,
     });
 
+  // What the server decides the user may do with each collection and Single,
+  // code rules included. Asked as eagerly as the permissions beside it.
+  const answer = useQuery<CapabilitiesResponse>({
+    queryKey: CURRENT_USER_CAPABILITIES_KEY,
+    queryFn: () => protectedApi.get<CapabilitiesResponse>("/me/capabilities"),
+    enabled: isPrivateRoute,
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+  });
+  const refetchAnswer = answer.refetch;
+
+  // The answer stops holding when the soonest role assignment ends, so it is
+  // asked again then rather than waiting for the next focus or navigation.
+  const validUntil = answer.data?.validUntil ?? null;
+  useEffect(() => {
+    if (validUntil === null) return undefined;
+    // Timers overflow past about 24.8 days; a later expiry is asked about on
+    // a later render.
+    const wait = Math.min(Math.max(0, validUntil - Date.now()), MAX_TIMER_MS);
+    const timer = setTimeout(() => {
+      void refetch();
+      void refetchAnswer();
+    }, wait);
+    return () => clearTimeout(timer);
+  }, [validUntil, refetch, refetchAnswer]);
+
   const permissions = data?.permissions ?? [];
   const isSuperAdmin = data?.isSuperAdmin ?? false;
   const roles = data?.roles ?? [];
 
   const capabilities = data
-    ? buildCapabilities(permissions, isSuperAdmin)
+    ? buildCapabilities(permissions, isSuperAdmin, answer.data)
     : EMPTY_CAPABILITIES;
 
   /**
@@ -291,15 +319,17 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   };
 
   /**
-   * Check if the current user can perform an action on a collection.
-   * Useful for dynamic collection permission checks.
+   * Whether the current user may perform an action on a collection or
+   * Single, as the server answers it.
    */
   const canAccessCollection = (
     collectionSlug: string,
-    action: "read" | "create" | "update" | "delete"
+    action: "read" | "create" | "update" | "delete" | "publish" | "unpublish"
   ): boolean => {
     if (isSuperAdmin) return true;
-    return permissions.includes(`${action}-${collectionSlug}`);
+    const entity = capabilities.collections[collectionSlug];
+    if (!entity) return false;
+    return entity[CAPABILITY_OF_ACTION[action]];
   };
 
   return {
@@ -307,18 +337,19 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     permissions,
     roles,
     isSuperAdmin,
-    isLoading: isLoading || isPending,
-    error,
+    isLoading: isLoading || isPending || answer.isLoading || answer.isPending,
+    error: error ?? answer.error,
     /**
-     * Whether any answer has arrived. A failed first request leaves the
+     * Whether both answers have arrived. A failed first request leaves the
      * capabilities empty, which reads exactly like a user who holds nothing,
      * so a guard must ask this before treating "no permission" as a refusal.
      * A failed refresh keeps the last answer, which still counts.
      */
-    hasAnswer: data !== undefined,
-    /** Ask for the permissions again, after a failure. */
+    hasAnswer: data !== undefined && answer.data !== undefined,
+    /** Ask for the permissions and capabilities again, after a failure. */
     retry: (): void => {
       void refetch();
+      void refetchAnswer();
     },
     hasPermission,
     canAccessCollection,

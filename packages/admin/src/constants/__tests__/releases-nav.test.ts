@@ -150,7 +150,7 @@ describe("the OTHER navigation render, which the rail test cannot see", () => {
   // would keep passing after `buildCapabilities` stopped setting a flag the
   // test still sets for itself.
   const holding = (permissions: string[]): AdminCapabilities =>
-    buildCapabilities(permissions, false);
+    buildCapabilities(permissions, false, undefined);
 
   it("shows Releases to a caller holding the seeded read permission", () => {
     // The defect this guards: `content-releases` is a SYSTEM resource, so it is
