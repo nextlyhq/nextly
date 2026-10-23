@@ -620,21 +620,28 @@ const MAY_PLACE_A_NAME = new Set(["CREATE", "SELECT", "WITH", "RENAME"]);
 const MAY_PLACE_ANY_NAME = new Set(["DO", "CALL", "EXECUTE", "IMPORT"]);
 
 /**
- * Statements, by the word that opens them, that may run code on PostgreSQL:
- * a function they call, or a trigger on a table they write, can run DDL
- * under any name. MySQL's and SQLite's functions and triggers cannot.
+ * The only statements, by the word that opens them, that this guard reads
+ * on PostgreSQL as running no code of their own. Any other may run a query,
+ * a function or a trigger that creates a relation under any name.
  */
-const POSTGRES_MAY_RUN_CODE = new Set([
-  "SELECT",
-  "WITH",
-  "VALUES",
-  "INSERT",
-  "UPDATE",
-  "DELETE",
-  "MERGE",
-  "TRUNCATE",
-  "COPY",
+const POSTGRES_PLAIN_DDL = new Set([
+  "CREATE",
+  "DROP",
+  "ALTER",
+  "COMMENT",
+  "GRANT",
+  "REVOKE",
+  "SET",
+  "RESET",
 ]);
+
+/**
+ * Words that make a PostgreSQL relation temporary. A temporary relation, or
+ * one PostgreSQL derives from it (a serial column's sequence, an index),
+ * shadows a permanent one of the same name under a name the text may not
+ * spell.
+ */
+const POSTGRES_TEMPORARY_WORDS = new Set(["TEMP", "TEMPORARY"]);
 
 /**
  * Words that run a query or code wherever they stand in a PostgreSQL
@@ -672,16 +679,21 @@ function placesNames(
 }
 
 /**
- * Whether a PostgreSQL statement may run code: it opens with a data
- * statement (`POSTGRES_MAY_RUN_CODE`), or runs a query anywhere in it
- * (`POSTGRES_RUNS_A_QUERY`). A function called from a column's default,
- * a check or a `USING` expression is not counted, as everywhere else in this
- * guard.
+ * Whether a PostgreSQL statement may put a relation under a name it does
+ * not spell: it is not plain DDL (`POSTGRES_PLAIN_DDL`), it runs a query
+ * anywhere in it (`POSTGRES_RUNS_A_QUERY`), or it makes or names a temporary
+ * relation (`POSTGRES_TEMPORARY_WORDS`, `pg_temp`). A function called from a
+ * column's default, a check or a `USING` expression is not counted, as
+ * everywhere else in this guard.
  */
 function postgresMayRunCode(opener: string, tokens: readonly Token[]): boolean {
-  if (POSTGRES_MAY_RUN_CODE.has(opener)) return true;
+  if (!POSTGRES_PLAIN_DDL.has(opener)) return true;
   return tokens.some(
-    token => token.kind === "word" && POSTGRES_RUNS_A_QUERY.has(token.upper)
+    token =>
+      (token.kind === "word" &&
+        (POSTGRES_RUNS_A_QUERY.has(token.upper) ||
+          POSTGRES_TEMPORARY_WORDS.has(token.upper))) ||
+      writtenName(token)?.toLowerCase() === "pg_temp"
   );
 }
 
@@ -971,6 +983,8 @@ class DropReader {
   private readonly placingIn = new Map<string, number[]>();
   /** The first statement that may have put a relation under any name. */
   private placingAnyIn: number | undefined;
+  /** Entries of the list holding more than one statement, by count (`reads`). */
+  private readonly packedReads = new Set<number>();
   /**
    * Whether the list holds a statement that may change which table an
    * unqualified name reaches (`changesNameResolution`). Once it does, no
@@ -1067,6 +1081,9 @@ class DropReader {
     this.nextStatement();
     this.reads += 1;
     const tokens = new Lexer(this.dialect, statement).tokens(statement);
+    const ends = tokens.findIndex(token => token.kind === "end");
+    if (ends !== -1 && ends < tokens.length - 1)
+      this.packedReads.add(this.reads);
     this.notePlacing(tokens);
     new StatementWalk(this, tokens, statement).run();
   }
@@ -1182,7 +1199,9 @@ class DropReader {
    */
   private mayStillStand(name: string): boolean {
     const emptiedIn = this.vacatedIn.get(name);
-    if (emptiedIn === undefined) return true;
+    // An entry holding more than one statement is read as one: what else in
+    // it may have placed the name cannot be told from the vacating statement.
+    if (emptiedIn === undefined || this.packedReads.has(emptiedIn)) return true;
     const placedEarlier = (this.placingIn.get(name) ?? []).some(
       read => read < this.reads && read !== emptiedIn
     );
