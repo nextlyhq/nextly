@@ -23,7 +23,8 @@
  * @module turbo-inputs.test
  */
 import { execFileSync } from "node:child_process";
-import { dirname, join, relative } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, normalize, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -449,5 +450,40 @@ describe("the shared TypeScript config is hashed", () => {
   it("counts packages/tsconfig among the global dependencies", () => {
     const globalFiles = Object.keys(dryRun().globalCacheInputs.files);
     expect(globalFiles).toContain("packages/tsconfig/base.json");
+  });
+});
+
+describe("a root script in the global inputs brings its imports with it", () => {
+  // The global inputs name root scripts one by one, because packages read only
+  // a few of the ~200. A listed script that imports another root script makes
+  // that one an input as well: `create-nextly-app`'s build loads
+  // `agent-skills.mjs`, which imports `agent-instructions.mjs`, so an edit to
+  // the latter changes the build while, unlisted, it leaves the hash unmoved.
+  const RELATIVE_IMPORT =
+    /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|^\s*import\s*)["'](\.{1,2}\/[^"']+)["']/gm;
+
+  function rootScriptImports(file) {
+    const source = readFileSync(join(REPO_ROOT, file), "utf8");
+    return [...source.matchAll(RELATIVE_IMPORT)]
+      .map(([, specifier]) => normalize(join(dirname(file), specifier)))
+      .filter(target => target.startsWith("scripts/"))
+      .map(target =>
+        existsSync(join(REPO_ROOT, target))
+          ? target
+          : [".mjs", ".js", ".ts", ".cjs"].map(ext => target + ext).find(candidate => existsSync(join(REPO_ROOT, candidate))) ?? target
+      );
+  }
+
+  it("lists every root script a listed one imports", () => {
+    const globalFiles = new Set(Object.keys(dryRun().globalCacheInputs.files));
+    const listed = [...globalFiles].filter(file => file.startsWith("scripts/"));
+    // Guards the guard: with no root script listed there is nothing to follow.
+    expect(listed.length).toBeGreaterThan(0);
+    const missing = listed.flatMap(file =>
+      rootScriptImports(file)
+        .filter(target => !globalFiles.has(target))
+        .map(target => `${file} imports ${target}`)
+    );
+    expect(missing).toEqual([]);
   });
 });

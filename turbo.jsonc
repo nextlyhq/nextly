@@ -81,15 +81,18 @@
   // every one of the ~200 root scripts (CI checks, release tooling, gates, and
   // their tests) a global input, so editing any of them re-ran every build,
   // lint, type-check and test in the workspace, about seven minutes cold on a
-  // local machine, to protect five files. These five are every root script
-  // read from a package, an app or `e2e/`, followed through their own imports
-  // (none import another root script). The guard in
+  // local machine, to protect seven files. Five are every root script
+  // read from a package, an app or `e2e/`, plus the two root scripts they import
+  // (`agent-skills` imports `agent-instructions`, which imports
+  // `check-instruction-size`), traced through every relative import. The guard in
   // `scripts/turbo-inputs.test.mjs` reports any tracked program input that no
   // hash covers, so a sixth read of a root script fails CI rather than passing
   // quietly.
   "globalDependencies": [
     "packages/tsconfig/*.json",
+    "scripts/agent-instructions.mjs",
     "scripts/agent-skills.mjs",
+    "scripts/check-instruction-size.mjs",
     "scripts/cli-entry.mjs",
     "scripts/dev-doctor.mjs",
     "scripts/pnpm-invocation.mjs",
