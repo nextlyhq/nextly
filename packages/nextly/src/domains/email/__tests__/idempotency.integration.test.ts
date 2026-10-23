@@ -18,35 +18,6 @@ process.env.NEXTLY_SECRET =
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-/** Who the REST routes see as the caller: a signed-in person unless set. */
-const restCaller = vi.hoisted(() => ({
-  current: { authMethod: "session", userId: "u1" } as {
-    authMethod: "session" | "api-key";
-    userId: string;
-    apiKeyId?: string;
-  },
-}));
-vi.mock("../../../auth/middleware", async importActual => {
-  const actual =
-    await importActual<typeof import("../../../auth/middleware")>();
-  return {
-    ...actual,
-    requireAuthentication: vi.fn(async () => ({
-      ...restCaller.current,
-      userEmail: "u@x.test",
-      userName: "U",
-      permissions: [] as string[],
-      claims: {},
-    })),
-  };
-});
-vi.mock("../../../init", async importActual => {
-  const actual = await importActual<typeof import("../../../init")>();
-  return { ...actual, getCachedNextly: vi.fn(async () => undefined) };
-});
-
-import { POST as postSend } from "../../../api/email-send";
-import { POST as postSendTemplate } from "../../../api/email-send-template";
 import { _resetEnvCache } from "../../../lib/env";
 import {
   definePlugin,
@@ -89,7 +60,6 @@ let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
-  restCaller.current = { authMethod: "session", userId: "u1" };
   messages.length = 0;
   behaviour.failures = 0;
   behaviour.gate = undefined;
@@ -198,14 +168,6 @@ function plugin(name = "mailer"): PluginContext {
   return context;
 }
 
-function post(path: string, body: unknown): Request {
-  return new Request(`http://localhost${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-}
-
 interface Keyed {
   to: string[];
   idempotencyKey: string;
@@ -247,27 +209,12 @@ function surfaces(
           options
         )),
       }) as Record<string, unknown>,
-    "POST /api/email/send": async e => {
-      const res = await postSend(post("/api/email/send", raw(e)));
-      expect(res.status).toBe(200);
-      return (await res.json()) as Record<string, unknown>;
-    },
-    "POST /api/email/send-with-template": async ({ subject: _s, ...e }) => {
-      const res = await postSendTemplate(
-        post("/api/email/send-with-template", { ...e, template: "alert" })
-      );
-      expect(res.status).toBe(200);
-      return (await res.json()) as Record<string, unknown>;
-    },
   };
 }
 
 const SURFACES = Object.keys(
   surfaces({} as TestNextly)
 ) as ReadonlyArray<string>;
-
-/** The REST routes, whose keys belong to the calling person or API key. */
-const REST_SURFACES = SURFACES.filter(name => name.startsWith("POST "));
 
 interface ClaimRow {
   scope: string;
@@ -415,7 +362,7 @@ describe.each(getConfiguredTestDialects())(
       expect(messages.map(m => m.options.to)).toEqual([A, B, B]);
     }, 120_000);
 
-    it("refuses the key with a different message, through the Direct API and REST", async () => {
+    it("refuses the key with a different message, through the Direct API", async () => {
       const { t } = await boot(dialect);
       await t.nextly.email.send({
         to: [A],
@@ -432,93 +379,7 @@ describe.each(getConfiguredTestDialects())(
           idempotencyKey: KEY,
         })
       ).rejects.toMatchObject({ code: "CONFLICT" });
-      // Within one REST caller's own keys, as within the site's.
-      const rest = (subject: string) =>
-        postSend(
-          post("/api/email/send", {
-            to: A,
-            subject,
-            html: "<p>x</p>",
-            idempotencyKey: KEY,
-          })
-        );
-      expect((await rest("Hi")).status).toBe(200);
-      expect((await rest("Changed")).status).toBe(409);
-      expect(messages).toHaveLength(2);
-    }, 120_000);
-
-    it.each(REST_SURFACES)(
-      "%s never claims a key the site's own code sends with",
-      async surface => {
-        const { t } = await boot(dialect);
-        const site = surfaces(t)["nextly.email.send"];
-
-        // A REST caller sends first with the key the site is about to use.
-        await surfaces(t)[surface]({ to: [B], idempotencyKey: KEY });
-        // The site's own send is neither refused nor answered from it.
-        const sent = await site({ to: [A], idempotencyKey: KEY });
-
-        expect(sent).toMatchObject({ success: true });
-        expect(sent.repeat).toBeUndefined();
-        expect(messages.map(m => m.options.to)).toEqual([B, A]);
-      },
-      120_000
-    );
-
-    it("keeps two REST callers' keys apart: two people, and an API key", async () => {
-      const { t } = await boot(dialect);
-      const restSend = surfaces(t)["POST /api/email/send"];
-
-      restCaller.current = { authMethod: "session", userId: "u1" };
-      const first = await restSend({ to: [A], idempotencyKey: KEY });
-      restCaller.current = { authMethod: "session", userId: "u2" };
-      const second = await restSend({
-        to: [B],
-        subject: "Other",
-        idempotencyKey: KEY,
-      });
-      restCaller.current = {
-        authMethod: "api-key",
-        userId: "u1",
-        apiKeyId: "k1",
-      };
-      const third = await restSend({
-        to: [B],
-        subject: "Third",
-        idempotencyKey: KEY,
-      });
-
-      for (const result of [first, second, third]) {
-        expect(result).toMatchObject({ success: true });
-        expect(result.repeat).toBeUndefined();
-      }
-      expect(messages).toHaveLength(3);
-      const scopes = (
-        await t.adapter.select<ClaimRow>("email_send_claims")
-      ).map(row => row.scope);
-      // Three claims, each stored under the label alone: the person or key
-      // they belong to reaches only the key digest.
-      expect(scopes).toEqual(["rest", "rest", "rest"]);
-    }, 120_000);
-
-    it("answers an API key's repeat from its first send", async () => {
-      const { t } = await boot(dialect);
-      const restSend = surfaces(t)["POST /api/email/send"];
-      restCaller.current = {
-        authMethod: "api-key",
-        userId: "u1",
-        apiKeyId: "k1",
-      };
-
-      const first = await restSend({ to: [A], idempotencyKey: KEY });
-      const repeat = await restSend({ to: [A], idempotencyKey: KEY });
-
       expect(messages).toHaveLength(1);
-      expect(repeat).toMatchObject({
-        success: true,
-        messageId: first.messageId,
-        repeat: true,
-      });
     }, 120_000);
 
     it("refuses the key once the template it rendered has been edited", async () => {

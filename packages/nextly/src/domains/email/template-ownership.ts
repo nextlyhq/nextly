@@ -470,11 +470,9 @@ export function buildTemplateOwnerRegistry(input: RegistryInput): {
       }
       map.set(
         template.slug,
-        owned(
-          { kind: "plugin", name: plugin.name },
-          pluginDefaults(template),
-          { engine: template.engine }
-        )
+        owned({ kind: "plugin", name: plugin.name }, pluginDefaults(template), {
+          engine: template.engine,
+        })
       );
     }
   }

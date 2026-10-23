@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-An idempotency key sent to the REST email send routes now belongs to the calling person or API key, kept apart from the keys the site's own code and other callers send with.
+Looking up a collection's schema no longer writes to the console. Every query against a collection resolved its schema through a lookup that logged three lines, one of them the name of every registered collection, so a busy app wrote thousands of identical lines to its server log per burst of requests. A lookup that has to build the schema, or finds none, still logs as before.

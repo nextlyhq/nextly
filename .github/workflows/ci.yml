@@ -49,9 +49,17 @@ permissions:
 # A merge-queue run is keyed by its commit as well. Each queued pull request
 # is tested on a commit of its own, and cancelling one entry's run because
 # another entry started would fail a pull request that did nothing wrong.
+#
+# Off a pull request the key also names the event. main-catch-up.yml dispatches
+# a run on a commit whose push run is often still queued, and in one shared
+# group the later of the two to start cancelled the other: on 387b921b4 the
+# dispatched run cancelled the push run ("a higher priority waiting request
+# ... exists"), so the commit main-catch-up existed to test lost a run instead
+# of gaining one. Only a pull request's runs cancel each other; a run of
+# `main`, the queue or a dispatch is never cancelled by another run.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || format('{0}-{1}', github.event_name, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Decides whether this commit can affect any of the jobs below, so a change
@@ -1269,26 +1277,41 @@ jobs:
   # Covers the class of failure the unit and integration suites structurally
   # cannot: jsdom has no layout engine, so a column that grew to 1024px or a
   # control outline that fails contrast measures the same whether the bug is
-  # there or not. Runs after `ci` so a broken tree does not spend browser
-  # minutes.
+  # there or not.
+  #
+  # `needs: changes`, not `needs: ci`, so it queues for a runner beside the
+  # lint, typecheck and build instead of after them. Behind `ci` it waited 26
+  # to 70 minutes for a runner in 7 of 9 runs on 2026-10-22, after `ci` had
+  # already finished. The cost is a runner spent on browser tests for a tree
+  # whose `ci` fails; the verdict arriving that much sooner on every other
+  # push is the trade. It repeats `ci`'s condition rather than inheriting it,
+  # so an inert change (documentation only) still skips it.
   #
   # The suite brings up its own playground on its own port, against its own
   # throwaway sqlite file. Nothing here touches a database anyone wanted.
-  # This job and the two below inherit the scope decision through `ci` rather
-  # than repeating its condition: a job whose `needs` was skipped is skipped
-  # too. That is load-bearing, so it survives being read — adding `if:
-  # always()` or `if: !cancelled()` here to make the job run after a FAILING
-  # `ci` also makes it run after a SKIPPED one, which restores the full cost on
+  # The two jobs below inherit the scope decision through `ci` rather than
+  # repeating its condition: a job whose `needs` was skipped is skipped too.
+  # That is load-bearing, so it survives being read — adding `if: always()`
+  # or `if: !cancelled()` to one of them to make it run after a FAILING `ci`
+  # also makes it run after a SKIPPED one, which restores the full cost on
   # every documentation change.
   e2e:
     name: Browser tests
-    needs: [ci]
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
     runs-on: ubuntu-latest
-    # 30, not 20. On a loaded runner pool this job's suite runs on one worker
-    # and a full pass took 17 minutes on main, so a 20-minute budget cancelled
-    # passing runs part way through; 30 leaves room for that without letting a
-    # hung run go on indefinitely.
-    timeout-minutes: 30
+    # 45, not 30. The suite runs on one worker, and at 402 tests a passing run
+    # was still going when 30 minutes cancelled it (job 120021242729: setup and
+    # build 8 minutes, then 22 minutes of tests, all passing). 45 leaves room for
+    # that without letting a hung run go on indefinitely.
+    timeout-minutes: 45
+
+    # Job-wide, so every turbo here reads the cache the Restore step put in
+    # `.turbo`, including the one `pnpm dev:app` runs inside the webServer.
+    # Set on the build step alone, that second turbo looked in its default
+    # folder, missed every task and rebuilt every package (~100 s).
+    env:
+      TURBO_CACHE_DIR: .turbo
 
     steps:
       - name: Checkout
@@ -1341,79 +1364,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Keyed on the lockfile: the browser build only has to change when the
-      # Playwright version does, and a download is most of this job's runtime.
-      - name: Cache Playwright browsers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: playwright-cache
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-
-      # `--with-deps` shells out to apt on EVERY run, and apt fetches ~21MB of
-      # CJK and legacy font packages that `ubuntu-latest` does not ship.
-      #
-      # These two knobs are NARROWER than they look. `Acquire::Timeout` fires on
-      # INACTIVITY and `Acquire::Retries` retries a FAILED item. In all four
-      # 2026-08-19 incidents the queue was ADVANCING — `Get:2` 16:11:37,
-      # `Get:3` 16:16:25, `Get:4` 16:26:55 — at roughly 10 kB/s, so nothing
-      # failed and nothing went quiet: apt's own 120s default `Timeout` was in
-      # force throughout and never fired.
-      #
-      # So what these buy is a bounded STALLED connection, not a bounded slow
-      # one. A throttled-but-progressing mirror is bounded only by the step
-      # timeout below. Making slow transfers abort and retry against a different
-      # mirror needs an in-step retry loop, which is deliberately not here: it
-      # would be a second mechanism added on the same day, with no measurement
-      # showing this one is insufficient.
-      - name: Harden apt before the Chromium dependency install
-        run: |
-          sudo tee /etc/apt/apt.conf.d/99-ci-retries >/dev/null <<'APT'
-          Acquire::Retries "5";
-          Acquire::http::Timeout "15";
-          Acquire::https::Timeout "15";
-          APT
-
-      # The cache above declared an `id` and NOTHING read it, so the browser
-      # download ran unconditionally.
-      #
-      # The saving is SMALL: the three browser downloads take about 9-10 seconds
-      # and restoring the 274MB cache entry costs roughly 4. What actually dominates this step is apt, at 15
-      # seconds to 3m05s, and apt runs on BOTH branches below. Anyone optimising
-      # this job further should aim there, not at the download.
-      #
-      # Two branches rather than one, because a cache hit still needs the SYSTEM
-      # libraries: they live in /usr, `ubuntu-latest` is a fresh VM per job, and
-      # no browser cache carries them. Skipping them on a hit produces
-      # "Host system is missing dependencies" instead of a fast job.
-      #
-      # `timeout-minutes` on both, shorter than the job's 30 so a stuck mirror
-      # fails HERE and named rather than as an ambiguous cancellation of the
-      # whole job. This is the only control that bounded any of the four
-      # incidents.
-      #
-      # EIGHT, not five. A green run the same day spent 3m18s in this step
-      # (job 96155695414, 17:08:15 -> 17:11:33), and green `Browser tests` jobs
-      # ran 10.8-14.7 min against a 20-minute budget — so the job already
-      # tolerates an install of about 8.5 minutes. Five would have made a red
-      # failure of the 5-to-8.5 minute band that was passing, which is a worse
-      # trade than the ambiguity it removes.
-      - name: Install Chromium and its system dependencies
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 8
-        run: pnpm --filter @nextlyhq/e2e exec playwright install --with-deps chromium
-
-      - name: Install Chromium's system dependencies
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        timeout-minutes: 8
-        run: pnpm --filter @nextlyhq/e2e exec playwright install-deps chromium
+      # Cache, Chromium, and apt only if Chromium cannot start without it; the
+      # action says why each step is as it is.
+      - name: Chromium and its system libraries
+        uses: ./.github/actions/chromium
 
       # The playground loads the admin and the plugins from their built output,
       # not their source, so a stale dist is a stale test.
       - name: Build packages
         run: pnpm turbo build --filter='./packages/*'
-        env:
-          TURBO_CACHE_DIR: .turbo
 
       - name: Run browser tests
         run: pnpm --filter @nextlyhq/e2e test:e2e
@@ -1472,6 +1431,13 @@ jobs:
     # than done for it. The suite itself is two specs.
     timeout-minutes: 30
 
+    # Job-wide, so every turbo here reads the cache the Restore step put in
+    # `.turbo`, including the one `pnpm dev:app` runs inside the webServer.
+    # Set on the build step alone, that second turbo looked in its default
+    # folder, missed every task and rebuilt every package (~100 s).
+    env:
+      TURBO_CACHE_DIR: .turbo
+
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1502,30 +1468,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: playwright-cache
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-
-      - name: Install Chromium and its system dependencies
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 8
-        run: pnpm --filter @nextlyhq/e2e exec playwright install --with-deps chromium
-
-      - name: Install Chromium's system dependencies
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        timeout-minutes: 8
-        run: pnpm --filter @nextlyhq/e2e exec playwright install-deps chromium
+      # Cache, Chromium, and apt only if Chromium cannot start without it; the
+      # action says why each step is as it is.
+      - name: Chromium and its system libraries
+        uses: ./.github/actions/chromium
 
       # The playground loads the admin and the plugins from their built output,
       # so a stale dist is a stale test — and here it would be a stale test of
       # the one thing this job exists to check.
       - name: Build packages
         run: pnpm turbo build --filter='./packages/*'
-        env:
-          TURBO_CACHE_DIR: .turbo
 
       # The config runs `next build` then `next start` itself, on its own port
       # and its own database, so nothing here has to arrange that.
