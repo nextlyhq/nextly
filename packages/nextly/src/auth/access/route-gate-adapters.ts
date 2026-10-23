@@ -170,17 +170,12 @@ const COLLECTION_ACTIONS = [
 /** The actions a Single's capabilities answer: it has no create or delete. */
 const SINGLE_ACTIONS = ["read", "update", "publish", "unpublish"] as const;
 
-/** The system resources the admin's screens are offered by permission. */
-export const CAPABILITY_SYSTEM_RESOURCES = [
-  "users",
-  "roles",
-  "media",
-  "settings",
-  "email-providers",
-  "email-templates",
-] as const;
-
-const SYSTEM_ACTIONS = ["read", "create", "update", "delete"] as const;
+/**
+ * The actions a REST request reaches through the entry's update route: a
+ * publish is a status change sent as an update, so its route asks update and
+ * the publish check comes on top of it.
+ */
+const THROUGH_UPDATE: ReadonlySet<string> = new Set(["publish", "unpublish"]);
 
 /** What the caller may do with one collection or Single. */
 export type EntityCapabilities =
@@ -191,15 +186,13 @@ export type EntityCapabilities =
       Record<(typeof SINGLE_ACTIONS)[number], boolean>
     >);
 
-/** What the caller may do with each collection, Single and system resource. */
+/**
+ * What the caller may do with each collection and Single. System resources
+ * are not answered here: their routes accept permissions of their own, which
+ * the caller's permission list already states.
+ */
 export interface RouteCapabilities {
   readonly entities: Readonly<Record<string, EntityCapabilities>>;
-  readonly system: Readonly<
-    Record<
-      (typeof CAPABILITY_SYSTEM_RESOURCES)[number],
-      Readonly<Record<(typeof SYSTEM_ACTIONS)[number], boolean>>
-    >
-  >;
 }
 
 /**
@@ -224,9 +217,10 @@ const OPERATION_OF: Record<"collection" | "single", Record<string, string>> = {
 };
 
 /**
- * What `caller` may do with each of `entities` and each system resource: the
- * route gate's answer for every action, as a REST request asking it would
- * get, so the admin offers what the server allows and nothing else.
+ * What `caller` may do with each of `entities`: the route gate's answer for
+ * every action, as a REST request asking it would get, so the admin offers
+ * what the server allows and nothing else. A publish or an unpublish is
+ * allowed only where the update its request goes through is allowed too.
  * `languageOf` gives the languages the REST operation behind an action is
  * told, so a rule hears the languages that request would.
  *
@@ -241,38 +235,26 @@ export async function routeGateCapabilities(
   rules: RouteRules,
   languageOf: (operation: string) => RuleLanguage
 ): Promise<RouteCapabilities> {
-  const answers = async (
-    resource: string,
-    actions: readonly string[],
-    operations?: Record<string, string>
-  ): Promise<Record<string, boolean>> => {
-    const answered: Record<string, boolean> = {};
-    for (const action of actions) {
-      const operation = operations?.[action];
-      const asked = () => capability(caller, action, resource, rules);
-      answered[action] = await (operation === undefined
-        ? asked()
-        : withRuleLanguage(languageOf(operation), asked));
-    }
-    return answered;
-  };
   const byEntity: Record<string, EntityCapabilities> = {};
   for (const [slug, kind] of entities) {
     const actions = kind === "single" ? SINGLE_ACTIONS : COLLECTION_ACTIONS;
-    byEntity[slug] = {
-      kind,
-      ...(await answers(slug, actions, OPERATION_OF[kind])),
-    } as EntityCapabilities;
+    const answered: Record<string, boolean> = {};
+    for (const action of actions) {
+      answered[action] = await withRuleLanguage(
+        languageOf(OPERATION_OF[kind][action] ?? action),
+        () => capability(caller, action, slug, rules)
+      );
+    }
+    // Update is answered before either lifecycle action in both lists.
+    for (const action of THROUGH_UPDATE) {
+      if (action in answered) {
+        answered[action] =
+          answered.update === true && answered[action] === true;
+      }
+    }
+    byEntity[slug] = { kind, ...answered } as EntityCapabilities;
   }
-  // A system resource declares no rule, so no language is asked of one.
-  const system: Record<string, Record<string, boolean>> = {};
-  for (const resource of CAPABILITY_SYSTEM_RESOURCES) {
-    system[resource] = await answers(resource, SYSTEM_ACTIONS);
-  }
-  return {
-    entities: byEntity,
-    system: system as RouteCapabilities["system"],
-  };
+  return { entities: byEntity };
 }
 
 /** The route gate's answer for one action, decided as its own subject. */

@@ -19,13 +19,14 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
 import { defineCollection, defineSingle, text } from "../../../config";
 import type { ApiKeyService } from "../../../domains/auth/services/api-key-service";
+import { UserRoleService } from "../../../domains/auth/services/user-role-service";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -33,6 +34,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
+import { consoleLogger } from "../../../services/shared";
 
 const ORIGIN = "http://localhost";
 
@@ -47,7 +49,6 @@ interface Capabilities {
   isSuperAdmin: boolean;
   validUntil: number | null;
   entities: Record<string, Record<string, unknown>>;
-  system: Record<string, Record<string, boolean>>;
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -58,6 +59,9 @@ describe.each(getConfiguredTestDialects())(
     let readerRoleId: string;
     let superAdminId: string;
     let readerKey: string;
+    let visitingId: string;
+    /** When the visiting reader's one role assignment ends. */
+    const visitEnds = new Date(Date.now() + 60 * 60 * 1000);
 
     async function session(userId: string, roleIds: string[]) {
       const token = await signAccessToken(
@@ -178,6 +182,19 @@ describe.each(getConfiguredTestDialects())(
           data: { name: "Reader", isActive: true, roles: [readerRoleId] },
         })
       ).item.id;
+      // Holds the readers' role for an hour, so the answer stops holding then.
+      visitingId = (
+        await direct.users.create({
+          email: "visiting@example.com",
+          password: "Password123!",
+          data: { name: "Visiting", isActive: true },
+        })
+      ).item.id;
+      const assigned = await new UserRoleService(
+        t.adapter as never,
+        consoleLogger
+      ).assignRoleToUser(visitingId, readerRoleId, { expiresAt: visitEnds });
+      expect(assigned.success).toBe(true);
       const keys = t.getService("apiKeyService") as unknown as ApiKeyService;
       readerKey = (
         await keys.createApiKey(readerId, {
@@ -290,6 +307,37 @@ describe.each(getConfiguredTestDialects())(
       expect(res.headers.get("cache-control")).toBe("private, no-store");
       // No assignment of the reader's role ends, so nothing limits the answer.
       expect(((await res.json()) as Capabilities).validUntil).toBeNull();
+    });
+
+    it("says the answer ends when the caller's soonest role assignment ends", async () => {
+      const { validUntil, entities } = await ask(
+        await session(visitingId, [readerRoleId])
+      );
+
+      // POPULATION CONTROL: the assignment is live, so the role is held.
+      expect(entities.posts).toMatchObject({ read: true });
+      // A database may keep whole seconds of the expiry.
+      expect(validUntil).not.toBeNull();
+      expect(Math.abs((validUntil ?? 0) - visitEnds.getTime())).toBeLessThan(
+        1000
+      );
+    });
+
+    it("refuses, rather than naming only some entities, when a registry cannot be read", async () => {
+      const registry = t.getService("collectionRegistryService") as unknown as {
+        getAllSlugs: () => Promise<string[]>;
+      };
+      const failed = vi
+        .spyOn(registry, "getAllSlugs")
+        .mockRejectedValue(new Error("registry unreachable"));
+      try {
+        const res = await askRaw(await session(readerId, [readerRoleId]));
+        // POPULATION CONTROL: the answer reached the registry that failed.
+        expect(failed).toHaveBeenCalled();
+        expect(res.status).toBe(503);
+      } finally {
+        failed.mockRestore();
+      }
     });
 
     it("refuses a caller it did not authenticate", async () => {

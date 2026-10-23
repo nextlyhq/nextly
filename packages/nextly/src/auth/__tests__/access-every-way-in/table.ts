@@ -361,8 +361,8 @@ const REACH: Record<Door, Reach> = {
     callers: NOT_PRINCIPAL,
     targets: { collection: ["update"], single: ["update"] },
   },
-  // One answer names every entity and system resource with every action it
-  // has, so it is asked whatever a permission-shaped door is asked. Only a
+  // One answer names every collection and Single with every action it has,
+  // so each is asked every action an entry route takes. Only a
   // caller `/me` authenticates reaches it, which is a person or a key; a
   // plugin's person signs in to the plugin, never to the admin, and a
   // visitor is refused before the handler runs. A collection is asked no
@@ -373,11 +373,7 @@ const REACH: Record<Door, Reach> = {
     targets: {
       collection: ENTRY_ACTIONS,
       single: READ_UPDATE,
-      media: READ,
-      users: CRUD,
       "single-pub": PUBLISHING,
-      roles: CRUD,
-      providers: CRUD,
     },
   },
 };

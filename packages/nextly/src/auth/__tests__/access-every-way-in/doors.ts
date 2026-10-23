@@ -645,13 +645,11 @@ const capabilityAnswers = new WeakMap<
 /** What `GET /me/capabilities` answers, as the admin reads it. */
 interface CapabilitiesBody {
   entities: Record<string, Record<string, unknown>>;
-  system: Record<string, Record<string, unknown>>;
 }
 
 /**
  * What the admin is told this caller may do with the row's target, from one
- * `GET /me/capabilities`. The endpoint answers about every entity and system
- * resource at once, as the admin asks it once per sign-in, so it is asked
+ * `GET /me/capabilities`. The endpoint answers about every entity at once, as the admin asks it once per sign-in, so it is asked
  * once per caller and setup and each row reads its own cell; the row's
  * deviations are the ones that request recorded in deciding that cell.
  *
@@ -683,7 +681,7 @@ async function capabilities(
   const { answer, bySubject } = await asked;
   if (typeof answer === "string") return answer;
   const slug = targetSlug(row);
-  const cell = answer.entities[slug] ?? answer.system[slug];
+  const cell = answer.entities[slug];
   const deviations = bySubject.get(`${row.action}-${slug}`) ?? [];
   if (cell === undefined || !(row.action in cell)) {
     return { answer: "=absent", deviations };

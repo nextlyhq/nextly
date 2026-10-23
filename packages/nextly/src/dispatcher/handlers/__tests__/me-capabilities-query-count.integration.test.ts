@@ -60,7 +60,6 @@ type Select = (...args: unknown[]) => { from: (...args: unknown[]) => unknown };
 
 interface Capabilities {
   entities: Record<string, Record<string, unknown>>;
-  system: Record<string, Record<string, boolean>>;
 }
 
 /** What one install's answer cost, and how much of an answer it was. */
@@ -176,10 +175,7 @@ describe.each(getConfiguredTestDialects())(
         }
         // The answers only: an entity also carries its `kind`, which is read
         // from the registry and costs no question about the caller.
-        const cells = [
-          ...Object.values(body.entities),
-          ...Object.values(body.system),
-        ].reduce(
+        const cells = Object.values(body.entities).reduce(
           (total, cell) =>
             total +
             Object.values(cell).filter(value => typeof value === "boolean")

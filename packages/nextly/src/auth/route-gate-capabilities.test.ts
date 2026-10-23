@@ -17,7 +17,6 @@ import type { CollectionAccessControl } from "../shared/types/access";
 
 import { recordingDeviations } from "./access/deviations";
 import {
-  CAPABILITY_SYSTEM_RESOURCES,
   routeGateCapabilities,
   routeGateVerdict,
   type GateCaller,
@@ -57,6 +56,11 @@ const STORED: Record<string, { roles: string[]; grants: GrantedPermission[] }> =
     viewer: { roles: ["viewer"], grants: [] },
     admin: { roles: ["super-admin"], grants: [] },
     owner: { roles: ["editor"], grants: [grant("read", POSTS)] },
+    // May publish posts, and holds no update to send the change through.
+    "publisher-only": {
+      roles: ["publisher"],
+      grants: [grant("read", POSTS), grant("publish", POSTS)],
+    },
     "grants-unreadable": { roles: ["editor"], grants: [] },
   };
 
@@ -137,6 +141,7 @@ const key = (
 const REQUESTS: Record<string, Request> = {
   "user-with": session("editor"),
   "user-without": session("viewer"),
+  "user-publish-only": session("publisher-only"),
   "super-admin": session("admin"),
   "key-with": key([grant("read", POSTS), grant("update", POSTS)]),
   "key-slugs-only": key([grant("read", POSTS)], { slugsOnly: true }),
@@ -197,23 +202,35 @@ afterAll(() => {
 /** One cell of an answer: what the caller may do with one resource. */
 type Cell = { resource: string; action: string; answer: boolean };
 
-/** Every cell of one answer, the entities' and the system resources' alike. */
+/** Every cell of one answer, one per entity and action. */
 function cellsOf(capabilities: RouteCapabilities): Cell[] {
   const entities = Object.entries(capabilities.entities).map(
     ([resource, { kind: _kind, ...actions }]) =>
       [resource, actions] as [string, Record<string, boolean>]
   );
-  const system = Object.entries(capabilities.system).map(
-    ([resource, actions]) =>
-      [resource, actions] as [string, Record<string, boolean>]
-  );
-  return [...entities, ...system].flatMap(([resource, actions]) =>
+  return entities.flatMap(([resource, actions]) =>
     Object.entries(actions).map(([action, answer]) => ({
       resource,
       action,
       answer,
     }))
   );
+}
+
+/**
+ * What a REST request for `action` meets: its route's gate, and for a publish
+ * or an unpublish, which is sent as an update, the update route's gate first.
+ */
+async function restAllows(
+  auth: AuthContext,
+  action: string,
+  resource: string,
+  rbac: RBACAccessControlService | undefined
+): Promise<boolean> {
+  const own = await routeGateVerdict(auth, action, resource, rbac);
+  if (action !== "publish" && action !== "unpublish") return own.allowed;
+  const update = await routeGateVerdict(auth, "update", resource, rbac);
+  return update.allowed && own.allowed;
 }
 
 /** Each setup and rule the comparison is made under, and its service. */
@@ -235,7 +252,7 @@ function setups(): {
 }
 
 describe("routeGateCapabilities", () => {
-  it("answers every cell as the route gate answers it, in every setup", async () => {
+  it("answers every cell as the REST request for it is answered, in every setup", async () => {
     let compared = 0;
     let allowed = 0;
     let refused = 0;
@@ -249,14 +266,14 @@ describe("routeGateCapabilities", () => {
           LANGUAGE_OF
         );
         for (const { resource, action, answer } of cellsOf(capabilities)) {
-          const gate = await routeGateVerdict(
+          const rest = await restAllows(
             auth,
             action,
             resource,
             registered.rbac
           );
           expect(answer, `${setup.name} ${who} ${action}-${resource}`).toBe(
-            gate.allowed
+            rest
           );
           compared += 1;
           if (answer) allowed += 1;
@@ -271,9 +288,9 @@ describe("routeGateCapabilities", () => {
     expect(refused).toBeGreaterThan(0);
   });
 
-  it("gives a collection six actions, a Single four, and each system resource four", async () => {
+  it("gives a collection six actions and a Single four", async () => {
     registered.rbac = new RBACAccessControlService();
-    const { entities, system } = await routeGateCapabilities(
+    const { entities } = await routeGateCapabilities(
       { userId: "editor" },
       ENTITIES,
       registered.rbac,
@@ -295,9 +312,6 @@ describe("routeGateCapabilities", () => {
       "unpublish",
       "update",
     ]);
-    expect(Object.keys(system).sort()).toEqual(
-      [...CAPABILITY_SYSTEM_RESOURCES].sort()
-    );
     // The editor reads and edits posts but holds no delete or publish.
     expect(entities[POSTS]).toMatchObject({
       kind: "collection",
@@ -306,31 +320,27 @@ describe("routeGateCapabilities", () => {
       delete: false,
       publish: false,
     });
-    // The route gate asks media's own permission alone, so `manage-media`
-    // counts for nothing here, as it counts for nothing at a REST gate today.
-    expect(system.media).toEqual({
-      read: true,
-      create: false,
-      update: false,
-      delete: false,
-    });
   });
 
-  it("records that a `manage-` permission went uncounted, as the route gate does", async () => {
+  it("refuses a publish to a caller who may publish but not update", async () => {
+    // A REST publish is a status change sent through the entry's update
+    // route, which refuses this caller before the publish is checked.
     registered.rbac = new RBACAccessControlService();
-    const { bySubject } = await recordingDeviations(() =>
-      routeGateCapabilities(
-        { userId: "editor" },
-        ENTITIES,
-        registered.rbac,
-        LANGUAGE_OF
-      )
+    const { entities } = await routeGateCapabilities(
+      { userId: "publisher-only" },
+      ENTITIES,
+      registered.rbac,
+      LANGUAGE_OF
     );
-    expect(bySubject.get("create-media")).toContain("manage-not-counted");
-    // POPULATION CONTROL: a permission held outright records nothing.
-    expect(bySubject.get("read-media") ?? []).not.toContain(
-      "manage-not-counted"
+    expect(entities[POSTS]).toMatchObject({ publish: false, update: false });
+    // POPULATION CONTROL: the publish gate alone allows this caller.
+    const alone = await routeGateVerdict(
+      session("publisher-only").auth,
+      "publish",
+      POSTS,
+      registered.rbac
     );
+    expect(alone.allowed).toBe(true);
   });
 
   it("records each cell's deviation under that cell's own subject", async () => {
@@ -345,9 +355,8 @@ describe("routeGateCapabilities", () => {
     );
     // The rule lets a person without the permission read posts today.
     expect(bySubject.get(`read-${POSTS}`)).toContain("rule-alone-for-people");
-    expect(bySubject.get("read-media") ?? []).not.toContain(
-      "rule-alone-for-people"
-    );
+    // POPULATION CONTROL: only the entities' own cells are subjects.
+    expect(bySubject.has("read-media")).toBe(false);
   });
 
   it("fails, as the route gate does, when the caller's access cannot be read", async () => {
