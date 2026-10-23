@@ -494,7 +494,10 @@ async function can(_world: World, row: Row, who: CallerHandle) {
     ["probe", "can", targetSlug(row), row.action],
     who.headers
   );
-  if (res.status !== 200) return String(res.status);
+  if (res.status !== 200) {
+    await noteResponse(res);
+    return String(res.status);
+  }
   const { may } = (await res.json()) as { may: unknown };
   return fromBoolean(may);
 }
@@ -526,26 +529,20 @@ async function service(world: World, row: Row, who: CallerHandle) {
   return fromProbeReply((await res.json()) as ProbeReply);
 }
 
-/** What the service probe hands back: its call's result, or what it threw. */
-interface ProbeReply {
-  ok: boolean;
-  status: number | null;
-  code?: string;
-  message?: string;
-  found?: boolean;
-}
+/**
+ * What the service probe hands back: its call's result, or the refusal it
+ * threw, read by `refusalFromError` as every door reads one.
+ */
+type ProbeReply =
+  | { ok: true; found?: boolean }
+  | { ok: false; refusal: Refusal };
 
 /** The probe's reply as an answer, noting the refusal it reports. */
 function fromProbeReply(body: ProbeReply): Answer {
   if (body.ok) return body.found === false ? "R" : "A";
-  // The plugin's call threw: what it threw, as the probe hands it back.
-  noteRefusal({
-    status: body.status ?? 0,
-    code: body.code ?? "-",
-    shape: "thrown",
-    message: body.message ?? "",
-  });
-  return body.status === null ? "E" : String(body.status);
+  noteRefusal(body.refusal);
+  // A thrown value that carried no status is a failure, not a refusal.
+  return body.refusal.status === 0 ? "E" : String(body.refusal.status);
 }
 
 /** A person's route, run as the dispatcher runs one for its person. */

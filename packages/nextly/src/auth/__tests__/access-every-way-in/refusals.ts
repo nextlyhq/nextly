@@ -12,8 +12,6 @@
  */
 import { NextlyError } from "../../../errors/nextly-error";
 
-import type { Door } from "./table";
-
 /** The body shapes a refusal arrives in. */
 export type Shape =
   /** `{ error: { code, message, requestId } }`, the canonical body. */
@@ -41,16 +39,6 @@ export interface Refusal {
    */
   missing?: string;
 }
-
-/** The doors whose refusals carry a status, and so are recorded here. */
-export const STATUS_DOORS: ReadonlySet<Door> = new Set<Door>([
-  "rest",
-  "direct",
-  "route",
-  "service",
-  "schema",
-  "lock",
-]);
 
 let current: Refusal | undefined;
 

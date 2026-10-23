@@ -5,5 +5,6 @@ malformed session  401 AUTH_REQUIRED data  | You must be logged in to access thi
 expired session  401 TOKEN_EXPIRED data  | Your session has expired, please refresh
 visitor  401 AUTH_REQUIRED data  | You must be logged in to access this resource
 address limit  429 RATE_LIMIT_EXCEEDED limit  | Too many requests. Please try again later.
+unresolved-address limit  429 RATE_LIMIT_EXCEEDED limit  | Too many requests. Please try again later.
 key budget  429 - data  | Rate limit exceeded for this API key
 plugin route limit  429 RATE_LIMITED error  | Too many requests. Please try again later.

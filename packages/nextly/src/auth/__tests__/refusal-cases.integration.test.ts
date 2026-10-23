@@ -6,7 +6,8 @@
  * that is not valid (an unknown key, a revoked key, a key whose creator is
  * deactivated, a session cookie that is malformed or expired), a request no
  * credential comes with, and each limit that answers 429 (the per-address
- * limit, an API key's own budget and a plugin route's limit). Each is
+ * limit, the one for requests whose address cannot be read, an API key's own
+ * budget and a plugin route's limit). Each is
  * recorded as the table's refusals are, status, code, body shape and message,
  * in `access-every-way-in/refusal-cases-today.txt`, so a change to how any of
  * them is answered shows as a diff of that file.
@@ -40,6 +41,7 @@ import {
   type TestNextly,
 } from "../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../routeHandler";
+import { sanitizeConfig } from "../../shared/types/config";
 import { buildClaims } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
 import { resetSessionStandingForTests } from "../session/session-standing";
@@ -89,14 +91,25 @@ interface KeyService {
   ): Promise<unknown>;
 }
 
+/** The collection every case reads. */
+const notes = defineCollection({
+  slug: NOTES,
+  status: true,
+  fields: [text({ name: "title" })],
+});
+
+/** An address a trusted proxy names as the client's. */
+const CLIENT_ADDRESS = "203.0.113.7";
+
 function request(
   segments: string[],
-  headers: Record<string, string> = {}
+  headers: Record<string, string> = {},
+  handlers: ReturnType<typeof createDynamicHandlers> = createDynamicHandlers()
 ): Promise<Response> {
   const req = new Request(`${ORIGIN}/api/${segments.join("/")}`, {
     headers: { origin: ORIGIN, ...headers },
   });
-  return createDynamicHandlers().GET(req, {
+  return handlers.GET(req, {
     params: Promise.resolve({ params: segments }),
   });
 }
@@ -106,6 +119,16 @@ async function refusalAt(res: Promise<Response>): Promise<Refusal> {
   const refusal = await refusalOf(await res);
   expect(refusal, "the request was refused").toBeDefined();
   return refusal!;
+}
+
+/**
+ * A request's refusal by a limit: a 429, so a request refused for anything
+ * else, such as wanting a credential, cannot stand in for the limit's answer.
+ */
+async function limitRefusalAt(res: Promise<Response>): Promise<Refusal> {
+  const refusal = await refusalAt(res);
+  expect(refusal.status, "the limit refused the request").toBe(429);
+  return refusal;
 }
 
 /**
@@ -191,13 +214,7 @@ describe.each(getConfiguredTestDialects())(
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
         plugins: [limitedPlugin],
-        collections: [
-          defineCollection({
-            slug: NOTES,
-            status: true,
-            fields: [text({ name: "title" })],
-          }),
-        ],
+        collections: [notes],
       });
       await seedPermissions(t);
       ownerId = await account(t, "owner@example.com");
@@ -269,11 +286,37 @@ describe.each(getConfiguredTestDialects())(
 
     describe("a limit", () => {
       it("the per-address limit", async () => {
+        // An address resolves only through a proxy the site trusts, so the
+        // handler trusts one, and only that address's own budget is spent.
+        const behindProxy = createDynamicHandlers({
+          config: sanitizeConfig({
+            collections: [notes],
+            plugins: [limitedPlugin],
+            security: { trustProxy: true },
+          }),
+        });
         cases.set(
           "address limit",
           await refusingLimits(
-            key => key.startsWith("ratelimit:"),
-            () => refusalAt(request(entries))
+            key => key === `ratelimit:${CLIENT_ADDRESS}:read`,
+            () =>
+              limitRefusalAt(
+                request(
+                  entries,
+                  { "x-forwarded-for": CLIENT_ADDRESS },
+                  behindProxy
+                )
+              )
+          )
+        );
+      });
+
+      it("the limit for requests whose address cannot be read", async () => {
+        cases.set(
+          "unresolved-address limit",
+          await refusingLimits(
+            key => key === "ratelimit:unresolved:read",
+            () => limitRefusalAt(request(entries))
           )
         );
       });
@@ -285,7 +328,9 @@ describe.each(getConfiguredTestDialects())(
           await refusingLimits(
             counted => counted === id,
             () =>
-              refusalAt(request(entries, { authorization: `Bearer ${key}` }))
+              limitRefusalAt(
+                request(entries, { authorization: `Bearer ${key}` })
+              )
           )
         );
       });
@@ -293,7 +338,7 @@ describe.each(getConfiguredTestDialects())(
       it("a plugin route's limit", async () => {
         const path = ["plugins", LIMITED_PLUGIN, "limited"];
         expect((await request(path)).status, "the first request").toBe(200);
-        cases.set("plugin route limit", await refusalAt(request(path)));
+        cases.set("plugin route limit", await limitRefusalAt(request(path)));
       });
     });
 
@@ -324,7 +369,7 @@ describe.each(getConfiguredTestDialects())(
     describe("today's answers", () => {
       it("are the answers the file records", async () => {
         // POPULATION CONTROL: every case above recorded its refusal.
-        expect(cases.size).toBe(9);
+        expect(cases.size).toBe(10);
         const recorded = [...cases.entries()]
           .map(([name, refusal]) => formatRefusal(name, refusal))
           .join("\n");

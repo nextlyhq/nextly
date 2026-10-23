@@ -85,7 +85,7 @@ import {
 } from "../../../plugins/test-nextly";
 
 import { ask, targetSlug } from "./doors";
-import { renderRefusals, STATUS_DOORS, type Refusal } from "./refusals";
+import { renderRefusals, type Refusal } from "./refusals";
 import {
   doorsAsking,
   oneAnswer,
@@ -197,7 +197,9 @@ export function describeEveryWayIn(dialect: TestDialect): void {
           );
           byDoor.set(door, answer);
           deviated.set(cellKey(row, door), deviations);
-          if (STATUS_DOORS.has(door) && isStatus(answer)) {
+          // Every answer that is a status is a refusal some door answered with,
+          // so every one is recorded: no list of doors to fall out of date.
+          if (isStatus(answer)) {
             // A status with nothing noted is recorded as such, so a door
             // that stops noting its refusals shows rather than drops out.
             refused.set(cellKey(row, door), {

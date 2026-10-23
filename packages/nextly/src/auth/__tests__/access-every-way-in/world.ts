@@ -35,6 +35,7 @@ import type { AuthenticatedScope } from "../../authenticated-scope";
 import { apiKeyScopeFrom } from "../../authenticated-scope";
 import { requireAuthentication } from "../../middleware/index";
 
+import { refusalFromError } from "./refusals";
 import {
   ENTRY_ACTIONS,
   CALLERS,
@@ -244,22 +245,9 @@ async function outcome(work: () => Promise<unknown>): Promise<Response> {
       typeof result === "boolean" ? { ok: true, found: result } : { ok: true }
     );
   } catch (error) {
-    // What the call threw, as its caller would read it: the status, and the
-    // code and public message a refusal carries.
-    const thrown = error as {
-      statusCode?: unknown;
-      code?: unknown;
-      publicMessage?: unknown;
-    };
-    return Response.json({
-      ok: false,
-      status: typeof thrown.statusCode === "number" ? thrown.statusCode : null,
-      code: typeof thrown.code === "string" ? thrown.code : undefined,
-      message:
-        typeof thrown.publicMessage === "string"
-          ? thrown.publicMessage
-          : undefined,
-    });
+    // What the call threw, read the one way every door reads a thrown
+    // refusal, and handed back whole.
+    return Response.json({ ok: false, refusal: refusalFromError(error) });
   }
 }
 
