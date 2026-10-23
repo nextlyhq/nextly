@@ -38,8 +38,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
+    "build": "tsdown",
+    "dev": "tsdown --watch",
     "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
@@ -87,7 +87,7 @@
     "react-dom": "19.3.1",
     "react-hook-form": "^7.66.0",
     "semver": "^7.6.0",
-    "tsup": "^8.5.0",
+    "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.0"
   },

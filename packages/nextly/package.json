@@ -6,233 +6,233 @@
   "type": "module",
   "main": "dist/index.mjs",
   "module": "dist/index.mjs",
-  "types": "dist/index.d.ts",
+  "types": "dist/index.d.mts",
   "bin": {
     "nextly": "./dist/cli/nextly.mjs"
   },
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
+      "types": "./dist/index.d.mts",
       "import": "./dist/index.mjs"
     },
     "./testing": {
-      "types": "./dist/testing.d.ts",
+      "types": "./dist/testing.d.mts",
       "import": "./dist/testing.mjs"
     },
     "./config": {
-      "types": "./dist/config.d.ts",
+      "types": "./dist/config.d.mts",
       "import": "./dist/config.mjs"
     },
     "./runtime": {
-      "types": "./dist/runtime.d.ts",
+      "types": "./dist/runtime.d.mts",
       "import": "./dist/runtime.mjs"
     },
     "./db-operators": {
-      "types": "./dist/db-operators.d.ts",
+      "types": "./dist/db-operators.d.mts",
       "import": "./dist/db-operators.mjs"
     },
     "./route-path": {
-      "types": "./dist/route-path.d.ts",
+      "types": "./dist/runtime/routing/slug-param.d.mts",
       "import": "./dist/runtime/routing/slug-param.mjs"
     },
     "./auth": {
-      "types": "./dist/auth/index.d.ts",
+      "types": "./dist/auth/index.d.mts",
       "import": "./dist/auth/index.mjs"
     },
     "./errors": {
-      "types": "./dist/errors/index.d.ts",
+      "types": "./dist/errors/index.d.mts",
       "import": "./dist/errors/index.mjs"
     },
     "./field-group-type": {
-      "types": "./dist/field-group-type.d.ts",
+      "types": "./dist/field-group-type.d.mts",
       "import": "./dist/field-group-type.mjs"
     },
     "./field-group-reconcile": {
-      "types": "./dist/field-group-reconcile.d.ts",
+      "types": "./dist/field-group-reconcile.d.mts",
       "import": "./dist/field-group-reconcile.mjs"
     },
     "./field-catalog": {
-      "types": "./dist/field-catalog.d.ts",
+      "types": "./dist/collections/fields/catalog.d.mts",
       "import": "./dist/collections/fields/catalog.mjs"
     },
     "./widget-gate": {
-      "types": "./dist/widget-gate.d.ts",
+      "types": "./dist/domains/widgets/gate.d.mts",
       "import": "./dist/domains/widgets/gate.mjs"
     },
     "./widget-result": {
-      "types": "./dist/widget-result.d.ts",
+      "types": "./dist/domains/widgets/result.d.mts",
       "import": "./dist/domains/widgets/result.mjs"
     },
     "./document-lock": {
-      "types": "./dist/document-lock.d.ts",
+      "types": "./dist/domains/document-lock/contract.d.mts",
       "import": "./dist/domains/document-lock/contract.mjs"
     },
     "./translation-filter-states": {
-      "types": "./dist/translation-filter-states.d.ts",
+      "types": "./dist/domains/i18n/translation-filter-states.d.mts",
       "import": "./dist/domains/i18n/translation-filter-states.mjs"
     },
     "./query": {
-      "types": "./dist/query/index.d.ts",
+      "types": "./dist/query/index.d.mts",
       "import": "./dist/query/index.mjs"
     },
     "./observability": {
-      "types": "./dist/observability/index.d.ts",
+      "types": "./dist/observability/index.d.mts",
       "import": "./dist/observability/index.mjs"
     },
     "./database": {
-      "types": "./dist/database/index.d.ts",
+      "types": "./dist/database/index.d.mts",
       "import": "./dist/database/index.mjs"
     },
     "./database/seeders": {
-      "types": "./dist/database/seeders/index.d.ts",
+      "types": "./dist/database/seeders/index.d.mts",
       "import": "./dist/database/seeders/index.mjs"
     },
     "./schemas": {
-      "types": "./dist/schemas/index.d.ts",
+      "types": "./dist/schemas/index.d.mts",
       "import": "./dist/schemas/index.mjs"
     },
     "./api": {
-      "types": "./dist/api/index.d.ts",
+      "types": "./dist/api/index.d.mts",
       "import": "./dist/api/index.mjs"
     },
     "./api/auth-state": {
-      "types": "./dist/api/auth-state.d.ts",
+      "types": "./dist/api/auth-state.d.mts",
       "import": "./dist/api/auth-state.mjs"
     },
     "./api/health": {
-      "types": "./dist/api/health.d.ts",
+      "types": "./dist/api/health.d.mts",
       "import": "./dist/api/health.mjs"
     },
     "./api/media-handlers": {
-      "types": "./dist/api/media-handlers.d.ts",
+      "types": "./dist/api/media-handlers.d.mts",
       "import": "./dist/api/media-handlers.mjs"
     },
     "./api/collections-schema": {
-      "types": "./dist/api/collections-schema.d.ts",
+      "types": "./dist/api/collections-schema.d.mts",
       "import": "./dist/api/collections-schema.mjs"
     },
     "./api/collections-schema-detail": {
-      "types": "./dist/api/collections-schema-detail.d.ts",
+      "types": "./dist/api/collections-schema-detail.d.mts",
       "import": "./dist/api/collections-schema-detail.mjs"
     },
     "./api/collections-schema-export": {
-      "types": "./dist/api/collections-schema-export.d.ts",
+      "types": "./dist/api/collections-schema-export.d.mts",
       "import": "./dist/api/collections-schema-export.mjs"
     },
     "./api/field-groups": {
-      "types": "./dist/api/field-groups.d.ts",
+      "types": "./dist/api/field-groups.d.mts",
       "import": "./dist/api/field-groups.mjs"
     },
     "./api/field-groups-detail": {
-      "types": "./dist/api/field-groups-detail.d.ts",
+      "types": "./dist/api/field-groups-detail.d.mts",
       "import": "./dist/api/field-groups-detail.mjs"
     },
     "./api/email-providers": {
-      "types": "./dist/api/email-providers.d.ts",
+      "types": "./dist/api/email-providers.d.mts",
       "import": "./dist/api/email-providers.mjs"
     },
     "./api/email-providers-detail": {
-      "types": "./dist/api/email-providers-detail.d.ts",
+      "types": "./dist/api/email-providers-detail.d.mts",
       "import": "./dist/api/email-providers-detail.mjs"
     },
     "./api/email-providers-test": {
-      "types": "./dist/api/email-providers-test.d.ts",
+      "types": "./dist/api/email-providers-test.d.mts",
       "import": "./dist/api/email-providers-test.mjs"
     },
     "./api/email-providers-default": {
-      "types": "./dist/api/email-providers-default.d.ts",
+      "types": "./dist/api/email-providers-default.d.mts",
       "import": "./dist/api/email-providers-default.mjs"
     },
     "./api/email-templates": {
-      "types": "./dist/api/email-templates.d.ts",
+      "types": "./dist/api/email-templates.d.mts",
       "import": "./dist/api/email-templates.mjs"
     },
     "./api/email-templates-detail": {
-      "types": "./dist/api/email-templates-detail.d.ts",
+      "types": "./dist/api/email-templates-detail.d.mts",
       "import": "./dist/api/email-templates-detail.mjs"
     },
     "./api/email-templates-preview": {
-      "types": "./dist/api/email-templates-preview.d.ts",
+      "types": "./dist/api/email-templates-preview.d.mts",
       "import": "./dist/api/email-templates-preview.mjs"
     },
     "./api/email-templates-draft-preview": {
-      "types": "./dist/api/email-templates-draft-preview.d.ts",
+      "types": "./dist/api/email-templates-draft-preview.d.mts",
       "import": "./dist/api/email-templates-draft-preview.mjs"
     },
     "./api/singles": {
-      "types": "./dist/api/singles.d.ts",
+      "types": "./dist/api/singles.d.mts",
       "import": "./dist/api/singles.mjs"
     },
     "./api/versions": {
-      "types": "./dist/api/versions.d.ts",
+      "types": "./dist/api/versions.d.mts",
       "import": "./dist/api/versions.mjs"
     },
     "./api/versions-detail": {
-      "types": "./dist/api/versions-detail.d.ts",
+      "types": "./dist/api/versions-detail.d.mts",
       "import": "./dist/api/versions-detail.mjs"
     },
     "./api/versions-diff": {
-      "types": "./dist/api/versions-diff.d.ts",
+      "types": "./dist/api/versions-diff.d.mts",
       "import": "./dist/api/versions-diff.mjs"
     },
     "./api/singles-detail": {
-      "types": "./dist/api/singles-detail.d.ts",
+      "types": "./dist/api/singles-detail.d.mts",
       "import": "./dist/api/singles-detail.mjs"
     },
     "./api/singles-schema-detail": {
-      "types": "./dist/api/singles-schema-detail.d.ts",
+      "types": "./dist/api/singles-schema-detail.d.mts",
       "import": "./dist/api/singles-schema-detail.mjs"
     },
     "./api/storage-upload-url": {
-      "types": "./dist/api/storage-upload-url.d.ts",
+      "types": "./dist/api/storage-upload-url.d.mts",
       "import": "./dist/api/storage-upload-url.mjs"
     },
     "./actions": {
-      "types": "./dist/actions/index.d.ts",
+      "types": "./dist/actions/index.d.mts",
       "import": "./dist/actions/index.mjs"
     },
     "./cli/utils": {
-      "types": "./dist/cli/utils/index.d.ts",
+      "types": "./dist/cli/utils/index.d.mts",
       "import": "./dist/cli/utils/index.mjs"
     },
     "./storage/read-errors": {
-      "types": "./dist/storage/read-errors.d.ts",
+      "types": "./dist/storage/read-errors.d.mts",
       "import": "./dist/storage/read-errors.mjs"
     },
     "./storage/fetch-stored-bytes": {
-      "types": "./dist/storage/fetch-stored-bytes.d.ts",
+      "types": "./dist/storage/fetch-stored-bytes.d.mts",
       "import": "./dist/storage/fetch-stored-bytes.mjs"
     },
     "./storage": {
-      "types": "./dist/storage/index.d.ts",
+      "types": "./dist/storage/index.d.mts",
       "import": "./dist/storage/index.mjs"
     },
     "./next": {
-      "types": "./dist/next.d.ts",
+      "types": "./dist/next.d.mts",
       "import": "./dist/next.mjs"
     },
     "./api/email-provider-types": {
-      "types": "./dist/api/email-provider-types.d.ts",
+      "types": "./dist/api/email-provider-types.d.mts",
       "import": "./dist/api/email-provider-types.mjs"
     },
     "./api/email-template-preview-types": {
-      "types": "./dist/api/email-template-preview-types.d.ts",
+      "types": "./dist/api/email-template-preview-types.d.mts",
       "import": "./dist/api/email-template-preview-types.mjs"
     },
     "./api/jobs-list-types": {
-      "types": "./dist/api/jobs-list-types.d.ts",
+      "types": "./dist/api/jobs-list-types.d.mts",
       "import": "./dist/api/jobs-list-types.mjs"
     },
     "./api/auth-ui-types": {
-      "types": "./dist/api/auth-ui-types.d.ts",
+      "types": "./dist/api/auth-ui-types.d.mts",
       "import": "./dist/api/auth-ui-types.mjs"
     },
     "./schema-extension": {
-      "types": "./dist/schema-extension.d.ts",
+      "types": "./dist/schema-extension.d.mts",
       "import": "./dist/schema-extension.mjs"
     },
     "./zod": {
-      "types": "./dist/zod.d.ts",
+      "types": "./dist/zod.d.mts",
       "import": "./dist/zod.mjs"
     }
   },
@@ -240,8 +240,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup && tsc -p tsconfig.dts.json && node --max-old-space-size=8192 --import tsx/esm ./node_modules/rollup/dist/bin/rollup -c rollup.dts.config.ts && rimraf dist/_intermediate_dts && node scripts/postbuild.cjs",
-    "dev": "tsup --watch",
+    "build": "tsdown && node scripts/postbuild.cjs",
+    "dev": "tsdown --watch",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
@@ -282,10 +282,8 @@
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "rimraf": "^6.1.3",
-    "rollup": "^4.60.1",
-    "rollup-plugin-dts": "^6.4.1",
     "sharp": "^0.35.0",
-    "tsup": "^8.5.0",
+    "tsdown": "^0.23.1",
     "tsx": "^4.20.5",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",

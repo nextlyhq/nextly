@@ -35,8 +35,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
+    "build": "tsdown",
+    "dev": "tsdown --watch",
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
@@ -78,7 +78,7 @@
     "nextly": "workspace:*",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "tsup": "^8.5.0",
+    "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.0"
   },

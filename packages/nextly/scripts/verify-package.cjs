@@ -72,7 +72,7 @@ if (existsSync(mysqlJournal)) {
 
 // Check 4: Main entry points exist (ESM-only)
 const mainMjs = join(__dirname, '..', 'dist', 'index.mjs');
-const mainDts = join(__dirname, '..', 'dist', 'index.d.ts');
+const mainDts = join(__dirname, '..', 'dist', 'index.d.mts');
 
 if (existsSync(mainMjs)) {
   pass('dist/index.mjs exists');
@@ -81,9 +81,9 @@ if (existsSync(mainMjs)) {
 }
 
 if (existsSync(mainDts)) {
-  pass('dist/index.d.ts exists');
+  pass('dist/index.d.mts exists');
 } else {
-  fail('dist/index.d.ts NOT found');
+  fail('dist/index.d.mts NOT found');
 }
 
 // Check 5: npm pack dry-run
