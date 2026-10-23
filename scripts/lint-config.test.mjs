@@ -13,8 +13,15 @@
 //
 // What each rule matches is lint-guards.test.mjs's question.
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -68,32 +75,51 @@ function lint(config, files) {
     root,
     `.oxlint-test-${process.pid}-${Math.random().toString(36).slice(2)}.config.mjs`
   );
-  const syntactic = {
-    ...config,
-    options: { ...config.options, typeAware: false },
-  };
-  writeFileSync(path, `export default ${JSON.stringify(syntactic)};\n`);
+  writeFileSync(
+    path,
+    `export default ${JSON.stringify(syntacticOnly(config))};\n`
+  );
   try {
-    let stdout;
-    try {
-      stdout = execFileSync(
-        node,
-        [oxlint, "-c", path, "-f", "json", ...files],
-        {
-          cwd: root,
-          encoding: "utf8",
-          maxBuffer: 64 * 1024 * 1024,
-        }
-      );
-    } catch (error) {
-      // Exit 1 means it found something, which is an answer, not a failure.
-      if (error.status !== 1 || !error.stdout) throw error;
-      stdout = error.stdout;
-    }
-    const report = JSON.parse(stdout);
+    const report = runOxlint(["-c", path, "-f", "json", ...files], root);
     return { diagnostics: report.diagnostics, files: report.number_of_files };
   } finally {
     rmSync(path, { force: true });
+  }
+}
+
+/** `config` with the type-aware rules off, as every run here lints. */
+function syntacticOnly(config) {
+  return { ...config, options: { ...config.options, typeAware: false } };
+}
+
+/** `config` with each plugin a relative path names given its absolute one here. */
+function withRootPlugins(config) {
+  const absolute = specifier =>
+    specifier.startsWith(".") ? join(root, specifier) : specifier;
+  return {
+    ...config,
+    jsPlugins: config.jsPlugins.map(plugin =>
+      typeof plugin === "string"
+        ? absolute(plugin)
+        : { ...plugin, specifier: absolute(plugin.specifier) }
+    ),
+  };
+}
+
+/** Runs oxlint from `cwd` and returns its JSON report. */
+function runOxlint(args, cwd) {
+  try {
+    return JSON.parse(
+      execFileSync(node, [oxlint, ...args], {
+        cwd,
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+      })
+    );
+  } catch (error) {
+    // Exit 1 means it found something, which is an answer, not a failure.
+    if (error.status !== 1 || !error.stdout) throw error;
+    return JSON.parse(error.stdout);
   }
 }
 
@@ -108,27 +134,42 @@ function withoutExemptions(rule) {
 }
 
 /**
- * Writes each probe at its repository-relative path, lints them all with the
- * committed configuration, and removes them whatever happens. A probe path is
- * new: the write refuses one that exists, so no real file is replaced.
+ * Lints each probe with the committed configuration, in a directory of its own
+ * laid out like the repository, so the `files` globs reach a probe exactly as
+ * they would the same path here. The directory is under the repository's
+ * `.turbo`, which git and every scan of the tree ignore, so no other suite
+ * sees a probe come and go; and the plugins a package name names resolve
+ * upwards from it as they do here. (Not under `node_modules`: oxlint lints a
+ * file there without its React rules.) A plugin named by a relative path is
+ * given its absolute one. The directory is the only thing removed.
  */
 function lintProbes(probes) {
-  const paths = Object.keys(probes);
+  const parent = join(root, ".turbo");
+  mkdirSync(parent, { recursive: true });
+  const dir = mkdtempSync(join(parent, "lint-probes-"));
   try {
-    for (const path of paths) {
-      writeFileSync(join(root, path), probes[path], { flag: "wx" });
+    for (const [path, source] of Object.entries(probes)) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), source, { flag: "wx" });
     }
-    const result = lint(committed, paths);
-    expect(result.files, "every probe is a file lint reads").toBe(paths.length);
-    return result.diagnostics;
+    const config = join(dir, "oxlint.config.mjs");
+    writeFileSync(
+      config,
+      `export default ${JSON.stringify(withRootPlugins(syntacticOnly(committed)))};\n`,
+      { flag: "wx" }
+    );
+    const report = runOxlint(
+      ["-c", config, "-f", "json", ...Object.keys(probes)],
+      dir
+    );
+    expect(report.number_of_files, "every probe is a file lint reads").toBe(
+      Object.keys(probes).length
+    );
+    return report.diagnostics;
   } finally {
-    for (const path of paths) rmSync(join(root, path), { force: true });
+    rmSync(dir, { recursive: true, force: true });
   }
 }
-
-/** A probe file name no other run, and no real file, can share. */
-const probeName = name =>
-  `lint-probe-${process.pid}-${Math.random().toString(36).slice(2)}-${name}`;
 
 /** Diagnostics from `rule`, counted per repository-relative file. */
 function countsPerFile(diagnostics, rule) {
@@ -292,23 +333,23 @@ describe("each guard, at a path no allowlist names", () => {
   const src = "packages/nextly/src";
   const probes = {
     "nextly(no-bare-error)": [
-      `${src}/${probeName("bare-error.ts")}`,
+      `${src}/lint-probe-bare-error.ts`,
       'export function probe(): never {\n  throw new Error("probe");\n}\n',
     ],
     "nextly(api-key-scope)": [
-      `${src}/${probeName("api-key-scope.ts")}`,
+      `${src}/lint-probe-api-key-scope.ts`,
       'export const scope = { actorType: "apiKey", permissions: [] };\n',
     ],
     "eslint(no-console)": [
-      `${src}/${probeName("console-call.ts")}`,
+      `${src}/lint-probe-console-call.ts`,
       'export function probe(): void {\n  console.log("probe");\n}\n',
     ],
     "eslint(no-restricted-globals)": [
-      `${src}/${probeName("console-value.ts")}`,
+      `${src}/lint-probe-console-value.ts`,
       "export const sink = console;\n",
     ],
     "eslint(no-restricted-imports)": [
-      `${src}/api/${probeName("migrate-import.ts")}`,
+      `${src}/api/lint-probe-migrate-import.ts`,
       'export { runMigrate } from "../cli/commands/migrate";\n',
     ],
   };
@@ -388,7 +429,7 @@ describe("the playground's React Compiler and accessibility rules", () => {
     const paths = Object.fromEntries(
       Object.keys(PROBES).map(rule => [
         rule,
-        `apps/playground/src/${probeName(`${rule.replace("/", "-")}.tsx`)}`,
+        `apps/playground/src/lint-probe-${rule.replace("/", "-")}.tsx`,
       ])
     );
     const diagnostics = lintProbes(
