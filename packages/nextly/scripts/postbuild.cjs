@@ -128,3 +128,37 @@ console.log("Verifying client-safe entries reach no Node built-in...");
     `${sources.length} client-safe entries reach no Node built-in.\n`
   );
 }
+
+// Every built file the manifest names exists. A path the build stopped
+// producing still resolves for nobody: a consumer's resolver finds no file, and
+// for a `types` path TypeScript falls back to untyped without an error.
+console.log("Verifying package.json names only files the build produced...");
+{
+  const { readFileSync } = require("fs");
+  const packageRoot = join(__dirname, "..");
+  const manifest = JSON.parse(
+    readFileSync(join(packageRoot, "package.json"), "utf8")
+  );
+  const named = [];
+  for (const field of ["main", "module", "types", "typings"]) {
+    if (typeof manifest[field] === "string") named.push(manifest[field]);
+  }
+  // Every string under `exports`, conditions nested to any depth.
+  const collect = value =>
+    typeof value === "string" ? [value] : Object.values(value).flatMap(collect);
+  named.push(...collect(manifest.exports));
+  const missing = named.filter(
+    file =>
+      /^(\.\/)?dist\//.test(file) &&
+      !file.includes("*") &&
+      !existsSync(join(packageRoot, file))
+  );
+  if (missing.length > 0) {
+    console.error(
+      "[build-guard] package.json names files the build did not produce:"
+    );
+    for (const file of missing) console.error(`  ${file}`);
+    process.exit(1);
+  }
+  console.log(`${named.length} manifest paths name built files.\n`);
+}
