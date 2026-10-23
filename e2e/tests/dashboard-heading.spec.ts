@@ -34,6 +34,10 @@ import { expect, type Page, type Request, type Route } from "@playwright/test";
 import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.dashboard] });
 
 /** The sample-content card's widget id, as core registers it. */
 const SEED_WIDGET_ID = "core/seed-demo-content";

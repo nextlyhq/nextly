@@ -23,6 +23,10 @@ import {
   release,
   schedule,
 } from "./support/releases-api";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.releases] });
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;

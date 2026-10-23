@@ -30,6 +30,10 @@ import {
   startEmptyPlayground,
   type EmptyPlayground,
 } from "../support/playground-dev-server";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.ownServer, LOCK.heavy] });
 
 test.describe("first-run setup at 127.0.0.1 for an app at localhost", () => {
   test.describe.configure({ mode: "serial", timeout: 6 * 60 * 1000 });

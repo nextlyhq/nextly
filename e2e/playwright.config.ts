@@ -58,13 +58,25 @@ export default defineConfig({
   // suite is not retried into passing locally. CI retries once, for the
   // genuinely slow-machine flakes, and records a trace when it does.
   retries: process.env.CI ? 1 : 0,
-  // One worker, everywhere. `fullyParallel: false` only serialises tests
-  // *within* a file; different spec files still get their own worker, and the
-  // default is more than one on most machines. Every worker here would share
-  // the same database and the same signed-in session, so a field one file
-  // creates is visible to another mid-assertion. The suite runs in ~20s: there
-  // is nothing to win by racing it against itself.
-  workers: 1,
+  // A run whose server broke fails every remaining test the same way, each one
+  // waiting out its timeout twice: past this many failures the rest of the
+  // report adds nothing but minutes on a runner. A green run still needs every
+  // test, so this only shortens a run that has already failed.
+  maxFailures: process.env.CI ? 25 : 0,
+  // Two workers in CI, one elsewhere. Every worker shares the one dev server,
+  // the one database and the one signed-in user, so two spec FILES run side by
+  // side only when neither can change what the other reads: a spec that writes
+  // shared state, or reads it as a whole, takes that state's named lock
+  // (`tests/support/locks.ts`), and files holding the same lock never overlap.
+  // `fullyParallel: false` keeps each file's tests in order on one worker.
+  // Locally one worker stays the default, since a dev server and two browsers
+  // are more than an ordinary laptop runs comfortably; `--workers=2` asks.
+  workers: process.env.CI ? 2 : 1,
+  // A retry runs ALONE, after everything else, rather than beside another
+  // file. A test that fails only next to another one then passes on its
+  // retry and is reported flaky, which names the coupling, instead of failing
+  // twice for a reason that is not its own.
+  retryStrategy: "isolated",
   forbidOnly: !!process.env.CI,
   fullyParallel: false,
 

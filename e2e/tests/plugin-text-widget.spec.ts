@@ -11,6 +11,10 @@ import { expect } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.dashboard] });
 
 test("a plugin's text widget draws its markdown on the dashboard", async ({
   page,

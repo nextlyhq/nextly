@@ -28,6 +28,10 @@ import {
   startEmptyPlayground,
   type EmptyPlayground,
 } from "../support/playground-dev-server";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.ownServer, LOCK.heavy] });
 
 test.describe("first-run setup at an address the app does not accept", () => {
   // One server, built and booted once, for the one flow below.
