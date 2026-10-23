@@ -28,6 +28,12 @@ const SheetModalContext = React.createContext(true);
 
 // Note: the close icon is not rendered by default here. Consumers should import and render their preferred icon with `SheetClose`.
 
+/** What `Sheet` is: a component taking {@link SheetProps}, with a `displayName`. */
+type SheetComponent = {
+  (props: SheetProps): React.JSX.Element;
+  displayName: string;
+};
+
 /**
  * Sheet Component
  *
@@ -82,7 +88,7 @@ const SheetModalContext = React.createContext(true);
  * @see https://www.radix-ui.com/primitives/docs/components/dialog
  * @public
  */
-const Sheet: React.FC<SheetProps> = ({
+const Sheet: SheetComponent = ({
   modal = true,
   children,
   ...props
@@ -222,6 +228,12 @@ const SheetContent: React.ForwardRefExoticComponent<
 });
 SheetContent.displayName = DialogPrimitive.Content.displayName;
 
+/** What `SheetHeader` and `SheetFooter` are: a `div` component with a `displayName`. */
+type SheetSectionComponent = {
+  (props: React.HTMLAttributes<HTMLDivElement>): React.JSX.Element;
+  displayName: string;
+};
+
 /**
  * SheetHeader
  *
@@ -231,7 +243,7 @@ SheetContent.displayName = DialogPrimitive.Content.displayName;
  * - **Text Alignment**: Left (default) or center
  * @public
  */
-const SheetHeader: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({
+const SheetHeader: SheetSectionComponent = ({
   className,
   ...props
 }: React.HTMLAttributes<HTMLDivElement>) => (
@@ -254,7 +266,7 @@ SheetHeader.displayName = "SheetHeader";
  * - **Alignment**: Right-aligned on desktop, stretched on mobile
  * @experimental
  */
-const SheetFooter: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({
+const SheetFooter: SheetSectionComponent = ({
   className,
   ...props
 }: React.HTMLAttributes<HTMLDivElement>) => (

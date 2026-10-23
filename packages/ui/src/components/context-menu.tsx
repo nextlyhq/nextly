@@ -320,12 +320,18 @@ const ContextMenuSeparator: React.ForwardRefExoticComponent<
 ));
 ContextMenuSeparator.displayName = ContextMenuPrimitive.Separator.displayName;
 
+/** What `ContextMenuShortcut` is: a `span` component with a `displayName`. */
+type ContextMenuShortcutComponent = {
+  (props: React.HTMLAttributes<HTMLSpanElement>): React.JSX.Element;
+  displayName: string;
+};
+
 /**
  * A keyboard shortcut hint, right-aligned in the item.
  *
  * @experimental
  */
-const ContextMenuShortcut: React.FC<React.HTMLAttributes<HTMLSpanElement>> = ({
+const ContextMenuShortcut: ContextMenuShortcutComponent = ({
   className,
   ...props
 }: React.HTMLAttributes<HTMLSpanElement>) => (
