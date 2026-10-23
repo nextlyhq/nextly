@@ -44,7 +44,11 @@ import { buildClaims } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
 import { resetSessionStandingForTests } from "../session/session-standing";
 
-import { refusalOf, type Refusal } from "./access-every-way-in/refusals";
+import {
+  formatRefusal,
+  refusalOf,
+  type Refusal,
+} from "./access-every-way-in/refusals";
 
 const ORIGIN = "http://localhost";
 const NOTES = "refusalnotes";
@@ -142,9 +146,6 @@ async function refusingLimits<T>(
     container.register<RateLimitStore>("coreRateLimitStore", () => counted);
   }
 }
-
-const line = (name: string, r: Refusal) =>
-  `${name}  ${r.status} ${r.code} ${r.shape}  | ${r.message}`;
 
 describe.each(getConfiguredTestDialects())(
   "refusals the access table has no caller for (%s)",
@@ -325,7 +326,7 @@ describe.each(getConfiguredTestDialects())(
         // POPULATION CONTROL: every case above recorded its refusal.
         expect(cases.size).toBe(9);
         const recorded = [...cases.entries()]
-          .map(([name, refusal]) => line(name, refusal))
+          .map(([name, refusal]) => formatRefusal(name, refusal))
           .join("\n");
         await expect(`${recorded}\n`).toMatchFileSnapshot(CASES_FILE);
       });

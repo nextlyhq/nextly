@@ -38,6 +38,7 @@ import {
   noteRefusal,
   noteResponse,
   noteUncaught,
+  refusalOf,
   takeRefusal,
   type Refusal,
 } from "./refusals";
@@ -591,9 +592,15 @@ async function observing<T>(work: () => Promise<T>): Promise<Observed<T>> {
   return { answer: result, bySubject };
 }
 
+/**
+ * What the schema list answered one caller: the slugs it listed, or the
+ * status it refused them with and the refusal as that response carried it.
+ */
+type SchemaList = string[] | { refused: Answer; refusal: Refusal | undefined };
+
 const schemaLists = new WeakMap<
   World,
-  Map<string, Promise<Observed<Answer | string[]>>>
+  Map<string, Promise<Observed<SchemaList>>>
 >();
 
 /**
@@ -613,20 +620,27 @@ async function schema(
   }
   let listed = cache.get(row.caller);
   if (!listed) {
-    listed = observing(async (): Promise<Answer | string[]> => {
+    listed = observing(async (): Promise<SchemaList> => {
       const res = await listCollectionsSchema(
         new Request(`${ORIGIN}/api/collections/schema?limit=500`, {
           headers: who.headers,
         })
       );
-      if (res.status !== 200) return String(res.status);
+      if (res.status !== 200) {
+        return { refused: String(res.status), refusal: await refusalOf(res) };
+      }
       const body = (await res.json()) as { items: { slug: string }[] };
       return body.items.map(item => item.slug);
     });
     cache.set(row.caller, listed);
   }
   const { answer, bySubject } = await listed;
-  if (typeof answer === "string") return answer;
+  if (!Array.isArray(answer)) {
+    // The list is asked once per caller, so every row it answers carries the
+    // one refusal that request was answered with.
+    if (answer.refusal) noteRefusal(answer.refusal);
+    return answer.refused;
+  }
   const slug = collectionOf(row.rule);
   return {
     answer: answer.includes(slug) ? "A" : "R",

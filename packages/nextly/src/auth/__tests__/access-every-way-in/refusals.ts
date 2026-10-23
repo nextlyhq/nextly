@@ -48,6 +48,7 @@ export const STATUS_DOORS: ReadonlySet<Door> = new Set<Door>([
   "direct",
   "route",
   "service",
+  "schema",
   "lock",
 ]);
 
@@ -223,16 +224,25 @@ export function namesInternals(message: string, slug: string): boolean {
   return slug !== "" && new RegExp(`\\b${slug}\\b`).test(message);
 }
 
+/**
+ * One refusal as a recorded line: what it is answered for, then its status,
+ * code and body shape, whether its message names something internal (judged
+ * against `slug`, the target's own, where there is one), how it compares with
+ * a missing entry's, and the message. Every file that records refusals writes
+ * its lines with this, so all of them read one way.
+ */
+export function formatRefusal(label: string, r: Refusal, slug = ""): string {
+  const leak = namesInternals(r.message, slug) ? " NAMES-INTERNALS" : "";
+  const missing = r.missing ? `  missing=${r.missing}` : "";
+  return `${label}  ${r.status} ${r.code} ${r.shape}${leak}${missing}  | ${r.message}`;
+}
+
 /** The refusals file: one line per refused cell at a door that has a status. */
 export function renderRefusals(
   refusals: ReadonlyMap<string, { refusal: Refusal; slug: string }>
 ): string {
   const lines = [...refusals.entries()]
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([cell, { refusal: r, slug }]) => {
-      const leak = namesInternals(r.message, slug) ? " NAMES-INTERNALS" : "";
-      const missing = r.missing ? `  missing=${r.missing}` : "";
-      return `${cell}  ${r.status} ${r.code} ${r.shape}${leak}${missing}  | ${r.message}`;
-    });
+    .map(([cell, { refusal, slug }]) => formatRefusal(cell, refusal, slug));
   return `${lines.join("\n")}\n`;
 }

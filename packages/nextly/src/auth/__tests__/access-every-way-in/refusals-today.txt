@@ -5516,58 +5516,76 @@ service visitor publish single-pub user-is-key-maker at route  401 AUTH_REQUIRED
 service visitor read collection async-false at direct  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
 service visitor read collection async-false at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection async-false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection async-false at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection async-false at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service visitor read collection async-throws at direct  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
 service visitor read collection async-throws at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection async-throws at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection async-throws at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection async-throws at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service visitor read collection async-true at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection async-true at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection async-true at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection false at direct  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
 service visitor read collection false at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection false at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection false at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service visitor read collection none at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection none at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection none at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection other-operation at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection other-operation at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection other-operation at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection permission-spelling at direct  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
 service visitor read collection permission-spelling at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection permission-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection permission-spelling at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection permission-spelling at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service visitor read collection principal-kind at direct  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
 service visitor read collection principal-kind at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection principal-kind at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection principal-kind at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection principal-kind at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service visitor read collection publish-false at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection publish-false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection publish-false at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection returns-false at direct  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
 service visitor read collection returns-false at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection returns-false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection returns-false at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection returns-false at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service visitor read collection returns-null at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection returns-null at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection returns-null at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection returns-true at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection returns-true at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection returns-true at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection returns-undefined at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection returns-undefined at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection returns-undefined at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection role-name at direct  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
 service visitor read collection role-name at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection role-name at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection role-name at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection role-name at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service visitor read collection role-screen-spelling at direct  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
 service visitor read collection role-screen-spelling at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection role-screen-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection role-screen-spelling at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection role-screen-spelling at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service visitor read collection throws at direct  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
 service visitor read collection throws at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection throws at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection throws at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection throws at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service visitor read collection true at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection true at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection true at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
 service visitor read collection user-is-key-maker at rest  401 AUTH_REQUIRED data  missing=same  | You must be logged in to access this resource
 service visitor read collection user-is-key-maker at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor read collection user-is-key-maker at schema  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection user-is-key-maker at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service visitor read media none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor read media none at rest  401 AUTH_REQUIRED data  | You must be logged in to access this resource
