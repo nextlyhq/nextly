@@ -18,6 +18,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { getCoreSchema } from "../../../schemas";
 import type { Logger } from "../../../services/shared";
 import { createTableBody } from "../../schema/pipeline/sql-templates/create-table-body";
+import { NextlyError } from "../../../errors/nextly-error";
 import { defineEmailProvider } from "../provider-definition";
 import { getEmailProviderRegistry } from "../services/email-provider-registry";
 import { EmailProviderService } from "../services/email-provider-service";
@@ -130,17 +131,35 @@ describe("testProvider disclosure", () => {
     expect(result.error).not.toContain(SECRET);
   });
 
-  it("keeps the detail for the operator, in the log", async () => {
+  it("keeps the detail for the operator, in the log, without the credential", async () => {
     await service.testProvider(providerId, undefined, "connection");
 
     // Withholding the detail from the CALLER must not withhold it from the
     // operator: the message tells them to read the server log, so something
-    // has to have written one.
+    // has to have written one. What it writes is contained as a thrown
+    // failure's cause is, so the log is not where the credential goes instead.
     const logged = vi
       .mocked(logger.warn)
       .mock.calls.map(call => JSON.stringify(call))
       .join("\n");
-    expect(logged).toContain(SECRET);
+    expect(logged).toContain("Invalid key [secret]");
+    expect(logged).not.toContain(SECRET);
+  });
+
+  it("logs a check's detail without the credential", async () => {
+    const result = await service.checkConfiguration({
+      type: "chatty-probe",
+      configuration: { apiKey: SECRET },
+    });
+
+    expect(result).toMatchObject({ checked: true, success: false });
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+    const logged = vi
+      .mocked(logger.warn)
+      .mock.calls.map(call => JSON.stringify(call))
+      .join("\n");
+    expect(logged).toContain("Invalid key [secret]");
+    expect(logged).not.toContain(SECRET);
   });
 
   it("refuses an unrecognised mode instead of sending a real message", async () => {
@@ -154,6 +173,82 @@ describe("testProvider disclosure", () => {
         "connecton" as unknown as "connection"
       )
     ).rejects.toThrow(/Unknown email provider test mode/);
+  });
+});
+
+describe("a provider's deliberate error, with the raw failure as its cause", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+
+  const wrapping = defineEmailProvider<{ apiKey: string }>({
+    type: "wrapping-probe",
+    label: "Wrapping Probe",
+    capabilities: { connectionTest: true },
+    configFields: [
+      { name: "apiKey", label: "API Key", kind: "password", secret: true },
+    ],
+    parseConfig: input => input as { apiKey: string },
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+    testConnection: config =>
+      Promise.reject(
+        new NextlyError({
+          code: "INTERNAL_ERROR",
+          publicMessage: "The key was refused.",
+          cause: new Error(`Invalid key ${config.apiKey}`),
+        })
+      ),
+    domainStatus: config =>
+      Promise.resolve({
+        domain: "example.com",
+        status: "pending" as const,
+        records: [{ type: "TXT", name: "auth", value: `k=${config.apiKey}` }],
+      }),
+  });
+
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(wrapping);
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    getEmailProviderRegistry().reset();
+  });
+
+  it("keeps its sentence, and logs its cause without the credential", async () => {
+    const result = await service.checkConfiguration({
+      type: "wrapping-probe",
+      configuration: { apiKey: SECRET },
+    });
+
+    expect(result).toMatchObject({
+      checked: true,
+      success: false,
+      error: "The key was refused.",
+    });
+    const logged = vi
+      .mocked(logger.error)
+      .mock.calls.map(call => JSON.stringify(call))
+      .join("\n");
+    expect(logged).toContain("Invalid key");
+    expect(logged).not.toContain(SECRET);
+  });
+
+  it("returns a domain status without the credential", async () => {
+    const status = await wrapping.domainStatusFrom?.(
+      { apiKey: SECRET },
+      "example.com"
+    );
+    expect(status?.records[0].value).toBe("k=[secret]");
+    expect(JSON.stringify(status)).not.toContain(SECRET);
   });
 });
 

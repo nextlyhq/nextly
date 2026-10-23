@@ -16,6 +16,11 @@
 import { NextlyError } from "../../errors";
 
 import { type EmailFailure, failureOf, withEmailFailure } from "./failure";
+import {
+  isEmailSetupCategory,
+  withSetupCategory,
+  type EmailSetupCategory,
+} from "./setup-category";
 import type { EmailProviderAdapter } from "./types";
 
 /**
@@ -154,6 +159,33 @@ export interface EmailProviderCapabilities {
  * @typeParam TConfig - the shape `parseConfig` produces and `createAdapter`
  *   consumes. Defaulted so a definition can be held without naming it.
  */
+/**
+ * @experimental What a connection probe found. `detail` is the provider's own
+ * text and goes only to the server log; `setup` says what a person setting the
+ * provider up should check when the probe failed.
+ */
+export interface ConnectionTestResult {
+  ok: boolean;
+  detail?: string;
+  setup?: EmailSetupCategory;
+}
+
+/**
+ * @experimental Whether a provider has verified the domain email is sent
+ * from, and the DNS records it expects for it.
+ */
+export interface EmailDomainStatus {
+  domain: string;
+  status: "verified" | "pending" | "failed";
+  records: Array<{
+    type: string;
+    name: string;
+    value: string;
+    /** An MX record's priority. */
+    priority?: number;
+  }>;
+}
+
 export interface EmailProviderDefinition<TConfig = Record<string, unknown>> {
   /** Stored in `email_providers.type`. Unique across built-ins and plugins. */
   type: string;
@@ -201,9 +233,16 @@ export interface EmailProviderDefinition<TConfig = Record<string, unknown>> {
    * sending. Declare `capabilities.connectionTest` alongside it, so a UI can
    * tell the difference between "this failed" and "this cannot be asked".
    */
-  testConnection?: (
-    config: TConfig
-  ) => Promise<{ ok: boolean; detail?: string }>;
+  testConnection?: (config: TConfig) => Promise<ConnectionTestResult>;
+  /**
+   * The status of a sending domain, where the provider reports one. Resolves
+   * `null` when the provider does not know the domain. Reads only; it must
+   * never change anything at the provider.
+   */
+  domainStatus?: (
+    config: TConfig,
+    domain: string
+  ) => Promise<EmailDomainStatus | null>;
   /**
    * Whether this install can run the provider at all.
    *
@@ -1163,9 +1202,12 @@ export interface RegisteredEmailProvider {
   /** Validate and build in one step; the parsed value never escapes. */
   createAdapterFrom: (input: unknown) => EmailProviderAdapter;
   /** Present only when the definition supplied a probe. */
-  testConnectionFrom?: (
-    input: unknown
-  ) => Promise<{ ok: boolean; detail?: string }>;
+  testConnectionFrom?: (input: unknown) => Promise<ConnectionTestResult>;
+  /** Present only when the definition supplied one. */
+  domainStatusFrom?: (
+    input: unknown,
+    domain: string
+  ) => Promise<EmailDomainStatus | null>;
   /** Whether a probe exists, without exposing it. */
   readonly hasConnectionTest: boolean;
   /**
@@ -1412,6 +1454,61 @@ function declaredSecretValues(
  * that this send has no id. The row is still written, and still says the
  * message was sent.
  */
+/**
+ * A domain status free of the declared credentials. It goes to every reader
+ * of the provider, and the callback that built it held decrypted
+ * configuration, so a credential written into a record would be handed to the
+ * browser. Where a credential cannot be compared, no status is shown. Read
+ * defensively: a contributed callback may answer with anything.
+ */
+const DOMAIN_STATES: ReadonlyArray<EmailDomainStatus["status"]> = [
+  "verified",
+  "pending",
+  "failed",
+];
+
+function withoutLeakedStatus(
+  status: EmailDomainStatus | null,
+  secrets: { comparable: readonly string[]; hasUnmatchable: boolean }
+): EmailDomainStatus | null {
+  if (status === null || typeof status !== "object") return null;
+  if (secrets.hasUnmatchable) return null;
+  const clean = (text: unknown) =>
+    withoutDeclaredSecrets(typeof text === "string" ? text : "", secrets);
+  const records = Array.isArray(status.records) ? status.records : [];
+  return {
+    domain: clean(status.domain),
+    status: DOMAIN_STATES.includes(status.status) ? status.status : "pending",
+    records: records.map(record => ({
+      type: clean(record.type),
+      name: clean(record.name),
+      value: clean(record.value),
+      ...(typeof record.priority === "number"
+        ? { priority: record.priority }
+        : {}),
+    })),
+  };
+}
+
+/**
+ * A probe's answer with its `detail` free of the declared credentials. The
+ * detail is the provider's own text, written with decrypted configuration in
+ * scope, and goes to the server log: a probe that returns
+ * `Invalid key ${config.apiKey}` rather than throwing it must not be the way
+ * around the containment a thrown failure gets. Where a credential cannot be
+ * compared, the detail is dropped. Read defensively: a contributed probe may
+ * answer with anything.
+ */
+function withoutLeakedDetail(
+  result: ConnectionTestResult,
+  secrets: { comparable: readonly string[]; hasUnmatchable: boolean }
+): ConnectionTestResult {
+  if (result === null || typeof result !== "object") return { ok: false };
+  const { detail, ...rest } = result;
+  if (typeof detail !== "string" || secrets.hasUnmatchable) return rest;
+  return { ...rest, detail: withoutDeclaredSecrets(detail, secrets) };
+}
+
 function withoutLeakedSecrets(
   result: EmailSendResult,
   secrets: { comparable: readonly string[]; hasUnmatchable: boolean }
@@ -1528,6 +1625,7 @@ export function defineEmailProvider<TConfig>(
   // inside a closure does not stay narrowed, and asserting it would hide a
   // definition that removed the probe after registration.
   const probe = definition.testConnection;
+  const domainProbe = definition.domainStatus;
 
   /**
    * Parse, turning any failure into one the API boundary can report.
@@ -1654,7 +1752,10 @@ export function defineEmailProvider<TConfig>(
       ? async (input: unknown) => {
           const config = parse(input);
           try {
-            return await probe(config);
+            return withoutLeakedDetail(
+              await probe(config),
+              secretsFromBothForms(definition.configFields, input, config)
+            );
           } catch (error) {
             // Contained here, where the parsed configuration is in scope. The
             // outer wrapper contains this callback too, but only against the
@@ -1668,6 +1769,30 @@ export function defineEmailProvider<TConfig>(
               error,
               "testConnection",
               secretsFromBothForms(definition.configFields, input, config)
+            );
+          }
+        }
+      : undefined,
+    domainStatusFrom: domainProbe
+      ? async (input: unknown, domain: string) => {
+          const config = parse(input);
+          const secrets = secretsFromBothForms(
+            definition.configFields,
+            input,
+            config
+          );
+          try {
+            return withoutLeakedStatus(
+              await domainProbe(config, domain),
+              secrets
+            );
+          } catch (error) {
+            // Contained as the probe is: it holds the parsed configuration.
+            throw normalizeProviderFailure(
+              definition.type,
+              error,
+              "domainStatus",
+              secrets
             );
           }
         }
@@ -1895,10 +2020,29 @@ function containedClassification<F extends EmailFailure>(
   return { ...rest, ...(status !== undefined ? { status } : {}), reason };
 }
 
+/**
+ * A provider's deliberate error with its `cause` contained. The public
+ * sentence is the provider's choice and is kept; the cause is whatever it
+ * wrapped, often the raw failure with a credential in its message, and it
+ * reaches the server log as the cause of every failure built from this one.
+ */
+function withContainedCause(
+  error: NextlyError,
+  secrets: DeclaredSecretValues
+): void {
+  if (error.cause === undefined) return;
+  Object.defineProperty(error, "cause", {
+    value: containedFailure(error.cause, secrets),
+    configurable: true,
+    writable: true,
+    enumerable: false,
+  });
+}
+
 function normalizeProviderFailure(
   type: string,
   error: unknown,
-  stage: "createAdapter" | "testConnection" | "send",
+  stage: "createAdapter" | "testConnection" | "domainStatus" | "send",
   secrets: DeclaredSecretValues
 ): unknown {
   // A provider that threw a `NextlyError` deliberately chose its own public
@@ -1909,10 +2053,20 @@ function normalizeProviderFailure(
   // Its classification, if it has one, is carried across, contained like the
   // rest of what the provider said.
   const failure = failureOf(error);
+  // The setup category is one of a fixed set of words, with nothing of the
+  // provider's in it, so it crosses as it is. Only a provider's check and
+  // test send read it; a send's result never carries it.
+  const attached = (error as { emailSetup?: unknown } | null)?.emailSetup;
+  const setup = isEmailSetupCategory(attached) ? attached : undefined;
+  const keepSetup = <E extends object>(value: E): E =>
+    setup && value instanceof Error ? withSetupCategory(value, setup) : value;
   if (NextlyError.is(error)) {
-    return failure
-      ? withEmailFailure(error, containedClassification(failure, secrets))
-      : error;
+    withContainedCause(error, secrets);
+    return keepSetup(
+      failure
+        ? withEmailFailure(error, containedClassification(failure, secrets))
+        : error
+    );
   }
   // Constructed rather than `NextlyError.internal()`, which fixes its own
   // public sentence: naming the provider is what tells an operator which of
@@ -1924,9 +2078,11 @@ function normalizeProviderFailure(
     cause: containedFailure(error, secrets),
     logContext: { providerType: type, stage },
   });
-  return failure
-    ? withEmailFailure(normalized, containedClassification(failure, secrets))
-    : normalized;
+  return keepSetup(
+    failure
+      ? withEmailFailure(normalized, containedClassification(failure, secrets))
+      : normalized
+  );
 }
 
 /**
@@ -1959,6 +2115,7 @@ export function containProviderCallbacks(
   provider: RegisteredEmailProvider
 ): RegisteredEmailProvider {
   const probe = provider.testConnectionFrom;
+  const domainProbe = provider.domainStatusFrom;
 
   return {
     ...provider,
@@ -2005,12 +2162,33 @@ export function containProviderCallbacks(
             // does, and `testProvider` writes its cause into the process log.
             const secrets = declaredSecretValues(provider.configFields, input);
             try {
-              return await probe(input);
+              return withoutLeakedDetail(await probe(input), secrets);
             } catch (error) {
               throw normalizeProviderFailure(
                 provider.type,
                 error,
                 "testConnection",
+                secrets
+              );
+            }
+          },
+        }
+      : {}),
+    ...(domainProbe
+      ? {
+          domainStatusFrom: async (input: unknown, domain: string) => {
+            // Contained as the probe is: it holds the decrypted configuration.
+            const secrets = declaredSecretValues(provider.configFields, input);
+            try {
+              return withoutLeakedStatus(
+                await domainProbe(input, domain),
+                secrets
+              );
+            } catch (error) {
+              throw normalizeProviderFailure(
+                provider.type,
+                error,
+                "domainStatus",
                 secrets
               );
             }

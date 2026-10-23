@@ -55,6 +55,7 @@ vi.mock("@admin/hooks/queries/useEmailProviders", () => ({
   useSetDefaultProvider: () => ({ mutate: vi.fn(), isPending: false }),
   useTestProvider: () => ({ mutate: vi.fn(), isPending: false }),
   useUpdateEmailProvider: () => ({ mutate: vi.fn(), isPending: false }),
+  useCheckProvider: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock("@admin/hooks/useRouter", () => ({
@@ -218,7 +219,7 @@ describe("row actions for an orphaned type when a refresh fails", () => {
     const actions = await rowActions();
 
     expect(actions).not.toContain("Set Default");
-    expect(actions).not.toContain("Send Test");
+    expect(actions).not.toContain("Send a test");
     // Deleting an orphaned row is the reason it is still listed.
     expect(actions).toContain("Delete");
   });
@@ -235,7 +236,7 @@ describe("row actions for an orphaned type when a refresh fails", () => {
     const actions = await rowActions();
 
     expect(actions).toContain("Set Default");
-    expect(actions).toContain("Send Test");
+    expect(actions).toContain("Send a test");
   });
 
   it("are offered when there is NO catalog at all", async () => {
@@ -247,7 +248,30 @@ describe("row actions for an orphaned type when a refresh fails", () => {
     const actions = await rowActions();
 
     expect(actions).toContain("Set Default");
-    expect(actions).toContain("Send Test");
+    expect(actions).toContain("Send a test");
+  });
+
+  it("withholds Set Default from a provider that is off, and still offers its test", async () => {
+    // The service refuses an off provider as the default, and the guided
+    // setup saves new providers off: offering the action would only fail.
+    useEmailProviders.mockReturnValue({
+      data: {
+        data: [{ ...PROVIDER, isActive: false }],
+        meta: { total: 1, page: 0, limit: 10, totalPages: 1 },
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+    useEmailProviderTypes.mockReturnValue(
+      CATALOG.staleAfterFailedRefetch([RESEND])
+    );
+    render(<EmailProviderTable />);
+
+    const actions = await rowActions();
+
+    expect(actions).not.toContain("Set Default");
+    expect(actions).toContain("Send a test");
   });
 });
 
