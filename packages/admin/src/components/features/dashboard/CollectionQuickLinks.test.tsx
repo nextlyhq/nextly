@@ -157,6 +157,36 @@ describe("the Collections card's tiles", () => {
     expect(screen.getByTestId("card-unavailable")).toBeInTheDocument();
   });
 
+  it("draws every collection past the default five", () => {
+    const names = ["a1", "a2", "a3", "a4", "a5", "a6", "a7"];
+    given({
+      list: names.map(name => ({ name, label: name.toUpperCase() })),
+      counts: names.map(name => ({
+        slug: name,
+        label: name.toUpperCase(),
+        group: null,
+        count: 1,
+      })),
+    });
+    expect(screen.getAllByRole("link")).toHaveLength(7);
+    expect(screen.queryByText(/more exist/i)).toBeNull();
+  });
+
+  it("says more exist past the most it draws, from the one row more", () => {
+    const names = Array.from({ length: 50 }, (_, i) => `c${i}`);
+    given({
+      list: names.map(name => ({ name, label: name })),
+      counts: names.map(name => ({
+        slug: name,
+        label: name,
+        group: null,
+        count: 1,
+      })),
+    });
+    expect(screen.getAllByRole("link")).toHaveLength(49);
+    expect(screen.getByText(/more exist/i)).toBeInTheDocument();
+  });
+
   it("names a collection's drafts beside its entries, and says nothing of none", () => {
     given({
       list: LIST,

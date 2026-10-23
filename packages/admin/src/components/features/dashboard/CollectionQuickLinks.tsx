@@ -2,10 +2,12 @@
 
 import { Card, CardContent, Skeleton } from "@nextlyhq/ui";
 import { Database, FileCheck, Layout, Puzzle } from "lucide-react";
+import { MAX_WIDGET_LIMIT } from "nextly/config";
 import type { WidgetComponentProps, WidgetSlot } from "nextly/widget-result";
 import type React from "react";
 import { useMemo } from "react";
 
+import { MoreExist } from "@admin/components/features/widgets/archetypes/more-exist";
 import * as Icons from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
@@ -28,6 +30,13 @@ type CollectionTile = Omit<CollectionCount, "count"> & {
   /** How many of its entries are drafts, once counted; absent until then. */
   draft?: number;
 };
+
+/**
+ * The most tiles the card draws: one fewer than it asks for, so the one more says more exist, the
+ * rule core's lists follow. The card asks the most any widget query returns, so this is reached
+ * only by an install with that many collections.
+ */
+const TILES_DRAWN = MAX_WIDGET_LIMIT - 1;
 
 /** One collection as `system:content` answers it: its entries, and how many are drafts. */
 type ContentRow = CollectionCount & { draft: number };
@@ -237,6 +246,7 @@ function CollectionCard({
 export const CollectionQuickLinks: React.FC<WidgetComponentProps> = ({
   slot,
   isFetching,
+  query,
   onRetry,
 }) => {
   const { data: collectionsData, isLoading: collectionsLoading } =
@@ -248,7 +258,12 @@ export const CollectionQuickLinks: React.FC<WidgetComponentProps> = ({
     () => collectionTiles(collectionsData?.items, collectionsLoading, counts),
     [counts, collectionsData?.items, collectionsLoading]
   );
-  const groups = useMemo(() => groupCollections(tiles ?? []), [tiles]);
+  const groups = useMemo(
+    () => groupCollections((tiles ?? []).slice(0, TILES_DRAWN)),
+    [tiles]
+  );
+  // The one row more the card asked for is what says more collections exist than it draws.
+  const moreExist = (counts?.length ?? 0) > TILES_DRAWN;
 
   const collectionsMap = useMemo(() => {
     const map = new Map<string, ApiCollection>();
@@ -299,6 +314,7 @@ export const CollectionQuickLinks: React.FC<WidgetComponentProps> = ({
           </div>
         </div>
       ))}
+      {moreExist && <MoreExist query={query} />}
     </div>
   );
 };

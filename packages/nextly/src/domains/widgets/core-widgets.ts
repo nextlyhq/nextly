@@ -60,6 +60,7 @@
 
 import { settings } from "./declaration/setting-builders";
 import type { WidgetDefinition, WidgetSetting } from "./definition";
+import { MAX_WIDGET_LIMIT } from "./query-limits";
 import {
   ACTIVITY_SOURCE_ID,
   ATTENTION_SOURCE_ID,
@@ -178,7 +179,9 @@ const CORE_WIDGET_LITERALS = [
     defaultOrder: 10,
     component: "core#CollectionQuickLinks",
     // Each collection's entries and drafts, counted as the reader, in the batch like every card.
-    query: { source: CONTENT_SOURCE_ID, op: "list" },
+    // Asked the most any widget query may return: an omitted limit is the default 5, and this
+    // card lists every collection, saying "more exist" past the last one it draws.
+    query: { source: CONTENT_SOURCE_ID, op: "list", limit: MAX_WIDGET_LIMIT },
     /*
      * Offered only while this reader has a collection to see. The card used to
      * answer that for itself, drawing a get-started panel of its own when it

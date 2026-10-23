@@ -17,7 +17,8 @@ import {
   requiredPermissionSlugs,
   validateWidgetDefinition,
 } from "../definition";
-import { TEAM_SOURCE_ID } from "../system-source-ids";
+import { MAX_WIDGET_LIMIT } from "../query-limits";
+import { CONTENT_SOURCE_ID, TEAM_SOURCE_ID } from "../system-source-ids";
 import { TEAM_GATE } from "../team-gate";
 
 function card(id: string) {
@@ -199,6 +200,18 @@ describe("core widget definitions", () => {
         `${widget.id} declines chrome, so it must draw its own`
       ).toBeDefined();
     }
+  });
+});
+
+describe("the content card", () => {
+  it("asks for every collection, not the default five", () => {
+    // An omitted limit is materialized as the default 5, which would cut a
+    // site's sixth collection from the card.
+    expect(card("core/collections").query).toEqual({
+      source: CONTENT_SOURCE_ID,
+      op: "list",
+      limit: MAX_WIDGET_LIMIT,
+    });
   });
 });
 
