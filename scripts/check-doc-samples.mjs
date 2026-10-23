@@ -42,6 +42,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
+import { exportedNames as declarationExports } from "@nextlyhq/module-specifiers/declaration-exports";
 import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
 
 import { topLevelOnly } from "./top-level-text.mjs";
@@ -1148,10 +1149,10 @@ export function exportsMapAnswers(exports, subpath) {
  * PERMISSIVE direction, not the strict one it was described as: a constructed
  * name and a misspelled export would both have been set aside there.
  */
-export function mentionIsReaderOwned(name, file, index, samples) {
+export function mentionIsReaderOwned(name, file, index, samples, exported) {
   const sample = samples.find(s => s.file === file && s.index === index);
   if (!sample) return false;
-  return readerOwnedMention(name, sample.code, extensionFor(sample));
+  return readerOwnedMention(name, sample.code, extensionFor(sample), exported);
 }
 
 export function declaredEarlier(name, file, index, samples) {
@@ -1611,31 +1612,19 @@ function workspaceManifest(pkg) {
  * Measured rather than assumed, which is the whole point of asking the exports:
  * a rule keyed on the shape alone would have silenced those two.
  *
- * From `src`, never from `dist`, so the answer cannot depend on whether a build
- * has run. CI runs the script suite BEFORE the build step, and reading the built
- * types there returned an empty set: every name read as the reader's, and the
- * unit tests failed on a clean checkout while passing on a laptop.
+ * From the published declarations, the files a consumer's import resolves, so
+ * only names a reader can actually import count. Reading `src` instead took its
+ * entries from every `src/…` string in a build config as well, and so counted
+ * two names no package publishes: `loadEnv`, built for nextly's CLI, and
+ * `useSyncExternalStore`, the target of an alias. This needs the packages
+ * built, which every run of this gate already requires, and the names whose
+ * answer is known are checked inside that run (`workspaceSetProblems`) rather
+ * than in the script suite, which CI runs before the build.
  *
  * EVERY typed entry a package declares, not only `"."`. A symbol published from
  * a subpath is still published: `@nextlyhq/builder` exports `BuilderShell` from
  * `./shell` and keeps it out of the root barrel, and reading the barrel alone
  * called it the reader's.
- *
- * An entry is found in one of two ways, because neither alone is enough.
- * `dist/shell.d.ts` names `src/shell.ts` and that mirror covers most of them,
- * but not `nextly/document-lock`, which is built from
- * `src/domains/document-lock/contract.ts`. Guessing the source from the output
- * name left six entries unresolved, and with them went `DocumentLockHolder`,
- * `FieldTypeCatalogEntry` and `Hsv`: reader-owned on a clean checkout and ours
- * after a build, which is the build-state dependence this was supposed to end.
- *
- * So the build's own configuration is asked as well, by PARSING it for the
- * source paths it names. Parsed rather than imported, because most of these
- * configs are TypeScript and this gate runs under plain `node`, and because a
- * gate that must not consult the network should not be executing build scripts
- * either. An import chain inside the package is followed, since `@nextlyhq/ui`
- * declares which barrel each subpath is built from in a module beside its
- * config rather than in the config.
  */
 const exportedNames = new Set();
 /**
@@ -1652,206 +1641,246 @@ const exportedNames = new Set();
  */
 const exportedValues = new Set();
 
-/** `./dist/shell.d.ts` as its source, since that is what is always present. */
-function sourceCandidatesFor(typesPath) {
-  const built = typesPath
-    .replace(/^\.\//, "")
-    .match(/^dist\/(.+)\.d\.[cm]?ts$/);
-  return built ? [`src/${built[1]}.ts`, `src/${built[1]}.tsx`] : [];
+/** Every workspace package anyone can install, with its manifest. */
+function publishedPackages() {
+  return readdirSync(join(ROOT, "packages"), { withFileTypes: true })
+    .filter(dirent => dirent.isDirectory())
+    .map(dirent => join(ROOT, "packages", dirent.name))
+    .map(packageDir => ({ packageDir, manifest: readManifest(packageDir) }))
+    .filter(({ manifest }) => Boolean(manifest?.name) && !manifest.private);
 }
 
-/** A relative import specifier, as the files it could mean. */
-function localModuleCandidates(base) {
-  const withoutJs = base.replace(/\.js$/, "");
-  return [
-    `${withoutJs}.ts`,
-    `${withoutJs}.tsx`,
-    base,
-    `${withoutJs}.mjs`,
-    join(withoutJs, "index.ts"),
-  ];
-}
-
-/**
- * The source files a package's build configuration names.
- *
- * Read by parsing, so nothing here runs a build script or needs a TypeScript
- * loader to read a `.ts` config. Relative imports are followed within the
- * package, because a config may keep its entry map in a module beside it.
- */
-function buildConfigEntries(packageDir) {
-  const queue = buildConfigFiles(packageDir);
-  const seen = new Set();
-  const found = new Set();
-  while (queue.length > 0) {
-    const file = queue.pop();
-    if (seen.has(file) || !existsSync(file)) continue;
-    seen.add(file);
-    const { entries, imports } = configReferences(file, packageDir);
-    entries.forEach(entry => found.add(entry));
-    queue.push(...imports);
-  }
-  return [...found];
-}
-
-/** A package's tsdown configs; none for a directory that cannot be read. */
-function buildConfigFiles(packageDir) {
+/** A package's manifest, or null for a directory that holds none it can read. */
+function readManifest(packageDir) {
   try {
-    return readdirSync(packageDir)
-      .filter(name => /^tsdown(\..+)?\.config\.[cm]?[jt]s$/.test(name))
-      .map(name => join(packageDir, name));
+    return JSON.parse(readFileSync(join(packageDir, "package.json"), "utf-8"));
   } catch {
-    return [];
+    return null;
   }
 }
 
+/** The declaration file one exports-map target names, if it names one. */
+function typesOf(target) {
+  const conditions =
+    target && typeof target === "object"
+      ? [target, target.import, target.default]
+      : [];
+  return conditions.map(condition => condition?.types).find(Boolean);
+}
+
+/** Every declaration file a manifest publishes, its root `types` included. */
+function declaredTypes(manifest) {
+  const targets =
+    manifest.exports && typeof manifest.exports === "object"
+      ? Object.values(manifest.exports)
+      : [];
+  const declared = [
+    ...targets.map(typesOf),
+    manifest.types ?? manifest.typings,
+  ];
+  // A package that declares none publishes no declarations, CSS and plain
+  // JavaScript packages among them.
+  return [...new Set(declared.filter(types => typeof types === "string"))];
+}
+
 /**
- * The `src/` entry files a build config names that exist, and the local
- * modules it imports, which may name more.
- *
- * A config that does not parse is refused rather than read as naming no
- * entries: every entry it would have named would go unchecked.
+ * Every declaration file the workspace publishes. One that is declared and not
+ * built is refused: its names would otherwise read as the reader's.
  */
-function configReferences(file, packageDir) {
-  const { program } = parseSource(readFileSync(file, "utf-8"), file);
-  const entries = [];
-  walk(program, node => {
-    const named =
-      node.type === "Literal" && typeof node.value === "string"
-        ? node.value
-        : "";
-    const full = join(packageDir, named);
-    if (/^src\/.+\.tsx?$/.test(named) && existsSync(full)) entries.push(full);
-    return true;
+function publishedDeclarations() {
+  const files = publishedPackages().flatMap(({ packageDir, manifest }) =>
+    declaredTypes(manifest).map(types => join(packageDir, types))
+  );
+  const missing = files.filter(file => !existsSync(file));
+  if (missing.length > 0) {
+    throw new Error(
+      `doc samples: published declarations are not built: ${missing.join(", ")}`
+    );
+  }
+  return files;
+}
+
+/**
+ * The names the published declarations export as VALUES, as the compiler
+ * answers it.
+ *
+ * A namespace import's type holds exactly an entry's value exports: a type-only
+ * export is not on it, whatever it points at (`export type { QueryClient }`
+ * names TanStack's runtime class and supplies no value), and an alias resolves
+ * to what it binds. So each entry is imported and `keyof typeof` it is asked to
+ * hold a name it cannot, which makes the compiler print the names it does hold,
+ * in full under `--noErrorTruncation`. An entry whose probe says anything else
+ * stops the run rather than reading as exporting no value.
+ */
+function valueExportsOf(files) {
+  const dir = mkdtempSync(join(tmpdir(), "nextly-exports-"));
+  try {
+    writeFileSync(join(dir, "probe.ts"), probeSource(files));
+    writeFileSync(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: PROBE_OPTIONS, files: ["probe.ts"] })
+    );
+    const reported = compileWithTsc(["-p", join(dir, "tsconfig.json")], dir);
+    if (reported.length !== files.length) {
+      throw new Error(
+        `doc samples: asked ${String(files.length)} entries for their values and was answered ${String(reported.length)} times`
+      );
+    }
+    return new Set(reported.flatMap(probedValues));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const PROBE_OPTIONS = {
+  strict: true,
+  skipLibCheck: true,
+  target: "es2022",
+  jsx: "react-jsx",
+  module: "esnext",
+  moduleResolution: "bundler",
+  noErrorTruncation: true,
+  types: [],
+};
+
+/** One line per entry, each asking `keyof` its namespace to hold `__probe__`. */
+function probeSource(files) {
+  const lines = files.map((file, index) => {
+    // Imported by the runtime file it declares, as a consumer imports it.
+    const specifier = file.replace(/\.d\.([mc]?)ts$/, ".$1js");
+    return `import * as n${String(index)} from ${JSON.stringify(specifier)}; const k${String(index)}: keyof typeof n${String(index)} = "__probe__";`;
   });
-  const imports = program.body.flatMap(statement =>
-    statement.type === "ImportDeclaration"
-      ? localModuleOf(file, statement.source.value)
-      : []
-  );
-  return { entries, imports };
+  return `${lines.join("\n")}\nexport {};\n`;
 }
 
-/** The file a relative import from `file` loads, as a one-item list, or none. */
-function localModuleOf(file, specifier) {
-  if (!specifier.startsWith(".")) return [];
-  const found = localModuleCandidates(join(dirname(file), specifier)).find(
-    candidate => existsSync(candidate)
-  );
-  return found === undefined ? [] : [found];
-}
+const PROBED = /^Type '"__probe__"' is not assignable to type '(.*)'\.$/;
 
-/** Every typed entry a package declares, resolved to a file that exists. *
- * The export set is a parameter with the workspace as its default, so the rule
- * can be stated as a test without a build having run. That mattered: reading it
- * unconditionally made the unit tests depend on build state, and they failed on
- * a clean CI checkout while passing on a laptop.
- */
-function typedEntriesOf(packageDir, manifest) {
-  const declared = [];
-  const map = manifest.exports;
-  if (map && typeof map === "object") {
-    for (const target of Object.values(map)) {
-      if (!target || typeof target !== "object") continue;
-      const types =
-        target.types ?? target.import?.types ?? target.default?.types;
-      if (typeof types === "string") declared.push(types);
-    }
+/** The value names one probe's diagnostic lists; anything else is refused. */
+function probedValues(diagnostic) {
+  const firstLine = diagnostic.message.split("\n")[0];
+  const listed =
+    diagnostic.code === "TS2322" ? PROBED.exec(firstLine)?.[1] : undefined;
+  if (listed === undefined) {
+    throw new Error(
+      `doc samples: could not ask line ${String(diagnostic.line)} for its values: ${diagnostic.code} ${diagnostic.message}`
+    );
   }
-  const root = manifest.types ?? manifest.typings;
-  if (typeof root === "string") declared.push(root);
-  if (declared.length === 0) declared.push("dist/index.d.ts");
-
-  const resolved = new Set(buildConfigEntries(packageDir));
-  for (const entry of new Set(declared)) {
-    for (const candidate of sourceCandidatesFor(entry)) {
-      const full = join(packageDir, candidate.replace(/^\.\//, ""));
-      if (existsSync(full)) {
-        resolved.add(full);
-        break;
-      }
-    }
-  }
-  return [...resolved];
-}
-
-/**
- * Whether an export is declared type-only, whatever it points at.
- *
- * Both spellings say it: `export type { X }` marks the declaration and
- * `export { type X }` marks the specifier. A symbol exported by several
- * specifiers is type-only only when every one of them is.
- */
-function exportedAsTypeOnly(symbol) {
-  const specifiers = (symbol.declarations ?? []).filter(ts.isExportSpecifier);
-  if (specifiers.length === 0) return false;
-  return specifiers.every(
-    specifier => specifier.isTypeOnly || specifier.parent.parent.isTypeOnly
-  );
+  return [...listed.matchAll(/"([^"]+)"/g)].map(match => match[1]);
 }
 
 function workspaceExports() {
   if (exportedNames.size > 0) return exportedNames;
-  const entries = [];
-  for (const dirent of readdirSync(join(ROOT, "packages"), {
-    withFileTypes: true,
-  })) {
-    if (!dirent.isDirectory()) continue;
-    const packageDir = join(ROOT, "packages", dirent.name);
-    const manifestPath = join(packageDir, "package.json");
-    if (!existsSync(manifestPath)) continue;
-    let manifest;
-    try {
-      manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
-    } catch {
-      continue;
-    }
-    if (!manifest.name || manifest.private) continue;
-    entries.push(...typedEntriesOf(packageDir, manifest));
-  }
-  if (entries.length === 0) return exportedNames;
-  // One program over every entry, because the same question asked twenty times
-  // costs twenty type-checker startups.
-  const program = ts.createProgram(entries, {
-    noEmit: true,
-    skipLibCheck: true,
-    target: ts.ScriptTarget.ES2022,
-    jsx: ts.JsxEmit.ReactJSX,
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
-  });
-  const checker = program.getTypeChecker();
-  for (const entry of entries) {
-    const sourceFile = program.getSourceFile(entry);
-    if (!sourceFile) continue;
-    const symbol = checker.getSymbolAtLocation(sourceFile);
-    if (!symbol) continue;
-    for (const exported of checker.getExportsOfModule(symbol)) {
-      exportedNames.add(exported.getName());
-      // A re-export is an alias, and an alias carries no namespace of its own:
-      // asking the alias whether it is a value answers for the thing bound
-      // rather than for the binding. Both questions matter, and in this order.
-      //
-      // `export type { QueryClient } from "./types/query"` points at TanStack's
-      // runtime class, so the target is a value while the export is not: an
-      // importer of `@nextlyhq/admin` cannot get that class from it. Reading
-      // only the target put `QueryClient` among the values and kept `new
-      // QueryClient()` reported as a name the workspace could have supplied.
-      if (exportedAsTypeOnly(exported)) continue;
-      const target =
-        exported.flags & ts.SymbolFlags.Alias
-          ? checker.getAliasedSymbol(exported)
-          : exported;
-      if (target.flags & ts.SymbolFlags.Value) {
-        exportedValues.add(exported.getName());
-      }
-    }
-  }
+  const files = publishedDeclarations();
+  files
+    .flatMap(file => [...declarationExports(file)])
+    .forEach(name => exportedNames.add(name));
+  valueExportsOf(files).forEach(name => exportedValues.add(name));
   return exportedNames;
 }
 
 export const readerOwnedName = (name, exported = workspaceExports()) =>
   /^[A-Z][A-Za-z0-9]*$/.test(name) && !exported.has(name);
+
+/**
+ * The export sets held to names whose answer is known, before any page is
+ * judged. Each wrong answer is named.
+ *
+ * Here rather than in the script suite, because the sets are read from the
+ * published declarations and CI runs that suite before the build; this gate
+ * already refuses to start without one. A set that answered "exported" to
+ * everything, or to nothing, fails a line below either way.
+ */
+export function workspaceSetProblems() {
+  const published = [
+    "Media",
+    "Skeleton",
+    // From a subpath, and kept out of the root barrel.
+    "BuilderShell",
+    // Entries whose output name does not mirror their source.
+    "DocumentLockHolder",
+    "FieldTypeCatalogEntry",
+    "Hsv",
+    "FIELD_TYPE_CATALOG",
+    "WidgetResult",
+  ];
+  // The reader's own: `Users` is also an icon barrel's export, which a scan of
+  // all source rather than the published entries picked up.
+  const readers = ["Posts", "MyCollection", "Users"];
+  const checks = [
+    ...published.map(name => [`${name} is published`, !readerOwnedName(name)]),
+    ...readers.map(name => [`${name} is the reader's`, readerOwnedName(name)]),
+    // A type, and an interface, but no value.
+    ["Media supplies no value", !workspaceValueExports().has("Media")],
+    // Exported type-only over TanStack's runtime class.
+    [
+      "QueryClient supplies no value",
+      !workspaceValueExports().has("QueryClient"),
+    ],
+    ["Skeleton supplies a value", workspaceValueExports().has("Skeleton")],
+    [
+      "BuilderShell supplies a value",
+      workspaceValueExports().has("BuilderShell"),
+    ],
+    ...mentionChecks(),
+  ];
+  return checks.filter(([, holds]) => !holds).map(([what]) => what);
+}
+
+/** How a block's use of a name decides whose it is, against the real sets. */
+function mentionChecks() {
+  const owned = (name, code, extension = "ts") =>
+    readerOwnedMention(name, code, extension);
+  return [
+    // A class the sample forgot to import, one of ours misspelled twice, and a
+    // type-only export constructed: none is the reader's.
+    [
+      "new S3Client is a finding",
+      !owned("S3Client", "const s = new S3Client({});"),
+    ],
+    [
+      "NextlyEror is a finding",
+      !owned("NextlyEror", "const e: NextlyEror = x;"),
+    ],
+    [
+      "<Skelton /> is a finding",
+      !owned("Skelton", "const s = <Skelton />;", "tsx"),
+    ],
+    [
+      "new QueryClient is a finding",
+      !owned("QueryClient", "const q = new QueryClient();"),
+    ],
+    ...["Posts", "Users", "Page", "Chart", "MyCollection"].map(name => [
+      `${name} in collections is the reader's`,
+      owned(name, `const c = { collections: [${name}] };`),
+    ]),
+    // `Media` needs a value no import here supplies, so as a value it is the
+    // reader's collection; as a type it is importable, and a finding.
+    [
+      "Media in collections is the reader's",
+      owned("Media", "const config = { collections: [Posts, Users, Media] };"),
+    ],
+    [
+      "Media as a type is a finding",
+      !owned("Media", "declare const m: Media;"),
+    ],
+    ["typeof Media is the reader's", owned("Media", "type X = typeof Media;")],
+    [
+      "<Skeleton /> is a finding",
+      !owned("Skeleton", "const el = <Skeleton />;", "tsx"),
+    ],
+  ];
+}
+
+/**
+ * The workspace's export sets as the reader-ownership questions take them:
+ * every published name, and the value half. Read only when a question is not
+ * handed its own sets, so those questions can be asked of a fixture without a
+ * build.
+ */
+const workspaceSets = () => ({
+  names: workspaceExports(),
+  values: workspaceValueExports(),
+});
 
 /** The value half of {@link workspaceExports}, built by the same pass. */
 export function workspaceValueExports() {
@@ -2080,23 +2109,27 @@ function differsOnlyAtTheEnd(a, b) {
  * well. A report that treats three names in one array differently is not one
  * anyone can act on.
  */
-export function readerOwnedMention(name, code, extension) {
+export function readerOwnedMention(name, code, extension, exported) {
   if (!/^[A-Z][A-Za-z0-9]*$/.test(name)) return false;
   // Asked before anything else, because it settles the question on its own:
   // whatever the workspace does or does not export, a constructed name has to
   // be a runtime class, and neither a generated type nor an authored component
   // is one.
   if (constructedInBlock(code, name, extension)) return false;
-  if (workspaceExports().has(name)) {
-    return (
-      !workspaceValueExports().has(name) &&
-      usedOnlyAsValue(code, name, extension)
-    );
+  // The workspace's sets only when none were given, and only here: the
+  // question above settles a constructed name without them.
+  const sets = exported ?? workspaceSets();
+  if (sets.names.has(name)) {
+    return !sets.values.has(name) && usedOnlyAsValue(code, name, extension);
   }
-  return !misspelledExport(name);
+  return !misspelledExport(name, sets.names);
 }
 
-export async function classifyDocDiagnostics({ diagnostics, samples }) {
+export async function classifyDocDiagnostics({
+  diagnostics,
+  samples,
+  exported,
+}) {
   const uninstalled = [];
   const continued = [];
   const real = [];
@@ -2171,7 +2204,7 @@ export async function classifyDocDiagnostics({ diagnostics, samples }) {
       const [file, idx] = line.split("  ")[0].split("#");
       const index = Number.parseInt(idx, 10);
       if (declaredEarlier(name, file, index, samples)) continued.push(line);
-      else if (mentionIsReaderOwned(name, file, index, samples))
+      else if (mentionIsReaderOwned(name, file, index, samples, exported))
         readerNames.push(line);
       else real.push(line);
       continue;
@@ -3171,6 +3204,16 @@ async function main() {
   // checkout does not, is not something a reader meets, and counting those
   // would fill the baseline with the harness's own artefacts.
   requireBuiltPackages();
+  // The export sets every reader-ownership answer comes from, held to the
+  // names whose answer is known; a wrong set would misfile every page.
+  const setProblems = workspaceSetProblems();
+  if (setProblems.length > 0) {
+    console.error(
+      "doc samples: the workspace's export sets answer wrongly, so no page was judged:"
+    );
+    for (const problem of setProblems) console.error(`  ${problem}`);
+    process.exit(1);
+  }
   // `auditDocs` returns nothing on the two paths it treats as graceful: a
   // partial tree, and no docs/ at all. Both print why and stop. Destructuring
   // the result unconditionally turned each of those into a TypeError one line
