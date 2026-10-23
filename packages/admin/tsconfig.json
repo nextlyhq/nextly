@@ -4,7 +4,6 @@
     "target": "ES2020",
     "emitDeclarationOnly": false,
     "outDir": "dist",
-    "baseUrl": ".",
     "paths": {
       "nextly": ["../nextly/src"],
       // The gate the layout endpoint and the browser BOTH decide with. Mapped
@@ -27,6 +26,10 @@
       // Same reason: the translation states the worklist asks the server for.
       "nextly/translation-filter-states": [
         "../nextly/src/domains/i18n/translation-filter-states.ts"
+      ],
+      // Same reason: the keys a linked filter keeps at its top level.
+      "nextly/reserved-filter-keys": [
+        "../nextly/src/domains/collections/query/reserved-filter-keys.ts"
       ],
       "@admin/*": ["./src/*"]
     }

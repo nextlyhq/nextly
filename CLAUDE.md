@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (ec9f9b7eee8a8066). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (6c9a8e7eb27eeae9). Edit that file, never this one. -->
 
 # Nextly Monorepo: Agent Guide
 
@@ -96,16 +96,16 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 
 ## Setup and dev loop
 
-- Requirements: Node `^20.19.0 || ^22.12.0 || >=24.0.0`, pnpm 12.5.1
+- Requirements: Node `^22.12.0 || >=24.0.0`, pnpm 12.5.1
   (`packageManager` is pinned in `package.json`; Corepack enforces the exact
   version). The ranges are disjoint deliberately, mirroring what the test
-  environment supports: 20.6-20.18 and the whole 23.x line are excluded, not
-  merely untested.
+  environment supports: the whole 23.x line is excluded, not merely untested,
+  and Node 20 is not supported.
 - Two different facts, deliberately not one: `engines.node` above is the
-  CONTRACT the published packages make, and `.nvmrc` (24.21.0) is the version
+  CONTRACT the published packages make, and `.nvmrc` (24.22.1) is the version
   contributors, CI and the release job actually run. Every workflow reads
   `.nvmrc`, so the toolchain moves by editing that file; narrowing `engines`
-  would drop Node 20/22 for users and is a separate decision. `package-smoke`
+  drops a Node line for users and is a separate decision. `package-smoke`
   derives its Node legs FROM `engines.node`, so the floors stay tested.
 - pnpm settings live in `pnpm-workspace.yaml`, not `.npmrc` and not a `pnpm`
   block in `package.json` — pnpm reads only auth and registry settings from
@@ -203,8 +203,8 @@ budget, the overrides and each operating system's caveats: the
 - Every code change includes a comment explaining what and why. Comments
   describe the code only: never reference tasks, plans, conversations, or
   review findings.
-- No `as any`, `@ts-expect-error`, or eslint-disable to silence type or lint
-  errors. Fix the cause with real types, guards, or generics.
+- No `as any`, `@ts-expect-error`, or a lint-disable comment to silence type or
+  lint errors. Fix the cause with real types, guards, or generics.
 - API responses use the canonical envelopes in
   `packages/nextly/src/api/response-shapes.ts` (`{ items, meta }` for lists,
   `{ message, item }` for mutations). Never invent a new response shape.

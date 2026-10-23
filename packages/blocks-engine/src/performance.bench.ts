@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { test } from "vitest";
 
 import { migrateDocument } from "./migration";
 import {
@@ -35,30 +35,32 @@ const source = staleMigrationSource();
 const staleThousand = staleVersionPage(1000, 1);
 const staleFourThousand = staleVersionPage(4000, 1);
 
-describe("validate", () => {
-  bench("1000 nodes, styled", () => {
-    validate(thousand, ctx);
-  });
-
-  bench("1000 nodes, no styles", () => {
-    validate(plain, ctx);
-  });
-
-  bench("4000 nodes, styled", () => {
-    validate(fourThousand, ctx);
-  });
-
-  bench("5000 nodes, at the node ceiling", () => {
-    validate(fiveThousand, ctx);
-  });
+// Each group is one comparison table: `bench.compare` runs its entries
+// against each other and prints them side by side.
+test("validate", async ({ bench }) => {
+  await bench.compare(
+    bench("1000 nodes, styled", () => {
+      validate(thousand, ctx);
+    }),
+    bench("1000 nodes, no styles", () => {
+      validate(plain, ctx);
+    }),
+    bench("4000 nodes, styled", () => {
+      validate(fourThousand, ctx);
+    }),
+    bench("5000 nodes, at the node ceiling", () => {
+      validate(fiveThousand, ctx);
+    })
+  );
 });
 
-describe("migrate", () => {
-  bench("1000 nodes, every node one version behind", () => {
-    migrateDocument(staleThousand, source);
-  });
-
-  bench("4000 nodes, every node one version behind", () => {
-    migrateDocument(staleFourThousand, source);
-  });
+test("migrate", async ({ bench }) => {
+  await bench.compare(
+    bench("1000 nodes, every node one version behind", () => {
+      migrateDocument(staleThousand, source);
+    }),
+    bench("4000 nodes, every node one version behind", () => {
+      migrateDocument(staleFourThousand, source);
+    })
+  );
 });

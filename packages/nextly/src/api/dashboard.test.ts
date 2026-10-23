@@ -295,6 +295,30 @@ describe("getDashboardActivity", () => {
     expect(json).not.toHaveProperty("total");
     expect(json).toEqual(result);
   });
+
+  it("publishes no position, even when the service hands one back", async () => {
+    // A position can name a row this reader may not read (the last row a walk
+    // read when it found nothing to show), so it stays on the server.
+    const hidden = "6f1c2a4e-0000-4000-8000-000000000000";
+    const result: ActivityLogResult = {
+      activities: [],
+      hasMore: true,
+      next: { createdAt: "2026-10-22T12:00:00.000Z", id: hidden },
+    };
+    serviceStub = {
+      getRecentActivity: vi.fn().mockResolvedValue(result),
+    };
+
+    const res = await getDashboardActivity(
+      makeReq("http://x/api/dashboard/activity?limit=5")
+    );
+
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ activities: [], hasMore: true });
+    // Nothing of the position under any name: not its id, and not its instant.
+    expect(body).not.toContain(hidden);
+    expect(body).not.toContain("2026-10-22T12:00:00");
+  });
 });
 
 /**

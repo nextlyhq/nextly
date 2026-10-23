@@ -22,6 +22,26 @@ on:
 permissions:
   contents: read
 
+# Turborepo's shared remote cache. A task whose inputs another run already
+# built replays that run's output instead of building again. Only `main`'s
+# pushes and the merge queue write to it, since those are what every later
+# run starts from; a pull request reads, so its build replays `main`'s tasks.
+# Entries are content-addressed per task and signed (`remoteCache.signature`
+# in turbo.jsonc), so a cancelled or altered upload is a miss, never a
+# half-built `dist/`. Without TURBO_TOKEN (a fork, or before the secret
+# exists) turbo uses its local cache alone, as before.
+#
+# Write access is enforced by GitHub, not by TURBO_CACHE, which the code under
+# test could override. The token and the signing key are secrets of the
+# `turbo-cache` environment, whose branch policy admits only `main` and the
+# merge queue's `gh-readonly-queue/main/*` refs; each job that builds names it
+# there and `turbo-cache-read` on every other event (`environment:` with
+# `deployment: false`, so no deployment is recorded). A pull request that
+# rewrites its workflow to name `turbo-cache` is refused the secrets.
+env:
+  TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+  TURBO_CACHE: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'local:rw,remote:rw' || 'local:rw,remote:r' }}
+
 # Superseding is right for a branch under review and wrong for `main`.
 #
 # On a pull request a new push makes the previous run's verdict irrelevant, so
@@ -92,6 +112,13 @@ jobs:
     outputs:
       inert: ${{ steps.decide.outputs.inert }}
       superseded: ${{ steps.newer.outputs.superseded }}
+      # Whether the Windows and macOS legs run: always off a pull request (on
+      # `main`, in the merge queue, for a dispatch), and on a pull request only
+      # when it changes a path where the platforms differ or carries the
+      # `ci:all-os` label. An empty answer, a step that failed, runs them.
+      # The label adds these legs to a pull request's CI; it does not start CI
+      # for an inert change, which runs no test job on any operating system.
+      all-os: ${{ github.event_name != 'pull_request' || steps.os.outputs.inert != 'true' || contains(github.event.pull_request.labels.*.name, 'ci:all-os') }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -176,6 +203,46 @@ jobs:
           # change that could not compile reached production because no check
           # built the app.
           ALWAYS_RUN_PATHS: '^(AGENTS(\.measured)?\.md$|docs/)'
+        run: node scripts/change-scope.mjs
+
+      # The Windows and macOS legs (the Windows pre-push gates, and the
+      # non-Linux legs of the scaffold, dev-script and entry-guard smokes) are
+      # a quarter of a pull request's jobs, and GitHub starts this
+      # organisation's jobs slowly: about four a minute, with five to ten
+      # running against a limit of twenty while a hundred and fifty runs wait
+      # (measured 2026-10-22). Over 2026-10-15 to 10-22 the macOS scaffold leg
+      # passed 168 of 168 runs, and of 21 Windows-only gate failures 11 were a
+      # process failing to start or a package build failing on Windows alone,
+      # with no change of the pull request's own to blame.
+      #
+      # So a pull request runs them only when it changes a path where the
+      # platforms behave differently: the scaffolder and its templates, the
+      # CLI and its entry points, the scripts and hooks (the root's and each
+      # package's and app's, where the platform checks outside the CLI live),
+      # the source files that branch on the operating system or split paths on
+      # its separator (telemetry's `environment.ts`, the local storage adapter,
+      # nextly's generated-path and component-map code; the CLI's are under
+      # `src/cli/`), the build, test and
+      # lint configs of the root, each package and each app, every manifest,
+      # line endings (`.gitattributes`) and this repository's workflows.
+      #
+      # The legs stay advisory, as before: `CI gate` does not need them. The
+      # merge queue and `main` run them on every commit, so a Windows-only
+      # regression in a path not listed here is first seen in the queue's or
+      # `main`'s run and is fixed forward.
+      #
+      # Every path is inert here except those, which is what reading
+      # `ALWAYS_RUN_PATHS` against an inert-everything pattern
+      # answers through the same script as the scope above. It runs on every
+      # event, the queue's included, so no step a required check stands on is
+      # skipped there; the `all-os` output reads its answer for pull requests
+      # alone.
+      - name: Decide whether a pull request needs the Windows and macOS legs
+        id: os
+        env:
+          SCOPE_TITLE: Operating-system scope
+          INERT_PATHS: "."
+          ALWAYS_RUN_PATHS: '^(packages/create-nextly-app/|templates/|packages/nextly/src/cli/|packages/[^/]+/bin/|scripts/|(packages|apps)/[^/]+/scripts/|\.husky/|\.github/|(.*/)?package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|turbo\.jsonc$|\.npmrc$|\.nvmrc$|\.gitattributes$|packages/telemetry/src/environment\.ts$|packages/nextly/src/storage/adapters/local-adapter\.ts$|packages/nextly/src/shared/lib/generated-output-paths\.ts$|packages/nextly/src/plugins/codegen/component-import-map\.ts$|packages/nextly/src/domains/widgets/declaration/component-map-check\.ts$|((packages|apps)/[^/]+/)?[^/]+\.config\.[cm]?[jt]s$)'
         run: node scripts/change-scope.mjs
 
   comments:
@@ -321,6 +388,14 @@ jobs:
     needs: changes
     if: needs.changes.outputs.inert != 'true'
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 45
 
     steps:
@@ -466,29 +541,15 @@ jobs:
         env:
           TURBO_CACHE_DIR: .turbo
 
-      # The bare-`Error` guard's own controls. They belong in a named step
-      # rather than folded into a neighbouring one, because what they check is
-      # unrelated to it and an unexplained suite is the first thing removed
-      # during someone else's cleanup.
-      #
-      # Runs here for the same reason the step above exists: `nextly`'s full
-      # test task is excluded from the Test job over a pre-existing failing
-      # baseline, so a suite left to that task executes in no CI job at all.
-      # Without this step the allowlist could be edited to silence package lint
-      # and nothing would check the size, the per-file counts, the
-      # globally-ignored paths, or that the rule is still mounted.
-      #
-      # Needs no build: the suite drives ESLint over this package's own source.
-      - name: Bare-Error guard controls (unit)
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: |
-          pnpm --filter nextly exec vitest run \
-            src/errors/__tests__/bare-error-allowlist.test.ts
-
       # Release tooling under `scripts/` sits in no workspace package, so
       # `turbo run test` never reaches it. Its own suite runs here: a defect in
       # the release-notes builder only surfaces during a real publish, after the
-      # packages are already on npm. Needs no build, runs in milliseconds.
+      # packages are already on npm. Needs no build.
+      #
+      # The lint guards' controls are here too: `lint-config.test.mjs` pins the
+      # bare-Error allowlist's size and per-file counts and proves each guard
+      # still reaches the files it exempts, so the allowlist cannot be edited
+      # to silence lint without this step going red.
       - name: Script tests
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm test:scripts
@@ -569,13 +630,22 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:workspace
 
-      # The dev-tooling scripts, which no other lint reaches. `turbo run lint`
-      # is per-package and stops at the workspace boundary, and the shared
-      # eslint config ignores `**/scripts/**/*` because type-aware linting
-      # cannot resolve files outside a tsconfig project. That ignore takes the
-      # UNTYPED rules with it, so an undefined reference in a release script
-      # reached a pull request with the whole scripts suite green: the
-      # reference was in the command-line block no test enters.
+      # Every publishable package at one version, the test the release's
+      # preflight applies. In the queue it checks the combined tree, which is
+      # where a Version Packages pull request that went stale shows: a package
+      # added to `main` after its last refresh is left on the old version, and
+      # merging it would leave the release it versioned unpublished. Reads the
+      # manifests only, in milliseconds, on every event.
+      - name: Release versions in lockstep
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/release/check-lockstep.mjs
+
+      # The dev-tooling scripts, which no other lint reaches. The main
+      # configuration ignores `scripts/` because type-aware linting cannot
+      # resolve files outside a tsconfig project. That ignore takes the UNTYPED
+      # rules with it, so an undefined reference in a release script reached a
+      # pull request with the whole scripts suite green: the reference was in
+      # the command-line block no test enters.
       - name: Scripts lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:scripts
@@ -584,12 +654,10 @@ jobs:
       # AGENTS.md rather than here: these steps read `dist`, and what they say
       # without one is misleading rather than merely absent.
       #
-      # `turbo.jsonc` gives `lint` no dependency at all, so it reads whatever
-      # `dist` survived. On an unbuilt tree it fails on
-      # `import-x/no-unresolved`, and the dangerous half is that every
-      # TYPE-AWARE rule then reports on types the checker cannot see: the
-      # message names YOUR EXPRESSION and reads as a correctness defect whose
-      # obvious remedy is a real regression. `publint` and `arethetypeswrong`
+      # `pnpm lint` builds nothing, so it reads whatever `dist` survived. On
+      # an unbuilt tree every TYPE-AWARE rule reports on types the checker
+      # cannot see: the message names YOUR EXPRESSION and reads as a
+      # correctness defect whose obvious remedy is a real regression. `publint` and `arethetypeswrong`
       # read `dist` directly and have nothing to say without one.
       #
       # `check-types` carries `^build`, so it rebuilds its own dependencies and
@@ -628,9 +696,7 @@ jobs:
 
       - name: Lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
-        run: pnpm turbo lint --continue --filter='./packages/*' --filter='./apps/*' --filter='./e2e'
-        env:
-          TURBO_CACHE_DIR: .turbo
+        run: pnpm lint
 
       - name: Typecheck
         if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
@@ -769,6 +835,14 @@ jobs:
     needs: changes
     if: needs.changes.outputs.inert != 'true'
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 30
 
     steps:
@@ -831,6 +905,14 @@ jobs:
     needs: changes
     if: needs.changes.outputs.inert != 'true'
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 30
 
     steps:
@@ -901,8 +983,16 @@ jobs:
   windows-gates:
     name: Pre-push gates (windows-latest)
     needs: changes
-    if: needs.changes.outputs.inert != 'true'
+    if: needs.changes.outputs.inert != 'true' && needs.changes.outputs.all-os == 'true'
     runs-on: windows-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 45
 
     steps:
@@ -968,11 +1058,9 @@ jobs:
 
       # These read what the build wrote, so after a failed build they would
       # report its missing output rather than failures of their own.
-      - name: Package lint
+      - name: Lint
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: pnpm turbo lint --continue --filter=./packages/*
-        env:
-          TURBO_CACHE_DIR: .turbo
+        run: pnpm lint
 
       - name: Typecheck
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -1004,8 +1092,16 @@ jobs:
   windows-gates-nextly:
     name: Pre-push gates (windows-latest, nextly tests)
     needs: changes
-    if: needs.changes.outputs.inert != 'true'
+    if: needs.changes.outputs.inert != 'true' && needs.changes.outputs.all-os == 'true'
     runs-on: windows-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 45
 
     steps:
@@ -1064,8 +1160,16 @@ jobs:
   windows-gates-admin:
     name: Pre-push gates (windows-latest, admin tests)
     needs: changes
-    if: needs.changes.outputs.inert != 'true'
+    if: needs.changes.outputs.inert != 'true' && needs.changes.outputs.all-os == 'true'
     runs-on: windows-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 45
 
     steps:
@@ -1138,6 +1242,14 @@ jobs:
     needs: changes
     if: needs.changes.outputs.inert != 'true'
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 20
 
     steps:
@@ -1178,11 +1290,11 @@ jobs:
       - name: Check what the packed admin gives a production application
         run: pnpm --filter @nextlyhq/admin check:published-build
 
-      # `tsup` alone, without the stylesheet step: the check is asked only for
+      # `tsdown` alone, without the stylesheet step: the check is asked only for
       # the two kinds a development-mode build must be refused for.
       - name: The check refuses a build made in development mode
         run: |
-          NODE_ENV=development pnpm --filter @nextlyhq/admin exec tsup
+          NODE_ENV=development pnpm --filter @nextlyhq/admin exec tsdown
           pnpm --filter @nextlyhq/admin check:published-build --packed . --must-fail-with error-detail,developer-tools
 
       # Only a job whose checks passed publishes what it learned.
@@ -1300,6 +1412,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.inert != 'true'
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
     # 45, not 30. The suite runs on one worker, and at 402 tests a passing run
     # was still going when 30 minutes cancelled it (job 120021242729: setup and
     # build 8 minutes, then 22 minutes of tests, all passing). 45 leaves room for
@@ -1311,6 +1428,8 @@ jobs:
     # Set on the build step alone, that second turbo looked in its default
     # folder, missed every task and rebuilt every package (~100 s).
     env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
       TURBO_CACHE_DIR: .turbo
 
     steps:
@@ -1427,6 +1546,11 @@ jobs:
     needs: [ci]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
     # Higher than `Browser tests` because the build is inside the budget rather
     # than done for it. The suite itself is two specs.
     timeout-minutes: 30
@@ -1436,6 +1560,8 @@ jobs:
     # Set on the build step alone, that second turbo looked in its default
     # folder, missed every task and rebuilt every package (~100 s).
     env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
       TURBO_CACHE_DIR: .turbo
 
     steps:
@@ -1516,6 +1642,14 @@ jobs:
     name: Dev reload applies a saved schema edit
     needs: [ci]
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 25
 
     steps:
@@ -1570,13 +1704,23 @@ jobs:
   # the core tree is broken.
   scaffold-smoke:
     name: Scaffold smoke (${{ matrix.os }})
-    needs: [ci]
+    needs: [changes, ci]
     runs-on: ${{ matrix.os }}
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Linux alone on a pull request that touches no platform-sensitive
+        # path; every platform otherwise (the `all-os` output of `changes`).
+        os: ${{ fromJSON(needs.changes.outputs.all-os == 'true' && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]') }}
 
     steps:
       - name: Checkout
@@ -1677,13 +1821,15 @@ jobs:
   # Windows in particular.
   dev-script-smoke:
     name: Dev script starts every watcher (${{ matrix.os }})
-    needs: [ci]
+    needs: [changes, ci]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Linux alone on a pull request that touches no platform-sensitive
+        # path; Windows too otherwise (the `all-os` output of `changes`).
+        os: ${{ fromJSON(needs.changes.outputs.all-os == 'true' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest"]') }}
 
     steps:
       - name: Checkout
@@ -1724,7 +1870,7 @@ jobs:
       # `shell: bash` on every leg, so one script covers all of them — Git Bash
       # ships on the Windows runners. The dev script is still launched through
       # pnpm, which is what puts `node_modules/.bin` on PATH; running the runner
-      # directly would fail to find `tsup` for reasons that have nothing to do
+      # directly would fail to find `tsdown` for reasons that have nothing to do
       # with the property under test.
       #
       # `dist` is removed first so a file found afterwards was produced by THIS
@@ -1739,7 +1885,7 @@ jobs:
           dev_pid=$!
 
           # Wait for the artifacts to exist, which is only enough to take a baseline from. It is
-          # NOT evidence that anything is watching: tsup writes `dist` before it arms its file
+          # NOT evidence that anything is watching: a watcher writes `dist` before it arms its file
           # watcher, so an edit made in this gap is absorbed by chokidar's initial scan and never
           # reported. The probe below is what establishes readiness.
           for _ in $(seq 1 120); do
@@ -1763,15 +1909,15 @@ jobs:
           # colour, so that edit rebuilds `index.mjs` as a side effect and a client command
           # regressed to a one-shot build would still be reported as watching.
           #
-          # An added export rather than a comment: tsup strips comments, so a comment-only edit
+          # An added export rather than a comment: a bundler may strip comments, so a comment-only edit
           # leaves the output byte-identical whether or not a rebuild ran, and the probe could not
           # detect one in either direction.
           before_client=$(cksum dist/index.mjs | awk '{print $1"-"$2}')
           before_server=$(cksum dist/color.mjs | awk '{print $1"-"$2}')
 
           # The edit is REPEATED until a rebuild is seen, rather than made once against a signal
-          # that claims the watcher is ready. tsup logs "Watching for changes" before it expands
-          # the watch path and constructs chokidar, so that line is a proxy: on a slow runner both
+          # that claims the watcher is ready. tsup logged "Watching for changes" before it expanded
+          # the watch path and constructed chokidar, so that line is a proxy: on a slow runner both
           # configs can log it while neither is listening, and a single edit made then is swallowed
           # by the initial scan. Retrying removes the proxy — the first rebuild IS the readiness
           # signal, and nothing has to be assumed about when it arrives.
@@ -1842,7 +1988,7 @@ jobs:
   # only when NO file matches its filters; with both suites named in a single
   # command a rename of either one leaves the other matching, so vitest runs
   # that one and exits 0 with the missing suite silently dropped. Measured on
-  # 4.1.10: two named, one absent -> `Test Files 1 passed`, exit 0; one named
+  # 4.1.10 and 5.0.5: two named, one absent -> `Test Files 1 passed`, exit 0; one named
   # and absent -> `No test files found, exiting with code 1`. Split, each name
   # is the sole filter of its step, so losing it means zero matches and a red.
   #
@@ -1868,7 +2014,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Linux alone on a pull request that touches no platform-sensitive
+        # path; Windows too otherwise (the `all-os` output of `changes`).
+        os: ${{ fromJSON(needs.changes.outputs.all-os == 'true' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest"]') }}
 
     steps:
       - name: Checkout

@@ -38,8 +38,6 @@
     "build": "tsdown",
     "dev": "tsdown --watch",
     "check-types": "tsc --noEmit",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts"
@@ -50,7 +48,7 @@
   "peerDependencies": {
     "@nextlyhq/admin": "0.0.2-alpha.68",
     "@nextlyhq/plugin-sdk": "workspace:*",
-    "next": "^14.0.0 || ^15.0.0 || ^16.0.0",
+    "next": "^15.5.28 || ^16.4.1",
     "nextly": "0.0.2-alpha.68",
     "react": "^18.0.0 || ^19.0.0"
   },
@@ -67,11 +65,10 @@
   },
   "devDependencies": {
     "@nextlyhq/admin": "workspace:*",
-    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@testing-library/react": "^16.3.0",
-    "@types/node": "^20.19.17",
+    "@types/node": "^22.20.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "jsdom": "^27.1.0",
@@ -80,10 +77,10 @@
     "react-dom": "19.3.1",
     "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.5"
   },
   "engines": {
-    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+    "node": "^22.12.0 || >=24.0.0"
   },
   "keywords": [
     "nextly",

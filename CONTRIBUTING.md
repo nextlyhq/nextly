@@ -39,12 +39,11 @@ We don't yet have a formal RFC process; significant proposals are discussed in G
 
 ### Prerequisites
 
-- Node.js `^20.19.0 || ^22.12.0 || >=24.0.0` (Node 24 LTS recommended, and
-  pinned at 24.21.0 in `.nvmrc` — `nvm use` picks it up). The ranges are
-  disjoint on purpose: they mirror what the test environment supports, so
-  20.6–20.18 and the 23.x line are excluded rather than merely untested.
-  `--env-file`, used by `pnpm db:seed`, needs >= 20.6 and is covered by every
-  range above. That range is what the PUBLISHED packages support; 24.21.0 is
+- Node.js `^22.12.0 || >=24.0.0` (Node 24 LTS recommended, and
+  pinned at 24.22.1 in `.nvmrc` — `nvm use` picks it up). The ranges are
+  disjoint on purpose: they mirror what the test environment supports, so the
+  23.x line is excluded rather than merely untested, and Node 20 is not
+  supported. That range is what the PUBLISHED packages support; 24.22.1 is
   what contributors and CI run, and the two move independently.
 - pnpm 12.5.1, pinned as `packageManager` in `package.json`. Do not install a
   pnpm yourself: `corepack enable` once, and every `pnpm` in the repo resolves
@@ -301,7 +300,7 @@ The following hooks run automatically:
 
 | Hook         | What runs                                                                             |
 | ------------ | ------------------------------------------------------------------------------------- |
-| `pre-commit` | Prettier formatting + ESLint on staged files (via lint-staged) + gitleaks secret scan |
+| `pre-commit` | Prettier formatting + oxlint on staged files (via lint-staged) + gitleaks secret scan |
 | `commit-msg` | Validates conventional commit format (see [Commit messages](#commit-messages))        |
 | `pre-push`   | Runs the production build to ensure all packages still compile                        |
 

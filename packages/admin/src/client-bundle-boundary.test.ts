@@ -136,7 +136,8 @@ const REVIEWED_BROWSER_PACKAGES: readonly string[] = [
   "css-tree/parser@2.3.1",
   "css-tree/walker@2.3.1",
   // Through `@nextlyhq/blocks-engine`. It imports no Node built-in, and reads `process.platform`
-  // only behind a `typeof process` guard.
+  // only behind a `typeof process` guard. 4.0.7 read 2026-10-22: against 4.0.5 it changes only glob
+  // parsing in `lib/parse.js` and `lib/scan.js`, and adds no import.
   "picomatch@4.0.7",
   // Validation with no runtime dependencies, written to run in browsers.
   "zod@4.6.2",

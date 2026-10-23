@@ -142,7 +142,7 @@ jobs:
       - uses: pnpm/action-setup@v3
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -672,7 +672,7 @@ or an administrator sets one for them.
 
 ## What you should never do
 
-- **Don't call `nextly migrate` from your deployed app's runtime.** It's a CLI tool, not a runtime API. Nextly enforces this with an ESLint rule for code in `init/`, `route-handler/`, `dispatcher/`, `api/`, `actions/`, `direct-api/`, `routeHandler.ts`, and `next.ts`.
+- **Don't call `nextly migrate` from your deployed app's runtime.** It's a CLI tool, not a runtime API. Nextly enforces this with a lint rule for code in `init/`, `route-handler/`, `dispatcher/`, `api/`, `actions/`, `direct-api/`, `routeHandler.ts`, and `next.ts`.
 - **Don't edit applied migration files.** The hash check catches this and aborts with `MIGRATION_TAMPERED`. To change something already applied, write a new corrective migration.
 - **Concurrent `nextly migrate` runs are guarded by the migrate lock.** A second concurrent run won't apply schema at the same time — it either errors with `NEXTLY_MIGRATE_LOCK_BUSY` (CLI) or waits (boot run). If a crashed run leaves a stale lock, clear it with `nextly migrate --force-unlock`. (The lock is a pooler-safe row with a TTL; the `filename` UNIQUE constraint remains a second line of defense.)
 

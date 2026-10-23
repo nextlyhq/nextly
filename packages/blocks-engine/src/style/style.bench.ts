@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { test } from "vitest";
 
 import { checkContrast } from "./contrast";
 import { compileStyleValues } from "./declarations";
@@ -77,45 +77,49 @@ const large = { tokens: tokenTable(500) };
 const largeFaces = faces(50);
 const exported = tokensToDtcg(large).document;
 
-describe("emit token blocks", () => {
-  bench("24 tokens, the size a site starts at", () => {
-    emitTokenBlocks(small, ".nx-pb-d-abc");
-  });
-
-  bench("500 tokens, the size one grows to", () => {
-    emitTokenBlocks(large, ".nx-pb-d-abc");
-  });
+// Each group is one comparison table: `bench.compare` runs its entries
+// against each other and prints them side by side.
+test("emit token blocks", async ({ bench }) => {
+  await bench.compare(
+    bench("24 tokens, the size a site starts at", () => {
+      emitTokenBlocks(small, ".nx-pb-d-abc");
+    }),
+    bench("500 tokens, the size one grows to", () => {
+      emitTokenBlocks(large, ".nx-pb-d-abc");
+    })
+  );
 });
 
-describe("emit font faces", () => {
-  bench("50 self-hosted faces", () => {
+test("emit font faces", async ({ bench }) => {
+  await bench("50 self-hosted faces", () => {
     emitFontFaces(largeFaces);
-  });
+  }).run();
 });
 
-describe("DTCG", () => {
-  bench("export 500 tokens", () => {
-    tokensToDtcg(large);
-  });
-
-  bench("import 500 tokens", () => {
-    dtcgToTokens(exported);
-  });
-
-  bench("round trip 500 tokens", () => {
-    dtcgToTokens(tokensToDtcg(large).document);
-  });
+test("DTCG", async ({ bench }) => {
+  await bench.compare(
+    bench("export 500 tokens", () => {
+      tokensToDtcg(large);
+    }),
+    bench("import 500 tokens", () => {
+      dtcgToTokens(exported);
+    }),
+    bench("round trip 500 tokens", () => {
+      dtcgToTokens(tokensToDtcg(large).document);
+    })
+  );
 });
 
-describe("contrast", () => {
+test("contrast", async ({ bench }) => {
   // The one measured per keystroke rather than per compile.
-  bench("one pair, hex", () => {
-    checkContrast("#767676", "#ffffff");
-  });
-
-  bench("one pair, translucent rgb()", () => {
-    checkContrast("rgb(0 0 0 / 50%)", "rgb(255 255 255)");
-  });
+  await bench.compare(
+    bench("one pair, hex", () => {
+      checkContrast("#767676", "#ffffff");
+    }),
+    bench("one pair, translucent rgb()", () => {
+      checkContrast("rgb(0 0 0 / 50%)", "rgb(255 255 255)");
+    })
+  );
 });
 
 /**
@@ -154,20 +158,20 @@ const SCALAR_VALUES: Readonly<Record<string, unknown>> = {
   opacity: 0.5,
 };
 
-describe("compiling declarations", () => {
+test("compiling declarations", async ({ bench }) => {
   // This walk runs once per node, per interaction state, per breakpoint, so a
   // page of a hundred blocks with three states and four breakpoints runs it
   // 1200 times. The union arms are what this measures; the scalar map beside it
   // is what says how much of the number is the union decision.
-  bench("scalar values, no unions", () => {
-    compileStyleValues(SCALAR_VALUES, "");
-  });
-
-  bench("every catalog union, first arm", () => {
-    compileStyleValues(UNION_VALUES, "");
-  });
-
-  bench("every catalog union, second arm", () => {
-    compileStyleValues(UNION_VALUES_SECOND_ARM, "");
-  });
+  await bench.compare(
+    bench("scalar values, no unions", () => {
+      compileStyleValues(SCALAR_VALUES, "");
+    }),
+    bench("every catalog union, first arm", () => {
+      compileStyleValues(UNION_VALUES, "");
+    }),
+    bench("every catalog union, second arm", () => {
+      compileStyleValues(UNION_VALUES_SECOND_ARM, "");
+    })
+  );
 });

@@ -80,13 +80,11 @@
   ],
   "scripts": {
     "build": "pnpm build:js && node scripts/build-css.mjs",
-    "build:js": "rimraf dist && tsup && tsup --config tsup.server-safe.config.ts && tsx scripts/check-client-directive.ts && tsx scripts/check-server-safe-artifacts.ts",
+    "build:js": "rimraf dist && tsdown --config-loader tsx && tsdown --config-loader tsx --config tsdown.server-safe.config.ts && tsx scripts/check-client-directive.ts && tsx scripts/check-server-safe-artifacts.ts",
     "build:css": "node scripts/build-css.mjs",
     "build:surface-declarations": "tsx scripts/build-surface-declarations.ts",
     "dev": "node scripts/dev.mjs",
     "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
@@ -94,7 +92,7 @@
     "clean": "rimraf dist"
   },
   "engines": {
-    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+    "node": "^22.12.0 || >=24.0.0"
   },
   "peerDependencies": {
     "lucide-react": ">=0.400.0",
@@ -103,20 +101,18 @@
   },
   "devDependencies": {
     "@nextlyhq/admin-css": "workspace:*",
-    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/module-specifiers": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@tailwindcss/cli": "^4.3.2",
     "@testing-library/react": "^16.3.0",
     "@types/culori": "^4.0.1",
-    "@types/node": "^20.19.17",
+    "@types/node": "^22.20.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "^5.1.0",
-    "@vitest/coverage-v8": "^4.1.0",
-    "@vitest/ui": "^4.1.0",
+    "@vitest/coverage-v8": "^5.0.5",
+    "@vitest/ui": "^5.0.5",
     "culori": "^4.0.2",
-    "eslint": "^9.39.1",
     "jsdom": "^27.1.0",
     "lucide-react": "^0.544.0",
     "postcss": "^8.5.6",
@@ -124,11 +120,11 @@
     "react-dom": "19.3.1",
     "rimraf": "^6.1.3",
     "tailwindcss": "^4.3.2",
-    "tsup": "^8.5.0",
+    "tsdown": "^0.23.1",
     "tsx": "^4.20.5",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.5"
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.2.12",
