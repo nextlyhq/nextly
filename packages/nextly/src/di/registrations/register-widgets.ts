@@ -57,6 +57,7 @@ import type { PluginDefinition } from "../../plugins/plugin-context";
 import { contributedWidgetSummaries } from "../../plugins/validate-admin-widgets";
 import { registerActivityWidgetSource } from "../../services/dashboard/activity-widget-source";
 import { registerAttentionWidgetSource } from "../../services/dashboard/attention-source";
+import { registerRecentEditsWidgetSource } from "../../services/dashboard/recent-edits-widget-source";
 import { registerSummaryWidgetSources } from "../../services/dashboard/summary-widget-sources";
 
 export function resetWidgetRegistries(
@@ -98,6 +99,23 @@ export function resetWidgetRegistries(
   // the generated map against the plugins this boot runs.
   setAdminComponentPlugins(plugins);
 
+  // The domains that answer a source of their own publish it here, after the
+  // stores are empty and BEFORE core's widgets: a widget's settings are
+  // admitted against the filters its source declares (`knobSourceFor`), so a
+  // source registered after the widget naming it would refuse its settings.
+  // PUSHED from the composition root rather than pulled by the widgets domain,
+  // which knows nothing about releases and must not have to import it — that
+  // inversion is what would make the widgets package depend on most of the
+  // codebase in order to offer a card.
+  registerReleasesWidgetSource();
+  registerVersionsWidgetSource();
+  registerActivityWidgetSource();
+  // Needs attention's source, which combines the releases' and versions' reads
+  // with the entry list's counts and so belongs to no one domain.
+  registerAttentionWidgetSource();
+  registerSummaryWidgetSources();
+  registerRecentEditsWidgetSource();
+
   for (const definition of CORE_WIDGETS) {
     registerWidget(definition);
   }
@@ -111,19 +129,6 @@ export function resetWidgetRegistries(
     pluginWidgetDeclarationGroups(plugins),
     pluginLegacyWidgetIds(plugins)
   );
-
-  // The domains that answer a source of their own publish it here, after the
-  // stores are empty. PUSHED from the composition root rather than pulled by
-  // the widgets domain, which knows nothing about releases and must not have to
-  // import it — that inversion is what would make the widgets package depend on
-  // most of the codebase in order to offer a card.
-  registerReleasesWidgetSource();
-  registerVersionsWidgetSource();
-  registerActivityWidgetSource();
-  // Needs attention's source, which combines the releases' and versions' reads
-  // with the entry list's counts and so belongs to no one domain.
-  registerAttentionWidgetSource();
-  registerSummaryWidgetSources();
 
   // 🔴 A plugin's sources are NOT registered here, and the reason is a hard
   // ordering fact rather than a preference: this runs before any plugin

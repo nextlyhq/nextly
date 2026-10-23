@@ -112,6 +112,8 @@ export interface ReadableWidgetDeclaration {
   dismissible?: boolean;
   /** Whether the host sizes this custom widget's list query; see `DashboardWidget`. */
   sizedQuery?: boolean;
+  /** The filters the widget's source narrows by; see `DashboardWidget`. */
+  sourceFilters?: DashboardWidget["sourceFilters"];
 }
 
 /**
@@ -242,6 +244,11 @@ function resolveOne(
     chrome: meta.chrome,
     dismissible: meta.dismissible,
     sizedQuery: meta.sizedQuery,
+    // Only a registration carries it (`mergeCollision`), so a contributed card
+    // that collides with a registered one keeps its source's filters.
+    ...(meta.sourceFilters === undefined
+      ? {}
+      : { sourceFilters: meta.sourceFilters }),
   };
 }
 
@@ -293,6 +300,9 @@ function resolveRegistered(
     chrome: meta.chrome,
     dismissible: meta.dismissible,
     sizedQuery: meta.sizedQuery,
+    ...(meta.sourceFilters === undefined
+      ? {}
+      : { sourceFilters: meta.sourceFilters }),
   };
 }
 
@@ -414,6 +424,11 @@ function mergeCollision(
       registration.sizedQuery,
       contribution.sizedQuery
     ),
+    // The registration's alone: core sets it when it publishes a registered
+    // widget, from the source the query names, and no contribution carries it.
+    ...(registration.sourceFilters === undefined
+      ? {}
+      : { sourceFilters: registration.sourceFilters }),
   };
 }
 
