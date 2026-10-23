@@ -616,28 +616,39 @@ function walkWhereClause(
     fail(`where clause is nested too deeply (max ${MAX_WHERE_DEPTH})`);
   }
   for (const [key, value] of Object.entries(where)) {
-    if (key === "and" || key === "or") {
-      const branches = assertCombinatorBranches(key, value);
-      for (const branch of branches) {
-        walkWhereClause(branch as Record<string, unknown>, depth + 1, scope);
-      }
-      continue;
-    }
-    if (heldAsSourceFilter(key, value, depth, scope)) continue;
-    if (
-      isWorkflowKey(key) &&
-      sourceKindFromId(scope.source.id) === "collection"
-    ) {
-      assertWorkflowCondition(key, value, depth);
-      continue;
-    }
-    if (!scope.declared.has(key)) {
-      fail(
-        `where references undeclared field "${key}" on "${scope.source.id}"`
-      );
-    }
-    assertFieldConditionShape(key, value, scope.op);
+    walkWhereEntry(key, value, depth, scope);
   }
+}
+
+/**
+ * One key of a `where` clause, at `depth`: a combinator's branches walked in
+ * turn, a filter the source declares, a collection's workflow condition, or a
+ * declared field's condition. Anything else is refused.
+ */
+function walkWhereEntry(
+  key: string,
+  value: unknown,
+  depth: number,
+  scope: WhereScope
+): void {
+  if (key === "and" || key === "or") {
+    for (const branch of assertCombinatorBranches(key, value)) {
+      walkWhereClause(branch as Record<string, unknown>, depth + 1, scope);
+    }
+    return;
+  }
+  if (heldAsSourceFilter(key, value, depth, scope)) return;
+  if (
+    isWorkflowKey(key) &&
+    sourceKindFromId(scope.source.id) === "collection"
+  ) {
+    assertWorkflowCondition(key, value, depth);
+    return;
+  }
+  if (!scope.declared.has(key)) {
+    fail(`where references undeclared field "${key}" on "${scope.source.id}"`);
+  }
+  assertFieldConditionShape(key, value, scope.op);
 }
 
 /**
@@ -1129,29 +1140,35 @@ function assertWindowAgreesWithOp(
   if (op !== "count" && op !== "timeseries") {
     fail(`since and until bound a count or a timeseries, not a ${op}`);
   }
-  const start = relativeSpanSchema.safeParse(since);
-  if (!start.success) {
-    fail(`since must be one of ${RELATIVE_SPANS.join(", ")}`);
-  }
+  const start = relativeSpanOf(since, "since");
   if (op === "count" && !declared.has("createdAt")) {
     fail(
       'since bounds a count on "createdAt", which this source does not declare'
     );
   }
-  if (until === undefined) return { since: start.data };
-  const end = relativeSpanSchema.safeParse(until);
-  if (!end.success) {
-    fail(`until must be one of ${RELATIVE_SPANS.join(", ")}`);
+  if (until === undefined) return { since: start };
+  const end = relativeSpanOf(until, "until");
+  assertEndsAfterStart(start, end);
+  return { since: start, until: end };
+}
+
+/** A window bound read as a span from the closed list, or refused by name. */
+function relativeSpanOf(value: unknown, name: "since" | "until"): RelativeSpan {
+  const parsed = relativeSpanSchema.safeParse(value);
+  if (!parsed.success) {
+    fail(`${name} must be one of ${RELATIVE_SPANS.join(", ")}`);
   }
+  return parsed.data;
+}
+
+/** Refuses an end that does not come after the start it closes. */
+function assertEndsAfterStart(start: RelativeSpan, end: RelativeSpan): void {
   // Measured against one instant, so the comparison holds for every "now".
   const probe = new Date(Date.UTC(2000, 0, 31));
   if (
-    relativeSpanStart(end.data, probe).getTime() <=
-    relativeSpanStart(start.data, probe).getTime()
+    relativeSpanStart(end, probe).getTime() <=
+    relativeSpanStart(start, probe).getTime()
   ) {
-    fail(
-      `until (${end.data}) must end the window after since (${start.data}) starts it`
-    );
+    fail(`until (${end}) must end the window after since (${start}) starts it`);
   }
-  return { since: start.data, until: end.data };
 }

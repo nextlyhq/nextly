@@ -997,15 +997,30 @@ function fittingValue(
   ctx: KnobContext | undefined
 ): unknown {
   const value = resolved[setting.name];
-  if (value === undefined || knob.fits === undefined || !isDependent(setting))
+  const fields = readerFieldsFor(setting, resolved, ctx);
+  if (value === undefined || knob.fits === undefined || fields === undefined) {
     return value;
-  const collection = resolved[setting.of];
-  const fields =
-    typeof collection === "string" ? ctx?.fieldsOf?.(collection) : undefined;
-  if (fields === undefined || knob.fits(value, fields)) return value;
+  }
+  if (knob.fits(value, fields)) return value;
   const fallback = declaredDefault(setting);
   return fallback !== undefined && knob.fits(fallback, fields)
     ? fallback
+    : undefined;
+}
+
+/**
+ * The fields the collection a dependent setting reads offers this reader, or
+ * `undefined` when the setting depends on none or they are not known.
+ */
+function readerFieldsFor(
+  setting: AnyWidgetSetting,
+  resolved: Record<string, unknown>,
+  ctx: KnobContext | undefined
+): readonly KnobField[] | undefined {
+  if (!isDependent(setting)) return undefined;
+  const collection = resolved[setting.of];
+  return typeof collection === "string"
+    ? ctx?.fieldsOf?.(collection)
     : undefined;
 }
 

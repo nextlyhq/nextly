@@ -207,28 +207,35 @@ export function addPanelRows(input: {
       offered
     );
     if (action === undefined) return [];
-    const widget = byId.get(widgetId);
-    return [
-      {
-        key: widgetId,
-        section: facts.group as AddPanelGroup,
-        ...(facts.subgroup === undefined ? {} : { subgroup: facts.subgroup }),
-        name: widget?.title ?? widgetId,
-        ...(facts.description === undefined
-          ? {}
-          : { description: facts.description }),
-        ...(facts.category === undefined ? {} : { category: facts.category }),
-        ...(facts.sketch === undefined ? {} : { sketch: facts.sketch }),
-        ...(widthsLabel(facts) === undefined
-          ? {}
-          : { widths: widthsLabel(facts) }),
-        placed,
-        action,
-      },
-    ];
+    return [widgetRowOf(widgetId, facts, byId.get(widgetId), placed, action)];
   });
 
   return [...removed, ...rows];
+}
+
+/** One widget's row in its add-panel group, carrying only the facts it states. */
+function widgetRowOf(
+  widgetId: string,
+  facts: WidgetWidthFacts,
+  widget: DashboardWidget | undefined,
+  placed: number,
+  action: AddPanelAction
+): AddPanelRow {
+  const widths = widthsLabel(facts);
+  return {
+    key: widgetId,
+    section: facts.group as AddPanelGroup,
+    ...(facts.subgroup === undefined ? {} : { subgroup: facts.subgroup }),
+    name: widget?.title ?? widgetId,
+    ...(facts.description === undefined
+      ? {}
+      : { description: facts.description }),
+    ...(facts.category === undefined ? {} : { category: facts.category }),
+    ...(facts.sketch === undefined ? {} : { sketch: facts.sketch }),
+    ...(widths === undefined ? {} : { widths }),
+    placed,
+    action,
+  };
 }
 
 /**

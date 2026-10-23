@@ -293,6 +293,23 @@ function componentPropsFor(
   };
 }
 
+/**
+ * A custom card's answers by cell key, for a card that declares several reads;
+ * `undefined` for any other card, which is handed `slot` alone.
+ */
+function customCellAnswers(
+  definition: WidgetRendererProps["definition"],
+  slotFor: CellSlotLookup | undefined
+): Record<string, WidgetSlot> | undefined {
+  if (definition.archetype !== "custom" || !definition.cells?.length) {
+    return undefined;
+  }
+  return cellAnswersOf(
+    definition.cells.map(cell => cell.key),
+    slotFor
+  );
+}
+
 /** Each cell's answer by key, leaving out the keys with none yet. */
 function cellAnswersOf(
   keys: readonly string[],
@@ -331,13 +348,7 @@ export function WidgetRenderer({
   const outcome = resolveWidgetOutcome(definition, slot, slotFor);
   // A custom card that declares several reads is handed each answer by key; a
   // key with no answer yet is left out, as `slot` is.
-  const cellAnswers =
-    definition.archetype === "custom" && definition.cells?.length
-      ? cellAnswersOf(
-          definition.cells.map(cell => cell.key),
-          slotFor
-        )
-      : undefined;
+  const cellAnswers = customCellAnswers(definition, slotFor);
 
   // Built once, so the two `chrome` branches below cannot drift into handing a
   // component different props depending on whether its card is framed.

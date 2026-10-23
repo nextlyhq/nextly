@@ -1479,21 +1479,30 @@ function queryCellsProblem(cells: unknown): string | undefined {
   }
   const seen = new Set<string>();
   for (const [index, cell] of cells.entries()) {
-    const { key, query, when } = (cell ?? {}) as Partial<WidgetQueryCell>;
-    if (typeof key !== "string" || key.trim() === "") {
-      return `cells[${index}] needs a non-empty key`;
-    }
-    if (
-      when !== undefined &&
-      !(WIDGET_CELL_CONDITIONS as readonly string[]).includes(when)
-    ) {
-      return `cells[${index}] ("${key}") has when "${String(when)}", which is not one of ${WIDGET_CELL_CONDITIONS.join(", ")}`;
-    }
-    if (typeof query !== "object" || query === null) {
-      return `cells[${index}] ("${key}") needs a query`;
-    }
+    const problem = queryCellProblem(cell, index);
+    if (problem !== undefined) return problem;
+    // Well formed now, so the key is a string.
+    const key = (cell as WidgetQueryCell).key;
     if (seen.has(key)) return `cells declare the key "${key}" more than once`;
     seen.add(key);
+  }
+  return undefined;
+}
+
+/** Why one cell cannot be asked: no key, a condition it may not name, or no query. */
+function queryCellProblem(cell: unknown, index: number): string | undefined {
+  const { key, query, when } = (cell ?? {}) as Partial<WidgetQueryCell>;
+  if (typeof key !== "string" || key.trim() === "") {
+    return `cells[${index}] needs a non-empty key`;
+  }
+  if (
+    when !== undefined &&
+    !(WIDGET_CELL_CONDITIONS as readonly string[]).includes(when)
+  ) {
+    return `cells[${index}] ("${key}") has when "${String(when)}", which is not one of ${WIDGET_CELL_CONDITIONS.join(", ")}`;
+  }
+  if (typeof query !== "object" || query === null) {
+    return `cells[${index}] ("${key}") needs a query`;
   }
   return undefined;
 }
