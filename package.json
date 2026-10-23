@@ -142,7 +142,7 @@
     "sherif": "1.13.0",
     "tsx": "^4.20.5",
     "turbo": "2.9.18",
-    "typescript": "^5.9.3",
+    "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.0",
     "vitest": "^4.1.0"
   },

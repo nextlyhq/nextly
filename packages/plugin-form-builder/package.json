@@ -65,7 +65,7 @@
     "lucide-react": "^0.544.0",
     "nextly": "workspace:*",
     "tsdown": "^0.23.1",
-    "typescript": "^5.9.3",
+    "typescript": "^6.0.3",
     "vitest": "^4.1.0"
   },
   "engines": {
