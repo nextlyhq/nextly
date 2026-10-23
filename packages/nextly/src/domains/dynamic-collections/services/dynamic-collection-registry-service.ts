@@ -311,6 +311,9 @@ export class DynamicCollectionRegistryService extends BaseService {
         // Needed to keep code-first config outranking the stored row when the
         // recording switch is mirrored into the live policy below.
         source: this.dynamicCollections.source,
+        // The stored recording decision, which a rename carries to the new
+        // slug when this update does not set one.
+        webhooks: this.dynamicCollections.webhooks,
       })
       .from(this.dynamicCollections)
       .where(eq(this.dynamicCollections.slug, collectionSlug))
@@ -410,7 +413,13 @@ export class DynamicCollectionRegistryService extends BaseService {
       targetSlug !== existing[0].slug &&
       !isConfigOwnedSource(existing[0].source)
     ) {
-      moveWebhookRecording(move);
+      // The decision this update commits: the one it writes, or the one the
+      // row already held.
+      const stored =
+        updates.webhooks !== undefined
+          ? updates.webhooks
+          : existing[0].webhooks;
+      moveWebhookRecording(move, stored?.record !== false);
     }
 
     // Mirror the stored change into the live policy so turning the switch off

@@ -84,7 +84,13 @@ function scopeNames(column: RenamedSlugColumn): string[] {
 function namedBy(column: SlugColumn): string[] {
   if (column.onRename === "keep") return [column.slugColumn];
   if (column.onRename === "follow-json") {
-    return [column.jsonColumn, column.rowId, ...(column.onlyWhereNull ?? [])];
+    return [
+      column.jsonColumn,
+      column.rowId,
+      ...(column.onlyWhereNull ?? []),
+      ...Object.keys(column.onlyWhereEqual ?? {}),
+      ...(column.reads ?? []),
+    ];
   }
   if (column.onRename === "end") return scopeNames(column);
   return [...scopeNames(column), ...derivedNames(column)];

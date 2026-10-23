@@ -620,7 +620,7 @@ export class SingleRegistryService extends BaseRegistryService<
               { returning: "*" }
             )
           : await this.renameSingleRow(
-              { id: existing.id, slug },
+              { id: existing.id, slug, tableName: existing.tableName },
               targetSlug,
               updateData
             );
@@ -634,7 +634,11 @@ export class SingleRegistryService extends BaseRegistryService<
       // drops the old slug's entry, so a Single created there later starts
       // from the default rather than inheriting this one's choice.
       if (targetSlug !== slug && !isConfigOwnedSource(existing.source)) {
-        moveWebhookRecording({ kind: "single", from: slug, to: targetSlug });
+        // The decision the rename committed, read back from the row it wrote.
+        moveWebhookRecording(
+          { kind: "single", from: slug, to: targetSlug },
+          this.deserializeRecord(results[0]).webhooks?.record !== false
+        );
       }
 
       // Mirror the stored change into the live policy so turning the switch
@@ -688,13 +692,24 @@ export class SingleRegistryService extends BaseRegistryService<
    * The row is matched by the id read before the rename as well as the slug:
    * a Single deleted and another registered under the slug since then is not
    * the one asked for, and is treated as gone.
+   *
+   * The Single's document carries its slug too, in the system `slug` column
+   * every Single's table is created with, and a read returns it as stored. It
+   * moves in the same transaction while it still holds the old slug; a value
+   * set to anything else was chosen for the document, and stays.
    */
   private async renameSingleRow(
-    fetched: { id: string; slug: string },
+    fetched: { id: string; slug: string; tableName: string },
     to: string,
     updateData: Record<string, unknown>
   ): Promise<DynamicSingleRecord[]> {
     const from = fetched.slug;
+    // Asked before the transaction: on PostgreSQL a statement against a
+    // missing table aborts the whole transaction. A Single whose table is not
+    // created yet holds no document to move.
+    const documentTable = (await this.adapter.listTables()).includes(
+      fetched.tableName
+    );
     const row = await renameEntity(this.adapter, {
       dialect: this.dialect,
       move: { kind: "single", from, to },
@@ -710,6 +725,13 @@ export class SingleRegistryService extends BaseRegistryService<
           }
         );
         if (written === 0) return null;
+        if (documentTable) {
+          await tx.update(
+            fetched.tableName,
+            { slug: to },
+            this.whereEq("slug", from)
+          );
+        }
         return tx.selectOne<DynamicSingleRecord>(this.registryTableName, {
           where: this.whereEq("slug", to),
         });

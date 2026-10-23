@@ -17,11 +17,12 @@ import type {
 
 import { getDialectTables } from "../../database/index";
 import { container } from "../../di";
+import { collectionTag, singleTag } from "../../revalidation/compute-tags";
+import type { CacheRevalidator } from "../../revalidation/types";
 import { writingPermissions } from "../../services/lib/permissions";
 import type { WebhookEndpointRegistry } from "../webhooks/endpoint-registry";
 import {
   clearWebhookRecording,
-  isWebhookRecordingEnabled,
   setWebhookRecording,
 } from "../webhooks/recording-policy";
 
@@ -41,7 +42,8 @@ import {
  * retired once it has finished, committed or not, as for any permission
  * write. After a commit, the cached list of webhook endpoints is dropped, so
  * the next delivery reads the filters the rename rewrote, and so is a renamed
- * collection's cached schema under either slug.
+ * collection's cached schema under either slug; and the cached content read
+ * under either slug is flushed.
  */
 export async function renameEntity<T>(
   adapter: DrizzleAdapter,
@@ -71,7 +73,24 @@ export async function renameEntity<T>(
   if (written !== null && move.kind === "collection") {
     dropCachedSchemas(move);
   }
+  if (written !== null) await flushCachedContent(move);
   return written;
+}
+
+/**
+ * Flush the content cached under both slugs, through the cache revalidator
+ * every content write flushes through. A page cached under the old slug would
+ * keep serving the renamed entity's content, with no write to its old name
+ * ever coming to flush it; one cached under the new slug, before it named
+ * anything, would keep answering that there is nothing there. Best-effort, as
+ * every flush is: the rename has committed.
+ */
+async function flushCachedContent(move: EntitySlugMove): Promise<void> {
+  if (!container.has("cacheRevalidator")) return;
+  const tagOf = move.kind === "collection" ? collectionTag : singleTag;
+  await container
+    .get<CacheRevalidator>("cacheRevalidator")
+    .flush([{ tags: [tagOf(move.from), tagOf(move.to)] }]);
 }
 
 /**
@@ -101,13 +120,17 @@ function dropCachedSchemas(move: EntitySlugMove): void {
 
 /**
  * Carry a Builder entity's webhook recording decision from its old slug to its
- * new one in this process. The decision is the one this process already holds
- * for the old slug (recording, when it holds none), so nothing is read or
- * parsed a second way; the old slug's entry is then dropped, so an entity
- * later created there starts from the default.
+ * new one in this process. `record` is the decision the rename committed, read
+ * from the registry row the rename wrote, not from this process's map: a
+ * re-read of the stored decisions that lands between the commit and this call
+ * has already moved the decision to the new slug and dropped the old one, and
+ * the old slug read then would answer the default and undo it. The old slug's
+ * entry is dropped, so an entity later created there starts from the default.
  */
-export function moveWebhookRecording(move: EntitySlugMove): void {
-  const record = isWebhookRecordingEnabled(move.kind, move.from);
+export function moveWebhookRecording(
+  move: EntitySlugMove,
+  record: boolean
+): void {
   clearWebhookRecording(move.kind, move.from);
   setWebhookRecording(move.kind, move.to, record, "db");
 }

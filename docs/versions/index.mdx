@@ -270,7 +270,8 @@ What moves to the new slug:
 - versions, autosaves and working drafts;
 - version pins, and each person's "last looked at" marker;
 - content events and the languages each one involved;
-- the releases that hold its documents;
+- the releases that hold its documents, and each release's history of them, so a release's
+  history keeps showing the document under its new name;
 - its schema events, its activity feed rows, and translations archived when localization was
   turned off.
 
@@ -287,6 +288,9 @@ A renamed collection or Single also keeps who may use it and where its webhooks 
   to the endpoints that listed the old one. An event already sent keeps the slug it was sent
   under;
 - its choice to record webhook events or not carries over to the new slug.
+
+A renamed Single's document reads its new slug too, unless the document's own `slug` was set to
+something else. Pages cached under either slug are refreshed when the rename commits.
 
 What ends with the old slug: its document locks, its preview links and any kept answers about
 who may use it. A preview link names the slug it was made for, so a link made before the rename

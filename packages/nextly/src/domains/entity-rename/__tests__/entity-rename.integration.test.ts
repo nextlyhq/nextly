@@ -30,6 +30,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { defineCollection, defineSingle, text } from "../../../config";
 import { container } from "../../../di";
 import { CollectionFileManager } from "../../../services/collection-file-manager";
+import { collectionTag, singleTag } from "../../../revalidation/compute-tags";
+import type { CacheRevalidator } from "../../../revalidation/types";
 import { ServiceContainer } from "../../../services/index";
 import {
   clearInMemoryPermissionTiersForTests,
@@ -47,6 +49,7 @@ import { PermissionCacheService } from "../../auth/services/permission-cache-ser
 import { DynamicCollectionRegistryService } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { recordContentEvent } from "../../content-events/record";
 import { documentLockKey } from "../../document-lock/lock-key";
+import { documentOfReleaseEvent } from "../../releases/release-events";
 import { releaseMemberKey } from "../../releases/release-member-key";
 import { ReleasesRepository } from "../../releases/releases-repository";
 import {
@@ -63,7 +66,10 @@ import {
 import { workingDraftKey } from "../../versions/working-draft-key";
 import type { WebhookEndpointRegistry } from "../../webhooks/endpoint-registry";
 import { fanOutDueEvents, type FanOutDatabase } from "../../webhooks/fan-out";
-import { isWebhookRecordingEnabled } from "../../webhooks/recording-policy";
+import {
+  applyStoredRecordingDecisions,
+  isWebhookRecordingEnabled,
+} from "../../webhooks/recording-policy";
 import {
   VersionsRepository,
   type VersionRef,
@@ -1289,6 +1295,183 @@ describe.each(getConfiguredTestDialects())(
           (await rowsOf(REGISTRY[kind])).filter(row => row.slug === to)
         ).toEqual([]);
       }
+    }, 120_000);
+
+    it("keeps an opt-out from recording webhooks when the stored decisions are re-read as the rename commits", async () => {
+      await boot(dialect);
+      const renames = [
+        ["collection", "notes", "journal"],
+        ["single", "masthead", "header"],
+      ] as const;
+      await new DynamicCollectionRegistryService(
+        t().adapter,
+        silentLogger
+      ).updateCollectionMetadata("notes", { webhooks: { record: false } });
+      await t()
+        .getService("singleRegistryService")
+        .updateSingle(
+          "masthead",
+          { webhooks: { record: false } },
+          { source: "ui" }
+        );
+      // Every opt-out the database holds, by kind, as a re-read finds them.
+      const stored: Record<RenamedEntityKind, string> = {
+        collection: "notes",
+        single: "masthead",
+      };
+      for (const [kind, from, to] of renames) {
+        expect([kind, isWebhookRecordingEnabled(kind, from)]).toEqual([
+          kind,
+          false,
+        ]);
+        stored[kind] = to;
+        // The stored decisions re-read just after the rename commits: this
+        // entity's opt-out is now stored under the new slug and nothing under
+        // the old, and every other opt-out is read back as it stands.
+        const adapter = t().adapter;
+        const original = adapter.transaction.bind(adapter);
+        vi.spyOn(adapter, "transaction").mockImplementationOnce(
+          async <T>(
+            work: (tx: TransactionContext) => Promise<T>,
+            options?: TransactionOptions
+          ) => {
+            const committed = await original(work, options);
+            applyStoredRecordingDecisions([
+              { scope: "collection", slug: stored.collection },
+              { scope: "single", slug: stored.single },
+            ]);
+            return committed;
+          }
+        );
+
+        await rename(kind, from, to);
+
+        vi.restoreAllMocks();
+        expect([kind, isWebhookRecordingEnabled(kind, to)]).toEqual([
+          kind,
+          false,
+        ]);
+      }
+    }, 120_000);
+
+    it("names a renamed document in its releases' history under its new name", async () => {
+      await boot(dialect);
+      const noteId = await writeNote();
+      await seedHistory("collection", "notes", noteId);
+      const mastheadId = await writeMasthead();
+      await seedHistory("single", "masthead", mastheadId);
+
+      await rename("collection", "notes", "journal");
+      await rename("single", "masthead", "header");
+
+      const documents = (await rowsOf("nextly_content_events"))
+        .filter(row => row.subjectKind === "release")
+        .map(row =>
+          documentOfReleaseEvent({
+            kind: String(row.kind),
+            payload: row.payload,
+          })
+        )
+        .filter(document => document !== undefined);
+      expect(documents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            scopeKind: "collection",
+            scopeSlug: "journal",
+            entryId: noteId,
+          }),
+          expect.objectContaining({
+            scopeKind: "single",
+            scopeSlug: "header",
+            entryId: mastheadId,
+          }),
+        ])
+      );
+    }, 120_000);
+
+    it("leaves no content event naming a renamed entity's old slug, in its subject or anywhere in its payload", async () => {
+      await boot(dialect);
+      const noteId = await writeNote();
+      await seedHistory("collection", "notes", noteId);
+      const mastheadId = await writeMasthead();
+      await seedHistory("single", "masthead", mastheadId);
+      const renames = [
+        ["collection", "notes", "journal"],
+        ["single", "masthead", "header"],
+      ] as const;
+      // Every string a payload holds, at any depth.
+      const stringsIn = (value: unknown): string[] => {
+        const parsed: unknown =
+          typeof value === "string" && /^[[{]/.test(value)
+            ? JSON.parse(value)
+            : value;
+        if (typeof parsed === "string") return [parsed];
+        if (Array.isArray(parsed)) return parsed.flatMap(stringsIn);
+        if (typeof parsed === "object" && parsed !== null) {
+          return Object.values(parsed).flatMap(stringsIn);
+        }
+        return [];
+      };
+      const naming = async (kind: RenamedEntityKind, slug: string) =>
+        (await rowsOf("nextly_content_events")).filter(
+          row =>
+            (row.subjectKind === kind && row.subjectSlug === slug) ||
+            stringsIn(row.payload).includes(slug)
+        );
+      // The fixture reaches both places a content event names an entity, so
+      // an empty answer after the rename means each was moved.
+      for (const [kind, from] of renames) {
+        const before = await naming(kind, from);
+        expect([kind, before.some(row => row.subjectKind === kind)]).toEqual([
+          kind,
+          true,
+        ]);
+        expect([
+          kind,
+          before.some(row => stringsIn(row.payload).includes(from)),
+        ]).toEqual([kind, true]);
+      }
+
+      for (const [kind, from, to] of renames) await rename(kind, from, to);
+
+      for (const [kind, from] of renames) {
+        expect([kind, await naming(kind, from)]).toEqual([kind, []]);
+      }
+    }, 120_000);
+
+    it("returns a renamed Single's document under its new slug", async () => {
+      await boot(dialect);
+      await writeMasthead();
+
+      await rename("single", "masthead", "header");
+
+      const read = await t()
+        .getService("singleEntryService")
+        .get("header", { overrideAccess: true });
+      expect((read.data as { slug?: unknown } | undefined)?.slug).toBe(
+        "header"
+      );
+    }, 120_000);
+
+    it("flushes the cached content of both slugs once a rename commits", async () => {
+      await boot(dialect);
+      const revalidator = container.get<CacheRevalidator>("cacheRevalidator");
+      const flushed = vi.spyOn(revalidator, "flush");
+
+      await rename("collection", "notes", "journal");
+      await rename("single", "masthead", "header");
+
+      const tags = flushed.mock.calls.flatMap(([intents]) =>
+        intents.flatMap(intent => intent.tags)
+      );
+      expect(tags).toEqual(
+        expect.arrayContaining([
+          collectionTag("notes"),
+          collectionTag("journal"),
+          singleTag("masthead"),
+          singleTag("header"),
+        ])
+      );
     }, 120_000);
 
     it("moves a custom permission's resource without respelling it, and keeps a name an administrator chose", async () => {

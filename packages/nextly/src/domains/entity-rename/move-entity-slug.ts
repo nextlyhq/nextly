@@ -580,28 +580,52 @@ async function endOnRename(
   }
 }
 
+/** One row of a JSON declaration, as `names` and `rewrite` are handed it. */
+interface JsonRow {
+  id: SqlParam;
+  value: unknown;
+  /** The declaration's `reads` columns, by SQL name. */
+  row: SlugKeyedRow;
+}
+
 /**
  * Every row's id and JSON value, for a table declared small enough to read,
- * leaving out the rows its declaration excludes.
+ * leaving out the rows its declaration excludes and reading the further
+ * columns it names.
  */
 async function jsonRows(
   tx: TransactionContext,
   column: JsonSlugColumn,
   properties: ColumnProperties
-): Promise<{ id: SqlParam; value: unknown }[]> {
+): Promise<JsonRow[]> {
   const idProperty = property(properties, column, column.rowId);
   const valueProperty = property(properties, column, column.jsonColumn);
-  const excluded = (column.onlyWhereNull ?? []).map(name => ({
-    column: property(properties, column, name),
-    op: "IS NULL" as const,
-  }));
+  const reads = column.reads ?? [];
+  const conditions = [
+    ...(column.onlyWhereNull ?? []).map(name => ({
+      column: property(properties, column, name),
+      op: "IS NULL" as const,
+    })),
+    ...Object.entries(column.onlyWhereEqual ?? {}).map(([name, value]) => ({
+      column: property(properties, column, name),
+      op: "=" as const,
+      value,
+    })),
+  ];
   const rows = await tx.select<Record<string, unknown>>(column.table, {
-    columns: [idProperty, valueProperty],
-    ...(excluded.length > 0 ? { where: { and: excluded } } : {}),
+    columns: [
+      idProperty,
+      valueProperty,
+      ...reads.map(name => property(properties, column, name)),
+    ],
+    ...(conditions.length > 0 ? { where: { and: conditions } } : {}),
   });
   return rows.map(row => ({
     id: rowIdOf(column, row[idProperty]),
     value: row[valueProperty],
+    row: Object.fromEntries(
+      reads.map(name => [name, row[property(properties, column, name)]])
+    ),
   }));
 }
 
@@ -613,7 +637,11 @@ async function refuseNamedInJson(
   move: EntitySlugMove
 ): Promise<void> {
   const rows = await jsonRows(tx, column, properties);
-  if (rows.some(row => column.names(row.value, move.to))) {
+  if (
+    rows.some(row =>
+      column.names(row.value, move.to, { kind: move.kind, row: row.row })
+    )
+  ) {
     throw takenSlug(column.table, move);
   }
 }
@@ -628,10 +656,13 @@ async function rewriteJson(
   const idProperty = property(properties, column, column.rowId);
   const valueProperty = property(properties, column, column.jsonColumn);
   for (const row of await jsonRows(tx, column, properties)) {
-    if (!column.names(row.value, move.from)) continue;
+    const target = { kind: move.kind, row: row.row };
+    if (!column.names(row.value, move.from, target)) continue;
     await tx.update(
       column.table,
-      { [valueProperty]: column.rewrite(row.value, move.from, move.to) },
+      {
+        [valueProperty]: column.rewrite(row.value, move.from, move.to, target),
+      },
       { and: [{ column: idProperty, op: "=", value: row.id }] }
     );
   }

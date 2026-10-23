@@ -37,6 +37,7 @@ import { NextlyError } from "../../errors";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { entityPermissionSpelling } from "../auth/services/entity-permission-spelling";
+import { documentOfReleaseEvent } from "../releases/release-events";
 import { releaseMemberKey } from "../releases/release-member-key";
 import { versionPinKey } from "../versions/version-pins";
 import { versionViewKey } from "../versions/version-views";
@@ -137,13 +138,33 @@ export interface JsonSlugColumn {
    * neither refuses a rename nor is rewritten by one.
    */
   onlyWhereNull?: readonly string[];
+  /**
+   * Columns that must hold these values for a row to be read at all, so a
+   * declaration over a large table reads only the rows that can name an
+   * entity.
+   */
+  onlyWhereEqual?: Readonly<Record<string, string>>;
+  /** Further columns `names` and `rewrite` are handed, by SQL name. */
+  reads?: readonly string[];
   /** The kinds whose slugs the value can name. */
   renames: readonly RenamedEntityKind[];
   onRename: "follow-json";
-  /** Whether `value` names `slug`. */
-  names(value: unknown, slug: string): boolean;
+  /** Whether `value` names the entity of `target.kind` under `slug`. */
+  names(value: unknown, slug: string, target: JsonSlugTarget): boolean;
   /** `value` naming `to` wherever it named `from`. */
-  rewrite(value: unknown, from: string, to: string): unknown;
+  rewrite(
+    value: unknown,
+    from: string,
+    to: string,
+    target: JsonSlugTarget
+  ): unknown;
+}
+
+/** The entity a JSON value is asked about, and the row the value is from. */
+export interface JsonSlugTarget {
+  kind: RenamedEntityKind;
+  /** The row's `reads` columns, by SQL name. */
+  row: SlugKeyedRow;
 }
 
 export type SlugColumn =
@@ -246,6 +267,42 @@ function envelopeRenamed(payload: unknown, from: string, to: string): unknown {
   const named = ["collection", "slug"].find(key => resource[key] === from);
   if (named === undefined) return payload;
   return { ...envelope, resource: { ...resource, [named]: to } };
+}
+
+/**
+ * Whether a release event's payload names the entity's document under
+ * `slug`: read by the one function release history reads it with, so the
+ * rename and the history's access decision agree on which document it is.
+ */
+function releaseEventNames(
+  payload: unknown,
+  slug: string,
+  target: JsonSlugTarget
+): boolean {
+  const document = documentOfReleaseEvent({
+    kind: textOf(target.row, "kind"),
+    payload: parsedJson(payload),
+  });
+  return (
+    document !== null &&
+    document !== undefined &&
+    document.scopeKind === target.kind &&
+    document.scopeSlug === slug
+  );
+}
+
+/** A release event's payload naming its document under `to`. */
+function releaseEventRenamed(
+  payload: unknown,
+  from: string,
+  to: string,
+  target: JsonSlugTarget
+): unknown {
+  const value = parsedJson(payload);
+  if (!releaseEventNames(value, from, target) || !isRecord(value)) {
+    return payload;
+  }
+  return { ...value, scopeSlug: to };
 }
 
 /** How every history table spells the two kinds a rename moves. */
@@ -459,6 +516,25 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     onRename: "follow-json",
     names: (value, slug) => filterCollections(value)?.includes(slug) ?? false,
     rewrite: (value, from, to) => withCollectionRenamed(value, from, to),
+  },
+  {
+    // A release's history of its documents: an event about a document added
+    // to, removed from or re-actioned in a release is the release's own
+    // (its subject is the release), and names the document inside its
+    // payload. The history decides who may see each such event from that
+    // document, so it follows the rename: release history keeps showing the
+    // document under its new name and its own access, and an entity later
+    // created under the old name is never judged in its place. Only release
+    // events are read.
+    table: "nextly_content_events",
+    jsonColumn: "payload",
+    rowId: "id",
+    onlyWhereEqual: { subject_kind: "release" },
+    reads: ["kind"],
+    renames: ["collection", "single"],
+    onRename: "follow-json",
+    names: releaseEventNames,
+    rewrite: releaseEventRenamed,
   },
   {
     table: "nextly_events",
