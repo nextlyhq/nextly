@@ -57,8 +57,20 @@ export function writtenFields(blocks: unknown): WrittenFields {
 }
 
 /** A stored format as the record reads it: anything but `written` is coded. */
-export function formatOf(stored: unknown): TemplateFormat {
+function formatOf(stored: unknown): TemplateFormat {
   return stored === "written" ? "written" : "code";
+}
+
+/** A stored row's format and blocks as the record reads them: a coded template has none. */
+export function storedFormat(row: {
+  format?: string | null;
+  blocks?: WrittenDocument | null;
+}): {
+  format: TemplateFormat;
+  blocks: WrittenDocument | null;
+} {
+  const format = formatOf(row.format);
+  return { format, blocks: format === "written" ? (row.blocks ?? null) : null };
 }
 
 /** A save's format, checked: unset is coded. */
