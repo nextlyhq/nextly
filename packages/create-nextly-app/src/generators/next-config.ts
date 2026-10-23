@@ -1046,16 +1046,30 @@ function cacheComponentsPlan(
     remove: (value.end ?? 0) - (value.start ?? 0),
     text: "false",
   };
-  const prefetching = object.properties.find(
+  // Every definition, under any spelling of its key: the last one wins at run
+  // time, so removing only the first can leave the one Next.js reads.
+  const prefetching = object.properties.filter(
     (property): property is ObjectProperty =>
       isPropertyNamed(property, PARTIAL_PREFETCHING)
   );
-  return prefetching
-    ? {
-        edits: [flip, removeProperty(source, prefetching)],
-        removed: [PARTIAL_PREFETCHING],
-      }
-    : { edits: [flip], removed: [] };
+  return {
+    edits: [
+      flip,
+      ...prefetching.map(property => removeProperty(source, property)),
+    ],
+    removed: prefetching.length > 0 ? [PARTIAL_PREFETCHING] : [],
+  };
+}
+
+/** Whether a config, read as code, still defines `partialPrefetching` anywhere in its exported object. */
+function definesPartialPrefetching(source: string, file: string): boolean {
+  const object = cacheComponentsObject(source, file);
+  return (
+    typeof object !== "string" &&
+    object.properties.some(property =>
+      isPropertyNamed(property, PARTIAL_PREFETCHING)
+    )
+  );
 }
 
 /**
@@ -1080,9 +1094,11 @@ export async function turnOffCacheComponents(
   if (plan.edits.length === 0) return { kind: "unchanged" };
   const text = applyEdits(source, plan.edits);
   const recheck = cacheComponentsPlan(text, file);
-  const prefetchingLeft =
-    "edits" in recheck && text.includes(`${PARTIAL_PREFETCHING}:`);
-  if ("reason" in recheck || recheck.edits.length > 0 || prefetchingLeft) {
+  if (
+    "reason" in recheck ||
+    recheck.edits.length > 0 ||
+    definesPartialPrefetching(text, file)
+  ) {
     return { kind: "manual", file, reason: "the edit could not be confirmed" };
   }
   await fs.writeFile(path.join(cwd, file), text, "utf-8");

@@ -100,6 +100,25 @@ export default nextConfig;
 `);
   });
 
+  // A later duplicate wins in JavaScript, and it may be spelled as a quoted key,
+  // so every definition goes and the result is read back as parsed code.
+  it("removes every partialPrefetching it defines, under any spelling", async () => {
+    await write(
+      "next.config.mjs",
+      'export default {\n  cacheComponents: true,\n  partialPrefetching: false,\n  "partialPrefetching": true,\n};\n'
+    );
+
+    const result = await turnOffCacheComponents(dir);
+
+    expect(result).toMatchObject({
+      kind: "turned-off",
+      removed: ["partialPrefetching"],
+    });
+    expect(await read("next.config.mjs")).toBe(
+      "export default {\n  cacheComponents: false,\n};\n"
+    );
+  });
+
   it("turns it off on a config written on one line", async () => {
     await write(
       "next.config.mjs",

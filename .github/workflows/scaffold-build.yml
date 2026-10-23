@@ -582,15 +582,20 @@ jobs:
           # every leg because they reach a project by two different routes — from this
           # checkout on the `local` legs, from the packed tarball on `bundled` — and only
           # the second is where a missing `files` entry would drop them.
-          test -f AGENTS.md || { echo "no AGENTS.md: the scaffold shipped no agent guide"; exit 1; }
-          test -f CLAUDE.md || { echo "no CLAUDE.md: nothing points Claude Code at AGENTS.md"; exit 1; }
+          # A template's guide, so not on the existing-app leg: there AGENTS.md is
+          # create-next-app's own, with no CLAUDE.md beside it, and the installer leaves
+          # the app's files alone.
+          if [ "${{ matrix.existing }}" != "create-next-app" ]; then
+            test -f AGENTS.md || { echo "no AGENTS.md: the scaffold shipped no agent guide"; exit 1; }
+            test -f CLAUDE.md || { echo "no CLAUDE.md: nothing points Claude Code at AGENTS.md"; exit 1; }
 
-          # The guide is generated from a template, so an unresolved placeholder would ship
-          # `{{databaseDialect}}` to the reader as if it were the answer.
-          if grep -q '{{' AGENTS.md; then
-            echo "AGENTS.md still contains an unreplaced {{placeholder}}"
-            grep -n '{{' AGENTS.md
-            exit 1
+            # The guide is generated from a template, so an unresolved placeholder would ship
+            # `{{databaseDialect}}` to the reader as if it were the answer.
+            if grep -q '{{' AGENTS.md; then
+              echo "AGENTS.md still contains an unreplaced {{placeholder}}"
+              grep -n '{{' AGENTS.md
+              exit 1
+            fi
           fi
 
           # `node_modules` says an install ran; it does not say WHICH installer ran. The CLI
@@ -621,6 +626,15 @@ jobs:
               exit 1
               ;;
           esac
+
+          # The font checks are about the TEMPLATES' layouts. The existing-app leg keeps
+          # create-next-app's own layout, which loads its font through `next/font/google`
+          # and imports no `@fontsource` package, so the control below would always find
+          # nothing there.
+          if [ "${{ matrix.existing }}" = "create-next-app" ]; then
+            echo "existing app: its layout is create-next-app's, not a template's; no font packages to check"
+            exit 0
+          fi
 
           # Every package the layouts import must be installed. Derived from the sources
           # rather than named here: a list in this file is a second answer to a question
@@ -709,8 +723,10 @@ jobs:
           echo "generated Zod schemas: $schemas"
           # The visual approach declares no collections in code (its schema lives
           # in the database), so generation has nothing to write a schema for and
-          # the compile above is the whole check. Every other leg must write some.
-          if [ "${{ matrix.approach }}" != visual ]; then
+          # the compile above is the whole check. The existing-app leg is the same:
+          # the config create-nextly-app writes into an existing app declares no
+          # collections or singles. Every other leg must write some.
+          if [ "${{ matrix.approach }}" != visual ] && [ "${{ matrix.existing }}" != "create-next-app" ]; then
             [ "$schemas" -gt 0 ] || { echo "generate:types wrote no Zod schema"; exit 1; }
           fi
 
