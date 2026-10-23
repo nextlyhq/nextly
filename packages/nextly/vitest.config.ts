@@ -58,14 +58,24 @@ function filesThatLeaveState(): string[] {
 }
 
 /**
- * Unit files that leave one of nextly's global singletons holding more than
- * they found, named by the singleton they fill. Nothing in their source says so
- * where the pattern above can see it: they fill a registry through the code
- * under test. `shared-module-guards.ts` is what finds them. It fails a shared
- * file whose run grows a singleton, so a new one is either reset by its tests
- * or listed here.
+ * Unit files that change one of nextly's global singletons through the code
+ * under test, named by the singleton they change. Nothing in their source says
+ * so where the patterns above can see it. `shared-module-guards.ts` is what
+ * finds them: it puts every singleton back after each shared file, and fails a
+ * file that changed one already there when it started. So a new one is either
+ * restored by its own tests or listed here.
  */
-const FILLS_GLOBAL_SINGLETONS = [
+const CHANGES_GLOBAL_SINGLETONS = [
+  // __nextly_eventBus
+  "src/auth/handlers/__tests__/register-allow-registration.test.ts",
+  "src/auth/handlers/__tests__/session-roles-read-failure.test.ts",
+  "src/auth/handlers/__tests__/session-row-lock.test.ts",
+  "src/plugins/plugin-config-view.test.ts",
+  "src/plugins/plugin-singles.test.ts",
+  // __nextly_webhookActivation
+  "src/domains/media/__tests__/media-folder.test.ts",
+  "src/domains/media/__tests__/media-service-edge-cases.test.ts",
+  "src/domains/singles/__tests__/single-virtual-field.test.ts",
   // __nextlyFieldFunctionRegistry
   "src/auth/principal-scope.test.ts",
   // __nextly_container
@@ -101,7 +111,7 @@ const FILLS_GLOBAL_SINGLETONS = [
 ];
 
 const isolatedFiles = [
-  ...new Set([...filesThatLeaveState(), ...FILLS_GLOBAL_SINGLETONS]),
+  ...new Set([...filesThatLeaveState(), ...CHANGES_GLOBAL_SINGLETONS]),
 ];
 
 export default defineConfig({
