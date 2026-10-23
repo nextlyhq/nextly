@@ -153,8 +153,9 @@ export function DualSidebar({
     isPermissionsLoading ||
     (!!permissionsError && permissions.length === 0);
   // The content sections are decided by the server's answer about collections
-  // and Singles as well, which arrives on its own.
-  const contentAnswerPending = hasPermissionDataPending || content.isLoading;
+  // and Singles alone, so they wait on that answer and not on the permission
+  // list: a list that failed would otherwise keep them pending for good.
+  const contentAnswerPending = !isHydrated || content.isLoading;
 
   const hasCollectionsSection = hasCollectionsSectionHelper(capabilities, {
     isPending: contentAnswerPending || isCollectionsLoading,

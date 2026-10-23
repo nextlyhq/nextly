@@ -25,6 +25,8 @@ const server = vi.hoisted(() => ({
   asked: [] as string[],
   /** A delay for the next permissions request, which answers as asked. */
   permissionsDelayMs: 0,
+  /** The same, for the next capabilities request. */
+  capabilitiesDelayMs: 0,
 }));
 
 /** The content language the screen's `?locale=` names, if any. */
@@ -46,8 +48,12 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
         return asAsked;
       }
       if (path.split("?")[0] === "/me/capabilities") {
-        if (server.capabilities instanceof Error) throw server.capabilities;
-        return server.capabilities;
+        const asAsked = server.capabilities;
+        const delay = server.capabilitiesDelayMs;
+        server.capabilitiesDelayMs = 0;
+        if (delay > 0) await new Promise(done => setTimeout(done, delay));
+        if (asAsked instanceof Error) throw asAsked;
+        return asAsked;
       }
       throw new Error(`unexpected request ${path}`);
     },
@@ -122,6 +128,7 @@ beforeEach(() => {
   server.capabilities = undefined;
   server.asked = [];
   server.permissionsDelayMs = 0;
+  server.capabilitiesDelayMs = 0;
   onScreen.locale = undefined;
 });
 
@@ -368,6 +375,57 @@ describe("useCurrentUserPermissions", () => {
     await waitFor(() => expect(result.current.error).not.toBeNull());
 
     expect(result.current.hasAnswer).toBe(false);
+  });
+
+  it("lets the slower half of a refresh at the end finish rather than restarting it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    server.capabilities = answering({ read: true }, Date.now() + 60_000);
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(newClient()),
+    });
+    await waitFor(() => expect(result.current.hasAnswer).toBe(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(59_000);
+    });
+
+    // At the end the permission list answers at once and the content answer
+    // three seconds later.
+    server.capabilities = answering({ read: true }, null);
+    server.capabilitiesDelayMs = 3_000;
+    const before = capabilityAsks();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_500);
+    });
+    // POPULATION CONTROL: the list's answer from after the end has landed.
+    expect(result.current.hasAnswer).toBe(true);
+    expect(capabilityAsks()).toBe(before + 1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+    // Asked once at the end, and left to finish.
+    expect(capabilityAsks()).toBe(before + 1);
+  });
+
+  it("asks again every minute while the content answer is missing, so an ended role is noticed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    server.capabilities = new Error("capabilities unavailable");
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(newClient()),
+    });
+    await waitFor(() => expect(result.current.content.error).not.toBeNull());
+    expect(result.current.hasPermission("read-posts")).toBe(true);
+
+    // The role ends, and no answer said when.
+    server.permissions = { ...EDITOR, permissions: [] };
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+
+    await waitFor(() =>
+      expect(result.current.hasPermission("read-posts")).toBe(false)
+    );
   });
 
   it("stops counting an answer once a change invalidates it, until a new one arrives", async () => {

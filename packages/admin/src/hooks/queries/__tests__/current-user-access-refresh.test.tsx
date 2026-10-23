@@ -40,7 +40,7 @@ import type { Permission } from "@admin/types/entities";
 
 import { CURRENT_USER_CAPABILITIES_KEY } from "../../current-user-access";
 import { useUpdatePermission } from "../usePermissions";
-import { useUpdateRole } from "../useRoles";
+import { useBulkUpdateRoles, useUpdateRole } from "../useRoles";
 import { useUpdateUser } from "../useUsers";
 
 const wrapperFor =
@@ -130,5 +130,29 @@ describe.each(EDITS)("$name", edit => {
     // POPULATION CONTROL: the edit's own caches are still reconciled.
     expect(keys.length).toBeGreaterThan(0);
     expect(asksAccessAgain(keys)).toBe(false);
+  });
+});
+
+describe("a bulk role edit given its own onComplete", () => {
+  it("still asks again what the user may do", async () => {
+    vi.mocked(updateRole).mockResolvedValue(undefined);
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useBulkUpdateRoles(), {
+      wrapper: wrapperFor(client),
+    });
+    const own = vi.fn();
+
+    await act(async () => {
+      await result.current.mutateAsync(["role-1"], {}, { onComplete: own });
+    });
+
+    // POPULATION CONTROL: the caller's callback replaced the default one.
+    expect(own).toHaveBeenCalled();
+    expect(
+      asksAccessAgain(invalidate.mock.calls.map(([f]) => [f?.queryKey]))
+    ).toBe(true);
   });
 });

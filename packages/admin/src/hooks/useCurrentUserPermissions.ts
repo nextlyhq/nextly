@@ -3,7 +3,7 @@ import {
   useQueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
 import { LOCALE_PARAM } from "../constants/search-params";
@@ -193,6 +193,14 @@ export function buildCapabilities(
   };
 }
 
+/**
+ * How often both answers are asked again while the content answer is
+ * missing. That answer carries the end of the soonest role assignment, so
+ * without it no end is known and the permission list beside it would
+ * otherwise be kept past an end nobody could see coming.
+ */
+const UNANSWERED_RECHECK_MS = 60_000;
+
 /** The longest delay a browser timer holds without overflowing. */
 const MAX_TIMER_MS = 2_147_483_647;
 
@@ -247,6 +255,58 @@ type CurrentUserPermissions = AnswerState & {
     action: "read" | "create" | "update" | "delete" | "publish" | "unpublish"
   ) => boolean;
 };
+
+/** Whether the content answer has failed and has never answered. */
+function contentUnanswered(
+  queryClient: ReturnType<typeof useQueryClient>,
+  key: readonly unknown[]
+): boolean {
+  const state = queryClient.getQueryState(key);
+  return state?.data === undefined && state?.error != null;
+}
+
+/** What the deadline effect does now, for the answers and ends it has. */
+type DeadlineStep =
+  | { kind: "ask-both" }
+  | { kind: "ask-stale"; list: boolean; answer: boolean }
+  | { kind: "wait"; at: number }
+  | { kind: "none" };
+
+/**
+ * The deadline effect's decision, apart from the timers and requests that
+ * carry it out:
+ *
+ * - an end has passed and an answer is from before it: ask both again, unless
+ *   a refresh for that end was already asked after it, in which case ask only
+ *   the halves still from before it;
+ * - otherwise wait for the next end to come, or, for an answer the server
+ *   gave after its own end, check again at most once a second.
+ */
+function nextDeadlineStep(state: {
+  ends: readonly number[];
+  validUntil: number | null;
+  answeredAt: number;
+  permissionsAnsweredAt: number;
+  askedAt: number | null;
+  now: number;
+}): DeadlineStep {
+  const { ends, validUntil, now } = state;
+  const passed = latestPassed(ends, now);
+  if (passed !== null) {
+    const list = state.permissionsAnsweredAt < passed;
+    const answer = state.answeredAt < passed;
+    if (list || answer) {
+      return state.askedAt === null || state.askedAt < passed
+        ? { kind: "ask-both" }
+        : { kind: "ask-stale", list, answer };
+    }
+  }
+  const upcoming = ends.filter(end => end > now);
+  const recheck =
+    validUntil !== null && validUntil <= now ? now + MIN_RECHECK_MS : Infinity;
+  const at = Math.min(...upcoming, recheck);
+  return at === Infinity ? { kind: "none" } : { kind: "wait", at };
+}
 
 /** The latest of `ends` that has passed by `now`, or null. */
 function latestPassed(ends: readonly number[], now: number): number | null {
@@ -319,6 +379,12 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // answer is asked for, and kept, per language, as the screen's own
   // requests are sent.
   const locale = useLocaleParam(LOCALE_PARAM);
+  // One key per language, kept stable so the effects below that ask about
+  // it run when the language changes and not on every render.
+  const capabilitiesKey = useMemo(
+    () => currentUserCapabilitiesKey(locale),
+    [locale]
+  );
 
   // The `/me/permissions` endpoint returns the canonical
   // UserPermissionsResponse shape directly, so `data` here IS the
@@ -330,6 +396,10 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     staleTime: 0,
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
+    refetchInterval: () =>
+      contentUnanswered(queryClient, capabilitiesKey)
+        ? UNANSWERED_RECHECK_MS
+        : false,
   });
   const { data, refetch } = permissionsQuery;
 
@@ -339,7 +409,6 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // only on focus, when a role assignment ends, and when the admin changes
   // roles, permissions, role assignments or the schema, not each time
   // another component mounts.
-  const capabilitiesKey = currentUserCapabilitiesKey(locale);
   const answer = useQuery<CapabilitiesResponse>({
     queryKey: capabilitiesKey,
     queryFn: () =>
@@ -351,6 +420,10 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     enabled: isPrivateRoute,
     staleTime: Infinity,
     refetchOnWindowFocus: "always",
+    refetchInterval: query =>
+      query.state.data === undefined && query.state.error !== null
+        ? UNANSWERED_RECHECK_MS
+        : false,
   });
   const refetchAnswer = answer.refetch;
 
@@ -381,8 +454,12 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   const endedAt = latestPassed(knownEnds, Date.now());
   const permissionsAnsweredAt = permissionsQuery.dataUpdatedAt;
   const [, setEndsReached] = useState(0);
+  // When the last refresh for a reached end was asked, so that once one half
+  // of it lands the other is not restarted.
+  const askedAt = useRef<number | null>(null);
   useEffect(() => {
     const askAgain = (): void => {
+      askedAt.current = Date.now();
       setEndsReached(reached => reached + 1);
       // A refresh already under way may have been asked before the end, and
       // its answer would arrive after it looking current, so it is replaced
@@ -390,23 +467,29 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
       void refetch();
       void refetchAnswer();
     };
-    const now = Date.now();
-    const passed = latestPassed(knownEnds, now);
-    // An end has passed and an answer from before it is all there is.
-    if (
-      passed !== null &&
-      (permissionsAnsweredAt < passed || answeredAt < passed)
-    ) {
+    const step = nextDeadlineStep({
+      ends: knownEnds,
+      validUntil,
+      answeredAt,
+      permissionsAnsweredAt,
+      askedAt: askedAt.current,
+      now: Date.now(),
+    });
+    if (step.kind === "ask-both") {
       askAgain();
       return undefined;
     }
-    // The next end to come, and, for an answer the server gave after its own
-    // end, a check at most once a second for the answer that follows it.
-    const upcoming = knownEnds.filter(end => end > now);
-    const recheck =
-      validUntil !== null && validUntil <= now ? now + MIN_RECHECK_MS : null;
-    const at = Math.min(...upcoming, recheck ?? Infinity);
-    if (at === Infinity) return undefined;
+    if (step.kind === "ask-stale") {
+      // Only a half not already being asked, so one half landing first does
+      // not restart the other.
+      const idle = (key: readonly unknown[]): boolean =>
+        queryClient.isFetching({ queryKey: key, exact: true }) === 0;
+      if (step.list && idle(CURRENT_USER_PERMISSIONS_KEY)) void refetch();
+      if (step.answer && idle(capabilitiesKey)) void refetchAnswer();
+      return undefined;
+    }
+    if (step.kind === "none") return undefined;
+    const { at } = step;
     let timer: ReturnType<typeof setTimeout>;
     const arm = (): void => {
       const remaining = at - Date.now();
@@ -427,6 +510,8 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     permissionsAnsweredAt,
     refetch,
     refetchAnswer,
+    queryClient,
+    capabilitiesKey,
   ]);
 
   // A change the admin made invalidates both answers; the old ones stop
