@@ -390,6 +390,8 @@ describe.each(getConfiguredTestDialects())(
           components: ["note", "quote"],
           repeatable: true,
         }),
+        // A dynamic zone holding one block, as an object rather than a list.
+        fieldGroup({ name: "oneZone", components: ["note", "quote"] }),
         group({
           name: "box",
           fields: [fieldGroup({ name: "inBox", component: "note" })],
@@ -931,6 +933,22 @@ describe.each(getConfiguredTestDialects())(
           "locked-rm-many0",
           "locked-rm-many1",
         ]);
+      });
+
+      it("keeps a single dynamic-zone block holding a value the updater may not change", async () => {
+        const { item } = await trusted.create({
+          collection: "pages",
+          data: {
+            title: "rmz",
+            oneZone: typed("note", { heading: "h", ...guardedValues("rmz") }),
+          },
+        } as never);
+        const id = String(item.id);
+        await updateAs("direct", "editor", id, { oneZone: null });
+
+        // A dynamic zone reads back as a list, whatever it holds.
+        const after = list((await stored("pages", id)).oneZone);
+        expect(after.map(block => block.locked)).toEqual(["locked-rmz"]);
       });
 
       it("removes it for an updater who may change everything it holds", async () => {

@@ -1434,6 +1434,53 @@ describe("FieldGroupDataService", () => {
       });
     });
 
+    it("judges a nested field group a container's default brings in", async () => {
+      // `box` defaults to a value holding an `inner` instance, whose `secret`
+      // no create may set: the default must not carry it past that rule.
+      ctx.registry.registerComponent("innerg", {
+        slug: "innerg",
+        tableName: "comp_innerg",
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "secret", type: "text" },
+        ],
+      });
+      registerFieldFunctions("fieldGroup", "innerg", [
+        { name: "secret", access: { create: () => false } },
+      ]);
+      ctx.registry.registerComponent("outerg", {
+        slug: "outerg",
+        tableName: "comp_outerg",
+        fields: [
+          { name: "title", type: "text" },
+          {
+            name: "box",
+            type: "group",
+            defaultValue: { inner: { heading: "h", secret: "from-default" } },
+            fields: [{ name: "inner", type: "component", component: "innerg" }],
+          },
+        ],
+      });
+      ctx.adapter.select.mockResolvedValue([]);
+
+      await ctx.service.saveComponentData({
+        parentId: "e1",
+        parentTable: "dc_pages",
+        access: CHECKED,
+        fields: [{ name: "outer", type: "component", component: "outerg" }],
+        data: { outer: { title: "t" } },
+      });
+
+      const box = (
+        ctx.adapter.insert.mock.calls[0][1] as Record<string, unknown>
+      ).box;
+      const parsed = (typeof box === "string" ? JSON.parse(box) : box) as {
+        inner?: Record<string, unknown>;
+      };
+      expect(parsed.inner?.heading).toBe("h");
+      expect(parsed.inner).not.toHaveProperty("secret");
+    });
+
     describe("a single field group's stored instance", () => {
       /** A stored `owned` instance, and a rule writable only for `allowedId`. */
       function storedOwned(allowedId: string) {

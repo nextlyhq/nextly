@@ -19,6 +19,7 @@ import {
   defineCollection,
   defineFieldGroup,
   fieldGroup,
+  group,
   text,
 } from "../../../config";
 import { Nextly } from "../../../direct-api/nextly";
@@ -50,6 +51,16 @@ describe.each(getConfiguredTestDialects())(
             fields: [
               text({ name: "heading" }),
               text({ name: "secret", access: { update: false } }),
+              // A translated container, held on the companion row and
+              // written whole.
+              group({
+                name: "box",
+                localized: true,
+                fields: [
+                  text({ name: "open" }),
+                  text({ name: "kept", access: { update: false } }),
+                ],
+              }),
             ],
           }),
         ],
@@ -130,6 +141,38 @@ describe.each(getConfiguredTestDialects())(
         data: { one: null },
       } as never);
       expect((await inSpanish(id))?.secret).toBe("es-only");
+    });
+
+    it("keeps a denied child of a translated container at its stored value", async () => {
+      const { item } = await trusted.create({
+        collection: "lpages",
+        data: {
+          title: "box",
+          one: { heading: "h-box", box: { open: "o", kept: "K" } },
+        },
+      } as never);
+      const id = String(item.id);
+      const one = (
+        (await trusted.findByID({
+          collection: "lpages",
+          id,
+          depth: 1,
+        } as never)) as Doc
+      ).one as Doc;
+      await checked.update({
+        collection: "lpages",
+        id,
+        data: { one: { id: one.id, box: { open: "o2", kept: "forged" } } },
+      } as never);
+
+      const after = (
+        (await trusted.findByID({
+          collection: "lpages",
+          id,
+          depth: 1,
+        } as never)) as Doc
+      ).one as Doc;
+      expect(after.box).toEqual({ open: "o2", kept: "K" });
     });
 
     it("removes one that holds no protected value in any language", async () => {
