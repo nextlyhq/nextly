@@ -620,6 +620,21 @@ const MAY_PLACE_A_NAME = new Set(["CREATE", "SELECT", "WITH", "RENAME"]);
 const MAY_PLACE_ANY_NAME = new Set(["DO", "CALL", "EXECUTE", "IMPORT"]);
 
 /**
+ * Whether a statement may put a relation under a name: under any name
+ * (`MAY_PLACE_ANY_NAME`), under the names it spells (`MAY_PLACE_A_NAME`, or
+ * an `ALTER ... RENAME`), or under none.
+ */
+function placesNames(tokens: readonly Token[]): "any" | "spelled" | undefined {
+  const first = tokens.find(token => token.kind === "word");
+  const opener = first?.kind === "word" ? first.upper : "";
+  if (MAY_PLACE_ANY_NAME.has(opener)) return "any";
+  if (MAY_PLACE_A_NAME.has(opener)) return "spelled";
+  const renames =
+    opener === "ALTER" && tokens.some(token => isWord(token, "RENAME"));
+  return renames ? "spelled" : undefined;
+}
+
+/**
  * Words that, before `SCHEMA`, make or rename a PostgreSQL schema — which
  * may then be the `$user` schema the search path starts with.
  */
@@ -1012,24 +1027,22 @@ class DropReader {
    * EXISTS` may find such a relation standing (`fillIfVacated`).
    */
   private notePlacing(tokens: readonly Token[]): void {
-    const first = tokens.find(token => token.kind === "word");
-    const opener = first?.kind === "word" ? first.upper : "";
-    if (MAY_PLACE_ANY_NAME.has(opener)) {
-      this.placingAnyIn ??= this.reads;
-      return;
-    }
-    const renames =
-      opener === "ALTER" && tokens.some(token => isWord(token, "RENAME"));
-    if (!MAY_PLACE_A_NAME.has(opener) && !renames) return;
+    const places = placesNames(tokens);
+    if (places === "any") this.placingAnyIn ??= this.reads;
+    if (places !== "spelled") return;
     for (const token of tokens) {
       const written =
         token.kind === "escaped-name" ? undefined : writtenName(token);
-      if (!written) continue;
-      const name = canonicalTableName(storedNameKey(written, this.dialect));
-      const placing = this.placingIn.get(name);
-      if (placing === undefined) this.placingIn.set(name, [this.reads]);
-      else placing.push(this.reads);
+      if (written) this.notePlaced(written);
     }
+  }
+
+  /** Records that this statement may put a relation under `written`. */
+  private notePlaced(written: string): void {
+    const name = canonicalTableName(storedNameKey(written, this.dialect));
+    const placing = this.placingIn.get(name);
+    if (placing === undefined) this.placingIn.set(name, [this.reads]);
+    else placing.push(this.reads);
   }
 
   /**
@@ -1108,21 +1121,29 @@ class DropReader {
     if (!table.local) return;
     const at = this.vacated.get(table.name);
     if (at === undefined || at >= this.statementIndex) return;
-    const emptiedIn = this.vacatedIn.get(table.name);
-    if (emptiedIn === undefined) return;
-    const placedEarlier = (this.placingIn.get(table.name) ?? []).some(
+    if (this.mayStillStand(table.name)) return;
+    this.occupy(table);
+  }
+
+  /**
+   * Whether a relation may still stand under a vacated `name`, for
+   * `fillIfVacated`: one of the conditions it lists holds.
+   */
+  private mayStillStand(name: string): boolean {
+    const emptiedIn = this.vacatedIn.get(name);
+    if (emptiedIn === undefined) return true;
+    const placedEarlier = (this.placingIn.get(name) ?? []).some(
       read => read < this.reads && read !== emptiedIn
     );
-    if (
+    const placedAnyEarlier =
+      this.placingAnyIn !== undefined && this.placingAnyIn < this.reads;
+    return (
       placedEarlier ||
-      (this.placingAnyIn !== undefined && this.placingAnyIn < this.reads) ||
-      this.createdAnywhere.has(table.name) ||
-      this.vacatedQualified.has(table.name) ||
+      placedAnyEarlier ||
+      this.createdAnywhere.has(name) ||
+      this.vacatedQualified.has(name) ||
       this.resolutionMayChange
-    ) {
-      return;
-    }
-    this.occupy(table);
+    );
   }
 
   /**
