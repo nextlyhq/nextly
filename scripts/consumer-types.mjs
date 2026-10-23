@@ -29,7 +29,13 @@
  * The first line printed is the verdict.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
@@ -41,23 +47,27 @@ const TEMPLATES = join(import.meta.dirname, "..", "templates");
 /** The TypeScript versions checked when none are given: the stable 5, 6 and 7 lines. */
 export const DEFAULT_TYPESCRIPT = ["5.9.3", "6.0.3", "7.0.2"];
 
-/** The files the checks write into each project, so diagnostics in them count as ours. */
-const CHECK_FILES = ["consumer-types.check.ts", "consumer-types.check.mts", "consumer-types.check.cts"];
-
 // ---------------------------------------------------------------------------
 // The packed packages
 // ---------------------------------------------------------------------------
 
 /** One packed package: its manifest, and the files the tarball holds, without the `package/` prefix. */
 export function readTarball(path) {
-  const listing = execFileSync("tar", ["-tzf", path], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+  const listing = execFileSync("tar", ["-tzf", path], {
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+  });
   const files = new Set(
     listing
       .split("\n")
       .filter(Boolean)
       .map(entry => entry.replace(/^package\//, ""))
   );
-  const manifest = JSON.parse(execFileSync("tar", ["-xzOf", path, "package/package.json"], { encoding: "utf8" }));
+  const manifest = JSON.parse(
+    execFileSync("tar", ["-xzOf", path, "package/package.json"], {
+      encoding: "utf8",
+    })
+  );
   return { path, name: manifest.name, manifest, files };
 }
 
@@ -85,8 +95,11 @@ const isObject = value => value !== null && typeof value === "object";
  * subpath's top-level `types` when the target is a bare path.
  */
 function conditionTypes(target, condition) {
-  const holder = typeof target[condition] === "string" ? target : target[condition];
-  return isObject(holder) && typeof holder.types === "string" ? holder.types : undefined;
+  const holder =
+    typeof target[condition] === "string" ? target : target[condition];
+  return isObject(holder) && typeof holder.types === "string"
+    ? holder.types
+    : undefined;
 }
 
 /** What ESM resolution reaches: the `import` condition, else a `types` no `require` competes with. */
@@ -116,10 +129,14 @@ export function manifestProblems(pkg) {
   const topLevel = pkg.manifest.types;
   const problems =
     typeof topLevel === "string" && !has(topLevel)
-      ? [`${pkg.name}: "types" names ${topLevel}, which the tarball does not hold`]
+      ? [
+          `${pkg.name}: "types" names ${topLevel}, which the tarball does not hold`,
+        ]
       : [];
   const subpathProblems = typedSubpaths(pkg).flatMap(subpath =>
-    Object.keys(FORMAT_EXTENSIONS).flatMap(format => typesProblems(subpath, format, has))
+    Object.keys(FORMAT_EXTENSIONS).flatMap(format =>
+      typesProblems(subpath, format, has)
+    )
   );
   return [...problems, ...subpathProblems];
 }
@@ -128,10 +145,15 @@ export function manifestProblems(pkg) {
 function typesProblems(subpath, format, has) {
   const types = subpath[format];
   if (!types) return [];
-  if (!has(types)) return [`${subpath.specifier} (${format}): types ${types} is not in the tarball`];
+  if (!has(types))
+    return [
+      `${subpath.specifier} (${format}): types ${types} is not in the tarball`,
+    ];
   return FORMAT_EXTENSIONS[format].some(extension => types.endsWith(extension))
     ? []
-    : [`${subpath.specifier} (${format}): types ${types} is the wrong format for ${format}`];
+    : [
+        `${subpath.specifier} (${format}): types ${types} is the wrong format for ${format}`,
+      ];
 }
 
 // ---------------------------------------------------------------------------
@@ -140,8 +162,11 @@ function typesProblems(subpath, format, has) {
 
 /** One subpath's import line in each module format, or nothing when that format has no types. */
 const IMPORT_LINE = {
-  esm: (subpath, binding) => subpath.import && `import type * as ${binding} from "${subpath.specifier}";`,
-  cjs: (subpath, binding) => subpath.require && `import ${binding} = require("${subpath.specifier}");`,
+  esm: (subpath, binding) =>
+    subpath.import &&
+    `import type * as ${binding} from "${subpath.specifier}";`,
+  cjs: (subpath, binding) =>
+    subpath.require && `import ${binding} = require("${subpath.specifier}");`,
 };
 
 /**
@@ -156,7 +181,9 @@ export function typeImportsSource(subpaths, style) {
     .filter(Boolean);
   const names = lines.map(line => /subpath\d+/.exec(line)[0]);
   // Each binding used as a type, so an unused import cannot be elided before its declaration is read.
-  lines.push(`export type Everything = [${names.map(name => `typeof ${name}`).join(", ")}];`);
+  lines.push(
+    `export type Everything = [${names.map(name => `typeof ${name}`).join(", ")}];`
+  );
   return `${lines.join("\n")}\n`;
 }
 
@@ -230,10 +257,15 @@ export default defineConfig({
 export function classifyDiagnostics(output, ourNames) {
   const all = diagnosticsIn(output);
   const isOurs = diagnostic => {
-    const owner = /node_modules\/((?:@[^/]+\/)?[^/]+)\//.exec(diagnostic.file)?.[1];
+    const owner = /node_modules\/((?:@[^/]+\/)?[^/]+)\//.exec(
+      diagnostic.file
+    )?.[1];
     return owner === undefined || ourNames.has(owner);
   };
-  return { ours: all.filter(isOurs), thirdParty: all.filter(diagnostic => !isOurs(diagnostic)) };
+  return {
+    ours: all.filter(isOurs),
+    thirdParty: all.filter(diagnostic => !isOurs(diagnostic)),
+  };
 }
 
 /** Every diagnostic in compiler output, in order, each with its continuation lines. */
@@ -242,7 +274,10 @@ function diagnosticsIn(output) {
   let current;
   for (const line of output.split("\n")) {
     const match = /^(.+?)\(\d+,\d+\): error TS\d+:/.exec(line);
-    if (match) found.push((current = { file: match[1].replaceAll("\\", "/"), text: line }));
+    if (match)
+      found.push(
+        (current = { file: match[1].replaceAll("\\", "/"), text: line })
+      );
     else current = continued(current, line);
   }
   return found;
@@ -261,7 +296,9 @@ function continued(current, line) {
  * ours missing from it was never checked, whatever the diagnostics say.
  */
 export function unread(expected, listed) {
-  const read = new Set(listed.split("\n").map(line => line.trim().replaceAll("\\", "/")));
+  const read = new Set(
+    listed.split("\n").map(line => line.trim().replaceAll("\\", "/"))
+  );
   return expected.filter(path => ![...read].some(file => file.endsWith(path)));
 }
 
@@ -270,8 +307,15 @@ export function unread(expected, listed) {
 // ---------------------------------------------------------------------------
 
 function run(command, args, cwd) {
-  const result = spawnSync(command, args, { cwd, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
-  return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  const result = spawnSync(command, args, {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  return {
+    status: result.status,
+    output: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+  };
 }
 
 /** Thrown when the run could not ask the question, as opposed to getting an answer. */
@@ -280,7 +324,9 @@ class CouldNotAsk extends Error {}
 function mustRun(command, args, cwd, what) {
   const result = run(command, args, cwd);
   if (result.status !== 0) {
-    throw new CouldNotAsk(`${what} failed (exit ${result.status}):\n${result.output.slice(-4000)}`);
+    throw new CouldNotAsk(
+      `${what} failed (exit ${result.status}):\n${result.output.slice(-4000)}`
+    );
   }
   return result.output;
 }
@@ -294,14 +340,27 @@ function mustRun(command, args, cwd, what) {
 export function pointAtTarballs(manifest, tarballs, added = []) {
   const spec = name => `file:${tarballs.get(name)}`;
   const pointed = ranges =>
-    Object.fromEntries(Object.entries(ranges).map(([name, range]) => [name, tarballs.has(name) ? spec(name) : range]));
+    Object.fromEntries(
+      Object.entries(ranges).map(([name, range]) => [
+        name,
+        tarballs.has(name) ? spec(name) : range,
+      ])
+    );
   const next = structuredClone(manifest);
   for (const field of ["dependencies", "devDependencies"]) {
     if (next[field]) next[field] = pointed(next[field]);
   }
-  const notDev = added.filter(name => next.devDependencies?.[name] === undefined);
-  next.dependencies = { ...next.dependencies, ...Object.fromEntries(notDev.map(name => [name, spec(name)])) };
-  next.overrides = { ...next.overrides, ...Object.fromEntries([...tarballs.keys()].map(name => [name, spec(name)])) };
+  const notDev = added.filter(
+    name => next.devDependencies?.[name] === undefined
+  );
+  next.dependencies = {
+    ...next.dependencies,
+    ...Object.fromEntries(notDev.map(name => [name, spec(name)])),
+  };
+  next.overrides = {
+    ...next.overrides,
+    ...Object.fromEntries([...tarballs.keys()].map(name => [name, spec(name)])),
+  };
   return next;
 }
 
@@ -343,7 +402,15 @@ function writeConfigs(project) {
   );
   writeFileSync(
     join(project, "tsconfig.consumer.declarations.json"),
-    JSON.stringify({ extends: "./tsconfig.json", include, compilerOptions: { skipLibCheck: false } }, null, 2)
+    JSON.stringify(
+      {
+        extends: "./tsconfig.json",
+        include,
+        compilerOptions: { skipLibCheck: false },
+      },
+      null,
+      2
+    )
   );
   writeFileSync(
     join(project, "tsconfig.consumer.nodenext.json"),
@@ -381,9 +448,13 @@ function writeConfigs(project) {
 function everyPackageProject(work, scaffolded, names, tarballs) {
   const dir = join(work, "consumer-everything");
   mkdirSync(dir, { recursive: true });
-  const app = JSON.parse(readFileSync(join(scaffolded, "package.json"), "utf8"));
+  const app = JSON.parse(
+    readFileSync(join(scaffolded, "package.json"), "utf8")
+  );
   const typePackages = Object.fromEntries(
-    Object.entries({ ...app.dependencies, ...app.devDependencies }).filter(([name]) => name.startsWith("@types/"))
+    Object.entries({ ...app.dependencies, ...app.devDependencies }).filter(
+      ([name]) => name.startsWith("@types/")
+    )
   );
   writeFileSync(
     join(dir, "package.json"),
@@ -392,7 +463,9 @@ function everyPackageProject(work, scaffolded, names, tarballs) {
         name: "consumer-everything",
         private: true,
         type: "module",
-        dependencies: Object.fromEntries(names.map(name => [name, `file:${tarballs.get(name)}`])),
+        dependencies: Object.fromEntries(
+          names.map(name => [name, `file:${tarballs.get(name)}`])
+        ),
         devDependencies: typePackages,
       },
       null,
@@ -401,15 +474,25 @@ function everyPackageProject(work, scaffolded, names, tarballs) {
   );
   // The app's settings, without what only the app itself has: its path
   // aliases, its editor plugin and its file list.
-  const settings = { ...parseJsonc(readFileSync(join(scaffolded, "tsconfig.json"), "utf8")).compilerOptions };
-  for (const appOnly of ["paths", "plugins", "incremental"]) delete settings[appOnly];
-  writeFileSync(join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: settings, include: [] }, null, 2));
+  const settings = {
+    ...parseJsonc(readFileSync(join(scaffolded, "tsconfig.json"), "utf8"))
+      .compilerOptions,
+  };
+  for (const appOnly of ["paths", "plugins", "incremental"])
+    delete settings[appOnly];
+  writeFileSync(
+    join(dir, "tsconfig.json"),
+    JSON.stringify({ compilerOptions: settings, include: [] }, null, 2)
+  );
   return dir;
 }
 
 const LEGS = [
   { name: "as scaffolded", config: "tsconfig.consumer.json" },
-  { name: "declarations checked", config: "tsconfig.consumer.declarations.json" },
+  {
+    name: "declarations checked",
+    config: "tsconfig.consumer.declarations.json",
+  },
   { name: "nodenext", config: "tsconfig.consumer.nodenext.json" },
 ];
 
@@ -425,11 +508,17 @@ function parseArgs(args) {
   };
   const tarballDir = option("--tarballs");
   if (!tarballDir) {
-    console.error("usage: node scripts/consumer-types.mjs --tarballs <dir> [--typescript a,b,c] [--work <dir>]");
+    console.error(
+      "usage: node scripts/consumer-types.mjs --tarballs <dir> [--typescript a,b,c] [--work <dir>]"
+    );
     process.exit(2);
   }
-  const versions = option("--typescript", DEFAULT_TYPESCRIPT.join(",")).split(",").filter(Boolean);
-  const work = resolve(option("--work", mkdtempSync(join(tmpdir(), "consumer-types-"))));
+  const versions = option("--typescript", DEFAULT_TYPESCRIPT.join(","))
+    .split(",")
+    .filter(Boolean);
+  const work = resolve(
+    option("--work", mkdtempSync(join(tmpdir(), "consumer-types-")))
+  );
   mkdirSync(work, { recursive: true });
   return { tarballDir, versions, work };
 }
@@ -437,10 +526,16 @@ function parseArgs(args) {
 /** The three projects, scaffolded, pointed at the tarballs, given their check files and installed. */
 function prepareProjects(packages, tarballs, work) {
   const cli = tarballs.get("create-nextly-app");
-  if (!cli) throw new CouldNotAsk("no create-nextly-app tarball to scaffold with");
+  if (!cli)
+    throw new CouldNotAsk("no create-nextly-app tarball to scaffold with");
   const app = scaffold(work, cli, "blog", "consumer-app");
   const plugin = scaffold(work, cli, "plugin", "consumer-plugin");
-  const everything = everyPackageProject(work, app, [...tarballs.keys()], tarballs);
+  const everything = everyPackageProject(
+    work,
+    app,
+    [...tarballs.keys()],
+    tarballs
+  );
   const projects = [
     { name: PROJECT_NAMES[0], dir: app, everything: false },
     { name: PROJECT_NAMES[1], dir: plugin, everything: false },
@@ -453,17 +548,33 @@ function prepareProjects(packages, tarballs, work) {
 
 function prepareProject(project, tarballs, subpaths) {
   const manifestPath = join(project.dir, "package.json");
-  const manifest = pointAtTarballs(JSON.parse(readFileSync(manifestPath, "utf8")), tarballs);
+  const manifest = pointAtTarballs(
+    JSON.parse(readFileSync(manifestPath, "utf8")),
+    tarballs
+  );
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
   // A scaffolded project is checked as its own code; the every-package
   // project carries the imports of every subpath and the documented usage.
   const reachable = project.everything ? subpaths : [];
-  const check = project.everything ? `${typeImportsSource(reachable, "esm")}${USAGE_SOURCE}` : "export {};\n";
+  const check = project.everything
+    ? `${typeImportsSource(reachable, "esm")}${USAGE_SOURCE}`
+    : "export {};\n";
   writeFileSync(join(project.dir, "consumer-types.check.ts"), check);
-  writeFileSync(join(project.dir, "consumer-types.check.mts"), typeImportsSource(reachable, "esm"));
-  writeFileSync(join(project.dir, "consumer-types.check.cts"), typeImportsSource(reachable, "cjs"));
+  writeFileSync(
+    join(project.dir, "consumer-types.check.mts"),
+    typeImportsSource(reachable, "esm")
+  );
+  writeFileSync(
+    join(project.dir, "consumer-types.check.cts"),
+    typeImportsSource(reachable, "cjs")
+  );
   writeConfigs(project.dir);
-  mustRun("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error"], project.dir, `installing the ${project.name}`);
+  mustRun(
+    "npm",
+    ["install", "--no-audit", "--no-fund", "--loglevel=error"],
+    project.dir,
+    `installing the ${project.name}`
+  );
 }
 
 /** Installs one TypeScript version in a folder of its own, and returns its `tsc` once it reports that version. */
@@ -471,31 +582,62 @@ function installTypeScript(work, version) {
   const home = join(work, `typescript-${version}`);
   mkdirSync(home, { recursive: true });
   writeFileSync(join(home, "package.json"), "{}");
-  mustRun("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error", `typescript@${version}`], home, `installing TypeScript ${version}`);
+  mustRun(
+    "npm",
+    [
+      "install",
+      "--no-audit",
+      "--no-fund",
+      "--loglevel=error",
+      `typescript@${version}`,
+    ],
+    home,
+    `installing TypeScript ${version}`
+  );
   const tsc = join(home, "node_modules", ".bin", "tsc");
   const reported = mustRun(tsc, ["-v"], home, `TypeScript ${version}`).trim();
-  if (!reported.endsWith(version)) throw new CouldNotAsk(`asked for TypeScript ${version}, ran ${reported}`);
+  if (!reported.endsWith(version))
+    throw new CouldNotAsk(`asked for TypeScript ${version}, ran ${reported}`);
   return tsc;
 }
 
 /** One compiler run: its failures and notes, or CouldNotAsk when it failed without saying why. */
 function checkLeg(tsc, project, leg, context) {
   const label = `TypeScript ${context.version}, ${project.name}, ${leg.name}`;
-  const result = run(tsc, ["-p", leg.config, "--pretty", "false", "--listFiles"], project.dir);
+  const result = run(
+    tsc,
+    ["-p", leg.config, "--pretty", "false", "--listFiles"],
+    project.dir
+  );
   if (result.status !== 0 && !/error TS\d+/.test(result.output)) {
-    throw new CouldNotAsk(`${label} exited ${result.status} with no diagnostics:\n${result.output.slice(-2000)}`);
+    throw new CouldNotAsk(
+      `${label} exited ${result.status} with no diagnostics:\n${result.output.slice(-2000)}`
+    );
   }
-  const { ours, thirdParty } = classifyDiagnostics(result.output, context.ourNames);
+  const { ours, thirdParty } = classifyDiagnostics(
+    result.output,
+    context.ourNames
+  );
   return {
-    failures: [...ours.map(diagnostic => `${label}: ${diagnostic.text}`), ...unreadFailures(project, leg, context, result.output, label)],
-    notes: thirdParty.length > 0 ? [`${label}: ${thirdParty.length} diagnostic(s) in third-party declarations (not ours, not gated)`] : [],
+    failures: [
+      ...ours.map(diagnostic => `${label}: ${diagnostic.text}`),
+      ...unreadFailures(project, leg, context, result.output, label),
+    ],
+    notes:
+      thirdParty.length > 0
+        ? [
+            `${label}: ${thirdParty.length} diagnostic(s) in third-party declarations (not ours, not gated)`,
+          ]
+        : [],
   };
 }
 
 /** The declarations the every-package project's bundler-resolved legs should have read and did not. */
 function unreadFailures(project, leg, context, listed, label) {
   if (!project.everything || leg.name === "nodenext") return [];
-  return unread(context.expectedRead, listed).map(path => `${label}: never read ${path}, so its types went unchecked`);
+  return unread(context.expectedRead, listed).map(
+    path => `${label}: never read ${path}, so its types went unchecked`
+  );
 }
 
 /** Every failure and note, from the manifests and from each version, project and leg. */
@@ -509,7 +651,10 @@ function checkPackages(packages, versions, work) {
   const expectedRead = packages.flatMap(pkg =>
     typedSubpaths(pkg)
       .filter(subpath => subpath.import)
-      .map(subpath => `node_modules/${pkg.name}/${subpath.import.replace(/^\.\//, "")}`)
+      .map(
+        subpath =>
+          `node_modules/${pkg.name}/${subpath.import.replace(/^\.\//, "")}`
+      )
   );
   const context = { ourNames: new Set(tarballs.keys()), expectedRead };
   for (const version of versions) {
@@ -529,10 +674,14 @@ function checkPackages(packages, versions, work) {
 function printVerdict(failures, packageCount, versions) {
   const typescript = versions.join(", ");
   if (failures.length === 0) {
-    console.log(`consumer-types: ok - ${packageCount} package(s), checked by TypeScript ${typescript}, in ${PROJECT_NAMES.join(", ")}`);
+    console.log(
+      `consumer-types: ok - ${packageCount} package(s), checked by TypeScript ${typescript}, in ${PROJECT_NAMES.join(", ")}`
+    );
     return 0;
   }
-  console.log(`consumer-types: FAIL - ${failures.length} problem(s) across ${packageCount} package(s) and TypeScript ${typescript}`);
+  console.log(
+    `consumer-types: FAIL - ${failures.length} problem(s) across ${packageCount} package(s) and TypeScript ${typescript}`
+  );
   for (const failure of failures) console.log(`  ${failure}`);
   return 1;
 }
@@ -540,7 +689,9 @@ function printVerdict(failures, packageCount, versions) {
 /** Reports a run that could not ask its question, and exits; any other error is rethrown. */
 function couldNotCheck(error) {
   if (!(error instanceof CouldNotAsk)) throw error;
-  console.log(`consumer-types: COULD NOT CHECK - ${error.message.split("\n")[0]}`);
+  console.log(
+    `consumer-types: COULD NOT CHECK - ${error.message.split("\n")[0]}`
+  );
   console.log(error.message);
   process.exit(1);
 }
@@ -562,4 +713,5 @@ function main() {
   process.exit(status);
 }
 
-if (process.argv[1] && basename(process.argv[1]) === "consumer-types.mjs") main();
+if (process.argv[1] && basename(process.argv[1]) === "consumer-types.mjs")
+  main();
