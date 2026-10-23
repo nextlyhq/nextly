@@ -180,12 +180,23 @@ export interface ActivityLogResult {
   /**
    * Where the next page starts, when there is one: strictly older than the
    * OLDEST save of the last row shown, so a run is never shown again, in part,
-   * at the top of the next page. Pass it back as `before`.
+   * at the top of the next page. Pass it back as `before`. A page that showed
+   * nothing because every row its walk read was hidden starts the next one
+   * after the last row read instead, so the walk can pass any run of them.
    */
   next?: ActivityPosition;
 }
 
-/** A position in the feed's order: the instant and the id that breaks a tie at it. */
+/**
+ * A position in the feed's order: the instant and the id that breaks a tie at it.
+ *
+ * 🔴 SERVER-SIDE ONLY. A position can name a row its caller may not read -- the
+ * last row a walk read when it found nothing to show -- and so says that some
+ * activity this reader may not see happened at that instant. The id is random
+ * and names nothing; the instant is the disclosure. The dashboard endpoint
+ * publishes no position, and an HTTP route that comes to page the feed must
+ * hand out an opaque cursor at its own boundary, never this value as it is.
+ */
 export interface ActivityPosition {
   createdAt: string;
   id: string;
@@ -615,6 +626,12 @@ export type ActivitySubjectKind = "collection" | "single" | "settings";
 interface RefilledActivity {
   rows: Record<string, unknown>[];
   end: boolean;
+  /**
+   * The last row the walk READ, authorized or not: where a page that found
+   * nothing to show continues, so a stretch of hidden rows longer than the
+   * walk's bound is passed rather than read again by every page.
+   */
+  lastRead?: Record<string, unknown>;
 }
 
 /**
@@ -850,8 +867,15 @@ function pageOf(
 ): FeedPage {
   const shown = runs.slice(0, limit);
   const hasMore = runs.length > limit || !end;
-  const lastCutShort = !end && runs.length <= limit;
   const last = shown[shown.length - 1];
+  // Only a run that later saves could join is a floor. A creation, a deletion,
+  // a settings change or a status change is one row whatever lies past the
+  // bound, so its count is exact: the one run-key rule decides which is which.
+  const lastCutShort =
+    !end &&
+    runs.length <= limit &&
+    last !== undefined &&
+    runKeyOf(last.oldest) !== undefined;
   const next =
     hasMore && last ? continuingAfter(last.oldest, lastCutShort) : undefined;
   return { shown, lastCutShort, hasMore, ...(next ? { next } : {}) };
@@ -867,15 +891,20 @@ function pageOf(
  * so the run is passed in steps and never read twice.
  */
 function feedPage(
-  rows: readonly Record<string, unknown>[],
-  end: boolean,
+  read: RefilledActivity,
   limit: number,
   cut: CutRun | undefined
 ): FeedPage {
-  const { rest, skipped } = afterRun(rows, cut);
-  const page = pageOf(runsOf(rest), end, limit);
-  if (page.shown.length > 0 || end || !skipped) return page;
-  const next = continuingAfter(skipped, true);
+  const { rest, skipped } = afterRun(read.rows, cut);
+  const page = pageOf(runsOf(rest), read.end, limit);
+  if (page.shown.length > 0 || read.end) return page;
+  // Nothing shown and more to read: continue past what this page read, or the
+  // next page would read the same rows and stop at the same bound. After the
+  // skipped run's last row it carries the run; after a hidden row it carries
+  // none, since no run was shown that a later save could join.
+  const next = skipped
+    ? continuingAfter(skipped, true)
+    : read.lastRead && positionOf(read.lastRead);
   return { ...page, ...(next ? { next } : {}) };
 }
 
@@ -1075,7 +1104,7 @@ export class ActivityLogService extends BaseService {
         caller,
         rows => runsOf(afterRun(rows, first.cut).rest).length > limit
       );
-      const page = feedPage(visible.rows, visible.end, limit, first.cut);
+      const page = feedPage(visible, limit, first.cut);
       return {
         activities: page.shown.map((run, index) =>
           this.mapRun(
@@ -1218,6 +1247,7 @@ export class ActivityLogService extends BaseService {
     const visible: Record<string, unknown>[] = [];
     const first = firstRound(start);
     let after = first.after;
+    let lastRead: Record<string, unknown> | undefined;
     const offset = first.offset;
 
     // Bounded so an install whose recent activity is almost entirely
@@ -1247,12 +1277,13 @@ export class ActivityLogService extends BaseService {
         ...(after ? {} : { offset }),
       });
       if (page.length === 0) return { rows: visible, end: true };
-      after = cursorOf(page[page.length - 1]) ?? after;
+      lastRead = page[page.length - 1];
+      after = cursorOf(lastRead) ?? after;
 
       visible.push(...(await this.authorizedRows(page, scope, caller)));
       // Enough rows found: the table has not ended, and the caller wants to
       // know that so `hasMore` stays true.
-      if (enough(visible)) return { rows: visible, end: false };
+      if (enough(visible)) return { rows: visible, end: false, lastRead };
       // A short page is the end of the table, not the end of this round.
       if (page.length < ACTIVITY_PAGE_SIZE) {
         return { rows: visible, end: true };
@@ -1260,7 +1291,7 @@ export class ActivityLogService extends BaseService {
       // A page whose last row cannot be read as a cursor would make the next
       // round repeat it forever; stop rather than loop on an unknown position.
       // Not an END: rows remain, this simply cannot reach them.
-      if (!after) return { rows: visible, end: false };
+      if (!after) return { rows: visible, end: false, lastRead };
     }
 
     // 🔴 The ROUNDS ran out, not the table. Reported as such, because the two
@@ -1268,7 +1299,7 @@ export class ActivityLogService extends BaseService {
     // about the data: a feed whose first thousand rows are unreadable would
     // otherwise tell the reader there is no further activity, when the scan
     // simply stopped working.
-    return { rows: visible, end: false };
+    return { rows: visible, end: false, lastRead };
   }
 
   /**
