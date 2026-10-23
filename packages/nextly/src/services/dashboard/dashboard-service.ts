@@ -182,6 +182,21 @@ function leftOut(
   return true;
 }
 
+/**
+ * The page of collections a content answer counts: all of them in slug order,
+ * cut to `limit` when there is one. A stated order, so the same install gives
+ * the same page on every read, whatever order the registry returns.
+ */
+function contentPage<T extends { slug: string }>(
+  collections: readonly T[],
+  limit: number | undefined
+): T[] {
+  const ordered = [...collections].sort((a, b) =>
+    a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0
+  );
+  return limit === undefined ? ordered : ordered.slice(0, limit);
+}
+
 export class DashboardService extends BaseService {
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
@@ -791,16 +806,25 @@ export class DashboardService extends BaseService {
    * The same registry read and the same per-collection reading `/stats` makes,
    * so a collection kept off the dashboard is absent here as it is there, and
    * every number is the caller's own.
+   *
+   * With a `limit`, the page is chosen before anything is counted: the
+   * collections in slug order, the first `limit` of them. Each collection
+   * costs up to three counts, so counting every one and then keeping a page
+   * would grow the dashboard's work with the install rather than the card.
    */
   async getContentByCollection(options: {
     scope: ReadableResources;
     caller: ReadCaller;
+    limit?: number;
   }): Promise<CollectionContent[]> {
     const collections = await this.getRegisteredCollections(options.scope, {
       slugs: new Set(),
       complete: false,
     });
-    return this.getCollectionContent(collections, options.caller);
+    return this.getCollectionContent(
+      contentPage(collections, options.limit),
+      options.caller
+    );
   }
 
   /**
