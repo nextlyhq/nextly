@@ -1,8 +1,19 @@
 import { cva, type VariantProps } from "class-variance-authority";
+import type { ClassProp } from "class-variance-authority/types";
 import { Loader2, type LucideProps } from "lucide-react";
-import { forwardRef } from "react";
+import {
+  forwardRef,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
+
+/** What `spinnerVariants` accepts: its variants, and `class` or `className`. */
+type SpinnerVariantsFn = (
+  props?: { size?: "sm" | "md" | "lg" | null | undefined } & ClassProp
+) => string;
 
 /**
  * Spinner Component - Design System Specification
@@ -49,18 +60,21 @@ import { cn } from "../lib/utils";
  * <Spinner className="text-primary" />
  * @experimental
  */
-const spinnerVariants = cva("animate-spin motion-reduce:animate-none", {
-  variants: {
-    size: {
-      sm: "h-4 w-4",
-      md: "h-5 w-5",
-      lg: "h-6 w-6",
+const spinnerVariants: SpinnerVariantsFn = cva(
+  "animate-spin motion-reduce:animate-none",
+  {
+    variants: {
+      size: {
+        sm: "h-4 w-4",
+        md: "h-5 w-5",
+        lg: "h-6 w-6",
+      },
     },
-  },
-  defaultVariants: {
-    size: "md",
-  },
-});
+    defaultVariants: {
+      size: "md",
+    },
+  }
+);
 
 /**
  * Spinner component props
@@ -82,7 +96,9 @@ export type SpinnerProps = Omit<LucideProps, "size"> &
  * Spinner component for loading states
  * @experimental
  */
-const Spinner = forwardRef<SVGSVGElement, SpinnerProps>(
+const Spinner: ForwardRefExoticComponent<
+  PropsWithoutRef<SpinnerProps> & RefAttributes<SVGSVGElement>
+> = forwardRef<SVGSVGElement, SpinnerProps>(
   (
     { size = "md", className, "aria-label": ariaLabel = "Loading", ...props },
     ref

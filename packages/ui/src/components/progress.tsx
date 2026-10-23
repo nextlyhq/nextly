@@ -52,9 +52,17 @@
  */
 
 import { cva, type VariantProps } from "class-variance-authority";
+import type { ClassProp } from "class-variance-authority/types";
 import * as React from "react";
 
 import { cn } from "../lib/utils";
+
+/** What `progressVariants` accepts: its variants, and `class` or `className`. */
+type ProgressVariantsFn = (
+  props?: {
+    variant?: "default" | "success" | "error" | null | undefined;
+  } & ClassProp
+) => string;
 
 /**
  * Progress variants using CVA
@@ -66,18 +74,21 @@ import { cn } from "../lib/utils";
 // Square corners: the capsule track clips the trailing edge already, so a radius
 // here would only round the leading edge, tapering low percentages into a sliver
 // narrower than the value they represent.
-export const progressVariants = cva("h-full rounded-none transition-all", {
-  variants: {
-    variant: {
-      default: "bg-primary-500",
-      success: "bg-success-500",
-      error: "bg-destructive",
+export const progressVariants: ProgressVariantsFn = cva(
+  "h-full rounded-none transition-all",
+  {
+    variants: {
+      variant: {
+        default: "bg-primary-500",
+        success: "bg-success-500",
+        error: "bg-destructive",
+      },
     },
-  },
-  defaultVariants: {
-    variant: "default",
-  },
-});
+    defaultVariants: {
+      variant: "default",
+    },
+  }
+);
 
 /**
  * Progress component props
@@ -156,7 +167,9 @@ export type ProgressProps = {
  * ```
  * @experimental
  */
-const Progress = React.forwardRef<HTMLDivElement, ProgressProps>(
+const Progress: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<ProgressProps> & React.RefAttributes<HTMLDivElement>
+> = React.forwardRef<HTMLDivElement, ProgressProps>(
   (
     {
       value,

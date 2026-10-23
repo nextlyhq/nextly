@@ -1,8 +1,15 @@
 import * as SelectPrimitive from "@radix-ui/react-select";
 import { cva, type VariantProps } from "class-variance-authority";
+import type { ClassProp } from "class-variance-authority/types";
 import { Check, ChevronDown, ChevronUp } from "lucide-react";
-import type { ComponentProps } from "react";
-import { forwardRef } from "react";
+import {
+  forwardRef,
+  type ComponentProps,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+  type JSX,
+} from "react";
 
 import { cn } from "../lib/utils";
 import { usePortalContainer } from "../providers/portal-provider";
@@ -42,26 +49,33 @@ import { usePortalContainer } from "../providers/portal-provider";
  * - Error state via aria-invalid
  * @public
  */
-function Select({ ...props }: ComponentProps<typeof SelectPrimitive.Root>) {
+function Select({
+  ...props
+}: ComponentProps<typeof SelectPrimitive.Root>): JSX.Element {
   return <SelectPrimitive.Root data-slot="select" {...props} />;
 }
 
 /** @experimental */
 function SelectGroup({
   ...props
-}: ComponentProps<typeof SelectPrimitive.Group>) {
+}: ComponentProps<typeof SelectPrimitive.Group>): JSX.Element {
   return <SelectPrimitive.Group data-slot="select-group" {...props} />;
 }
 
 /** @public */
 function SelectValue({
   ...props
-}: ComponentProps<typeof SelectPrimitive.Value>) {
+}: ComponentProps<typeof SelectPrimitive.Value>): JSX.Element {
   return <SelectPrimitive.Value data-slot="select-value" {...props} />;
 }
 
+/** What `selectTriggerVariants` accepts: its variants, and `class` or `className`. */
+type SelectTriggerVariantsFn = (
+  props?: { size?: "default" | "sm" | "lg" | null | undefined } & ClassProp
+) => string;
+
 /** @experimental */
-const selectTriggerVariants = cva(
+const selectTriggerVariants: SelectTriggerVariantsFn = cva(
   // hover:border-primary (full strength) keeps the hover boundary more visible
   // than the resting border-input, not a fainter alpha of it.
   "flex w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-sm text-foreground cursor-pointer transition-all duration-150 focus:border-primary! focus-visible:border-primary! focus:outline-none hover:border-primary disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-primary/5 data-[placeholder]:text-muted-foreground aria-[invalid=true]:border-destructive aria-[invalid=true]:focus:border-destructive! [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4",
@@ -88,7 +102,10 @@ export interface SelectTriggerProps
     VariantProps<typeof selectTriggerVariants> {}
 
 /** @public */
-const SelectTrigger = forwardRef<
+const SelectTrigger: ForwardRefExoticComponent<
+  PropsWithoutRef<SelectTriggerProps> &
+    RefAttributes<React.ElementRef<typeof SelectPrimitive.Trigger>>
+> = forwardRef<
   React.ElementRef<typeof SelectPrimitive.Trigger>,
   SelectTriggerProps
 >(({ className, size, children, ...props }, ref) => {
@@ -115,7 +132,7 @@ function SelectContent({
   children,
   position = "popper",
   ...props
-}: ComponentProps<typeof SelectPrimitive.Content>) {
+}: ComponentProps<typeof SelectPrimitive.Content>): JSX.Element {
   const portalContainer = usePortalContainer();
 
   return (
@@ -155,7 +172,7 @@ function SelectContent({
 function SelectLabel({
   className,
   ...props
-}: ComponentProps<typeof SelectPrimitive.Label>) {
+}: ComponentProps<typeof SelectPrimitive.Label>): JSX.Element {
   return (
     <SelectPrimitive.Label
       data-slot="select-label"
@@ -170,7 +187,7 @@ function SelectItem({
   className,
   children,
   ...props
-}: ComponentProps<typeof SelectPrimitive.Item>) {
+}: ComponentProps<typeof SelectPrimitive.Item>): JSX.Element {
   return (
     <SelectPrimitive.Item
       data-slot="select-item"
@@ -194,7 +211,7 @@ function SelectItem({
 function SelectSeparator({
   className,
   ...props
-}: ComponentProps<typeof SelectPrimitive.Separator>) {
+}: ComponentProps<typeof SelectPrimitive.Separator>): JSX.Element {
   return (
     <SelectPrimitive.Separator
       data-slot="select-separator"
@@ -208,7 +225,7 @@ function SelectSeparator({
 function SelectScrollUpButton({
   className,
   ...props
-}: ComponentProps<typeof SelectPrimitive.ScrollUpButton>) {
+}: ComponentProps<typeof SelectPrimitive.ScrollUpButton>): JSX.Element {
   return (
     <SelectPrimitive.ScrollUpButton
       data-slot="select-scroll-up-button"
@@ -227,7 +244,7 @@ function SelectScrollUpButton({
 function SelectScrollDownButton({
   className,
   ...props
-}: ComponentProps<typeof SelectPrimitive.ScrollDownButton>) {
+}: ComponentProps<typeof SelectPrimitive.ScrollDownButton>): JSX.Element {
   return (
     <SelectPrimitive.ScrollDownButton
       data-slot="select-scroll-down-button"

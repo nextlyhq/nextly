@@ -5,22 +5,30 @@ import {
   Portal,
   Content,
 } from "@radix-ui/react-tooltip";
-import { forwardRef } from "react";
+import {
+  forwardRef,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
 import { usePortalContainer } from "../providers/portal-provider";
 
 /** @experimental */
-const TooltipProvider = Provider;
+const TooltipProvider: typeof Provider = Provider;
 
 /** @public */
-const Tooltip = Root;
+const Tooltip: typeof Root = Root;
 
 /** @public */
-const TooltipTrigger = Trigger;
+const TooltipTrigger: typeof Trigger = Trigger;
 
 /** @public */
-const TooltipContent = forwardRef<
+const TooltipContent: ForwardRefExoticComponent<
+  PropsWithoutRef<React.ComponentPropsWithoutRef<typeof Content>> &
+    RefAttributes<React.ElementRef<typeof Content>>
+> = forwardRef<
   React.ElementRef<typeof Content>,
   React.ComponentPropsWithoutRef<typeof Content>
 >(({ className, sideOffset = 4, ...props }, ref) => {

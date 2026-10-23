@@ -1,7 +1,21 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import { forwardRef, type HTMLAttributes } from "react";
+import type { ClassProp } from "class-variance-authority/types";
+import {
+  forwardRef,
+  type HTMLAttributes,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
+
+/** What `alertVariants` accepts: its variants, and `class` or `className`. */
+type AlertVariantsFn = (
+  props?: {
+    variant?: "destructive" | "info" | "success" | "warning" | null | undefined;
+  } & ClassProp
+) => string;
 
 /**
  * Alert Component - Design System Specification
@@ -72,7 +86,7 @@ import { cn } from "../lib/utils";
  * - Destructive: <XCircle className="h-4 w-4" />
  * @experimental
  */
-const alertVariants = cva(
+const alertVariants: AlertVariantsFn = cva(
   "relative flex items-start gap-3 rounded-md  border border-border p-4 text-sm   transition-colors duration-150",
   {
     variants: {
@@ -115,7 +129,9 @@ export type AlertProps = HTMLAttributes<HTMLDivElement> &
  * </Alert>
  * @experimental
  */
-const Alert = forwardRef<HTMLDivElement, AlertProps>(
+const Alert: ForwardRefExoticComponent<
+  PropsWithoutRef<AlertProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, AlertProps>(
   ({ className, variant = "info", role = "alert", ...props }, ref) => {
     return (
       <div
@@ -143,7 +159,9 @@ export type AlertTitleProps = HTMLAttributes<HTMLHeadingElement>;
  * <AlertTitle>Payment Successful</AlertTitle>
  * @experimental
  */
-const AlertTitle = forwardRef<HTMLHeadingElement, AlertTitleProps>(
+const AlertTitle: ForwardRefExoticComponent<
+  PropsWithoutRef<AlertTitleProps> & RefAttributes<HTMLHeadingElement>
+> = forwardRef<HTMLHeadingElement, AlertTitleProps>(
   ({ className, ...props }, ref) => {
     return (
       <h5
@@ -175,7 +193,9 @@ export type AlertDescriptionProps = HTMLAttributes<HTMLDivElement>;
  * </AlertDescription>
  * @experimental
  */
-const AlertDescription = forwardRef<HTMLDivElement, AlertDescriptionProps>(
+const AlertDescription: ForwardRefExoticComponent<
+  PropsWithoutRef<AlertDescriptionProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, AlertDescriptionProps>(
   ({ className, ...props }, ref) => {
     return (
       <div

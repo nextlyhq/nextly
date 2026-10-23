@@ -1,12 +1,16 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { cva, type VariantProps } from "class-variance-authority";
+import type { ClassProp } from "class-variance-authority/types";
 import { X } from "lucide-react";
-import type {
-  ElementRef,
-  ComponentPropsWithoutRef,
-  HTMLAttributes,
+import {
+  forwardRef,
+  type ElementRef,
+  type ComponentPropsWithoutRef,
+  type HTMLAttributes,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
 } from "react";
-import { forwardRef } from "react";
 
 import { cn } from "../lib/utils";
 import { usePortalContainer } from "../providers/portal-provider";
@@ -60,16 +64,16 @@ import { usePortalContainer } from "../providers/portal-provider";
  * @public
  */
 
-const Dialog = DialogPrimitive.Root;
+const Dialog: typeof DialogPrimitive.Root = DialogPrimitive.Root;
 
 /** @experimental */
-const DialogTrigger = DialogPrimitive.Trigger;
+const DialogTrigger: typeof DialogPrimitive.Trigger = DialogPrimitive.Trigger;
 
 /** @experimental */
-const DialogPortal = DialogPrimitive.Portal;
+const DialogPortal: typeof DialogPrimitive.Portal = DialogPrimitive.Portal;
 
 /** @experimental */
-const DialogClose = DialogPrimitive.Close;
+const DialogClose: typeof DialogPrimitive.Close = DialogPrimitive.Close;
 
 /** @experimental */
 export type DialogOverlayProps = ComponentPropsWithoutRef<
@@ -82,26 +86,35 @@ export type DialogOverlayProps = ComponentPropsWithoutRef<
  * token's, not a literal: it differs by mode and a host can retheme it.
  * @experimental
  */
-const DialogOverlay = forwardRef<
-  ElementRef<typeof DialogPrimitive.Overlay>,
-  DialogOverlayProps
->(({ className, ...props }, ref) => (
-  <DialogPrimitive.Overlay
-    ref={ref}
-    data-slot="dialog-overlay"
-    className={cn(
-      // A modal scrim, from the `--nx-overlay` token rather than a surface
-      // token. A black wash is the point — painting it from `background` would
-      // make it a white veil in light mode — but the alpha still has to differ
-      // per mode, because what it composites over is white in one and mid-tone
-      // in the other.
-      "fixed inset-0 z-50 bg-overlay backdrop-blur-sm transition-opacity duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
-      className
-    )}
-    {...props}
-  />
-));
+const DialogOverlay: ForwardRefExoticComponent<
+  PropsWithoutRef<DialogOverlayProps> &
+    RefAttributes<ElementRef<typeof DialogPrimitive.Overlay>>
+> = forwardRef<ElementRef<typeof DialogPrimitive.Overlay>, DialogOverlayProps>(
+  ({ className, ...props }, ref) => (
+    <DialogPrimitive.Overlay
+      ref={ref}
+      data-slot="dialog-overlay"
+      className={cn(
+        // A modal scrim, from the `--nx-overlay` token rather than a surface
+        // token. A black wash is the point — painting it from `background` would
+        // make it a white veil in light mode — but the alpha still has to differ
+        // per mode, because what it composites over is white in one and mid-tone
+        // in the other.
+        "fixed inset-0 z-50 bg-overlay backdrop-blur-sm transition-opacity duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+        className
+      )}
+      {...props}
+    />
+  )
+);
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
+
+/** What `dialogContentVariants` accepts: its variants, and `class` or `className`. */
+type DialogContentVariantsFn = (
+  props?: {
+    size?: "sm" | "md" | "lg" | "xl" | "full" | null | undefined;
+  } & ClassProp
+) => string;
 
 /**
  * Dialog content size variants using CVA.
@@ -113,7 +126,7 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
  * @variant full - Full width with margin (responsive) - fullscreen on mobile
  * @experimental
  */
-const dialogContentVariants = cva("", {
+const dialogContentVariants: DialogContentVariantsFn = cva("", {
   variants: {
     size: {
       sm: "max-w-sm",
@@ -147,37 +160,39 @@ export type DialogContentProps = ComponentPropsWithoutRef<
  * ```
  * @public
  */
-const DialogContent = forwardRef<
-  ElementRef<typeof DialogPrimitive.Content>,
-  DialogContentProps
->(({ className, children, size, ...props }, ref) => {
-  const portalContainer = usePortalContainer();
+const DialogContent: ForwardRefExoticComponent<
+  PropsWithoutRef<DialogContentProps> &
+    RefAttributes<ElementRef<typeof DialogPrimitive.Content>>
+> = forwardRef<ElementRef<typeof DialogPrimitive.Content>, DialogContentProps>(
+  ({ className, children, size, ...props }, ref) => {
+    const portalContainer = usePortalContainer();
 
-  return (
-    <DialogPortal container={portalContainer}>
-      <DialogOverlay />
-      <DialogPrimitive.Content
-        ref={ref}
-        data-slot="dialog-content"
-        className={cn(
-          "fixed left-[50%] top-[50%] z-[51] grid w-full translate-x-[-50%] translate-y-[-50%] gap-4  border border-border bg-background p-6 shadow-xl rounded-lg duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]",
-          dialogContentVariants({ size }),
-          className
-        )}
-        {...props}
-      >
-        {children}
-        <DialogPrimitive.Close
-          data-slot="dialog-close"
-          className="absolute right-4 top-4 rounded-md p-1 text-muted-foreground cursor-pointer transition-colors duration-150 hover-unified focus:outline-none focus:ring-2 focus:ring-ring disabled:pointer-events-none disabled:cursor-not-allowed"
+    return (
+      <DialogPortal container={portalContainer}>
+        <DialogOverlay />
+        <DialogPrimitive.Content
+          ref={ref}
+          data-slot="dialog-content"
+          className={cn(
+            "fixed left-[50%] top-[50%] z-[51] grid w-full translate-x-[-50%] translate-y-[-50%] gap-4  border border-border bg-background p-6 shadow-xl rounded-lg duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]",
+            dialogContentVariants({ size }),
+            className
+          )}
+          {...props}
         >
-          <X className="h-4 w-4" />
-          <span className="sr-only">Close</span>
-        </DialogPrimitive.Close>
-      </DialogPrimitive.Content>
-    </DialogPortal>
-  );
-});
+          {children}
+          <DialogPrimitive.Close
+            data-slot="dialog-close"
+            className="absolute right-4 top-4 rounded-md p-1 text-muted-foreground cursor-pointer transition-colors duration-150 hover-unified focus:outline-none focus:ring-2 focus:ring-ring disabled:pointer-events-none disabled:cursor-not-allowed"
+          >
+            <X className="h-4 w-4" />
+            <span className="sr-only">Close</span>
+          </DialogPrimitive.Close>
+        </DialogPrimitive.Content>
+      </DialogPortal>
+    );
+  }
+);
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
 /** @public */
@@ -188,7 +203,9 @@ export type DialogHeaderProps = HTMLAttributes<HTMLDivElement>;
  * Provides consistent spacing and alignment (centered on mobile, left-aligned on desktop).
  * @public
  */
-const DialogHeader = forwardRef<HTMLDivElement, DialogHeaderProps>(
+const DialogHeader: ForwardRefExoticComponent<
+  PropsWithoutRef<DialogHeaderProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, DialogHeaderProps>(
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
@@ -218,7 +235,9 @@ export type DialogFooterProps = HTMLAttributes<HTMLDivElement>;
  * ```
  * @public
  */
-const DialogFooter = forwardRef<HTMLDivElement, DialogFooterProps>(
+const DialogFooter: ForwardRefExoticComponent<
+  PropsWithoutRef<DialogFooterProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, DialogFooterProps>(
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
@@ -244,19 +263,21 @@ export type DialogTitleProps = ComponentPropsWithoutRef<
  * @accessibility Required for screen readers. Always include a DialogTitle.
  * @public
  */
-const DialogTitle = forwardRef<
-  ElementRef<typeof DialogPrimitive.Title>,
-  DialogTitleProps
->(({ className, ...props }, ref) => (
-  <DialogPrimitive.Title
-    ref={ref}
-    className={cn(
-      "text-lg font-semibold leading-none tracking-tight text-foreground",
-      className
-    )}
-    {...props}
-  />
-));
+const DialogTitle: ForwardRefExoticComponent<
+  PropsWithoutRef<DialogTitleProps> &
+    RefAttributes<ElementRef<typeof DialogPrimitive.Title>>
+> = forwardRef<ElementRef<typeof DialogPrimitive.Title>, DialogTitleProps>(
+  ({ className, ...props }, ref) => (
+    <DialogPrimitive.Title
+      ref={ref}
+      className={cn(
+        "text-lg font-semibold leading-none tracking-tight text-foreground",
+        className
+      )}
+      {...props}
+    />
+  )
+);
 DialogTitle.displayName = DialogPrimitive.Title.displayName;
 
 /** @public */
@@ -272,7 +293,10 @@ export type DialogDescriptionProps = ComponentPropsWithoutRef<
  * If not needed visually, you can use sr-only class.
  * @public
  */
-const DialogDescription = forwardRef<
+const DialogDescription: ForwardRefExoticComponent<
+  PropsWithoutRef<DialogDescriptionProps> &
+    RefAttributes<ElementRef<typeof DialogPrimitive.Description>>
+> = forwardRef<
   ElementRef<typeof DialogPrimitive.Description>,
   DialogDescriptionProps
 >(({ className, ...props }, ref) => (

@@ -1,12 +1,25 @@
 import * as CheckboxPrimitive from "@radix-ui/react-checkbox";
 import { Check, Minus } from "lucide-react";
-import type { ComponentPropsWithoutRef, ElementRef } from "react";
-import { forwardRef } from "react";
+import {
+  forwardRef,
+  type ComponentPropsWithoutRef,
+  type ElementRef,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
 
 /** @public */
-const Checkbox = forwardRef<
+const Checkbox: ForwardRefExoticComponent<
+  PropsWithoutRef<
+    ComponentPropsWithoutRef<typeof CheckboxPrimitive.Root> & {
+      indeterminate?: boolean;
+    }
+  > &
+    RefAttributes<ElementRef<typeof CheckboxPrimitive.Root>>
+> = forwardRef<
   ElementRef<typeof CheckboxPrimitive.Root>,
   ComponentPropsWithoutRef<typeof CheckboxPrimitive.Root> & {
     indeterminate?: boolean;

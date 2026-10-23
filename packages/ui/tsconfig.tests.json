@@ -25,7 +25,10 @@
   "compilerOptions": {
     "noEmit": true,
     "rootDir": ".",
-    "types": ["node"]
+    "types": ["node"],
+    // Off for tests and scripts: they publish no declarations, and
+    // `tsconfig.json` already holds every shipped file to it.
+    "isolatedDeclarations": false
   },
   "include": ["src/**/*", "scripts/**/*"],
   "exclude": ["dist", "node_modules"]

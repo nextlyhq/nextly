@@ -1,10 +1,42 @@
 import { Slot } from "@radix-ui/react-slot";
 import { cva } from "class-variance-authority";
+import type { ClassProp } from "class-variance-authority/types";
 import * as React from "react";
-import { forwardRef } from "react";
+import {
+  forwardRef,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
 import type { ButtonProps } from "../types/button";
+
+/** What `buttonVariants` accepts: its variants, and `class` or `className`. */
+type ButtonVariantsFn = (
+  props?: {
+    variant?:
+      | "link"
+      | "default"
+      | "primary"
+      | "destructive"
+      | "outline"
+      | "secondary"
+      | "ghost"
+      | null
+      | undefined;
+    size?:
+      | "default"
+      | "sm"
+      | "md"
+      | "lg"
+      | "icon"
+      | "icon-sm"
+      | "icon-lg"
+      | null
+      | undefined;
+  } & ClassProp
+) => string;
 
 /**
  * Button Component - Design System Specification
@@ -23,7 +55,7 @@ import type { ButtonProps } from "../types/button";
  * Note: 'primary' is a semantic alias for 'default' variant for better code readability
  * @experimental
  */
-const buttonVariants = cva(
+const buttonVariants: ButtonVariantsFn = cva(
   "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium cursor-pointer transition-all duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-0 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] [&_svg]:text-current",
   {
     variants: {
@@ -76,7 +108,9 @@ const buttonVariants = cva(
 );
 
 /** @public */
-const Button = forwardRef<HTMLButtonElement, ButtonProps>(
+const Button: ForwardRefExoticComponent<
+  PropsWithoutRef<ButtonProps> & RefAttributes<HTMLButtonElement>
+> = forwardRef<HTMLButtonElement, ButtonProps>(
   (
     {
       className,

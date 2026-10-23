@@ -1,7 +1,23 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import type { HTMLAttributes } from "react";
+import type { ClassProp } from "class-variance-authority/types";
+import type { HTMLAttributes, JSX } from "react";
 
 import { cn } from "../lib/utils";
+
+/** What `badgeVariants` accepts: its variants, and `class` or `className`. */
+type BadgeVariantsFn = (
+  props?: {
+    variant?:
+      | "default"
+      | "primary"
+      | "destructive"
+      | "outline"
+      | "success"
+      | "warning"
+      | null
+      | undefined;
+  } & ClassProp
+) => string;
 
 /**
  * Badge Component - Design System Specification
@@ -32,7 +48,7 @@ import { cn } from "../lib/utils";
  * - outline: Transparent background with  border border-border
  * @experimental
  */
-const badgeVariants = cva(
+const badgeVariants: BadgeVariantsFn = cva(
   "inline-flex items-center rounded-sm px-2.5 py-0.5 h-[22px] text-xs font-medium transition-colors",
   {
     variants: {
@@ -71,7 +87,11 @@ export interface BadgeProps
     VariantProps<typeof badgeVariants> {}
 
 /** @public */
-function Badge({ className, variant = "default", ...props }: BadgeProps) {
+function Badge({
+  className,
+  variant = "default",
+  ...props
+}: BadgeProps): JSX.Element {
   return (
     <div
       data-slot={`badge.${variant}`}

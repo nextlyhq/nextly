@@ -3,22 +3,27 @@ import * as React from "react";
 import { cn } from "../lib/utils";
 
 /** @experimental */
-const Table = React.forwardRef<
-  HTMLTableElement,
-  React.HTMLAttributes<HTMLTableElement>
->(({ className, ...props }, ref) => (
-  <div className="relative w-full overflow-auto">
-    <table
-      ref={ref}
-      className={cn("w-full caption-bottom text-sm", className)}
-      {...props}
-    />
-  </div>
-));
+const Table: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<React.HTMLAttributes<HTMLTableElement>> &
+    React.RefAttributes<HTMLTableElement>
+> = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTMLTableElement>>(
+  ({ className, ...props }, ref) => (
+    <div className="relative w-full overflow-auto">
+      <table
+        ref={ref}
+        className={cn("w-full caption-bottom text-sm", className)}
+        {...props}
+      />
+    </div>
+  )
+);
 Table.displayName = "Table";
 
 /** @experimental */
-const TableHeader = React.forwardRef<
+const TableHeader: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<React.HTMLAttributes<HTMLTableSectionElement>> &
+    React.RefAttributes<HTMLTableSectionElement>
+> = React.forwardRef<
   HTMLTableSectionElement,
   React.HTMLAttributes<HTMLTableSectionElement>
 >(({ className, ...props }, ref) => (
@@ -31,7 +36,10 @@ const TableHeader = React.forwardRef<
 TableHeader.displayName = "TableHeader";
 
 /** @experimental */
-const TableBody = React.forwardRef<
+const TableBody: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<React.HTMLAttributes<HTMLTableSectionElement>> &
+    React.RefAttributes<HTMLTableSectionElement>
+> = React.forwardRef<
   HTMLTableSectionElement,
   React.HTMLAttributes<HTMLTableSectionElement>
 >(({ className, ...props }, ref) => (
@@ -44,7 +52,10 @@ const TableBody = React.forwardRef<
 TableBody.displayName = "TableBody";
 
 /** @experimental */
-const TableFooter = React.forwardRef<
+const TableFooter: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<React.HTMLAttributes<HTMLTableSectionElement>> &
+    React.RefAttributes<HTMLTableSectionElement>
+> = React.forwardRef<
   HTMLTableSectionElement,
   React.HTMLAttributes<HTMLTableSectionElement>
 >(({ className, ...props }, ref) => (
@@ -60,7 +71,10 @@ const TableFooter = React.forwardRef<
 TableFooter.displayName = "TableFooter";
 
 /** @experimental */
-const TableRow = React.forwardRef<
+const TableRow: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<React.HTMLAttributes<HTMLTableRowElement>> &
+    React.RefAttributes<HTMLTableRowElement>
+> = React.forwardRef<
   HTMLTableRowElement,
   React.HTMLAttributes<HTMLTableRowElement>
 >(({ className, ...props }, ref) => (
@@ -76,7 +90,10 @@ const TableRow = React.forwardRef<
 TableRow.displayName = "TableRow";
 
 /** @experimental */
-const TableHead = React.forwardRef<
+const TableHead: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<React.ThHTMLAttributes<HTMLTableCellElement>> &
+    React.RefAttributes<HTMLTableCellElement>
+> = React.forwardRef<
   HTMLTableCellElement,
   React.ThHTMLAttributes<HTMLTableCellElement>
 >(({ className, ...props }, ref) => (
@@ -92,7 +109,10 @@ const TableHead = React.forwardRef<
 TableHead.displayName = "TableHead";
 
 /** @experimental */
-const TableCell = React.forwardRef<
+const TableCell: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<React.TdHTMLAttributes<HTMLTableCellElement>> &
+    React.RefAttributes<HTMLTableCellElement>
+> = React.forwardRef<
   HTMLTableCellElement,
   React.TdHTMLAttributes<HTMLTableCellElement>
 >(({ className, ...props }, ref) => (
@@ -108,7 +128,10 @@ const TableCell = React.forwardRef<
 TableCell.displayName = "TableCell";
 
 /** @experimental */
-const TableCaption = React.forwardRef<
+const TableCaption: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<React.HTMLAttributes<HTMLTableCaptionElement>> &
+    React.RefAttributes<HTMLTableCaptionElement>
+> = React.forwardRef<
   HTMLTableCaptionElement,
   React.HTMLAttributes<HTMLTableCaptionElement>
 >(({ className, ...props }, ref) => (

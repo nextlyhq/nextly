@@ -1,7 +1,19 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import { forwardRef, type ComponentProps } from "react";
+import type { ClassProp } from "class-variance-authority/types";
+import {
+  forwardRef,
+  type ComponentProps,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
+
+/** What `inputVariants` accepts: its variants, and `class` or `className`. */
+type InputVariantsFn = (
+  props?: { size?: "default" | "sm" | "lg" | null | undefined } & ClassProp
+) => string;
 
 /**
  * Input Component - Design System Specification
@@ -39,7 +51,7 @@ import { cn } from "../lib/utils";
  * - search: Search input with clear button
  * @experimental
  */
-const inputVariants = cva(
+const inputVariants: InputVariantsFn = cva(
   // `text-foreground` is explicit rather than inherited. Tailwind's preflight
   // sets `color: inherit` on form controls, so without it the typed value takes
   // whatever colour an ancestor happens to carry -- muted inside a
@@ -72,7 +84,9 @@ export interface InputProps
     VariantProps<typeof inputVariants> {}
 
 /** @public */
-const Input = forwardRef<HTMLInputElement, InputProps>(
+const Input: ForwardRefExoticComponent<
+  PropsWithoutRef<InputProps> & RefAttributes<HTMLInputElement>
+> = forwardRef<HTMLInputElement, InputProps>(
   ({ className, type, size, ...props }, ref) => {
     return (
       <input

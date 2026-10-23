@@ -2,7 +2,14 @@
 
 import { Root, List, Trigger, Content } from "@radix-ui/react-tabs";
 import { cva, type VariantProps } from "class-variance-authority";
-import { forwardRef, type ComponentPropsWithoutRef } from "react";
+import type { ClassProp } from "class-variance-authority/types";
+import {
+  forwardRef,
+  type ComponentPropsWithoutRef,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
 import type {
@@ -93,7 +100,7 @@ import type {
  * @see https://www.radix-ui.com/primitives/docs/components/tabs
  * @public
  */
-const Tabs = Root;
+const Tabs: typeof Root = Root;
 
 /**
  * The list's own appearance, as variants rather than as classes each caller
@@ -123,7 +130,12 @@ const TABS_LIST_VARIANTS = {
   ghost: "h-8 bg-transparent",
 } as const;
 
-const tabsListVariants = cva(
+/** What `tabsListVariants` accepts: its variants, and `class` or `className`. */
+type TabsListVariantsFn = (
+  props?: { variant?: "default" | "ghost" | null | undefined } & ClassProp
+) => string;
+
+const tabsListVariants: TabsListVariantsFn = cva(
   // Square corners: underline tabs, so the list never draws a rounded surface.
   // `gap-1` and `p-0` are invariant across the variants, so they belong here —
   // repeating them in each arm gives any future adjustment two sites to change
@@ -158,7 +170,15 @@ const tabsListVariants = cva(
  * - Layout: inline-flex (horizontal by default, use orientation="vertical" on Tabs root for vertical)
  * @public
  */
-const TabsList = forwardRef<
+const TabsList: ForwardRefExoticComponent<
+  PropsWithoutRef<
+    TabsListBaseProps &
+      VariantProps<typeof tabsListVariants> & {
+        /** * Let a strip too wide for its container scroll sideways. * * The scroll container is a WRAPPER, never the list, and that is why this * prop exists rather than callers reaching for `overflow-x-auto` * themselves. Two things go wrong when the list is the scroller, and the * second is why the obvious remedy is also wrong: * * - Per the CSS overflow rules, `visible` computes to `auto` when the * other axis is neither `visible` nor `clip`, so `overflow-x` alone * always makes the element a VERTICAL scroll container too. * - `TabsTrigger` carries `-mb-0.5` so its 2px underline lands ON this * list's rail rather than below it. That pull-up puts content past the * content-box edge, which the new scroll container reports as vertical * overflow — so `overflow-y-hidden` would clip the 2px the underline is * made of, silencing a scrollbar by deleting the indicator. * * With the wrapper scrolling instead, the list keeps its rail and * `w-max min-w-full` makes that rail span the full scroll width rather * than stopping where the triggers do. */ scrollable?: boolean;
+      }
+  > &
+    RefAttributes<TabsListRef>
+> = forwardRef<
   TabsListRef,
   TabsListBaseProps &
     VariantProps<typeof tabsListVariants> & {
@@ -222,7 +242,12 @@ const TABS_TRIGGER_SIZES = {
   sm: "text-xs",
 } as const;
 
-const tabsTriggerVariants = cva(
+/** What `tabsTriggerVariants` accepts: its variants, and `class` or `className`. */
+type TabsTriggerVariantsFn = (
+  props?: { size?: "default" | "sm" | null | undefined } & ClassProp
+) => string;
+
+const tabsTriggerVariants: TabsTriggerVariantsFn = cva(
   // Square corners: the active state is a 2px border on the trailing edge that
   // has to run the full length of the trigger and stay flush with its ends.
   //
@@ -264,7 +289,12 @@ const tabsTriggerVariants = cva(
  * - Data attributes: [data-state="active|inactive"], [data-disabled]
  * @public
  */
-const TabsTrigger = forwardRef<
+const TabsTrigger: ForwardRefExoticComponent<
+  PropsWithoutRef<
+    TabsTriggerBaseProps & VariantProps<typeof tabsTriggerVariants>
+  > &
+    RefAttributes<TabsTriggerRef>
+> = forwardRef<
   TabsTriggerRef,
   TabsTriggerBaseProps & VariantProps<typeof tabsTriggerVariants>
 >(({ className, size, ...props }, ref) => (
@@ -290,7 +320,9 @@ TabsTrigger.displayName = Trigger.displayName;
  * - Only active content is visible, inactive content is hidden
  * @public
  */
-const TabsContent = forwardRef<TabsContentRef, TabsContentProps>(
+const TabsContent: ForwardRefExoticComponent<
+  PropsWithoutRef<TabsContentProps> & RefAttributes<TabsContentRef>
+> = forwardRef<TabsContentRef, TabsContentProps>(
   ({ className, ...props }, ref) => (
     <Content
       ref={ref}

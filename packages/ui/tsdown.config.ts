@@ -22,7 +22,11 @@ export default defineConfig({
   entry: clientBuildEntries(),
   format: ["esm", "cjs"],
   // Declarations without a type check: `check-types` is the type check.
-  dts: { sourcemap: false, compilerOptions: { noCheck: true } },
+  // oxc writes the declarations from the source's own annotations
+  // (`isolatedDeclarations` in tsconfig.json). Named rather than left to the
+  // plugin's choice, which falls back to `tsc` without saying so when the
+  // flag is off.
+  dts: { generator: "oxc", sourcemap: false },
   // Cleaning is done once by the build script, not per-config: the two configs
   // also run as concurrent watchers in dev, where a clean here would wipe the
   // server-safe entries and leave them missing until their sources changed.

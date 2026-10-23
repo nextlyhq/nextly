@@ -1,6 +1,12 @@
 import * as RadioGroupPrimitive from "@radix-ui/react-radio-group";
-import type { ElementRef, ComponentPropsWithoutRef } from "react";
-import { forwardRef } from "react";
+import {
+  forwardRef,
+  type ElementRef,
+  type ComponentPropsWithoutRef,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
 
@@ -33,7 +39,10 @@ import { cn } from "../lib/utils";
  * - Hover state changes  border border-border color for better interactivity
  * @public
  */
-const RadioGroup = forwardRef<
+const RadioGroup: ForwardRefExoticComponent<
+  PropsWithoutRef<ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Root>> &
+    RefAttributes<ElementRef<typeof RadioGroupPrimitive.Root>>
+> = forwardRef<
   ElementRef<typeof RadioGroupPrimitive.Root>,
   ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Root>
 >(({ className, ...props }, ref) => {
@@ -50,7 +59,10 @@ const RadioGroup = forwardRef<
 RadioGroup.displayName = "RadioGroup";
 
 /** @public */
-const RadioGroupItem = forwardRef<
+const RadioGroupItem: ForwardRefExoticComponent<
+  PropsWithoutRef<ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>> &
+    RefAttributes<ElementRef<typeof RadioGroupPrimitive.Item>>
+> = forwardRef<
   ElementRef<typeof RadioGroupPrimitive.Item>,
   ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>
 >(({ className, ...props }, ref) => {

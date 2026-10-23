@@ -87,22 +87,35 @@ const menuSurface =
   "z-50 max-h-[var(--radix-context-menu-content-available-height)] min-w-[8rem] overflow-y-auto overflow-x-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 origin-[--radix-context-menu-content-transform-origin]";
 
 /** @experimental */
-const ContextMenu = ContextMenuPrimitive.Root;
+const ContextMenu: typeof ContextMenuPrimitive.Root = ContextMenuPrimitive.Root;
 
 /** @experimental */
-const ContextMenuTrigger = ContextMenuPrimitive.Trigger;
+const ContextMenuTrigger: typeof ContextMenuPrimitive.Trigger =
+  ContextMenuPrimitive.Trigger;
 
 /** @experimental */
-const ContextMenuGroup = ContextMenuPrimitive.Group;
+const ContextMenuGroup: typeof ContextMenuPrimitive.Group =
+  ContextMenuPrimitive.Group;
 
 /** @experimental */
-const ContextMenuSub = ContextMenuPrimitive.Sub;
+const ContextMenuSub: typeof ContextMenuPrimitive.Sub =
+  ContextMenuPrimitive.Sub;
 
 /** @experimental */
-const ContextMenuRadioGroup = ContextMenuPrimitive.RadioGroup;
+const ContextMenuRadioGroup: typeof ContextMenuPrimitive.RadioGroup =
+  ContextMenuPrimitive.RadioGroup;
 
 /** @experimental */
-const ContextMenuSubTrigger = React.forwardRef<
+const ContextMenuSubTrigger: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<
+    React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubTrigger> & {
+      inset?: boolean;
+    }
+  > &
+    React.RefAttributes<
+      React.ElementRef<typeof ContextMenuPrimitive.SubTrigger>
+    >
+> = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.SubTrigger>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubTrigger> & {
     inset?: boolean;
@@ -125,7 +138,14 @@ const ContextMenuSubTrigger = React.forwardRef<
 ContextMenuSubTrigger.displayName = ContextMenuPrimitive.SubTrigger.displayName;
 
 /** @experimental */
-const ContextMenuSubContent = React.forwardRef<
+const ContextMenuSubContent: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<
+    React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubContent>
+  > &
+    React.RefAttributes<
+      React.ElementRef<typeof ContextMenuPrimitive.SubContent>
+    >
+> = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.SubContent>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubContent>
 >(({ className, ...props }, ref) => {
@@ -144,7 +164,12 @@ const ContextMenuSubContent = React.forwardRef<
 ContextMenuSubContent.displayName = ContextMenuPrimitive.SubContent.displayName;
 
 /** @experimental */
-const ContextMenuContent = React.forwardRef<
+const ContextMenuContent: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<
+    React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>
+  > &
+    React.RefAttributes<React.ElementRef<typeof ContextMenuPrimitive.Content>>
+> = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>
 >(({ className, ...props }, ref) => {
@@ -163,7 +188,14 @@ const ContextMenuContent = React.forwardRef<
 ContextMenuContent.displayName = ContextMenuPrimitive.Content.displayName;
 
 /** @experimental */
-const ContextMenuItem = React.forwardRef<
+const ContextMenuItem: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<
+    React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Item> & {
+      inset?: boolean;
+    }
+  > &
+    React.RefAttributes<React.ElementRef<typeof ContextMenuPrimitive.Item>>
+> = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Item>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Item> & {
     inset?: boolean;
@@ -183,7 +215,14 @@ const ContextMenuItem = React.forwardRef<
 ContextMenuItem.displayName = ContextMenuPrimitive.Item.displayName;
 
 /** @experimental */
-const ContextMenuCheckboxItem = React.forwardRef<
+const ContextMenuCheckboxItem: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<
+    React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.CheckboxItem>
+  > &
+    React.RefAttributes<
+      React.ElementRef<typeof ContextMenuPrimitive.CheckboxItem>
+    >
+> = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.CheckboxItem>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.CheckboxItem>
 >(({ className, children, checked, ...props }, ref) => (
@@ -209,7 +248,12 @@ ContextMenuCheckboxItem.displayName =
   ContextMenuPrimitive.CheckboxItem.displayName;
 
 /** @experimental */
-const ContextMenuRadioItem = React.forwardRef<
+const ContextMenuRadioItem: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<
+    React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.RadioItem>
+  > &
+    React.RefAttributes<React.ElementRef<typeof ContextMenuPrimitive.RadioItem>>
+> = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.RadioItem>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.RadioItem>
 >(({ className, children, ...props }, ref) => (
@@ -233,7 +277,14 @@ const ContextMenuRadioItem = React.forwardRef<
 ContextMenuRadioItem.displayName = ContextMenuPrimitive.RadioItem.displayName;
 
 /** @experimental */
-const ContextMenuLabel = React.forwardRef<
+const ContextMenuLabel: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<
+    React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Label> & {
+      inset?: boolean;
+    }
+  > &
+    React.RefAttributes<React.ElementRef<typeof ContextMenuPrimitive.Label>>
+> = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Label>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Label> & {
     inset?: boolean;
@@ -252,7 +303,12 @@ const ContextMenuLabel = React.forwardRef<
 ContextMenuLabel.displayName = ContextMenuPrimitive.Label.displayName;
 
 /** @experimental */
-const ContextMenuSeparator = React.forwardRef<
+const ContextMenuSeparator: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<
+    React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Separator>
+  > &
+    React.RefAttributes<React.ElementRef<typeof ContextMenuPrimitive.Separator>>
+> = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Separator>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Separator>
 >(({ className, ...props }, ref) => (
@@ -269,7 +325,7 @@ ContextMenuSeparator.displayName = ContextMenuPrimitive.Separator.displayName;
  *
  * @experimental
  */
-const ContextMenuShortcut = ({
+const ContextMenuShortcut: React.FC<React.HTMLAttributes<HTMLSpanElement>> = ({
   className,
   ...props
 }: React.HTMLAttributes<HTMLSpanElement>) => (
