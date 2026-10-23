@@ -107,6 +107,29 @@ function withoutExemptions(rule) {
   return config;
 }
 
+/**
+ * Writes each probe at its repository-relative path, lints them all with the
+ * committed configuration, and removes them whatever happens. A probe path is
+ * new: the write refuses one that exists, so no real file is replaced.
+ */
+function lintProbes(probes) {
+  const paths = Object.keys(probes);
+  try {
+    for (const path of paths) {
+      writeFileSync(join(root, path), probes[path], { flag: "wx" });
+    }
+    const result = lint(committed, paths);
+    expect(result.files, "every probe is a file lint reads").toBe(paths.length);
+    return result.diagnostics;
+  } finally {
+    for (const path of paths) rmSync(join(root, path), { force: true });
+  }
+}
+
+/** A probe file name no other run, and no real file, can share. */
+const probeName = name =>
+  `lint-probe-${process.pid}-${Math.random().toString(36).slice(2)}-${name}`;
+
 /** Diagnostics from `rule`, counted per repository-relative file. */
 function countsPerFile(diagnostics, rule) {
   const counts = {};
@@ -258,4 +281,127 @@ describe("the API-key scope guard's allowlist", () => {
       );
     }
   });
+});
+
+// Each guard above is shown live at a path no allowlist names: a probe doing
+// what the guard forbids, written where the committed `files` reach, must be
+// reported there. The checks above remove exemptions from allowlisted files;
+// these hold the guard to new code, where it matters most. The static-only
+// imports rule has no such path: its `files` are exactly the two boot modules.
+describe("each guard, at a path no allowlist names", () => {
+  const src = "packages/nextly/src";
+  const probes = {
+    "nextly(no-bare-error)": [
+      `${src}/${probeName("bare-error.ts")}`,
+      'export function probe(): never {\n  throw new Error("probe");\n}\n',
+    ],
+    "nextly(api-key-scope)": [
+      `${src}/${probeName("api-key-scope.ts")}`,
+      'export const scope = { actorType: "apiKey", permissions: [] };\n',
+    ],
+    "eslint(no-console)": [
+      `${src}/${probeName("console-call.ts")}`,
+      'export function probe(): void {\n  console.log("probe");\n}\n',
+    ],
+    "eslint(no-restricted-globals)": [
+      `${src}/${probeName("console-value.ts")}`,
+      "export const sink = console;\n",
+    ],
+    "eslint(no-restricted-imports)": [
+      `${src}/api/${probeName("migrate-import.ts")}`,
+      'export { runMigrate } from "../cli/commands/migrate";\n',
+    ],
+  };
+
+  it("reports each forbidden construct in the file it was written to", () => {
+    const diagnostics = lintProbes(Object.fromEntries(Object.values(probes)));
+    for (const [rule, [path]] of Object.entries(probes)) {
+      expect(
+        countsPerFile(diagnostics, rule)[path] ?? 0,
+        `${rule} at ${path}`
+      ).toBeGreaterThan(0);
+    }
+  }, 120_000);
+});
+
+// The playground's React Compiler and accessibility rules, each shown to report
+// on a construct it exists to catch. The rules come from the playground's own
+// override, so a rule turned on there without a probe here, or a probe whose
+// rule is off, fails the first test.
+describe("the playground's React Compiler and accessibility rules", () => {
+  const PROBES = {
+    "react/error-boundaries":
+      "function Child() {\n  return <div />;\n}\nexport function Probe() {\n  try {\n    return <Child />;\n  } catch {\n    return null;\n  }\n}\n",
+    "react/globals":
+      "let renders = 0;\nexport function Probe() {\n  renders = renders + 1;\n  return <div>{renders}</div>;\n}\n",
+    "react/immutability":
+      'import { useState } from "react";\nexport function Probe() {\n  const [state] = useState({ count: 0 });\n  state.count = 1;\n  return <div>{state.count}</div>;\n}\n',
+    "react/incompatible-library":
+      'import { useForm } from "react-hook-form";\nexport function Probe() {\n  const { watch } = useForm();\n  return <div>{String(watch("x"))}</div>;\n}\n',
+    "react/preserve-manual-memoization":
+      'import { useMemo } from "react";\nexport function useProbe() {\n  const { data } = useStats();\n  return useMemo(() => {\n    const map = new Map<string, number>();\n    if (!data?.items) return map;\n    for (const item of data.items) map.set(String(item), item);\n    return map;\n  }, [data?.items]);\n}\nfunction useStats(): { data?: { items?: number[] } } {\n  return {};\n}\n',
+    "react/purity":
+      "export function Probe() {\n  const now = Date.now();\n  return <div>{now}</div>;\n}\n",
+    "react/refs":
+      'import { useRef } from "react";\nexport function Probe() {\n  const ref = useRef(0);\n  return <div>{ref.current}</div>;\n}\n',
+    "react/set-state-in-effect":
+      'import { useEffect, useState } from "react";\nexport function Probe() {\n  const [value, setValue] = useState(0);\n  useEffect(() => {\n    setValue(1);\n  }, []);\n  return <div>{value}</div>;\n}\n',
+    "react/set-state-in-render":
+      'import { useState } from "react";\nexport function Probe() {\n  const [value, setValue] = useState(0);\n  setValue(1);\n  return <div>{value}</div>;\n}\n',
+    "react/static-components":
+      "export function Probe() {\n  const Inner = () => <span />;\n  return <Inner />;\n}\n",
+    "react/unsupported-syntax":
+      'export function Probe() {\n  const value = eval("1");\n  return <div>{value}</div>;\n}\n',
+    "react/use-memo":
+      'import { useMemo } from "react";\nexport function Probe({ n }: { n: Promise<number> }) {\n  const value = useMemo(async () => {\n    await n;\n  }, [n]);\n  return <div>{String(value)}</div>;\n}\n',
+    // Both elements: `Image` is reported only through the rule's options.
+    "jsx-a11y/alt-text":
+      'import Image from "next/image";\nexport function Probe() {\n  return (\n    <>\n      <img src="/x.png" />\n      <Image src="/x.png" width={1} height={1} />\n    </>\n  );\n}\n',
+    "jsx-a11y/aria-props":
+      'export function Probe() {\n  return <div aria-labeledby="x" />;\n}\n',
+    "jsx-a11y/aria-proptypes":
+      'export function Probe() {\n  return <div aria-hidden="maybe" />;\n}\n',
+    "jsx-a11y/aria-unsupported-elements":
+      'export function Probe() {\n  return <meta aria-hidden="true" />;\n}\n',
+    "jsx-a11y/role-has-required-aria-props":
+      'export function Probe() {\n  return <div role="checkbox" />;\n}\n',
+    "jsx-a11y/role-supports-aria-props":
+      'export function Probe() {\n  return <li aria-required="true" />;\n}\n',
+  };
+  // How many reports each probe must produce, where it is more than one.
+  const EXPECTED_REPORTS = { "jsx-a11y/alt-text": 2 };
+
+  // The override that turns the accessibility rules on is the playground's.
+  const playground = overrideFor("jsx-a11y/alt-text");
+
+  // The playground's own React and accessibility rules: every other React
+  // rule is turned on for all React packages, in an override of its own.
+  const rulesOn = Object.keys(playground.rules).filter(rule =>
+    /^(react|jsx-a11y)\//.test(rule)
+  );
+
+  it("has a probe for exactly the React and accessibility rules the playground turns on", () => {
+    expect([...rulesOn].sort()).toEqual(Object.keys(PROBES).sort());
+  });
+
+  it("reports each probe's construct, in its own file, through its own rule", () => {
+    const paths = Object.fromEntries(
+      Object.keys(PROBES).map(rule => [
+        rule,
+        `apps/playground/src/${probeName(`${rule.replace("/", "-")}.tsx`)}`,
+      ])
+    );
+    const diagnostics = lintProbes(
+      Object.fromEntries(
+        Object.entries(PROBES).map(([rule, source]) => [paths[rule], source])
+      )
+    );
+    for (const [rule, path] of Object.entries(paths)) {
+      const [plugin, name] = rule.split("/");
+      expect(
+        countsPerFile(diagnostics, `${plugin}(${name})`)[path] ?? 0,
+        `${rule} at ${path}`
+      ).toBe(EXPECTED_REPORTS[rule] ?? 1);
+    }
+  }, 120_000);
 });
