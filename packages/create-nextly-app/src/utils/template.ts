@@ -1236,9 +1236,13 @@ let resolvedRuntimeVersions: Record<string, string> | null = null;
 async function resolveRuntimeVersions(): Promise<Record<string, string>> {
   if (resolvedRuntimeVersions) return resolvedRuntimeVersions;
 
+  // The lowest Next.js 16 release Nextly's own `next` peer accepts, the first
+  // without the advisories that peer excludes: an offline cache or a private
+  // mirror installs whatever this range admits.
+  const NEXT_FLOOR = "^16.4.1";
   const FALLBACKS: Record<string, string> = {
-    next: "^16.1.0",
-    "eslint-config-next": "^16.1.0",
+    next: NEXT_FLOOR,
+    "eslint-config-next": NEXT_FLOOR,
   };
 
   const entries = await Promise.all(
@@ -1558,7 +1562,10 @@ async function generatePluginPackageJson(
     "@types/react-dom": PINNED_VERSIONS["@types/react-dom"],
     typescript: PINNED_VERSIONS.typescript,
     tsdown: "^0.23.1",
-    vitest: "^4.1.0",
+    vitest: "^5.0.5",
+    // Vitest's peer, declared because Yarn installs no peers: without it a
+    // Yarn-scaffolded plugin installs, and then `yarn test` cannot load Vite.
+    vite: "^7.3.5",
     eslint: PINNED_VERSIONS.eslint,
     "@eslint/js": PINNED_VERSIONS.eslint,
     "typescript-eslint": "^8.0.0",

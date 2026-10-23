@@ -2359,7 +2359,7 @@ export class CollectionMutationService extends BaseService {
     );
     if (params.entryIds.length === 0) return issues;
     const collection = await this.releaseCollection(params.collectionName);
-    if ((collection as { status?: boolean } | null)?.status !== true) {
+    if (!this.keepsStatus(collection)) {
       return issues;
     }
     // A translation table without its per-language status cannot be read for
@@ -2498,7 +2498,7 @@ export class CollectionMutationService extends BaseService {
     const documents = new Map<string, Record<string, unknown>>();
     if (params.entryIds.length === 0) return documents;
     const collection = await this.releaseCollection(params.collectionName);
-    if ((collection as { status?: boolean } | null)?.status !== true) {
+    if (!this.keepsStatus(collection)) {
       return documents;
     }
     if (await this.companionLacksStatus(params.collectionName)) {
@@ -2653,6 +2653,19 @@ export class CollectionMutationService extends BaseService {
       );
     }
     return held;
+  }
+
+  /**
+   * Whether a release's collection has the draft/published status turned on.
+   * The collection arrives as an `object`, so `in` narrows it to the field
+   * rather than a cast asserting a shape.
+   */
+  private keepsStatus(collection: object | null): boolean {
+    return (
+      collection !== null &&
+      "status" in collection &&
+      collection.status === true
+    );
   }
 
   /**

@@ -23,9 +23,10 @@ import { cn } from "@admin/lib/utils";
  * Through the DOM rather than as a prop, because the admin runs on React 18
  * and 19 and they disagree about the attribute: React 18 drops a boolean
  * `inert`, and React 19 reads the string form `""` as false. Attached only
- * while customising, since the fence itself exists only then.
+ * while customising, since the fence itself exists only then; the settings
+ * sheet's preview uses it too, for a card that is shown and not used.
  */
-function fenceOff(element: HTMLElement | null): void {
+export function fenceOff(element: HTMLElement | null): void {
   element?.setAttribute("inert", "");
 }
 

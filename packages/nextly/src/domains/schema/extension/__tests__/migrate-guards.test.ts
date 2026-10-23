@@ -5,7 +5,7 @@
  * app-owned table blocks a migration that was never wrong; a production run
  * that skips plugin tables reports success and leaves a query to discover it.
  */
-import { describe, expect, it, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { snapshotComparableTables } from "../../pipeline/managed-tables";
 import {
@@ -16,6 +16,12 @@ import {
 import { col, defineTable } from "../dsl";
 
 beforeEach(() => {
+  clearActiveExtensionSchema();
+});
+
+// Taken down after the last test as well, so the next file run in this worker
+// does not inherit a plugin's tables.
+afterEach(() => {
   clearActiveExtensionSchema();
 });
 
