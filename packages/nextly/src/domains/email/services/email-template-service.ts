@@ -92,7 +92,7 @@ import {
 } from "../transaction-flow";
 import type { EmailConfig } from "../types";
 import {
-  formatOf,
+  storedFormat,
   writtenForCreate,
   writtenForUpdate,
 } from "../written/fields";
@@ -583,11 +583,7 @@ export class EmailTemplateService extends BaseService {
     return {
       ...columns,
       kind: columns.kind ?? "template",
-      format: formatOf(columns.format),
-      blocks:
-        formatOf(columns.format) === "written"
-          ? (columns.blocks ?? null)
-          : null,
+      ...storedFormat(columns),
       description: columns.description ?? null,
       cc: columns.cc ?? null,
       bcc: columns.bcc ?? null,

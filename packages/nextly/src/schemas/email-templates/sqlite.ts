@@ -119,6 +119,15 @@ export const emailTemplatesSqlite = sqliteTable(
      */
     preheader: text("preheader"),
 
+    /**
+     * Whether the template is written (blocks) or coded (HTML). Null, as on
+     * every row stored before written templates, is coded.
+     */
+    format: text("format"),
+
+    /** A written template's blocks (`domains/email/written`); null for a coded one. */
+    blocks: text("blocks", { mode: "json" }).$type<WrittenDocument>(),
+
     // --------------------------------------------------------
     // Template Metadata
     // --------------------------------------------------------
@@ -240,15 +249,6 @@ export const emailTemplatesSqlite = sqliteTable(
 
     /** When the template is sent, written by its owner (or the site). */
     description: text("description"),
-
-    /**
-     * Whether the template is written (blocks) or coded (HTML). Null, as on
-     * every row stored before written templates, is coded.
-     */
-    format: text("format"),
-
-    /** A written template's blocks (`domains/email/written`); null for a coded one. */
-    blocks: text("blocks", { mode: "json" }).$type<WrittenDocument>(),
 
     // --------------------------------------------------------
     // Metadata
