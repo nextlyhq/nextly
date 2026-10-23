@@ -185,9 +185,7 @@ export async function keepDeniedAtStored(input: {
   // the stale verdict allows it, the restoration leaves it out, and the
   // whole-column write deletes a value the final document protects.
   const asLeft = overlay(stored, permitted);
-  const permittedStored = detachData(
-    isRecord(asLeft) ? asLeft : stored
-  ) as Record<string, unknown>;
+  const permittedStored = detachData(isRecord(asLeft) ? asLeft : stored);
   await input.applyRules(permittedStored);
   const out = restoreDenied(
     input.update,
@@ -337,12 +335,22 @@ function rowPairing(
   to: readonly unknown[]
 ): (index: number) => number | undefined {
   const byId = idIndex(to);
-  const byPosition = (index: number) =>
-    index < to.length ? index : undefined;
+  const byPosition = (index: number) => (index < to.length ? index : undefined);
   if (byId === undefined) return byPosition;
+  // The rows another row names by id are that row's. A row without an id
+  // pairs by position only with a row nothing names, so a new row added ahead
+  // of rows that keep their ids takes none of their values, while a list sent
+  // without its ids still pairs each row with the one at its place.
+  const named = new Set<number>();
+  for (const row of from) {
+    const at = byId.get(rowId(row) ?? "");
+    if (at !== undefined) named.add(at);
+  }
   return index => {
     const id = rowId(from[index]);
-    return id === undefined ? byPosition(index) : byId.get(id);
+    if (id !== undefined) return byId.get(id);
+    const at = byPosition(index);
+    return at === undefined || named.has(at) ? undefined : at;
   };
 }
 
@@ -371,8 +379,10 @@ function idIndex(rows: readonly unknown[]): Map<string, number> | undefined {
  * writer is allowed to make laid over them.
  *
  * Only PERMITTED changes are laid over, because a denied one never reaches the
- * row, and the shape of `stored` is preserved exactly so a caller can still
- * read this alongside the row key by key and row by row.
+ * row. The shape of `stored` is kept, so a caller can still read this
+ * alongside the row key by key and row by row, with one addition: a key the
+ * update adds to a record is laid over too, since a rule reading a sibling
+ * must see the sibling the update writes.
  */
 function overlay(stored: unknown, permitted: unknown): unknown {
   if (permitted === undefined) return stored;
@@ -386,13 +396,26 @@ function overlay(stored: unknown, permitted: unknown): unknown {
   }
   if (!isRecord(stored)) return isRecord(permitted) ? stored : permitted;
   if (!isRecord(permitted)) return stored;
+  return overlayRecord(stored, permitted);
+}
+
+/** {@link overlay} for one record: its own keys, then the ones the update adds. */
+function overlayRecord(
+  stored: Record<string, unknown>,
+  permitted: Record<string, unknown>
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(stored)) {
     assign(
       out,
       key,
-      hasOwn(permitted, key) ? overlay(stored[key], permitted[key]) : stored[key]
+      hasOwn(permitted, key)
+        ? overlay(stored[key], permitted[key])
+        : stored[key]
     );
+  }
+  for (const key of Object.keys(permitted)) {
+    if (!hasOwn(stored, key)) assign(out, key, permitted[key]);
   }
   return out;
 }
