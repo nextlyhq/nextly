@@ -46,10 +46,13 @@ import { pluginSettingsSecrets } from "../../plugins/settings-service";
 import { ERASED_RECIPIENT_HASH, recipientDigest } from "../delivery-record";
 import { defineEmailProvider } from "../provider-definition";
 import {
+  attemptQueuedEmail,
   openQueuedMessage,
   resealQueuedMessages,
   storeQueuedEmail,
 } from "../queued-send";
+import { scopedSender } from "../send-claims";
+import type { EmailService } from "../services/email-service";
 import { EmailDeliveryService } from "../services/email-delivery-service";
 import type { EmailProviderAdapter } from "../types";
 
@@ -390,6 +393,38 @@ describe.each(getConfiguredTestDialects())(
       expect(calls).toEqual([]);
     }, 120_000);
 
+    it("sends nothing when its person is deleted between an attempt's first read and its claim", async () => {
+      // The attempt reads the email waiting, the deletion then commits, and
+      // only then does the attempt claim it: it must find it cancelled, not
+      // send the message it would have read first.
+      const t = await boot(dialect);
+      const gone = await person("acc_between");
+      behaviour.failures = 1;
+      const result = await plugin().services.email.queue({
+        ...message,
+        to: SHARED,
+        person: gone,
+      });
+      expect(result.state).toBe("waiting");
+      const attempts = calls.length;
+
+      await attemptQueuedEmail(
+        {
+          adapter: deletingAfterFirstRead(t, () =>
+            plugin().principals!.reportDeleted(gone)
+          ) as never,
+          sender: scope =>
+            scopedSender(t.getService("emailService") as EmailService, scope),
+          secrets: pluginSettingsSecrets(env),
+        },
+        { queuedId: result.id },
+        { attempt: 2, now: new Date() }
+      );
+
+      expect(calls).toHaveLength(attempts);
+      expect((await queued(t, result.id)).state).toBe("cancelled");
+    });
+
     it("lets an attempt already with the provider finish, and records it erased", async () => {
       const t = await boot(dialect);
       const gone = await person("acc_in_flight");
@@ -496,3 +531,62 @@ describe.each(getConfiguredTestDialects())(
     });
   }
 );
+
+/**
+ * The booted adapter, whose Drizzle handle runs `between` once, after the
+ * first read of `email_queue` returns its rows and before the attempt goes
+ * on. Every step of a query builder is wrapped, since Drizzle's builders are
+ * thenable at every step and `limit` is where a read ends.
+ */
+function deletingAfterFirstRead(
+  t: TestNextly,
+  between: () => Promise<unknown>
+): unknown {
+  const real = t.adapter as unknown as {
+    getCapabilities(): unknown;
+    getDrizzle(relations?: unknown): object;
+  };
+  let done = false;
+  const tableName = (table: unknown): string =>
+    String(
+      (table as Record<symbol, unknown> | undefined)?.[
+        Symbol.for("drizzle:Name")
+      ] ?? ""
+    );
+  const wrap = (builder: object, readingQueue: boolean): object =>
+    new Proxy(builder, {
+      get(target, prop) {
+        const value = Reflect.get(target, prop, target) as unknown;
+        if (typeof value !== "function") return value;
+        // A promise's own methods run on the promise, not on this wrapper.
+        if (prop === "then" || prop === "catch" || prop === "finally") {
+          return (value as (...a: unknown[]) => unknown).bind(target);
+        }
+        return (...args: unknown[]) => {
+          const next = (value as (...a: unknown[]) => unknown).apply(
+            target,
+            args
+          );
+          const queue =
+            prop === "from"
+              ? tableName(args[0]) === "email_queue"
+              : readingQueue;
+          if (prop === "limit" && queue && !done) {
+            done = true;
+            return Promise.resolve(next).then(async rows => {
+              await between();
+              return rows;
+            });
+          }
+          return next !== null && typeof next === "object"
+            ? wrap(next, queue)
+            : next;
+        };
+      },
+    });
+  return {
+    getCapabilities: () => real.getCapabilities(),
+    getDrizzle: (relations?: unknown) =>
+      wrap(real.getDrizzle(relations), false),
+  };
+}
