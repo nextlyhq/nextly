@@ -879,6 +879,10 @@ class DropReader {
    * before the list runs decides their credit (`tablesCreatedBy`).
    */
   readonly creating = new Set<string>();
+  /** Every table name this list creates, under any schema. */
+  private readonly createdAnywhere = new Set<string>();
+  /** Names a statement vacated while naming their schema. */
+  private readonly vacatedQualified = new Set<string>();
   /**
    * Whether the list holds a statement that may change which table an
    * unqualified name reaches (`changesNameResolution`). Once it does, no
@@ -1012,9 +1016,11 @@ class DropReader {
   /**
    * A relation name that a statement drops, renames or moves away: a later
    * lookup of it may reach a relation it shadowed (`lookupsAfterVacating`).
+   * `local` is false when the statement named the relation's schema.
    */
-  vacate(name: string): void {
+  vacate(name: string, local = true): void {
     this.vacated.set(name, this.statementIndex);
+    if (!local) this.vacatedQualified.add(name);
   }
 
   /**
@@ -1034,17 +1040,25 @@ class DropReader {
    * A `CREATE TABLE IF NOT EXISTS` under `table`'s name: it fills the name
    * only when an earlier statement of this list vacated it, since nothing
    * stands there then, and the create makes the table. Not when this list
-   * created a table of the name before: a temporary one shadows a real one,
-   * and dropping it leaves the real one standing, which the create leaves in
-   * place. Nor once a statement may have changed which schema an unqualified
-   * name reaches (`resolutionMayChange`): the create may then find another
-   * table of the name, and make nothing. Credited with nothing else
-   * (`create`).
+   * created a table of the name before, under any schema: a temporary one
+   * shadows a real one, and dropping it leaves the real one standing, which
+   * the create leaves in place. Not when the create, or a statement that
+   * vacated the name, named a schema: an unqualified name may then reach
+   * another schema than the one emptied, where a table may stand. Nor once a
+   * statement may have changed which schema an unqualified name reaches
+   * (`resolutionMayChange`). Credited with nothing else (`create`).
    */
   fillIfVacated(table: TableRef): void {
+    if (!table.local) return;
     const at = this.vacated.get(table.name);
     if (at === undefined || at >= this.statementIndex) return;
-    if (this.creating.has(table.name) || this.resolutionMayChange) return;
+    if (
+      this.createdAnywhere.has(table.name) ||
+      this.vacatedQualified.has(table.name) ||
+      this.resolutionMayChange
+    ) {
+      return;
+    }
     this.occupy(table);
   }
 
@@ -1069,6 +1083,7 @@ class DropReader {
    * statement naming the existing table reaches the existing table.
    */
   create(table: TableRef): void {
+    this.createdAnywhere.add(table.name);
     this.occupy(table);
     if (!table.local) return;
     this.creating.add(table.name);
@@ -1110,7 +1125,7 @@ class DropReader {
 
   /** Records a dropped name, and the original name if a rename made it. */
   drop(table: TableRef): void {
-    this.vacate(table.name);
+    this.vacate(table.name, table.local);
     if (this.takeCreated(table)) return;
     const original = this.renamedFrom.get(table.name);
     this.droppedAt.set(table.name, this.statementIndex);
@@ -1122,7 +1137,7 @@ class DropReader {
   }
 
   rename(from: TableRef, to: TableRef): void {
-    this.vacate(from.name);
+    this.vacate(from.name, from.local);
     if (this.takeCreated(from)) {
       this.create(to);
       return;
@@ -1141,7 +1156,7 @@ class DropReader {
    */
   relocate(table: TableRef): string {
     const { name } = table;
-    this.vacate(name);
+    this.vacate(name, table.local);
     if (this.takeCreated(table)) return name;
     const original = this.renamedFrom.get(name) ?? name;
     this.renamed.push(original);
@@ -1806,7 +1821,7 @@ class StatementWalk {
     for (;;) {
       const name = this.qualifiedName(k);
       if (name === undefined) return;
-      this.reader.vacate(name.name);
+      this.reader.vacate(name.name, name.local);
       if (this.punct(name.next) !== ",") return;
       k = name.next + 1;
     }
@@ -1820,7 +1835,7 @@ class StatementWalk {
   private readRelationMove(at: number): void {
     const relation = this.movableRelationAt(at);
     if (relation !== undefined && this.movesAwayFrom(relation.next)) {
-      this.reader.vacate(relation.name);
+      this.reader.vacate(relation.name, relation.local);
     }
   }
 

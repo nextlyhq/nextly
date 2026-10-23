@@ -7,9 +7,10 @@
  *
  * Where a table of the name may still stand, the create may make nothing and
  * fills nothing: before any drop of the name; after the list created a table
- * of that name, since a temporary table shadows a real one and its drop
- * leaves the real one standing; or after a statement that may change which
- * schema an unqualified name reaches.
+ * of that name, under any schema, since a temporary table shadows a real one
+ * and its drop leaves the real one standing; when the drop or the create
+ * names a schema, since an unqualified name may reach another one; or after
+ * a statement that may change which schema an unqualified name reaches.
  */
 import { describe, expect, it } from "vitest";
 
@@ -154,6 +155,68 @@ describe("CREATE TABLE IF NOT EXISTS where a table of the name may stand, on pos
             "DROP TABLE legacy_orders",
             "SET search_path TO scratch, public",
             "CREATE TABLE IF NOT EXISTS legacy_orders (id INT)",
+            "ALTER TABLE legacy_orders ADD COLUMN note INT",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatch(vacated);
+  });
+
+  it.each([
+    [
+      "the temporary schema named",
+      "CREATE TABLE pg_temp.legacy_orders (id INT)",
+    ],
+    [
+      "the temporary schema and keyword",
+      "CREATE TEMP TABLE pg_temp.legacy_orders (id INT)",
+    ],
+    ["another schema named", "CREATE TABLE scratch.legacy_orders (id INT)"],
+  ])(
+    "fills nothing after the list created a table of the name with %s",
+    (_spelling, created) => {
+      expect(
+        refusal(() =>
+          guard(
+            [
+              created,
+              "DROP TABLE legacy_orders",
+              "CREATE TABLE IF NOT EXISTS legacy_orders (id INT)",
+              "ALTER TABLE legacy_orders ADD COLUMN note INT",
+            ],
+            "app",
+            "postgresql"
+          )
+        )
+      ).toMatch(vacated);
+    }
+  );
+
+  it("fills nothing after a drop that named the schema, which an unqualified create may not reach", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "DROP TABLE public.legacy_orders",
+            "CREATE TABLE IF NOT EXISTS legacy_orders (id INT)",
+            "ALTER TABLE legacy_orders ADD COLUMN note INT",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatch(vacated);
+  });
+
+  it("fills nothing under a create that names the schema", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "DROP TABLE legacy_orders",
+            "CREATE TABLE IF NOT EXISTS public.legacy_orders (id INT)",
             "ALTER TABLE legacy_orders ADD COLUMN note INT",
           ],
           "app",
