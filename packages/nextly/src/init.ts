@@ -105,6 +105,7 @@ const globalForInit = globalThis as unknown as {
   __nextly_cachedInstance?: Nextly | null;
   __nextly_drizzleVersionChecked?: boolean;
   __nextly_initPromise?: Promise<Nextly> | null;
+  __nextly_serverStartRegisterRunning?: boolean;
 };
 
 // ============================================================
@@ -547,6 +548,27 @@ export async function getCachedNextly(): Promise<Nextly> {
 }
 
 /**
+ * Whether a start the project's instrumentation is running right now — a
+ * `register()` that `createRegister()` built, from its first statement to
+ * its settling.
+ *
+ * The server-start origin is what this records, because the in-flight
+ * promise alone cannot say it: `getNextly({ config })` is also the documented
+ * request-time API, and one request calling it while another reaches the
+ * request-path boot is not a server-start boot, whatever the timing. The
+ * flag is set as `register()`'s first statement, before its dynamic imports,
+ * so a request arriving in the window before the start has called Nextly at
+ * all still finds it — the earlier of the two windows a first request can
+ * race — and cleared when `register()` settles, so a later boot in the same
+ * process (a development re-registration after a config edit, a retry after
+ * a failed start) is not told a start is under way that finished long ago.
+ * On `globalThis` for the reason the rest of the boot state is.
+ */
+export function isServerStartRegisterRunning(): boolean {
+  return globalForInit.__nextly_serverStartRegisterRunning === true;
+}
+
+/**
  * Create a Next.js instrumentation `register` function for Nextly.
  *
  * This is the recommended way to initialize Nextly via Next.js's
@@ -574,7 +596,18 @@ export function createRegister(
   config: SanitizedNextlyConfig
 ): () => Promise<void> {
   return async function register() {
-    await getNextly({ config });
+    // Before the first await, so the whole of register() — its dynamic
+    // imports included — reads as an active server-start start to anything
+    // that asks while it runs (`isServerStartRegisterRunning`). Cleared in
+    // finally so a later boot in the same process (a development
+    // re-registration after a config edit, a retry after a failed start)
+    // is not told a start is under way that finished long ago.
+    globalForInit.__nextly_serverStartRegisterRunning = true;
+    try {
+      await getNextly({ config });
+    } finally {
+      globalForInit.__nextly_serverStartRegisterRunning = false;
+    }
   };
 }
 
@@ -632,6 +665,7 @@ export function createRegister(
  * ```
  */
 export async function shutdownNextly(): Promise<void> {
+  delete globalForInit.__nextly_serverStartRegisterRunning;
   if (globalForInit.__nextly_cachedInstance) {
     await globalForInit.__nextly_cachedInstance.shutdown();
   }
