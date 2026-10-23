@@ -1,6 +1,7 @@
 {
   "extends": "@nextlyhq/tsconfig/base-bundler.json",
   "compilerOptions": {
+    "types": ["node"],
     "rootDir": "src",
     "outDir": "dist",
     "paths": {
