@@ -17,8 +17,14 @@
 import { autocompletion } from "@codemirror/autocomplete";
 import { html } from "@codemirror/lang-html";
 import { liquid } from "@codemirror/lang-liquid";
+import { LanguageSupport, StreamLanguage } from "@codemirror/language";
 import { linter, type Diagnostic } from "@codemirror/lint";
-import CodeMirror, { EditorState, EditorView } from "@uiw/react-codemirror";
+import CodeMirror, {
+  EditorState,
+  EditorView,
+  ExternalChange,
+  type Transaction,
+} from "@uiw/react-codemirror";
 import {
   useEffect,
   useMemo,
@@ -80,9 +86,35 @@ export interface LiquidEditorProps {
  * API and the schemas accept one) can still be edited, and repaired.
  */
 const oneLine = EditorState.transactionFilter.of(transaction =>
-  transaction.newDoc.lines > Math.max(1, transaction.startState.doc.lines)
-    ? []
-    : transaction
+  isFromOutside(transaction) ||
+  transaction.newDoc.lines <= Math.max(1, transaction.startState.doc.lines)
+    ? transaction
+    : []
+);
+
+/**
+ * Whether the form set the value (a duplicate loading its source, Discard
+ * restoring the saved one). That value is the field's already, whatever its
+ * lines, and is shown as it is: refusing it would show one thing while a save
+ * stores another.
+ */
+function isFromOutside(transaction: Transaction): boolean {
+  return transaction.annotation(ExternalChange) === true;
+}
+
+/**
+ * Text with no markup in it: a subject, a From line, a plain-text body.
+ * Liquid's own default is HTML, whose tag closing would answer the `>` of
+ * `Shop <shop@example.com>` with a closing tag.
+ */
+const plainText = new LanguageSupport(
+  StreamLanguage.define({
+    name: "text",
+    token: stream => {
+      stream.skipToEnd();
+      return null;
+    },
+  })
 );
 
 /**
@@ -131,7 +163,7 @@ function liquidTooling(
 
 /** The grammar: Liquid (inside HTML for the body), or plain HTML or text. */
 function language(isLiquid: boolean, mode: LiquidEditorProps["mode"]) {
-  if (isLiquid) return liquid(mode === "html" ? { base: html() } : {});
+  if (isLiquid) return liquid({ base: mode === "html" ? html() : plainText });
   return mode === "html" ? [html()] : [];
 }
 

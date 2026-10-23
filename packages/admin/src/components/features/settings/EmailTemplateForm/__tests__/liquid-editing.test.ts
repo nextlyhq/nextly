@@ -8,6 +8,7 @@
 import { CompletionContext } from "@codemirror/autocomplete";
 import { html } from "@codemirror/lang-html";
 import { liquid } from "@codemirror/lang-liquid";
+import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorState } from "@uiw/react-codemirror";
 import { describe, expect, it } from "vitest";
 
@@ -33,6 +34,9 @@ function offered(doc: string): string[] {
     doc,
     extensions: [liquid({ base: html() })],
   });
+  // Parsed whole, as an editor has it by the time anyone asks. The parser
+  // otherwise stops at a time budget, which a busy machine can run out of.
+  ensureSyntaxTree(state, doc.length, 5000);
   const context = new CompletionContext(state, doc.length, true);
   const result = emailCompletionSource(data)(context);
   return result ? result.options.map(option => option.label) : [];

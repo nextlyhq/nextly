@@ -8,6 +8,8 @@
  * body being edited rather than the other one.
  */
 import { currentCompletions, startCompletion } from "@codemirror/autocomplete";
+import { htmlLanguage } from "@codemirror/lang-html";
+import { forceParsing } from "@codemirror/language";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { EditorView } from "@uiw/react-codemirror";
 import { useRef } from "react";
@@ -119,6 +121,45 @@ describe("the email editor", () => {
     expect(view().state.doc.toString()).toBe("Hello back");
   });
 
+  it("shows a multi-line value the form resets it to, unchanged", () => {
+    // A duplicate loading its source, or Discard restoring a saved value, sets
+    // the field from outside. A value saved with a break must arrive whole:
+    // showing anything else would differ from what a save then stores.
+    let view: EditorView | null = null;
+    const props = {
+      label: "Subject",
+      mode: "text" as const,
+      singleLine: true,
+      onChange: () => {},
+      readOnly: false,
+      completion: COMPLETION,
+      onCreateEditor: (created: EditorView) => {
+        view = created;
+      },
+    };
+    const { rerender } = render(<LiquidEditor {...props} value="Welcome" />);
+    rerender(<LiquidEditor {...props} value={"Welcome\nback"} />);
+    expect(view!.state.doc.toString()).toBe("Welcome\nback");
+  });
+
+  it("closes no HTML tag in a text field", () => {
+    // An address is written `Shop <shop@example.com>`: the closing `>` must
+    // not be read as the end of an HTML tag and answered with `</shop…>`.
+    const { view } = mountEditor({ value: "Shop <shop" });
+    const v = view();
+    const at = v.state.doc.length;
+    act(() => {
+      v.dispatch({ selection: { anchor: at } });
+      // As a browser has by the time anyone types: the whole text parsed,
+      // the layer inside Liquid included.
+      forceParsing(v, at, 5000);
+    });
+    // HTML's tag closing acts wherever HTML is the language, so the text
+    // must not be read as HTML at all.
+    expect(htmlLanguage.isActiveAt(v.state, at, -1)).toBe(false);
+    expect(htmlLanguage.isActiveAt(v.state, 0, 1)).toBe(false);
+  });
+
   it("lets a multi-line field take a line break", () => {
     const { view } = mountEditor({ value: "Welcome" });
     type(view(), "Welcome\nto the shop");
@@ -161,9 +202,13 @@ describe("the email editor", () => {
     act(() => {
       startCompletion(view());
     });
+    // Asked while the caret is still inside the tag: a later edit would
+    // close any completion anyway, and hide one that was offered.
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(currentCompletions(view().state)).toEqual([]);
+
     type(view(), "Hi {{ userName | nope }}");
     await new Promise(resolve => setTimeout(resolve, 500));
-    expect(currentCompletions(view().state)).toEqual([]);
     expect(onProblems).not.toHaveBeenCalledWith([
       expect.objectContaining({ message: expect.stringMatching(/nope/) }),
     ]);

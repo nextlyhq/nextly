@@ -1,7 +1,7 @@
 "use client";
 
 import { Badge, Button } from "@nextlyhq/ui";
-import { Suspense, lazy, type JSX } from "react";
+import { Suspense, lazy, useId, type JSX } from "react";
 
 // The admin's code editor, which reads and checks JSON; loaded with the panel.
 const CodeMirrorEditor = lazy(() =>
@@ -27,6 +27,7 @@ export function DataRail({
   sampleError: string | null;
   unknownVariables: string[];
 }): JSX.Element {
+  const errorId = useId();
   return (
     <div className="space-y-5">
       <div>
@@ -58,6 +59,8 @@ export function DataRail({
           >
             <CodeMirrorEditor
               label="Sample data"
+              invalid={Boolean(sampleError)}
+              describedBy={sampleError ? errorId : undefined}
               language="json"
               value={sampleText}
               onChange={onSampleChange}
@@ -74,7 +77,7 @@ export function DataRail({
           </Suspense>
         </div>
         {sampleError ? (
-          <p className="mt-1.5 text-xs text-destructive">
+          <p id={errorId} className="mt-1.5 text-xs text-destructive">
             Invalid JSON: {sampleError}
           </p>
         ) : null}

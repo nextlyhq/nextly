@@ -45,8 +45,27 @@ describe("the Data panel", () => {
     expect(onSampleChange).toHaveBeenLastCalledWith("{}", expect.anything());
   });
 
-  it("says when the sample data isn't JSON", () => {
+  it("says when the sample data isn't JSON, on the field itself", async () => {
     mount("Unexpected token");
-    expect(screen.getByText("Invalid JSON: Unexpected token")).toBeDefined();
+    const message = screen.getByText("Invalid JSON: Unexpected token");
+    const field = await screen.findByRole(
+      "textbox",
+      { name: "Sample data" },
+      { timeout: 5000 }
+    );
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    expect(field.getAttribute("aria-describedby")).toBe(message.id);
+    expect(message.id).not.toBe("");
+  });
+
+  it("marks valid sample data as valid", async () => {
+    mount();
+    const field = await screen.findByRole(
+      "textbox",
+      { name: "Sample data" },
+      { timeout: 5000 }
+    );
+    expect(field.getAttribute("aria-invalid")).toBe("false");
+    expect(field.getAttribute("aria-describedby")).toBeNull();
   });
 });
