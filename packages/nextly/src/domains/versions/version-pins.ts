@@ -61,6 +61,12 @@ export interface VersionPin {
   versionNo: number;
 }
 
+/** One of a holder's own slots: its holder is the handle that read it. */
+export interface VersionPinSlot {
+  slot: string;
+  versionNo: number;
+}
+
 /** What a registered holder can do with its own slots. */
 export interface VersionPinHolder {
   /**
@@ -78,6 +84,13 @@ export interface VersionPinHolder {
   ): Promise<void>;
   /** Free every slot this holder has on the document. */
   releaseAll(tx: TransactionContext, ref: VersionRef): Promise<void>;
+  /**
+   * This holder's slots on the document: a plain read, taking the caller's
+   * transaction or the adapter. The holder is a predicate of the query, so
+   * what other holders pin on the same document is never read, however many
+   * slots they hold.
+   */
+  list(db: VersionsDbApi, ref: VersionRef): Promise<VersionPinSlot[]>;
 }
 
 const HOLDER_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
@@ -308,6 +321,17 @@ function holderHandle(name: string): VersionPinHolder {
           ...documentWhere(ref),
           { column: "holder", op: "=" as const, value: name },
         ],
+      });
+    },
+    list(db, ref) {
+      return db.select<VersionPinSlot>(PINS_TABLE, {
+        columns: ["slot", "versionNo"],
+        where: {
+          and: [
+            ...documentWhere(ref),
+            { column: "holder", op: "=" as const, value: name },
+          ],
+        },
       });
     },
   };

@@ -21,7 +21,6 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import {
   registerNamespacedVersionPinHolder,
-  versionPins,
   type VersionPinHolderDefinition,
 } from "../domains/versions/version-pins";
 import type { VersionRef } from "../domains/versions/versions-repository";
@@ -153,7 +152,7 @@ export function pluginVersionPins(
           logContext: { name: definition.name },
         });
       }
-      const { handle, recorded } = registerNamespacedVersionPinHolder(
+      const { handle } = registerNamespacedVersionPinHolder(
         pluginAdminSlug(pluginName),
         definition
       );
@@ -172,10 +171,8 @@ export function pluginVersionPins(
             handle.releaseAll(tx, ref)
           ),
         list: (ref, opts) =>
-          onPluginTransaction(opts?.tx, "versions.pins.list", async tx =>
-            (await versionPins.list(tx, ref))
-              .filter(pin => pin.holder === recorded)
-              .map(({ slot, versionNo }) => ({ slot, versionNo }))
+          onPluginTransaction(opts?.tx, "versions.pins.list", tx =>
+            handle.list(tx, ref)
           ),
       } satisfies PluginVersionPinHolder);
     },

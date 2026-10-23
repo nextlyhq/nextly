@@ -251,6 +251,11 @@ describe.each(getConfiguredTestDialects())(
       expect(await doc.stored()).toEqual([
         { holder: "workflows", slot: "approved", versionNo: 1 },
       ]);
+      // The plugin's holder is "<slug>.workflows", so core's "workflows" is
+      // not its own: the read never answers with core's slot.
+      expect(
+        await doc.a.db.transaction(tx => namedAlike.list(doc.ref, { tx }))
+      ).toEqual([]);
     });
 
     it("refuses a name that is not kebab-case", async () => {

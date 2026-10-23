@@ -250,7 +250,10 @@ export async function clearReview(tx: TransactionContext, ref: VersionRef) {
 - `registerVersionPinHolder` refuses a name another feature registered. Registering the
   same name and label again, as a module reloaded in development does, returns the same
   handle.
-- `versionPins.list(db, ref)` reads every slot on a document, of every feature.
+- `legal.list(db, ref)` reads the slots this feature holds on a document, taking a
+  transaction or the adapter. The read names the holder, so another feature's slots never
+  leave the database. `versionPins.list(db, ref)` reads every slot on a document, of every
+  feature.
 - Deleting a document, a collection or a Single removes its pins, and a pin waiting on one
   being deleted is refused.
 
