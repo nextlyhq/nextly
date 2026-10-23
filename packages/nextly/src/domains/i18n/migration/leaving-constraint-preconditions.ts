@@ -118,26 +118,79 @@ export async function refusalsForConstrainedFieldsLeaving(args: {
 
   const refusals: LeavingTranslationRefusal[] = [];
   for (const field of args.newFields) {
-    const previous = args.leaving.has(field.name)
-      ? before.get(field.name)
-      : undefined;
-    // The values are in the companion column the field had before the change.
-    const column = previous
-      ? fieldToLocalizedColumnSpec(previous, dialect, args.builtBy)?.name
-      : undefined;
-    if (column === undefined) continue;
-    const col = q(args.renamedFrom?.get(column) ?? column, dialect);
-    const constraints = leavingFieldConstraints(field, args.uniqueIndexed);
-    const without = constraints.includes("required") ? await missing(col) : 0;
-    if (without > 0) {
+    const col = leavingValuesColumn(field, {
+      ...args,
+      dialect,
+      before,
+    });
+    if (col === undefined) continue;
+    refusals.push(
+      ...(await refusalsForOneField(field, col, {
+        uniqueIndexed: args.uniqueIndexed,
+        language,
+        surface: args.surface,
+        missing,
+        sharing,
+      }))
+    );
+  }
+  return refusals;
+}
+
+/**
+ * The quoted companion column a leaving field's values are in RIGHT NOW, or undefined for a field
+ * that is not leaving translation or stores no column. A field this change renames is already
+ * under its new name in `before`, while its values are still in the column it had.
+ */
+function leavingValuesColumn(
+  field: LeavingFieldLike,
+  ctx: {
+    dialect: SupportedDialect;
+    builtBy: ColumnOrigin;
+    leaving: ReadonlySet<string>;
+    before: ReadonlyMap<string, LeavingFieldLike>;
+    renamedFrom?: ReadonlyMap<string, string>;
+  }
+): string | undefined {
+  if (!ctx.leaving.has(field.name)) return undefined;
+  const previous = ctx.before.get(field.name);
+  if (previous === undefined) return undefined;
+  const column = fieldToLocalizedColumnSpec(
+    previous,
+    ctx.dialect,
+    ctx.builtBy
+  )?.name;
+  if (column === undefined) return undefined;
+  return q(ctx.renamedFrom?.get(column) ?? column, ctx.dialect);
+}
+
+/** One leaving field's refusals: one per setting the default language's values cannot take. */
+async function refusalsForOneField(
+  field: LeavingFieldLike,
+  col: string,
+  ctx: {
+    uniqueIndexed?: ReadonlySet<string>;
+    language: string;
+    surface: TranslationSurface;
+    missing: (col: string) => Promise<number>;
+    sharing: (col: string) => Promise<number>;
+  }
+): Promise<LeavingTranslationRefusal[]> {
+  const constraints = leavingFieldConstraints(field, ctx.uniqueIndexed);
+  const refusals: LeavingTranslationRefusal[] = [];
+  if (constraints.includes("required")) {
+    const without = await ctx.missing(col);
+    if (without > 0)
       refusals.push(
-        requiredRefusal(field.name, without, language, args.surface)
+        requiredRefusal(field.name, without, ctx.language, ctx.surface)
       );
-    }
-    const shared = constraints.includes("unique") ? await sharing(col) : 0;
-    if (shared > 0) {
-      refusals.push(uniqueRefusal(field.name, shared, language, args.surface));
-    }
+  }
+  if (constraints.includes("unique")) {
+    const shared = await ctx.sharing(col);
+    if (shared > 0)
+      refusals.push(
+        uniqueRefusal(field.name, shared, ctx.language, ctx.surface)
+      );
   }
   return refusals;
 }

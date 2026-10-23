@@ -1608,9 +1608,13 @@ export class DynamicCollectionService extends BaseService {
           sharedUnconstrained,
           mainOptions
         );
-        // The settings as their own diff, so each dialect applies them its own way. Planned without
-        // the live table's facts, which describe the columns before this migration creates them;
-        // whether the values can take the settings was asked before anything ran.
+        // The settings as their own diff, so each dialect applies them its own way. The live
+        // table's facts describe the columns BEFORE the main diff above creates them, so they are
+        // not passed; what this diff needs instead is the type that diff will have written.
+        // MySQL restates a whole column definition on every MODIFY, and with no type to restate it
+        // falls back to the legacy renderer — which would narrow a float the main diff had just
+        // created `double` down to `decimal(10,2)`, from two diffs that are each correct alone.
+        // Whether the values can take the settings was asked before anything ran.
         const settingsSQL = sharedUnconstrained.some(
           (f, i) => f !== newShared[i]
         )
@@ -1618,7 +1622,12 @@ export class DynamicCollectionService extends BaseService {
               collection.tableName,
               sharedUnconstrained,
               newShared,
-              { wasStatus: hasStatus, hasStatus }
+              {
+                wasStatus: hasStatus,
+                hasStatus,
+                liveColumnTypes:
+                  this.schemaService.plannedColumnTypes(sharedUnconstrained),
+              }
             )
           : undefined;
         // A leaving field whose column unattended provisioning left on THIS database's main table.

@@ -1159,7 +1159,7 @@ export class SingleMetadataService {
     newFields: FieldDefinition[],
     schemaService: Pick<
       DynamicCollectionSchemaService,
-      "generateAlterTableMigration"
+      "generateAlterTableMigration" | "plannedColumnTypes"
     >
   ): { newFields: FieldDefinition[]; settingsSQL: string } {
     const { wasLocalized, isLocalized, hasStatus } = input;
@@ -1179,7 +1179,15 @@ export class SingleMetadataService {
             input.existing.tableName,
             unconstrained,
             newFields,
-            { wasStatus: hasStatus, hasStatus }
+            {
+              wasStatus: hasStatus,
+              hasStatus,
+              // The type the diff BEFORE this one writes, not the live table's: MySQL restates a
+              // whole column definition on every MODIFY, and with none to restate it falls back
+              // to the legacy renderer, narrowing a float that diff had just created `double`
+              // down to `decimal(10,2)`.
+              liveColumnTypes: schemaService.plannedColumnTypes(unconstrained),
+            }
           )
         : "",
     };

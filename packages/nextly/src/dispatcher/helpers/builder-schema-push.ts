@@ -6,8 +6,11 @@
  * dialog that pushes twice (a Required or Unique field leaving translation gets its setting in a
  * second push, once its values are shared) runs the same push both times.
  */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { FieldRename } from "../../domains/i18n/migration/reconcile-companion";
+import { movedOnto } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
 import { BrowserPromptDispatcher } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
@@ -24,6 +27,7 @@ import type { DesiredSchema } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { NextlyError } from "../../errors/nextly-error";
 import { getProductionNotifier } from "../../runtime/notifications/index";
+import type { FieldDefinition } from "../../schemas/dynamic-collections";
 
 import { getConfigFromDI, getMigrationJournalFromDI } from "./di";
 
@@ -69,6 +73,86 @@ export function builderSchemaPush(args: {
       // its prompts and refusals, before it drops the main column.
       defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
     });
+}
+
+/** What a Single's or field group's companion reconcile is given, beyond the entity's kind. */
+export interface BuilderCompanionReconcile {
+  slug: string;
+  tableName: string;
+  oldFields: FieldDefinition[];
+  newFields: FieldDefinition[];
+  /** Localization AFTER this save, as the request asks for it. */
+  localized: boolean;
+  /** Localization BEFORE it, from the persisted record: an enable seeds, a disable restores. */
+  wasLocalized: boolean;
+  adapter: DrizzleAdapter;
+  /** A translated field the admin renamed: the dialog's answer naming the companion. */
+  renamed?: FieldRename | undefined;
+  /** Draft/Published after and before this save. A field group has neither. */
+  status?: boolean;
+  wasStatus?: boolean;
+}
+
+/**
+ * Pushes `desired` for a Single's or field group's dialog, then brings its companion in step.
+ *
+ * One function because the two are one step in effect, and were written out twice: the push
+ * pipeline deliberately excludes `_locales` tables, so every dialog that pushes must reconcile
+ * the companion too, and a dialog that paired them differently would leave an entity's
+ * translations behind its main table.
+ *
+ * @throws Error when the push is refused, and `NEXTLY_INTERNAL_ERROR` naming the entity when the
+ *   push landed but its companion could not be brought in step.
+ */
+export async function pushAndReconcileCompanion(
+  push: (desired: DesiredSchema) => Promise<PipelineResult>,
+  desired: DesiredSchema,
+  kind: "single" | "component",
+  companion: BuilderCompanionReconcile
+): Promise<PipelineResult> {
+  const result = await push(desired);
+  if (!result.success) {
+    // The push's own words, under the code its status already was: what the dialog tells the
+    // admin about a refused apply is the only account of it they get.
+    throw new NextlyError({
+      code: "NEXTLY_MIGRATION_APPLY_FAILED",
+      publicMessage: result.error?.message ?? "Failed to apply schema changes",
+    });
+  }
+  // Columns this apply already moved onto the companion, with their values, before its drop, so
+  // the reconcile takes them as done rather than adding them again.
+  const joinedBefore = movedOnto(result, companion.tableName);
+  try {
+    if (kind === "single") {
+      const { reconcileSingleCompanion } = await import(
+        "../../domains/singles/services/reconcile-single-companion"
+      );
+      await reconcileSingleCompanion({
+        ...companion,
+        joinedBefore,
+        status: companion.status === true,
+        wasStatus: companion.wasStatus === true,
+      });
+    } else {
+      const { reconcileComponentCompanion } = await import(
+        "../../domains/field-groups/services/field-group-table-provisioning"
+      );
+      await reconcileComponentCompanion({ ...companion, joinedBefore });
+    }
+  } catch (error) {
+    throw NextlyError.internal({
+      cause: error instanceof Error ? error : undefined,
+      logContext: {
+        op:
+          kind === "single"
+            ? "singleCompanionReconcile"
+            : "componentCompanionReconcile",
+        slug: companion.slug,
+        detail: error instanceof Error ? error.message : String(error),
+      },
+    });
+  }
+  return result;
 }
 
 /**

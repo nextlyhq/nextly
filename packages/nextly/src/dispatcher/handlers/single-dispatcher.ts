@@ -43,7 +43,6 @@ import {
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
-import { movedOnto } from "../../domains/schema/pipeline/apply";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
@@ -51,7 +50,6 @@ import type { DesiredSingle } from "../../domains/schema/pipeline/types";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
-import { reconcileSingleCompanion } from "../../domains/singles/services/reconcile-single-companion";
 import {
   resolveSingleTableName,
   singleTableFamiliesCollide,
@@ -87,6 +85,7 @@ import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import {
   builderSchemaPush,
   leavingSettingsNotApplied,
+  pushAndReconcileCompanion,
 } from "../helpers/builder-schema-push";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -1286,44 +1285,23 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           legacyBundle,
         ],
       });
-      const result = await push(desired);
-
-      if (!result.success) {
-        throw new Error(
-          result.error?.message ?? "Failed to apply schema changes"
-        );
-      }
-
-      // i18n: the push pipeline excludes companion tables, so reconcile the single's companion
-      // out-of-band — create single_<slug>_locales on the first translatable field, then ADD/DROP
-      // columns as the field set changes (mirrors collections). Uses the request's `isLocalized`.
-      try {
-        await reconcileSingleCompanion({
-          slug,
-          tableName,
-          oldFields: single.fields as unknown as FieldDefinition[],
-          newFields: fields as unknown as FieldDefinition[],
-          localized: isLocalized,
-          // Detect an enable/disable transition against the persisted state so this apply
-          // seeds/restores existing rows rather than only creating an empty companion.
-          wasLocalized: (single as { localized?: boolean }).localized === true,
-          status: single.status === true,
-          // Read from the same persisted record as `wasLocalized`, so both describe the state
-          // before this apply.
-          wasStatus: single.status === true,
-          adapter,
-          // Added to the companion, with their values, by the apply before its drop.
-          joinedBefore: movedOnto(result, tableName),
-          // A translated field the admin renamed: the dialog's answer naming the companion.
-          renamed: companionRename ?? undefined,
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        throw NextlyError.internal({
-          cause: err instanceof Error ? err : undefined,
-          logContext: { op: "singleCompanionReconcile", slug, detail: msg },
-        });
-      }
+      // The push excludes companion tables, so single_<slug>_locales is brought in step right
+      // after it: created on the first translatable field, then ADD/DROPped as the field set
+      // changes (mirrors collections).
+      await pushAndReconcileCompanion(push, desired, "single", {
+        slug,
+        tableName,
+        oldFields: single.fields as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        localized: isLocalized,
+        wasLocalized: (single as { localized?: boolean }).localized === true,
+        // Both read from the same persisted record as `wasLocalized`, so all three describe the
+        // state before this apply.
+        status: single.status === true,
+        wasStatus: single.status === true,
+        adapter,
+        renamed: companionRename ?? undefined,
+      });
 
       // The settings the first push left off, now that the shared columns hold the default
       // language's values. Whether those values can take them was asked before anything ran.
