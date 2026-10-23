@@ -6,7 +6,7 @@ description: Deploy a Nextly application to Vercel (recommended) or self-host on
 A Nextly application is a standard Next.js app, so anywhere Next.js runs is fair game. This guide covers the two paths Nextly is built around:
 
 - **Vercel** (recommended) -- the default target. Zero-config Next.js, first-class Vercel Blob storage, build-step migrations.
-- **Self-host** -- Node.js 20.19+, 22.12+ or 24+ behind a process manager and reverse proxy. Linked out for the operator-side details rather than reproduced here.
+- **Self-host** -- Node.js 22.12+ or 24+ behind a process manager and reverse proxy. Linked out for the operator-side details rather than reproduced here.
 
 Whichever you choose, run database migrations on a CI/CD step (or your laptop) **before** the new app code takes traffic. The deployed app never touches schema -- see [Production migrations](/docs/guides/production-migrations) for why.
 
@@ -118,11 +118,11 @@ Set `security.trustProxy: true` in `nextly.config.ts`, so sign-in is rate limite
 
 ## Self-host with Node.js
 
-Run Nextly on any host that supports Node.js 20.19+, 22.12+ or 24+. The deployment shape is intentionally boring: build the app, run it under a process manager, put a reverse proxy in front for SSL.
+Run Nextly on any host that supports Node.js 22.12+ or 24+. The deployment shape is intentionally boring: build the app, run it under a process manager, put a reverse proxy in front for SSL.
 
 ### Requirements
 
-- **Node.js 20.19+, 22.12+ or 24+** (matches the `serverExternalPackages` and `sharp` ABI requirements).
+- **Node.js 22.12+ or 24+** (matches the `serverExternalPackages` and `sharp` ABI requirements).
 - **A process manager** -- pm2, systemd, Docker, or similar. Keep the Node process supervised so crashes auto-restart.
 - **A reverse proxy** -- nginx or Caddy in front for TLS termination, HTTP/2, and access logging.
 

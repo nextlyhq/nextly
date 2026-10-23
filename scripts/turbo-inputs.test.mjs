@@ -23,9 +23,10 @@
  * @module turbo-inputs.test
  */
 import { execFileSync } from "node:child_process";
-import { globSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { existsSync, globSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -72,12 +73,20 @@ function dryRun() {
 
 /**
  * Whether a check-types command writes no build-info file: it runs `tsc` at
- * least once, and every run says `--incremental false`. One `tsc` without it
- * writes the file, so the command still races its own build.
+ * least once, and every run ends up with `--incremental false`. One `tsc`
+ * without it writes the file, so the command still races its own build. tsc
+ * keeps the LAST value of a repeated flag, and a bare `--incremental` means
+ * true, so only the last `--incremental` in each run decides.
  */
 function writesNoBuildInfo(command) {
   const runs = command.match(/\btsc\b[^&|;]*/g) ?? [];
-  return runs.length > 0 && runs.every(run => /--incremental false\b/.test(run));
+  return (
+    runs.length > 0 &&
+    runs.every(run => {
+      const flags = run.match(/--incremental(?:\s+(?:true|false)\b)?/g) ?? [];
+      return flags.at(-1)?.replace(/\s+/g, " ") === "--incremental false";
+    })
+  );
 }
 
 function resolvedTasks() {
@@ -638,6 +647,9 @@ describe("a package's hash covers the program it actually compiles", () => {
     expect(writesNoBuildInfo("tsc --noEmit")).toBe(false);
     expect(writesNoBuildInfo("tsc --noEmit --incremental false && tsc --noEmit -p tsconfig.tests.json")).toBe(false);
     expect(writesNoBuildInfo("next typegen")).toBe(false);
+    expect(writesNoBuildInfo("tsc --noEmit --incremental false --incremental")).toBe(false);
+    expect(writesNoBuildInfo("tsc --noEmit --incremental false --incremental true")).toBe(false);
+    expect(writesNoBuildInfo("tsc --incremental --noEmit --incremental false")).toBe(true);
   });
 });
 
@@ -652,5 +664,68 @@ describe("the shared TypeScript config is hashed", () => {
   it("counts packages/tsconfig among the global dependencies", () => {
     const globalFiles = Object.keys(dryRun().globalCacheInputs.files);
     expect(globalFiles).toContain("packages/tsconfig/base.json");
+  });
+});
+
+describe("a root script in the global inputs brings its imports with it", () => {
+  // The global inputs name root scripts one by one, because packages read only
+  // a few of the ~200. A listed script that imports another root script makes
+  // that one an input as well: `create-nextly-app`'s build loads
+  // `agent-skills.mjs`, which imports `agent-instructions.mjs`, so an edit to
+  // the latter changes the build while, unlisted, it leaves the hash unmoved.
+  // Every string literal in the script that names an existing file beside it
+  // counts, not only `import`/`require` specifiers: `dev-doctor.mjs` loads
+  // `cli-entry.mjs` through `import(pathToFileURL(path.join(HERE,
+  // "cli-entry.mjs")).href)`, a path built at run time that no specifier
+  // pattern sees. Read from the parsed source, so a file named in a comment
+  // is no edge, and erring only toward listing a file that is merely named.
+  // Running the scripts to record what they load is no option: they act on
+  // the machine when run.
+  const EXTENSIONS = ["", ".mjs", ".js", ".ts", ".cjs"];
+
+  function namedFile(from, text) {
+    const base = normalize(join(dirname(from), text));
+    return EXTENSIONS.map(ext => base + ext).find(candidate => {
+      const path = join(REPO_ROOT, candidate);
+      return existsSync(path) && statSync(path).isFile();
+    });
+  }
+
+  const isStringLiteral = node => ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
+
+  /** The text of every string literal in the file, from its syntax tree. */
+  function stringLiterals(file) {
+    const texts = [];
+    const visit = node => {
+      if (isStringLiteral(node)) texts.push(node.text);
+      ts.forEachChild(node, visit);
+    };
+    visit(ts.createSourceFile(file, readFileSync(join(REPO_ROOT, file), "utf8"), ts.ScriptTarget.Latest, true));
+    return texts;
+  }
+
+  function rootScriptImports(file) {
+    const targets = stringLiterals(file).map(text => namedFile(file, text));
+    return [...new Set(targets.filter(target => target?.startsWith("scripts/") && target !== file))];
+  }
+
+  it("follows a script loaded through a path built at run time, and ignores one named in a comment", () => {
+    // `dev-doctor.mjs` builds the path to `cli-entry.mjs`, and
+    // `pnpm-invocation.mjs` names `verify-merge.mjs` only in its comments.
+    expect(rootScriptImports("scripts/dev-doctor.mjs")).toContain("scripts/cli-entry.mjs");
+    expect(rootScriptImports("scripts/pnpm-invocation.mjs")).not.toContain("scripts/verify-merge.mjs");
+  });
+
+  it("lists every root script a listed one imports", () => {
+    const globalFiles = new Set(Object.keys(dryRun().globalCacheInputs.files));
+    const listed = [...globalFiles].filter(file => file.startsWith("scripts/"));
+    // Guards the guard: with no root script listed there is nothing to follow.
+    expect(listed.length).toBeGreaterThan(0);
+    const missing = listed.flatMap(file =>
+      rootScriptImports(file)
+        .filter(target => !globalFiles.has(target))
+        .map(target => `${file} imports ${target}`)
+    );
+    expect(missing).toEqual([]);
   });
 });

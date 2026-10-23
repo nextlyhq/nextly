@@ -1110,7 +1110,9 @@ const PINNED_VERSIONS: Record<string, string> = {
   "react-dom": "^19.1.0",
   // Dev dependencies
   typescript: "^5",
-  "@types/node": "^20",
+  // The oldest Node line in this package's `engines.node`, so a scaffolded
+  // project's type-check refuses an API newer than the Node it may run on.
+  "@types/node": "^22",
   "@types/react": "^19",
   "@types/react-dom": "^19",
   "@tailwindcss/postcss": "^4",

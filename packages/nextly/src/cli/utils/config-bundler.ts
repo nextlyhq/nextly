@@ -148,7 +148,7 @@ export async function bundleAndRequire(
       entryPoints: [filepath],
       bundle: true,
       platform: "node",
-      target: "node20",
+      target: "node22",
       format: "esm",
       outfile: outFile,
       external: options.external,
