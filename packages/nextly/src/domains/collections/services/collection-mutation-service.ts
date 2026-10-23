@@ -3510,10 +3510,11 @@ export class CollectionMutationService extends BaseService {
       // them a value, at any depth, refuses them taking its live one too.
       // Nor a translated component's shared sub-fields, which are left to the
       // editor to copy by hand.
-      mayTake: stale =>
+      mayTake: (stale, change) =>
         wholeWritableFields(
           stale.filter(name => !byHand.has(name)),
           live,
+          change,
           data =>
             applyFieldWriteAccess({
               kind: "collection",

@@ -67,6 +67,18 @@ async function boot(
               update: ({ locale }: { locale?: string }) => locale !== "es",
             },
           }),
+          // A rule that reads a sibling: the price may be written only while
+          // the document's lock is open.
+          text({ name: "lockState", localized: false }),
+          number({
+            name: "price",
+            localized: false,
+            access: {
+              update: ({ data }) =>
+                (data as { lockState?: unknown } | undefined)?.lockState ===
+                "open",
+            },
+          }),
         ],
       }),
     ],
@@ -429,6 +441,75 @@ describe.each(getConfiguredTestDialects())(
         (await pendingSnapshot("en")).details as { note?: unknown }
       ).toMatchObject({ note: "admin edit" });
     });
+
+    it("takes the live values only into the Single named, and leaves another's change alone", async () => {
+      const singles = await boot(dialect);
+      await spanishPublishesThirteen(singles);
+
+      // A Single whose row was replaced after the caller was authorised for
+      // the one they named: nothing is taken.
+      const refused = await singles.takeLiveSharedValues({
+        slug: SLUG,
+        entryId: "a-document-replaced-since",
+        locale: "en",
+        overrideAccess: true,
+      });
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(404);
+      expect((await pendingSnapshot("en")).articleCount).toBe(10);
+
+      // The document as it is, named: taken.
+      const id = (
+        (await singles.get(SLUG, { locale: "en", overrideAccess: true }))
+          .data as { id: string }
+      ).id;
+      const taken = await singles.takeLiveSharedValues({
+        slug: SLUG,
+        entryId: id,
+        locale: "en",
+        overrideAccess: true,
+      });
+      expect(taken.data).toEqual({ taken: ["articleCount"], outOfDate: [] });
+    });
+
+    // A field rule that reads a sibling is judged on the change as it will
+    // be, the sibling included, not on the fields taken alone.
+    it.each([
+      ["leaves the lock open, so the price is taken", "open", ["price"], []],
+      ["closes the lock, so the price is left", "closed", [], ["price"]],
+    ])(
+      "judges a sibling-dependent rule on the whole change: English %s",
+      async (_label, lockState, taken, outOfDate) => {
+        const singles = await boot(dialect);
+        await live(singles);
+        expect(
+          (
+            await save(singles, "en", {
+              lockState: "open",
+              price: 10,
+              status: "published",
+            })
+          ).success
+        ).toBe(true);
+        expect(
+          (await save(singles, "en", { siteName: "EN edited", lockState }))
+            .success
+        ).toBe(true);
+        expect((await save(singles, "es", { price: 13 })).success).toBe(true);
+        expect(
+          (await save(singles, "es", { status: "published" })).success
+        ).toBe(true);
+
+        const result = await singles.takeLiveSharedValues({
+          slug: SLUG,
+          locale: "en",
+          overrideAccess: false,
+          user: { id: "u1" },
+        });
+
+        expect(result.data).toEqual({ taken, outOfDate });
+      }
+    );
 
     it("judges taking the live values by the rules of the language asked for", async () => {
       const singles = await boot(dialect);

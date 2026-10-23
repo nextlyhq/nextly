@@ -364,17 +364,30 @@ export class SingleMutationService extends BaseService {
    * and publish takes, so the live values read beside it are the ones the
    * next publish compares. Null when the Single has no row or the language no
    * pending change.
+   *
+   * @param expectedEntryId The document the caller was checked against, when
+   *   it was. A Single deleted and made again since is a different document,
+   *   so it is refused, under the lock, rather than written for that caller.
    */
   private async lockedPendingChange(
     tx: TransactionContext,
     singleMeta: DynamicSingleRecord,
     slug: string,
-    requestLocale: string | null
+    requestLocale: string | null,
+    expectedEntryId?: string
   ) {
     const row = await tx.selectOne<{ id?: string }>(singleMeta.tableName, {});
     const entryId = row?.id;
     if (entryId === undefined) return null;
     await tx.lockRow(singleMeta.tableName, entryId);
+    if (expectedEntryId !== undefined && entryId !== expectedEntryId) {
+      throw NextlyError.notFound({
+        logContext: {
+          reason: "take-live-shared-values-single-replaced",
+          scopeSlug: slug,
+        },
+      });
+    }
     const ref = { scopeKind: "single" as const, scopeSlug: slug, entryId };
     const locale = workingDraftLocale({
       documentLocalized: true,
@@ -408,7 +421,8 @@ export class SingleMutationService extends BaseService {
       tx,
       singleMeta,
       params.slug,
-      params.locale ?? null
+      params.locale ?? null,
+      params.entryId
     );
     if (!found) return null;
     const { ref, locale, pending } = found;
@@ -432,10 +446,11 @@ export class SingleMutationService extends BaseService {
       // them a value, at any depth, refuses them taking its live one too.
       // Nor a translated component's shared sub-fields, which are left to the
       // editor to copy by hand.
-      mayTake: stale =>
+      mayTake: (stale, change) =>
         wholeWritableFields(
           stale.filter(name => !byHand.has(name)),
           live,
+          change,
           data =>
             applyFieldWriteAccess({
               kind: "single",
@@ -474,6 +489,11 @@ export class SingleMutationService extends BaseService {
    */
   async takeLiveSharedValues(params: {
     slug: string;
+    /**
+     * The document the caller was checked against, when it was: the values
+     * are taken into that document or none.
+     */
+    entryId?: string;
     /** Which language's pending change; the default when none is named. */
     locale?: string | null;
     /** Who took them, for the change's history. */

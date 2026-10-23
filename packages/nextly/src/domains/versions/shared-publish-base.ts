@@ -508,21 +508,29 @@ function editTime(
 
 /**
  * Of these fields, those the caller may write whole. The write rules are run
- * on a copy of their live values, and a field passes only when the rules left
- * it as it was: one with a nested field the caller may not write is not
- * taken, since taking it would write that nested value over the change's.
+ * on a copy of the pending change as taking them would leave it, their live
+ * values over its own, and a field passes only when the rules left it as it
+ * was: one with a nested field the caller may not write is not taken, since
+ * taking it would write that nested value over the change's.
  *
+ * The whole change, not the fields alone, because a rule may read a sibling:
+ * shown only the fields taken, a rule asking about another field sees it
+ * missing and answers for a document that will never exist.
+ *
+ * @param pending The pending change the fields would be taken into.
  * @param applyWriteRules The caller's field write rules, which remove what
  *   they refuse from the data they are handed, at any depth.
  */
 export async function wholeWritableFields(
   names: readonly string[],
   live: Record<string, unknown>,
+  pending: Record<string, unknown>,
   applyWriteRules: (data: Record<string, unknown>) => Promise<void>
 ): Promise<string[]> {
-  const data = structuredClone(
-    Object.fromEntries(names.map(name => [name, live[name]]))
-  );
+  const data = structuredClone({
+    ...pending,
+    ...Object.fromEntries(names.map(name => [name, live[name]])),
+  });
   await applyWriteRules(data);
   return names.filter(
     name => name in data && sameSharedValue(data[name], live[name])
@@ -541,8 +549,9 @@ export async function wholeWritableFields(
  * recorded (none when nothing changed).
  *
  * @param live The live document, shaped as a version snapshot is.
- * @param mayTake The out-of-date fields the caller may write; all of them
- *   when omitted, for a trusted caller.
+ * @param mayTake The out-of-date fields the caller may write, judged on the
+ *   pending change it is handed; all of them when omitted, for a trusted
+ *   caller.
  */
 export async function takeLiveSharedValuesInto(
   tx: TransactionContext,
@@ -555,7 +564,10 @@ export async function takeLiveSharedValuesInto(
     pending: Record<string, unknown>;
     createdBy: string | null;
     maxPerDoc?: number | false;
-    mayTake?: (stale: string[]) => Promise<string[]>;
+    mayTake?: (
+      stale: string[],
+      pending: Record<string, unknown>
+    ) => Promise<string[]>;
     views?: SharedViews;
   }
 ): Promise<{ taken: string[]; remaining: string[]; versionNo: number | null }> {
@@ -568,7 +580,9 @@ export async function takeLiveSharedValuesInto(
     pending,
     views,
   });
-  const allowed = args.mayTake ? new Set(await args.mayTake(stale)) : null;
+  const allowed = args.mayTake
+    ? new Set(await args.mayTake(stale, pending))
+    : null;
   const taken = allowed ? stale.filter(name => allowed.has(name)) : stale;
   const remaining = stale.filter(name => !taken.includes(name));
   // Recorded before the save, so the save's retention pass already keeps it.
