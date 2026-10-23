@@ -365,6 +365,29 @@ describe("each guard, at a path no allowlist names", () => {
   }, 120_000);
 });
 
+// The tab-indicator guard reads every file a call site can live in: each
+// extension JSX is legal in, outside `src` as well as in it, and in an app as
+// well as a package. A path the committed `files` miss is a call site never
+// read, and the repository-wide silence would look the same.
+describe("the tab-indicator guard, wherever a call site can live", () => {
+  const violation = ext =>
+    `import { TabsTrigger } from "@nextlyhq/ui";\nexport const probe = <TabsTrigger value="a" className="border-b-0" />;\n// ${ext}\n`;
+  const probes = {
+    "packages/admin/src/lint-probe-tab.tsx": violation("tsx"),
+    "packages/create-nextly-app/examples/lint-probe-tab.jsx": violation("jsx"),
+    "apps/playground/app/lint-probe-tab.js": violation("js"),
+    // Named like build output, and an ordinary route segment all the same.
+    "apps/playground/app/build/lint-probe-tab.tsx": violation("tsx"),
+  };
+
+  it("reports a repainted indicator in each of them", () => {
+    const counts = countsPerFile(lintProbes(probes), "nextly(tab-indicator)");
+    expect(counts).toEqual(
+      Object.fromEntries(Object.keys(probes).map(path => [path, 1]))
+    );
+  }, 120_000);
+});
+
 // The playground's React Compiler and accessibility rules, each shown to report
 // on a construct it exists to catch. The rules come from the playground's own
 // override, so a rule turned on there without a probe here, or a probe whose

@@ -506,5 +506,12 @@ export default defineConfig({
       files: ["packages/admin/src/**/*.{ts,tsx}"],
       rules: { "nextly/no-keyboard-listener": "error" },
     },
+    {
+      // The Tabs primitive owns its indicator: a call site passes layout, and a
+      // different indicator is a change to the primitive. Every extension JSX
+      // is legal in, since a JavaScript app writes JSX in `.js` too.
+      files: ["packages/**/*.{tsx,jsx,js}", "apps/**/*.{tsx,jsx,js}"],
+      rules: { "nextly/tab-indicator": "error" },
+    },
   ],
 });
