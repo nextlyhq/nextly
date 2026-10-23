@@ -126,6 +126,15 @@ export const emailTemplatesPg = pgTable(
      */
     preheader: text("preheader"),
 
+    /**
+     * Whether the template is written (blocks) or coded (HTML). Null, as on
+     * every row stored before written templates, is coded.
+     */
+    format: varchar("format", { length: 10 }),
+
+    /** A written template's blocks (`domains/email/written`); null for a coded one. */
+    blocks: jsonb("blocks").$type<WrittenDocument>(),
+
     // --------------------------------------------------------
     // Template Metadata
     // --------------------------------------------------------
@@ -240,15 +249,6 @@ export const emailTemplatesPg = pgTable(
 
     /** When the template is sent, written by its owner (or the site). */
     description: text("description"),
-
-    /**
-     * Whether the template is written (blocks) or coded (HTML). Null, as on
-     * every row stored before written templates, is coded.
-     */
-    format: varchar("format", { length: 10 }),
-
-    /** A written template's blocks (`domains/email/written`); null for a coded one. */
-    blocks: jsonb("blocks").$type<WrittenDocument>(),
 
     // --------------------------------------------------------
     // Metadata
