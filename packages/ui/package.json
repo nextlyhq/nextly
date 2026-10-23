@@ -109,7 +109,7 @@
     "@tailwindcss/cli": "^4.3.2",
     "@testing-library/react": "^16.3.0",
     "@types/culori": "^4.0.1",
-    "@types/node": "^20.19.17",
+    "@types/node": "^22.20.5",
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
     "@vitejs/plugin-react": "^5.1.0",

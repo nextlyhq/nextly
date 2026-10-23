@@ -102,7 +102,7 @@
     "@nextlyhq/admin": "workspace:*",
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
-    "@types/node": "^20.19.17",
+    "@types/node": "^22.20.5",
     "@types/react": "19.2.0",
     "nextly": "workspace:*",
     "react": "19.2.0",
