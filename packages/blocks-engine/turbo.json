@@ -13,9 +13,9 @@
       // `$TURBO_EXTENDS$` keeps the root inputs rather than restating them.
       // `dist/**` is appended because those bundles are a real input to the
       // suite, and a cached pass ignoring them would survive a change to what
-      // the bundler emits. `tsup.config.ts` decides which entry points exist
+      // the bundler emits. `tsdown.config.ts` decides which entry points exist
       // at all, so a change there changes what the boundary suite is checking.
-      "inputs": ["$TURBO_EXTENDS$", "dist/**", "tsup.config.ts"]
+      "inputs": ["$TURBO_EXTENDS$", "dist/**", "tsdown.config.ts"]
     },
     "test:watch": {
       // The same build edge as `test`: a watch run reads the same bundles, and

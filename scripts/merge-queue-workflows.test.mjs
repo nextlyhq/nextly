@@ -1130,9 +1130,9 @@ describe("who owns what the required checks run", () => {
   it("owns every manifest, task graph, and test, compiler, lint and build configuration in the repository", () => {
     const definitions = trackedFiles().filter(path => LANE_DEFINITIONS.test(path));
     // The control: the walk finds the repository's manifests and configurations, not nothing,
-    // and a Rollup configuration by its name alone, as `rollup -c` finds one without being told.
+    // and a tsdown configuration by its name alone, as `tsdown` finds one without being told.
     expect(definitions.length).toBeGreaterThan(50);
-    expect(definitions).toContain("packages/nextly/rollup.dts.config.ts");
+    expect(definitions).toContain("packages/nextly/tsdown.config.ts");
     // And every Next.js configuration, wherever it sits: the playground's,
     // which the required build builds, and each template's.
     expect(definitions).toEqual(expect.arrayContaining(["apps/playground/next.config.ts", "templates/base/next.config.ts", "templates/plugin/dev/next.config.ts"]));
@@ -1170,7 +1170,7 @@ describe("who owns what the required checks run", () => {
     const tracked = new Set(files);
     const run = files.filter(path => WORKSPACE_MANIFEST.test(path)).flatMap(manifest => filesTasksRun(manifest, tracked, tasks));
     // The control: the build steps a package runs from its own directory, directly and through `pnpm run`.
-    expect(run).toEqual(expect.arrayContaining(["packages/nextly/scripts/postbuild.cjs", "packages/nextly/rollup.dts.config.ts", "packages/ui/scripts/check-server-safe-artifacts.ts"]));
+    expect(run).toEqual(expect.arrayContaining(["packages/nextly/scripts/postbuild.cjs", "packages/ui/scripts/check-server-safe-artifacts.ts"]));
     for (const path of new Set(run)) expect(ownersOf(rules, path), path).not.toEqual([]);
   });
 
@@ -1429,7 +1429,7 @@ function ownersOf(rules, path) {
 }
 
 /** Manifests, task graphs, and the test, compiler, lint and build configuration the lanes run with. */
-const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|tsup|rollup)[^/]*\.config\.[^/]+)$/;
+const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|tsup|tsdown|rollup)[^/]*\.config\.[^/]+)$/;
 
 /** A workspace package's manifest, whose scripts Turbo runs. */
 const WORKSPACE_MANIFEST = /^(?:packages|apps)\/[^/]+\/package\.json$|^e2e\/package\.json$/;
