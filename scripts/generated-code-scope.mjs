@@ -34,7 +34,7 @@ export const extras = [
   `${src}/cli/commands/generate-types.ts`,
   `${src}/plugins/codegen/`,
   "packages/nextly/package.json",
-  "packages/nextly/tsup.config.js",
+  "packages/nextly/tsdown.config.ts",
   "templates/",
   ".github/workflows/generated-code-compiles.yml",
   "scripts/generated-code-scope.mjs",

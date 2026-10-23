@@ -32,12 +32,11 @@ export default defineConfig({
     // running multiple test files against the same container in parallel
     // can saturate connections. Sequential is conservative; we can revisit
     // with parallel forks later if the runtime becomes a bottleneck.
+    // One worker: Vitest 4 removed `poolOptions.forks.singleFork` and ignores
+    // it; `maxWorkers: 1` is its replacement. Each file keeps its own module
+    // graph (the default isolation), as it did inside the single fork.
     pool: "forks",
-    poolOptions: {
-      forks: {
-        singleFork: true,
-      },
-    },
+    maxWorkers: 1,
     // singleFork keeps everything in one process, but vitest still interleaves
     // test files within it by default. The suites that exercise system tables
     // with a fixed name (`nextly_schema_events`) cannot use the per-file table

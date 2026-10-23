@@ -39,12 +39,11 @@ We don't yet have a formal RFC process; significant proposals are discussed in G
 
 ### Prerequisites
 
-- Node.js `^20.19.0 || ^22.12.0 || >=24.0.0` (Node 24 LTS recommended, and
-  pinned at 24.21.0 in `.nvmrc` — `nvm use` picks it up). The ranges are
-  disjoint on purpose: they mirror what the test environment supports, so
-  20.6–20.18 and the 23.x line are excluded rather than merely untested.
-  `--env-file`, used by `pnpm db:seed`, needs >= 20.6 and is covered by every
-  range above. That range is what the PUBLISHED packages support; 24.21.0 is
+- Node.js `^22.12.0 || >=24.0.0` (Node 24 LTS recommended, and
+  pinned at 24.22.1 in `.nvmrc` — `nvm use` picks it up). The ranges are
+  disjoint on purpose: they mirror what the test environment supports, so the
+  23.x line is excluded rather than merely untested, and Node 20 is not
+  supported. That range is what the PUBLISHED packages support; 24.22.1 is
   what contributors and CI run, and the two move independently.
 - pnpm 12.5.1, pinned as `packageManager` in `package.json`. Do not install a
   pnpm yourself: `corepack enable` once, and every `pnpm` in the repo resolves
@@ -87,7 +86,7 @@ The dev super-admin is `dev@nextly.local` / `DevPassword123!` if you ever need t
 | Side             | Packages                                                           | How they're loaded in dev                                                                                                                                         |
 | ---------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Client (browser) | `@nextlyhq/ui`, `@nextlyhq/admin`, `@nextlyhq/plugin-form-builder` | Turbopack reads `src/` directly — see [`apps/playground/next.config.ts`](apps/playground/next.config.ts) `turbopack.resolveAlias`. Edits HMR through immediately. |
-| Server (Node)    | `nextly`, all 4 adapters, all 3 storage packages                   | `serverExternalPackages` + each package's `tsup --watch` keeps `dist/` fresh. Edits round-trip through dist (~1-2 s rebuild).                                     |
+| Server (Node)    | `nextly`, all 4 adapters, all 3 storage packages                   | `serverExternalPackages` + each package's `tsdown --watch` keeps `dist/` fresh. Edits round-trip through dist (~1-2 s rebuild).                                   |
 
 Pick `pnpm dev` when you are actively editing a published package's source AND want the playground to reflect those edits without you running a build by hand. Pick `pnpm dev:app` for everything else; it boots faster.
 

@@ -1,9 +1,9 @@
-import { cpSync, existsSync } from "fs";
-import { createRequire } from "module";
-import { dirname, join } from "path";
-import { fileURLToPath } from "url";
+import { cpSync, existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { defineConfig } from "tsup";
+import { defineConfig, type Rolldown } from "tsdown";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -11,7 +11,32 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // can supply the resolver a concrete `coreVersion` without reading a file at
 // runtime (D6).
 const require = createRequire(import.meta.url);
-const { version: coreVersion } = require("./package.json");
+const { version: coreVersion } = require("./package.json") as {
+  version: string;
+};
+
+/**
+ * Drops `import "node:…";` lines that bind nothing.
+ *
+ * The bundler's shared runtime chunk keeps a bare `import "node:module"` even
+ * when nothing in it uses `createRequire`. Every client-safe entry that shares
+ * that chunk then reaches a Node built-in, and a browser bundler refuses it
+ * (Turbopack: "does not support external modules (request: node:module)").
+ * Importing a built-in has no side effects, so an import that binds nothing
+ * does nothing, and removing it changes no behaviour. postbuild.cjs checks
+ * that no client-safe entry reaches a built-in.
+ */
+const dropUnboundBuiltinImports: Rolldown.Plugin = {
+  name: "nextly:drop-unbound-builtin-imports",
+  // On the finished chunks: the import is added after `renderChunk`.
+  generateBundle(_options, bundle) {
+    for (const file of Object.values(bundle)) {
+      if (file.type === "chunk") {
+        file.code = file.code.replace(/^import "node:[\w/]+";\n/gm, "");
+      }
+    }
+  },
+};
 
 // Server-only entry points that need Node.js shims (__dirname, import.meta.url, etc.)
 const serverEntries = [
@@ -141,6 +166,12 @@ const clientEntries = [
   // uses them from builds SQL — so a client reaching the list through it would
   // reach the ORM, and one writing its own copy would drift from the server.
   "src/domains/i18n/translation-filter-states.ts",
+  // The keys a filter may carry only at its top level, as their own entry. The
+  // admin keeps exactly these at the top level beside its own filters, and the
+  // module the server judges them in imports the shape check's graph -- so a
+  // client reaching the list through it would take more than the list, and one
+  // writing its own copy would drift from the server.
+  "src/domains/collections/query/reserved-filter-keys.ts",
   // The query-parameter formats, so a caller writes one with the same code the
   // server reads it with. Imported by the admin's API Playground and by plugin
   // admin components, which is why it is a leaf rather than a root export.
@@ -164,8 +195,46 @@ const clientEntries = [
   "src/zod.ts",
 ];
 
-// Shared config options
-const sharedConfig = {
+// Packages this build never bundles: each name and its subpaths.
+const NEVER_BUNDLE = [
+  // Database drivers — kept external (CJS native modules can't be bundled into ESM)
+  "better-sqlite3",
+  "pg",
+  "mysql2",
+  "mysql2/promise",
+  "drizzle-orm",
+  "drizzle-orm/better-sqlite3",
+  "drizzle-orm/node-postgres",
+  "drizzle-orm/mysql2",
+  // drizzle-kit — dev/CLI tool, must not be bundled into production Next.js builds.
+  // It imports esbuild and @libsql native binaries that Turbopack cannot parse.
+  // v1 split the programmatic API into per-dialect payload/* entrypoints.
+  "drizzle-kit",
+  "drizzle-kit/payload/postgres",
+  "drizzle-kit/payload/mysql",
+  "drizzle-kit/payload/sqlite",
+  // Next.js - keep external to match user's version
+  "next",
+  "next/server",
+  // React - keep external to match user's version
+  "react",
+  "react-dom",
+  // Native binaries that can't be bundled
+  "sharp",
+  "esbuild",
+  // Database adapter packages - installed separately based on user's DB choice
+  "@nextlyhq/adapter-drizzle",
+  "@nextlyhq/adapter-mysql",
+  "@nextlyhq/adapter-postgres",
+  "@nextlyhq/adapter-sqlite",
+];
+
+// Combine all entries into a single build to avoid race conditions
+// with parallel builds and the clean option
+const allEntries = [...serverEntries, ...clientEntries];
+
+export default defineConfig({
+  entry: allEntries,
   format: ["esm"],
   outDir: "dist",
   sourcemap: false,
@@ -173,62 +242,22 @@ const sharedConfig = {
   define: {
     __NEXTLY_CORE_VERSION__: JSON.stringify(coreVersion),
   },
-  external: [
-    // Database drivers — kept external (CJS native modules can't be bundled into ESM)
-    "better-sqlite3",
-    "pg",
-    "mysql2",
-    "mysql2/promise",
-    "drizzle-orm",
-    "drizzle-orm/better-sqlite3",
-    "drizzle-orm/node-postgres",
-    "drizzle-orm/mysql2",
-    // drizzle-kit — dev/CLI tool, must not be bundled into production Next.js builds.
-    // It imports esbuild and @libsql native binaries that Turbopack cannot parse.
-    // v1 split the programmatic API into per-dialect payload/* entrypoints.
-    "drizzle-kit",
-    "drizzle-kit/payload/postgres",
-    "drizzle-kit/payload/mysql",
-    "drizzle-kit/payload/sqlite",
-    // Next.js - keep external to match user's version
-    "next",
-    "next/server",
-    // React - keep external to match user's version
-    "react",
-    "react-dom",
-    // Native binaries that can't be bundled
-    "sharp",
-    "esbuild",
-    // Database adapter packages - installed separately based on user's DB choice
-    "@nextlyhq/adapter-drizzle",
-    "@nextlyhq/adapter-mysql",
-    "@nextlyhq/adapter-postgres",
-    "@nextlyhq/adapter-sqlite",
-  ],
-  outExtension({ format }) {
-    return {
-      js: format === "cjs" ? ".cjs" : ".mjs",
-    };
+  deps: {
+    neverBundle: id =>
+      NEVER_BUNDLE.some(name => id === name || id.startsWith(`${name}/`)),
   },
-};
-
-// Combine all entries into a single build to avoid race conditions
-// with parallel builds and the clean option
-const allEntries = [...serverEntries, ...clientEntries];
-
-export default defineConfig({
-  ...sharedConfig,
-  entry: allEntries,
-  // DTS is generated via a separate `tsc -p tsconfig.dts.json` + rollup
-  // pipeline in the build script (see package.json "build" and
-  // rollup.dts.config.ts). Handling DTS here would OOM with 30+ parallel
-  // rollup-plugin-dts workers each resolving the full type graph.
-  dts: false,
+  // One bundled `.d.ts` per entry, beside its `.mjs`, emitted from the same
+  // build without type-checking: `check-types` is the type check.
+  dts: { sourcemap: false, compilerOptions: { noCheck: true } },
+  outExtensions() {
+    return { js: ".mjs", dts: ".d.mts" };
+  },
   clean: true,
-  // No shims — output is native ESM (.mjs). The __require shim generated
-  // by shims:true throws "Dynamic require of X is not supported" for Node
-  // builtins (events, net, etc.) when loaded by Turbopack on Vercel.
-  // Code that needs __dirname already has ESM fallbacks via import.meta.url.
+  plugins: [dropUnboundBuiltinImports],
+  // No shims — output is native ESM (.mjs). A `require` shim throws "Dynamic
+  // require of X is not supported" for Node builtins (events, net, etc.) when
+  // loaded by Turbopack on Vercel. Code that needs __dirname already has ESM
+  // fallbacks via import.meta.url.
   shims: false,
   async onSuccess() {
     // Copy migration files to dist after build
