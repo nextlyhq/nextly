@@ -29,9 +29,9 @@
 "nextly": patch
 ---
 
-A translated field marked unique is now unique within each language. The same value is refused twice in one language, as a duplicate of a shared unique field is (409 `DUPLICATE`), and allowed once in each language. A value left blank is never a duplicate, and nothing stored changes: the rule is an index on each translations table, keyed on the value with blanks left out, so every read returns what it did before.
+A translated field marked unique is now unique within each language. The same value is refused twice in one language, as a duplicate of a shared unique field is (409 `DUPLICATE`), and allowed once in each language. A text value left blank is never a duplicate, and nothing stored changes: the rule is an index on each translations table, keyed on the value with blanks left out, so every read returns what it did before. A translated number, boolean or date has no blank: zero and false are values like any other. Values count as the same exactly as for a shared unique field of that column: on MySQL, under its default case- and accent-insensitive collation, "About" and "about" are one value.
 
-Every way of declaring the field enforces it. The Schema Builder adds the index when it creates a collection, Single or field group, and adds or drops it when a field becomes or stops being unique. `db:sync`, and the reload under `next dev`, do the same for fields defined in code. `nextly migrate:create` writes a migration that adds or drops it, so production gets it with `nextly migrate`. Until the index is there, each start names the field and the commands to run.
+Every way of declaring the field enforces it. The Schema Builder adds the index when it creates a collection, Single or field group, and adds or drops it when a field becomes or stops being unique. `db:sync`, and the reload under `next dev`, do the same for fields defined in code. `nextly migrate:create` writes a migration that adds or drops it, so production gets it with `nextly migrate`. Until the index is there, each start names the field and what adds it: the commands to run for a field defined in code, or saving the entity in the Schema Builder for one made there.
 
 Adding the rule is refused before anything changes where it cannot hold:
 
