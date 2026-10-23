@@ -10,6 +10,10 @@ import {
 
 import { cn } from "../lib/utils";
 
+type RadioGroupProps = ComponentPropsWithoutRef<
+  typeof RadioGroupPrimitive.Root
+>;
+
 /**
  * RadioGroup Component - Design System Specification
  *
@@ -40,31 +44,34 @@ import { cn } from "../lib/utils";
  * @public
  */
 const RadioGroup: ForwardRefExoticComponent<
-  PropsWithoutRef<ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Root>> &
+  PropsWithoutRef<RadioGroupProps> &
     RefAttributes<ElementRef<typeof RadioGroupPrimitive.Root>>
-> = forwardRef<
-  ElementRef<typeof RadioGroupPrimitive.Root>,
-  ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Root>
->(({ className, ...props }, ref) => {
-  return (
-    <RadioGroupPrimitive.Root
-      className={cn("grid gap-2", className)}
-      {...props}
-      ref={ref}
-      data-slot="radio-group"
-    />
-  );
-});
+> = forwardRef<ElementRef<typeof RadioGroupPrimitive.Root>, RadioGroupProps>(
+  ({ className, ...props }, ref) => {
+    return (
+      <RadioGroupPrimitive.Root
+        className={cn("grid gap-2", className)}
+        {...props}
+        ref={ref}
+        data-slot="radio-group"
+      />
+    );
+  }
+);
 
 RadioGroup.displayName = "RadioGroup";
 
+type RadioGroupItemProps = ComponentPropsWithoutRef<
+  typeof RadioGroupPrimitive.Item
+>;
+
 /** @public */
 const RadioGroupItem: ForwardRefExoticComponent<
-  PropsWithoutRef<ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>> &
+  PropsWithoutRef<RadioGroupItemProps> &
     RefAttributes<ElementRef<typeof RadioGroupPrimitive.Item>>
 > = forwardRef<
   ElementRef<typeof RadioGroupPrimitive.Item>,
-  ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>
+  RadioGroupItemProps
 >(({ className, ...props }, ref) => {
   return (
     <RadioGroupPrimitive.Item

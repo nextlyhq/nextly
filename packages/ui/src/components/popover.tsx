@@ -14,15 +14,17 @@ const PopoverTrigger: typeof PopoverPrimitive.Trigger =
 /** @experimental */
 const PopoverAnchor: typeof PopoverPrimitive.Anchor = PopoverPrimitive.Anchor;
 
+type PopoverContentProps = React.ComponentPropsWithoutRef<
+  typeof PopoverPrimitive.Content
+>;
+
 /** @experimental */
 const PopoverContent: React.ForwardRefExoticComponent<
-  React.PropsWithoutRef<
-    React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
-  > &
+  React.PropsWithoutRef<PopoverContentProps> &
     React.RefAttributes<React.ElementRef<typeof PopoverPrimitive.Content>>
 > = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
+  PopoverContentProps
 >(({ className, align = "center", sideOffset = 4, ...props }, ref) => {
   const portalContainer = usePortalContainer();
 

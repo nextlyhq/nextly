@@ -160,6 +160,33 @@ const tabsListVariants: VariantsFn<typeof TABS_LIST_VARIANT_MAP> = cva(
   }
 );
 
+/** What `TabsList` is declared to take. `TabsListProps`, below, is read back from the component. */
+type TabsListOwnProps = TabsListBaseProps &
+  VariantProps<typeof tabsListVariants> & {
+    /**
+     * Let a strip too wide for its container scroll sideways.
+     *
+     * The scroll container is a WRAPPER, never the list, and that is why this
+     * prop exists rather than callers reaching for `overflow-x-auto`
+     * themselves. Two things go wrong when the list is the scroller, and the
+     * second is why the obvious remedy is also wrong:
+     *
+     *  - Per the CSS overflow rules, `visible` computes to `auto` when the
+     *    other axis is neither `visible` nor `clip`, so `overflow-x` alone
+     *    always makes the element a VERTICAL scroll container too.
+     *  - `TabsTrigger` carries `-mb-0.5` so its 2px underline lands ON this
+     *    list's rail rather than below it. That pull-up puts content past the
+     *    content-box edge, which the new scroll container reports as vertical
+     *    overflow — so `overflow-y-hidden` would clip the 2px the underline is
+     *    made of, silencing a scrollbar by deleting the indicator.
+     *
+     * With the wrapper scrolling instead, the list keeps its rail and
+     * `w-max min-w-full` makes that rail span the full scroll width rather
+     * than stopping where the triggers do.
+     */
+    scrollable?: boolean;
+  };
+
 /**
  * TabsList - Container for tab triggers
  *
@@ -171,62 +198,31 @@ const tabsListVariants: VariantsFn<typeof TABS_LIST_VARIANT_MAP> = cva(
  * @public
  */
 const TabsList: ForwardRefExoticComponent<
-  PropsWithoutRef<
-    TabsListBaseProps &
-      VariantProps<typeof tabsListVariants> & {
-        /** * Let a strip too wide for its container scroll sideways. * * The scroll container is a WRAPPER, never the list, and that is why this * prop exists rather than callers reaching for `overflow-x-auto` * themselves. Two things go wrong when the list is the scroller, and the * second is why the obvious remedy is also wrong: * * - Per the CSS overflow rules, `visible` computes to `auto` when the * other axis is neither `visible` nor `clip`, so `overflow-x` alone * always makes the element a VERTICAL scroll container too. * - `TabsTrigger` carries `-mb-0.5` so its 2px underline lands ON this * list's rail rather than below it. That pull-up puts content past the * content-box edge, which the new scroll container reports as vertical * overflow — so `overflow-y-hidden` would clip the 2px the underline is * made of, silencing a scrollbar by deleting the indicator. * * With the wrapper scrolling instead, the list keeps its rail and * `w-max min-w-full` makes that rail span the full scroll width rather * than stopping where the triggers do. */ scrollable?: boolean;
-      }
-  > &
-    RefAttributes<TabsListRef>
-> = forwardRef<
-  TabsListRef,
-  TabsListBaseProps &
-    VariantProps<typeof tabsListVariants> & {
-      /**
-       * Let a strip too wide for its container scroll sideways.
-       *
-       * The scroll container is a WRAPPER, never the list, and that is why this
-       * prop exists rather than callers reaching for `overflow-x-auto`
-       * themselves. Two things go wrong when the list is the scroller, and the
-       * second is why the obvious remedy is also wrong:
-       *
-       *  - Per the CSS overflow rules, `visible` computes to `auto` when the
-       *    other axis is neither `visible` nor `clip`, so `overflow-x` alone
-       *    always makes the element a VERTICAL scroll container too.
-       *  - `TabsTrigger` carries `-mb-0.5` so its 2px underline lands ON this
-       *    list's rail rather than below it. That pull-up puts content past the
-       *    content-box edge, which the new scroll container reports as vertical
-       *    overflow — so `overflow-y-hidden` would clip the 2px the underline is
-       *    made of, silencing a scrollbar by deleting the indicator.
-       *
-       * With the wrapper scrolling instead, the list keeps its rail and
-       * `w-max min-w-full` makes that rail span the full scroll width rather
-       * than stopping where the triggers do.
-       */
-      scrollable?: boolean;
-    }
->(({ className, variant, scrollable = false, ...props }, ref) => {
-  const list = (
-    <List
-      ref={ref}
-      data-slot="tabs-list"
-      className={cn(
-        tabsListVariants({ variant }),
-        scrollable && "w-max min-w-full",
-        className
-      )}
-      {...props}
-    />
-  );
+  PropsWithoutRef<TabsListOwnProps> & RefAttributes<TabsListRef>
+> = forwardRef<TabsListRef, TabsListOwnProps>(
+  ({ className, variant, scrollable = false, ...props }, ref) => {
+    const list = (
+      <List
+        ref={ref}
+        data-slot="tabs-list"
+        className={cn(
+          tabsListVariants({ variant }),
+          scrollable && "w-max min-w-full",
+          className
+        )}
+        {...props}
+      />
+    );
 
-  if (!scrollable) return list;
+    if (!scrollable) return list;
 
-  return (
-    <div data-slot="tabs-list-scroller" className="w-full overflow-x-auto">
-      {list}
-    </div>
-  );
-});
+    return (
+      <div data-slot="tabs-list-scroller" className="w-full overflow-x-auto">
+        {list}
+      </div>
+    );
+  }
+);
 TabsList.displayName = List.displayName;
 
 /**
@@ -270,6 +266,10 @@ const tabsTriggerVariants: VariantsFn<typeof TABS_TRIGGER_VARIANT_MAP> = cva(
   }
 );
 
+/** What `TabsTrigger` is declared to take. `TabsTriggerProps`, below, is read back from the component. */
+type TabsTriggerOwnProps = TabsTriggerBaseProps &
+  VariantProps<typeof tabsTriggerVariants>;
+
 /**
  * TabsTrigger - Clickable tab button
  *
@@ -290,21 +290,17 @@ const tabsTriggerVariants: VariantsFn<typeof TABS_TRIGGER_VARIANT_MAP> = cva(
  * @public
  */
 const TabsTrigger: ForwardRefExoticComponent<
-  PropsWithoutRef<
-    TabsTriggerBaseProps & VariantProps<typeof tabsTriggerVariants>
-  > &
-    RefAttributes<TabsTriggerRef>
-> = forwardRef<
-  TabsTriggerRef,
-  TabsTriggerBaseProps & VariantProps<typeof tabsTriggerVariants>
->(({ className, size, ...props }, ref) => (
-  <Trigger
-    ref={ref}
-    data-slot="tabs-trigger"
-    className={cn(tabsTriggerVariants({ size }), className)}
-    {...props}
-  />
-));
+  PropsWithoutRef<TabsTriggerOwnProps> & RefAttributes<TabsTriggerRef>
+> = forwardRef<TabsTriggerRef, TabsTriggerOwnProps>(
+  ({ className, size, ...props }, ref) => (
+    <Trigger
+      ref={ref}
+      data-slot="tabs-trigger"
+      className={cn(tabsTriggerVariants({ size }), className)}
+      {...props}
+    />
+  )
+);
 TabsTrigger.displayName = Trigger.displayName;
 
 /**

@@ -110,6 +110,10 @@ const SheetClose: typeof DialogPrimitive.Close = DialogPrimitive.Close;
 /** @experimental */
 const SheetPortal: typeof DialogPrimitive.Portal = DialogPrimitive.Portal;
 
+type SheetOverlayProps = React.ComponentPropsWithoutRef<
+  typeof DialogPrimitive.Overlay
+>;
+
 /**
  * SheetOverlay
  *
@@ -121,13 +125,11 @@ const SheetPortal: typeof DialogPrimitive.Portal = DialogPrimitive.Portal;
  * @experimental
  */
 const SheetOverlay: React.ForwardRefExoticComponent<
-  React.PropsWithoutRef<
-    React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
-  > &
+  React.PropsWithoutRef<SheetOverlayProps> &
     React.RefAttributes<React.ElementRef<typeof DialogPrimitive.Overlay>>
 > = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Overlay>,
-  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
+  SheetOverlayProps
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay
     data-slot="sheet-overlay"
@@ -276,6 +278,10 @@ const SheetFooter: SheetSectionComponent = ({
 );
 SheetFooter.displayName = "SheetFooter";
 
+type SheetTitleProps = React.ComponentPropsWithoutRef<
+  typeof DialogPrimitive.Title
+>;
+
 /**
  * SheetTitle
  *
@@ -287,13 +293,11 @@ SheetFooter.displayName = "SheetFooter";
  * @public
  */
 const SheetTitle: React.ForwardRefExoticComponent<
-  React.PropsWithoutRef<
-    React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>
-  > &
+  React.PropsWithoutRef<SheetTitleProps> &
     React.RefAttributes<React.ElementRef<typeof DialogPrimitive.Title>>
 > = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Title>,
-  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>
+  SheetTitleProps
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
@@ -302,6 +306,10 @@ const SheetTitle: React.ForwardRefExoticComponent<
   />
 ));
 SheetTitle.displayName = DialogPrimitive.Title.displayName;
+
+type SheetDescriptionProps = React.ComponentPropsWithoutRef<
+  typeof DialogPrimitive.Description
+>;
 
 /**
  * SheetDescription
@@ -314,13 +322,11 @@ SheetTitle.displayName = DialogPrimitive.Title.displayName;
  * @public
  */
 const SheetDescription: React.ForwardRefExoticComponent<
-  React.PropsWithoutRef<
-    React.ComponentPropsWithoutRef<typeof DialogPrimitive.Description>
-  > &
+  React.PropsWithoutRef<SheetDescriptionProps> &
     React.RefAttributes<React.ElementRef<typeof DialogPrimitive.Description>>
 > = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Description>,
-  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Description>
+  SheetDescriptionProps
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
