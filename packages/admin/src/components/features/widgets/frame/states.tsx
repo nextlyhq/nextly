@@ -14,6 +14,7 @@
  */
 
 import { Button, Skeleton } from "@nextlyhq/ui";
+import type { WidgetSlot } from "nextly/widget-result";
 
 import { Lock, RefreshCw, XCircle } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
@@ -325,5 +326,31 @@ export function CardError({
         </Button>
       )}
     </div>
+  );
+}
+
+/**
+ * A custom card's failed answer in the frame's own words: "not available" when
+ * the source is not this reader's, and otherwise the error, with the Retry the
+ * frame offers a framed card when the card was handed one. One place, so every
+ * custom card that draws its own states draws this one alike.
+ */
+export function CardSlotFailure({
+  slot,
+  title,
+  onRetry,
+}: {
+  slot: Extract<WidgetSlot, { ok: false }>;
+  title: string;
+  onRetry?: (() => void) | undefined;
+}) {
+  return slot.code === "unavailable" ? (
+    <CardUnavailable />
+  ) : (
+    <CardError
+      message={slot.error}
+      title={title}
+      {...(onRetry ? { onRetry } : {})}
+    />
   );
 }

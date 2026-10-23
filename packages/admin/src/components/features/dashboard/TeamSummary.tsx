@@ -10,8 +10,8 @@ import { ROUTES } from "@admin/constants/routes";
 
 import { CardFigure } from "../widgets/frame/figure";
 import {
-  CardError,
   CardSkeleton,
+  CardSlotFailure,
   CardUnavailable,
 } from "../widgets/frame/states";
 import { useCardTier } from "../widgets/frame/tier";
@@ -89,15 +89,7 @@ export const TeamSummary: React.FC<WidgetComponentProps> = ({
 }) => {
   if (!slot) return isFetching ? <CardSkeleton shape="figure" /> : null;
   if (!slot.ok) {
-    return slot.code === "unavailable" ? (
-      <CardUnavailable />
-    ) : (
-      <CardError
-        title="Team"
-        message={slot.error}
-        {...(onRetry ? { onRetry } : {})}
-      />
-    );
+    return <CardSlotFailure slot={slot} title="Team" onRetry={onRetry} />;
   }
   const rows = slot.result.op === "list" ? slot.result.items : [];
   const users = figureOf(rows, "users");

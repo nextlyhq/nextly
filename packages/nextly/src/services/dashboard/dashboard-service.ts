@@ -74,21 +74,6 @@ export interface CollectionCount {
 }
 
 /**
- * One collection's entries as this caller may read them: its total, and how
- * many are published and how many are drafts.
- *
- * The one per-collection reading the dashboard makes. `/stats` derives its
- * counts and its overall breakdown from these rows, and `system:content`
- * answers them, so the Content card and the summary cannot come to disagree.
- * A collection without the Draft/Published lifecycle has no drafts: every entry
- * the caller may read is published.
- */
-export interface CollectionContent extends CollectionCount {
-  published: number;
-  draft: number;
-}
-
-/**
  * Full dashboard stats response.
  *
  * The installation-wide counts are optional: each is present only for a
@@ -105,6 +90,21 @@ export interface DashboardStatsResponse {
   fieldGroups?: number;
   singles: number;
   apiKeys?: number;
+}
+
+/**
+ * One collection's entries as this caller may read them: its total, and how
+ * many are published and how many are drafts.
+ *
+ * The one per-collection reading the dashboard makes. `/stats` derives its
+ * counts and its overall breakdown from these rows, and `system:content`
+ * answers them, so the Content card and the summary cannot come to disagree.
+ * A collection without the Draft/Published lifecycle has no drafts: every entry
+ * the caller may read is published.
+ */
+export interface CollectionContent extends CollectionCount {
+  published: number;
+  draft: number;
 }
 
 /**

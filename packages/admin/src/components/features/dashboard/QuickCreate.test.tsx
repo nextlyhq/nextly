@@ -38,7 +38,7 @@ interface TestCollection {
   name: string;
   label?: string;
   labels?: { singular: string; plural: string };
-  admin?: { hidden?: boolean };
+  admin?: { hidden?: boolean; disableCreate?: boolean };
 }
 
 function collection(

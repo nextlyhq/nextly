@@ -15,11 +15,7 @@ import type { CollectionCount } from "@admin/types/dashboard/stats";
 import type { ApiCollection } from "@admin/types/entities";
 
 import { CardFigure } from "../widgets/frame/figure";
-import {
-  CardError,
-  CardSkeleton,
-  CardUnavailable,
-} from "../widgets/frame/states";
+import { CardSkeleton, CardSlotFailure } from "../widgets/frame/states";
 
 import { keptOffDashboard } from "./kept-off-dashboard";
 
@@ -266,14 +262,8 @@ export const CollectionQuickLinks: React.FC<WidgetComponentProps> = ({
   // frame's own skeleton and error while they are not there. The skeleton only while neither the
   // list nor the counts are known, since either one says which tiles there are.
   if (slot && !slot.ok) {
-    return slot.code === "unavailable" ? (
-      <CardUnavailable />
-    ) : (
-      <CardError
-        title="Collections"
-        message={slot.error}
-        {...(onRetry ? { onRetry } : {})}
-      />
+    return (
+      <CardSlotFailure slot={slot} title="Collections" onRetry={onRetry} />
     );
   }
   if (tiles === undefined) {

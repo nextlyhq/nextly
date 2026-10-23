@@ -21,7 +21,7 @@ import {
   CardEmpty,
   CardError,
   CardSkeleton,
-  CardUnavailable,
+  CardSlotFailure,
 } from "@admin/components/features/widgets/frame/states";
 import {
   rowsDrawn,
@@ -49,6 +49,15 @@ function readRow(row: Record<string, unknown>): ReleaseSourceRow | undefined {
       : undefined;
   }
   return row.kind === "release" ? { kind: "release", row } : undefined;
+}
+
+/** An answer's rows, split by kind: the attention counts, and the releases. */
+function rowsOf(items: readonly Record<string, unknown>[]) {
+  const rows = items.flatMap(item => readRow(item) ?? []);
+  return {
+    attention: rows.flatMap(row => (row.kind === "attention" ? [row] : [])),
+    releases: rows.flatMap(row => (row.kind === "release" ? [row.row] : [])),
+  };
 }
 
 /** The Releases list narrowed to one reason releases need attention. */
@@ -92,13 +101,11 @@ export const UpcomingReleasesCard: React.FC<WidgetComponentProps> = ({
     ) : null;
   }
   if (!slot.ok) {
-    return slot.code === "unavailable" ? (
-      <CardUnavailable />
-    ) : (
-      <CardError
-        message={slot.error}
+    return (
+      <CardSlotFailure
+        slot={slot}
         title="Upcoming releases"
-        {...(onRetry ? { onRetry } : {})}
+        onRetry={onRetry}
       />
     );
   }
@@ -110,13 +117,7 @@ export const UpcomingReleasesCard: React.FC<WidgetComponentProps> = ({
       />
     );
   }
-  const rows = slot.result.items.flatMap(item => readRow(item) ?? []);
-  const attention = rows.flatMap(row =>
-    row.kind === "attention" ? [row] : []
-  );
-  const releases = rows.flatMap(row =>
-    row.kind === "release" ? [row.row] : []
-  );
+  const { attention, releases } = rowsOf(slot.result.items);
   if (attention.length === 0 && releases.length === 0) {
     return (
       <CardEmpty
