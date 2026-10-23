@@ -12,6 +12,7 @@
  */
 
 import {
+  ATTENTION_DUE_WINDOW_MS,
   ATTENTION_KINDS,
   parseAttentionKey,
   type AttentionKind,
@@ -23,9 +24,6 @@ import {
 import type { WidgetResult, WidgetSlot } from "nextly/widget-result";
 
 import { buildRoute, ROUTES } from "@admin/constants/routes";
-
-/** How far ahead "due this week" looks, as the server counts it. */
-const DUE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** One collection's or Single's share of a kind. */
 export interface AttentionPartRow {
@@ -44,6 +42,11 @@ export interface AttentionKindRow {
   atLeast: boolean;
   /** The one list that holds the whole kind, when there is one. */
   href?: string;
+  /**
+   * Nothing found, but some lists went unread: the kind cannot be called clear,
+   * and its row says so rather than showing a number.
+   */
+  unchecked?: true;
   parts: AttentionPartRow[];
 }
 
@@ -81,19 +84,26 @@ function filteredListHref(slug: string, where: Record<string, unknown>) {
  */
 function partHref(
   kind: AttentionKind,
-  contentKind: "collection" | "single",
-  slug: string,
-  now: number
+  part: { contentKind: "collection" | "single"; slug: string; locale?: string },
+  asOf: number
 ): string {
-  if (contentKind === "single") return buildRoute(ROUTES.SINGLE_EDIT, { slug });
+  if (part.contentKind === "single") {
+    // The language the change was counted in, as the editor's own `?locale=`.
+    const path = buildRoute(ROUTES.SINGLE_EDIT, { slug: part.slug });
+    return part.locale === undefined
+      ? path
+      : `${path}?${new URLSearchParams({ locale: part.locale }).toString()}`;
+  }
   if (kind === "scheduled") {
-    return filteredListHref(slug, {
+    // The week the source counted over, measured from the answer's own
+    // instant and the source's own window, never this browser's clock.
+    return filteredListHref(part.slug, {
       [IN_RELEASE_KEY]: {
-        scheduledBefore: new Date(now + DUE_WINDOW_MS).toISOString(),
+        scheduledBefore: new Date(asOf + ATTENTION_DUE_WINDOW_MS).toISOString(),
       },
     });
   }
-  return filteredListHref(slug, { [PENDING_CHANGE_KEY]: true });
+  return filteredListHref(part.slug, { [PENDING_CHANGE_KEY]: true });
 }
 
 /** A grouped answer, the one shape this card's source gives. */
@@ -116,7 +126,10 @@ function keyOf(bucket: AttentionBucket): {
   value: string;
   key: NonNullable<ReturnType<typeof parseAttentionKey>>;
 } | null {
-  if (bucket.value === null || bucket.count <= 0) return null;
+  // An empty bucket is left out, except a kind's zero floor: nothing found
+  // while some lists went unread, which the card must not read as clear.
+  if (bucket.value === null) return null;
+  if (bucket.count <= 0 && bucket.atLeast !== true) return null;
   const key = parseAttentionKey(bucket.value);
   return key === null ? null : { value: bucket.value, key };
 }
@@ -132,6 +145,9 @@ function kindRow(
     count: bucket.count,
     atLeast: bucket.atLeast === true,
     ...(kind === "overdue" ? { href: OVERDUE_RELEASES_HREF } : {}),
+    ...(bucket.count === 0 && bucket.atLeast === true
+      ? { unchecked: true as const }
+      : {}),
     parts: [],
   };
 }
@@ -141,6 +157,9 @@ function kindRow(
  * nothing in it, or with a key this admin does not know, is left out.
  */
 function readBuckets(result: GroupedResult, now: number): ReadBuckets {
+  // The instant the answer was computed at; this page's clock only for an
+  // answer that does not say.
+  const asOf = result.asOf === undefined ? now : Date.parse(result.asOf);
   const labels = new Map(
     (result.field?.choices ?? []).map(choice => [choice.value, choice.label])
   );
@@ -159,7 +178,7 @@ function readBuckets(result: GroupedResult, now: number): ReadBuckets {
       label: labels.get(value) ?? key.part.slug,
       count: bucket.count,
       atLeast: bucket.atLeast === true,
-      href: partHref(key.kind, key.part.contentKind, key.part.slug, now),
+      href: partHref(key.kind, key.part, asOf),
     });
     read.partsOf.set(key.kind, parts);
   }
@@ -188,8 +207,8 @@ function kindRows({ rows, partsOf }: ReadBuckets): AttentionKindRow[] {
 }
 
 /**
- * The card's view of its slot. `now` is when the links are built, so the week
- * a "Publishing this week" link opens ends a week from the click's page.
+ * The card's view of its slot. `now` stands in for the answer's own instant
+ * only when the answer carries none.
  */
 export function attentionView(
   slot: WidgetSlot | undefined,

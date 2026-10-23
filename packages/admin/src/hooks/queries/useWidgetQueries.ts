@@ -543,7 +543,8 @@ function asGrouped(
   buckets: unknown,
   truncated: unknown,
   field: unknown,
-  atLeast: unknown
+  atLeast: unknown,
+  asOf: unknown
 ): WidgetResult | undefined {
   const read = asBuckets(buckets);
   if (!read) return undefined;
@@ -556,6 +557,9 @@ function asGrouped(
     ...(truncated === true ? { truncated: true } : {}),
     ...(described !== undefined && { field: described }),
     ...(atLeast === true ? { atLeast: true } : {}),
+    // The instant the answer was computed at, kept only in the form the server
+    // writes it, so a link built from it opens what was counted.
+    ...(typeof asOf === "string" && isInstant(asOf) ? { asOf } : {}),
   };
 }
 
@@ -662,7 +666,8 @@ function asResult(value: unknown): WidgetResult | undefined {
       result.buckets,
       result.truncated,
       result.field,
-      result.atLeast
+      result.atLeast,
+      result.asOf
     );
   }
 

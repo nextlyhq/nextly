@@ -113,6 +113,16 @@ export type WidgetResult =
        */
       truncated?: boolean;
       /**
+       * The instant the answer was computed at, in ISO 8601 UTC, for a source
+       * whose buckets depend on it (a window ending "a week from now"). A card
+       * building a link from such a bucket builds it from this instant rather
+       * than its own clock, so the list it opens holds what was counted.
+       * Additive: absent, nothing in the answer depends on when it was read.
+       *
+       * @experimental
+       */
+      asOf?: string;
+      /**
        * The grouped field: its label for the chart's axis, and the label of each value a bucket
        * holds. Absent when the source does not declare the field.
        */

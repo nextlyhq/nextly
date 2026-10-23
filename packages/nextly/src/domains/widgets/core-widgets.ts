@@ -59,6 +59,7 @@
 
 import { settings } from "./declaration/setting-builders";
 import type { WidgetDefinition, WidgetSetting } from "./definition";
+import { MAX_WIDGET_LIMIT } from "./query";
 import {
   ACTIVITY_SOURCE_ID,
   ATTENTION_SOURCE_ID,
@@ -241,7 +242,14 @@ const CORE_WIDGET_LITERALS = [
     defaultOrder: 25,
     // Ungated: each kind is answered by its own domain as the reader, and a
     // kind they may not read is simply absent from the answer.
-    query: { source: ATTENTION_SOURCE_ID, op: "groupBy", groupBy: "item" },
+    // As many kinds and parts as a grouped answer may carry: the card draws
+    // each part at its widest, and the source caps the answer at this.
+    query: {
+      source: ATTENTION_SOURCE_ID,
+      op: "groupBy",
+      groupBy: "item",
+      limit: MAX_WIDGET_LIMIT,
+    },
     component: "core#NeedsAttention",
   },
   {

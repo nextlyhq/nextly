@@ -320,6 +320,10 @@ function absorbPage(
  * met through a locale it is denied in may still be readable in a locale that
  * has not been read yet — and a walk that stopped there reported zero for a set
  * the caller could see entirely.
+ *
+ * `visibleRows`, when given, receives every row the caller may see, each
+ * language of a document included, for a reader that chooses among them; the
+ * documents themselves keep one row each, whichever the order met first.
  */
 async function gatherVisibleDocuments(
   wanted: number,
@@ -327,7 +331,8 @@ async function gatherVisibleDocuments(
   order: PendingEditOrder,
   readableSlugs: readonly string[],
   caller: ReadCaller,
-  scope: PendingEditScope
+  scope: PendingEditScope,
+  visibleRows?: VersionMeta[]
 ): Promise<{ documents: VersionMeta[]; exhausted: boolean }> {
   const gathered: Gathered = { documents: [], seen: new Set() };
   let after: PendingEditCursor | undefined;
@@ -350,6 +355,7 @@ async function gatherVisibleDocuments(
     after = { updatedAt: last.updatedAt, id: last.id };
 
     const visible = await visiblePendingEdits(rows, caller, scope);
+    visibleRows?.push(...visible);
     if (absorbPage(gathered, visible, wanted)) {
       return { documents: gathered.documents, exhausted: false };
     }
@@ -498,28 +504,73 @@ async function resolveVersions(
 export async function singlesWithPendingChanges(
   caller: ReadCaller,
   opts?: ResolverOptions
-): Promise<{ slugs: string[]; atLeast: boolean; anyReadable: boolean }> {
+): Promise<{
+  singles: { slug: string; locale: string | null }[];
+  atLeast: boolean;
+  anyReadable: boolean;
+}> {
   const { scope, readableSlugs } = await sharedReadableScope(caller, opts);
   const singles = readableSlugs.filter(
     slug => scope.kinds.get(slug) === "single"
   );
   if (singles.length === 0) {
-    return { slugs: [], atLeast: false, anyReadable: false };
+    return { singles: [], atLeast: false, anyReadable: false };
   }
-  const { documents, exhausted } = await gatherVisibleDocuments(
+  // Every visible language row, not only the one each document kept: the walk
+  // pages by row id, so the row a document keeps is an arbitrary one of its
+  // languages, and the link's language is chosen from all of them.
+  const visibleRows: VersionMeta[] = [];
+  const { exhausted } = await gatherVisibleDocuments(
     Number.MAX_SAFE_INTEGER,
     COUNT_ROW_BUDGET,
     "identity",
     singles,
     caller,
-    scope
+    scope,
+    visibleRows
   );
   return {
-    // Sorted, so the parts come back in the same order on every read.
-    slugs: [...new Set(documents.map(row => row.scopeSlug))].sort(),
+    singles: pendingLocaleBySingle(visibleRows),
     atLeast: !exhausted,
     anyReadable: true,
   };
+}
+
+/**
+ * Each Single with a pending change the reader may see, and the language its
+ * link opens: the unlocalized document where there is one, otherwise the
+ * readable language changed most recently. Visibility is decided per language,
+ * so the link names the language that was counted rather than opening the
+ * default, which may hold no change or be one the reader is denied.
+ *
+ * Sorted by slug, so the parts come back in the same order on every read.
+ */
+function pendingLocaleBySingle(
+  rows: readonly VersionMeta[]
+): { slug: string; locale: string | null }[] {
+  const chosen = new Map<string, VersionMeta>();
+  for (const row of rows) {
+    const held = chosen.get(row.scopeSlug);
+    if (held === undefined || opensBefore(row, held)) {
+      chosen.set(row.scopeSlug, row);
+    }
+  }
+  return [...chosen.values()]
+    .map(row => ({ slug: row.scopeSlug, locale: row.locale }))
+    .sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+}
+
+/**
+ * Whether a Single's link should open `row`'s language rather than `held`'s:
+ * no language first, then the later change, then the language's own name, so
+ * the choice does not depend on the order the rows were read in.
+ */
+function opensBefore(row: VersionMeta, held: VersionMeta): boolean {
+  if (held.locale === null) return false;
+  if (row.locale === null) return true;
+  const changed = row.updatedAt.getTime() - held.updatedAt.getTime();
+  if (changed !== 0) return changed > 0;
+  return row.locale < held.locale;
 }
 
 /**
