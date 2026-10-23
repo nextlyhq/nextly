@@ -1409,8 +1409,28 @@ describe("the independent-review gate", () => {
 
   // The job installs no packages, so the script must run with none; that is
   // proven beside the script, by running it from a copy with none above it.
+  // The one install is gitleaks' release binary, held to its pinned digest.
   it("installs no packages for the script it runs", () => {
-    expect(job.steps.some(candidate => /\binstall\b/.test(String(candidate.run)) && !/gitleaks/.test(String(candidate.run)))).toBe(false);
+    const packageManager = /\b(?:npm|pnpm|yarn|bun|npx|corepack)\b/;
+    for (const candidate of job.steps) expect(String(candidate.run ?? ""), candidate.name).not.toMatch(packageManager);
+    const installs = job.steps.filter(candidate => /\binstall\b/i.test(String(candidate.run ?? "")) || /\binstall\b/i.test(String(candidate.name ?? "")));
+    expect(installs.map(candidate => candidate.name)).toEqual(["Install gitleaks"]);
+    // Each command of that step, continuation lines joined, is one of these exactly.
+    const commands = installs[0].run
+      .replace(/\s*\\\n\s*/g, " ")
+      .split("\n")
+      .map(line => line.trim())
+      .filter(Boolean);
+    const allowed = [
+      /^GITLEAKS_VERSION=[\d.]+$/,
+      /^GITLEAKS_SHA256=[0-9a-f]{64}$/,
+      /^curl -sSL -o \/tmp\/gitleaks\.tar\.gz "https:\/\/github\.com\/gitleaks\/gitleaks\/releases\/download\/v\$\{GITLEAKS_VERSION\}\/gitleaks_\$\{GITLEAKS_VERSION\}_linux_x64\.tar\.gz"$/,
+      /^echo "\$\{GITLEAKS_SHA256\} {2}\/tmp\/gitleaks\.tar\.gz" \| sha256sum -c -$/,
+      /^sudo tar -xz -C \/usr\/local\/bin gitleaks < \/tmp\/gitleaks\.tar\.gz$/,
+      /^gitleaks version$/,
+    ];
+    expect(commands).toHaveLength(allowed.length);
+    commands.forEach((command, at) => expect(command).toMatch(allowed[at]));
   });
 });
 

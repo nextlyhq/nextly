@@ -8,7 +8,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { load } from "js-yaml";
@@ -808,10 +808,19 @@ describe("what the checker runs with a fork's head checked out", () => {
     // Every action is a pinned checkout or setup-node, or the checker's own title action at the root.
     expect(steps.every(step => step.run !== undefined || /^actions\/(checkout|setup-node)@[0-9a-f]{40}$/.test(String(step.uses)) || step.uses === "./.github/actions/pr-title")).toBe(true);
     // Inside the change, only the checker and the scan run, and neither runs the change's files.
-    const inChange = steps.filter(step => step["working-directory"] === change.with.path).map(step => step.name);
+    // A working directory is read as a path, however it is spelled.
+    const workspace = /^(?:\$GITHUB_WORKSPACE|\$\{\{\s*github\.workspace\s*\}\})(?:\/|$)/;
+    const underChange = value => {
+      const path = posix.normalize(String(value ?? ".").replace(workspace, "./"));
+      return path === change.with.path || path.startsWith(`${change.with.path}/`);
+    };
+    const inChange = steps.filter(step => underChange(step["working-directory"])).map(step => step.name);
     expect(inChange).toEqual(["No AI credit", "Run gitleaks on the commits this run adds"]);
-    // No step names a path under the change any other way.
-    for (const step of steps) expect(JSON.stringify({ ...step, "working-directory": undefined }), step.name).not.toMatch(/\bchange\//);
+    // No step reaches into the change any other way: a `cd` into it, or a path under it.
+    for (const step of steps) {
+      expect(String(step.run ?? ""), step.name).not.toMatch(/\bcd\s+["']?(?:\.\/|\$GITHUB_WORKSPACE\/|\$\{\{\s*github\.workspace\s*\}\}\/)?change\b/);
+      expect(JSON.stringify({ ...step, "working-directory": undefined }), step.name).not.toMatch(/(?:^|[^\w-])change\//);
+    }
   });
 });
 

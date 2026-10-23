@@ -46,6 +46,8 @@ describe("the secret scan's inputs", () => {
     expect(change.with.ref).toBe("${{ github.event_name == 'pull_request_target' && format('refs/pull/{0}/head', github.event.pull_request.number) || github.sha }}");
     expect(change.with["fetch-depth"]).toBe(0);
     expect(STEP["working-directory"]).toBe(change.with.path);
+    // And gitleaks reads the working directory itself, not a path that leads back to the root.
+    expect([...STEP.run.matchAll(/--source\s+(\S+)/g)].map(match => match[1])).toEqual(["."]);
   });
 });
 
@@ -93,6 +95,8 @@ describe.runIf(process.platform !== "win32")("the range the secret scan reads", 
     expect(result.status, result.output).toBe(0);
     expect(result.scans).toHaveLength(1);
     expect(result.scans[0].split(" ")).toEqual(expect.arrayContaining(["detect", `--log-opts=${range}`, "--redact"]));
+    // The repository scanned is the one the step runs in: the change's checkout.
+    expect(result.scans[0]).toMatch(/(?:^| )--source \.(?: |$)/);
   }
 
   it("scans a pull request's own commits, from the base branch it targets", () => {

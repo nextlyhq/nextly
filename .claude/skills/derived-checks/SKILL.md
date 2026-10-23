@@ -559,9 +559,11 @@ post-commit detection as prevention, and the remedy for a credential that has
 already landed is rotation and history rewriting rather than a failed check.
 
 Read the enforcing invocation's own boundary too, rather than assuming it covers
-whatever the advisory side skipped. It is `branches: [main]`, so a pull request
-stacked on another feature branch never triggers it — the layering is real for
-the main-targeting case and absent for the stacked one.
+whatever the advisory side skipped. It is `pull_request_target` with no branch
+filter, so it runs on every pull request, a stacked one included, and scans its
+commits against the branch it targets. The other required jobs are
+`branches: [main]` and do not: a stacked pull request has a secret scan and no
+build or tests (the `reading-a-ci-verdict` skill).
 
 **An advisory check** is one whose false negative costs only the defect it
 failed to report — a convention guard, a dead-code or dead-class warning, a
