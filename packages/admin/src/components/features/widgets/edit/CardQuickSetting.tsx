@@ -18,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useEffect, useState } from "react";
 
 import { useCardTier } from "../frame/tier";
@@ -45,7 +46,7 @@ export function CardQuickSetting({
   disabled,
   unavailable,
   onChange,
-}: CardQuickSettingProps) {
+}: CardQuickSettingProps): JSX.Element | null {
   // Shown at once, ahead of the save; the stored value takes over again whenever it changes.
   const [shown, setShown] = useState(value);
   useEffect(() => setShown(value), [value]);

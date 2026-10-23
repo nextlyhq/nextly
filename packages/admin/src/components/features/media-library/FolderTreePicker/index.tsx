@@ -81,7 +81,7 @@ export function FolderTreePicker({
   compact = false,
   autoExpandToSelection = true,
   className,
-}: FolderTreePickerProps) {
+}: FolderTreePickerProps): React.JSX.Element {
   const { data: rootFolders, isLoading } = useRootFolders();
   const [expandedIds, setExpandedIds] = React.useState<Set<string>>(new Set());
 

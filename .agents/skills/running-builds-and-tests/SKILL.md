@@ -137,6 +137,44 @@ held in every session.
   a test is the right call — is the `testing-evidence` skill. Load it before
   adding, changing or judging a test.
 
+## Every export states its type
+
+A package whose tsconfig sets `isolatedDeclarations` has its published
+declarations written by oxc, one file at a time and with no type checker, so
+every export must state its type: a function its return type, a constant its
+annotation. `check-types` reports a missing one (`TS9xxx`), so the rule is
+enforced there; these are the forms to write it in.
+
+- A value's type through `typeof`, never the value copied into the type:
+  `typeof DEFAULT_MAX_DOCUMENT_BYTES`, not `2097152`. The copy is correct on
+  the day it is written and stale on the day the constant changes.
+- Types are imported with `import type`, which oxlint's
+  `consistent-type-imports` holds. A value import for a type pulls a runtime
+  module into the declaration's graph.
+- A component returns `JSX.Element`, with `JSX` imported as a type from
+  `react` (`import type { JSX } from "react"`), or `React.JSX.Element` where
+  `React` is already in scope; `ReactNode` when it may render nothing. Never
+  from `react/jsx-runtime`, which is the runtime the compiler imports for you.
+- A type too long to read inline gets a name: a type alias beside the export,
+  unexported unless consumers need it. Spelling a large inferred type out in
+  full, as for a Drizzle table, states thousands of lines that go stale with
+  every column.
+- A generated module whose value is a large literal checks it against its type
+  and declares it as that type: `satisfies PluginMigration as PluginMigration`.
+  The check stays, and the declaration is the type rather than the literal.
+
+TypeScript's code fix `fixMissingTypeAnnotationOnExports` adds the annotations
+in bulk, headless through the language service. Review what it writes for
+these, each seen in this repository:
+
+- an import list ending in a comma, which it extends into `FC,,` that does not
+  parse;
+- a type it uses without importing, or one that clashes with a local name;
+- a literal value copied into a type, which becomes `typeof` the constant;
+- a value import for a type, which becomes `import type`;
+- a large inferred type spelled out in full, which gets a name or the
+  `satisfies T as T` form above instead.
+
 ## How much of the machine a local gate may take
 
 Every heavy command — `pnpm build`, `lint`, `check-types`, `test`,

@@ -67,6 +67,42 @@ describe("the forms this reader claims to see", () => {
     );
   });
 
+  it("sees a JSDoc @import of a scoped package, whose name starts with the tag character", () => {
+    // The tag ends at the next tag, which starts after whitespace; an `@`
+    // inside the quoted specifier is part of the name.
+    const read2 = read(
+      '/**\n * @import { T } from "@scope/pkg"\n * @import { U } from "other"\n */',
+      "module.js"
+    );
+    expect(read2).toContain("@scope/pkg");
+    expect(read2).toContain("other");
+  });
+
+  it("reads an escaped JSDoc specifier as the string it spells", () => {
+    // `p\u0067` is `pg` to the compiler; the raw text would name no package.
+    expect(read('/** @import { T } from "p\\u0067" */', "module.js")).toEqual([
+      "pg",
+    ]);
+    expect(
+      read('/** @typedef {import("p\\u0067").T} T */', "module.js")
+    ).toEqual(["pg"]);
+  });
+
+  it("reads a JSDoc type wherever it starts: after a parameter's name, or on the next line", () => {
+    expect(
+      read('/** @param value {import("forbidden").T} */', "module.js")
+    ).toContain("forbidden");
+    expect(
+      read('/**\n * @type\n * {import("forbidden").T}\n */', "module.js")
+    ).toContain("forbidden");
+  });
+
+  it("reads past a quoted brace inside a JSDoc type, which is a character, not its end", () => {
+    expect(
+      read('/** @type {"}" | import("forbidden").T} */', "module.js")
+    ).toContain("forbidden");
+  });
+
   it("sees an import type inside a JSDoc typedef, which JavaScript files use", () => {
     expect(read('/** @typedef {import("pkg").T} T */', "module.js")).toContain(
       "pkg"
@@ -75,6 +111,12 @@ describe("the forms this reader claims to see", () => {
 
   it("sees a triple-slash type reference, which is not in the node tree at all", () => {
     expect(read('/// <reference types="pkg" />')).toContain("pkg");
+  });
+
+  it("sees a triple-slash type reference whose types attribute is not the first", () => {
+    expect(
+      read('/// <reference resolution-mode="import" types="pkg" />')
+    ).toContain("pkg");
   });
 
   it("sees a specifier written as a substitution-free template literal", () => {
@@ -91,6 +133,37 @@ describe("the forms this reader must NOT report", () => {
 
   it("ignores a specifier that appears only inside a string", () => {
     expect(read(`const s = 'from "pkg"';`)).toEqual([]);
+  });
+
+  it("ignores an import mentioned in JSDoc prose rather than in a tag's type", () => {
+    // The description is text, not a type expression. The control beside it is
+    // the same words inside `{...}`, which IS read, so this cannot pass by the
+    // JSDoc scan reading nothing at all.
+    expect(read('/** Loads import("pkg") lazily. */', "module.js")).toEqual([]);
+    expect(read('/** @type {import("pkg")} */', "module.js")).toEqual(["pkg"]);
+  });
+
+  it("ignores a reference directive below the first statement", () => {
+    // The compiler honours triple-slash directives only at the top of a file;
+    // further down the same text is an ordinary comment.
+    expect(read('export const x = 1;\n/// <reference types="pkg" />')).toEqual(
+      []
+    );
+    expect(read('/// <reference types="pkg" />\nexport const x = 1;')).toEqual([
+      "pkg",
+    ]);
+  });
+});
+
+describe("a file the parser cannot read", () => {
+  it("throws rather than reporting that it imports nothing", () => {
+    // A failed parse yields an empty program. Returning its (empty) imports
+    // would be a clean green over a file that was never read. `<div>` in a
+    // `.ts` file is the classic way to get there: it is not a type assertion
+    // the parser can finish.
+    expect(() =>
+      importedSpecifiers('import "pkg";\nconst el = <div>x</div>;', "module.ts")
+    ).toThrow(/module\.ts cannot be parsed/);
   });
 });
 
@@ -131,17 +204,12 @@ describe("the parser follows the filename, not a default", () => {
   });
 });
 
-describe("the JSDoc descent terminates", () => {
-  it("reads a typedef attached to a declaration without recursing forever", () => {
-    // The two descents reach each other. A `@typedef` on a declaration is
-    // reachable from that declaration, and `forEachChild` on the tag walks back
-    // to it, so an unguarded walk overflows the stack rather than returning a
-    // wrong answer.
-    //
-    // The ATTACHED form is what makes this fixture reach the mechanism: a
-    // free-floating `/** @typedef ... */` with no declaration under it has
-    // nothing to cycle through, terminates either way, and passes with the
-    // guard removed. That was the first version of this test.
+describe("a JSDoc block attached to a declaration", () => {
+  it("is read once, not once per node it documents", () => {
+    // JSDoc is read from the comment list, which holds each block once,
+    // whether or not a declaration follows it. A reader that also walked the
+    // block from the declaration it documents would report the specifier twice,
+    // so the exact list is the assertion, and the ATTACHED form is the fixture.
     expect(
       read(
         '/** @typedef {import("pkg").T} T */\nexport const x = 1;',
@@ -210,6 +278,12 @@ describe("whether a reference survives to runtime", () => {
   it("reports an import-equals as reaching runtime", () => {
     expect(refs(`import a = require("pkg");`)).toEqual([
       { specifier: "pkg", typeOnly: false },
+    ]);
+  });
+
+  it("reports a type-only import-equals as erased", () => {
+    expect(refs(`import type a = require("pkg");`)).toEqual([
+      { specifier: "pkg", typeOnly: true },
     ]);
   });
 

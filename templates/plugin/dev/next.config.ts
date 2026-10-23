@@ -6,6 +6,8 @@ import type { NextConfig } from "next";
 // external (Turbopack can't bundle them).
 const nextConfig: NextConfig = {
   typescript: { ignoreBuildErrors: true },
+  // Nextly does not support Cache Components yet; see the installation guide.
+  cacheComponents: false,
   // Transpile the aliased plugin source so HMR fires on src/ edits.
   transpilePackages: ["{{pluginName}}"],
   serverExternalPackages: [

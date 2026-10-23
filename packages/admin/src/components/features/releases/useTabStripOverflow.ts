@@ -16,6 +16,7 @@
  *
  * @module components/features/releases/useTabStripOverflow
  */
+import type { RefObject } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 /** Which edges of the strip have tabs scrolled out of sight beyond them. */
@@ -62,7 +63,10 @@ function revealSelected(root: HTMLElement, scroller: HTMLElement): void {
  * @param selected - the selected tab's value; the strip scrolls it into view
  *   each time it changes.
  */
-export function useTabStripOverflow(selected: string) {
+export function useTabStripOverflow(selected: string): {
+  ref: RefObject<HTMLDivElement | null>;
+  edges: TabStripEdges;
+} {
   const ref = useRef<HTMLDivElement>(null);
   const [edges, setEdges] = useState<TabStripEdges>({
     start: false,

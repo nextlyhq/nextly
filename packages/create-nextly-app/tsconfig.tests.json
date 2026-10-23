@@ -1,0 +1,15 @@
+// Type-checks everything under `src/` that the shipping config leaves out
+// for `isolatedDeclarations`: the stubs in `src/__tests__/stubs/`, which
+// publish nothing. With them it checks the same files main's single config
+// did. The `*.test.ts` files stay out here, as they were before this config
+// existed: Vitest runs them without a type check, and bringing them under
+// `tsc` is separate work. Both configs run in `check-types`.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "isolatedDeclarations": false
+  },
+  "include": ["src/**/*"],
+  "exclude": ["dist", "node_modules", "**/*.test.ts", "**/*.spec.ts"]
+}

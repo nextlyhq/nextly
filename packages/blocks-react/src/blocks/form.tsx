@@ -35,7 +35,7 @@
  *
  * @module blocks/library/form
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { ReactElement, ReactNode } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
@@ -362,7 +362,7 @@ export function renderForm({
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
 // published types is typed the same as one compiled here. See `./index.ts`.
-export const form = defineBlock<FormProps, PageContext>({
+export const form: BlockDefinition<FormProps, PageContext> = defineBlock({
   name: "core/form",
   version: 1,
   description:

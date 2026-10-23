@@ -21,6 +21,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { Loader2 } from "@admin/components/icons";
 
@@ -45,7 +46,7 @@ export function DiscardDraftConfirmDialog({
   entryLabel,
   onConfirm,
   isLoading = false,
-}: DiscardDraftConfirmDialogProps) {
+}: DiscardDraftConfirmDialogProps): JSX.Element {
   const label = entryLabel?.trim() || "this entry";
 
   return (

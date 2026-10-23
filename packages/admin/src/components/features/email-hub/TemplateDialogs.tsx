@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useEffect, useState } from "react";
 
 import { Loader2 } from "@admin/components/icons";
@@ -49,7 +50,7 @@ export function TemplateDeleteDialog({
   template: TemplateRef | null;
   onConfirm: () => void;
   isLoading: boolean;
-}) {
+}): JSX.Element | null {
   if (!template) return null;
 
   return (
@@ -102,7 +103,7 @@ export function TemplatePreviewDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   template: TemplateRef | null;
-}) {
+}): JSX.Element | null {
   const { mutate: doPreview, isPending: isLoading } = usePreviewEmailTemplate();
   const [previewHtml, setPreviewHtml] = useState("");
   const [previewSubject, setPreviewSubject] = useState("");

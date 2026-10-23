@@ -131,7 +131,7 @@ export function MediaCard({
   onSelectionChange,
   onClick,
   className = "",
-}: MediaCardProps) {
+}: MediaCardProps): React.JSX.Element {
   const [imageError, setImageError] = useState(false);
   const [imageLoading, setImageLoading] = useState(true);
 

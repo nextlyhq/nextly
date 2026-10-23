@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import {
@@ -23,7 +24,7 @@ export function RolePermissionsSection({
   allPermissions,
   lockedPermissionIds,
   isLoading,
-}: RolePermissionsSectionProps) {
+}: RolePermissionsSectionProps): JSX.Element {
   return (
     <FormField
       control={form.control}

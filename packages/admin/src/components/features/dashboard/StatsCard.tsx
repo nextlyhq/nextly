@@ -18,7 +18,9 @@ import { Link } from "@admin/components/ui/link";
 import { cn } from "@admin/lib/utils";
 import type { StatsCardProps } from "@admin/types/dashboard/stats";
 
-export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
+export const StatsCard: React.ForwardRefExoticComponent<
+  StatsCardProps & React.RefAttributes<HTMLDivElement>
+> = React.forwardRef<HTMLDivElement, StatsCardProps>(
   (
     {
       title,

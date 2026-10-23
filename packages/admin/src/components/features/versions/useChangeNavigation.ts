@@ -16,10 +16,14 @@ import { changeAnchorId } from "./VersionChangesForm";
  * previous or next one. A move brings the change into view and focuses it,
  * so a keyboard or screen reader user lands on it as well as seeing it.
  */
-export function useChangeNavigation(order: readonly string[]) {
+export function useChangeNavigation(order: readonly string[]): {
+  position: number;
+  current: string;
+  move: (delta: -1 | 1) => void;
+} {
   const [position, setPosition] = useState(0);
   const at = Math.min(position, Math.max(order.length - 1, 0));
-  const move = (delta: -1 | 1) => {
+  const move = (delta: -1 | 1): void => {
     if (order.length === 0) return;
     const next = (at + delta + order.length) % order.length;
     setPosition(next);

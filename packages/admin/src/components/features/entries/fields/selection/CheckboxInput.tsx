@@ -10,6 +10,7 @@
 
 import { Checkbox } from "@nextlyhq/ui";
 import type { CheckboxFieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import {
   useController,
   type Control,
@@ -109,7 +110,7 @@ export function CheckboxInput<TFieldValues extends FieldValues = FieldValues>({
   disabled = false,
   readOnly = false,
   className,
-}: CheckboxInputProps<TFieldValues>) {
+}: CheckboxInputProps<TFieldValues>): JSX.Element {
   // Get default value - handle function default values
   const getDefaultValue = () => {
     if (typeof field.defaultValue === "function") {

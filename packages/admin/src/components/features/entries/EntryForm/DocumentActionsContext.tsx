@@ -15,7 +15,7 @@
  *
  * @module components/features/entries/EntryForm/DocumentActionsContext
  */
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, type ReactNode, type JSX } from "react";
 
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 
@@ -40,7 +40,7 @@ export function DocumentActionsHost({
 }: {
   input: DocumentActionBindingsInput;
   children: ReactNode;
-}) {
+}): JSX.Element {
   const documentActions = useDocumentActionBindings(input);
   return (
     <DocumentActionsContext.Provider value={documentActions}>
@@ -108,7 +108,7 @@ export function SaveActionFormProvider({
   formId,
   className,
   children,
-}: Omit<EntryFormProviderProps, "onSubmit">) {
+}: Omit<EntryFormProviderProps, "onSubmit">): JSX.Element {
   const { run } = useHostedDocumentActions();
   return (
     <EntryFormProvider

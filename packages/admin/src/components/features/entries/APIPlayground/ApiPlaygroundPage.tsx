@@ -16,6 +16,7 @@
  */
 
 import { Alert, AlertDescription, AlertTitle, Skeleton } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { AlertCircle } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
@@ -38,7 +39,10 @@ const NOUN: Record<ApiPlaygroundKind, string> = {
   single: "single",
 };
 
-export function ApiPlaygroundPage({ kind, slug }: ApiPlaygroundPageProps) {
+export function ApiPlaygroundPage({
+  kind,
+  slug,
+}: ApiPlaygroundPageProps): JSX.Element {
   const isSingle = kind === "single";
   const noun = NOUN[kind];
 

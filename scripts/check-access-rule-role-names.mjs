@@ -49,7 +49,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -81,12 +81,15 @@ export function isShippedSource(path) {
   );
 }
 
+/** The node types a rule can be written as. */
+const FUNCTION_TYPES = new Set([
+  "ArrowFunctionExpression",
+  "FunctionExpression",
+  "FunctionDeclaration",
+]);
+
 function isFunctionNode(node) {
-  return (
-    ts.isArrowFunction(node) ||
-    ts.isFunctionExpression(node) ||
-    ts.isFunctionDeclaration(node)
-  );
+  return FUNCTION_TYPES.has(node?.type);
 }
 
 /**
@@ -96,116 +99,139 @@ function isFunctionNode(node) {
 function unwrap(node) {
   let inner = node;
   while (
-    ts.isParenthesizedExpression(inner) ||
-    ts.isAsExpression(inner) ||
-    ts.isSatisfiesExpression(inner) ||
-    ts.isNonNullExpression(inner) ||
-    ts.isTypeAssertionExpression(inner)
+    inner.type === "ParenthesizedExpression" ||
+    inner.type === "TSAsExpression" ||
+    inner.type === "TSSatisfiesExpression" ||
+    inner.type === "TSNonNullExpression" ||
+    inner.type === "TSTypeAssertion"
   )
     inner = inner.expression;
   return inner;
 }
 
-/** The name a property is written under, when it is written plainly. */
-function propertyName(name) {
-  return name && (ts.isIdentifier(name) || ts.isStringLiteral(name))
-    ? name.text
-    : undefined;
+/** A quoted string's value, or undefined for anything else. */
+function quotedString(node) {
+  const isString = node?.type === "Literal" && typeof node.value === "string";
+  return isString ? node.value : undefined;
+}
+
+/** A name written plainly: an identifier, or a quoted string. */
+function plainName(node) {
+  return node?.type === "Identifier" ? node.name : quotedString(node);
+}
+
+/**
+ * The name a property is written under: a plain key, or a computed key that is
+ * a string (`["role"]`), which names the property as surely. A key computed
+ * from anything else has no name to read.
+ */
+function propertyName(property) {
+  return property.computed
+    ? quotedString(property.key)
+    : plainName(property.key);
 }
 
 /** `{ roles }` or `{ role: r }` in a destructuring pattern. */
-function bindsRole(node) {
-  if (!ts.isBindingElement(node) || !ts.isObjectBindingPattern(node.parent))
+function bindsRole(node, parent) {
+  if (node.type !== "Property" || parent?.type !== "ObjectPattern")
     return false;
-  return ROLE_KEYS.has(
-    propertyName(node.propertyName) ?? propertyName(node.name) ?? ""
-  );
+  return ROLE_KEYS.has(propertyName(node) ?? "");
 }
 
 /** `x.roles`, `x.role`, `x["roles"]` or `x["role"]`. */
 function accessesRole(node) {
-  if (ts.isPropertyAccessExpression(node)) return ROLE_KEYS.has(node.name.text);
-  return (
-    ts.isElementAccessExpression(node) &&
-    ts.isStringLiteral(node.argumentExpression) &&
-    ROLE_KEYS.has(node.argumentExpression.text)
-  );
+  if (node.type !== "MemberExpression") return false;
+  const key = node.computed
+    ? quotedString(node.property)
+    : plainName(node.property);
+  return ROLE_KEYS.has(key ?? "");
 }
 
 /** Whether a function reads a role anywhere in its parameters or body. */
 function readsRole(fn) {
-  const visit = node =>
-    bindsRole(node) ||
-    accessesRole(node) ||
-    ts.forEachChild(node, visit) === true;
-  return ts.forEachChild(fn, visit) === true;
+  let reads = false;
+  walk(fn, (node, ancestors) => {
+    if (reads) return false;
+    if (bindsRole(node, ancestors.at(-1)) || accessesRole(node)) reads = true;
+  });
+  return reads;
 }
 
 /**
  * A top-level `function` or `const` declaration, as the index keeps it: the
  * node it declares (the function, or the `const`'s initializer) and whether
- * its type names it an access rule.
+ * its type names it an access rule. An `export` around a declaration changes
+ * nothing about what it declares.
  */
-function declarationsOf(statement, source) {
-  if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
-    return [["default", { node: unwrap(statement.expression), typed: false }]];
+function declarationsOf(statement, text) {
+  if (statement.type === "ExportDefaultDeclaration") {
+    const declared = statement.declaration;
+    if (declared.type === "FunctionDeclaration") {
+      const entry = { node: declared, typed: false };
+      return [
+        ...(declared.id ? [[declared.id.name, entry]] : []),
+        ["default", entry],
+      ];
+    }
+    return declared.type === "ClassDeclaration"
+      ? []
+      : [["default", { node: unwrap(declared), typed: false }]];
   }
-  if (ts.isFunctionDeclaration(statement)) {
-    const entry = { node: statement, typed: false };
-    const isDefault = statement.modifiers?.some(
-      modifier => modifier.kind === ts.SyntaxKind.DefaultKeyword
-    );
-    return [
-      ...(statement.name ? [[statement.name.text, entry]] : []),
-      ...(isDefault ? [["default", entry]] : []),
-    ];
+  const declared =
+    statement.type === "ExportNamedDeclaration"
+      ? statement.declaration
+      : statement;
+  if (declared?.type === "FunctionDeclaration") {
+    return declared.id
+      ? [[declared.id.name, { node: declared, typed: false }]]
+      : [];
   }
-  if (!ts.isVariableStatement(statement)) return [];
-  return statement.declarationList.declarations
-    .filter(decl => ts.isIdentifier(decl.name) && decl.initializer)
-    .map(decl => [
-      decl.name.text,
-      {
-        node: unwrap(decl.initializer),
-        typed:
-          decl.type !== undefined && RULE_TYPE.test(decl.type.getText(source)),
-      },
-    ]);
+  if (declared?.type !== "VariableDeclaration") return [];
+  return declared.declarations
+    .filter(decl => decl.id.type === "Identifier" && decl.init)
+    .map(decl => {
+      const annotation = decl.id.typeAnnotation?.typeAnnotation;
+      return [
+        decl.id.name,
+        {
+          node: unwrap(decl.init),
+          typed:
+            annotation !== undefined &&
+            annotation !== null &&
+            RULE_TYPE.test(text.slice(annotation.start, annotation.end)),
+        },
+      ];
+    });
 }
 
 /** The specifier of a relative import, or undefined for any other statement. */
 function relativeSpecifier(statement) {
-  if (!ts.isImportDeclaration(statement)) return undefined;
-  const specifier = statement.moduleSpecifier;
-  return ts.isStringLiteral(specifier) && specifier.text.startsWith(".")
-    ? specifier.text
-    : undefined;
+  if (statement.type !== "ImportDeclaration") return undefined;
+  const specifier = statement.source.value;
+  return specifier.startsWith(".") ? specifier : undefined;
 }
 
 /** A relative import's default and named bindings, by local name. */
 function relativeImportsOf(statement) {
   const from = relativeSpecifier(statement);
-  const clause = from && statement.importClause;
-  if (!clause) return [];
-  const named =
-    clause.namedBindings && ts.isNamedImports(clause.namedBindings)
-      ? clause.namedBindings.elements.map(element => [
-          element.name.text,
-          { from, name: (element.propertyName ?? element.name).text },
-        ])
-      : [];
-  return clause.name
-    ? [[clause.name.text, { from, name: "default" }], ...named]
-    : named;
+  if (!from) return [];
+  return statement.specifiers.flatMap(specifier => {
+    if (specifier.type === "ImportDefaultSpecifier")
+      return [[specifier.local.name, { from, name: "default" }]];
+    if (specifier.type === "ImportSpecifier")
+      return [
+        [specifier.local.name, { from, name: plainName(specifier.imported) }],
+      ];
+    return [];
+  });
 }
 
 /** The named elements of an `export { ... }`, or none for any other statement. */
 function exportedElements(statement) {
-  return ts.isExportDeclaration(statement) &&
-    !statement.isTypeOnly &&
-    statement.exportClause &&
-    ts.isNamedExports(statement.exportClause)
-    ? statement.exportClause.elements
+  return statement.type === "ExportNamedDeclaration" &&
+    statement.exportKind !== "type" &&
+    statement.declaration === null
+    ? statement.specifiers
     : [];
 }
 
@@ -216,44 +242,44 @@ function exportedElements(statement) {
  */
 function reExportsOf(statement) {
   const elements = exportedElements(statement);
-  const specifier = statement.moduleSpecifier;
-  if (specifier && ts.isStringLiteral(specifier)) {
-    return {
-      imports: specifier.text.startsWith(".")
-        ? elements.map(element => [
-            element.name.text,
-            {
-              from: specifier.text,
-              name: (element.propertyName ?? element.name).text,
-            },
-          ])
-        : [],
-      declarations: [],
-    };
-  }
-  return {
-    imports: [],
-    declarations: elements
-      .filter(element => element.propertyName)
-      .map(element => [
-        element.name.text,
-        { node: element.propertyName, typed: false },
-      ]),
-  };
+  const from =
+    statement.type === "ExportNamedDeclaration"
+      ? statement.source?.value
+      : undefined;
+  return from === undefined
+    ? { imports: [], declarations: renamedLocals(elements) }
+    : { imports: forwardedImports(elements, from), declarations: [] };
+}
+
+/** `export { a } from "./b"`: each name passed on, as an import of it from that module. */
+function forwardedImports(elements, from) {
+  if (!from.startsWith(".")) return [];
+  return elements.map(element => [
+    plainName(element.exported),
+    { from, name: plainName(element.local) },
+  ]);
+}
+
+/** `export { a as b }`: each renamed local, as a declaration of `b` naming `a`. */
+function renamedLocals(elements) {
+  return elements
+    .filter(element => plainName(element.local) !== plainName(element.exported))
+    .map(element => [
+      plainName(element.exported),
+      { node: element.local, typed: false },
+    ]);
 }
 
 /** Top-level declarations by name, and the relative imports by local name. */
-function indexFile(source) {
-  const reExports = source.statements.map(reExportsOf);
+function indexFile(program, text) {
+  const reExports = program.body.map(reExportsOf);
   return {
     declarations: new Map([
-      ...source.statements.flatMap(statement =>
-        declarationsOf(statement, source)
-      ),
+      ...program.body.flatMap(statement => declarationsOf(statement, text)),
       ...reExports.flatMap(entry => entry.declarations),
     ]),
     imports: new Map([
-      ...source.statements.flatMap(relativeImportsOf),
+      ...program.body.flatMap(relativeImportsOf),
       ...reExports.flatMap(entry => entry.imports),
     ]),
   };
@@ -277,43 +303,52 @@ function resolveRelative(fromPath, specifier, has) {
 function ruleOfValue(written, operation) {
   const value = unwrap(written);
   if (isFunctionNode(value)) return { fn: value, name: operation };
-  if (ts.isIdentifier(value))
-    return { identifier: value.text, name: value.text };
+  if (value.type === "Identifier")
+    return { identifier: value.name, name: value.name };
   return undefined;
 }
 
 /**
  * What a property of an `access: { ... }` object names: an inline function,
- * or an identifier to follow, with the name a finding reports it under.
+ * or an identifier to follow, with the name a finding reports it under. A
+ * getter or setter names no rule.
  */
 function ruleOfProperty(property) {
-  const operation = propertyName(property.name) ?? "access";
-  if (ts.isMethodDeclaration(property))
-    return { fn: property, name: operation };
-  if (ts.isShorthandPropertyAssignment(property))
-    return ruleOfValue(property.name, operation);
-  return ts.isPropertyAssignment(property)
-    ? ruleOfValue(property.initializer, operation)
-    : undefined;
+  if (property.type !== "Property" || property.kind !== "init")
+    return undefined;
+  const operation = propertyName(property) ?? "access";
+  if (property.method) return { fn: property.value, name: operation };
+  // A shorthand property's value is the identifier it names.
+  return ruleOfValue(property.value, operation);
 }
 
 /**
  * Every `access` a file declares: an object literal written in place, or the
- * name of one declared elsewhere (`access: shared`, or `{ access }`).
+ * name of one declared elsewhere (`access: shared`, or `{ access }`). Only
+ * properties of an object LITERAL count; `const { access } = config` reads
+ * one rather than declaring it.
  */
-function accessObjects(source) {
+function accessObjects(program) {
   const found = [];
-  const visit = node => {
-    if (ts.isShorthandPropertyAssignment(node) && node.name.text === "access")
-      found.push({ identifier: "access" });
-    if (ts.isPropertyAssignment(node) && propertyName(node.name) === "access") {
-      const value = unwrap(node.initializer);
-      if (ts.isObjectLiteralExpression(value)) found.push({ object: value });
-      else if (ts.isIdentifier(value)) found.push({ identifier: value.text });
+  walk(program, (node, ancestors) => {
+    if (
+      node.type !== "Property" ||
+      node.kind !== "init" ||
+      node.method ||
+      ancestors.at(-1)?.type !== "ObjectExpression" ||
+      propertyName(node) !== "access"
+    ) {
+      return;
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
+    if (node.shorthand) {
+      found.push({ identifier: "access" });
+      return;
+    }
+    const value = unwrap(node.value);
+    if (value.type === "ObjectExpression") found.push({ object: value });
+    else if (value.type === "Identifier")
+      found.push({ identifier: value.name });
+  });
   return found;
 }
 
@@ -322,15 +357,9 @@ function parserOver(files) {
   const parsed = new Map();
   return path => {
     if (!parsed.has(path)) {
-      const kind = path.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-      const source = ts.createSourceFile(
-        path,
-        files.get(path),
-        ts.ScriptTarget.Latest,
-        true,
-        kind
-      );
-      parsed.set(path, { source, ...indexFile(source) });
+      const text = files.get(path);
+      const { program } = parseSource(text, path);
+      parsed.set(path, { program, text, ...indexFile(program, text) });
     }
     return parsed.get(path);
   };
@@ -347,8 +376,8 @@ function follow(files, parse, path, identifier, seen = new Set()) {
   const file = parse(path);
   const local = file.declarations.get(identifier)?.node;
   // `export default access` names another declaration; follow it.
-  if (local && ts.isIdentifier(local))
-    return follow(files, parse, path, local.text, seen);
+  if (local?.type === "Identifier")
+    return follow(files, parse, path, local.name, seen);
   if (local) return { path, node: local };
   const imported = file.imports.get(identifier);
   const target =
@@ -360,7 +389,7 @@ function follow(files, parse, path, identifier, seen = new Set()) {
 function accessObjectAt(files, parse, path, entry) {
   if (entry.object) return { path, object: entry.object };
   const target = follow(files, parse, path, entry.identifier);
-  return target && ts.isObjectLiteralExpression(target.node)
+  return target?.node.type === "ObjectExpression"
     ? { path: target.path, object: target.node }
     : undefined;
 }
@@ -373,13 +402,14 @@ function propertiesOf(files, parse, at, seen = new Set()) {
   if (seen.has(at.object)) return [];
   seen.add(at.object);
   return at.object.properties.flatMap(property => {
-    if (!ts.isSpreadAssignment(property)) return [{ path: at.path, property }];
-    const spread = unwrap(property.expression);
-    const inner = ts.isObjectLiteralExpression(spread)
-      ? { path: at.path, object: spread }
-      : ts.isIdentifier(spread)
-        ? accessObjectAt(files, parse, at.path, { identifier: spread.text })
-        : undefined;
+    if (property.type !== "SpreadElement") return [{ path: at.path, property }];
+    const spread = unwrap(property.argument);
+    const inner =
+      spread.type === "ObjectExpression"
+        ? { path: at.path, object: spread }
+        : spread.type === "Identifier"
+          ? accessObjectAt(files, parse, at.path, { identifier: spread.name })
+          : undefined;
     return inner ? propertiesOf(files, parse, inner, seen) : [];
   });
 }
@@ -395,11 +425,11 @@ function ruleAt(files, parse, path, rule) {
 
 /** One file's access rules, each with where it is declared and its name. */
 function rulesIn(files, parse, path) {
-  const { source, declarations } = parse(path);
+  const { program, declarations } = parse(path);
   const typed = [...declarations]
     .filter(([, entry]) => entry.typed && isFunctionNode(entry.node))
     .map(([name, entry]) => ({ path, fn: entry.node, name }));
-  const declared = accessObjects(source)
+  const declared = accessObjects(program)
     .map(entry => accessObjectAt(files, parse, path, entry))
     .filter(Boolean)
     .flatMap(at => propertiesOf(files, parse, at))
@@ -425,17 +455,14 @@ export function findRoleNameRules(files) {
   for (const rule of [...files.keys()].flatMap(path =>
     rulesIn(files, parse, path)
   )) {
-    const key = `${rule.path}:${rule.fn.pos}`;
+    const key = `${rule.path}:${rule.fn.start}`;
     if (!rules.has(key)) rules.set(key, rule);
   }
   return [...rules.values()]
     .filter(({ fn }) => readsRole(fn))
     .map(({ path, fn, name }) => {
-      const { source } = parse(path);
-      const { line } = source.getLineAndCharacterOfPosition(
-        fn.getStart(source)
-      );
-      return { path, line: line + 1, name };
+      const { text } = parse(path);
+      return { path, line: text.slice(0, fn.start).split("\n").length, name };
     })
     .sort((x, y) => x.path.localeCompare(y.path) || x.line - y.line);
 }

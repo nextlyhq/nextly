@@ -17,6 +17,7 @@
 
 import { Button } from "@nextlyhq/ui";
 import { Undo2 } from "lucide-react";
+import type { JSX } from "react";
 
 import * as Icons from "@admin/components/icons";
 
@@ -37,7 +38,7 @@ export function RemovalNotice({
   undoRef,
   onUndo,
   onClose,
-}: RemovalNoticeProps) {
+}: RemovalNoticeProps): JSX.Element | null {
   if (title === undefined) return null;
   return (
     <div

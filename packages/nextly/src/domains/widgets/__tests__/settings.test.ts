@@ -576,6 +576,25 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
     expect(widgetSettingsProblem([limit, compact])).toBeUndefined();
   });
 
+  it("is admitted where core builds the card's query from it, and still judged by every other rule", () => {
+    // A declared widget's query is built from these settings on the server, so they reach the
+    // data it shows: there is nothing to refuse.
+    expect(widgetSettingsProblem(content, true)).toBeUndefined();
+    expect(() => validateWidgetSettings(content, "core/x", true)).not.toThrow();
+    // Admitted is not unchecked: a dependent setting naming no Collection setting is still
+    // refused for what it is.
+    const orphan = {
+      name: "where",
+      label: "Where",
+      type: "filter",
+      of: "nothing",
+    };
+    expect(widgetSettingsProblem([orphan], true)).toBeDefined();
+    expect(widgetSettingsProblem([orphan], true)).not.toContain(
+      CONTENT_SETTING_NOT_DRAWN
+    );
+  });
+
   it("reads a stored value its type can hold, and the starting value otherwise", () => {
     expect(
       resolveWidgetSettings(content, {

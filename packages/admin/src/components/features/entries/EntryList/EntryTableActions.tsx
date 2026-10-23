@@ -16,6 +16,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { MoreHorizontal, Pencil, Trash2 } from "@admin/components/icons";
 
@@ -62,7 +63,7 @@ export function EntryTableActions({
   entryId,
   onEdit,
   onDelete,
-}: EntryTableActionsProps) {
+}: EntryTableActionsProps): JSX.Element {
   return (
     // Stop propagation to prevent React portal event bubbling from reaching
     // the parent TableRow's onClick handler (which navigates to edit page).

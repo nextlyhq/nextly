@@ -367,9 +367,15 @@ function fail(message: string): never {
  * install. One rule set answering both channels is the thing
  * `plugins/__tests__/channel-divergence` exists to protect.
  */
-export function widgetSettingsProblem(settings: unknown): string | undefined {
+export function widgetSettingsProblem(
+  settings: unknown,
+  queryBuiltByCore = false
+): string | undefined {
   const [problem] = widgetSettingsProblems(settings);
   if (problem !== undefined) return problem;
+  // A widget whose query core builds from its declaration reads its content
+  // settings there, so they reach the data it shows: nothing to refuse.
+  if (queryBuiltByCore) return undefined;
   // Every setting is now known to be well formed, so each has a type.
   const content = (settings as readonly AnyWidgetSetting[] | undefined)?.find(
     isContentSetting
@@ -636,9 +642,10 @@ function defaultProblem(
  */
 export function validateWidgetSettings(
   settings: unknown,
-  widgetId: string
-): asserts settings is WidgetSetting[] | undefined {
-  const problem = widgetSettingsProblem(settings);
+  widgetId: string,
+  queryBuiltByCore = false
+): asserts settings is AnyWidgetSetting[] | undefined {
+  const problem = widgetSettingsProblem(settings, queryBuiltByCore);
   if (problem !== undefined) fail(`${widgetId}: ${problem}`);
 }
 

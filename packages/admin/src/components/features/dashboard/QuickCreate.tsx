@@ -41,6 +41,7 @@ import {
 } from "@nextlyhq/ui";
 import type { SizeTier } from "@nextlyhq/ui/format";
 import { Plus } from "lucide-react";
+import type { JSX } from "react";
 import { useMemo } from "react";
 
 import { Link } from "@admin/components/ui/link";
@@ -81,7 +82,7 @@ const SHORTCUTS_DRAWN: Readonly<Record<SizeTier, number>> = Object.freeze({
  */
 const COLLECTION_PAGE_SIZE = 100;
 
-export function QuickCreate() {
+export function QuickCreate(): JSX.Element | null {
   // 🔴 The SERVER's list, not the whole registry. This is the same query the
   // sidebar reads, and it is already filtered to what this reader may see — so
   // a collection they are not allowed to know exists is absent before any

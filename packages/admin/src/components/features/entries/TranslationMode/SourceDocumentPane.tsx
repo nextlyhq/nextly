@@ -22,6 +22,7 @@
  */
 
 import type { FieldConfig } from "nextly/config";
+import type { JSX } from "react";
 
 import { ReadOnlyDocumentForm } from "@admin/components/features/entries/EntryForm/ReadOnlyDocumentForm";
 
@@ -40,7 +41,11 @@ export interface SourcePaneDocument {
   values: Record<string, unknown>;
 }
 
-export function SourceDocumentPane({ source }: { source: SourcePaneDocument }) {
+export function SourceDocumentPane({
+  source,
+}: {
+  source: SourcePaneDocument;
+}): JSX.Element {
   return (
     <div
       // A SOLID token rather than an alpha tint of one. `text-muted-foreground`

@@ -12,6 +12,7 @@
 // were added in PR 2 alongside the page-level mount of FieldEditorSheet.
 import { Input, Label, Switch, Textarea } from "@nextlyhq/ui";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
+import type { JSX } from "react";
 
 import { toSnakeName } from "@admin/lib/builder";
 
@@ -61,7 +62,11 @@ function hasTypeSpecificEditor(type: string): boolean {
   );
 }
 
-export function GeneralTab({ field, readOnly = false, onChange }: Props) {
+export function GeneralTab({
+  field,
+  readOnly = false,
+  onChange,
+}: Props): JSX.Element {
   const isSystem = field.isSystem === true;
   const nameDisabled = readOnly || isSystem;
 

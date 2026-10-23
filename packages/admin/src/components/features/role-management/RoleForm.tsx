@@ -5,6 +5,7 @@ import {
   Button,
   FormActions,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { FormProvider } from "react-hook-form";
 
 import { SettingsSection } from "@admin/components/features/settings";
@@ -33,7 +34,7 @@ export const ROLE_FORM_ID = "role-form";
  *
  * The component now focuses solely on layout and composition.
  */
-export function RoleForm({ roleId }: RoleFormProps) {
+export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
   const {
     form,
     allPermissions,

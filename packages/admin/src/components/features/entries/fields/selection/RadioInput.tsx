@@ -10,6 +10,7 @@
 
 import { Label, RadioGroup, RadioGroupItem } from "@nextlyhq/ui";
 import type { RadioFieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import {
   useController,
   type Control,
@@ -124,7 +125,7 @@ export function RadioInput<TFieldValues extends FieldValues = FieldValues>({
   disabled = false,
   readOnly = false,
   className,
-}: RadioInputProps<TFieldValues>) {
+}: RadioInputProps<TFieldValues>): JSX.Element {
   // Get default value - handle function default values
   const getDefaultValue = () => {
     if (typeof field.defaultValue === "function") {

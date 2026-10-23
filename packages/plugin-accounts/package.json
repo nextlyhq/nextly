@@ -65,6 +65,7 @@
   },
   "devDependencies": {
     "@nextlyhq/admin": "workspace:*",
+    "@nextlyhq/module-specifiers": "workspace:*",
     "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@testing-library/react": "^16.3.0",

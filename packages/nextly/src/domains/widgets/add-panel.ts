@@ -104,7 +104,7 @@ export function addPanelFacts(
       ? {}
       : { description: widget.description }),
     ...(widget.category === undefined ? {} : { category: widget.category }),
-    sketch: widget.archetype ?? "custom",
+    sketch: widget.sketch ?? widget.archetype ?? "custom",
   };
 }
 

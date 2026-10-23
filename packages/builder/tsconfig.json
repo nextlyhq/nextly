@@ -4,7 +4,10 @@
     "rootDir": "src",
     "outDir": "dist",
     "jsx": "react-jsx",
-    "lib": ["ES2022", "DOM"]
+    "lib": ["ES2022", "DOM"],
+    // Every export states its type, so tsdown can write the published
+    // declarations with oxc, one file at a time and without a type checker.
+    "isolatedDeclarations": true
   },
   "include": ["src/**/*"],
   "exclude": ["dist", "node_modules"]

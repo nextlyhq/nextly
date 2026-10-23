@@ -9,6 +9,8 @@
  * @module components/features/widgets/archetypes/more-exist
  */
 
+import type { JSX } from "react";
+
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { cn } from "@admin/lib/utils";
@@ -81,7 +83,7 @@ function statusParam(status: string | undefined): string | undefined {
   return scope === "all" ? undefined : scope;
 }
 
-export function MoreExist({ query }: { query: CardQuery }) {
+export function MoreExist({ query }: { query: CardQuery }): JSX.Element {
   const href = moreExistHref(query);
   return href ? (
     <Link

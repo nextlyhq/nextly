@@ -12,6 +12,7 @@
 
 import type { TimeseriesInterval } from "../collections/query/timeseries-interval";
 
+import type { TransportableValue } from "./declaration/transportable";
 import type { WidgetQuery } from "./query";
 import type { WidgetFieldChoice, WidgetSourceFieldType } from "./sources";
 
@@ -161,6 +162,19 @@ export type WidgetResult =
       points: { start: string; count: number }[];
       /** The interval the points were bucketed by. */
       interval: TimeseriesInterval;
+    }
+  | {
+      /**
+       * A declared widget's own data, for the component it draws itself with.
+       *
+       * 🔴 A RESULT kind only, never a query's op: no query asks for it and no
+       * source answers with it. Core's runner makes it, for a widget declared
+       * with its own display, from what that widget's data function answered
+       * once the value is known to reach the browser as itself. Anything else
+       * answering with it is refused as a malformed answer.
+       */
+      op: "data";
+      data: TransportableValue;
     };
 
 /**
@@ -179,7 +193,17 @@ export type WidgetResult =
  * discover it.
  */
 export type WidgetSlot =
-  | { ok: true; result: WidgetResult }
+  | {
+      ok: true;
+      result: WidgetResult;
+      /**
+       * Present when a declared widget's empty test holds for this answer: the
+       * card shows its empty state, with the answer still carried. Not a failure,
+       * so never a Retry; absent for every answer that is not empty, and for
+       * every widget that declares no test.
+       */
+      empty?: true;
+    }
   | {
       ok: false;
       error: string;
@@ -250,14 +274,17 @@ export type WidgetComponentProps = {
    *
    * 🔴 `undefined` means TWO different things, and a component that treats them
    * alike will draw an empty state over a request that is still running: the
-   * widget declared no query, so no answer is ever coming; or the batch carrying
-   * this card's query has not answered YET. `isFetching` tells them apart.
+   * widget asks for nothing (no query, and no data of its own core builds), so
+   * no answer is ever coming; or the batch carrying this card's question has not
+   * answered YET. `isFetching` tells them apart. A widget that declares its own
+   * data gets it here as `{ op: "data", data }`.
    */
   slot: WidgetSlot | undefined;
   /**
-   * Whether this card's query is in flight, the FIRST request included.
+   * Whether this card's question is in flight, the FIRST request included: its
+   * query, or the data core builds for a widget that declares its own.
    *
-   * Always `false` for a widget that declared no query, which is what makes it
+   * Always `false` for a widget that asks for nothing, which is what makes it
    * the discriminator for an absent `slot`.
    */
   isFetching: boolean;

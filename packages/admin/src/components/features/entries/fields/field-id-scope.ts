@@ -16,13 +16,14 @@
  * @module components/features/entries/fields/field-id-scope
  */
 
+import type { Context } from "react";
 import { createContext, useContext } from "react";
 
 /**
  * The prefix applied to every field element id below this point. Empty means
  * "this is the only rendering of the document", which is the common case.
  */
-export const FieldIdScopeContext = createContext("");
+export const FieldIdScopeContext: Context<string> = createContext("");
 
 /**
  * The DOM id a field's control should carry.

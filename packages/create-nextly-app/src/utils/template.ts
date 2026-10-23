@@ -1132,9 +1132,9 @@ const PINNED_VERSIONS: Record<string, string> = {
  * into its package.json and the existing-app path installs them, both from
  * here, so the two cannot disagree on a version.
  */
-export const CONFIG_TOOLING_DEV_DEPENDENCIES = [
-  `esbuild@${PINNED_VERSIONS.esbuild}`,
-] as const;
+export const CONFIG_TOOLING_DEV_DEPENDENCIES: readonly [
+  `esbuild@${typeof PINNED_VERSIONS.esbuild}`,
+] = [`esbuild@${PINNED_VERSIONS.esbuild}`] as const;
 
 /**
  * Packages whose latest version is fetched from the npm registry at
@@ -1649,8 +1649,10 @@ export const NATIVE_BUILD_DEPENDENCIES = [
  * ESLint setup, so adding Nextly to an app the person set up leaves its
  * approval to them.
  */
-export const NEXTLY_NATIVE_BUILD_DEPENDENCIES =
-  NATIVE_BUILD_DEPENDENCIES.filter(dep => dep !== "unrs-resolver");
+export const NEXTLY_NATIVE_BUILD_DEPENDENCIES: Exclude<
+  (typeof NATIVE_BUILD_DEPENDENCIES)[number],
+  "unrs-resolver"
+>[] = NATIVE_BUILD_DEPENDENCIES.filter(dep => dep !== "unrs-resolver");
 
 /**
  * Generate the `pnpm-workspace.yaml` for a scaffolded project.

@@ -38,6 +38,7 @@ import { container } from "../di";
 import { addPanelFacts, inAddPanelOrder } from "../domains/widgets/add-panel";
 import {
   declaredWidgets,
+  placedByDefault,
   widthFacts,
   type CanonicalWidget,
   type WidgetWidthFacts,
@@ -137,8 +138,9 @@ function placeable(widget: CanonicalWidget) {
  * removal it was given, and comes back removed the day they can.
  */
 function followedDefault(unarranged?: StoredLayout): WidgetPlacement[] {
+  const placed = declaredWidgets().filter(placedByDefault);
   return dismissalsApplied(
-    defaultPlacements(declaredWidgets().map(placeable)),
+    defaultPlacements(placed.map(placeable)),
     unarranged
   );
 }
@@ -268,6 +270,48 @@ async function visibleWidgets(auth: AuthContext) {
       audience.heldActionGates
     ),
   };
+}
+
+/**
+ * The cards this caller was handed, by card id: exactly what a by-card query
+ * may ask for, and nothing else; and the widgets they could place a card of,
+ * which a card not yet saved, or a settings preview, may be asked for.
+ *
+ * 🔴 Read by the same two passes and the same arrangement the layout read
+ * takes ({@link visibleWidgets}, {@link visibleArrangement}), so a card the
+ * reader was never shown -- another person's, a widget they may not see, one
+ * they removed -- is simply not here, and the query endpoint cannot answer it
+ * differently from the dashboard that drew it.
+ */
+export async function askableCards(auth: AuthContext): Promise<{
+  handed: ReadonlyMap<string, WidgetPlacement>;
+  placeable: ReadonlySet<string>;
+}> {
+  const service = await getLayoutService();
+  const view = await visibleWidgets(auth);
+  const stored = await service.getLayout(SCOPE_KIND, view.caller.userId);
+  return {
+    handed: new Map(
+      visibleArrangement(stored.layout, view.visibleIds)
+        .filter(placement => placement.removed !== true)
+        .map(placement => [placement.id, placement])
+    ),
+    // 🔴 The layout write's own gate (`putWidgetLayout` refuses a placement of
+    // any widget outside it, and `authenticateLayoutWrite` refuses an API key
+    // outright), so a widget whose card may be previewed with settings of the
+    // reader's choosing is exactly one they could place. A key has no admin
+    // screen to place a card on, so it may preview none.
+    placeable: mayWriteLayout(auth) ? view.visibleIds : new Set<string>(),
+  };
+}
+
+/**
+ * Whether this caller may write a dashboard layout at all: a person signed in
+ * to the admin, never an API key. One rule for the write and for the previews
+ * that stand in for one.
+ */
+function mayWriteLayout(auth: AuthContext): boolean {
+  return auth.authMethod !== "api-key";
 }
 
 /**
@@ -441,7 +485,7 @@ async function authenticateLayoutWrite(
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
-  if (auth.authMethod === "api-key") {
+  if (!mayWriteLayout(auth)) {
     throw NextlyError.forbidden({
       logContext: { reason: `an api key may not ${intent} a dashboard layout` },
     });

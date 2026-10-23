@@ -13,13 +13,15 @@
  * @module components/features/entries/CompletenessMeter
  */
 
+import type { JSX } from "react";
+
 export function CompletenessMeter({
   translated,
   total,
 }: {
   translated: number;
   total: number;
-}) {
+}): JSX.Element | null {
   if (total === 0) return null;
   return (
     <span

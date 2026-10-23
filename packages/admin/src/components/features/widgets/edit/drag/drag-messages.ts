@@ -15,7 +15,7 @@ const KEYS =
   "Use the arrow keys to move it, Space to drop it, Escape to cancel.";
 
 /** What the drag library reads to a screen reader user who reaches a handle. */
-export const DRAG_INSTRUCTIONS = `To pick up a card, press Space or Enter. ${KEYS}`;
+export const DRAG_INSTRUCTIONS: string = `To pick up a card, press Space or Enter. ${KEYS}`;
 
 /** The handle's accessible name. */
 export function handleLabel(title: string): string {

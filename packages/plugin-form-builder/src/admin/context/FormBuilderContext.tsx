@@ -14,6 +14,7 @@
 
 import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
 import {
+  type JSX,
   createContext,
   useContext,
   useCallback,
@@ -322,7 +323,7 @@ export function FormBuilderProvider({
   initialData,
   children,
   readOnly = false,
-}: FormBuilderProviderProps) {
+}: FormBuilderProviderProps): JSX.Element {
   // State
   const [fields, setFieldsState] = useState<AnyFormField[]>(
     initialData?.fields || []
