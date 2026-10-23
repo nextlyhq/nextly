@@ -6,16 +6,16 @@
 // reports each file it visits, so the comparison is of what oxlint actually
 // linted rather than of what the paths look like they cover.
 import { execFileSync } from "node:child_process";
-import { rmSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
 
 import committed from "../oxlint.config.mjs";
-import { NAMED_PASSES, passes } from "./lint.mjs";
+import { NAMED_PASSES, oxlintCommand, passes } from "./lint.mjs";
 
 const root = join(import.meta.dirname, "..");
-const oxlint = join(root, "node_modules/.bin/oxlint");
+const [node, oxlint] = oxlintCommand();
 const id = `${process.pid}-${Math.random().toString(36).slice(2)}`;
 
 // Written beside the committed configuration, because oxlint resolves a
@@ -50,7 +50,7 @@ afterAll(() => {
 function visited(args) {
   let stdout;
   try {
-    stdout = execFileSync(oxlint, [...args, "-f", "json"], {
+    stdout = execFileSync(node, [oxlint, ...args, "-f", "json"], {
       cwd: root,
       encoding: "utf8",
       maxBuffer: 256 * 1024 * 1024,
@@ -73,25 +73,34 @@ describe("the lint passes", () => {
     for (const path of named) expect(last).toContain(`${path}/**`);
   });
 
-  it(
-    "lint exactly the files one pass over the repository lints, each once",
-    () => {
-      const whole = visited(["-c", config, "."]);
-      // The control: the plugin reports, and from more than one package.
-      expect(whole.length).toBeGreaterThan(1000);
-      expect(new Set(whole).size).toBe(whole.length);
+  it("lint exactly the files one pass over the repository lints, each once", () => {
+    const whole = visited(["-c", config, "."]);
+    // The control: the plugin reports, and from more than one package.
+    expect(whole.length).toBeGreaterThan(1000);
+    expect(new Set(whole).size).toBe(whole.length);
 
-      const split = passes(config).flatMap(args => visited(args));
-      const counts = new Map();
-      for (const file of split) counts.set(file, (counts.get(file) ?? 0) + 1);
-      expect(
-        [...counts].filter(([, n]) => n > 1).map(([file]) => file),
-        "files more than one pass lints"
-      ).toEqual([]);
-      expect([...counts.keys()].sort()).toEqual([...whole].sort());
-      // Each pass reaches something, so none is a path that stopped existing.
-      for (const args of passes(config)) expect(visited(args).length).toBeGreaterThan(0);
-    },
-    180_000
-  );
+    const split = passes(config).flatMap(args => visited(args));
+    const counts = new Map();
+    for (const file of split) counts.set(file, (counts.get(file) ?? 0) + 1);
+    expect(
+      [...counts].filter(([, n]) => n > 1).map(([file]) => file),
+      "files more than one pass lints"
+    ).toEqual([]);
+    expect([...counts.keys()].sort()).toEqual([...whole].sort());
+    // Each pass reaches something, so none is a path that stopped existing.
+    for (const args of passes(config))
+      expect(visited(args).length).toBeGreaterThan(0);
+  }, 180_000);
+});
+
+describe("how the passes run oxlint", () => {
+  it("runs its entry script with this Node, not a name only a shell resolves", () => {
+    const [command, script] = oxlintCommand();
+    // A bare name fails on Windows, where `node_modules/.bin` holds a `.cmd`.
+    expect(command).toBe(process.execPath);
+    expect(existsSync(script)).toBe(true);
+    expect(
+      execFileSync(command, [script, "--version"], { encoding: "utf8" })
+    ).toMatch(/\d+\.\d+\.\d+/);
+  });
 });

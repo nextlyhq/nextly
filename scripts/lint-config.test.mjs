@@ -19,10 +19,12 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import committed from "../oxlint.config.mjs";
+import { oxlintCommand } from "./lint.mjs";
 
 const root = join(import.meta.dirname, "..");
 const nextly = join(root, "packages/nextly");
-const oxlint = join(root, "node_modules/.bin/oxlint");
+// Run as lint.mjs runs it, by Node, which works on Windows as well.
+const [node, oxlint] = oxlintCommand();
 
 const readJson = path => JSON.parse(readFileSync(path, "utf8"));
 
@@ -74,11 +76,15 @@ function lint(config, files) {
   try {
     let stdout;
     try {
-      stdout = execFileSync(oxlint, ["-c", path, "-f", "json", ...files], {
-        cwd: root,
-        encoding: "utf8",
-        maxBuffer: 64 * 1024 * 1024,
-      });
+      stdout = execFileSync(
+        node,
+        [oxlint, "-c", path, "-f", "json", ...files],
+        {
+          cwd: root,
+          encoding: "utf8",
+          maxBuffer: 64 * 1024 * 1024,
+        }
+      );
     } catch (error) {
       // Exit 1 means it found something, which is an answer, not a failure.
       if (error.status !== 1 || !error.stdout) throw error;

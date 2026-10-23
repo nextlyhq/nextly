@@ -26,6 +26,9 @@
  * as `--fix`, go to every pass.
  */
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** The repository's lint configuration. */
@@ -44,13 +47,33 @@ export const NAMED_PASSES = [
 /** The oxlint arguments of every pass, each followed by `extra`. */
 export function passes(config = CONFIG, extra = []) {
   const named = NAMED_PASSES.map(paths => ["-c", config, ...paths, ...extra]);
-  const ignored = NAMED_PASSES.flat().flatMap(path => ["--ignore-pattern", `${path}/**`]);
+  const ignored = NAMED_PASSES.flat().flatMap(path => [
+    "--ignore-pattern",
+    `${path}/**`,
+  ]);
   return [...named, ["-c", config, ".", ...ignored, ...extra]];
+}
+
+/**
+ * How to run oxlint: its own entry script, by the Node running this one.
+ * Not by name, because on Windows the name resolves only to a `.cmd` shim,
+ * which a spawn without a shell does not find.
+ */
+export function oxlintCommand() {
+  const manifest = createRequire(import.meta.url).resolve(
+    "oxlint/package.json"
+  );
+  const { bin } = JSON.parse(readFileSync(manifest, "utf8"));
+  const entry = typeof bin === "string" ? bin : bin.oxlint;
+  return [process.execPath, join(dirname(manifest), entry)];
 }
 
 /** Runs one pass, and whether it passed. */
 function runPass(args) {
-  const { status, error } = spawnSync("oxlint", args, { stdio: "inherit" });
+  const [command, script] = oxlintCommand();
+  const { status, error } = spawnSync(command, [script, ...args], {
+    stdio: "inherit",
+  });
   if (error) throw error;
   return status === 0;
 }
