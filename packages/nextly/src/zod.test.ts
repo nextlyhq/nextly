@@ -16,7 +16,7 @@ describe("nextly/zod", () => {
     ) as { exports: Record<string, { types?: string; import?: string }> };
 
     expect(manifest.exports["./zod"]).toEqual({
-      types: "./dist/zod.d.ts",
+      types: "./dist/zod.d.mts",
       import: "./dist/zod.mjs",
     });
   });
@@ -25,13 +25,13 @@ describe("nextly/zod", () => {
     // Schemas run in the browser as well as on the server, so the entry sits
     // with the others a browser bundle may reach, where the admin's bundle
     // boundary test holds it to that.
-    const tsupConfig = readFileSync(
-      resolve(packageRoot, "tsup.config.js"),
+    const buildConfig = readFileSync(
+      resolve(packageRoot, "tsdown.config.ts"),
       "utf8"
     );
-    const clientEntries = tsupConfig.slice(
-      tsupConfig.indexOf("const clientEntries = ["),
-      tsupConfig.indexOf("];", tsupConfig.indexOf("const clientEntries = ["))
+    const clientEntries = buildConfig.slice(
+      buildConfig.indexOf("const clientEntries = ["),
+      buildConfig.indexOf("];", buildConfig.indexOf("const clientEntries = ["))
     );
 
     expect(clientEntries).toContain('"src/zod.ts"');

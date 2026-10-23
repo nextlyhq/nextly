@@ -20,6 +20,18 @@ import { consoleLogger } from "../shared/types";
 
 import type { StoragePlugin } from "./types";
 
+/**
+ * Imports an optional storage adapter by name, at run time only.
+ *
+ * The name arrives as a parameter so no build step can fold it into a literal
+ * `import("@nextlyhq/storage-s3")`: a host app's bundler would then try to
+ * resolve a package the app may not have installed. `webpackIgnore` says the
+ * same to webpack and Turbopack, for a host that bundles this module.
+ */
+function importOptionalPackage(specifier: string) {
+  return import(/* webpackIgnore: true */ specifier);
+}
+
 // Try to load dotenv for config file execution context
 async function ensureEnvLoaded(): Promise<void> {
   // Only load dotenv in Node.js environment (not edge runtime)
@@ -70,8 +82,9 @@ export async function getStorageFromEnv(): Promise<StoragePlugin[]> {
   const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
   if (blobToken) {
     try {
-      const pkg = "@nextlyhq/storage-vercel-blob";
-      const { vercelBlobStorage } = await import(/* webpackIgnore: true */ pkg);
+      const { vercelBlobStorage } = await importOptionalPackage(
+        "@nextlyhq/storage-vercel-blob"
+      );
       consoleLogger.info(
         "[Nextly] Storage: Vercel Blob (auto-detected from BLOB_READ_WRITE_TOKEN)"
       );
@@ -102,8 +115,9 @@ export async function getStorageFromEnv(): Promise<StoragePlugin[]> {
       );
     } else {
       try {
-        const pkg = "@nextlyhq/storage-s3";
-        const { s3Storage } = await import(/* webpackIgnore: true */ pkg);
+        const { s3Storage } = await importOptionalPackage(
+          "@nextlyhq/storage-s3"
+        );
         consoleLogger.info(
           "[Nextly] Storage: S3 (auto-detected from S3_BUCKET)"
         );
@@ -133,9 +147,8 @@ export async function getStorageFromEnv(): Promise<StoragePlugin[]> {
   const uploadthingToken = process.env.UPLOADTHING_TOKEN;
   if (uploadthingToken) {
     try {
-      const pkg = "@nextlyhq/storage-uploadthing";
-      const { uploadthingStorage } = await import(
-        /* webpackIgnore: true */ pkg
+      const { uploadthingStorage } = await importOptionalPackage(
+        "@nextlyhq/storage-uploadthing"
       );
       consoleLogger.info(
         "[Nextly] Storage: Uploadthing (auto-detected from UPLOADTHING_TOKEN)"
