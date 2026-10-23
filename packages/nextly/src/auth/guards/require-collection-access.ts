@@ -37,7 +37,9 @@ export interface CollectionAccessDeps {
  * `nextly.access.check({ userId, resource, operation })`, which asks the one
  * access decision. For an API key, check the key's own permissions, which
  * `nextly.access.checkApiKey({ rawKey })` returns: `nextly.access.check`
- * judges the key's maker, not the key. Removed in the next release.
+ * judges the key's maker, not the key. Keep running the collection rule your
+ * `evaluateCodeAccess` ran: this guard runs no rule of its own, and neither
+ * does `checkApiKey`. Removed in the next release.
  */
 export async function checkCollectionAccess(
   context: AuthContext,

@@ -27,7 +27,9 @@ export const INSTEAD_OF_A_ROLE_CHECK =
 export const INSTEAD_OF_AN_ACCESS_CHECK =
   "for a signed-in user, use `nextly.access.check({ userId, resource, operation })`, which asks the one access decision. " +
   "For an API key, check the key's own permissions, which `nextly.access.checkApiKey({ rawKey })` returns: " +
-  "`nextly.access.check` judges the user who made the key, not the key's narrower scope";
+  "`nextly.access.check` judges the user who made the key, not the key's narrower scope. " +
+  "If you passed `checkCollectionAccess` an `evaluateCodeAccess`, keep running that collection rule too: " +
+  "like `checkCollectionAccess`, `checkApiKey` runs no rule of its own";
 
 /**
  * What authenticates an API key and returns what it may do. It applies no
