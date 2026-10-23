@@ -263,6 +263,10 @@ describe("CREATE TABLE IF NOT EXISTS where a table of the name may stand, on pos
       ["CREATE TABLE fx__scratch AS TABLE fx__view"],
     ],
     [
+      "a CREATE whose WITH query reads a relation",
+      ["CREATE TABLE fx__scratch AS WITH q AS (TABLE fx__view) TABLE q"],
+    ],
+    [
       "a routine that may create it",
       ["DO $$ BEGIN CREATE TEMP TABLE legacy_orders (id int); END $$"],
     ],

@@ -694,7 +694,7 @@ function placesNames(
  * Whether a PostgreSQL statement may put a relation under a name it does
  * not spell: it is not plain DDL (`POSTGRES_PLAIN_DDL`); or, unless it only
  * names privileges, comments or settings (`POSTGRES_RUNS_NOTHING`), it runs a
- * query anywhere in it (`POSTGRES_RUNS_A_QUERY`, or `AS TABLE`), or it makes
+ * query anywhere in it (`POSTGRES_RUNS_A_QUERY`, or `startsATableQuery`), or it makes
  * or names a temporary relation (`POSTGRES_TEMPORARY_WORDS`, `pg_temp`). A function called from a
  * column's default, a check or a `USING` expression is not counted, as
  * everywhere else in this guard.
@@ -707,10 +707,32 @@ function postgresMayRunCode(opener: string, tokens: readonly Token[]): boolean {
       (token.kind === "word" &&
         (POSTGRES_RUNS_A_QUERY.has(token.upper) ||
           POSTGRES_TEMPORARY_WORDS.has(token.upper) ||
-          // `AS TABLE r`, a query reading `r`, which may be a view.
-          (token.upper === "AS" && isWord(tokens[at + 1], "TABLE")))) ||
+          startsATableQuery(tokens, at))) ||
       writtenName(token)?.toLowerCase() === "pg_temp"
   );
+}
+
+/** Words after which PostgreSQL's `TABLE r` is a query, not a table's kind. */
+const BEFORE_A_TABLE_QUERY = new Set([
+  "AS",
+  "UNION",
+  "INTERSECT",
+  "EXCEPT",
+  "ALL",
+  "DISTINCT",
+]);
+
+/**
+ * Whether the `TABLE` at `at` heads a query reading a relation, which may
+ * be a view calling a function: after `AS`, a set operation, or a bracket,
+ * as in `AS WITH q AS (TABLE v) TABLE q`.
+ */
+function startsATableQuery(tokens: readonly Token[], at: number): boolean {
+  if (!isWord(tokens[at], "TABLE")) return false;
+  const before = tokens[at - 1];
+  if (before?.kind === "punct")
+    return before.char === "(" || before.char === ")";
+  return before?.kind === "word" && BEFORE_A_TABLE_QUERY.has(before.upper);
 }
 
 /**
