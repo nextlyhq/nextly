@@ -2,7 +2,6 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -168,7 +167,9 @@ const ENTRY_POINTS: Array<[string, string]> = declaredSubpaths.map(subpath => [
  * The files sit in a directory of their own under the package's `.turbo`, which
  * git and every scan of the tree ignore, with `rootDir` widened to hold them.
  */
-const ABSENT = new Set(["TS2305", "TS2724", "TS2614"]);
+// TS2459 and TS2460 are a module that declares the name without exporting it,
+// or exports it under another name: absent from the surface all the same.
+const ABSENT = new Set(["TS2305", "TS2724", "TS2614", "TS2459", "TS2460"]);
 
 function exportedAmong(names: readonly string[]): Map<string, Set<string>> {
   const parent = path.join(packageRoot, ".turbo");
@@ -246,41 +247,202 @@ function exported(): Map<string, Set<string>> {
 /** How long the one compile of the package gets, on a slow runner. */
 const COMPILE_TIMEOUT_MS = 180_000;
 
-/**
- * The leading documentation of the one function or constant `name` declares in
- * this package's source, read with oxc. More than one declaration of the name
- * is refused: which one an entry point publishes would then be a guess.
- */
-function declarationDocs(name: string): string {
-  const found: string[] = [];
-  const declaration = new RegExp(
-    `^export (?:async )?(?:function|const|let) ${name}\\b`,
-    "m"
+/** A statement that declares an exported name, with the file it sits in. */
+interface Declared {
+  file: string;
+  text: string;
+  start: number;
+  comments: ReturnType<typeof parseSource>["comments"];
+}
+
+type Statement = ReturnType<typeof parseSource>["program"]["body"][number];
+
+/** The source module a relative specifier names, as the build resolves it. */
+function moduleFile(importer: string, specifier: string): string {
+  const base = path
+    .resolve(path.dirname(importer), specifier)
+    .replace(/\.js$/, "");
+  const file = [`${base}.ts`, `${base}.tsx`, path.join(base, "index.ts")].find(
+    candidate => existsSync(candidate)
   );
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else if (/\.tsx?$/.test(entry.name) && !/\.test\./.test(entry.name)) {
-        const text = readFileSync(full, "utf8");
-        const match = declaration.exec(text);
-        if (!match) continue;
-        const { comments } = parseSource(text, full);
-        const before = comments.filter(
-          comment => comment.type === "Block" && comment.end <= match.index
-        );
-        const nearest = before.at(-1);
-        const between =
-          nearest === undefined ? "" : text.slice(nearest.end, match.index);
-        found.push(
-          nearest !== undefined && between.trim() === "" ? nearest.value : ""
-        );
-      }
+  if (!specifier.startsWith(".") || file === undefined) {
+    throw new Error(`${importer}: could not follow ${specifier}`);
+  }
+  return file;
+}
+
+/** The names a declaration statement binds at the top of its module. */
+function declaredNames(statement: Statement): string[] {
+  if (statement.type === "FunctionDeclaration") {
+    return statement.id ? [statement.id.name] : [];
+  }
+  if (statement.type === "VariableDeclaration") {
+    return statement.declarations.flatMap(declarator =>
+      declarator.id.type === "Identifier" ? [declarator.id.name] : []
+    );
+  }
+  return [];
+}
+
+function nameOf(node: {
+  type: string;
+  name?: string;
+  value?: unknown;
+}): string {
+  return node.type === "Identifier" ? (node.name ?? "") : String(node.value);
+}
+
+/** A parsed source module. */
+interface Module {
+  file: string;
+  text: string;
+  program: ReturnType<typeof parseSource>["program"];
+  comments: ReturnType<typeof parseSource>["comments"];
+}
+
+function readModule(file: string): Module {
+  const text = readFileSync(file, "utf8");
+  return { file, text, ...parseSource(text, file) };
+}
+
+function declaredAt(module: Module, statement: Statement): Declared {
+  const { file, text, comments } = module;
+  return { file, text, start: statement.start, comments };
+}
+
+/** The top-level statement declaring `binding`, exported or not. */
+function declarationOf(module: Module, binding: string): Statement | undefined {
+  return module.program.body.find(statement => {
+    const declaration =
+      statement.type === "ExportNamedDeclaration"
+        ? statement.declaration
+        : statement;
+    return declaration ? declaredNames(declaration).includes(binding) : false;
+  });
+}
+
+/** Where an imported `binding` comes from; only a named import can be followed. */
+function importOf(
+  module: Module,
+  binding: string
+): { source: string; imported: string } | undefined {
+  for (const statement of module.program.body) {
+    if (statement.type !== "ImportDeclaration") continue;
+    const specifier = statement.specifiers.find(s => s.local.name === binding);
+    if (specifier === undefined) continue;
+    if (specifier.type !== "ImportSpecifier") {
+      throw new Error(`${module.file}: could not follow ${binding}`);
     }
-  };
-  walk(path.join(packageRoot, "src"));
-  expect(found, `declarations of ${name}`).toHaveLength(1);
-  return found[0] ?? "";
+    return {
+      source: statement.source.value,
+      imported: nameOf(specifier.imported),
+    };
+  }
+  return undefined;
+}
+
+/** The declarations behind a binding of this module: its own, or an import's. */
+function localDeclarations(
+  module: Module,
+  binding: string,
+  seen: Set<string>
+): Declared[] {
+  const statement = declarationOf(module, binding);
+  if (statement) return [declaredAt(module, statement)];
+  const imported = importOf(module, binding);
+  if (imported === undefined) {
+    throw new Error(`${module.file}: no binding ${binding}`);
+  }
+  return exportedDeclarations(
+    moduleFile(module.file, imported.source),
+    imported.imported,
+    seen
+  );
+}
+
+/** What one `export { ... }` or `export <declaration>` publishes as `name`. */
+function namedExport(
+  module: Module,
+  statement: Extract<Statement, { type: "ExportNamedDeclaration" }>,
+  name: string,
+  seen: Set<string>
+): Declared[] {
+  const found: Declared[] = [];
+  if (
+    statement.declaration &&
+    declaredNames(statement.declaration).includes(name)
+  ) {
+    found.push(declaredAt(module, statement));
+  }
+  for (const specifier of statement.specifiers) {
+    if (nameOf(specifier.exported) !== name) continue;
+    const binding = nameOf(specifier.local);
+    found.push(
+      ...(statement.source
+        ? exportedDeclarations(
+            moduleFile(module.file, statement.source.value),
+            binding,
+            seen
+          )
+        : localDeclarations(module, binding, seen))
+    );
+  }
+  return found;
+}
+
+/**
+ * The declarations behind what `file` exports as `name`, followed through
+ * `export { a as b } from`, an export of an imported binding, and `export *`,
+ * the way the compiler follows them. Asked of the export rather than found by
+ * spelling, because a module re-exporting a different function under this
+ * name publishes THAT function, whatever else in the package shares its name.
+ * A chain this cannot follow throws rather than reading as no declaration.
+ */
+function exportedDeclarations(
+  file: string,
+  name: string,
+  seen = new Set<string>()
+): Declared[] {
+  if (seen.has(`${file}#${name}`)) return [];
+  seen.add(`${file}#${name}`);
+  const module = readModule(file);
+  return module.program.body.flatMap(statement => {
+    if (statement.type === "ExportNamedDeclaration") {
+      return namedExport(module, statement, name, seen);
+    }
+    if (statement.type === "ExportAllDeclaration" && !statement.exported) {
+      return exportedDeclarations(
+        moduleFile(file, statement.source.value),
+        name,
+        seen
+      );
+    }
+    return [];
+  });
+}
+
+/**
+ * The JSDoc of the one declaration an entry point publishes as `name`. Only a
+ * block comment opening with two asterisks, directly above it, counts: a plain
+ * block comment is not documentation, and the compiler shows a consumer no tag
+ * from one.
+ */
+function publishedDocs(entrySource: string, name: string): string {
+  const declarations = exportedDeclarations(entrySource, name);
+  expect(
+    declarations.map(d => d.file),
+    `declarations published as ${name}`
+  ).toHaveLength(1);
+  const [declared] = declarations;
+  if (declared === undefined) return "";
+  const nearest = declared.comments
+    .filter(comment => comment.end <= declared.start)
+    .at(-1);
+  if (nearest === undefined) return "";
+  const adjacent =
+    declared.text.slice(nearest.end, declared.start).trim() === "";
+  const jsdoc = nearest.type === "Block" && nearest.value.startsWith("*");
+  return adjacent && jsdoc ? nearest.value : "";
 }
 
 describe("published export surface", () => {
@@ -346,7 +508,11 @@ describe("published export surface", () => {
         exported().get("nextly")?.has("defaultSkipAdminApi"),
         "nextly exports defaultSkipAdminApi"
       ).toBe(true);
-      expect(declarationDocs("defaultSkipAdminApi")).toMatch(/@deprecated\b/);
+      const root = ENTRY_POINTS.find(([entry]) => entry === "nextly")?.[1];
+      expect(root, "the root entry point").toBeDefined();
+      expect(publishedDocs(root ?? "", "defaultSkipAdminApi")).toMatch(
+        /@deprecated\b/
+      );
     },
     COMPILE_TIMEOUT_MS
   );

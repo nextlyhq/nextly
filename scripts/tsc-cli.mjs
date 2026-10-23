@@ -90,10 +90,14 @@ export function diagnosticsIn(output) {
  * Compiles with `args` (files and options, `--noEmit` added) and returns the
  * diagnostics. A run that failed without printing one could not compile at
  * all, which is reported rather than read as a clean result.
+ *
+ * `--incremental false` because the shared base config turns incremental on:
+ * a build-info file another program wrote answers from that program's state,
+ * and an error count read from it can be stale.
  */
 export function compile(args, cwd) {
   const { status, output } = runTsc(
-    ["--noEmit", "--pretty", "false", ...args],
+    ["--noEmit", "--incremental", "false", "--pretty", "false", ...args],
     cwd
   );
   const diagnostics = diagnosticsIn(output);
