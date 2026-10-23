@@ -35,9 +35,6 @@ vi.mock("@admin/components/features/dashboard/SeedDemoContentCard", () => ({
 vi.mock("@admin/components/features/dashboard/CollectionQuickLinks", () => ({
   CollectionQuickLinks: stub,
 }));
-vi.mock("@admin/components/features/dashboard/SinglesQuickLinks", () => ({
-  SinglesQuickLinks: stub,
-}));
 vi.mock("@admin/components/features/dashboard/QuickCreate", () => ({
   QuickCreate: stub,
 }));
@@ -78,7 +75,6 @@ describe("core widget components register at runtime", () => {
     for (const path of [
       "core#SeedDemoContentCard",
       "core#CollectionQuickLinks",
-      "core#SinglesQuickLinks",
       "core#QuickCreate",
       "core#TeamSummary",
       "core#RecentActivity",

@@ -47,6 +47,7 @@ import { createHash } from "node:crypto";
 
 import { NextlyError } from "../../errors/nextly-error";
 
+import { CONTENT_WIDTHS, NEEDS_ATTENTION_WIDTHS } from "./core-widget-widths";
 import { MAX_PLACEMENTS } from "./layout-limits";
 import { LAYOUT_SCHEMA_VERSION } from "./layout-payload";
 import {
@@ -171,8 +172,54 @@ export interface WidgetRetirement {
   allowedWidths?: readonly WidgetWidth[];
 }
 
-/** Retired widget ids, each with what its cards become. */
-export type WidgetRetirements = ReadonlyMap<string, WidgetRetirement>;
+/**
+ * Retired widgets, each with what its cards become. A `ReadonlyMap` of exact
+ * ids is one; {@link widgetRetirements} adds the families of ids minted per
+ * collection or Single, which no list of exact ids can name.
+ */
+export interface WidgetRetirements {
+  /** What a card of this widget becomes, or `undefined` when it is not retired. */
+  get(widgetId: string): WidgetRetirement | undefined;
+  /** Every retirement, for the successors they name. */
+  values(): Iterable<WidgetRetirement>;
+}
+
+/** A family of retired ids, matched by their shape rather than spelled out. */
+export interface WidgetRetirementPattern {
+  matches: (widgetId: string) => boolean;
+  retirement: WidgetRetirement;
+}
+
+/**
+ * The retirements over exact ids, then over the families `patterns` match.
+ * An exact id wins over a pattern, so one id is never answered two ways.
+ */
+export function widgetRetirements(
+  exact: ReadonlyMap<string, WidgetRetirement>,
+  patterns: readonly WidgetRetirementPattern[] = []
+): WidgetRetirements {
+  return {
+    get: widgetId =>
+      exact.get(widgetId) ??
+      patterns.find(pattern => pattern.matches(widgetId))?.retirement,
+    values: () => [
+      ...exact.values(),
+      ...patterns.map(pattern => pattern.retirement),
+    ],
+  };
+}
+
+/** What a Collections, Singles or per-Single card becomes: the one Content card. */
+const INTO_CONTENT: WidgetRetirement = {
+  successor: "core/content",
+  allowedWidths: CONTENT_WIDTHS.allowedWidths,
+};
+
+/**
+ * A per-Single card's id: `single/<slug>-status`, as the generated set mints
+ * it. Matched by shape, since there is one per Single the install ever had.
+ */
+const PER_SINGLE_CARD = /^single\/[a-z0-9-]+-status$/;
 
 /**
  * The widgets this release has retired.
@@ -182,16 +229,34 @@ export type WidgetRetirements = ReadonlyMap<string, WidgetRetirement>;
  *   attention card, merging into one the layout already holds. Needs attention
  *   draws from a third to the full width, so a quarter-width card is drawn at a
  *   third.
+ * - Collections, Singles and the per-Single cards became Content (below).
  */
-export const RETIRED_WIDGETS: WidgetRetirements = new Map([
+export const RETIRED_WIDGETS: WidgetRetirements = widgetRetirements(
+  new Map<string, WidgetRetirement>([
+    [
+      "core/pending-edits",
+      {
+        successor: "core/needs-attention",
+        allowedWidths: NEEDS_ATTENTION_WIDTHS.allowedWidths,
+      },
+    ],
+    // - Collections and Singles became one Content card, which lists both.
+    //   Every saved layout holds the two (a save carries the cards a condition
+    //   hid), so they merge: the first one's id and position, the larger width
+    //   Content allows, removed only if both were.
+    ["core/collections", INTO_CONTENT],
+    ["core/singles", INTO_CONTENT],
+  ]),
   [
-    "core/pending-edits",
+    // - A per-Single card became Content, merging into the Content card a
+    //   layout already holds. Its settings were about one Single, which
+    //   Content does not take, so they are not carried.
     {
-      successor: "core/needs-attention",
-      allowedWidths: ["third", "half", "twoThirds", "full"],
+      matches: widgetId => PER_SINGLE_CARD.test(widgetId),
+      retirement: { ...INTO_CONTENT, settings: () => undefined },
     },
-  ],
-]);
+  ]
+);
 
 function isUsableText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -683,7 +748,11 @@ export function applyRetirements(
   placements: WidgetPlacement[],
   retirements: WidgetRetirements
 ): WidgetPlacement[] {
-  if (!placements.some(placement => retirements.has(placement.widgetId))) {
+  if (
+    !placements.some(
+      placement => retirements.get(placement.widgetId) !== undefined
+    )
+  ) {
     return placements;
   }
   const cards = retiringCards(placements, retirements);

@@ -58,6 +58,15 @@
  * @module domains/widgets/core-widgets
  */
 
+import {
+  CONTENT_WIDTHS,
+  CREATE_WIDTHS,
+  NEEDS_ATTENTION_WIDTHS,
+  RECENT_ACTIVITY_WIDTHS,
+  RECENTLY_EDITED_WIDTHS,
+  TEAM_WIDTHS,
+  UPCOMING_RELEASES_WIDTHS,
+} from "./core-widget-widths";
 import { settings } from "./declaration/setting-builders";
 import type { WidgetDefinition, WidgetSetting } from "./definition";
 import { MAX_WIDGET_LIMIT } from "./query-limits";
@@ -122,7 +131,9 @@ const RECENTLY_EDITED_COLLECTION: AnyWidgetSetting = {
 export const CORE_WIDGET_COMPONENT_PREFIX = "core#";
 
 /**
- * Ordered as the dashboard has always drawn them.
+ * The agreed default dashboard, in `defaultOrder`: Needs attention, Create,
+ * Recently edited, Recent activity, Content, Upcoming releases and Team, each
+ * at its agreed width (`core-widget-widths.ts`), after the onboarding cards.
  *
  * Spaced by ten rather than numbered one-by-one, so a card can be placed
  * between two of these later without renumbering the rest -- the reason
@@ -196,49 +207,28 @@ const CORE_WIDGET_LITERALS = [
     dismissible: true,
   },
   {
-    id: "core/collections",
-    title: "Collections",
-    description: "Entry counts per collection, grouped by what provides them.",
+    id: "core/content",
+    title: "Content",
+    description:
+      "Each collection and Single this reader may see, with its entries and drafts.",
     archetype: "custom",
     defaultSize: "full",
-    // The narrowest width it still draws at: a grid of collection cards, which needs at least half the row.
-    minSize: "lg",
-    defaultOrder: 10,
+    // From half the row, where its list of collections and Singles still reads, to the full width.
+    ...CONTENT_WIDTHS,
+    defaultOrder: 50,
     component: "core#CollectionQuickLinks",
-    // Each collection's entries and drafts, counted as the reader, in the batch like every card.
-    // Asked the most any widget query may return: an omitted limit is the default 5, and this
-    // card lists every collection, saying "more exist" past the last one it draws.
+    // Each collection's entries and drafts, and each Single, counted as the reader, in the batch
+    // like every card. Asked the most any widget query may return: an omitted limit is the
+    // default 5, and this card lists everything, saying "more exist" past the last it draws.
     query: { source: CONTENT_SOURCE_ID, op: "list", limit: MAX_WIDGET_LIMIT },
     /*
-     * Offered only while this reader has a collection to see. The card used to
-     * answer that for itself, drawing a get-started panel of its own when it
-     * had no counts -- a third pitch on a fresh dashboard already carrying the
-     * seed offer and the setup checklist, each of which is the host's to make
-     * and each of which the host now withdraws on its own. A reader with
-     * nothing to list is not shown an empty list.
+     * Offered only while this reader has a collection or a Single to see that
+     * is neither internal nor hidden. A reader with nothing to list is not
+     * shown an empty list. It replaces the Collections and Singles cards, whose
+     * saved cards convert into it (`RETIRED_WIDGETS`).
      */
     lifecycle: "conditional",
-    visibleWhen: "collections:present",
-  },
-  {
-    id: "core/singles",
-    title: "Singles",
-    description: "The project's singles.",
-    archetype: "custom",
-    defaultSize: "full",
-    // The narrowest width it still draws at: a grid of Single cards, which needs at least half the row.
-    minSize: "lg",
-    defaultOrder: 20,
-    component: "core#SinglesQuickLinks",
-    /*
-     * The same rule, and this card is why the rule exists in the grid at all:
-     * it used to return nothing when the install had no singles, and a card
-     * that renders nothing still holds its placement, so the layout reserved
-     * an empty slot on every install that never used singles. The host drops
-     * it instead.
-     */
-    lifecycle: "conditional",
-    visibleWhen: "singles:present",
+    visibleWhen: "content:present",
   },
   {
     id: "core/quick-create",
@@ -246,11 +236,15 @@ const CORE_WIDGET_LITERALS = [
     description:
       "One click to an empty entry form, for the collections this reader may create in.",
     archetype: "custom",
-    defaultSize: "full",
-    // The narrowest width it still draws at: a row of create buttons, which wraps from a third.
-    minSize: "md",
-    defaultOrder: 15,
+    defaultSize: "md",
+    // From a third, where its row of create buttons wraps, to the full width.
+    ...CREATE_WIDTHS,
+    defaultOrder: 20,
     component: "core#QuickCreate",
+    // Offered only to a reader who could create an entry somewhere: every
+    // button on it would otherwise open onto a refusal.
+    lifecycle: "conditional",
+    visibleWhen: "create:available",
   },
   {
     id: "core/team",
@@ -258,10 +252,10 @@ const CORE_WIDGET_LITERALS = [
     // Tier-neutral: a small card draws the people alone, and a reader may see only one count.
     description: "Your project's team at a glance.",
     archetype: "custom",
-    defaultSize: "full",
-    // The narrowest width it still draws at: two counters side by side, which need at least a third.
-    minSize: "md",
-    defaultOrder: 30,
+    defaultSize: "md",
+    // From a quarter, where its small tier draws the people alone, to half the row.
+    ...TEAM_WIDTHS,
+    defaultOrder: 70,
     component: "core#TeamSummary",
     link: { label: "All users", href: "/admin/users" },
     // Offered to the readers its source answers, by the one constant both read.
@@ -277,8 +271,12 @@ const CORE_WIDGET_LITERALS = [
     // Two thirds by default; from a third, where its small tier still names
     // each kind, to the full width, where each kind breaks down per collection.
     defaultSize: "xl",
-    minSize: "md",
-    defaultOrder: 25,
+    ...NEEDS_ATTENTION_WIDTHS,
+    defaultOrder: 10,
+    // Offered only to a reader who may read a kind it counts; its source
+    // answers "not available" to anyone else.
+    lifecycle: "conditional",
+    visibleWhen: "attention:readable",
     // Ungated: each kind is answered by its own domain as the reader, and a
     // kind they may not read is simply absent from the answer.
     // As many kinds and parts as a grouped answer may carry: the card draws
@@ -302,10 +300,10 @@ const CORE_WIDGET_LITERALS = [
     // the card's like any other's.
     archetype: "custom",
     component: "core#RecentlyEdited",
-    defaultSize: "md",
-    // The narrowest width it still draws at: a list whose rows need at least a third.
-    minSize: "md",
-    defaultOrder: 35,
+    defaultSize: "lg",
+    // Half the row by default; from a third, where its rows still read, to the full width.
+    ...RECENTLY_EDITED_WIDTHS,
+    defaultOrder: 30,
     // From the activity trail, one row per document at its latest save the
     // reader may see, across every collection they may read; the same trail
     // Recent activity reads, grouped by document rather than by run. Every
@@ -349,9 +347,13 @@ const CORE_WIDGET_LITERALS = [
     component: "core#UpcomingReleases",
     link: { label: "All releases", href: "/admin/releases" },
     defaultSize: "md",
-    // The narrowest width it still draws at: a list whose rows need at least a third.
-    minSize: "md",
-    defaultOrder: 40,
+    // From a third, where its rows still read, to two thirds: a short list needs no more.
+    ...UPCOMING_RELEASES_WIDTHS,
+    defaultOrder: 60,
+    // Beside its gate: offered once a release exists that the reader may
+    // read, not as an empty card on a site that has never made one.
+    lifecycle: "conditional",
+    visibleWhen: "releases:present",
     /*
      * 🔴 One of the two core cards with a gate, and the asymmetry is deliberate rather
      * than an inconsistency. `ReleasesService.find` opens with
@@ -418,10 +420,10 @@ const CORE_WIDGET_LITERALS = [
     // other's, and answered by `system:activity` through the batch, the same
     // read the activity endpoint makes.
     archetype: "custom",
-    defaultSize: "full",
-    // The narrowest width it still draws at: a feed whose rows need at least a third.
-    minSize: "md",
-    defaultOrder: 45,
+    defaultSize: "lg",
+    // Half the row by default; from a third, where its rows still read, to the full width.
+    ...RECENT_ACTIVITY_WIDTHS,
+    defaultOrder: 40,
     component: "core#RecentActivity",
     query: { source: ACTIVITY_SOURCE_ID, op: "list" },
     // Asked like core's own lists: the rows its size draws and one more, so the

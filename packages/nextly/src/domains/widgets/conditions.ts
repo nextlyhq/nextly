@@ -98,6 +98,43 @@ async function singlesArePresent(probe: ConditionProbe): Promise<boolean> {
 }
 
 /**
+ * Whether this reader may read at least one collection or one single.
+ *
+ * DERIVED from the two answers above rather than read again, so the card that
+ * lists both is offered exactly when one of the cards listing a kind would be.
+ * Both reads come from the probe's memo.
+ */
+async function contentIsPresent(probe: ConditionProbe): Promise<boolean> {
+  const [collections, singles] = await Promise.all([
+    collectionsArePresent(probe),
+    singlesArePresent(probe),
+  ]);
+  return collections || singles;
+}
+
+/**
+ * Whether this reader could create an entry in some collection: the probe's one
+ * create decision, the same the Get started card's first-entry step reads.
+ */
+function createIsAvailable(probe: ConditionProbe): Promise<boolean> {
+  return probe.mayCreateEntry();
+}
+
+/**
+ * Whether this reader may read any kind Needs attention counts: content (its
+ * unpublished changes), or releases (due and overdue). Asked in that order, so
+ * a reader with content needs no release decision at all.
+ */
+async function attentionIsReadable(probe: ConditionProbe): Promise<boolean> {
+  return (await contentIsPresent(probe)) || probe.mayReadReleases();
+}
+
+/** Whether a release exists that this reader may read. */
+function releasesArePresent(probe: ConditionProbe): Promise<boolean> {
+  return probe.releasesExist();
+}
+
+/**
  * Whether setup is left to do, answering "yes" when the check itself failed.
  *
  * 🔴 The one condition that fails VISIBLE. Every other evaluator that throws
@@ -131,6 +168,10 @@ const EVALUATORS: Record<
   "seed:unanswered": seedIsUnanswered,
   "collections:present": collectionsArePresent,
   "singles:present": singlesArePresent,
+  "content:present": contentIsPresent,
+  "create:available": createIsAvailable,
+  "attention:readable": attentionIsReadable,
+  "releases:present": releasesArePresent,
 };
 
 /**

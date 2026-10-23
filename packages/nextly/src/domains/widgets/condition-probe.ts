@@ -35,6 +35,10 @@ import {
 } from "../../auth/collection-definition-policy";
 import { wouldReadOwnNewCollection } from "../../auth/new-entity-access-policy";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
+import {
+  callerMayReadAnyRelease,
+  callerMayReadReleases,
+} from "../releases/releases-widget-source";
 
 import { getStartedSteps } from "./get-started";
 import type { GetStartedAnswer } from "./get-started-steps";
@@ -92,6 +96,17 @@ export interface ConditionProbe {
    */
   mayCreateCollection(): Promise<boolean>;
   /**
+   * Whether this reader may read releases, by the releases domain's own rule,
+   * resolved at most once. Permissions only: nothing is read.
+   */
+  mayReadReleases(): Promise<boolean>;
+  /**
+   * Whether a release exists that this reader may read, resolved at most once:
+   * `false` without asking the database when they may read none, and otherwise
+   * one id read with a bound of one (`ReleasesService.anyReadable`).
+   */
+  releasesExist(): Promise<boolean>;
+  /**
    * The Get started steps offered to this reader, before their skips, resolved
    * at most once: the one answer the setup condition and the step list both
    * read, so the two cannot disagree.
@@ -105,6 +120,8 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
   let content: Promise<ContentAnswer> | undefined;
   let createEntry: Promise<boolean> | undefined;
   let createCollection: Promise<boolean> | undefined;
+  let readReleases: Promise<boolean> | undefined;
+  let anyRelease: Promise<boolean> | undefined;
   let started: Promise<GetStartedAnswer> | undefined;
 
   const readCollections = (): Promise<RegistryAnswer> => {
@@ -193,6 +210,18 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
       return createEntry;
     },
     mayCreateCollection,
+    mayReadReleases: () => {
+      readReleases ??= callerMayReadReleases(caller);
+      return readReleases;
+    },
+    releasesExist: () => {
+      // The read only for a reader the releases domain lets read: the same
+      // question it would refuse otherwise, answered here as "none".
+      anyRelease ??= probe
+        .mayReadReleases()
+        .then(may => (may ? callerMayReadAnyRelease(caller) : false));
+      return anyRelease;
+    },
     getStarted: () => {
       started ??= getStartedSteps(probe);
       return started;

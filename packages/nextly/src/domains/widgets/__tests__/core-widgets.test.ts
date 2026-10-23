@@ -136,24 +136,31 @@ describe("core widget definitions", () => {
     expect(checklist?.visibleWhen).toBe("onboarding:incomplete");
   });
 
-  it("offers the collections card only while there is a collection to list", () => {
-    // This one drew a get-started panel of its own when it had no counts -- a
-    // third pitch on a fresh dashboard already carrying the seed offer and the
-    // checklist, decided inside a permanent card where the host could not
-    // withdraw it. The host decides now, and from the same reader-scoped
-    // answer the other conditions use.
-    const collections = CORE_WIDGETS.find(w => w.id === "core/collections");
-    expect(collections?.lifecycle).toBe("conditional");
-    expect(collections?.visibleWhen).toBe("collections:present");
+  it("offers the Content card only while there is a collection or a Single to list", () => {
+    // One card for both: a reader with Singles and no collections still has
+    // something it lists, which `collections:present` alone would hide.
+    const content = CORE_WIDGETS.find(w => w.id === "core/content");
+    expect(content?.lifecycle).toBe("conditional");
+    expect(content?.visibleWhen).toBe("content:present");
   });
 
-  it("offers the singles card only while there is a single to list", () => {
-    // The card that returned NOTHING when the install had no singles, and so
-    // held an empty grid placement on every install that never used them --
-    // the reserved-slot defect the lifecycle was introduced to remove.
-    const singles = CORE_WIDGETS.find(w => w.id === "core/singles");
-    expect(singles?.lifecycle).toBe("conditional");
-    expect(singles?.visibleWhen).toBe("singles:present");
+  it("offers Create, Needs attention and Upcoming releases each on what it needs", () => {
+    const shownWhen = (id: string) => {
+      const declared = card(id);
+      expect(declared.lifecycle, id).toBe("conditional");
+      return declared.visibleWhen;
+    };
+    expect(shownWhen("core/quick-create")).toBe("create:available");
+    expect(shownWhen("core/needs-attention")).toBe("attention:readable");
+    expect(shownWhen("core/upcoming-releases")).toBe("releases:present");
+    // Its gate stays: the condition is about existence, the gate about access.
+    expect(card("core/upcoming-releases").requiredPermission).toBeDefined();
+  });
+
+  it("no longer declares the Collections and Singles cards Content replaced", () => {
+    const ids = CORE_WIDGETS.map(w => w.id);
+    expect(ids).not.toContain("core/collections");
+    expect(ids).not.toContain("core/singles");
   });
 
   it("keeps every OTHER core card permanent", () => {
@@ -170,8 +177,10 @@ describe("core widget definitions", () => {
     expect(conditional).toEqual([
       "core/seed-demo-content",
       "core/onboarding-checklist",
-      "core/collections",
-      "core/singles",
+      "core/content",
+      "core/quick-create",
+      "core/needs-attention",
+      "core/upcoming-releases",
     ]);
   });
 
@@ -218,7 +227,7 @@ describe("the content card", () => {
   it("asks for every collection, not the default five", () => {
     // An omitted limit is materialized as the default 5, which would cut a
     // site's sixth collection from the card.
-    expect(card("core/collections").query).toEqual({
+    expect(card("core/content").query).toEqual({
       source: CONTENT_SOURCE_ID,
       op: "list",
       limit: MAX_WIDGET_LIMIT,
@@ -249,5 +258,43 @@ describe("the team card's description", () => {
     const team = CORE_WIDGETS.find(widget => widget.id === "core/team");
     expect(team?.description).toBeDefined();
     expect(team?.description).not.toMatch(/\b(users|roles)\b/i);
+  });
+});
+
+describe("the default dashboard", () => {
+  // The agreed cards, in order, each at its agreed width and within its allowed widths.
+  const AGREED = [
+    [
+      "core/needs-attention",
+      "twoThirds",
+      ["third", "half", "twoThirds", "full"],
+    ],
+    ["core/quick-create", "third", ["third", "half", "twoThirds", "full"]],
+    ["core/recently-edited", "half", ["third", "half", "twoThirds", "full"]],
+    ["core/recent-activity", "half", ["third", "half", "twoThirds", "full"]],
+    ["core/content", "full", ["half", "twoThirds", "full"]],
+    ["core/upcoming-releases", "third", ["third", "half", "twoThirds"]],
+    ["core/team", "third", ["quarter", "third", "half"]],
+  ] as const;
+
+  it("orders the agreed cards as agreed", () => {
+    const ordered = CORE_WIDGETS.filter(w => AGREED.some(([id]) => id === w.id))
+      .slice()
+      .sort((a, b) => (a.defaultOrder ?? 0) - (b.defaultOrder ?? 0))
+      .map(w => w.id);
+    expect(ordered).toEqual(AGREED.map(([id]) => id));
+  });
+
+  it("gives each its agreed width, and only its agreed widths", () => {
+    // Stated in the arrangement's own words, which win over the size range
+    // (`widthFacts` reads one or the other, never both).
+    for (const [id, defaultWidth, allowedWidths] of AGREED) {
+      const declared = card(id);
+      expect([id, declared.defaultWidth, declared.allowedWidths]).toEqual([
+        id,
+        defaultWidth,
+        allowedWidths,
+      ]);
+    }
   });
 });
