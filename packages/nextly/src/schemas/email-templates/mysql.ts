@@ -37,6 +37,7 @@ import {
 } from "drizzle-orm/mysql-core";
 
 import type { EmailAttachmentInput } from "../../domains/email/types";
+import type { WrittenDocument } from "../../domains/email/written/document";
 
 import type { EmailTemplateVariable, EmailTemplateVersion } from "./types";
 
@@ -239,6 +240,15 @@ export const emailTemplatesMysql = mysqlTable(
 
     /** When the template is sent, written by its owner (or the site). */
     description: text("description"),
+
+    /**
+     * Whether the template is written (blocks) or coded (HTML). Null, as on
+     * every row stored before written templates, is coded.
+     */
+    format: varchar("format", { length: 10 }),
+
+    /** A written template's blocks (`domains/email/written`); null for a coded one. */
+    blocks: json("blocks").$type<WrittenDocument>(),
 
     // --------------------------------------------------------
     // Metadata

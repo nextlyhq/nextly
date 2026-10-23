@@ -236,7 +236,34 @@ function makeEngine(
     }
   }
   if (html) writeEscapedOnce(liquid);
+  registerWrittenFilters(liquid);
   return liquid;
+}
+
+/**
+ * The filters a written email compiles to (`domains/email/written`), which a
+ * coded email can use as well:
+ * - `has_value`: whether a value is present, and not null, an empty string or
+ *   an empty list. 0 and false are values.
+ * - `as_list`: the value when it is a list, otherwise no items.
+ * - `safe_url`: the value when it is an http, https or mailto address (only
+ *   http and https for `safe_url: 'image'`), otherwise nothing, so a value
+ *   from a send can never become a `javascript:` link.
+ */
+function registerWrittenFilters(liquid: Liquid): void {
+  liquid.registerFilter("has_value", (value: unknown) => {
+    if (value === undefined || value === null || value === "") return false;
+    return !(Array.isArray(value) && value.length === 0);
+  });
+  liquid.registerFilter("as_list", (value: unknown) =>
+    Array.isArray(value) ? value : []
+  );
+  liquid.registerFilter("safe_url", (value: unknown, kind?: unknown) => {
+    const url = asText(TrustedHtml.is(value) ? value.html : value).trim();
+    const allowed =
+      kind === "image" ? /^https?:\/\//i : /^(https?:\/\/|mailto:)/i;
+    return allowed.test(url) ? url : "";
+  });
 }
 
 const ENGINES = {
