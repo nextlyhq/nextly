@@ -1238,6 +1238,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         newFields: fields as unknown as FieldDefinition[],
         wasLocalized,
         isLocalized,
+        // This apply's push refuses a main-table column drop the admin did not confirm.
+        mainDropsConfirmed: true,
       });
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();

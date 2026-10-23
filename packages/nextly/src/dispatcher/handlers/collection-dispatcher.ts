@@ -790,7 +790,6 @@ const COLLECTIONS_METHODS: Record<
       // candidates for the new collection being saved.
       const desired = await buildFullDesiredSchema();
 
-
       // Resolve adapter for the pipeline construction.
       const adapter = getAdapterFromDI();
       if (!adapter) {
@@ -936,6 +935,8 @@ const COLLECTIONS_METHODS: Record<
         newFields: fields as unknown as FieldDefinition[],
         wasLocalized,
         isLocalized,
+        // This apply's push refuses a main-table column drop the admin did not confirm.
+        mainDropsConfirmed: true,
       });
 
       const result = await apply(desired, "ui", {

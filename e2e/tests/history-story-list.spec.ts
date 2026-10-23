@@ -7,8 +7,11 @@
  * panel, not the editor's save flow. Set `HISTORY_SHOTS_DIR` to keep a
  * screenshot of each state.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+// The suite's `test`, which renews the session, so this spec is not signed out
+// once a run passes the token's lifetime.
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 const NOTES = "/admin/api/collections/history-notes/entries";
