@@ -761,6 +761,67 @@ describeEachDialect("a translated field that is renamed", dialect => {
     }
   );
 
+  // A field group's settings save changes only its companion, so a translated field taken away
+  // beside an added one would drop the companion column with every language's value. A nested
+  // field group stores its rows in its own table and renders no companion column, so the save is
+  // judged by the same rule as the other settings saves rather than by which columns it renders.
+  // A text field in its place is a rename, which this save cannot apply and refuses on its own.
+  it.each([
+    {
+      shape: "a nested field group",
+      added: { name: "cta", type: "component", component: "button" },
+      code: /TRANSLATED_FIELD_REMOVED_BESIDE_ADDED/,
+    },
+    {
+      shape: "a text field",
+      added: { name: "title2", type: "text" },
+      code: /requires_schema_change/,
+    },
+  ])(
+    "refuses a field group's settings save that replaces a translated field with $shape, keeping every language",
+    async ({ added, code }) => {
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "button",
+          label: "Button",
+          fields: [{ name: "label", type: "text" }],
+        }
+      );
+      const id = await seedFieldGroup();
+
+      const refusal = await dispatchComponents(
+        "updateComponent",
+        { slug: "banner" },
+        { fields: [added, { name: "views", type: "number" }] }
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(await companionValues("comp_banner", "heading", id)).toEqual({
+        en: "Hello",
+        es: "Hola",
+      });
+      expect(reported(refusal)).toMatch(code);
+    }
+  );
+
+  // The positive control for the refusal above: removing a translated field on its own is the
+  // admin's choice, and the settings save applies it.
+  it("applies a field group's settings save that only removes a translated field", async () => {
+    await seedFieldGroup();
+
+    await dispatchComponents(
+      "updateComponent",
+      { slug: "banner" },
+      { fields: [{ name: "views", type: "number" }] }
+    );
+
+    expect(await columnsOf("comp_banner_locales")).not.toContain("heading");
+  });
+
   // A field group keeps a many-to-many relationship on its own row, as a column, where a
   // collection keeps it in a junction table, so replacing a translated field with one is the
   // same removal beside an addition. Asked of the preflight directly: the schema dialog's payload
