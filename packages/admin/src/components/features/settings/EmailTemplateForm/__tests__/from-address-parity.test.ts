@@ -65,6 +65,8 @@ const VALUES = [
   // A quoted name may hold brackets; they aren't the address's.
   '"{{ name }} <team>" <shop@example.com>',
   '"Shop <x>" <{{ sender }}>',
+  // The last `<` is inside quotes, so it isn't where the address starts.
+  '<shop@example.com "{{ name }} <team">',
   // No variables at all.
   "shop@example.com",
   "Shop <shop@example.com>",
