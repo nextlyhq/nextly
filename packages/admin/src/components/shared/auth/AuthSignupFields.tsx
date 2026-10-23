@@ -2,6 +2,8 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Input } from "@nextlyhq/ui";
+import type { JSX } from "react";
+import type { UseFormReturn } from "react-hook-form";
 import { useForm, useFormContext } from "react-hook-form";
 import { z } from "zod";
 
@@ -25,7 +27,12 @@ import { passwordSchema } from "@admin/lib/validation";
  * server does not share would reject input the API accepts. A name past the
  * cap is refused by the server with a reason the screen now shows.
  */
-export const signupFormSchema = z
+export const signupFormSchema: z.ZodObject<{
+  fullName: z.ZodString;
+  email: z.ZodString;
+  password: z.ZodString;
+  confirmPassword: z.ZodString;
+}> = z
   .object({
     // Trim FIRST: zod runs a chain in the order it is written, so a length
     // check placed before the trim measures the untrimmed string — two spaces
@@ -56,7 +63,7 @@ export type SignupFormValues = z.infer<typeof signupFormSchema>;
  * Same reasoning as `useNewPasswordForm`: `mode: "onBlur"` decides when a
  * person is told they got it wrong, and two copies of that can disagree.
  */
-export function useSignupForm() {
+export function useSignupForm(): UseFormReturn<SignupFormValues> {
   return useForm<SignupFormValues>({
     resolver: zodResolver(signupFormSchema),
     mode: "onBlur",
@@ -92,7 +99,7 @@ export function useSignupForm() {
  * Reveal state lives here; the form comes from context, so render this inside a
  * `FormProvider` driven by {@link signupFormSchema}.
  */
-export function AuthSignupFields() {
+export function AuthSignupFields(): JSX.Element {
   const { control, watch } = useFormContext<SignupFormValues>();
 
   const password = watch("password");

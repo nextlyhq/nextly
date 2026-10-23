@@ -1,7 +1,7 @@
 "use client";
 
 import { Input } from "@nextlyhq/ui";
-import { useId } from "react";
+import { useId, type JSX } from "react";
 
 import { cn } from "@admin/lib/utils";
 
@@ -58,7 +58,7 @@ export function RangeField({
   disabled = false,
   orientation = "row",
   className,
-}: RangeFieldProps) {
+}: RangeFieldProps): JSX.Element {
   // Generated rather than derived from `label`, because two ranges can share a
   // label in different parts of a page and duplicate ids would point every
   // label at the first input.

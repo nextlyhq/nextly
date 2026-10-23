@@ -7,6 +7,7 @@
  * @module hooks/queries/useRecentEntries
  */
 
+import type { UseQueryResult } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
@@ -20,7 +21,9 @@ import type { RecentEntriesResponse } from "@admin/types/dashboard/recent-entrie
  * @param limit - Number of entries to fetch (default: 5)
  * @returns TanStack Query result with recent entries
  */
-export function useRecentEntries(limit: number = 5) {
+export function useRecentEntries(
+  limit: number = 5
+): UseQueryResult<RecentEntriesResponse, Error> {
   return useQuery<RecentEntriesResponse, Error>({
     queryKey: ["dashboard", "recent-entries", limit],
     queryFn: () =>

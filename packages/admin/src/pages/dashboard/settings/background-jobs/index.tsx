@@ -171,7 +171,7 @@ export const BackgroundJobsContent: React.FC = () => {
   );
 };
 
-export default function BackgroundJobsPage() {
+export default function BackgroundJobsPage(): React.JSX.Element {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer width="wide">

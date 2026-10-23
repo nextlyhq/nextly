@@ -1478,8 +1478,8 @@ describe("the title check's permissions", () => {
     expect(checkout.with["fetch-depth"]).toBe("${{ github.event_name == 'merge_group' && '0' || '1' }}");
   });
 
-  // The pull request's head is checked out for the steps that only read it,
-  // under its own path; the title's validator never runs from there.
+  // A pull request's head is checked out under its own path for the steps
+  // that only read it; the title's validator never runs from there.
   it("runs the validator from the root's checkout, never the pull request's head", () => {
     expect(titleStep.uses).toBe("./.github/actions/pr-title");
     expect(titleStep["working-directory"]).toBeUndefined();

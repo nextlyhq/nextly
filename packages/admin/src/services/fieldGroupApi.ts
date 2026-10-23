@@ -134,6 +134,40 @@ export const deleteFieldGroup = async (
   );
 };
 
+/** The type of {@link fieldGroupApi}. */
+type FieldGroupApiType = {
+  readonly fetchComponents: typeof fetchComponents;
+  readonly deleteFieldGroup: typeof deleteFieldGroup;
+  readonly list: () => Promise<ApiFieldGroup[]>;
+  readonly get: (fieldGroupSlug: string) => Promise<ApiFieldGroup>;
+  readonly create: (payload: CreateComponentPayload) => Promise<ApiFieldGroup>;
+  readonly update: (
+    fieldGroupSlug: string,
+    payload: UpdateComponentPayload
+  ) => Promise<ApiFieldGroup>;
+  readonly remove: (fieldGroupSlug: string) => Promise<{ message: string }>;
+  readonly previewSchemaChanges: (
+    fieldGroupSlug: string,
+    fields: unknown[],
+    localized?: boolean
+  ) => Promise<SchemaPreviewResponse>;
+  readonly applySchemaChanges: (
+    fieldGroupSlug: string,
+    fields: unknown[],
+    schemaVersion: number,
+    resolutions?: Record<string, FieldResolution>,
+    renameResolutions?: SchemaRenameResolution[],
+    localized?: boolean
+  ) => Promise<SchemaApplyResponse>;
+  readonly previewReconcile: (
+    fieldGroupSlug: string
+  ) => Promise<ReconcileFieldGroupPreview>;
+  readonly reconcile: (
+    fieldGroupSlug: string,
+    expectedSchemaVersion: number
+  ) => Promise<MutationResponse<ReconcileFieldGroupResult>>;
+};
+
 /**
  * Component API service object.
  *
@@ -143,7 +177,7 @@ export const deleteFieldGroup = async (
  * callers so mutations match the read shape; toast text comes from
  * `message` when needed.
  */
-export const fieldGroupApi = {
+export const fieldGroupApi: FieldGroupApiType = {
   fetchComponents,
   deleteFieldGroup,
 

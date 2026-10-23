@@ -1,7 +1,13 @@
 "use client";
 
 import type { TableParams, ListResponse } from "@nextlyhq/ui";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 
 import {
   createRole,
@@ -11,6 +17,7 @@ import {
   updateRole,
 } from "@admin/services/roleApi";
 import type { Role } from "@admin/types/entities";
+import type { UseBulkMutationReturn } from "@admin/types/hooks/bulk-mutation";
 
 import { useBulkMutation } from "../useBulkMutation";
 
@@ -81,7 +88,9 @@ const defaultParams: TableParams = {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useQuery
  */
-export function useRoles(params?: TableParams) {
+export function useRoles(
+  params?: TableParams
+): UseQueryResult<ListResponse<Role>, Error> {
   return useQuery<ListResponse<Role>, Error>({
     queryKey: ["roles", params],
     queryFn: async () => {
@@ -136,7 +145,7 @@ export function useRoles(params?: TableParams) {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useQuery
  */
-export function useRole(roleId?: string) {
+export function useRole(roleId?: string): UseQueryResult<Role, Error> {
   return useQuery<Role, Error>({
     queryKey: ["roles", roleId],
     queryFn: async () => {
@@ -199,7 +208,14 @@ export function useRole(roleId?: string) {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  */
-export function useCreateRole() {
+export function useCreateRole(): UseMutationResult<
+  {
+    id: string;
+  },
+  Error,
+  Partial<Role>,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<{ id: string }, Error, Partial<Role>>({
@@ -273,7 +289,17 @@ export function useCreateRole() {
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  * @see https://tanstack.com/query/v5/docs/react/guides/optimistic-updates
  */
-export function useUpdateRole() {
+export function useUpdateRole(): UseMutationResult<
+  void,
+  Error,
+  {
+    roleId: string;
+    updates: Partial<Role>;
+  },
+  {
+    previousRole: unknown;
+  }
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -365,7 +391,12 @@ export function useUpdateRole() {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  */
-export function useDeleteRole() {
+export function useDeleteRole(): UseMutationResult<
+  void,
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<void, Error, string>({
@@ -472,7 +503,12 @@ export function useDeleteRole() {
  * @see useDeleteRole - Single role deletion hook
  * @see useBulkDeleteUsers - Similar pattern for users
  */
-export function useBulkDeleteRoles() {
+export function useBulkDeleteRoles(): UseBulkMutationReturn<
+  string,
+  void,
+  Error,
+  void
+> {
   const queryClient = useQueryClient();
 
   return useBulkMutation<string, void, Error, void>({
@@ -609,7 +645,12 @@ export function useBulkDeleteRoles() {
  * @see useUpdateRole - Single role update hook with optimistic updates
  * @see useBulkUpdateUsers - Similar pattern for users
  */
-export function useBulkUpdateRoles() {
+export function useBulkUpdateRoles(): UseBulkMutationReturn<
+  string,
+  void,
+  Error,
+  Partial<Role>
+> {
   const queryClient = useQueryClient();
 
   return useBulkMutation<string, void, Error, Partial<Role>>({

@@ -84,6 +84,6 @@ export type JobWindowSize = (typeof JOB_WINDOW_SIZES)[number];
  * whole point of stating retention is that an absence must not be read as
  * proof a job never ran.
  */
-export const DEFAULT_JOB_RETENTION_DAYS = Math.round(
+export const DEFAULT_JOB_RETENTION_DAYS: number = Math.round(
   DEFAULT_RETENTION_MS / (24 * 60 * 60 * 1000)
 );

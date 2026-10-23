@@ -1,7 +1,7 @@
 "use client";
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
-import { useCallback } from "react";
+import { useCallback, type JSX } from "react";
 
 import { EmailSubpageLayout } from "@admin/components/features/email-hub/EmailSubpageLayout";
 import {
@@ -29,7 +29,7 @@ import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
 import { validateUUID } from "@admin/lib/validation";
 
-export default function EditEmailProviderPage() {
+export default function EditEmailProviderPage(): JSX.Element {
   const { route } = useRouter();
 
   // Extract and validate provider ID from route params

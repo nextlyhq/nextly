@@ -307,7 +307,9 @@ interface BrandingProviderProps {
   children: React.ReactNode;
 }
 
-export function BrandingProvider({ children }: BrandingProviderProps) {
+export function BrandingProvider({
+  children,
+}: BrandingProviderProps): React.JSX.Element {
   // Both queries below are cached for five minutes, and a schema change makes
   // them stale — the workspace half carries the widget declarations, including
   // the cards core derives per collection. This provider owns them, so it is

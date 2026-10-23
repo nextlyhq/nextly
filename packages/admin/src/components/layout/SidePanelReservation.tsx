@@ -39,7 +39,7 @@ export function SidePanelReservationProvider({
   children,
 }: {
   children: React.ReactNode;
-}) {
+}): React.JSX.Element {
   const { entries: reservations, register } =
     useMountRegistry<SidePanelReservation>();
 

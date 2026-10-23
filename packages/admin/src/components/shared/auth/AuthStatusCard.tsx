@@ -7,7 +7,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@nextlyhq/ui";
-import { type ReactNode } from "react";
+import { type ReactNode, type JSX } from "react";
 
 export interface AuthStatusCardProps {
   /** What happened, as a heading: "Email Verified", "Invalid Link". */
@@ -42,7 +42,7 @@ export function AuthStatusCard({
   title,
   description,
   children,
-}: AuthStatusCardProps) {
+}: AuthStatusCardProps): JSX.Element {
   return (
     <div className="w-full max-w-[480px] mx-auto">
       <Card className="transition-all duration-300 ease-in-out border-border-strong shadow-none p-10">

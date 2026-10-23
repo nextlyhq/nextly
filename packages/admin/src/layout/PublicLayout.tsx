@@ -4,7 +4,9 @@ interface PublicLayoutProps {
   children: React.ReactNode;
 }
 
-export function PublicLayout({ children }: PublicLayoutProps) {
+export function PublicLayout({
+  children,
+}: PublicLayoutProps): React.JSX.Element {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background overflow-y-auto w-full">
       <div className="w-full py-12 px-6 flex flex-col items-center justify-center">

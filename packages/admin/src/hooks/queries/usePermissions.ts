@@ -1,5 +1,11 @@
 import type { TableParams, ListResponse } from "@nextlyhq/ui";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 
 import {
   deletePermission,
@@ -75,7 +81,9 @@ const defaultParams: TableParams = {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useQuery
  */
-export function usePermissions(params?: TableParams) {
+export function usePermissions(
+  params?: TableParams
+): UseQueryResult<ListResponse<Permission>, Error> {
   return useQuery<ListResponse<Permission>, Error>({
     queryKey: ["permissions", params],
     queryFn: async () => {
@@ -124,7 +132,9 @@ export function usePermissions(params?: TableParams) {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useQuery
  */
-export function usePermission(permissionId?: string) {
+export function usePermission(
+  permissionId?: string
+): UseQueryResult<Permission, Error> {
   return useQuery<Permission, Error>({
     queryKey: ["permissions", permissionId],
     queryFn: async () => {
@@ -199,7 +209,17 @@ export function usePermission(permissionId?: string) {
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  * @see https://tanstack.com/query/v5/docs/react/guides/optimistic-updates
  */
-export function useUpdatePermission() {
+export function useUpdatePermission(): UseMutationResult<
+  Permission,
+  Error,
+  {
+    permissionId: string;
+    updates: Partial<Permission>;
+  },
+  {
+    previousPermission: unknown;
+  }
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -304,7 +324,12 @@ export function useUpdatePermission() {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  */
-export function useDeletePermission() {
+export function useDeletePermission(): UseMutationResult<
+  void,
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<void, Error, string>({

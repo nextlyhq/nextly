@@ -128,11 +128,17 @@ describe("the content source", () => {
   it("asks the service within the scope the access layer gives this reader", async () => {
     const answer = rows(await askContent());
     expect(resolveReadableResources).toHaveBeenCalledWith(caller);
-    expect(getContentByCollection).toHaveBeenCalledWith({
-      scope: SCOPE,
-      caller,
-    });
+    expect(getContentByCollection).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: SCOPE, caller })
+    );
     expect(answer).toEqual([POSTS]);
+  });
+
+  it("hands the query's limit to the service, which counts only that page", async () => {
+    await askContent({ limit: 7 });
+    expect(getContentByCollection).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 7 })
+    );
   });
 
   it("answers only the fields a query selected, at most its limit", async () => {
