@@ -251,6 +251,42 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual(["alpha", "gamma"]);
     });
 
+    it("compares a bound with a fraction of a second exactly", async () => {
+      const key = await boot(dialect);
+      // alpha was created at 12:00:00.000. Floored to the second, the first
+      // bound would exclude it and the second would match it.
+      expect(
+        await filtered(
+          key,
+          json({ createdAt: { less_than: "2026-01-10T12:00:00.500Z" } })
+        )
+      ).toEqual(["alpha"]);
+      expect(
+        await filtered(
+          key,
+          json({ createdAt: { equals: "2026-01-10T12:00:00.500Z" } })
+        )
+      ).toEqual([]);
+    });
+
+    it("answers a bound far outside the stored years as it would any other", async () => {
+      const key = await boot(dialect);
+      // MySQL's TIMESTAMP holds 1970 to 2038, and a bound outside that range
+      // must still compare, not match nothing.
+      expect(
+        await filtered(key, json({ createdAt: { less_than: "2100-01-01" } }))
+      ).toEqual(["alpha", "beta", "gamma"]);
+      expect(
+        await filtered(key, json({ createdAt: { greater_than: "2100-01-01" } }))
+      ).toEqual([]);
+      expect(
+        await filtered(key, json({ createdAt: { greater_than: "1900-01-01" } }))
+      ).toEqual(["alpha", "beta", "gamma"]);
+      expect(
+        await filtered(key, json({ createdAt: { less_than: "1900-01-01" } }))
+      ).toEqual([]);
+    });
+
     it("answers 400 for a value no date can be read from", async () => {
       const key = await boot(dialect);
       const cases: Array<[string, string]> = [

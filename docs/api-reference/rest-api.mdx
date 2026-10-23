@@ -644,7 +644,7 @@ Operators (verified against `packages/nextly/src/domains/collections/query/query
 | `not_in`             | Value not in comma-separated list.                | `where[status][not_in]=archived`       |
 | `exists`             | Field is non-null when `true`, null when `false`. | `where[image][exists]=true`            |
 
-A date (`createdAt`, `updatedAt`, or a `date` field) is compared with an ISO 8601 value: an instant with its offset, such as `2026-09-01T09:00:00Z` or `2026-09-01T11:00:00+02:00`, or a calendar date, such as `2026-09-01`, which means the start of that day in UTC. Any other value, including a time with no offset, is refused with `400 FILTER_INVALID_OPERAND`.
+A date (`createdAt`, `updatedAt`, or a `date` field) is compared with an ISO 8601 value: an instant with its offset, such as `2026-09-01T09:00:00Z` or `2026-09-01T11:00:00+02:00`, or a calendar date, such as `2026-09-01`, which means the start of that day in UTC. Any other value, including a time with no offset, is refused with a `400` whose `error.code` is `VALIDATION_ERROR`, naming the filter in `error.data.errors` with the code `FILTER_INVALID_OPERAND`.
 
 ```
 ?where[createdAt][greater_than_equal]=2026-09-01&where[createdAt][less_than]=2026-10-01

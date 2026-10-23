@@ -34,7 +34,10 @@ import {
   or,
   sql,
 } from "drizzle-orm";
+import { MySqlTimestamp } from "drizzle-orm/mysql-core";
+import { SQLiteTimestamp } from "drizzle-orm/sqlite-core";
 
+import { mysqlTimestampOperand } from "../../domains/collections/query/timeseries-bucket";
 import type { LocalizedFieldRef } from "../../domains/i18n/companion-join";
 import { buildCompanionExists } from "../../domains/i18n/companion-join";
 import { NextlyError } from "../../errors/nextly-error";
@@ -241,15 +244,36 @@ function dateOperand(key: string, value: unknown): Date {
 }
 
 /**
+ * An instant as this column compares it, on the column's own dialect.
+ *
+ * - SQLite stores an integer in the column's unit (seconds, or milliseconds),
+ *   and its own encoder FLOORS a Date to that unit, so a bound at `.500` would
+ *   be compared as the second before it. The number is bound as it is, the
+ *   fraction kept, so `less_than` `.500` keeps a row at `.000` and `equals`
+ *   `.500` matches none, as on PostgreSQL.
+ * - MySQL compares a `TIMESTAMP` in the session time zone, so the instant is
+ *   spelled as `from_unixtime`, which is read in that same zone.
+ * - PostgreSQL's `timestamp` reads the Date the driver sends, in UTC, exactly.
+ */
+function dateBound(column: Column, instant: Date): Date | SQL {
+  if (is(column, SQLiteTimestamp)) {
+    const ms = instant.getTime();
+    return sql`${column.mode === "timestamp" ? ms / 1000 : ms}`;
+  }
+  if (is(column, MySqlTimestamp)) return mysqlTimestampOperand(instant);
+  return instant;
+}
+
+/**
  * A comparison's value as the column compares it.
  *
  * Decided by the COLUMN, not by the field's declared type, so every column
  * Drizzle reads and writes as a `Date` (its "object date" columns: the system
  * `createdAt` and `updatedAt`, and every date field) takes the same path on
- * every dialect. Such a column maps its operand with its own driver mapping,
- * which on SQLite reads `getTime()`: a filter written the way rows read, with
- * an ISO string, threw there and answered 500, while PostgreSQL and MySQL
- * handed the same string to the database to interpret.
+ * every dialect: the value is read as the instant it names, then spelled as
+ * the column's dialect compares an instant. Handed to the column's own driver
+ * mapping instead, an ISO string threw on SQLite (which reads `getTime()`)
+ * and answered 500, while PostgreSQL and MySQL each interpreted it alone.
  */
 function comparisonOperand(
   schemaColumn: Column,
@@ -257,9 +281,9 @@ function comparisonOperand(
   value: unknown
 ): unknown {
   if (schemaColumn.dataType !== "object date") return value;
-  return Array.isArray(value)
-    ? value.map(item => dateOperand(key, item))
-    : dateOperand(key, value);
+  const bound = (item: unknown) =>
+    dateBound(schemaColumn, dateOperand(key, item));
+  return Array.isArray(value) ? value.map(bound) : bound(value);
 }
 
 export function buildDrizzleCondition(

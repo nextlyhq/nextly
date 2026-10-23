@@ -29,6 +29,6 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Filtering by a date works on SQLite. A filter on `createdAt`, `updatedAt` or a date field with an ISO 8601 value used to answer 500 on SQLite, the admin's Created and Updated filters on every list among them. It now narrows the list and its count, as it does on PostgreSQL and MySQL.
+Filtering by a date works on SQLite. A filter on `createdAt`, `updatedAt` or a date field with an ISO 8601 value used to answer 500 on SQLite, the admin's Created and Updated filters on every list among them. It now narrows the list and its count, as it does on PostgreSQL and MySQL. A bound with a fraction of a second is compared exactly on SQLite, which used to floor it to the second, and on MySQL a bound means the same instant whatever time zone the server runs in. On PostgreSQL, an instant written with an offset other than `Z` is compared as the instant it names, where its offset used to be dropped.
 
-A date is compared with an instant with its offset (`2026-09-01T09:00:00Z`) or a calendar date (`2026-09-01`, the start of that day in UTC), read the same way on every database. Any other value, including a time with no offset, is now refused with `400 FILTER_INVALID_OPERAND` on every database, where PostgreSQL and MySQL used to pass it to the database to interpret.
+A date is compared with an instant with its offset (`2026-09-01T09:00:00Z`) or a calendar date (`2026-09-01`, the start of that day in UTC), read the same way on every database. Any other value, including a time with no offset, is now refused with a 400 validation error (`FILTER_INVALID_OPERAND` in its field errors) on every database, where PostgreSQL and MySQL used to pass it to the database to interpret.
