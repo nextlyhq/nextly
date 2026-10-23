@@ -9204,8 +9204,15 @@ export class CollectionMutationService extends BaseService {
               }
               // What goes live, re-read on the locked row: a language the
               // rule was not asked about refuses the write as a conflict.
+              // Only where the lock found a row: one deleted since the write
+              // was authorized puts no language live, and the write that
+              // follows matches nothing and is answered as a missing
+              // document. The row that is gone is never read for this, and
+              // the pre-transaction copy is never stood in for it: judging a
+              // document that no longer exists would answer a refusal where
+              // the caller should be told it is not there.
               const { askedLanguages } = transitionGuard;
-              if (askedLanguages !== undefined) {
+              if (askedLanguages !== undefined && preUpdateRow) {
                 const changed = await this.languagesChangedUnderLock({
                   collectionName: params.collectionName,
                   entryId: params.entryId,
