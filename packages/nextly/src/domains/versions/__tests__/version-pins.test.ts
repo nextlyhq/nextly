@@ -6,6 +6,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  registerNamespacedVersionPinHolder,
   registerVersionPinHolder,
   resetVersionPinHolders,
   versionPinHolderNames,
@@ -118,5 +119,57 @@ describe("versionPinKey", () => {
     expect(versionPinKey(ref, "a", "b:c")).not.toBe(
       versionPinKey({ ...ref, entryId: "e1:a" }, "b", "c")
     );
+  });
+});
+
+describe("a holder in a plugin's namespace", () => {
+  it("is recorded as the plugin's slug, a dot, and its name", () => {
+    const { recorded } = registerNamespacedVersionPinHolder("acme-billing", {
+      name: "approvals",
+      label: "Approvals",
+    });
+    expect(recorded).toBe("acme-billing.approvals");
+    expect(versionPinHolderNames()).toContain("acme-billing.approvals");
+  });
+
+  it("holds apart from another plugin's holder, and from core's, of one name", () => {
+    const a = registerNamespacedVersionPinHolder("acme-a", {
+      name: "workflows",
+      label: "A",
+    });
+    const b = registerNamespacedVersionPinHolder("acme-b", {
+      name: "workflows",
+      label: "B",
+    });
+    expect([a.recorded, b.recorded]).toEqual([
+      "acme-a.workflows",
+      "acme-b.workflows",
+    ]);
+    expect(a.handle).not.toBe(b.handle);
+    expect(versionPinHolderNames()).toContain("workflows");
+  });
+
+  it("is a name core's own registration refuses, so core cannot take it", () => {
+    expect(() =>
+      registerVersionPinHolder({ name: "acme-billing.approvals", label: "X" })
+    ).toThrow(/kebab-case/);
+  });
+
+  it("refuses a name that is not kebab-case, and one too long with the slug", () => {
+    expect(() =>
+      registerNamespacedVersionPinHolder("acme", {
+        name: "Approvals",
+        label: "A",
+      })
+    ).toThrow(/kebab-case/);
+    expect(() =>
+      registerNamespacedVersionPinHolder("acme", { name: "a.b", label: "A" })
+    ).toThrow(/kebab-case/);
+    expect(() =>
+      registerNamespacedVersionPinHolder("a".repeat(40), {
+        name: "b".repeat(30),
+        label: "A",
+      })
+    ).toThrow(/at most 64 characters/);
   });
 });

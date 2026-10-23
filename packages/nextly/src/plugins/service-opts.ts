@@ -555,7 +555,7 @@ export type PluginCollectionService = Pick<
  * transaction, and the scope that decides how long the token may reach it
  * (`transactionScope`, the same rule `ctx.db.transaction` follows).
  */
-interface PluginTransactionRecord {
+export interface PluginTransactionRecord {
   readonly tx: TransactionContext;
   readonly scope: TransactionScope;
 }
@@ -570,7 +570,7 @@ const pluginTransactions = new WeakMap<object, PluginTransactionRecord>();
  * The record a plugin's token stands for, or a refusal when the value is not
  * one `withTransaction` handed out.
  */
-function transactionOf(token: unknown): PluginTransactionRecord {
+export function transactionOf(token: unknown): PluginTransactionRecord {
   const record =
     typeof token === "object" && token !== null
       ? pluginTransactions.get(token)

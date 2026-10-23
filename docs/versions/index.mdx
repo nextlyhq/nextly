@@ -254,8 +254,38 @@ export async function clearReview(tx: TransactionContext, ref: VersionRef) {
 - Deleting a document, a collection or a Single removes its pins, and a pin waiting on one
   being deleted is refused.
 
-A plugin's `ctx.db.transaction` hands it a handle to its own tables, not the
-`TransactionContext` above, so a plugin cannot pin through it.
+### From a plugin
+
+A plugin pins through `ctx.services.versions.pins`, on its own transaction: the handle
+`ctx.db.transaction` passes its callback, or the transaction
+`ctx.services.collections.withTransaction` hands its work. The pin commits or rolls back
+with the plugin's own writes.
+
+```ts
+import type { PluginContext, VersionRef } from "@nextlyhq/plugin-sdk";
+
+// Record the approval in the plugin's own table, and pin the version it names,
+// in one transaction.
+export async function approve(
+  ctx: PluginContext,
+  ref: VersionRef,
+  versionNo: number
+) {
+  const approvals = ctx.services.versions.pins.registerHolder({
+    name: "approvals",
+    label: "Approvals",
+  });
+  await ctx.db.transaction(async tx => {
+    await approvals.pin(ref, { slot: "approved", versionNo }, { tx });
+  });
+}
+```
+
+- A plugin's holder is named in its own namespace, so two plugins can each register
+  `approvals` and hold apart, and no plugin can register or reach a holder of core's.
+- `pin`, `release`, `releaseAll` and `list` all take `{ tx }`, and refuse anything but an
+  open transaction of the plugin's. `list` returns the holder's own slots.
+- A plugin's pins take the same document lock and refusals as the ones above.
 
 ## Related
 
