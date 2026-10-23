@@ -9,12 +9,7 @@
  * @module components/features/widgets/edit/drag/CardDragContext
  */
 
-import {
-  DndContext,
-  DragOverlay,
-  type SensorDescriptor,
-  type SensorOptions,
-} from "@dnd-kit/core";
+import { DndContext, DragOverlay } from "@dnd-kit/core";
 import type { ReactNode } from "react";
 
 import * as Icons from "@admin/components/icons";
@@ -25,9 +20,6 @@ import {
   SILENT_DRAG,
   type CardDrag,
 } from "./useCardDrag";
-
-/** No sensor runs at one column, so a press on a card never becomes a drag there. */
-const NO_SENSORS: SensorDescriptor<SensorOptions>[] = [];
 
 /** The chip modifier, made once: a new array each render would reset the overlay. */
 const CHIP_MODIFIERS = [chipAtPointer];
@@ -58,7 +50,11 @@ export function CardDragContext({
   const held = drag.drag;
   return (
     <DndContext
-      sensors={drag.enabled ? drag.sensors : NO_SENSORS}
+      // The same sensors at every width. dnd-kit reads the list as an effect's dependencies, so
+      // a list that empties at one column changes size between renders, which React warns of
+      // and does not promise to handle. A drag cannot start there anyway: the grid hands a card
+      // no drag while dragging is off, so its `useDraggable` is disabled and no handle is drawn.
+      sensors={drag.sensors}
       onDragStart={drag.onDragStart}
       onDragMove={drag.onDragMove}
       onDragEnd={drag.onDragEnd}
