@@ -105,6 +105,37 @@ interface ReadBuckets {
   partsOf: Map<AttentionKind, AttentionPartRow[]>;
 }
 
+/** One bucket of the answer. */
+type AttentionBucket = GroupedResult["buckets"][number];
+
+/**
+ * A bucket's key, when the bucket has something in it and names a kind or a
+ * part this admin knows; otherwise `null`, and the bucket is left out.
+ */
+function keyOf(bucket: AttentionBucket): {
+  value: string;
+  key: NonNullable<ReturnType<typeof parseAttentionKey>>;
+} | null {
+  if (bucket.value === null || bucket.count <= 0) return null;
+  const key = parseAttentionKey(bucket.value);
+  return key === null ? null : { value: bucket.value, key };
+}
+
+/** A kind's own row, from its total's bucket. */
+function kindRow(
+  kind: AttentionKind,
+  bucket: AttentionBucket
+): AttentionKindRow {
+  return {
+    kind,
+    label: KIND_LABELS[kind],
+    count: bucket.count,
+    atLeast: bucket.atLeast === true,
+    ...(kind === "overdue" ? { href: OVERDUE_RELEASES_HREF } : {}),
+    parts: [],
+  };
+}
+
 /**
  * Sorts the answer's buckets into kinds and parts by their keys. A bucket with
  * nothing in it, or with a key this admin does not know, is left out.
@@ -115,20 +146,11 @@ function readBuckets(result: GroupedResult, now: number): ReadBuckets {
   );
   const read: ReadBuckets = { rows: new Map(), partsOf: new Map() };
   for (const bucket of result.buckets) {
-    const value = bucket.value;
-    if (value === null || bucket.count <= 0) continue;
-    const key = parseAttentionKey(value);
-    if (key === null) continue;
-    const atLeast = bucket.atLeast === true;
+    const keyed = keyOf(bucket);
+    if (keyed === null) continue;
+    const { value, key } = keyed;
     if (!("part" in key)) {
-      read.rows.set(key.kind, {
-        kind: key.kind,
-        label: KIND_LABELS[key.kind],
-        count: bucket.count,
-        atLeast,
-        ...(key.kind === "overdue" ? { href: OVERDUE_RELEASES_HREF } : {}),
-        parts: [],
-      });
+      read.rows.set(key.kind, kindRow(key.kind, bucket));
       continue;
     }
     const parts = read.partsOf.get(key.kind) ?? [];
@@ -136,7 +158,7 @@ function readBuckets(result: GroupedResult, now: number): ReadBuckets {
       key: value,
       label: labels.get(value) ?? key.part.slug,
       count: bucket.count,
-      atLeast,
+      atLeast: bucket.atLeast === true,
       href: partHref(key.kind, key.part.contentKind, key.part.slug, now),
     });
     read.partsOf.set(key.kind, parts);
