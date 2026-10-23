@@ -122,7 +122,9 @@ describe("the leaf is reachable as one", () => {
     expect(PKG.exports["./route-path"]?.import).toBe(
       "./dist/runtime/routing/slug-param.mjs"
     );
-    expect(PKG.exports["./route-path"]?.types).toBe("./dist/route-path.d.ts");
+    expect(PKG.exports["./route-path"]?.types).toBe(
+      "./dist/runtime/routing/slug-param.d.mts"
+    );
   });
 
   it("builds the artifact that entry promises", () => {
@@ -130,7 +132,10 @@ describe("the leaf is reachable as one", () => {
     // without the other: an export map naming an artifact the build does not
     // emit is a published entry point that 404s on install, and it would pass
     // the assertion above on its own.
-    const tsup = readFileSync(resolve(SRC_DIR, "../tsup.config.js"), "utf8");
-    expect(tsup).toContain('"src/runtime/routing/slug-param.ts"');
+    const buildConfig = readFileSync(
+      resolve(SRC_DIR, "../tsdown.config.ts"),
+      "utf8"
+    );
+    expect(buildConfig).toContain('"src/runtime/routing/slug-param.ts"');
   });
 });
