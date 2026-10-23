@@ -27,8 +27,6 @@
     "build": "tsdown",
     "dev": "tsdown --watch",
     "check-types": "tsc --noEmit",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest"
@@ -51,7 +49,6 @@
   },
   "devDependencies": {
     "@nextlyhq/admin": "workspace:*",
-    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@nextlyhq/ui": "workspace:*",
@@ -60,13 +57,15 @@
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",
     "@types/node": "^22.20.5",
-    "@types/react": "19.2.0",
+    "@types/react": "19.3.0",
     "jsdom": "^27.1.0",
     "lucide-react": "^0.544.0",
     "nextly": "workspace:*",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.5"
   },
   "engines": {
     "node": "^22.12.0 || >=24.0.0"

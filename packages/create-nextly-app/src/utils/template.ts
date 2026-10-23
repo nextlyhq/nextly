@@ -1106,8 +1106,9 @@ async function replacePlaceholders(
 const PINNED_VERSIONS: Record<string, string> = {
   // Next.js ecosystem — resolved at runtime via fetchLatestVersion()
   // (see generatePackageJson)
-  react: "^19.1.0",
-  "react-dom": "^19.1.0",
+  // The floor is the React the repository builds and tests with.
+  react: "^19.3.1",
+  "react-dom": "^19.3.1",
   // Dev dependencies
   typescript: "^5",
   // The oldest Node line in this package's `engines.node`, so a scaffolded
@@ -1562,7 +1563,10 @@ async function generatePluginPackageJson(
     "@types/react-dom": PINNED_VERSIONS["@types/react-dom"],
     typescript: PINNED_VERSIONS.typescript,
     tsdown: "^0.23.1",
-    vitest: "^4.1.0",
+    vitest: "^5.0.5",
+    // Vitest's peer, declared because Yarn installs no peers: without it a
+    // Yarn-scaffolded plugin installs, and then `yarn test` cannot load Vite.
+    vite: "^7.3.5",
     eslint: PINNED_VERSIONS.eslint,
     "@eslint/js": PINNED_VERSIONS.eslint,
     "typescript-eslint": "^8.0.0",

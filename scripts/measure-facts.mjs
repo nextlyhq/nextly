@@ -107,12 +107,6 @@ const facts = [
     cmd: "pnpm turbo run check-types --continue --force",
     heavy: true,
   },
-  {
-    id: "lint-cold",
-    what: "lint with the turbo cache forced off (read the dist-state line before interpreting)",
-    cmd: "pnpm turbo run lint --continue --force",
-    heavy: true,
-  },
 ];
 
 // A cheap run keeps the committed file's heavy rows instead of replacing

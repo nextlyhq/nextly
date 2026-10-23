@@ -1,7 +1,28 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import { forwardRef, type ComponentProps } from "react";
+import {
+  forwardRef,
+  type ComponentProps,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
+import type { VariantsFn } from "../lib/variants";
+
+/** The arms `inputVariants` is built from. Its type is read from them: {@link VariantsFn}. */
+export const INPUT_VARIANT_MAP = {
+  size: {
+    // `-md` rather than `-sm`, so that a small input is the same height as
+    // a small button standing beside it in a toolbar or a filter row.
+    // Button's `sm` has always used this step; an input reading `-sm` made
+    // `size="sm"` mean 36px on one control and 32px on another, and a form
+    // row mixing them sat 4px out of line.
+    sm: "h-[var(--nx-control-height-md)] px-2.5 py-2 text-sm",
+    default: "h-[var(--nx-control-height)] px-3 py-2.5 text-sm",
+    lg: "h-[var(--nx-control-height-lg)] px-4 py-3 text-base",
+  },
+};
 
 /**
  * Input Component - Design System Specification
@@ -39,7 +60,7 @@ import { cn } from "../lib/utils";
  * - search: Search input with clear button
  * @experimental
  */
-const inputVariants = cva(
+const inputVariants: VariantsFn<typeof INPUT_VARIANT_MAP> = cva(
   // `text-foreground` is explicit rather than inherited. Tailwind's preflight
   // sets `color: inherit` on form controls, so without it the typed value takes
   // whatever colour an ancestor happens to carry -- muted inside a
@@ -48,18 +69,7 @@ const inputVariants = cva(
   // and callers were compensating by putting the token on a wrapper.
   "file:text-foreground text-foreground placeholder:text-muted-foreground placeholder:opacity-50 selection:bg-primary selection:text-primary-foreground w-full min-w-0 rounded-md border border-input bg-background text-sm transition-all duration-150 outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 focus:ring-0 focus:ring-offset-0 focus:outline-none focus:border-primary! focus-visible:border-primary! aria-invalid:border-destructive aria-invalid:focus:border-destructive! data-[invalid=true]:border-destructive data-[invalid=true]:focus:border-destructive!",
   {
-    variants: {
-      size: {
-        // `-md` rather than `-sm`, so that a small input is the same height as
-        // a small button standing beside it in a toolbar or a filter row.
-        // Button's `sm` has always used this step; an input reading `-sm` made
-        // `size="sm"` mean 36px on one control and 32px on another, and a form
-        // row mixing them sat 4px out of line.
-        sm: "h-[var(--nx-control-height-md)] px-2.5 py-2 text-sm",
-        default: "h-[var(--nx-control-height)] px-3 py-2.5 text-sm",
-        lg: "h-[var(--nx-control-height-lg)] px-4 py-3 text-base",
-      },
-    },
+    variants: INPUT_VARIANT_MAP,
     defaultVariants: {
       size: "default",
     },
@@ -72,7 +82,9 @@ export interface InputProps
     VariantProps<typeof inputVariants> {}
 
 /** @public */
-const Input = forwardRef<HTMLInputElement, InputProps>(
+const Input: ForwardRefExoticComponent<
+  PropsWithoutRef<InputProps> & RefAttributes<HTMLInputElement>
+> = forwardRef<HTMLInputElement, InputProps>(
   ({ className, type, size, ...props }, ref) => {
     return (
       <input

@@ -158,9 +158,17 @@ export default defineConfig([
       // The declarations name the packages their types come from rather than
       // inlining them, bundled into the JavaScript or not. `@admin/*` is this
       // package's own source under a path alias, so it is resolved and bundled.
+      //
+      // Rolldown asks this again with each RESOLVED id, a file path. A Windows
+      // path starts with a drive letter, which the package-name test accepts,
+      // and a source file marked external binds the declarations to the
+      // JavaScript module, where no type is exported. `path.win32` treats both
+      // `D:\…` and `/…` as absolute, so a path is never a package on any OS.
       dts: {
         neverBundle: id =>
-          /^(@[\w-][\w.-]*\/)?[\w-]/.test(id) && !id.startsWith("@admin/"),
+          !path.win32.isAbsolute(id) &&
+          /^(@[\w-][\w.-]*\/)?[\w-]/.test(id) &&
+          !id.startsWith("@admin/"),
       },
     },
     treeshake: {
@@ -196,7 +204,7 @@ export default defineConfig([
     },
     minify: true,
     plugins: [stylesheetImportsAreEmpty],
-    onSuccess: async () => {
+    onSuccess: () => {
       const distDir = path.join(process.cwd(), "dist");
 
       if (!fs.existsSync(distDir)) {

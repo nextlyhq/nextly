@@ -10,8 +10,6 @@
     "nextly": "nextly",
     "ci": "nextly migrate && next build",
     "check-types": "next typegen && tsc --noEmit --incremental false",
-    "lint": "eslint",
-    "lint:fix": "eslint --fix",
     "env:copy": "cp .env.example .env",
     "db:seed": "tsx --env-file=.env scripts/seed.ts",
     "plugins:install": "nextly plugins install --all",
@@ -39,29 +37,26 @@
     "next": "^16.4.2",
     "nextly": "workspace:^",
     "pg": "^8.16.3",
-    "react": "19.2.0",
-    "react-dom": "19.2.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "sharp": "^0.35.5"
   },
   "devDependencies": {
-    "@eslint/eslintrc": "^3",
     "@nextlyhq/admin-css": "workspace:^",
     "@tailwindcss/postcss": "^4.3.2",
     "@testing-library/react": "^16.3.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.20.5",
     "@types/pg": "^8.15.5",
-    "@types/react": "19.2.0",
-    "@types/react-dom": "19.2.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "better-sqlite3": "^12.10.0",
     "culori": "^4.0.2",
-    "eslint": "^9.39.1",
-    "eslint-config-next": "^16.4.2",
     "jsdom": "^27.1.0",
     "playwright": "^1.61.1",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.3.2",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.5"
   }
 }

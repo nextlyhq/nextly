@@ -41,7 +41,7 @@ export default defineConfig({
   sourcemap: true,
   minify: false,
   target: "es2022",
-  async onSuccess() {
+  onSuccess() {
     // Copy the editor stylesheet.
     const src = join(process.cwd(), "src/styles");
     const dist = join(process.cwd(), "dist/styles");

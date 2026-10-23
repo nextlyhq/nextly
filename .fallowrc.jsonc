@@ -3,8 +3,8 @@
   //
   // Fallow reads the whole module graph at once and reports what nothing
   // reaches: unused files, exports and dependencies, unresolved imports,
-  // import cycles, duplication and complexity. It answers questions ESLint
-  // cannot, because ESLint sees one file at a time.
+  // import cycles, duplication and complexity. It answers questions lint
+  // cannot, because a lint rule sees one file at a time.
   //
   // Commands:
   //   - pnpm fallow       = full-repo report, apps/playground included.
