@@ -79,6 +79,7 @@ import {
 } from "../../../shared/lib/password-fields";
 import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import type { Logger } from "../../../shared/types";
+import { carriesContent } from "../../audit/lifecycle-fields";
 import { willRecordSingleActivity } from "../../audit/record-activity";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
 import {
@@ -2065,6 +2066,10 @@ export class SingleMutationService extends BaseService {
               enforceLocalizedRequired,
             };
             let promotedDraft = false;
+            // Whether the request that promoted also carried content of its
+            // own, which no earlier save recorded: the trail reads that
+            // publish as a save too.
+            let promotionCarriesContent = false;
             if (
               !holdEdit &&
               // Lifecycle and drafts versioning included. A draft stored before
@@ -2164,6 +2169,13 @@ export class SingleMutationService extends BaseService {
                     });
                   }
                 }
+                // Read before the draft's components are written into the
+                // caller's below: the caller's own values alone, its scalars and
+                // the component values it sent.
+                const callerCarriesContent = carriesContent({
+                  ...currentData,
+                  ...attemptComponentFields,
+                });
                 // The caller's own payload wins over the pending change: a
                 // publish that also sets a field is saying something about that
                 // field now.
@@ -2203,6 +2215,7 @@ export class SingleMutationService extends BaseService {
                   delete mainPayload.status;
                 }
                 promotedDraft = true;
+                promotionCarriesContent = callerCarriesContent;
               }
             }
             // A publish with nothing pending puts the live row itself live: a
@@ -3580,6 +3593,7 @@ export class SingleMutationService extends BaseService {
                 statusAfter: singleHasStatus ? dataLocaleStatus : undefined,
                 statusBefore: previousLocaleStatus,
                 promotedPendingEdits: promotedDraft,
+                requestEdits: promotionCarriesContent,
                 restores: options.sourceVersionNo != null,
               },
             });

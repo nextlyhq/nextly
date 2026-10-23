@@ -43,6 +43,8 @@ const NOTES = "re_notes";
 const PAGES = "re_pages";
 const SECRET = "re_secret";
 const HOME = "re-home";
+/** A Single with Draft/Published, saved but never published. */
+const ABOUT = "re-about";
 /** More collections than the cross-collection read it replaces ever looked at. */
 const MANY = Array.from({ length: 22 }, (_, i) => `re_c${i}`);
 
@@ -110,6 +112,13 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "headline" }),
           fieldGroup({ name: "hero", component: "re_card" }),
         ],
+      }),
+      defineSingle({
+        slug: ABOUT,
+        label: { singular: "About" },
+        status: true,
+        access: { read: () => true, update: () => true },
+        fields: [text({ name: "headline" })],
       }),
     ],
   });
@@ -318,6 +327,60 @@ describe.each(getConfiguredTestDialects())(
         status: "published",
         pendingChanges: false,
       });
+    });
+
+    it("takes the publisher's row when the publish also edits the page", async () => {
+      const t = await boot(dialect);
+      const id = await create(
+        t,
+        BEN,
+        PAGES,
+        { title: "live", status: "published" },
+        at(10)
+      );
+      await save(t, ANA, PAGES, id, { title: "pending" }, at(5));
+
+      // 🔴 Ben publishes Ana's pending edits AND changes the title in the same
+      // request. That title was never saved before, so the publish is a save of
+      // Ben's; the pure promotion above is the case that keeps Ana's row.
+      const [publish] = await save(
+        t,
+        BEN,
+        PAGES,
+        id,
+        { status: "published", title: "edited on publish" },
+        at(1)
+      );
+      expect(metadataOf(publish!)).toMatchObject({
+        published: true,
+        publishedWithEdits: true,
+      });
+      expect(
+        (await recentlyEdited(as(BEN))).map(row => [row.id, row.userId])
+      ).toEqual([[publish!.id, BEN.id]]);
+    });
+
+    it("labels a Single saved as a draft with its status", async () => {
+      const t = await boot(dialect);
+      const singles = t.getService("singleEntryService") as unknown as {
+        update: (
+          slug: string,
+          data: Record<string, unknown>,
+          options: Record<string, unknown>
+        ) => Promise<{ success: boolean }>;
+      };
+      await written(t, at(1), () =>
+        singles.update(
+          ABOUT,
+          { headline: "Draft words" },
+          { overrideAccess: true, actor: { type: "user", id: ANA.id } }
+        )
+      );
+      // Read as the reader, in every state: a draft is read, not reported
+      // missing, so its row says "draft" rather than nothing.
+      expect(
+        (await recentlyEdited(as(ANA))).map(row => [row.collection, row.status])
+      ).toEqual([[ABOUT, "draft"]]);
     });
 
     it("fills the card from older readable saves when the newest are all of a collection the reader may not read", async () => {

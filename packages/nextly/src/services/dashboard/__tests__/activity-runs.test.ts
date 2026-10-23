@@ -289,6 +289,15 @@ describe("what a row changed", () => {
     // it put live were each recorded when they were saved.
     expect(update({ changedFields: ["title"], published: true })).toBe(false);
     expect(update({ published: true })).toBe(false);
+    // Unless the promoting request carried content of its own, which no
+    // earlier save recorded: that publish is a save too.
+    expect(
+      update({
+        changedFields: ["title"],
+        published: true,
+        publishedWithEdits: true,
+      })
+    ).toBe(true);
     // A row that does not say what it changed was a save by somebody.
     expect(update(null)).toBe(true);
   });
