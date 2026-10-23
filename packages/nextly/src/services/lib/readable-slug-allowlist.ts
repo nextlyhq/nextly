@@ -62,10 +62,30 @@ export async function readableSlugAllowlist(
   kind: "collection" | "single"
 ): Promise<string[] | undefined> {
   if (!caller) return undefined;
+  return (await readableSlugsOfKind(caller, kind)).slugs;
+}
 
+/**
+ * The slugs of `kind` a caller may read, and whether the registry could be
+ * read at all.
+ *
+ * The allowlist above is DERIVED from this, so the two answer one question.
+ * They differ only in what they keep of an unreadable registry: the allowlist
+ * fails closed to "nothing visible", which is right for scoping a list, while
+ * a caller deciding what to TELL the reader needs to know the registry could
+ * not be read, because "you have nothing" and "we could not check" are
+ * different statements and only the first is a fact about the install.
+ */
+export async function readableSlugsOfKind(
+  caller: ReadAccessCaller,
+  kind: "collection" | "single"
+): Promise<{ slugs: string[]; reachable: boolean }> {
   const registry = await registeredSlugsOfKind(kind);
-  if (!registry.reachable) return [];
+  if (!registry.reachable) return { slugs: [], reachable: false };
 
   const readable = await readableEntities(registry.slugs, caller);
-  return registry.slugs.filter(slug => readable.has(slug));
+  return {
+    slugs: registry.slugs.filter(slug => readable.has(slug)),
+    reachable: true,
+  };
 }

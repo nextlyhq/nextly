@@ -191,17 +191,13 @@ export class CollectionFileManager {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ): Promise<any> {
     const schemaKey = `dc_${collectionName.replace(/-/g, "_")}`;
-    consoleLogger.info("[FileManager] loadDynamicSchema called", {
-      collectionName,
-      schemaKey,
-    });
-    consoleLogger.info("[FileManager] Registry keys", {
-      detail: Array.from(this.schemaRegistry.keys()),
-    });
 
-    // First check registry (for code-first collections with pre-compiled schemas)
+    // First check registry (for code-first collections with pre-compiled schemas).
+    // A hit is the common case, reached on every query against a collection, so
+    // it logs nothing: a line per call, with the registry's whole key list, was
+    // thousands of lines per request burst and an array copy each time. The
+    // rarer paths below (a schema generated, or none found) still log.
     if (this.schemaRegistry.has(schemaKey)) {
-      consoleLogger.info("[FileManager] Found schema in registry");
       return this.schemaRegistry.get(schemaKey);
     }
 
