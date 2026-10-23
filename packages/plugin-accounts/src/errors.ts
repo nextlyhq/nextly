@@ -1,13 +1,44 @@
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
 /**
+ * The codes the accounts plugin raises.
+ *
+ * Written once, here: {@link CODES} must give each one its status and public
+ * message and may hold no other, so a code added or removed on one side alone
+ * fails to compile.
+ *
+ * @experimental
+ */
+export type AccountsErrorCode =
+  | "ACCOUNTS_INVALID_OPTIONS"
+  | "ACCOUNTS_CORE_MISSING"
+  | "ACCOUNTS_LIMITS_NOT_SHARED"
+  | "ACCOUNTS_NOT_STARTED"
+  | "ACCOUNTS_CROSS_SITE"
+  | "ACCOUNTS_INVALID_INPUT"
+  | "ACCOUNTS_WRONG_CREDENTIALS"
+  | "ACCOUNTS_WAIT"
+  | "ACCOUNTS_TOO_MANY_REQUESTS"
+  | "ACCOUNTS_TRY_AGAIN"
+  | "ACCOUNTS_DEACTIVATED"
+  | "ACCOUNTS_UNVERIFIED"
+  | "ACCOUNTS_LINK_REFUSED"
+  | "ACCOUNTS_WRONG_CODE"
+  | "ACCOUNTS_TOO_MANY_TRIES"
+  | "ACCOUNTS_SIGN_IN_NEEDED"
+  | "ACCOUNTS_SAME_ADDRESS"
+  | "ACCOUNTS_ADDRESS_TAKEN"
+  | "ACCOUNTS_NOT_FOUND"
+  | "ACCOUNTS_NOT_APPLICABLE";
+
+/**
  * Every code the accounts plugin raises, in its own namespace so a caller
  * branches on them without matching core's, with the status each answers
  * with and its public message. The message is fixed per code, so nothing a
  * caller sent is echoed back; the detail goes to `logContext`, which only
  * operators see.
  */
-const CODES = {
+const CODES: Record<AccountsErrorCode, readonly [number, string]> = {
   // A site's own configuration, or the core it runs, is the server's fault,
   // never a visitor's: 500.
   /** A plugin option outside the bounds the plugin keeps it within. */
@@ -84,14 +115,7 @@ const CODES = {
     409,
     "That can't be done to this account as it stands.",
   ],
-} as const satisfies Record<string, readonly [number, string]>;
-
-/**
- * The codes the accounts plugin raises.
- *
- * @experimental
- */
-export type AccountsErrorCode = keyof typeof CODES;
+};
 
 /**
  * Raise an accounts error: its fixed status and public message, `publicData`
