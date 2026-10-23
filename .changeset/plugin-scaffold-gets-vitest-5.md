@@ -29,9 +29,11 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A new plugin from `create-nextly-app` gets Vitest 5 (`vitest ^5.0.5`) instead of Vitest 4.
+A new plugin from `create-nextly-app` gets Vitest 5 (`vitest ^5.0.5`) instead of Vitest 4, with `vite` declared beside it (Yarn installs no peers, so `yarn test` could not load Vite without it).
 
-Vitest 5 needs Node 22.12 or later. In a test written for Vitest 4, check for these:
+Vitest 5 needs Node 22.12 or later, so the plugin's `package.json` now says so in `engines` (`^22.12.0 || ^24.0.0 || >=26.0.0`).
+
+In a test written for Vitest 4, check for these:
 
 - `expect(promise).resolves` or `.rejects` that isn't awaited now fails the test.
 - Mock call history is cleared before every test (`clearMocks` is on by default).

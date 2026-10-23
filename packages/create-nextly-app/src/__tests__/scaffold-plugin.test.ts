@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import {
   mkdir,
   mkdtemp,
@@ -25,6 +26,8 @@ import {
 
 import type { DatabaseConfig } from "../types";
 import { copyTemplate } from "../utils/template";
+
+const requireFromHere = createRequire(import.meta.url);
 
 /*
  * Scaffolded source is checked by its syntax tree rather than its text: a
@@ -281,6 +284,21 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     // `pnpm` field (pnpm 11 ignores that field). Without this, `pnpm install` aborts
     // on better-sqlite3 (the dev playground's native dep) with ERR_PNPM_IGNORED_BUILDS.
     expect(pkg.pnpm).toBeUndefined();
+
+    // The test runner it installs decides which Node it can run on and which
+    // Vite it needs. Read from the installed Vitest, so a Vitest upgrade that
+    // moves either one fails here rather than in a plugin author's first test.
+    const vitestManifest = requireFromHere("vitest/package.json") as {
+      engines: { node: string };
+      peerDependencies: { vite: string };
+    };
+    expect(pkg.engines.node).toBe(vitestManifest.engines.node);
+    const viteMajor = /^\^(\d+)\./.exec(pkg.devDependencies.vite)?.[1];
+    expect(
+      vitestManifest.peerDependencies.vite
+        .split("||")
+        .map(range => range.trim())
+    ).toContain(`^${viteMajor}.0.0`);
 
     /*
      * The scaffolded suite boots a real instance, so its budget is asserted
