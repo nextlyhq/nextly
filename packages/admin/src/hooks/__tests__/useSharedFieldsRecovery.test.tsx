@@ -223,6 +223,58 @@ describe("useSharedFieldsRecovery", () => {
     expect(toast.dismiss).toHaveBeenCalledWith(ids[0]);
   });
 
+  it("doesn't show the live values in a form the editor has moved to another language", async () => {
+    let arrive: (answer: unknown) => void = () => {};
+    take.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          arrive = resolve;
+        })
+    );
+    const onTaken = vi.fn();
+    const rendered = renderHook(
+      ({ locale }: { locale: string }) =>
+        useSharedFieldsRecovery({
+          scope: { kind: "collection", slug: "authors", entryId: "e1" },
+          locale,
+          fields: [{ name: "articleCount", label: "Article Count" }],
+          save: async () => undefined,
+          onTaken,
+        }),
+      { initialProps: { locale: "es" } }
+    );
+    const form = formHolding({ articleCount: 3 });
+    rendered.result.current(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      form
+    );
+
+    actionOf(toast.error.mock.calls[0])();
+    await vi.waitFor(() => expect(take).toHaveBeenCalled());
+    // The author moves to a language already loaded while the take is in
+    // flight. The editor keeps the one form, now showing that language.
+    rendered.rerender({ locale: "en" });
+    arrive({
+      message: "ok",
+      item: { taken: ["articleCount"], outOfDate: [] },
+    });
+    await vi.waitFor(() => expect(onTaken).toHaveBeenCalled());
+
+    // Spanish's live values are not written into the English form.
+    expect(form.adoptTaken).not.toHaveBeenCalled();
+    // The take itself named Spanish and stands; the reload shows it.
+    expect(take).toHaveBeenCalledWith(
+      { kind: "collection", slug: "authors", entryId: "e1" },
+      "es"
+    );
+    expect(toast.success).toHaveBeenCalledWith(
+      "Spanish now uses the live Article Count. Its earlier value is in History."
+    );
+  });
+
   it("leaves any other error to the caller", () => {
     const { recover } = renderRecovery();
     expect(

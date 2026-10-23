@@ -26,7 +26,7 @@
  * @module hooks/useSharedFieldsRecovery
  */
 
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import { toast } from "@admin/components/ui";
 import { useLocalization } from "@admin/hooks/useLocalization";
@@ -132,14 +132,20 @@ export function useSharedFieldsRecovery(args: {
   // the scope object, which callers build afresh on every render.
   const toastId = scope ? refusalToastId(scope, locale) : null;
 
+  // The document and language the editor shows now. An action taken before
+  // the editor moved keeps running: dismissing its toast does not stop a
+  // request already in flight, and the form it holds is a live reference to
+  // whatever is on screen, not to the document it was refused for.
+  const onScreen = useRef(toastId);
+
   // The toast's action saves this editor's form; once the editor shows
   // another document or language, or none, that form is not the refused one.
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    onScreen.current = toastId;
+    return () => {
       if (toastId) toast.dismiss(toastId);
-    },
-    [toastId]
-  );
+    };
+  }, [toastId]);
 
   return useCallback(
     (error: unknown, form: RefusedForm) => {
@@ -156,14 +162,20 @@ export function useSharedFieldsRecovery(args: {
       const named = fieldList(stale.fields.map(labelOf), stale.hiddenCount);
       const one = stale.fields.length + stale.hiddenCount === 1;
 
+      const refusedFor = refusalToastId(scope, locale);
       const take = async () => {
         try {
           // Read now, not when refused: edits made since are part of it.
           await save(await form.pendingChangeNow());
           const { item } = await versionApi.takeLiveSharedValues(scope, locale);
           // Before the reload, so the document it brings is the one the form
-          // takes the live values from.
-          form.adoptTaken(item.taken);
+          // takes the live values from. Only while the editor still shows the
+          // document and language this was refused for: moving to a language
+          // already loaded keeps the same form, and showing this language's
+          // live values in it would overwrite the other one's edits. The take
+          // itself named its own document and language, so it stands either
+          // way, and the reload below brings it to whatever is on screen.
+          if (onScreen.current === refusedFor) form.adoptTaken(item.taken);
           toast.success(takenMessage(item, language, labelOf));
           onTaken();
         } catch (failure) {
