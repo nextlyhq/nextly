@@ -674,6 +674,35 @@ describe.each(getConfiguredTestDialects())(
       expect(everyLanguage.statusCode).toBe(409);
     });
 
+    it("answers an entry deleted after the rule was asked as missing, not as a refusal", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: GROWING_ARTICLES,
+        data: { heading: "en", status: "draft" },
+      });
+      const { id } = created.item;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      // As the rule answers, the entry goes, so the lock finds no row: the
+      // comparison has nothing to read and the caller is told it is gone.
+      onFirstAsk = async () => {
+        await t.nextly.delete({ collection: GROWING_ARTICLES, id });
+      };
+
+      const everyLanguage = await handlerOf(t).updateEntry(
+        {
+          collectionName: GROWING_ARTICLES,
+          entryId: id,
+          overrideAccess: false,
+          user: USER,
+          locale: "*",
+        },
+        { status: "published" }
+      );
+      expect(everyLanguage.success).toBe(false);
+      expect(everyLanguage.statusCode).toBe(404);
+    });
+
     it("refuses a Single's publish of every language with a conflict when a language goes live after the rule was asked", async () => {
       const t = await boot(dialect);
       await singlesOf(t).update(
