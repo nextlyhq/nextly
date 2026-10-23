@@ -13,7 +13,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import { importedSpecifiers } from "@nextlyhq/module-specifiers";
 import { describe, expect, it } from "vitest";
 
 const SRC = dirname(fileURLToPath(import.meta.url));
@@ -21,15 +21,14 @@ const ROOT_ENTRIES = ["index.ts", join("testing", "index.ts")];
 const NEXT_ENTRY = join(SRC, "next", "index.ts");
 
 /**
- * Every module a source names, as TypeScript's own pre-processor reads it:
- * static imports and re-exports, `import()` and `require()` of a literal.
- * Type-only imports count too: a root whose declarations name `next` breaks
- * a site's type-check without Next.js as surely as one that loads it.
+ * Every module a source names, as the repository's one reader of imports reads
+ * it: static imports and re-exports, `import()` and `require()`, a target it
+ * cannot read as a marker that matches nothing. Type-only imports count too: a
+ * root whose declarations name `next` breaks a site's type-check without
+ * Next.js as surely as one that loads it.
  */
-function importsIn(source: string): string[] {
-  return ts
-    .preProcessFile(source, true, true)
-    .importedFiles.map(file => file.fileName);
+function importsIn(source: string, fileName: string): string[] {
+  return importedSpecifiers(source, fileName);
 }
 
 /** A relative import's file, or null for a package or a JSON file, which imports nothing. */
@@ -54,7 +53,7 @@ function graphOf(entry: string): Set<string> {
   for (let file = queue.pop(); file !== undefined; file = queue.pop()) {
     if (seen.has(file)) continue;
     seen.add(file);
-    for (const specifier of importsIn(readFileSync(file, "utf8"))) {
+    for (const specifier of importsIn(readFileSync(file, "utf8"), file)) {
       const next = resolve(file, specifier);
       if (next !== null) queue.push(next);
     }
@@ -81,7 +80,7 @@ function isNext(specifier: string): boolean {
 /** The files of a graph that name a `next` module, with what they name. */
 function nextImportsIn(files: Iterable<string>): string[] {
   return [...files].flatMap(file =>
-    importsIn(readFileSync(file, "utf8"))
+    importsIn(readFileSync(file, "utf8"), file)
       .filter(isNext)
       .map(specifier => `${relative(SRC, file)}: ${specifier}`)
   );
@@ -99,7 +98,8 @@ describe("the import reader", () => {
           'const old = require("next/server");',
           "const text = \"import { x } from 'next/form'\";",
           '// import "next/script";',
-        ].join("\n")
+        ].join("\n"),
+        "probe.ts"
       )
     ).toEqual([
       "next/headers",

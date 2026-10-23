@@ -239,6 +239,12 @@ describe("whether a reference survives to runtime", () => {
     ]);
   });
 
+  it("reports a type-only import-equals as erased", () => {
+    expect(refs(`import type a = require("pkg");`)).toEqual([
+      { specifier: "pkg", typeOnly: true },
+    ]);
+  });
+
   it("reports typeof import as erased", () => {
     expect(refs(`type A = typeof import("pkg");`)).toEqual([
       { specifier: "pkg", typeOnly: true },

@@ -6,7 +6,8 @@ import {
   importedSpecifiers,
   UNRESOLVABLE_SPECIFIER,
 } from "@nextlyhq/module-specifiers";
-import ts from "typescript";
+import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
+import type { Node } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 import {
   collectModules,
@@ -114,7 +115,8 @@ const ALLOWED_IN_TESTS = [
   // first client render disagree is repaired by React discarding the subtree,
   // and `renderToString` is the only way to observe that from a test.
   "react-dom/server",
-  "typescript",
+  "@nextlyhq/module-specifiers/parse-source",
+  "oxc-parser",
   "vitest",
 ];
 
@@ -405,25 +407,21 @@ describe("the builder's layering contract", () => {
     // out again. Importing the config to compare values is not available —
     // `rootDir` is `src`, and reaching outside it fails `check-types` (TS6059).
     const configPath = join(SRC_DIR, "..", "vitest.config.ts");
-    const config = ts.createSourceFile(
-      "vitest.config.ts",
-      readFileSync(configPath, "utf8"),
-      ts.ScriptTarget.ESNext,
-      true
-    );
+    const configText = readFileSync(configPath, "utf8");
+    const config = parseSource(configText, "vitest.config.ts");
 
-    let includeInitialiser: ts.Expression | undefined;
-    const visit = (node: ts.Node): void => {
+    let includeInitialiser: Node | undefined;
+    walk(config.program, node => {
       if (
-        ts.isPropertyAssignment(node) &&
-        ts.isIdentifier(node.name) &&
-        node.name.text === "include"
+        node.type === "Property" &&
+        !node.shorthand &&
+        !node.computed &&
+        node.key.type === "Identifier" &&
+        node.key.name === "include"
       ) {
-        includeInitialiser = node.initializer;
+        includeInitialiser = node.value;
       }
-      ts.forEachChild(node, visit);
-    };
-    visit(config);
+    });
 
     // Positive control: an `include` that stopped being found would make the
     // assertion below vacuous, and this guard exists because a check that
@@ -433,12 +431,8 @@ describe("the builder's layering contract", () => {
       "vitest.config.ts must set `include`"
     ).toBeDefined();
     expect(
-      includeInitialiser && ts.isIdentifier(includeInitialiser)
-        ? includeInitialiser.text
-        : config.text.slice(
-            includeInitialiser!.getStart(config),
-            includeInitialiser!.getEnd()
-          )
+      includeInitialiser &&
+        configText.slice(includeInitialiser.start, includeInitialiser.end)
     ).toBe("TEST_GLOBS");
   });
 });

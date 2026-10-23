@@ -100,10 +100,11 @@ export interface ModuleSpecifierRef {
   /**
    * Whether this reference is erased before anything runs.
    *
-   * True for `import type`, `export type`, `typeof import()`, a JSDoc
-   * `@import` and a triple-slash type reference. False for everything that
-   * survives into the emitted module: a plain import, a bare side-effect
-   * import, `import(...)`, `require(...)` and `import x = require(...)`.
+   * True for `import type` (including `import type x = require()`), `export
+   * type`, `typeof import()`, a JSDoc `@import` and a triple-slash type
+   * reference. False for everything that survives into the emitted module: a
+   * plain import, a bare side-effect import, `import(...)`, `require(...)` and
+   * `import x = require(...)`.
    *
    * 🔴 A mixed clause such as `import { a, type B } from "pkg"` is NOT type-only.
    * The module is still loaded for `a`, and reading the inline `type` keyword as
@@ -337,7 +338,12 @@ export function moduleSpecifierRefs(
     },
     TSImportEqualsDeclaration(node) {
       if (node.moduleReference.type === "TSExternalModuleReference") {
-        add(node.start, node.moduleReference.expression, false);
+        // `import type x = require("pkg")` erases like any `import type`.
+        add(
+          node.start,
+          node.moduleReference.expression,
+          node.importKind === "type"
+        );
       }
     },
     CallExpression(node: CallExpression) {
