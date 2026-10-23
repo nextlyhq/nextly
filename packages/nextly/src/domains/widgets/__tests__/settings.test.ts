@@ -528,7 +528,11 @@ describe("applyWidgetSettings drives only the knobs it declares", () => {
       )
     ).toBe(base);
     // No declared source at all: the card's collection is its source.
-    const sourceless = { op: "list" as const, limit: 5 };
+    // Typed with the source it does not have yet, which the knob gives it.
+    const sourceless: { source?: string; op: "list"; limit: number } = {
+      op: "list",
+      limit: 5,
+    };
     expect(
       applyWidgetSettings(sourceless, [collection], { collection: "pages" })
         .source
