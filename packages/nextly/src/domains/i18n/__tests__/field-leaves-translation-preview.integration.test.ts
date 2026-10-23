@@ -285,6 +285,29 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     });
   });
 
+  // Five entries in two groups sharing an English heading, of two and of three: every entry in
+  // either is in the way, so the preview counts five, as Apply's refusal does.
+  it("counts the entries of every group that would share a value for a Unique field", async () => {
+    await seedCollection();
+    const entries = handler().getEntryService();
+    for (const heading of ["One", "Two", "Two"]) {
+      const entry = await entries.createEntry(
+        { collectionName: "posts", overrideAccess: true, locale: "en" },
+        { heading, views: 1 }
+      );
+      expect(entry.success, JSON.stringify(entry)).toBe(true);
+    }
+
+    const preview = await previewShared([
+      { name: "heading", type: "text", unique: true, localized: false },
+      { name: "views", type: "number" },
+    ]);
+
+    expect(preview.leavingTranslation?.[0]?.refusal?.reason).toMatch(
+      /^5 entries would share a value for heading, which must be unique/
+    );
+  });
+
   it("counts a Single's values", async () => {
     await dispatchSingles(
       "createSingle",

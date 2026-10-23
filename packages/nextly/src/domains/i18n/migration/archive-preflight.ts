@@ -18,7 +18,10 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
-import { companionColumnNames } from "../runtime/companion-io";
+import {
+  companionColumnNames,
+  localizedColumnsOnMain,
+} from "../runtime/companion-io";
 
 import { ensureI18nArchive } from "./ensure-archive";
 import { fieldsJoiningTranslation } from "./field-joins-translation";
@@ -97,8 +100,9 @@ async function writeArchiveFirst(
  * writes are safe to repeat, so the companion transition that later drops the column, and a
  * migration file replayed elsewhere, can make them again without adding rows. Should a later step
  * of the change be refused, the rows written here are copies of values that are still in place.
- * A leaving field whose companion column an earlier apply of the change already dropped is neither
- * judged nor archived again (`movedLeavingFields`), so the same change, retried, can finish.
+ * A leaving field whose values an earlier apply of the change already moved onto the main table,
+ * dropping its companion column, is neither judged nor archived again (`movedLeavingFields`), so
+ * the same change, retried, can finish.
  *
  * Nothing is asked when no field leaves translation, or when the entity is not translated before
  * and after the change (turning translation off for the whole entity archives by its own path).
@@ -186,7 +190,7 @@ export async function archiveFieldsLeavingTranslation(args: {
     live,
     renamedColumn(rename, args.builtBy, dialect)
   );
-  const moved = movedLeavingFields(live, {
+  const moved = await movedLeavingFields(args.adapter, args.tableName, live, {
     leaving,
     oldFields,
     renamedFrom,
@@ -351,14 +355,22 @@ function renamedSource(
 }
 
 /**
- * The leaving fields whose values are no longer on the companion: the column they are read from
- * (under its old name for a renamed field, `renamedFrom`) is not among its `live` columns. An
- * earlier apply of the same change copied their default language's values onto the main table,
- * archived the other languages and dropped the column, then stopped before the registry recorded
- * it, for instance when the push applying a Required or Unique setting was refused. A retry has
- * no values of theirs left to judge or archive.
+ * The leaving fields whose values an earlier apply of the same change already moved: the column
+ * they are read from (under its old name for a renamed field, `renamedFrom`) is not among the
+ * companion's `live` columns, AND the main table has the field's shared column. That apply copied
+ * their default language's values onto the main table, archived the other languages and dropped
+ * the companion column, then stopped before the registry recorded it, for instance when the push
+ * applying a Required or Unique setting was refused. A retry has no values of theirs left to judge
+ * or archive.
+ *
+ * A companion column missing while the main table has no shared column either is not that state
+ * (a companion that drifted, or was only partly provisioned), so such a field is judged and
+ * archived as any other, and the read of its missing column refuses the change before any schema
+ * work. The main table is read only when a companion column is missing.
  */
-function movedLeavingFields(
+async function movedLeavingFields(
+  adapter: DrizzleAdapter,
+  tableName: string,
   live: ReadonlySet<string>,
   args: {
     leaving: ReadonlySet<string>;
@@ -367,19 +379,24 @@ function movedLeavingFields(
     builtBy: ColumnOrigin;
     dialect: SupportedDialect;
   }
-): Set<string> {
+): Promise<Set<string>> {
+  const columnOf = (f: LeavingFieldLike) =>
+    fieldToLocalizedColumnSpec(f, args.dialect, args.builtBy)?.name;
+  const offCompanion = args.oldFields.filter(f => {
+    const col = args.leaving.has(f.name) ? columnOf(f) : undefined;
+    return col !== undefined && !live.has(args.renamedFrom?.get(col) ?? col);
+  });
+  if (offCompanion.length === 0) return new Set();
+  const onMain = new Set(
+    (await localizedColumnsOnMain(adapter, tableName, offCompanion)).map(
+      c => c.name
+    )
+  );
   return new Set(
-    args.oldFields
-      .filter(f => args.leaving.has(f.name))
+    offCompanion
       .filter(f => {
-        const col = fieldToLocalizedColumnSpec(
-          f,
-          args.dialect,
-          args.builtBy
-        )?.name;
-        return (
-          col !== undefined && !live.has(args.renamedFrom?.get(col) ?? col)
-        );
+        const col = columnOf(f);
+        return col !== undefined && onMain.has(col);
       })
       .map(f => f.name)
   );

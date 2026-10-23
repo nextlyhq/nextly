@@ -561,6 +561,7 @@ describeEachDialect(
     /** The registry table of each entity a schema dialog changes, and its slug there. */
     const REGISTRY: Record<string, { table: string; slug: string }> = {
       collection: { table: "dynamic_collections", slug: "posts" },
+      single: { table: "dynamic_singles", slug: "hero" },
       fieldGroup: { table: "dynamic_components", slug: "promo" },
     };
 
@@ -636,6 +637,87 @@ describeEachDialect(
         expect(
           await inserts(rowFor(path.table, "kept-1", "'kept@example.com'"))
         ).toBe(true);
+      }
+    );
+
+    // Both settings at once: the shared column is added holding neither and takes both after the
+    // copy, so what the entries must satisfy is asked of the values that copy writes, not of the
+    // one placeholder an added Required column would otherwise start with in every entry.
+    it.each(
+      PATHS.filter(p => p.entity === "collection").map(p => ({
+        ...p,
+        required: notNullSkipped(p, "required")
+          ? "takes a row without one, as SQLite skips column modification on a save"
+          : "enforces Required",
+      }))
+    )(
+      "keeps English's values as the shared ones for a field both Required and Unique, enforcing Unique, and $required, when $path",
+      async path => {
+        const english = ["a1@example.com", "b2@example.com"];
+        const flags = { required: true, unique: true };
+        await seedConstrained(path, flags, english);
+
+        await path.change([{ ...CODE, localized: false, ...flags }, VIEWS]);
+
+        expect(await sharedCodes(path.table)).toEqual(english);
+        // A row keeping both first, so a refusal of the two that follow is their value's.
+        expect(
+          await inserts(rowFor(path.table, "kept-1", "'kept@example.com'"))
+        ).toBe(true);
+        expect(
+          await inserts(rowFor(path.table, "duplicate-1", "'a1@example.com'"))
+        ).not.toBe(true);
+        expect(
+          (await inserts(rowFor(path.table, "missing-1", "NULL"))) === true
+        ).toBe(notNullSkipped(path, "required"));
+      }
+    );
+
+    // Two groups of entries sharing a value, of two and of three: every entry in either is in the
+    // way, so the refusal counts five.
+    it.each(PATHS.filter(p => p.entity !== "single"))(
+      "counts the entries of every group that would share a value, when $path",
+      async path => {
+        await seedConstrained(path, {}, [
+          "two@example.com",
+          "two@example.com",
+          "three@example.com",
+          "three@example.com",
+          "three@example.com",
+        ]);
+
+        const refusal = await attempt(
+          path.change([{ ...CODE, localized: false, unique: true }, VIEWS])
+        );
+
+        expect(reported(refusal)).toMatch(
+          /5 entries would share a value for code, which must be unique/
+        );
+      }
+    );
+
+    // A companion missing the field's column while the main table has none either is not a change
+    // an earlier apply left part-way: its values are nowhere this change can read. The save is
+    // refused before any schema work, as one whose values cannot be read.
+    it.each(PATHS)(
+      "refuses before any schema change when the companion lacks the field's column and the main table has none, when $path",
+      async path => {
+        const english =
+          path.entity === "single"
+            ? ["a1@example.com"]
+            : ["a1@example.com", "b2@example.com"];
+        await seedConstrained(path, {}, english);
+        await query(
+          `ALTER TABLE ${q(`${path.table}_locales`)} DROP COLUMN ${q("code")}`
+        );
+
+        const refusal = await attempt(
+          path.change([{ ...CODE, localized: false, unique: true }, VIEWS])
+        );
+
+        expect(refusal).toBeInstanceOf(Error);
+        expect(await columnsOf(path.table)).not.toContain("code");
+        expect(await registryTranslatesCode(path.entity)).not.toBe(false);
       }
     );
   }

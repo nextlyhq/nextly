@@ -98,7 +98,10 @@ export async function refusalsForConstrainedFieldsLeaving(args: {
     );
     return Number(row?.n ?? 0);
   };
-  /** How many entries would share the commonest repeated value; the value is never read. */
+  /**
+   * How many entries would share a value with another entry: every entry of every value held more
+   * than once, summed over those values, so two pairs count four. The values are never read.
+   */
   const sharing = async (col: string) => {
     const shared = restoredValue(
       {
@@ -110,8 +113,8 @@ export async function refusalsForConstrainedFieldsLeaving(args: {
       `${companion}.${col}`
     );
     const [row] = await adapter.executeQuery<{ n: number | string }>(
-      `SELECT COUNT(*) AS n FROM (SELECT ${shared} AS v FROM ${main}) s ` +
-        `WHERE s.v IS NOT NULL GROUP BY s.v HAVING COUNT(*) > 1 ORDER BY COUNT(*) DESC LIMIT 1`
+      `SELECT COALESCE(SUM(g.n), 0) AS n FROM (SELECT COUNT(*) AS n FROM (SELECT ${shared} AS v FROM ${main}) s ` +
+        `WHERE s.v IS NOT NULL GROUP BY s.v HAVING COUNT(*) > 1) g`
     );
     return Number(row?.n ?? 0);
   };

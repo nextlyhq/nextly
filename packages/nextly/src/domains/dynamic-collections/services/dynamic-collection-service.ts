@@ -1506,8 +1506,24 @@ export class DynamicCollectionService extends BaseService {
         );
         return fields.filter(f => !translated.has(f.name));
       };
+      // A field that stops being translated while the collection stays translated: main gains its
+      // column in this save, so the companion transition has a shared column to copy the default
+      // language's value into before it drops its own.
+      const leavingTranslation = new Set(
+        collectionWasLocalized && collectionIsLocalized
+          ? fieldsLeavingTranslation(oldUserFields, userDefinedFields)
+          : []
+      );
       const mainBefore = onMain(oldUserFields, collectionWasLocalized);
-      const mainAfter = onMain(userDefinedFields, collectionIsLocalized);
+      // Judged in the shape the main diff adds it with: a leaving field's column comes without its
+      // Required or Unique setting and takes it once the default language's values are copied in,
+      // and whether those values can take it is asked by the preflight above
+      // (`archiveFieldsLeavingTranslation`). Judged with the setting, an added Required column
+      // would be checked holding one placeholder in every entry.
+      const mainAfter = withoutLeavingConstraints(
+        onMain(userDefinedFields, collectionIsLocalized),
+        leavingTranslation
+      );
       // A table still to be deployed holds no entries, so there is nothing to check yet.
       const tableDeployed = await this.adapter.tableExists(
         collection.tableName
@@ -1569,14 +1585,6 @@ export class DynamicCollectionService extends BaseService {
             collectionIsLocalized
           ),
         ]);
-        // A field that stops being translated while the collection stays translated is the
-        // exception: main gains its column here, so the companion transition below has a
-        // shared column to copy the default language's value into before it drops its own.
-        const leavingTranslation = new Set(
-          collectionWasLocalized && collectionIsLocalized
-            ? fieldsLeavingTranslation(oldUserFields, userDefinedFields)
-            : []
-        );
         // A field that becomes translated while the collection stays translated: its main column
         // goes, so the main diff has to see it as there before and gone after. Its value moves to
         // the default language's companion row first, ahead of this diff (see the companion
