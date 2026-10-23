@@ -1386,7 +1386,11 @@ export class ActivityLogService extends BaseService {
           ...this.mapRow(row, options.singles?.labels),
           locale: toNullableString(row.locale),
         })),
-        hasMore: saves.length > limit,
+        // A walk that stopped at its bound before the table's end has not seen
+        // what lies past it, so older documents may still exist: "more" then,
+        // as the feed's own paging says, rather than a claim that the list
+        // ended.
+        hasMore: saves.length > limit || !visible.end,
       };
     } catch (error) {
       this.logger.error("Failed to query recent edits", {
