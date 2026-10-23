@@ -97,6 +97,8 @@ async function writeArchiveFirst(
  * writes are safe to repeat, so the companion transition that later drops the column, and a
  * migration file replayed elsewhere, can make them again without adding rows. Should a later step
  * of the change be refused, the rows written here are copies of values that are still in place.
+ * A leaving field whose companion column an earlier apply of the change already dropped is neither
+ * judged nor archived again (`movedLeavingFields`), so the same change, retried, can finish.
  *
  * Nothing is asked when no field leaves translation, or when the entity is not translated before
  * and after the change (turning translation off for the whole entity archives by its own path).
@@ -175,14 +177,22 @@ export async function archiveFieldsLeavingTranslation(args: {
     return;
   }
   const dialect = args.adapter.getCapabilities().dialect;
-  // Where a renamed field's values are now: in the column it had, until an earlier apply renamed
-  // it; and nowhere on the companion once an earlier apply finished moving them and stopped before
-  // the registry recorded it, so its archive rows are already written.
-  const source = await renamedSource(
-    args.adapter,
-    args.tableName,
+  // The companion's columns as this database has them, read once: they say where a renamed field's
+  // values are, and which leaving fields an earlier apply already moved.
+  const live = new Set(
+    await companionColumnNames(args.adapter, args.tableName)
+  );
+  const renamedFrom = renamedSource(
+    live,
     renamedColumn(rename, args.builtBy, dialect)
   );
+  const moved = movedLeavingFields(live, {
+    leaving,
+    oldFields,
+    renamedFrom,
+    builtBy: args.builtBy,
+    dialect,
+  });
 
   const shapeRefusals = [
     ...refusalsForFieldsLeavingTranslation({
@@ -213,17 +223,15 @@ export async function archiveFieldsLeavingTranslation(args: {
       tableName: args.tableName,
       builtBy: args.builtBy,
       defaultLocale: args.defaultLocale,
-      // A renamed field whose values an earlier apply already moved has none left here to ask.
+      // A field whose values an earlier apply already moved has none left here to ask.
       leaving: new Set(
         [...leaving].filter(
-          name =>
-            !refusedPaths.has(`fields.${name}`) &&
-            !(source.moved && name === rename?.to.name)
+          name => !refusedPaths.has(`fields.${name}`) && !moved.has(name)
         )
       ),
       oldFields,
       newFields: args.newFields,
-      renamedFrom: source.renamedFrom,
+      renamedFrom,
       surface: "builder",
     })),
   ];
@@ -248,11 +256,10 @@ export async function archiveFieldsLeavingTranslation(args: {
       dialect,
       builtBy: args.builtBy,
       defaultLocale: args.defaultLocale,
-      oldFields: source.moved
-        ? oldFields.filter(f => f.name !== rename?.to.name)
-        : oldFields,
+      // A moved field's archive rows were written by the apply that moved it.
+      oldFields: oldFields.filter(f => !moved.has(f.name)),
       newFields: args.newFields,
-      renamedFrom: source.renamedFrom,
+      renamedFrom,
     })
   );
 }
@@ -330,21 +337,52 @@ async function refuseRenameAsTranslationEnds(
 }
 
 /**
- * The renamed field's values as this database has them (`renamed` maps its new column to its old
- * one): read from the old column while it is there; from the new one once an earlier apply renamed
- * it; and `moved` when neither is left, because an earlier apply copied them out, archived them and
- * dropped the column, then stopped before the registry recorded the change.
+ * Where the renamed field's values are read from (`renamed` maps its new column to its old one):
+ * the old column while the companion `live` still has it; undefined once an earlier apply renamed
+ * it, so they are read under the new name.
  */
-async function renamedSource(
-  adapter: DrizzleAdapter,
-  tableName: string,
+function renamedSource(
+  live: ReadonlySet<string>,
   renamed: ReadonlyMap<string, string> | undefined
-): Promise<{ renamedFrom?: ReadonlyMap<string, string>; moved: boolean }> {
-  if (!renamed) return { moved: false };
-  const live = new Set(await companionColumnNames(adapter, tableName));
-  const [[to, from]] = [...renamed];
-  if (live.has(from)) return { renamedFrom: renamed, moved: false };
-  return { moved: !live.has(to) };
+): ReadonlyMap<string, string> | undefined {
+  if (!renamed) return undefined;
+  const [[, from]] = [...renamed];
+  return live.has(from) ? renamed : undefined;
+}
+
+/**
+ * The leaving fields whose values are no longer on the companion: the column they are read from
+ * (under its old name for a renamed field, `renamedFrom`) is not among its `live` columns. An
+ * earlier apply of the same change copied their default language's values onto the main table,
+ * archived the other languages and dropped the column, then stopped before the registry recorded
+ * it, for instance when the push applying a Required or Unique setting was refused. A retry has
+ * no values of theirs left to judge or archive.
+ */
+function movedLeavingFields(
+  live: ReadonlySet<string>,
+  args: {
+    leaving: ReadonlySet<string>;
+    oldFields: readonly LeavingFieldLike[];
+    renamedFrom: ReadonlyMap<string, string> | undefined;
+    builtBy: ColumnOrigin;
+    dialect: SupportedDialect;
+  }
+): Set<string> {
+  return new Set(
+    args.oldFields
+      .filter(f => args.leaving.has(f.name))
+      .filter(f => {
+        const col = fieldToLocalizedColumnSpec(
+          f,
+          args.dialect,
+          args.builtBy
+        )?.name;
+        return (
+          col !== undefined && !live.has(args.renamedFrom?.get(col) ?? col)
+        );
+      })
+      .map(f => f.name)
+  );
 }
 
 /**

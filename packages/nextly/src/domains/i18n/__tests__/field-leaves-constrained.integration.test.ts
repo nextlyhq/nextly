@@ -16,6 +16,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
+import { NextlyError } from "../../../errors/nextly-error";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -23,6 +24,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
+import { PushSchemaPipeline } from "../../schema/pipeline/pushschema-pipeline";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 
 interface Entries {
@@ -511,6 +513,88 @@ describeEachDialect(
           /2 entries would share a value for code, which must be unique/
         );
         expect(await columnsOf(path.table)).not.toContain("code");
+      }
+    );
+
+    /** The registry table of each entity a schema dialog changes, and its slug there. */
+    const REGISTRY: Record<string, { table: string; slug: string }> = {
+      collection: { table: "dynamic_collections", slug: "posts" },
+      fieldGroup: { table: "dynamic_components", slug: "promo" },
+    };
+
+    /** Whether the registry still describes `code` as translated. */
+    async function registryTranslatesCode(entity: string): Promise<unknown> {
+      const { table, slug } = REGISTRY[entity];
+      const [row] = await query<{ fields: unknown }>(
+        `SELECT ${q("fields")} AS fields FROM ${q(table)} WHERE ${q("slug")} = '${slug}'`
+      );
+      const fields = (
+        typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
+      ) as { name: string; localized?: boolean }[];
+      return fields.find(f => f.name === "code")?.localized;
+    }
+
+    // A dialog's apply shares the values, drops the companion column and only then pushes the
+    // Unique setting. When that last push fails (here a write landing in between gives a second
+    // entry an existing value), the values already sit on the main table while the registry still
+    // names the field translated, so the same save, retried, has to finish from that state.
+    it.each(
+      PATHS.filter(
+        p => p.path.includes("schema dialog") && p.entity !== "single"
+      )
+    )(
+      "finishes on a retry after the push applying Unique fails once the values are shared, when $path",
+      async path => {
+        const english = ["a1@example.com", "b2@example.com"];
+        await seedConstrained(path, { unique: true }, english);
+        const change = [{ ...CODE, localized: false, unique: true }, VIEWS];
+
+        // The real push, run as it is; before the second one in the save, a row sharing an
+        // entry's value is written to the main table, so that push is refused by the database.
+        const realApply = PushSchemaPipeline.prototype.apply;
+        let pushes = 0;
+        const spy = vi
+          .spyOn(PushSchemaPipeline.prototype, "apply")
+          .mockImplementation(async function (
+            this: PushSchemaPipeline,
+            ...args: Parameters<PushSchemaPipeline["apply"]>
+          ) {
+            pushes += 1;
+            if (pushes === 2) {
+              await query(
+                rowFor(path.table, "concurrent-1", "'a1@example.com'")
+              );
+            }
+            return realApply.apply(this, args);
+          });
+        const failure = await attempt(path.change(change));
+        spy.mockRestore();
+
+        expect(pushes).toBe(2);
+        expect(failure).toBeInstanceOf(NextlyError);
+        expect((failure as NextlyError).logContext?.op).toBe(
+          "leavingFieldSettings"
+        );
+        // The state the retry starts from: values shared, companion column gone, registry behind.
+        expect(await columnsOf(`${path.table}_locales`)).not.toContain("code");
+        expect(await registryTranslatesCode(path.entity)).not.toBe(false);
+
+        await query(
+          `DELETE FROM ${q(path.table)} WHERE ${q("id")} = 'concurrent-1'`
+        );
+        await path.change(change);
+
+        expect(await registryTranslatesCode(path.entity)).toBe(false);
+        expect(await sharedCodes(path.table)).toEqual(english);
+        // The row sharing an entry's value first, then one of the same shape that does not: the
+        // second is taken, so the first was refused for its value, not for its shape or for the
+        // fixed slug a collection's rows here carry, which only one of them can hold.
+        expect(
+          await inserts(rowFor(path.table, "broken-1", "'a1@example.com'"))
+        ).not.toBe(true);
+        expect(
+          await inserts(rowFor(path.table, "kept-1", "'kept@example.com'"))
+        ).toBe(true);
       }
     );
   }
