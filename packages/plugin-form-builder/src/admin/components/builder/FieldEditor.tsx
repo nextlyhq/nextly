@@ -34,7 +34,7 @@ import {
   SelectValue,
 } from "@nextlyhq/ui";
 import { validationRulesForFieldType } from "nextly/field-catalog";
-import { useState, useCallback, useMemo } from "react";
+import { type JSX, useState, useCallback, useMemo } from "react";
 
 import type {
   AnyFieldValidation,
@@ -594,7 +594,11 @@ function ValidationTab({
  * />
  * ```
  */
-export function FieldEditor({ field, allFields, onUpdate }: FieldEditorProps) {
+export function FieldEditor({
+  field,
+  allFields,
+  onUpdate,
+}: FieldEditorProps): JSX.Element {
   const [activeTab, setActiveTab] = useState<string>("general");
 
   return (
