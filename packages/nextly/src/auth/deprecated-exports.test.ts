@@ -126,6 +126,45 @@ describe("a deprecated nextly/auth export", () => {
     });
   }
 
+  it("authenticateApiKey still authenticates a Bearer key through the validator it is given", async () => {
+    const auth = await freshAuth();
+    const validateApiKey = vi.fn(async (rawKey: string) =>
+      rawKey === "good-key"
+        ? {
+            valid: true,
+            userId: "user-1",
+            permissions: new Map([["read-posts", true]]),
+            roles: ["editor"],
+          }
+        : { valid: false, error: "Invalid API key" }
+    );
+    const bearer = (key: string) =>
+      new Request("http://localhost/api/posts", {
+        headers: { authorization: `Bearer ${key}` },
+      });
+
+    const accepted = await auth.authenticateApiKey(bearer("good-key"), {
+      validateApiKey,
+    });
+    expect(validateApiKey).toHaveBeenCalledWith("good-key");
+    expect(accepted).toMatchObject({
+      userId: "user-1",
+      authMethod: "api-key",
+      roles: ["editor"],
+    });
+    expect(
+      accepted && "permissions" in accepted
+        ? accepted.permissions.get("read-posts")
+        : undefined
+    ).toBe(true);
+
+    const refused = await auth.authenticateApiKey(bearer("bad-key"), {
+      validateApiKey,
+    });
+    expect(validateApiKey).toHaveBeenCalledWith("bad-key");
+    expect(refused).toMatchObject({ statusCode: 401 });
+  });
+
   it("is not warned about by the exports that stay", async () => {
     const auth = await freshAuth();
     // POPULATION CONTROL: the same module, an export that is not deprecated.
