@@ -83,18 +83,18 @@ export default defineConfig({
       `${REPO_ROOT}apps/**/*.{ts,tsx,js,jsx}`,
       `${REPO_ROOT}templates/**/*.{ts,tsx,js,jsx}`,
       "**/src/**/*.css",
-      // The declaration build runs through both tsup configs, and a child
+      // The declaration build runs through both tsdown configs, and a child
       // process loads them — they are in no module graph Vitest can invalidate,
       // so a config that stops emitting an entry point would leave the last
       // green surface result on screen.
       //
-      // Deliberately NOT written `**/tsup*.config.*/**` to match the shape of
+      // Deliberately NOT written `**/tsdown*.config.*/**` to match the shape of
       // the entries above, because that shape does not match a FILE. Measured
       // against the picomatch Vitest matches with:
       //
       //   `**/package.json/**`     vs `packages/ui/package.json`     -> true
       //   `**/vitest.config.*/**`  vs `packages/ui/vitest.config.ts` -> false
-      //   `**/tsup*.config.*`      vs `packages/ui/tsup.config.ts`   -> true
+      //   `**/tsdown*.config.*`    vs `packages/ui/tsdown.config.ts` -> true
       //
       // Only a trailing literal segment collapses onto the file; a segment
       // holding a `*` does not. So two of the three defaults above match
@@ -102,7 +102,7 @@ export default defineConfig({
       // restarts the server anyway, and they are kept to stay in step with the
       // defaults they replace. A trigger for these configs has to be written
       // without the suffix or it would silently never fire.
-      "**/tsup*.config.*",
+      "**/tsdown*.config.*",
     ],
   },
 });

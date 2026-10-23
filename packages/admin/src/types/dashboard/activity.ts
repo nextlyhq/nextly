@@ -74,6 +74,14 @@ export interface Activity {
    * relative time in the admin already is.
    */
   timestamp: string;
+  /**
+   * How many saves this row stands for: one person's repeated saves of one
+   * document are one row, at the latest save's time. Absent means one, so an
+   * activity built anywhere else, a sign-in among them, needs neither field.
+   */
+  count?: number;
+  /** Whether `count` is a floor, drawn `N+`: the server stopped reading inside the run. Absent means not. */
+  countAtLeast?: boolean;
 }
 
 /**

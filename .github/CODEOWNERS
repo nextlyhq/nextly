@@ -34,7 +34,6 @@ turbo.jsonc                  @mobeenabdullah
 # sits, and the Node version every workflow reads.
 tsconfig*.json               @mobeenabdullah
 eslint*.config.*             @mobeenabdullah
-tsup*.config.*               @mobeenabdullah
 tsdown*.config.*             @mobeenabdullah
 rollup*.config.*             @mobeenabdullah
 next.config.*                @mobeenabdullah

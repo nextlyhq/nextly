@@ -20,6 +20,14 @@
   "tasks": {
     "check-types": {
       "dependsOn": ["^check-types", "^build"]
+    },
+    "build": {
+      // `next build` compiles Tailwind with automatic detection from this
+      // directory, which reads class names out of every file under it, tests
+      // and Markdown included. So unlike the shared build inputs, this hash
+      // keeps them: a class used only there still lands in the compiled sheet,
+      // and leaving it out would replay a stale one.
+      "inputs": ["$TURBO_DEFAULT$", ".env*"]
     }
   }
 }
