@@ -77,7 +77,28 @@ export interface WebhookEndpointSummary {
  * "Expire immediately" is 0; the rest let the rotated-away secret keep signing
  * for a while so a receiver can switch over. The default matches the backend.
  */
-export const WEBHOOK_ROTATION_WINDOWS = [
+export const WEBHOOK_ROTATION_WINDOWS: readonly [
+  {
+    readonly seconds: 0;
+    readonly label: "Expire immediately";
+  },
+  {
+    readonly seconds: number;
+    readonly label: "24 hours";
+  },
+  {
+    readonly seconds: number;
+    readonly label: "48 hours";
+  },
+  {
+    readonly seconds: number;
+    readonly label: "7 days";
+  },
+  {
+    readonly seconds: number;
+    readonly label: "30 days";
+  },
+] = [
   { seconds: 0, label: "Expire immediately" },
   { seconds: 24 * 60 * 60, label: "24 hours" },
   { seconds: 48 * 60 * 60, label: "48 hours" },
@@ -86,7 +107,7 @@ export const WEBHOOK_ROTATION_WINDOWS = [
 ] as const;
 
 /** The default overlap window (48 hours), mirroring the backend default. */
-export const WEBHOOK_ROTATION_DEFAULT_OVERLAP_SECONDS = 48 * 60 * 60;
+export const WEBHOOK_ROTATION_DEFAULT_OVERLAP_SECONDS: number = 48 * 60 * 60;
 
 export interface RotateWebhookInput {
   /** How long the rotated-away secret stays valid, in seconds. */

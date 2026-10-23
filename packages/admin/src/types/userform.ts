@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import type { FieldError } from "react-hook-form";
+import type { FieldError, Resolver } from "react-hook-form";
 import { z } from "zod";
 
 import { filterStringArray } from "@admin/lib/type-guards";
@@ -18,7 +18,9 @@ export interface UserFormProps {
   };
 }
 
-export const rolesSchema = z.array(z.string().min(1)).default([]);
+export const rolesSchema: z.ZodDefault<z.ZodArray<z.ZodString>> = z
+  .array(z.string().min(1))
+  .default([]);
 
 /**
  * How a newly created account first gets a password.
@@ -72,7 +74,17 @@ const avatarUrlSchema = z
   .optional()
   .or(z.literal(""));
 
-export function getUserFormSchema(isEdit: boolean) {
+export function getUserFormSchema(isEdit: boolean): z.ZodObject<
+  {
+    password: z.ZodOptional<z.ZodString>;
+    fullName: z.ZodString;
+    email: z.ZodString;
+    avatarUrl: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+    active: z.ZodOptional<z.ZodBoolean>;
+    roles: z.ZodOptional<z.ZodDefault<z.ZodArray<z.ZodString>>>;
+  },
+  z.core.$loose
+> {
   const base = {
     fullName: z.string().trim().min(1, "Full name is required"),
     email: z.string().trim().email("Enter a valid email"),
@@ -116,19 +128,85 @@ export function getUserFormSchema(isEdit: boolean) {
     });
 }
 
-export const createUserFormSchema = getUserFormSchema(false);
-export const editUserFormSchema = getUserFormSchema(true);
+export const createUserFormSchema: z.ZodObject<
+  {
+    password: z.ZodOptional<z.ZodString>;
+    fullName: z.ZodString;
+    email: z.ZodString;
+    avatarUrl: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+    active: z.ZodOptional<z.ZodBoolean>;
+    roles: z.ZodOptional<z.ZodDefault<z.ZodArray<z.ZodString>>>;
+  },
+  z.core.$loose
+> = getUserFormSchema(false);
+export const editUserFormSchema: z.ZodObject<
+  {
+    password: z.ZodOptional<z.ZodString>;
+    fullName: z.ZodString;
+    email: z.ZodString;
+    avatarUrl: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+    active: z.ZodOptional<z.ZodBoolean>;
+    roles: z.ZodOptional<z.ZodDefault<z.ZodArray<z.ZodString>>>;
+  },
+  z.core.$loose
+> = getUserFormSchema(true);
 
 /**
  * The react-hook-form settings the create and edit pages use. `criteriaMode:
  * "all"` keeps every issue the schema reports for a field rather than the
  * first, so the password field can list each rule a password misses.
  */
-export const createUserFormSettings = {
+export const createUserFormSettings: {
+  readonly resolver: Resolver<
+    {
+      [x: string]: unknown;
+      fullName: string;
+      email: string;
+      password?: string | undefined;
+      avatarUrl?: string | undefined;
+      active?: boolean | undefined;
+      roles?: string[] | undefined;
+    },
+    unknown,
+    {
+      [x: string]: unknown;
+      fullName: string;
+      email: string;
+      password?: string | undefined;
+      avatarUrl?: string | undefined;
+      active?: boolean | undefined;
+      roles?: string[] | undefined;
+    }
+  >;
+  readonly criteriaMode: "all";
+} = {
   resolver: zodResolver(createUserFormSchema),
   criteriaMode: "all",
 } as const;
-export const editUserFormSettings = {
+export const editUserFormSettings: {
+  readonly resolver: Resolver<
+    {
+      [x: string]: unknown;
+      fullName: string;
+      email: string;
+      password?: string | undefined;
+      avatarUrl?: string | undefined;
+      active?: boolean | undefined;
+      roles?: string[] | undefined;
+    },
+    unknown,
+    {
+      [x: string]: unknown;
+      fullName: string;
+      email: string;
+      password?: string | undefined;
+      avatarUrl?: string | undefined;
+      active?: boolean | undefined;
+      roles?: string[] | undefined;
+    }
+  >;
+  readonly criteriaMode: "all";
+} = {
   resolver: zodResolver(editUserFormSchema),
   criteriaMode: "all",
 } as const;
@@ -166,7 +244,15 @@ export type UserFormValues = CreateUserFormValues;
  * the request carries it in plain text only over the app's own connection.
  * Custom fields arrive under `customFields` and are sent at the top level.
  */
-export function editUserUpdates(values: EditUserFormValues) {
+export function editUserUpdates(values: EditUserFormValues): {
+  name: string;
+  email: string;
+  password: string | undefined;
+  // filterStringArray always returns string[], no fallback needed
+  roles: string[];
+  image: string | undefined;
+  isActive: boolean | undefined;
+} {
   const customFields = (values as Record<string, unknown>).customFields as
     | Record<string, unknown>
     | undefined;

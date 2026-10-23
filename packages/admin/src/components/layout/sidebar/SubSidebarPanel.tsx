@@ -14,6 +14,9 @@
  * wants the width back, and the layout above only drops the whole sidebar
  * COLUMN when the primary rail is surrendered too.
  */
+
+import type { JSX } from "react";
+
 import { cn } from "@admin/lib/utils";
 
 import { useSuppressedChrome } from "../ChromeSuppression";
@@ -45,7 +48,7 @@ export function SubSidebarPanel({
   standaloneLabel: string;
   /** Everything `SubSidebarContent` needs, passed through unread. */
   content: React.ComponentProps<typeof SubSidebarContent>;
-}) {
+}): JSX.Element {
   const hasSubSidebar = isSubSidebarOpen(
     selectedMain,
     visibleMenuItemIds,

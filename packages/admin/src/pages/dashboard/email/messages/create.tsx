@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type JSX,
+} from "react";
 
 import {
   DEFAULT_VALUES,
@@ -20,7 +27,7 @@ import { navigateTo } from "@admin/lib/navigation";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 import { getTemplate } from "@admin/services/emailTemplateApi";
 
-export default function CreateEmailTemplatePage() {
+export default function CreateEmailTemplatePage(): JSX.Element {
   const { mutate: createTemplate, isPending } = useCreateEmailTemplate();
   const [duplicateTemplate, setDuplicateTemplate] =
     useState<EmailTemplateRecord | null>(null);

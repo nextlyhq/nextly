@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@nextlyhq/ui";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type JSX } from "react";
 
 import { EmailHubLayout } from "@admin/components/features/email-hub/EmailHubLayout";
 import { CreateEmailDialog } from "@admin/components/features/email-hub/messages/CreateEmailDialog";
@@ -25,7 +25,7 @@ import { replaceTo } from "@admin/lib/navigation";
  * its emails (only its providers, say) is taken on to the first tab they may
  * see rather than shown a list the server would refuse.
  */
-export default function EmailMessagesPage() {
+export default function EmailMessagesPage(): JSX.Element {
   const { hasPermission, hasAnswer } = useCurrentUserPermissions();
   const [creating, setCreating] = useState(false);
   const canRead = holdsAny(hasPermission, EMAIL_TEMPLATE_READ_PERMISSIONS);

@@ -39,7 +39,7 @@ import {
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import { MoreHorizontal } from "lucide-react";
-import { useMemo, type KeyboardEvent } from "react";
+import { useMemo, type KeyboardEvent, type JSX } from "react";
 
 import { Pagination } from "@admin/components/shared/pagination";
 import type { PaginationProps } from "@admin/components/shared/pagination/types";
@@ -165,7 +165,7 @@ export function DataTableView<Row extends object>({
   ariaLabel = "Data table",
   bordered = true,
   className,
-}: DataTableViewProps<Row>) {
+}: DataTableViewProps<Row>): JSX.Element {
   // Merge plugin-contributed columns (and transforms) for this list, if any.
   const resolvedColumns = useMemo(
     () => (registryKey ? resolvePluginColumns(registryKey, columns) : columns),

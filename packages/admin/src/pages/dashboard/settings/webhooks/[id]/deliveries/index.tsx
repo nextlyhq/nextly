@@ -225,7 +225,7 @@ const DeliveriesContent: React.FC<{ id: string }> = ({ id }) => {
   );
 };
 
-export default function WebhookDeliveriesPage() {
+export default function WebhookDeliveriesPage(): React.JSX.Element {
   const { route } = useRouter();
   const id =
     route?.params?.id && typeof route.params.id === "string"

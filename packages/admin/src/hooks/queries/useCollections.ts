@@ -32,6 +32,8 @@ import {
   useQuery,
   useQueryClient,
   type UseQueryOptions,
+  type UseMutationResult,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
@@ -43,6 +45,7 @@ import type {
   UpdateCollectionPayload,
 } from "@admin/types/collection";
 import type { ApiCollection } from "@admin/types/entities";
+import type { UseBulkMutationReturn } from "@admin/types/hooks/bulk-mutation";
 
 import { useBulkMutation } from "../useBulkMutation";
 
@@ -90,13 +93,25 @@ export const collectionKeys = {
   all: () => ["collections"] as const,
 
   /** Base key for collection list queries */
-  lists: () => [...collectionKeys.all(), "list"] as const,
+  lists: (): readonly ["collections", "list"] =>
+    [...collectionKeys.all(), "list"] as const,
 
   /**
    * Stable query key for paginated/filtered collection lists.
    * Flattens params to prevent object reference issues.
    */
-  list: (params: TableParams) =>
+  list: (
+    params: TableParams
+  ): readonly [
+    "collections",
+    "list",
+    {
+      readonly page: number;
+      readonly pageSize: number;
+      readonly search: string;
+      readonly sorting: string;
+    },
+  ] =>
     [
       ...collectionKeys.lists(),
       {
@@ -108,16 +123,20 @@ export const collectionKeys = {
     ] as const,
 
   /** Base key for collection detail queries */
-  details: () => [...collectionKeys.all(), "detail"] as const,
+  details: (): readonly ["collections", "detail"] =>
+    [...collectionKeys.all(), "detail"] as const,
 
   /** Query key for a single collection by name */
-  detail: (name: string) => [...collectionKeys.details(), name] as const,
+  detail: (name: string): readonly ["collections", "detail", string] =>
+    [...collectionKeys.details(), name] as const,
 
   /** Base key for collection schema queries (enriched with component fields) */
-  schemas: () => [...collectionKeys.all(), "schema"] as const,
+  schemas: (): readonly ["collections", "schema"] =>
+    [...collectionKeys.all(), "schema"] as const,
 
   /** Query key for a collection's enriched schema by name */
-  schema: (name: string) => [...collectionKeys.schemas(), name] as const,
+  schema: (name: string): readonly ["collections", "schema", string] =>
+    [...collectionKeys.schemas(), name] as const,
 };
 
 /**
@@ -172,7 +191,7 @@ export function useCollections(
     UseQueryOptions<ListResponse<ApiCollection>, Error>,
     "queryKey" | "queryFn"
   >
-) {
+): UseQueryResult<ListResponse<ApiCollection>, Error> {
   const effectiveParams = params || defaultParams;
   return useQuery<ListResponse<ApiCollection>, Error>({
     queryKey: collectionKeys.list(effectiveParams), // Use query key factory for stable keys
@@ -227,7 +246,7 @@ export function useCollections(
 export function useCollection(
   collectionName?: string,
   options?: Omit<UseQueryOptions<Collection, Error>, "queryKey" | "queryFn">
-) {
+): UseQueryResult<Collection, Error> {
   return useQuery<Collection, Error>({
     queryKey: collectionName
       ? collectionKeys.detail(collectionName)
@@ -260,7 +279,7 @@ export function useCollection(
 export function useCollectionSchema(
   collectionName?: string,
   options?: Omit<UseQueryOptions<Collection, Error>, "queryKey" | "queryFn">
-) {
+): UseQueryResult<Collection, Error> {
   return useQuery<Collection, Error>({
     queryKey: collectionName
       ? collectionKeys.schema(collectionName)
@@ -324,7 +343,14 @@ export function useCollectionSchema(
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  */
-export function useCreateCollection() {
+export function useCreateCollection(): UseMutationResult<
+  {
+    message: string;
+  },
+  Error,
+  CreateCollectionPayload,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<{ message: string }, Error, CreateCollectionPayload>({
@@ -389,7 +415,17 @@ export function useCreateCollection() {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  */
-export function useUpdateCollection() {
+export function useUpdateCollection(): UseMutationResult<
+  {
+    message: string;
+  },
+  Error,
+  {
+    collectionName: string;
+    updates: UpdateCollectionPayload;
+  },
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -459,7 +495,12 @@ export function useUpdateCollection() {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  */
-export function useDeleteCollection() {
+export function useDeleteCollection(): UseMutationResult<
+  void,
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<void, Error, string>({
@@ -569,7 +610,12 @@ export function useDeleteCollection() {
  * @see useBulkMutation - Generic bulk mutation hook
  * @see useBulkDeleteUsers - Similar pattern for users
  */
-export function useBulkDeleteCollections() {
+export function useBulkDeleteCollections(): UseBulkMutationReturn<
+  string,
+  void,
+  Error,
+  void
+> {
   const queryClient = useQueryClient();
 
   return useBulkMutation<string, void, Error, void>({
@@ -675,7 +721,12 @@ export function useBulkDeleteCollections() {
  * @see useBulkMutation - Generic bulk mutation hook
  * @see useBulkUpdateUsers - Similar pattern for users
  */
-export function useBulkUpdateCollections() {
+export function useBulkUpdateCollections(): UseBulkMutationReturn<
+  string,
+  void,
+  Error,
+  UpdateCollectionPayload
+> {
   const queryClient = useQueryClient();
 
   return useBulkMutation<string, void, Error, UpdateCollectionPayload>({

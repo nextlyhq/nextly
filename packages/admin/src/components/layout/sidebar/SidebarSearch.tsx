@@ -1,4 +1,5 @@
 import { Input } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { Search } from "@admin/components/icons";
 
@@ -12,7 +13,7 @@ export function SidebarSearch({
   placeholder,
   value,
   onChange,
-}: SidebarSearchProps) {
+}: SidebarSearchProps): JSX.Element {
   return (
     <div className="px-2 pb-2">
       <div className="relative">

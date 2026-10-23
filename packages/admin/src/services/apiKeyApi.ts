@@ -204,7 +204,15 @@ export async function revokeApiKey(id: string): Promise<void> {
   );
 }
 
-export const apiKeyApi = {
+/** The type of {@link apiKeyApi}. */
+type ApiKeyApiType = {
+  readonly fetchApiKeys: typeof fetchApiKeys;
+  readonly createApiKey: typeof createApiKey;
+  readonly updateApiKey: typeof updateApiKey;
+  readonly revokeApiKey: typeof revokeApiKey;
+};
+
+export const apiKeyApi: ApiKeyApiType = {
   fetchApiKeys,
   createApiKey,
   updateApiKey,

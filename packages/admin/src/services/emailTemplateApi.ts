@@ -462,7 +462,24 @@ export async function undoOwnerUpdate(
   return normalizeTemplate(result.item);
 }
 
-export const emailTemplateApi = {
+/** The type of {@link emailTemplateApi}. */
+type EmailTemplateApiType = {
+  readonly listTemplates: typeof listTemplates;
+  readonly getTemplate: typeof getTemplate;
+  readonly createTemplate: typeof createTemplate;
+  readonly updateTemplate: typeof updateTemplate;
+  readonly deleteTemplate: typeof deleteTemplate;
+  readonly previewTemplate: typeof previewTemplate;
+  readonly previewDraft: typeof previewDraft;
+  readonly sendTestEmail: typeof sendTestEmail;
+  readonly overrideTemplate: typeof overrideTemplate;
+  readonly resetTemplate: typeof resetTemplate;
+  readonly compareTemplate: typeof compareTemplate;
+  readonly applyOwnerUpdate: typeof applyOwnerUpdate;
+  readonly undoOwnerUpdate: typeof undoOwnerUpdate;
+};
+
+export const emailTemplateApi: EmailTemplateApiType = {
   listTemplates,
   getTemplate,
   createTemplate,

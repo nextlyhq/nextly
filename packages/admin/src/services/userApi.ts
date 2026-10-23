@@ -113,7 +113,16 @@ export const getUserById = async (userId: string): Promise<User> => {
   return result;
 };
 
-export const userApi = {
+/** The type of {@link userApi}. */
+type UserApiType = {
+  readonly fetchUsers: typeof fetchUsers;
+  readonly updateUser: typeof updateUser;
+  readonly createUser: typeof createUser;
+  readonly deleteUser: typeof deleteUser;
+  readonly getUserById: typeof getUserById;
+};
+
+export const userApi: UserApiType = {
   fetchUsers,
   updateUser,
   createUser,
