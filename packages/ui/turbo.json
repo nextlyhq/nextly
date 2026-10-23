@@ -2,6 +2,21 @@
   "$schema": "https://turbo.build/schema.json",
   "extends": ["//"],
   "tasks": {
+    "build": {
+      // The server-safe build writes its metafile through a plugin outside
+      // this package, so the plugin is an input: editing it changes what the
+      // artifact check reads, and a package-scoped hash alone would replay it.
+      //
+      // This build also compiles Tailwind, which scans source files for class
+      // names, tests and Markdown included. So unlike the shared build inputs,
+      // this hash keeps them: a class used only in a test still lands in the
+      // compiled sheet, and leaving it out would replay a stale sheet.
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".env*",
+        "$TURBO_ROOT$/scripts/tsdown-metafile.mjs"
+      ]
+    },
     "test": {
       // `build` because guards here read this package's OWN `dist`, and the
       // root task depends on `^build`, which builds dependencies and not this

@@ -27,8 +27,8 @@ import { newestEventsByFilename } from "../../domains/schema/events/newest-event
 import {
   SchemaEventsRepository,
   type SchemaEventRow,
+  truncateErrorMessage,
 } from "../../domains/schema/events/schema-events-repository";
-import { truncateErrorMessage } from "../../domains/schema/events/schema-events-repository";
 import {
   concurrentRunError,
   failedAttemptMayBePartial,

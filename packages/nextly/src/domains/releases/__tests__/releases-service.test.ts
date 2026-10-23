@@ -1108,6 +1108,24 @@ describe("ReleasesService.count", () => {
   });
 });
 
+describe("ReleasesService.mayRead", () => {
+  it("answers by the decision every read makes, implication included", async () => {
+    expect(await service({ holds: ["read"] }).svc.mayRead(ADMIN)).toBe(true);
+    // Creating or publishing a release implies reading one, as for `count`.
+    expect(await service({ holds: ["create"] }).svc.mayRead(ADMIN)).toBe(true);
+    expect(await service({ holds: [] }).svc.mayRead(ADMIN)).toBe(false);
+    expect(
+      await service({ holds: ["read"] }).svc.mayRead({ userId: null })
+    ).toBe(false);
+  });
+
+  it("throws a failure that is not a refusal, rather than answering no", async () => {
+    const { svc, deps } = service({ holds: ["read"] });
+    deps.canManageReleases.mockRejectedValueOnce(new Error("store down"));
+    await expect(svc.mayRead(ADMIN)).rejects.toThrow("store down");
+  });
+});
+
 describe("ReleasesService.publishNow", () => {
   it("schedules the release for this moment, then runs the drain within the budget", async () => {
     // Scheduled for later, so it is moved first, fenced on the state and the

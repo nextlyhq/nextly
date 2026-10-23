@@ -33,9 +33,9 @@ const exportMap = JSON.parse(read("package.json")).exports as Record<
   { types?: string; import?: string } | string
 >;
 
-/** Entries the server-safe tsup config builds. */
+/** Entries the server-safe tsdown config builds. */
 function serverSafeEntries(): string[] {
-  const config = read("tsup.server-safe.config.ts");
+  const config = read("tsdown.server-safe.config.ts");
   const block = /entry:\s*\[([^\]]*)\]/.exec(config);
   return [...(block?.[1] ?? "").matchAll(/"([^"]+)"/g)].map(m => m[1]);
 }
@@ -60,7 +60,7 @@ describe("the ops subpath is published", () => {
     // an op — for no reason other than how the bundle was assembled.
     expect(serverSafeEntries()).toContain("src/ops.ts");
 
-    const clientConfig = read("tsup.config.ts");
+    const clientConfig = read("tsdown.config.ts");
     expect(clientConfig).not.toContain("src/ops.ts");
   });
 });

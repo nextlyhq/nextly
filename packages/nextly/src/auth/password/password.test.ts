@@ -18,6 +18,18 @@ import {
   type PasswordHasher,
 } from "../password";
 
+/**
+ * The cost every hash here is made at, except where the cost is the subject.
+ *
+ * bcryptjs at the default cost of 12 takes about a quarter of a second per
+ * hash on a fast machine and several times that on a loaded runner, and this
+ * file hashes some thirty times. bcrypt writes its cost into the hash, so
+ * `verifyPassword` checks a cost-4 hash exactly as it checks a cost-12 one: what
+ * these tests exercise is the same code at either cost. The default itself is
+ * pinned once, below.
+ */
+const FIXTURE_SALT_ROUNDS = 4;
+
 /** A raw password a shape test once stored as given: long, with a colon. */
 const COLON_PASSPHRASE = "correct-horse:battery-staple-and-more-words";
 
@@ -27,7 +39,7 @@ describe("password utilities", () => {
       it("should hash a valid password", async () => {
         const plainPassword = "MySecureP@ss123";
 
-        const hash = await hashPassword(plainPassword);
+        const hash = await hashPassword(plainPassword, FIXTURE_SALT_ROUNDS);
 
         expect(hash).toBeDefined();
         expect(typeof hash).toBe("string");
@@ -38,8 +50,8 @@ describe("password utilities", () => {
       it("should produce different hashes for the same password (salt)", async () => {
         const plainPassword = "SamePassword123!";
 
-        const hash1 = await hashPassword(plainPassword);
-        const hash2 = await hashPassword(plainPassword);
+        const hash1 = await hashPassword(plainPassword, FIXTURE_SALT_ROUNDS);
+        const hash2 = await hashPassword(plainPassword, FIXTURE_SALT_ROUNDS);
 
         // Assert: Different salts should produce different hashes
         expect(hash1).not.toBe(hash2);
@@ -48,7 +60,10 @@ describe("password utilities", () => {
       it("should handle passwords with special characters", async () => {
         const passwordWithSpecialChars = "P@ssw0rd!#$%^&*()_+-=[]{}|;:,.<>?";
 
-        const hash = await hashPassword(passwordWithSpecialChars);
+        const hash = await hashPassword(
+          passwordWithSpecialChars,
+          FIXTURE_SALT_ROUNDS
+        );
 
         expect(hash).toBeDefined();
         expect(hash.length).toBeGreaterThan(0);
@@ -61,7 +76,7 @@ describe("password utilities", () => {
       it("should handle very long passwords (>100 chars)", async () => {
         const longPassword = "A1b2C3d4!".repeat(20); // 180 characters
 
-        const hash = await hashPassword(longPassword);
+        const hash = await hashPassword(longPassword, FIXTURE_SALT_ROUNDS);
 
         expect(hash).toBeDefined();
 
@@ -73,7 +88,7 @@ describe("password utilities", () => {
       it("should handle passwords with Unicode characters", async () => {
         const unicodePassword = "Pässwörd123!你好";
 
-        const hash = await hashPassword(unicodePassword);
+        const hash = await hashPassword(unicodePassword, FIXTURE_SALT_ROUNDS);
 
         expect(hash).toBeDefined();
 
@@ -84,7 +99,7 @@ describe("password utilities", () => {
 
       it("should use custom salt rounds when provided", async () => {
         const password = "TestPassword123!";
-        const customSaltRounds = 10;
+        const customSaltRounds = 5;
 
         const hash = await hashPassword(password, customSaltRounds);
 
@@ -101,13 +116,14 @@ describe("password utilities", () => {
         expect(isValid).toBe(true);
       });
 
-      it("should produce bcrypt-format hash (starts with $2a$ or $2b$)", async () => {
+      it("should produce a bcrypt-format hash at the default cost of 12", async () => {
         const password = "ValidPassword123!";
 
         const hash = await hashPassword(password);
 
-        // Assert: bcrypt hashes start with $2a$ or $2b$ followed by cost factor
-        expect(hash).toMatch(/^\$2[ab]\$\d{2}\$/);
+        // bcrypt hashes start with $2a$ or $2b$, then the cost factor. The one
+        // hash in this file made at the default cost, so the default is pinned.
+        expect(hash).toMatch(/^\$2[ab]\$12\$/);
       });
     });
 
@@ -123,7 +139,10 @@ describe("password utilities", () => {
         // Arrange: hashPassword() doesn't validate strength, only checks non-empty
         const whitespacePassword = "   ";
 
-        const hash = await hashPassword(whitespacePassword);
+        const hash = await hashPassword(
+          whitespacePassword,
+          FIXTURE_SALT_ROUNDS
+        );
 
         // Assert: Hashing succeeds (validation should happen before hashing)
         expect(hash).toBeDefined();
@@ -139,7 +158,7 @@ describe("password utilities", () => {
     describe("successful verification", () => {
       it("should verify correct password", async () => {
         const plainPassword = "CorrectPassword123!";
-        const hash = await hashPassword(plainPassword);
+        const hash = await hashPassword(plainPassword, FIXTURE_SALT_ROUNDS);
 
         const isValid = await verifyPassword(plainPassword, hash);
 
@@ -148,7 +167,7 @@ describe("password utilities", () => {
 
       it("should verify password with special characters", async () => {
         const password = "Sp3c!@l#Ch@rs$%^&*()";
-        const hash = await hashPassword(password);
+        const hash = await hashPassword(password, FIXTURE_SALT_ROUNDS);
 
         const isValid = await verifyPassword(password, hash);
 
@@ -157,7 +176,7 @@ describe("password utilities", () => {
 
       it("should verify very long passwords", async () => {
         const longPassword = "VeryLongP@ssw0rd!".repeat(10); // 170 chars
-        const hash = await hashPassword(longPassword);
+        const hash = await hashPassword(longPassword, FIXTURE_SALT_ROUNDS);
 
         const isValid = await verifyPassword(longPassword, hash);
 
@@ -166,7 +185,7 @@ describe("password utilities", () => {
 
       it("should verify password with Unicode characters", async () => {
         const unicodePassword = "Pässwörd123!日本語";
-        const hash = await hashPassword(unicodePassword);
+        const hash = await hashPassword(unicodePassword, FIXTURE_SALT_ROUNDS);
 
         const isValid = await verifyPassword(unicodePassword, hash);
 
@@ -178,7 +197,7 @@ describe("password utilities", () => {
       it("should reject incorrect password", async () => {
         const correctPassword = "CorrectPassword123!";
         const wrongPassword = "WrongPassword456!";
-        const hash = await hashPassword(correctPassword);
+        const hash = await hashPassword(correctPassword, FIXTURE_SALT_ROUNDS);
 
         const isValid = await verifyPassword(wrongPassword, hash);
 
@@ -188,7 +207,7 @@ describe("password utilities", () => {
       it("should reject password with wrong case", async () => {
         const password = "CaseSensitiveP@ss123";
         const wrongCasePassword = "casesensitivep@ss123";
-        const hash = await hashPassword(password);
+        const hash = await hashPassword(password, FIXTURE_SALT_ROUNDS);
 
         const isValid = await verifyPassword(wrongCasePassword, hash);
 
@@ -198,7 +217,7 @@ describe("password utilities", () => {
       it("should reject password with extra characters", async () => {
         const password = "Password123!";
         const passwordWithExtra = "Password123!extra";
-        const hash = await hashPassword(password);
+        const hash = await hashPassword(password, FIXTURE_SALT_ROUNDS);
 
         const isValid = await verifyPassword(passwordWithExtra, hash);
 
@@ -208,7 +227,7 @@ describe("password utilities", () => {
       it("should reject password with missing characters", async () => {
         const password = "Password123!";
         const passwordWithMissing = "Password123";
-        const hash = await hashPassword(password);
+        const hash = await hashPassword(password, FIXTURE_SALT_ROUNDS);
 
         const isValid = await verifyPassword(passwordWithMissing, hash);
 
@@ -218,7 +237,10 @@ describe("password utilities", () => {
 
     describe("edge cases and security", () => {
       it("should return false for empty password", async () => {
-        const hash = await hashPassword("ValidPassword123!");
+        const hash = await hashPassword(
+          "ValidPassword123!",
+          FIXTURE_SALT_ROUNDS
+        );
 
         const isValid = await verifyPassword("", hash);
 
@@ -254,7 +276,7 @@ describe("password utilities", () => {
       it("should use bcrypt which is timing-attack resistant by design", async () => {
         const correctPassword = "CorrectPassword123!";
         const wrongPassword = "WrongPassword456!";
-        const hash = await hashPassword(correctPassword);
+        const hash = await hashPassword(correctPassword, FIXTURE_SALT_ROUNDS);
 
         // Act & Assert: bcrypt's constant-time comparison is built-in
         // We verify the function works correctly for both cases
@@ -272,7 +294,7 @@ describe("password utilities", () => {
       it("should handle comparison with externally generated bcrypt hash", async () => {
         // Arrange: Generate our own hash for a known password
         const knownPassword = "TestPassword123!";
-        const hash = await hashPassword(knownPassword);
+        const hash = await hashPassword(knownPassword, FIXTURE_SALT_ROUNDS);
 
         // Act: Verify with the same password
         const isValid = await verifyPassword(knownPassword, hash);
@@ -385,7 +407,7 @@ describe("password utilities", () => {
       it("an upgraded account whose stored password is on the common list still signs in with it", async () => {
         // The rule binds when setting a password, never re-judges stored passwords
         const commonPlain = "password";
-        const hash = await hashPassword(commonPlain);
+        const hash = await hashPassword(commonPlain, FIXTURE_SALT_ROUNDS);
         expect(await verifyPassword(commonPlain, hash)).toBe(true);
 
         // But setting it again is refused
@@ -483,7 +505,7 @@ describe("password utilities", () => {
 
       it("an upgraded account whose stored password is past 72 bytes still signs in with it", async () => {
         const longPassword = "A1b2C3d4!".repeat(10); // 90 bytes
-        const hash = await hashPassword(longPassword);
+        const hash = await hashPassword(longPassword, FIXTURE_SALT_ROUNDS);
 
         // verifyPassword verifies past 72 bytes
         expect(await verifyPassword(longPassword, hash)).toBe(true);
@@ -749,7 +771,7 @@ describe("password utilities", () => {
       expect(strengthCheck.ok).toBe(true);
 
       // Act: Hash password
-      const hash = await hashPassword(password);
+      const hash = await hashPassword(password, FIXTURE_SALT_ROUNDS);
       expect(hash).toBeDefined();
 
       // Act: Verify correct password
@@ -785,7 +807,10 @@ describe("password utilities", () => {
       expect(strengthCheck.ok).toBe(true);
 
       // Step 2: Hash for storage
-      const hashedPassword = await hashPassword(userPassword);
+      const hashedPassword = await hashPassword(
+        userPassword,
+        FIXTURE_SALT_ROUNDS
+      );
       expect(hashedPassword).toBeDefined();
       expect(hashedPassword).not.toBe(userPassword);
 
@@ -819,7 +844,7 @@ describe("password utilities", () => {
         expect(compare).not.toHaveBeenCalled();
         // The control: a real hash is compared, and the right password
         // matches it.
-        const hash = await hashPassword(COLON_PASSPHRASE);
+        const hash = await hashPassword(COLON_PASSPHRASE, FIXTURE_SALT_ROUNDS);
         expect(await verifyPassword(COLON_PASSPHRASE, hash)).toBe(true);
         expect(compare).toHaveBeenCalledTimes(1);
       } finally {
@@ -828,7 +853,11 @@ describe("password utilities", () => {
     });
 
     it("is told from a hash whatever it looks like", async () => {
-      expect(isPasswordHash(await hashPassword(COLON_PASSPHRASE))).toBe(true);
+      expect(
+        isPasswordHash(
+          await hashPassword(COLON_PASSPHRASE, FIXTURE_SALT_ROUNDS)
+        )
+      ).toBe(true);
       expect(isPasswordHash(COLON_PASSPHRASE)).toBe(false);
       // A bcrypt prefix is not enough: the whole hash is.
       expect(isPasswordHash("$2a$12$invalidhashvalue")).toBe(false);

@@ -299,11 +299,11 @@ describe("the scaffold installs the fonts its templates import", () => {
     }
   );
 
-  it("declares nothing when the caller passes no template directories", () => {
+  it("declares nothing when the caller passes no template directories", async () => {
     // The collector is handed the dirs the scaffold is COPYING. A downloaded or
     // --local-template source is a different tree from the bundled one, and a collector that
     // resolved its own path would install the fonts of templates the project never receives.
-    expect(collectFontDependencies([])).resolves.toEqual([]);
+    await expect(collectFontDependencies([])).resolves.toEqual([]);
   });
 
   it.each(APP_TEMPLATES)(

@@ -12,6 +12,7 @@
 
 import type { TimeseriesInterval } from "../collections/query/timeseries-interval";
 
+import type { WidgetQuery } from "./query";
 import type { WidgetFieldChoice, WidgetSourceFieldType } from "./sources";
 
 /**
@@ -246,4 +247,24 @@ export type WidgetComponentProps = {
    * the discriminator for an absent `slot`.
    */
   isFetching: boolean;
+  /**
+   * The query this card ASKED: its declaration's, with its reader's settings
+   * applied, the "Number of items" among them. A component drawing rows sizes
+   * them from this, as core's lists do. When the widget declares `sizedQuery`,
+   * the batch sent it sized to the card, one row more than the card draws, so
+   * that extra row says more exist; otherwise it was sent exactly as asked.
+   *
+   * Absent for a widget that declared no query.
+   *
+   * @experimental
+   */
+  query?: WidgetQuery;
+  /**
+   * Asks this card's question again, when the batch's answer was an error the
+   * component draws: the Retry a framed card's error offers. Absent while there
+   * is nothing to retry.
+   *
+   * @experimental
+   */
+  onRetry?: () => void;
 };

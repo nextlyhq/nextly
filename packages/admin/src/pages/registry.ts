@@ -671,7 +671,7 @@ export const routeConfig: Record<string, RouteConfig> = {
 };
 
 // The builder's editor routes stay in the table unconditionally, and nothing
-// here may consult NODE_ENV to drop them. This package is PREBUILT: tsup folds
+// here may consult NODE_ENV to drop them. This package is PREBUILT: the bundler folds
 // `process.env.NODE_ENV` at package build time, so a module-load env check in
 // the dist answers where the LIBRARY was built, never where it is RUNNING.
 //
