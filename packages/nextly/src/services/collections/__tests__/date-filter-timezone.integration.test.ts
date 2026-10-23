@@ -1,14 +1,15 @@
 /**
- * A MySQL date filter selects the same rows whatever time zone the server runs
- * in.
+ * A MySQL date filter selects a row Nextly wrote, whatever time zone the
+ * server's session runs in.
  *
- * A date field is a MySQL `TIMESTAMP`, and MySQL compares a `TIMESTAMP` with a
- * datetime operand in the SESSION time zone, which follows the server's own
- * unless something pins it. A bound handed over as a wall-clock datetime is
- * therefore read as a different instant on a server outside UTC. The REST
- * suite cannot see this: its container runs in UTC, where the defect and the
- * fix answer alike. This renders the condition the where builder SHIPS and
- * runs it under three session zones.
+ * A date field is a MySQL `TIMESTAMP`. Every Nextly write stores a `Date`
+ * through the column's own encoder, as its UTC wall clock, and MySQL reads that
+ * wall clock in the SESSION time zone, which follows the server's own unless
+ * something pins it. A filter is right when its bound is read the same way, so
+ * this writes the row as Nextly writes it in each session zone, then filters in
+ * that same zone. The REST suite cannot see this: its container runs in UTC,
+ * where every spelling of a bound answers alike. This renders the condition the
+ * where builder SHIPS.
  */
 
 import {
@@ -29,12 +30,16 @@ import { buildDrizzleCondition } from "../drizzle-condition";
 
 const URL = process.env.TEST_MYSQL_URL;
 const TABLE = "dfo_tz_probe";
+const ZONES = ["+00:00", "-08:00", "+05:30"];
 
 /** The table as the where builder sees a collection's: a date field `c`. */
 const table = mysqlTable(TABLE, {
   label: varchar("label", { length: 255 }),
   c: timestamp("c"),
 });
+
+/** The row's instant: 03:00 UTC on March 4, 19:00 on March 3 at -08:00. */
+const STORED = new Date("2026-03-04T03:00:00.000Z");
 
 type Conn = {
   query: (text: string, values?: unknown[]) => Promise<[unknown, unknown]>;
@@ -43,13 +48,27 @@ type Conn = {
 
 let connection: Conn | undefined;
 
-/** How many probe rows a filter selects at a session zone. */
-async function countAt(zone: string, where: WhereFilter) {
+/**
+ * Store the row in `zone` as a Nextly write stores it: the instant through the
+ * column's own encoder, the one `mapDateValuesToDriver` applies to every write.
+ */
+async function writeAt(zone: string): Promise<void> {
   if (!connection) throw new Error("no connection");
+  await connection.query(`SET time_zone = '${zone}'`);
+  await connection.query(`DELETE FROM ${TABLE}`);
+  await connection.query(
+    `INSERT INTO ${TABLE} (id, title, slug, label, c) VALUES ('probe', 'probe', 'probe', 'probe', ?)`,
+    [table.c.mapToDriverValue(STORED)]
+  );
+}
+
+/** How many rows a filter selects, read in the zone the row was written in. */
+async function countAt(zone: string, where: WhereFilter): Promise<number> {
+  if (!connection) throw new Error("no connection");
+  await writeAt(zone);
   const condition = buildDrizzleCondition(buildWhereClause(where), table);
   if (!condition) throw new Error("the filter compiled to no condition");
   const { sql: text, params } = new MySqlDialect().sqlToQuery(condition);
-  await connection.query(`SET time_zone = '${zone}'`);
   const [rows] = await connection.query(
     `SELECT COUNT(*) AS n FROM ${TABLE} WHERE ${text}`,
     params
@@ -59,7 +78,7 @@ async function countAt(zone: string, where: WhereFilter) {
 
 const describeOrSkip = URL ? describe : describe.skip;
 
-describeOrSkip("a MySQL date filter, across server time zones", () => {
+describeOrSkip("a MySQL date filter, across session time zones", () => {
   beforeAll(async () => {
     const { createConnection } = await import("mysql2/promise");
     connection = (await createConnection(URL as string)) as unknown as Conn;
@@ -84,13 +103,6 @@ describeOrSkip("a MySQL date filter, across server time zones", () => {
     )) {
       await connection.query(statement);
     }
-    // Written at UTC, so the stored instant is unambiguous: 03:00 UTC on
-    // March 4, which is 19:00 on March 3 at -08:00.
-    await connection.query(`SET time_zone = '+00:00'`);
-    await connection.query(
-      `INSERT INTO ${TABLE} (id, title, slug, label, c)
-       VALUES ('probe', 'probe', 'probe', 'probe', '2026-03-04 03:00:00')`
-    );
   });
 
   afterAll(async () => {
@@ -99,20 +111,16 @@ describeOrSkip("a MySQL date filter, across server time zones", () => {
     connection = undefined;
   });
 
-  it("selects the row after a UTC midnight bound at +00:00, -08:00 and +05:30", async () => {
-    // A bound at UTC midnight, read as wall-clock midnight at -08:00, would be
-    // 08:00 UTC and leave out the row stored at 03:00 UTC.
+  it("selects the row after a UTC midnight bound in every session zone", async () => {
     const where = { c: { greater_than_equal: "2026-03-04T00:00:00Z" } };
     const counts: number[] = [];
-    for (const zone of ["+00:00", "-08:00", "+05:30"]) {
-      counts.push(await countAt(zone, where));
-    }
+    for (const zone of ZONES) counts.push(await countAt(zone, where));
     expect(counts).toEqual([1, 1, 1]);
   });
 
-  it("compares the stored instant exactly at every zone", async () => {
+  it("compares the stored instant exactly in every session zone", async () => {
     // Equal to the second, and not a second later, whatever the zone.
-    for (const zone of ["+00:00", "-08:00", "+05:30"]) {
+    for (const zone of ZONES) {
       expect(
         await countAt(zone, { c: { equals: "2026-03-04T03:00:00Z" } }),
         zone

@@ -34,10 +34,8 @@ import {
   or,
   sql,
 } from "drizzle-orm";
-import { MySqlTimestamp } from "drizzle-orm/mysql-core";
 import { SQLiteTimestamp } from "drizzle-orm/sqlite-core";
 
-import { mysqlTimestampOperand } from "../../domains/collections/query/timeseries-bucket";
 import type { LocalizedFieldRef } from "../../domains/i18n/companion-join";
 import { buildCompanionExists } from "../../domains/i18n/companion-join";
 import { NextlyError } from "../../errors/nextly-error";
@@ -251,16 +249,17 @@ function dateOperand(key: string, value: unknown): Date {
  *   be compared as the second before it. The number is bound as it is, the
  *   fraction kept, so `less_than` `.500` keeps a row at `.000` and `equals`
  *   `.500` matches none, as on PostgreSQL.
- * - MySQL compares a `TIMESTAMP` in the session time zone, so the instant is
- *   spelled as `from_unixtime`, which is read in that same zone.
- * - PostgreSQL's `timestamp` reads the Date the driver sends, in UTC, exactly.
+ * - PostgreSQL and MySQL take the Date through the column's own encoder: the
+ *   UTC wall clock every Nextly write stores. MySQL reads that wall clock in
+ *   the session time zone on both sides, so a bound compares like the stored
+ *   rows whenever writes and reads share a session zone, which is the
+ *   contract every Nextly read already relies on.
  */
 function dateBound(column: Column, instant: Date): Date | SQL {
   if (is(column, SQLiteTimestamp)) {
     const ms = instant.getTime();
     return sql`${column.mode === "timestamp" ? ms / 1000 : ms}`;
   }
-  if (is(column, MySqlTimestamp)) return mysqlTimestampOperand(instant);
   return instant;
 }
 

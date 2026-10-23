@@ -44,30 +44,6 @@ const MYSQL_TIMESTAMP_MIN_EPOCH = 1;
 const MYSQL_TIMESTAMP_MAX_EPOCH = 2147483647;
 
 /**
- * An instant as a MySQL `TIMESTAMP` column compares it, for a filter.
- *
- * `from_unixtime`, for the reason {@link timeseriesBoundOperand} gives: the
- * column is compared in the session time zone, and so is this expression, so
- * the comparison means the same instant on a server in any zone. The fraction
- * of a second is kept, so a bound at `.500` is not floored onto the second a
- * stored row holds.
- *
- * Clamped rather than dropped, because a filter has no "no bound" to fall back
- * on: `from_unixtime` answers NULL below zero, and a NULL comparison matches
- * nothing whatever the operator. No stored `TIMESTAMP` lies outside its range,
- * so a bound moved to just beyond that range -- zero below, half a second past
- * the last storable second above -- compares with every possible row exactly
- * as the bound written would.
- */
-export function mysqlTimestampOperand(instant: Date): SQL {
-  const seconds = Math.min(
-    Math.max(instant.getTime() / 1000, 0),
-    MYSQL_TIMESTAMP_MAX_EPOCH + 0.5
-  );
-  return sql`from_unixtime(${seconds})`;
-}
-
-/**
  * The value a window bound is compared against, spelled so the comparison means
  * the same instant whatever zone the server runs in.
  *
