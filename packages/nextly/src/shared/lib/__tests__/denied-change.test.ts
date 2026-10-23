@@ -371,6 +371,50 @@ describe("keepDeniedAtStored", () => {
     ]);
   });
 
+  it("gives a new row no stored value when the stored rows carry ids", async () => {
+    // A row without an id, added ahead of rows that keep theirs, is new: the
+    // stored row at its index is the one the next row names, not this one.
+    const kept = await keepDeniedAtStored({
+      update: {
+        rows: [
+          { heading: "new" },
+          { id: "a", heading: "a2" },
+          { id: "b", heading: "b2" },
+        ],
+      },
+      stored: {
+        rows: [
+          { id: "a", heading: "a", locked: "locked-a" },
+          { id: "b", heading: "b", locked: "locked-b" },
+        ],
+      },
+      applyRules: deniesLockedRows,
+    });
+
+    expect(kept.rows).toEqual([
+      { heading: "new" },
+      { id: "a", heading: "a2", locked: "locked-a" },
+      { id: "b", heading: "b2", locked: "locked-b" },
+    ]);
+  });
+
+  it("judges a container with the siblings the update adds to it", async () => {
+    // `a` is writable only while `b` is not "x". The update writes the group
+    // whole with `b` set and `a` left out, which as the update leaves it the
+    // rule denies, so the stored `a` stays rather than being cleared.
+    const kept = await keepDeniedAtStored({
+      update: { g: { b: "x" } },
+      stored: { g: { a: "old" } },
+      applyRules: document => {
+        const group = document.g as Record<string, unknown> | undefined;
+        if (group?.b === "x") delete group.a;
+        return Promise.resolve();
+      },
+    });
+
+    expect(kept.g).toEqual({ b: "x", a: "old" });
+  });
+
   it("pairs rows by position when they carry no id", async () => {
     // The control: rows that cannot be told apart keep the value at their
     // index, as they always have.
