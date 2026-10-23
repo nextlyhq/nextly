@@ -147,10 +147,14 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
-      - name: Setup Node.js
+      # The packages build under the repository's own Node, which the build
+      # tools require (tsdown needs 22.18 or later), not under the floor this
+      # job tests. The floor is what a CONSUMER runs, so it is switched to after
+      # the pack, for the install and build of the app the claim is about.
+      - name: Setup Node.js for the build
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: ${{ matrix.node }}
+          node-version-file: .nvmrc
           cache: pnpm
 
       - name: Install dependencies
@@ -163,6 +167,11 @@ jobs:
         run: |
           mkdir -p /tmp/nextly-pack
           (cd packages/create-nextly-app && pnpm pack --pack-destination /tmp/nextly-pack)
+
+      - name: Setup Node.js ${{ matrix.node }} for the scaffold
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
 
       # Unlike the per-PR scaffold smoke (which passes --skip-install to stay
       # fast), this runs the real install and a real production build of the
@@ -259,10 +268,14 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
-      - name: Setup Node.js
+      # The packages build under the repository's own Node, which the build
+      # tools require (tsdown needs 22.18 or later), not under the floor this
+      # job tests. The floor is what a CONSUMER runs, so it is switched to after
+      # the pack, for the install and build of the app the claim is about.
+      - name: Setup Node.js for the build
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: ${{ matrix.node }}
+          node-version-file: .nvmrc
           cache: pnpm
 
       - name: Install dependencies
@@ -278,6 +291,11 @@ jobs:
         run: |
           mkdir -p /tmp/ui-pack
           (cd packages/ui && pnpm pack --pack-destination /tmp/ui-pack)
+
+      - name: Setup Node.js ${{ matrix.node }} for the app
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
 
       # The app is GENERATED from the export map, so a new server-safe subpath is
       # covered without editing this workflow. A hand-written import list would

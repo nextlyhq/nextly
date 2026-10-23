@@ -24,7 +24,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { globSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -439,6 +439,91 @@ describe("every tracked file a compiler reads is covered by some hash", () => {
       expect(
         uncovered,
         `${task.package} compiles ${String(uncovered.length)} tracked file(s) that no hash covers, so editing one leaves its cache valid:\n  ${uncovered.slice(0, 10).join("\n  ")}`
+      ).toEqual([]);
+    },
+    PROBE_TIMEOUT_MS
+  );
+});
+
+/**
+ * The directories a package's Tailwind stylesheets scan for class names,
+ * repository-relative. Each `@source "<dir>"` names one, relative to the sheet;
+ * `@import "tailwindcss"` adds automatic detection, which starts where the
+ * build runs the CLI, the package root. `@source not` and `@source inline(…)`
+ * name no directory.
+ */
+function tailwindScans(directory, tracked) {
+  const sheets = [...tracked].filter(
+    file => file.startsWith(`${directory}/src/`) && file.endsWith(".css")
+  );
+  const scans = new Set();
+  for (const sheet of sheets) {
+    const text = readFileSync(join(REPO_ROOT, sheet), "utf8");
+    if (/@import\s+["']tailwindcss["']/.test(text)) scans.add(directory);
+    for (const [, dir] of text.matchAll(/@source\s+["']([^"']+)["']/g)) {
+      scans.add(relative(REPO_ROOT, resolve(REPO_ROOT, dirname(sheet), dir)));
+    }
+  }
+  return [...scans];
+}
+
+describe("every file a Tailwind build scans is in some build hash", () => {
+  // Tailwind reads class names out of every file under the directories it
+  // scans, tests and Markdown included, so a build that compiles it must hash
+  // all of them, or an edit to a class used only there replays a stale sheet.
+  // This is the input the TypeScript-program check above cannot see: the
+  // build reads these files through the Tailwind CLI, not through a compiler.
+  const tracked = trackedPaths();
+  const plan = parseTurboPlan(
+    execFileSync("pnpm", ["exec", "turbo", "run", "build", "--dry=json"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    }),
+    "turbo run build --dry=json"
+  );
+  const builds = plan.tasks.filter(task => task.task === "build");
+  /** Each build's inputs, as repository paths. */
+  const hashedBy = new Map(
+    builds.map(task => [
+      task.package,
+      new Set(Object.keys(task.inputs).map(file => join(task.directory, file))),
+    ])
+  );
+  const withSheets = builds
+    .map(task => [task, tailwindScans(task.directory, tracked)])
+    .filter(([, scans]) => scans.length > 0);
+
+  it("finds the packages that compile Tailwind", () => {
+    // The control: a reader that found no sheet would assert nothing.
+    expect(withSheets.map(([task]) => task.package).sort()).toEqual(
+      expect.arrayContaining(["@nextlyhq/admin", "@nextlyhq/builder", "@nextlyhq/ui"])
+    );
+  });
+
+  it.each(withSheets.map(([task, scans]) => [task.package, task, scans]))(
+    "%s: hashes every tracked file its stylesheets scan",
+    (_name, task, scans) => {
+      // A file in another package's directory counts as covered when that
+      // package's build hashes it and this build depends on that build, the
+      // edge through which its hash moves this one.
+      const dependencyBuilds = (task.dependencies ?? [])
+        .filter(id => id.endsWith("#build"))
+        .map(id => hashedBy.get(id.split("#")[0]))
+        .filter(Boolean);
+      const own = hashedBy.get(task.package);
+      const scanned = [...tracked].filter(
+        file =>
+          !file.endsWith(".css") &&
+          scans.some(dir => file.startsWith(`${dir}/`))
+      );
+      expect(scanned.length, `no tracked file under ${scans.join(", ")}`).toBeGreaterThan(0);
+      const unhashed = scanned.filter(
+        file => !own.has(file) && !dependencyBuilds.some(inputs => inputs.has(file))
+      );
+      expect(
+        unhashed,
+        `${task.package} compiles Tailwind over ${String(unhashed.length)} file(s) no build hash covers, so editing a class in one replays a stale stylesheet:\n  ${unhashed.slice(0, 10).join("\n  ")}`
       ).toEqual([]);
     },
     PROBE_TIMEOUT_MS
