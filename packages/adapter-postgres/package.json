@@ -18,8 +18,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
+    "build": "tsdown",
+    "dev": "tsdown --watch",
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
@@ -46,7 +46,7 @@
     "@vitest/ui": "^5.0.5",
     "eslint": "^9.39.1",
     "pg": "^8.16.3",
-    "tsup": "^8.5.0",
+    "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^5.0.5"

@@ -4,7 +4,7 @@ import path from "path";
 import tsconfigPaths from "vite-tsconfig-paths";
 import { defineConfig } from "vitest/config";
 
-// Mirror the tsup `define` so `getCoreVersion()` resolves under test (D6).
+// Mirror the tsdown `define` so `getCoreVersion()` resolves under test (D6).
 const require = createRequire(import.meta.url);
 const { version: coreVersion } = require("./package.json") as {
   version: string;

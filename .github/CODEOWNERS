@@ -35,6 +35,7 @@ turbo.jsonc                  @mobeenabdullah
 tsconfig*.json               @mobeenabdullah
 eslint*.config.*             @mobeenabdullah
 tsup*.config.*               @mobeenabdullah
+tsdown*.config.*             @mobeenabdullah
 rollup*.config.*             @mobeenabdullah
 next.config.*                @mobeenabdullah
 /.nvmrc                      @mobeenabdullah
