@@ -18,13 +18,18 @@ import { consoleLogger } from "../../shared/types";
 /** What was refused, already named, so each is logged once per process. */
 const named = new Set<string>();
 
-/** How a rule's answer reads in the notice. */
+/**
+ * How a rule's answer reads in the notice: its kind, never its content. A
+ * rule may hand back anything, a token included, and the notice needs only
+ * to say that the answer was not `true`; reading the value could also throw,
+ * which would fail the request the rule meant to refuse.
+ */
 function describe(value: unknown): string {
   if (value === null) return "null";
   if (value === undefined) return "undefined";
-  // A function or a symbol has no JSON form; its type alone names it.
-  const json = JSON.stringify(value);
-  return json === undefined ? typeof value : `${typeof value} ${json}`;
+  if (Array.isArray(value)) return "an array";
+  const kind = typeof value;
+  return kind === "object" ? "an object" : `a ${kind}`;
 }
 
 /**

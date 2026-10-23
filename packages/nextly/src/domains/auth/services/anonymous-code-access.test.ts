@@ -153,4 +153,21 @@ describe("a function rule's answer for a caller with no session", () => {
     await answerFor(true);
     expect(warn).toHaveBeenCalledTimes(1);
   });
+
+  it("names a rule's answer by its kind only: no value is copied, and none can fail the check", async () => {
+    const warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    // A rule that hands back something it should not have: the notice says
+    // what kind of answer it was, never what was in it.
+    await expect(answerFor("Bearer secret-token")).resolves.toBe(false);
+    expect(String(warn.mock.calls[0][0])).toContain("answered a string");
+    expect(String(warn.mock.calls[0][0])).not.toContain("secret-token");
+    // An answer with no JSON form, or one that refers to itself, still
+    // refuses rather than failing the request.
+    clearRuleAnswerNotices();
+    await expect(answerFor(BigInt(1))).resolves.toBe(false);
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    clearRuleAnswerNotices();
+    await expect(answerFor(cyclic)).resolves.toBe(false);
+  });
 });
