@@ -1,7 +1,9 @@
 // The shapes the tab-indicator rule (lint/tab-indicator) must tell apart, run
 // through oxlint's own rule tester, and the CSS questions it asks answered
 // directly where a call site cannot isolate them. Which files the rule reaches
-// is lint-config.test.mjs's question.
+// is `scripts/lint-config.test.mjs`'s question. Here, in this package's suite,
+// because the rule reads what this package's BUILD renders, and this suite's
+// task builds the package first.
 //
 // Each table entry is a shape an earlier version of this check got wrong, in
 // one direction or the other, so the reason it is here is written beside it.
@@ -10,16 +12,16 @@ import { join } from "node:path";
 import { RuleTester } from "oxlint/plugins-dev";
 import { describe, expect, it } from "vitest";
 
-import guards from "../lint/guards.mjs";
+import guards from "../../../../../lint/guards.mjs";
 import {
   excludeEachOther,
   ownedCssProperties,
-} from "../lint/tab-indicator/appearance.mjs";
+} from "../../../../../lint/tab-indicator/appearance.mjs";
 
 RuleTester.describe = describe;
 RuleTester.it = it;
 
-const REPO = join(import.meta.dirname, "..");
+const REPO = join(import.meta.dirname, "../../../../..");
 const tester = new RuleTester();
 const rule = guards.rules["tab-indicator"];
 
@@ -32,6 +34,11 @@ const PROBE = join(REPO, "probe.tsx");
 
 /** [what it is, the element] for each shape that must be reported, once. */
 const CATCHES = [
+  // An undecided `&&` yields its right operand whenever its left is truthy.
+  [
+    "an owned class behind an undecided condition",
+    '<TabsTrigger className={active && "border-b-0"} />',
+  ],
   // `??` yields its left operand when that is certainly present, so a
   // literal class there is the one applied.
   [
@@ -483,6 +490,16 @@ const CATCHES = [
 
 /** [what it is, the element] for each shape that must stay clean. */
 const CLEAN = [
+  // A condition's test is never the value it yields: only a ternary's
+  // branches, and only an `&&`'s right, can become the class.
+  [
+    "an owned class compared in a ternary's test",
+    '<TabsTrigger className={mode === "border-b-0" ? "w-full" : "gap-2"} />',
+  ],
+  [
+    "an owned class compared on the left of an `&&`",
+    '<TabsTrigger className={mode === "border-b-0" && "w-full"} />',
+  ],
   // The other side of the same operator: a present left operand means the
   // right one is never applied.
   [

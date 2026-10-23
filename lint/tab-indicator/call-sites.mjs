@@ -306,10 +306,26 @@ function literalStrings(node, found, resolver) {
     }
     return found;
   }
-  for (const child of resolver.childrenOf(node)) {
+  for (const child of yieldedOperands(node, resolver)) {
     literalStrings(child, found, resolver);
   }
   return found;
+}
+
+/**
+ * The parts of an expression whose value can become the class. An undecided
+ * conditional yields one of its branches and never its test, and an `&&`
+ * yields its left only when that is falsy, which holds no class, so only its
+ * right counts. Anything else may yield any part of itself.
+ */
+function yieldedOperands(node, resolver) {
+  if (node.type === "ConditionalExpression") {
+    return [node.consequent, node.alternate];
+  }
+  if (node.type === "LogicalExpression" && node.operator === "&&") {
+    return [node.right];
+  }
+  return resolver.childrenOf(node);
 }
 
 /**

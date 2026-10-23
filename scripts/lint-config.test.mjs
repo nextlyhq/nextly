@@ -22,11 +22,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
 import committed from "../oxlint.config.mjs";
-import { oxlintCommand } from "./lint.mjs";
+import { everyPass, oxlintCommand, TEMPLATES_PASS } from "./lint.mjs";
 
 const root = join(import.meta.dirname, "..");
 const nextly = join(root, "packages/nextly");
@@ -143,7 +144,7 @@ function withoutExemptions(rule) {
  * file there without its React rules.) A plugin named by a relative path is
  * given its absolute one. The directory is the only thing removed.
  */
-function lintProbes(probes) {
+function lintProbes(probes, config = committed) {
   const parent = join(root, ".turbo");
   mkdirSync(parent, { recursive: true });
   const dir = mkdtempSync(join(parent, "lint-probes-"));
@@ -152,14 +153,14 @@ function lintProbes(probes) {
       mkdirSync(dirname(join(dir, path)), { recursive: true });
       writeFileSync(join(dir, path), source, { flag: "wx" });
     }
-    const config = join(dir, "oxlint.config.mjs");
+    const written = join(dir, "oxlint.config.mjs");
     writeFileSync(
-      config,
-      `export default ${JSON.stringify(withRootPlugins(syntacticOnly(committed)))};\n`,
+      written,
+      `export default ${JSON.stringify(withRootPlugins(syntacticOnly(config)))};\n`,
       { flag: "wx" }
     );
     const report = runOxlint(
-      ["-c", config, "-f", "json", ...Object.keys(probes)],
+      ["-c", written, "-f", "json", ...Object.keys(probes)],
       dir
     );
     expect(report.number_of_files, "every probe is a file lint reads").toBe(
@@ -385,6 +386,23 @@ describe("the tab-indicator guard, wherever a call site can live", () => {
     expect(counts).toEqual(
       Object.fromEntries(Object.keys(probes).map(path => [path, 1]))
     );
+  }, 120_000);
+
+  // A scaffolded project depends on `@nextlyhq/ui`, so a template is a call
+  // site too. The repository's configuration ignores the templates, so they
+  // are read by a pass of their own, with its own configuration.
+  it("reports one in a scaffold template, through the pass `pnpm lint` runs there", async () => {
+    expect(everyPass()).toContainEqual(TEMPLATES_PASS);
+    const [, configFile, templates] = TEMPLATES_PASS;
+    const { default: config } = await import(
+      pathToFileURL(join(root, configFile)).href
+    );
+    const probe = `${templates}/base/src/app/lint-probe-tab.tsx`;
+    const counts = countsPerFile(
+      lintProbes({ [probe]: violation("tsx") }, config),
+      "nextly(tab-indicator)"
+    );
+    expect(counts).toEqual({ [probe]: 1 });
   }, 120_000);
 });
 

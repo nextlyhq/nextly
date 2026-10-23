@@ -190,6 +190,7 @@ export default defineConfig({
     // project. Every other configuration file is linted.
     "oxlint.config.mjs",
     "oxlint.scripts.config.mjs",
+    "oxlint.templates.config.mjs",
     "**/vitest.config.{ts,mjs}",
     "**/vitest.*.config.ts",
     "**/vitest.global-setup.{js,ts,mjs,cjs}",

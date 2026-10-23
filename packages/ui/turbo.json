@@ -57,6 +57,9 @@
         "$TURBO_ROOT$/apps/**/*.tsx",
         "$TURBO_ROOT$/apps/**/*.jsx",
         "$TURBO_ROOT$/apps/**/*.js",
+        // The tab-indicator rule's suite tests the lint rule, which lives at
+        // the root beside the other lint guards.
+        "$TURBO_ROOT$/lint/**",
         // The RSC-matrix suite reads the root manifest and the package-smoke
         // workflow, comparing the job's Node legs against `engines.node`. Listed
         // here rather than on the root task: there they become inputs to every
@@ -86,6 +89,9 @@
         "$TURBO_ROOT$/apps/**/*.tsx",
         "$TURBO_ROOT$/apps/**/*.jsx",
         "$TURBO_ROOT$/apps/**/*.js",
+        // The tab-indicator rule's suite tests the lint rule, which lives at
+        // the root beside the other lint guards.
+        "$TURBO_ROOT$/lint/**",
         // The RSC-matrix suite reads the root manifest and the package-smoke
         // workflow, comparing the job's Node legs against `engines.node`. Listed
         // here rather than on the root task: there they become inputs to every
