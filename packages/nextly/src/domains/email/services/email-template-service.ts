@@ -980,26 +980,7 @@ export class EmailTemplateService extends BaseService {
   ): Promise<Set<string>> {
     const kept = new Set<string>();
     if (templates.length === 0) return kept;
-    // One read of the whole state answers both whether the switch is
-    // recorded and which templates it kept. No meta table means nothing was
-    // recorded, so every template is judged by what it holds.
-    const state = await this.engineStateFor("decide");
-    let recorded: Record<string, unknown>;
-    let adopted: boolean | null;
-    if (state) {
-      recorded = Object.fromEntries([...state.keys].map(key => [key, true]));
-      adopted = state.adopted;
-    } else {
-      try {
-        recorded = await this.meta.getAll();
-        adopted = Object.hasOwn(recorded, LIQUID_ADOPTED_KEY);
-      } catch (error) {
-        if (!isMissingTable(error, this.dialect)) throw error;
-        recorded = {};
-        adopted = null;
-      }
-    }
-    const marked = (key: string) => Object.hasOwn(recorded, key);
+    const { adopted, marked } = await this.recordedEngineMarks();
     for (const template of templates) {
       if (adopted) {
         if (marked(keptKey(template.id))) kept.add(template.id);
@@ -1010,6 +991,31 @@ export class EmailTemplateService extends BaseService {
       }
     }
     return kept;
+  }
+
+  /**
+   * The switch and the marks it left, from one read of the whole state.
+   * No meta table means nothing was recorded, so every template is judged by
+   * what it holds.
+   */
+  private async recordedEngineMarks(): Promise<{
+    adopted: boolean | null;
+    marked: (key: string) => boolean;
+  }> {
+    const state = await this.engineStateFor("decide");
+    if (state) {
+      return { adopted: state.adopted, marked: key => state.keys.has(key) };
+    }
+    try {
+      const recorded = await this.meta.getAll();
+      return {
+        adopted: Object.hasOwn(recorded, LIQUID_ADOPTED_KEY),
+        marked: key => Object.hasOwn(recorded, key),
+      };
+    } catch (error) {
+      if (!isMissingTable(error, this.dialect)) throw error;
+      return { adopted: null, marked: () => false };
+    }
   }
 
   /** Whether a template is kept on the old engine, and what in it is why. */
