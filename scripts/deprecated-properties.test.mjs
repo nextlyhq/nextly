@@ -10,7 +10,9 @@ import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  auditProject,
   deprecatedPropertiesIn,
+  deprecatedPropertiesOf,
   deprecationIn,
   positionOf,
   writtenProperties,
@@ -151,6 +153,18 @@ describe("deprecatedPropertiesIn, asked of the compiler's language server", () =
     rmSync(dir, { recursive: true, force: true });
   });
 
+  /** Two samples beside the API: one writes a deprecated property, one does not. */
+  function projectFiles() {
+    const first = join(dir, "by-file-1.ts");
+    const second = join(dir, "by-file-2.ts");
+    writeFileSync(
+      first,
+      'import { plugin } from "./api";\n\nplugin({ collections: [] });\n'
+    );
+    writeFileSync(second, 'import { plugin } from "./api";\nplugin({});\n');
+    return [first, second];
+  }
+
   let count = 0;
   /** What the audit reports for `body`, written in a sample beside the API. */
   async function reported(body) {
@@ -196,6 +210,32 @@ describe("deprecatedPropertiesIn, asked of the compiler's language server", () =
   it("reports nothing where the union leaves an arm that does not deprecate it", async () => {
     expect(await reported('either({ both: "x" });')).toEqual([]);
   });
+
+  it("audits every file of a project, answering by file and line", async () => {
+    const [first, second] = projectFiles();
+    const found = await auditProject(dir, [first, second]);
+    expect(
+      Object.fromEntries(
+        Object.entries(found).map(([file, list]) => [
+          file,
+          list.map(({ name, line }) => [name, line]),
+        ])
+      )
+    ).toEqual({ [first]: [["collections", 3]], [second]: [] });
+  }, 60_000);
+
+  it("answers the same as its own process, for a caller that cannot wait", async () => {
+    const files = projectFiles();
+    expect(deprecatedPropertiesOf(dir, files)).toEqual(
+      await auditProject(dir, files)
+    );
+  }, 60_000);
+
+  it("throws when the audit fails, rather than answering", () => {
+    expect(() =>
+      deprecatedPropertiesOf(dir, [join(dir, "no-such-sample.ts")])
+    ).toThrow(/the audit failed \(1\): .*no-such-sample\.ts/s);
+  }, 60_000);
 
   it("carries a note across lines, and ends it at the next tag", async () => {
     expect(await reported("plugin({ multi: 1, tagged: 2 });")).toEqual([

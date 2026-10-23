@@ -14,10 +14,14 @@
 // shape has nothing to be deprecated against, and its hover carries no tag. A
 // union the literal leaves ambiguous answers with the union's own member,
 // which carries a tag only when every arm does.
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { extname } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
+
+import { startLanguageServer } from "./language-server.mjs";
 
 /**
  * `{ name, start }` for each property in `source` whose name the text decides,
@@ -101,8 +105,8 @@ function hoverText(hover) {
 }
 
 /**
- * `{ name, start, note }` for each property `source` writes that its API has
- * deprecated, asked of `server` (from `startLanguageServer`, initialised on a
+ * `{ name, start, line, note }` for each property `source` writes that its API
+ * has deprecated, `line` counting from 1, asked of `server` (from `startLanguageServer`, initialised on a
  * project that includes `file`). The file is opened with `source` as its text
  * for the questions and closed after them.
  */
@@ -122,7 +126,11 @@ export async function deprecatedPropertiesIn(server, file, source) {
       written.map(property => noteFor(server, uri, source, property))
     );
     return written
-      .map((property, index) => ({ ...property, note: notes[index] }))
+      .map((property, index) => ({
+        ...property,
+        line: positionOf(source, property.start).line + 1,
+        note: notes[index],
+      }))
       .filter(property => property.note !== undefined);
   } finally {
     server.notify("textDocument/didClose", { textDocument: { uri } });
@@ -142,4 +150,69 @@ async function noteFor(server, uri, source, { name, start }) {
     hover,
     `'${name}' at ${uri}:${String(position.line + 1)}`
   );
+}
+
+/**
+ * The audit over `files`, each read from disk, of the project whose
+ * `tsconfig.json` is in `dir`: `{ [file]: [{ name, start, line, note }] }`.
+ * One server answers for all of them and is closed after, and any failure
+ * rejects the whole audit.
+ */
+export async function auditProject(dir, files) {
+  const server = startLanguageServer({ cwd: dir });
+  try {
+    await server.request("initialize", {
+      processId: process.pid,
+      rootUri: pathToFileURL(dir).href,
+      capabilities: {
+        textDocument: { hover: { contentFormat: ["markdown"] } },
+      },
+    });
+    server.notify("initialized", {});
+    const found = {};
+    for (const file of files) {
+      found[file] = await deprecatedPropertiesIn(
+        server,
+        file,
+        readFileSync(file, "utf8")
+      );
+    }
+    return found;
+  } finally {
+    await server.close();
+  }
+}
+
+/**
+ * The audit as a program of its own: `auditProject` over its arguments,
+ * printed as JSON, exiting 1 with the reason on stderr if it fails.
+ */
+const AUDIT_PROGRAM = `
+import { auditProject } from ${JSON.stringify(import.meta.url)};
+const [dir, ...files] = process.argv.slice(1);
+try {
+  process.stdout.write(JSON.stringify(await auditProject(dir, files)));
+} catch (error) {
+  process.stderr.write(String(error?.stack ?? error) + "\\n");
+  process.exitCode = 1;
+}
+`;
+
+/**
+ * `auditProject`, for a caller that cannot wait on a promise: run as its own
+ * process and waited for. A failed audit throws, with what it reported.
+ */
+export function deprecatedPropertiesOf(dir, files) {
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "--eval", AUDIT_PROGRAM, dir, ...files],
+    { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 }
+  );
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(
+      `deprecated properties: the audit failed (${String(result.status)}): ${result.stderr.trim()}`
+    );
+  }
+  return JSON.parse(result.stdout);
 }
