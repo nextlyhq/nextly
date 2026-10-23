@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (127717b7884d33e8). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (9fe55c8b212f38a1). Edit that file, never this one. -->
 
 # packages/nextly: Agent Guide
 
@@ -35,8 +35,8 @@ inside `packages/nextly`.
   code-defined rule (`checkAnonymousCodeAccess`, handed `user: null`, no
   roles, no permissions); a rule that says nothing about the operation lets
   the request fall through to the public default. The Single gate
-  (`checkSingleAccess`) and relationship expansion (`judgeTarget`) ask that
-  same question, so one rule gives one answer on every door. Two exceptions
+  (`checkSingleAccess`) and relationship expansion (`relatedRowReads`) ask
+  that same question, so one rule gives one answer on every door. Two exceptions
   fail closed regardless: `publish`/`unpublish` with no user, and
   `routeAuthorized` with no user.
 - A permission is spelled `read-posts` everywhere, rules included; their
@@ -47,8 +47,8 @@ inside `packages/nextly`.
   one key differently.
 - A collection whose code-defined `access` says nothing about an operation
   falls through to DB permissions; a caller with no matching grant is refused.
-  A rule that throws denies. Relationship expansion (`judgeTarget`) asks a
-  populated TARGET the same: no read rule means a person needs a grant, and a
+  A rule that throws denies. Relationship expansion (`relatedRowReads`) asks
+  a populated TARGET the same: no read rule means a person needs a grant, and a
   key needs `read-<target>` in its own scope before any rule; `users` and
   media need `read-users` / `read-media` of a person or key; a visitor keeps
   media and never gets a user.
