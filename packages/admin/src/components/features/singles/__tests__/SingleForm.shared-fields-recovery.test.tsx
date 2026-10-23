@@ -182,8 +182,13 @@ describe("a Single's form, for a publish refused over shared values", () => {
     act(() => {
       refusedFormOf(onSubmit)?.adoptTaken(["heroTitle"]);
     });
+    // Typed while the live values were being taken: newer than anything the
+    // reloaded Single carries.
+    await user.clear(tagline);
+    await user.type(tagline, "Later");
     // The reloaded Single: the live heading taken into the change, the same
-    // identity as the one on screen.
+    // identity as the one on screen, and the tagline as it was saved, before
+    // the edit above.
     act(() => {
       rerenderWith({
         ...first,
@@ -192,8 +197,10 @@ describe("a Single's form, for a publish refused over shared values", () => {
       } as unknown as SingleDocumentData);
     });
 
+    // Only the field taken is reset; a reset of the whole form would put the
+    // saved "Mine" back over the edit made since.
     expect(heading).toHaveValue("Live");
-    expect(tagline).toHaveValue("Mine");
+    expect(tagline).toHaveValue("Later");
 
     await user.click(
       screen.getByRole("button", { name: "Save from the view" })
@@ -201,7 +208,7 @@ describe("a Single's form, for a publish refused over shared values", () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
     expect(onSubmit.mock.calls[1]?.[0]).toMatchObject({
       heroTitle: "Live",
-      tagline: "Mine",
+      tagline: "Later",
     });
   });
 });

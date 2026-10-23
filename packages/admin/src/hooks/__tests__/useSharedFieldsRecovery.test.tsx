@@ -223,6 +223,35 @@ describe("useSharedFieldsRecovery", () => {
     expect(toast.dismiss).toHaveBeenCalledWith(ids[0]);
   });
 
+  it("closes the toast when the editor moves to another language in place, and gives the next refusal its own", () => {
+    const { result, rerender } = renderHook(
+      ({ locale }: { locale: string }) =>
+        useSharedFieldsRecovery({
+          scope: { kind: "collection", slug: "authors", entryId: "e1" },
+          locale,
+          fields: [{ name: "articleCount", label: "Article Count" }],
+          save: async () => undefined,
+          onTaken: vi.fn(),
+        }),
+      { initialProps: { locale: "es" } }
+    );
+    const stale = refusal({
+      reason: "shared-fields-out-of-date",
+      fields: ["articleCount"],
+    });
+    result.current(stale, formHolding({}));
+    const spanish = (toast.error.mock.calls[0]?.[1] as { id?: unknown }).id;
+
+    // The same editor, still mounted, switched to English.
+    rerender({ locale: "en" });
+    expect(toast.dismiss).toHaveBeenCalledWith(spanish);
+
+    result.current(stale, formHolding({}));
+    const english = (toast.error.mock.calls[1]?.[1] as { id?: unknown }).id;
+    expect(english).toEqual(expect.any(String));
+    expect(english).not.toBe(spanish);
+  });
+
   it("doesn't show the live values in a form the editor has moved to another language", async () => {
     let arrive: (answer: unknown) => void = () => {};
     take.mockImplementation(
