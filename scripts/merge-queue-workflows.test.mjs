@@ -358,10 +358,55 @@ describe("when the Release job runs", () => {
     expect(String(direct?.run)).toContain(action.with.publish);
   });
 
-  it("leaves Release health to skip a skipped Release, and to run on its schedule", () => {
-    expect(decide(health, { "github.event_name": "workflow_run", "github.event.workflow_run.conclusion": "skipped" })).toBe("false");
-    expect(decide(health, { "github.event_name": "workflow_run", "github.event.workflow_run.conclusion": "success" })).toBe("true");
-    expect(decide(health, { "github.event_name": "schedule", "github.event.workflow_run.conclusion": null })).toBe("true");
+  /*
+   * A Release run whose only job skipped concludes `success`, as a skipped job
+   * reports success, so Release health tells the runs apart by what started
+   * them: every value below is one a real `workflow_run` payload carries,
+   * conclusion included.
+   */
+  const releaseRun = ({ event = "push", branch = "main", message = "fix(nextly): type the send-test error (#2563)" } = {}) => ({
+    "github.event_name": "workflow_run",
+    "github.event.workflow_run.conclusion": "success",
+    "github.event.workflow_run.event": event,
+    "github.event.workflow_run.head_branch": branch,
+    "github.event.workflow_run.head_commit.message": message,
+  });
+
+  it("runs Release health after a Release run that released, or was dispatched, from main", () => {
+    expect(decide(health, releaseRun({ message: "chore: version packages (alpha) (#2600)" }))).toBe("true");
+    expect(decide(health, releaseRun({ event: "workflow_dispatch", message: "fix(nextly): anything (#1)" }))).toBe("true");
+  });
+
+  it("skips Release health after an ordinary push, whose skipped job still concludes success", () => {
+    expect(decide(health, releaseRun())).toBe("false");
+  });
+
+  it("skips Release health after a dispatch from another ref", () => {
+    for (const branch of ["feature/try-a-release", "v0.0.2-alpha.66"]) {
+      expect(decide(health, releaseRun({ event: "workflow_dispatch", branch })), branch).toBe("false");
+    }
+  });
+
+  it("runs Release health on its schedule and on its own dispatch, and never in a fork", () => {
+    expect(decide(health, { "github.event_name": "schedule" })).toBe("true");
+    expect(decide(health, { "github.event_name": "workflow_dispatch" })).toBe("true");
+    expect(decide(health, { ...releaseRun({ event: "workflow_dispatch" }), "github.repository": "someone/nextly" })).toBe("false");
+  });
+});
+
+describe("a Version Packages pull request that went stale", () => {
+  /*
+   * A public package added to `main` after that pull request was last
+   * refreshed keeps its old version while every other package takes the next
+   * one, and the merge's publish would then refuse the release. The queue's
+   * run checks the combined tree, so the check there keeps it from merging.
+   */
+  const steps = read(".github/workflows/ci.yml").jobs.ci.steps;
+  const step = steps.find(candidate => /\bnode scripts\/release\/check-lockstep\.mjs\b/.test(String(candidate.run)));
+
+  it("checks every pull request's and every queued group's packages share one version", () => {
+    expect(step, "a ci step runs check-lockstep.mjs").toBeDefined();
+    expect(String(step.if)).not.toMatch(/event_name/);
   });
 });
 

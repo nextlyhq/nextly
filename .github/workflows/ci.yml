@@ -569,6 +569,16 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:workspace
 
+      # Every publishable package at one version, the test the release's
+      # preflight applies. In the queue it checks the combined tree, which is
+      # where a Version Packages pull request that went stale shows: a package
+      # added to `main` after its last refresh is left on the old version, and
+      # merging it would leave the release it versioned unpublished. Reads the
+      # manifests only, in milliseconds, on every event.
+      - name: Release versions in lockstep
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/release/check-lockstep.mjs
+
       # The dev-tooling scripts, which no other lint reaches. `turbo run lint`
       # is per-package and stops at the workspace boundary, and the shared
       # eslint config ignores `**/scripts/**/*` because type-aware linting

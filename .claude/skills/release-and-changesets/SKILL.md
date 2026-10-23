@@ -36,7 +36,10 @@ file by hand under `.changeset/` following an existing one.
    publishes all packages to npm via trusted publishing (OIDC) in the
    protected environment. It publishes the version that merge carries even
    when other changesets reached `main` after the PR was last refreshed; those
-   wait for the next run of the workflow. Every real version is published this way; never run
+   wait for the next run of the workflow. A public package added after that
+   refresh is the exception: it would stay on the old version, so CI's
+   "Release versions in lockstep" step fails the PR (and the queue's run of
+   it) until the workflow is run again to refresh it. Every real version is published this way; never run
    `changeset publish` or `npm publish` yourself. The one exception is the
    `0.0.0` placeholder that claims a brand-new package name: a maintainer with
    publish rights on npm runs `scripts/release/bootstrap-package.mjs` once,

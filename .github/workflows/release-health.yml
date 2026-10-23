@@ -49,10 +49,20 @@ jobs:
     # file an issue about a release the fork does not own.
     #
     # Nor after a Release run whose job was skipped: Release runs its job only
-    # for the Version Packages merge or a dispatch, so most pushes to `main`
-    # complete a skipped run, which still fires `workflow_run` while changing
-    # nothing this check reads. The daily schedule still checks in any case.
-    if: github.repository == 'nextlyhq/nextly' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion != 'skipped')
+    # for the Version Packages merge or a dispatch from `main`, so most pushes
+    # to `main` complete a skipped run, which still fires `workflow_run` while
+    # changing nothing this check reads. Such a run concludes `success`, not
+    # `skipped`, because a skipped job reports success, so the run is told
+    # apart by what started it, with the same test as Release's own job: a
+    # dispatch, or the Version Packages merge, on `main`. The daily schedule
+    # still checks in any case.
+    # A block scalar, since the title's ": " would end a plain YAML value.
+    if: >-
+      github.repository == 'nextlyhq/nextly' &&
+      (github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.head_branch == 'main' &&
+      (github.event.workflow_run.event == 'workflow_dispatch' ||
+      startsWith(github.event.workflow_run.head_commit.message, 'chore: version packages'))))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
