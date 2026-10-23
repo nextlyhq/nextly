@@ -72,7 +72,7 @@
       "import": "./dist/domains/i18n/translation-filter-states.mjs"
     },
     "./reserved-filter-keys": {
-      "types": "./dist/reserved-filter-keys.d.ts",
+      "types": "./dist/domains/collections/query/reserved-filter-keys.d.mts",
       "import": "./dist/domains/collections/query/reserved-filter-keys.mjs"
     },
     "./query": {
