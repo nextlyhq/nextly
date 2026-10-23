@@ -566,7 +566,7 @@ export function statusAsRun(status) {
  *
  * A non-empty list of check-runs is not evidence that CI ran. The workflows
  * here are independent, so a run where `ci.yml` never created its jobs while
- * `secret-scan.yml` succeeded produces a green-looking set containing no build
+ * `small-checks.yml` succeeded produces a green-looking set containing no build
  * and no tests. Absence of the expected name is the only thing that separates
  * them, and absence is invisible to any filter over what IS present.
  */
@@ -716,15 +716,17 @@ export function workflowPathsIgnore(workflowText, trigger) {
  * Checks whose absence means the revision has no coverage, not that it is
  * clean, each with the filter deciding whether it was due to report.
  */
-export function requiredChecks(integrationPathsIgnore, { merged = false } = {}) {
+export function requiredChecks(integrationPathsIgnore) {
   return [
     // Every other job in `ci.yml` hangs off this one through `needs: [ci]`, so
     // if it never reported then the browser, scaffold and dev-script jobs did
     // not run either, however many unrelated workflows went green. `ci.yml`
     // filters in a job rather than at the trigger, so it always reports.
     { name: "Lint / Typecheck / Test / Build", pathsIgnore: [] },
-    // Its own workflow, unfiltered, on every pull request.
-    { name: "gitleaks", pathsIgnore: [] },
+    // Its own workflow, unfiltered, on every pull request, in the queue and on
+    // every push to the base branch: the title, AI-credit, secret-scan and
+    // review steps in one job, so its absence leaves all four unjudged.
+    { name: "Small checks (title, AI credit, secret scan, review)", pathsIgnore: [] },
     // Listed for the reason this whole list exists: it is an INDEPENDENT job in
     // `ci.yml`, hanging off nothing, so removing or renaming it produces no
     // check-run for a failure check to reject - the control would disappear in
@@ -742,14 +744,6 @@ export function requiredChecks(integrationPathsIgnore, { merged = false } = {}) 
     { name: "Integration (postgres)", pathsIgnore: integrationPathsIgnore },
     { name: "Integration (mysql)", pathsIgnore: integrationPathsIgnore },
     { name: "Integration (sqlite)", pathsIgnore: integrationPathsIgnore },
-    // Reported by its own workflow, on a pull request and in the merge queue,
-    // and never on a push to the base branch, which has no title to validate,
-    // so requiring it post-merge would demand a result that is never written.
-    // Judged only when present, a run that never started left the title
-    // unvalidated and the gate green.
-    ...(merged
-      ? []
-      : [{ name: "Validate PR title follows Conventional Commits", pathsIgnore: [] }]),
   ];
 }
 
@@ -1253,7 +1247,7 @@ export function main(argv) {
     workflowAt(filterRevision, ".github/workflows/integration.yml"),
     merged ? "push" : "pull_request"
   );
-  const required = requiredChecks(integrationIgnore, { merged });
+  const required = requiredChecks(integrationIgnore);
   // Paginated. A pull request with more than 100 review threads would
   // otherwise have everything past the first page counted as resolved, which
   // is the reassuring direction.

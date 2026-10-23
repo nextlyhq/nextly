@@ -333,7 +333,7 @@ Branch names aren't strictly enforced by CI — but consistent names make the me
 
 ## Commit messages
 
-We follow [Conventional Commits](https://www.conventionalcommits.org/). The `pr-title.yml` workflow enforces this on PR titles, and commitlint validates each commit locally via the `commit-msg` hook.
+We follow [Conventional Commits](https://www.conventionalcommits.org/). The `small-checks.yml` workflow enforces this on PR titles, and commitlint validates each commit locally via the `commit-msg` hook.
 
 ```
 <type>(<scope>): <description>
@@ -345,7 +345,7 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/). The `pr-
 
 **Types**: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
 
-**Scopes**: see the canonical list in [`.github/workflows/pr-title.yml`](.github/workflows/pr-title.yml). Match a package directory name (`admin`, `nextly`, `adapter-postgres`, etc.) or use `root`, `deps`, `release`, `ci`, or `docs` for repo-wide changes.
+**Scopes**: see the canonical list in [`.github/workflows/small-checks.yml`](.github/workflows/small-checks.yml). Match a package directory name (`admin`, `nextly`, `adapter-postgres`, etc.) or use `root`, `deps`, `release`, `ci`, or `docs` for repo-wide changes.
 
 **Description rules**: imperative mood ("add" not "added"), lowercase, no trailing period, ≤72 characters.
 
@@ -412,7 +412,7 @@ Every pull request merges through GitHub's merge queue: it runs the required che
 
 - a maintainer has approved it, and a code owner too for the files [`.github/CODEOWNERS`](.github/CODEOWNERS) names;
 - every conversation is resolved;
-- these checks pass: `CI gate`, `Comment convention (describes code, not process)`, `Integration (mysql)`, `Integration (postgres)`, `Integration (sqlite)`, `Validate PR title follows Conventional Commits`, `Independent review of the revision being merged`, `gitleaks` and `No AI credit`.
+- these checks pass: `CI gate`, `Comment convention (describes code, not process)`, `Integration (mysql)`, `Integration (postgres)`, `Integration (sqlite)` and `Small checks (title, AI credit, secret scan, review)`. That last one is a single job whose steps check the title, refuse AI credit, run gitleaks and, in the queue, require an independent review.
 
 ---
 

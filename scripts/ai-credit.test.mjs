@@ -693,14 +693,19 @@ describe("the command in CI", () => {
 });
 
 describe("the workflow that runs it", () => {
+  const workflow = load(readFileSync(new URL("../.github/workflows/small-checks.yml", import.meta.url), "utf8"));
+  const steps = workflow.jobs.checks.steps;
+
   // A title and a description are published the moment they are written, so
   // an edit to either is read again; the queue reads what it would land.
   it("runs on every change to a pull request, its edits included, and in the merge queue", () => {
-    const workflow = load(readFileSync(new URL("../.github/workflows/ai-credit.yml", import.meta.url), "utf8"));
     const triggers = workflow.on ?? workflow[true];
     expect(triggers.pull_request_target).toEqual({ types: ["opened", "edited", "synchronize", "reopened"] });
     expect(triggers.merge_group).toEqual({ types: ["checks_requested"] });
-    expect(workflow.jobs.credit.steps.at(-1).run).toBe("node trusted/scripts/ai-credit.mjs");
+    const credit = steps.find(step => step.name === "No AI credit");
+    expect(credit.run).toBe('node "$GITHUB_WORKSPACE/scripts/ai-credit.mjs"');
+    // On a push to `main` there is no pull request to read, and the queue already read what landed.
+    expect(credit.if).toBe("${{ !cancelled() && github.event_name != 'push' }}");
   });
 });
 
@@ -708,27 +713,33 @@ describe("where the workflow's checker comes from", () => {
   // A change could rewrite the checker it is judged by, so the checker comes
   // from main, or the queue's base, and the change is only read.
   it("runs the checker from main or the queue's base, and only reads the change", () => {
-    const workflow = load(readFileSync(new URL("../.github/workflows/ai-credit.yml", import.meta.url), "utf8"));
-    const steps = workflow.jobs.credit.steps;
-    const [change, checker] = steps.filter(step => String(step.uses).startsWith("actions/checkout@"));
+    const workflow = load(readFileSync(new URL("../.github/workflows/small-checks.yml", import.meta.url), "utf8"));
+    const steps = workflow.jobs.checks.steps;
+    const [checker, change] = steps.filter(step => String(step.uses).startsWith("actions/checkout@"));
+    // The checker is the workspace root: `main` on a pull request, the queue's base in the queue.
+    expect(checker.with.path).toBeUndefined();
+    expect(checker.with.ref).toBe("${{ github.event.merge_group.base_sha }}");
+    expect(change.with.path).toBe("change");
     expect(change.with["fetch-depth"]).toBe(0);
-    expect(change.with.ref).toBe("${{ github.event_name == 'merge_group' && github.ref || format('refs/pull/{0}/head', github.event.pull_request.number) }}");
-    expect(checker.with.ref).toBe("${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.repository.default_branch }}");
-    expect(workflow.jobs.credit.permissions).toEqual({ contents: "read" });
-    expect(checker.with.path).toBe("trusted");
-    expect(steps.at(-1).run.startsWith(`node ${checker.with.path}/`)).toBe(true);
+    expect(change.with.ref).toBe("${{ github.event_name == 'pull_request_target' && format('refs/pull/{0}/head', github.event.pull_request.number) || github.sha }}");
+    // git reads the change from inside its checkout; the script is the root's.
+    const credit = steps.find(step => step.name === "No AI credit");
+    expect(credit["working-directory"]).toBe(change.with.path);
+    expect(credit.run.startsWith('node "$GITHUB_WORKSPACE/')).toBe(true);
+    expect(Object.values(workflow.jobs.checks.permissions).every(level => level === "read")).toBe(true);
   });
 });
 
 describe("what the checker runs with a fork's head checked out", () => {
   // Checkout refuses a fork's head under `pull_request_target` unless told
   // otherwise, and this job opts in. That is safe only while nothing from the
-  // change runs: the checker is checked out inside the change's tree, so a bare
-  // specifier it imported would resolve to the change's own `node_modules`.
-  const workflowText = readFileSync(new URL("../.github/workflows/ai-credit.yml", import.meta.url), "utf8");
+  // change runs: the change sits under `change/`, inside the checker's tree,
+  // and git and gitleaks only read it, so the checker must load nothing a bare
+  // specifier could resolve from anywhere but Node and its own folder.
+  const workflowText = readFileSync(new URL("../.github/workflows/small-checks.yml", import.meta.url), "utf8");
   const workflow = load(workflowText);
-  const steps = workflow.jobs.credit.steps;
-  const [change, checker] = steps.filter(step => String(step.uses).startsWith("actions/checkout@"));
+  const steps = workflow.jobs.checks.steps;
+  const [checker, change] = steps.filter(step => String(step.uses).startsWith("actions/checkout@"));
 
   const CHECKER_FILES = ["ai-credit.mjs", "change-scope.mjs", "cli-entry.mjs", "workflow-context.mjs"];
 
@@ -784,18 +795,23 @@ describe("what the checker runs with a fork's head checked out", () => {
     expect(checker.with["allow-unsafe-pr-checkout"]).toBeUndefined();
     expect(change.with["persist-credentials"]).toBe(false);
     expect(checker.with["persist-credentials"]).toBe(false);
-    expect(checker.with["sparse-checkout"]).toBe("scripts");
   });
 
-  it("uses no secret, grants only a read, and runs nothing but the checker", () => {
+  it("uses no secret, grants only reads, and runs nothing from the change", () => {
     expect(workflowText).not.toMatch(/\bsecrets\./);
     expect(workflow.permissions).toEqual({});
-    expect(workflow.jobs.credit.permissions).toEqual({ contents: "read" });
-    // Node's version is read from main's checkout, not from the change.
+    expect(workflow.jobs.checks.permissions).toEqual({ contents: "read", "pull-requests": "read", issues: "read" });
+    // Node's version is read from the checker's checkout, not from the change.
     const setupNode = steps.find(step => String(step.uses).startsWith("actions/setup-node@"));
-    expect(setupNode.with["node-version-file"]).toBe(`${checker.with.path}/.nvmrc`);
-    expect(steps.filter(step => step.run !== undefined).map(step => step.run)).toEqual([`node ${checker.with.path}/scripts/ai-credit.mjs`]);
-    expect(steps.every(step => step.run !== undefined || /^actions\/(checkout|setup-node)@[0-9a-f]{40}$/.test(String(step.uses)))).toBe(true);
+    expect(setupNode.with["node-version-file"]).toBe(".nvmrc");
+    expect(setupNode.with.cache).toBeUndefined();
+    // Every action is a pinned checkout or setup-node, or the checker's own title action at the root.
+    expect(steps.every(step => step.run !== undefined || /^actions\/(checkout|setup-node)@[0-9a-f]{40}$/.test(String(step.uses)) || step.uses === "./.github/actions/pr-title")).toBe(true);
+    // Inside the change, only the checker and the scan run, and neither runs the change's files.
+    const inChange = steps.filter(step => step["working-directory"] === change.with.path).map(step => step.name);
+    expect(inChange).toEqual(["No AI credit", "Run gitleaks on the commits this run adds"]);
+    // No step names a path under the change any other way.
+    for (const step of steps) expect(JSON.stringify({ ...step, "working-directory": undefined }), step.name).not.toMatch(/\bchange\//);
   });
 });
 
