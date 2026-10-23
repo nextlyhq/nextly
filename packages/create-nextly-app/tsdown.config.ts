@@ -7,6 +7,7 @@ import { defineConfig } from "tsdown";
 // The repository's own skill check, so the build bundles exactly the skills
 // it holds to be for people building with Nextly.
 import { userSkillSeparation } from "../../scripts/agent-skills.mjs";
+
 import {
   copyBundledSkills,
   skillsToBundle,
@@ -93,7 +94,7 @@ export default defineConfig({
   },
   checks: { legacyCjs: false },
   cjsDefault: false,
-  async onSuccess() {
+  onSuccess() {
     copyBundledTemplates();
     copyBundledSkillsFromRepository();
   },

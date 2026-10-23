@@ -148,3 +148,29 @@ tester.run(
     ],
   }
 );
+
+tester.run("no-legacy-lifecycle", guards.rules["no-legacy-lifecycle"], {
+  valid: [
+    // The lifecycles React kept, and the deliberate UNSAFE_ spelling.
+    "class A extends React.Component { componentDidMount() {} componentDidUpdate() {} }",
+    "class A extends Component { UNSAFE_componentWillMount() {} }",
+    // A class that is not a React component may name its methods anything.
+    "class Queue { componentWillMount() {} }",
+    "class Queue extends Base { componentWillUpdate() {} }",
+  ],
+  invalid: [
+    {
+      code: "class A extends React.Component { componentWillMount() {} }",
+      errors: 1,
+    },
+    {
+      code: "class A extends PureComponent { componentWillReceiveProps() {} }",
+      errors: 1,
+    },
+    {
+      // A class field holding the method is the same lifecycle.
+      code: "const A = class extends Component { componentWillUpdate = () => {}; };",
+      errors: 1,
+    },
+  ],
+});

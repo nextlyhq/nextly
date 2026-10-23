@@ -232,6 +232,56 @@ const noStaticRestrictedImport = {
   },
 };
 
+/** The lifecycle methods React deprecated in 16.9, by the name a class component defines. */
+const LEGACY_LIFECYCLES = new Set([
+  "componentWillMount",
+  "componentWillReceiveProps",
+  "componentWillUpdate",
+]);
+
+/** The name a class's `extends` clause gives, as `Component` or `React.Component`. */
+function superClassName(node) {
+  const base = node.superClass ?? {};
+  return base.type === "MemberExpression" ? base.property.name : base.name;
+}
+
+/** React's two class-component bases. */
+const REACT_BASES = new Set(["Component", "PureComponent"]);
+
+/** The name a class member is defined under, unless it is computed. */
+function memberName(member) {
+  return !member.computed && member.key?.type === "Identifier"
+    ? member.key.name
+    : undefined;
+}
+
+/**
+ * A class component defining a lifecycle method React has deprecated.
+ *
+ * eslint-plugin-react's `no-deprecated` reported these, and oxlint has no
+ * port of it. The other half of that rule, the APIs React has REMOVED
+ * (`ReactDOM.render`, `findDOMNode`, `createFactory`…), needs no lint rule:
+ * React 19's types no longer declare them, so the type check refuses them.
+ */
+const noLegacyLifecycle = {
+  meta: { type: "problem", schema: [] },
+  create(context) {
+    const check = node => {
+      if (!REACT_BASES.has(superClassName(node))) return;
+      for (const member of node.body.body) {
+        const name = memberName(member);
+        if (LEGACY_LIFECYCLES.has(name)) {
+          context.report({
+            node: member.key,
+            message: `\`${name}\` is deprecated in React. Do the work in componentDidMount or componentDidUpdate, or derive it with getDerivedStateFromProps.`,
+          });
+        }
+      }
+    };
+    return { ClassDeclaration: check, ClassExpression: check };
+  },
+};
+
 export default {
   meta: { name: "nextly" },
   rules: {
@@ -239,5 +289,6 @@ export default {
     "api-key-scope": apiKeyScope,
     "no-keyboard-listener": noKeyboardListener,
     "no-static-restricted-import": noStaticRestrictedImport,
+    "no-legacy-lifecycle": noLegacyLifecycle,
   },
 };

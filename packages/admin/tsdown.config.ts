@@ -196,7 +196,7 @@ export default defineConfig([
     },
     minify: true,
     plugins: [stylesheetImportsAreEmpty],
-    onSuccess: async () => {
+    onSuccess: () => {
       const distDir = path.join(process.cwd(), "dist");
 
       if (!fs.existsSync(distDir)) {

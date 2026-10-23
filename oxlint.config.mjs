@@ -149,9 +149,13 @@ export default defineConfig({
     "**/run-*.{ts,js,mjs}",
     // nextly's ad hoc scripts at the package root.
     "packages/nextly/test-*.ts",
-    // Configuration files sit outside every package's TypeScript project.
-    "**/*.config.{js,ts,mjs,cjs,mts,cts}",
-    "**/*.config.*.{js,ts,mjs,cjs}",
+    // The lint configurations themselves, and vitest's configuration and
+    // global setup, as before: they sit outside every package's TypeScript
+    // project. Every other configuration file is linted.
+    "oxlint.config.mjs",
+    "oxlint.scripts.config.mjs",
+    "**/vitest.config.{ts,mjs}",
+    "**/vitest.*.config.ts",
     "**/vitest.global-setup.{js,ts,mjs,cjs}",
     "lint/**",
     // Copies and fixtures, linted where they are written.
@@ -347,6 +351,13 @@ export default defineConfig({
         "react/no-unknown-property": "error",
         "react/no-unsafe": "off",
         "react/react-in-jsx-scope": "off",
+        "react/require-render-return": "error",
+        // eslint-plugin-react's `no-deprecated`, which oxlint has no port of:
+        // the deprecated lifecycles here, and the removed APIs by the type
+        // check (React 19's types no longer declare them). The type-aware
+        // `typescript/no-deprecated` is not a stand-in: it reports every
+        // `@deprecated` API, not React's, and is a policy of its own.
+        "nextly/no-legacy-lifecycle": "error",
         "react/rules-of-hooks": "error",
         "react/exhaustive-deps": "warn",
       },
