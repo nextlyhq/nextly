@@ -376,9 +376,11 @@ interface KeptActor {
  *
  * The role version retires it on any change, in this process or another, and
  * the soonest assignment expiry ends it earlier still. This is the backstop,
- * the same five minutes an API key's copied grants carry.
+ * and what bounds how long a change made through another instance goes unseen
+ * where the role version cannot be read: the same minute the per-answer
+ * process cache it replaced carried.
  */
-const ACTOR_CACHE_TTL_MS = 5 * 60_000;
+const ACTOR_CACHE_TTL_MS = 60_000;
 
 /** The most users whose actors are kept at once, oldest-asked evicted first. */
 const ACTOR_CACHE_MAX_ENTRIES = 10_000;
@@ -439,8 +441,14 @@ async function actorOnPool(userId: string): Promise<ResolvedActor> {
     }
   }
   const actor = await loadActor(userId);
-  // Nothing the request keeps about this user outlives these roles.
-  answersHoldUntil(userId, actor.validUntil);
+  const expiresAt = cacheExpiry(
+    Date.now(),
+    ACTOR_CACHE_TTL_MS,
+    actor.validUntil
+  );
+  // Nothing the request keeps about this user outlives what this process
+  // would keep: these roles, and the kept actor's own life.
+  answersHoldUntil(userId, expiresAt);
   if (stampIsCurrent(resolvedUnder)) {
     if (actorCache.size >= ACTOR_CACHE_MAX_ENTRIES) {
       const oldest = actorCache.keys().next().value;
@@ -449,7 +457,7 @@ async function actorOnPool(userId: string): Promise<ResolvedActor> {
     actorCache.set(userId, {
       actor,
       epoch: resolvedUnder,
-      expiresAt: cacheExpiry(Date.now(), ACTOR_CACHE_TTL_MS, actor.validUntil),
+      expiresAt,
     });
   }
   return actor;
@@ -660,7 +668,15 @@ export async function listEffectiveGrants(
       return await loadEffectiveGrants(userId, executor);
     }
     // A list of its own for each caller: a rule handed it may change it.
-    return [...(await actorThisRequest(userId)).grants];
+    try {
+      return [...(await actorThisRequest(userId)).grants];
+    } catch {
+      // The actor is all of a user's access read together. When part of it
+      // fails, the grants are read on their own, so a reader that keeps
+      // whichever half it could read still gets the half that can be read.
+      const { roleIds } = await new PermissionChecker().walkRoles(userId);
+      return grantsOf(userId, roleIds);
+    }
   } catch (cause) {
     throw unreadable(cause, { reason: "permissions-unreadable", userId });
   }
@@ -982,11 +998,14 @@ export async function writingPermissions<TTable, T>(
  * Empty the stored answers, then publish the role version that retires every
  * actor kept in every instance.
  *
- * The role version is the only signal another instance receives: an actor it
- * kept under the old version is not served after the move. No read is
- * answered from the stored rows any more, so emptying them only keeps the
- * table from holding answers it no longer serves until it is retired; a
- * failure to empty them is reported and the version is published regardless.
+ * Nothing here reads the stored answers, but an instance still running an
+ * earlier release does, during a rolling upgrade, and the version is the only
+ * signal it receives. So a retirement that failed publishes nothing: published,
+ * the version would tell such an instance to drop its in-memory answer and read
+ * a stored row the failed retirement left live, filing it under the new
+ * version where nothing left to happen can reach it. Withheld, those rows are
+ * served until their own expiry, as they would have been, and this process
+ * has already forgotten what it kept about the change.
  *
  * The depth is held across both steps, so nothing this process resolves while
  * they run is kept as current; see {@link resolvedUnderCurrentRevision}.
@@ -1003,9 +1022,7 @@ async function retireSharedThenPublish(
       await retireShared();
     } catch (error) {
       // Reported, not thrown: an invalidation failure must not break the
-      // write that raised it. Published all the same: no read is answered from
-      // the stored rows any more, so nothing can promote one, and the role
-      // version is what retires every actor kept in every instance.
+      // write that raised it. Unpublished, though, for the reason above.
       getAuthLogger()?.log?.("error", {
         category: "auth",
         op: "cache",
@@ -1013,6 +1030,7 @@ async function retireSharedThenPublish(
         ...logContext,
         error: String(error),
       });
+      return;
     }
     await bumpEpoch();
   });
@@ -1349,7 +1367,14 @@ export async function listRoleSlugsForUserStrict(
   // Looked up once per request on the pool; see `listEffectivePermissions`.
   if (executor !== undefined) return loadRoleSlugs(userId, executor);
   // A list of its own for each caller; see `listEffectivePermissions`.
-  return [...(await actorThisRequest(userId)).roleSlugs];
+  try {
+    return [...(await actorThisRequest(userId)).roleSlugs];
+  } catch {
+    // Read on their own when the actor cannot be read whole, so a failed
+    // grants read leaves the roles a reader could read standing.
+    const { roleIds } = await new PermissionChecker().walkRoles(userId);
+    return roleSlugsOf(roleIds);
+  }
 }
 
 /** The lookup behind {@link listRoleSlugsForUserStrict}; throws on failure. */
