@@ -117,6 +117,7 @@ import {
   markWriteIntegrityFailure,
 } from "../../../shared/write-integrity";
 import type { SupportedDialect } from "../../../types/database";
+import { carriesContent } from "../../audit/lifecycle-fields";
 import { willRecordMutationActivity } from "../../audit/record-activity";
 import {
   recordSaveEvent,
@@ -8819,6 +8820,10 @@ export class CollectionMutationService extends BaseService {
           // draft is deleted in the same transaction below, so promote is atomic:
           // any failure rolls back the live write and leaves the draft intact.
           let promotedDraft = false;
+          // Whether the request that promoted also carried content of its own,
+          // which no earlier save recorded: the trail reads that publish as a
+          // save too.
+          let promotionCarriesContent = false;
           if (promotePossible && promoteRestoreCtx) {
             const workingDraft = await new VersionsRepository(
               tx
@@ -9011,6 +9016,7 @@ export class CollectionMutationService extends BaseService {
                 updatedAt: updatePayload.updatedAt,
               };
               promotedDraft = true;
+              promotionCarriesContent = carriesContent(callerContribution);
             }
           }
 
@@ -9663,6 +9669,7 @@ export class CollectionMutationService extends BaseService {
                     statusBefore: draftLiveStatus,
                     promotedPendingEdits: promotedDraft,
                     restores: isRestoreWrite,
+                    requestEdits: promotionCarriesContent,
                   },
                 });
               } else {

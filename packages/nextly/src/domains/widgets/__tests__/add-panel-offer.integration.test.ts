@@ -142,8 +142,11 @@ describeEachDialect("what the add panel is offered", dialect => {
     const layout = await read(reader);
     expect(named(layout).has(GATED)).toBe(false);
     expect(layout.widgets).not.toHaveProperty(GATED);
-    // The control: the same read names the ungated built-ins.
-    expect(named(layout).has("core/team")).toBe(true);
+    // The control: the same read names a built-in this reader may see. Recent
+    // activity, which has no gate and no condition. Not Team: it is offered
+    // only to someone who may read people and add or change them, which this
+    // reader, holding no grants, may not.
+    expect(named(layout).has("core/recent-activity")).toBe(true);
   });
 
   it("offers no card derived from a collection, and has none for content kept off the dashboard", async () => {
