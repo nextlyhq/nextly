@@ -27,7 +27,7 @@ NC='\033[0m' # No Color
 # These are pre-existing issues, NOT caused by refactoring.
 # The gate fails only if counts INCREASE beyond these baselines.
 BASELINE_TS_ERRORS=8        # TS2742 in test-setup.ts
-BASELINE_LINT_WARNINGS=3118 # Mostly .tsup/declaration/ artifacts
+BASELINE_LINT_WARNINGS=3118 # Mostly declaration artifacts (counted under tsup)
 BASELINE_TEST_FAILURES=610  # Tests requiring DATABASE_URL (updated Phase 5: includes all workspace tests)
 
 NEW_REGRESSIONS=0
@@ -91,7 +91,7 @@ else
 fi
 
 # ─── 4. Build ───
-echo -e "\n${YELLOW}=== Build (tsup + tsc + rollup-dts + postbuild) ===${NC}"
+echo -e "\n${YELLOW}=== Build (tsdown + postbuild) ===${NC}"
 if pnpm build 2>&1; then
   echo -e "${GREEN}PASS: Build${NC}"
   RESULTS+=("PASS: Build")

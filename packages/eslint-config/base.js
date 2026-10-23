@@ -133,35 +133,16 @@ export const config = [
   {
     ignores: [
       "dist/**",
-      // tsup writes a bundled copy of its config to disk during build
-      // (e.g. tsup.config.bundled_abc123.mjs) — treat these as build artifacts.
-      //
-      // Both shapes, because tsup names the copy after the config it read and a
-      // package may have several: `packages/builder` builds a second bundle
-      // from `tsup.server-safe.config.ts`, whose copy is
-      // `tsup.server-safe.config.bundled_*.mjs` and matches neither of the
-      // first two patterns. The source-config entries below already carry that
-      // `tsup.*.config` form; the bundled ones did not, so an interrupted build
-      // left a file no rule covered.
-      //
-      // These are normally deleted when tsup exits. A watcher killed with
-      // Ctrl-C leaves one behind, and because it is untracked and unignored the
-      // next `git push` fails the pre-push lint with a parsing error naming a
-      // file the developer never wrote.
-      "**/tsup.config.bundled_*.mjs",
-      "**/tsup.config.bundled_*.cjs",
-      "**/tsup.*.config.bundled_*.mjs",
-      "**/tsup.*.config.bundled_*.cjs",
-      // reason: config files (tsup, next, vitest, eslint) aren't in any
+      // reason: config files (tsdown, next, vitest, eslint) aren't in any
       // tsconfig project, so type-aware linting can't resolve them. They
       // are maintained by hand and don't need lint coverage.
-      // Also covers additional tsup entrypoint configs, e.g.
-      // `tsup.preset.config.ts` for a bundle built with different options.
-      "**/tsup.config.{js,ts,mjs,cjs}",
-      "**/tsup.*.config.{js,ts,mjs,cjs}",
+      // Also covers additional tsdown entrypoint configs, e.g.
+      // `tsdown.server-safe.config.ts` for a bundle built with different options.
+      "**/tsdown.config.{js,ts,mjs,cjs}",
+      "**/tsdown.*.config.{js,ts,mjs,cjs}",
       "**/next.config.{js,ts,mjs,cjs}",
       "**/vitest.config.{js,ts,mjs,cjs}",
-      // The same for a variant config, matching the `tsup.*.config` line above:
+      // The same for a variant config, matching the `tsdown.*.config` line above:
       // a package that splits its unit and integration runs adds
       // `vitest.integration.config.ts`, which sits outside every tsconfig
       // project exactly as the config beside it does.

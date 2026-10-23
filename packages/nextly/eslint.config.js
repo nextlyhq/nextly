@@ -91,12 +91,11 @@ export default [
   },
   {
     ignores: [
-      ".tsup/**",
       "dist/**",
       ".turbo/**",
       "node_modules/**",
       "test-*.ts",
-      "tsup.config.js",
+      "tsdown.config.ts",
       // Config for the rule above, not source. Same treatment as the other root-level
       // config files: outside the TS project service, so linting it as typed source
       // fails to parse.
@@ -111,7 +110,11 @@ export default [
   },
   {
     // reason: build scripts and config files use Node globals + CJS requires
-    files: ["tsup.config.{js,ts,mjs}", "*.config.{js,ts,mjs}", "scripts/**/*"],
+    files: [
+      "tsdown.config.{js,ts,mjs}",
+      "*.config.{js,ts,mjs}",
+      "scripts/**/*",
+    ],
     languageOptions: {
       globals: {
         console: "readonly",

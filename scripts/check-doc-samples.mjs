@@ -518,10 +518,10 @@ function requireBuiltPackages() {
     for (const name of unbuilt) console.error(`  ${name}`);
     process.exit(1);
   }
-  const types = join(ROOT, "packages", "nextly", "dist", "index.d.ts");
+  const types = join(ROOT, "packages", "nextly", "dist", "index.d.mts");
   if (existsSync(types)) return;
   console.error(
-    "doc samples: packages/nextly/dist/index.d.ts is missing, so the samples " +
+    "doc samples: packages/nextly/dist/index.d.mts is missing, so the samples " +
       "cannot resolve the types they are checked against.\n" +
       "  Build first: pnpm turbo build --filter='./packages/*'\n" +
       "  Nothing was checked, and no finding here would have been about the docs."
@@ -1650,7 +1650,7 @@ const exportedValues = new Set();
 
 /** `./dist/shell.d.ts` as its source, since that is what is always present. */
 function sourceCandidatesFor(typesPath) {
-  const built = typesPath.replace(/^\.\//, "").match(/^dist\/(.+)\.d\.ts$/);
+  const built = typesPath.replace(/^\.\//, "").match(/^dist\/(.+)\.d\.[cm]?ts$/);
   return built ? [`src/${built[1]}.ts`, `src/${built[1]}.tsx`] : [];
 }
 
@@ -1681,7 +1681,7 @@ function buildConfigEntries(packageDir) {
     return [];
   }
   const queue = names
-    .filter(name => /^tsup(\..+)?\.config\.[cm]?[jt]s$/.test(name))
+    .filter(name => /^tsdown(\..+)?\.config\.[cm]?[jt]s$/.test(name))
     .map(name => join(packageDir, name));
   const seen = new Set();
   const found = new Set();

@@ -3,7 +3,7 @@
  *
  * The running core version is needed by `resolvePlugins` to validate each
  * plugin's `nextly` compatibility range. We obtain it from a build-time /
- * test-time injected constant (`__NEXTLY_CORE_VERSION__`, set via the tsup and
+ * test-time injected constant (`__NEXTLY_CORE_VERSION__`, set via the tsdown and
  * vitest `define` blocks reading `package.json`), falling back to reading our
  * own `package.json` at runtime (Node only) so the value is always available.
  *
@@ -23,7 +23,7 @@ let cached: string | undefined;
 export function getCoreVersion(): string {
   if (cached) return cached;
 
-  // Build-time / test-time injected constant (tsup + vitest `define`).
+  // Build-time / test-time injected constant (tsdown + vitest `define`).
   const injected =
     typeof __NEXTLY_CORE_VERSION__ !== "undefined"
       ? __NEXTLY_CORE_VERSION__

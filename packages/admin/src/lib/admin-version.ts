@@ -1,7 +1,7 @@
 /**
  * The release this admin bundle belongs to.
  *
- * Injected at build time from `package.json` by the tsup and vitest `define`
+ * Injected at build time from `package.json` by the tsdown and vitest `define`
  * blocks, mirroring how core resolves `__NEXTLY_CORE_VERSION__`. No runtime
  * `package.json` read as core has: this bundle targets the browser, where
  * there is no module resolver to fall back to.
