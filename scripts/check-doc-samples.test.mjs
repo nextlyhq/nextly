@@ -950,6 +950,41 @@ describe("a fence whose only module syntax is a namespace export", () => {
   });
 });
 
+describe("compiling the samples on the compiler's command line", () => {
+  const sample = (index, code) => ({
+    file: "docs/a.mdx",
+    index,
+    lang: "ts",
+    meta: "",
+    code,
+  });
+
+  it("still type-checks the other samples when one does not parse", () => {
+    // tsc reports only parse errors while any file fails to parse, so one
+    // malformed block would hide every type error on every other page. The
+    // run is repeated without it; reading the first run as complete reports
+    // the parse error alone.
+    const reported = compile(
+      [sample(0, "const broken = ;"), sample(1, 'const wrong: number = "x";')],
+      "test-parse-and-type"
+    ).join("\n");
+    expect(reported).toContain("docs/a.mdx#0:1  error TS1109");
+    expect(reported).toContain("docs/a.mdx#1:1  error TS2322");
+  });
+
+  it("writes a message chain on one line, each step at its depth", () => {
+    // The baseline's identities are read from this text, so it must say what
+    // the compiler API's flattened message said: a step keeps its indentation.
+    const reported = compile(
+      [sample(0, "const f: (x: number) => void = (x: string) => {};")],
+      "test-chain"
+    ).join("\n");
+    expect(reported).toContain(
+      "is not assignable to type '(x: number) => void'.   Types of parameters 'x' and 'x' are incompatible.     Type 'number' is not assignable to type 'string'."
+    );
+  });
+});
+
 describe("withEarlierContext says which fence each pasted line came from", () => {
   const page = [
     {

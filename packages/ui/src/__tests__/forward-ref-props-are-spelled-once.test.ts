@@ -23,7 +23,8 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
+import type { Node, TSType, VariableDeclarator } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -46,83 +47,83 @@ interface Annotated {
   problem: string | null;
 }
 
+/** The source text a node spans. Every oxc node carries its `start` and `end`. */
+type Spelled = (node: Node) => string;
+
 /** The argument of the first `<name><...>` type reference under `node`. */
-function argumentOf(
-  node: ts.Node,
-  name: string,
-  sf: ts.SourceFile
-): string | undefined {
+function argumentOf(node: Node, name: string, of: Spelled): string | undefined {
   let found: string | undefined;
-  const visit = (n: ts.Node): void => {
-    if (found !== undefined) return;
+  walk(node, n => {
+    if (found !== undefined) return false;
     if (
-      ts.isTypeReferenceNode(n) &&
-      n.typeName.getText(sf).split(".").pop() === name &&
-      n.typeArguments?.length === 1
+      n.type === "TSTypeReference" &&
+      of(n.typeName).split(".").pop() === name &&
+      n.typeArguments?.params.length === 1
     ) {
-      found = n.typeArguments[0].getText(sf);
-      return;
+      found = of(n.typeArguments.params[0]);
+      return false;
     }
-    ts.forEachChild(n, visit);
-  };
-  visit(node);
+    return undefined;
+  });
   return found;
 }
 
-/** A declaration with both a type annotation and a call as its value. */
-type AnnotatedCall = ts.VariableDeclaration & {
-  type: ts.TypeNode;
-  initializer: ts.CallExpression;
-};
+/** An annotated `const X: ... = forwardRef<T, P>(...)`: its name, annotation and generic. */
+interface AnnotatedCall {
+  name: string;
+  annotation: TSType;
+  generic: TSType[];
+}
 
 /** An annotated `const X: ... = forwardRef<T, P>(...)`, or `undefined`. */
 function annotatedForwardRef(
-  n: ts.Node,
-  sf: ts.SourceFile
+  n: VariableDeclarator,
+  of: Spelled
 ): AnnotatedCall | undefined {
-  if (!ts.isVariableDeclaration(n) || !n.type || !n.initializer)
-    return undefined;
-  if (!ts.isCallExpression(n.initializer)) return undefined;
-  const callee = n.initializer.expression.getText(sf).split(".").pop();
-  return callee === "forwardRef" ? (n as AnnotatedCall) : undefined;
+  const { id, init } = n;
+  if (id.type !== "Identifier" || !id.typeAnnotation) return undefined;
+  if (init?.type !== "CallExpression") return undefined;
+  if (of(init.callee).split(".").pop() !== "forwardRef") return undefined;
+  return {
+    name: id.name,
+    annotation: id.typeAnnotation.typeAnnotation,
+    generic: init.typeArguments?.params ?? [],
+  };
 }
 
 /** Why the declaration breaks the rule, or `null` when it keeps it. */
-function problemOf(decl: AnnotatedCall, sf: ts.SourceFile): string | null {
-  const [ref, props] = decl.initializer.typeArguments ?? [];
+function problemOf(decl: AnnotatedCall, of: Spelled): string | null {
+  const [ref, props] = decl.generic;
   if (props === undefined || ref === undefined) {
     return "forwardRef has no <T, P> generic";
   }
-  const P = props.getText(sf);
-  const T = ref.getText(sf);
+  const P = of(props);
+  const T = of(ref);
   if (!/^[\w.]+$/.test(P)) {
     return `props are written inline (${P.slice(0, 60)}…), not named once`;
   }
-  const wrapped = argumentOf(decl.type, "PropsWithoutRef", sf);
+  const wrapped = argumentOf(decl.annotation, "PropsWithoutRef", of);
   if (wrapped !== P)
     return `annotation wraps ${String(wrapped)}, generic says ${P}`;
-  const refType = argumentOf(decl.type, "RefAttributes", sf);
+  const refType = argumentOf(decl.annotation, "RefAttributes", of);
   if (refType !== T)
     return `annotation's ref is ${String(refType)}, generic says ${T}`;
   return null;
 }
 
 function annotatedForwardRefs(file: string): Annotated[] {
-  const sf = ts.createSourceFile(
-    file,
-    readFileSync(file, "utf8"),
-    ts.ScriptTarget.Latest,
-    true,
-    file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
-  );
+  const text = readFileSync(file, "utf8");
+  // oxc, through the parse every source-reading check shares: it refuses a
+  // file it could not read rather than handing back an empty one.
+  const { program } = parseSource(text, file);
+  const of: Spelled = node => text.slice(node.start, node.end);
   const out: Annotated[] = [];
-  const visit = (n: ts.Node): void => {
-    const decl = annotatedForwardRef(n, sf);
-    if (decl)
-      out.push({ name: decl.name.getText(sf), problem: problemOf(decl, sf) });
-    ts.forEachChild(n, visit);
-  };
-  visit(sf);
+  walk(program, n => {
+    if (n.type !== "VariableDeclarator") return undefined;
+    const decl = annotatedForwardRef(n, of);
+    if (decl) out.push({ name: decl.name, problem: problemOf(decl, of) });
+    return undefined;
+  });
   return out;
 }
 

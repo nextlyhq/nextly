@@ -7,6 +7,7 @@ import {
   CommandGroup,
   CommandItem,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { User as UserIcon } from "@admin/components/icons";
 import { useUsers } from "@admin/hooks/queries/useUsers";
@@ -94,7 +95,7 @@ export interface UserSearchResultsProps {
 export function UserSearchResults({
   search,
   onSelect,
-}: UserSearchResultsProps) {
+}: UserSearchResultsProps): JSX.Element | null {
   // Debounce search input using reusable hook
   const debouncedSearch = useDebouncedValue(search, SEARCH_DEBOUNCE_MS);
 

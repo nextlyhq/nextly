@@ -1,3 +1,5 @@
+import type { JSX } from "react";
+
 import type {
   PaletteDragData,
   FieldListDragData,
@@ -43,7 +45,9 @@ interface DragOverlayContentProps {
   data: PaletteDragData | FieldListDragData;
 }
 
-export function DragOverlayContent({ data }: DragOverlayContentProps) {
+export function DragOverlayContent({
+  data,
+}: DragOverlayContentProps): JSX.Element {
   if (data.source === "palette") {
     const IconComponent = iconMap[data.icon] || Icons.FileText;
     return (

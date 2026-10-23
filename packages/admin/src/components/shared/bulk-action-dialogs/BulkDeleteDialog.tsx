@@ -10,6 +10,7 @@ import {
   DialogTitle,
   Spinner,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { AlertTriangle } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
@@ -164,7 +165,7 @@ export function BulkDeleteDialog({
   entityType = "User",
   entityTypePlural = "Users",
   description,
-}: BulkDeleteDialogProps) {
+}: BulkDeleteDialogProps): JSX.Element {
   // Support both new `items` prop and deprecated `users` prop for backward compatibility
   const normalizedItems: DeleteItem[] =
     items ??

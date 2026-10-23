@@ -75,7 +75,7 @@ const listAnswers: Equal<
   CataloguePageView
 > = true;
 
-export const assertions = [
+export const assertions: true[] = [
   serverAnswers,
   servicesAnswer,
   addTakes,

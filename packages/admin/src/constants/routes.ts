@@ -187,7 +187,15 @@ export type RouteValue = (typeof ROUTES)[keyof typeof ROUTES];
  * are keyed by {@link PublicRoutePath}, so a path added here without a page
  * fails to compile rather than becoming a silently unguarded URL.
  */
-export const PUBLIC_ROUTE_PATHS = [
+export const PUBLIC_ROUTE_PATHS: readonly [
+  "/admin/setup",
+  "/admin/login",
+  "/admin/register",
+  "/admin/forgot-password",
+  "/admin/reset-password",
+  "/admin/verify-email",
+  "/admin/accept-invite",
+] = [
   ROUTES.SETUP,
   ROUTES.LOGIN,
   ROUTES.REGISTER,

@@ -65,6 +65,11 @@ const DIAGNOSTIC = /^(?:(.+?)\((\d+),(\d+)\): )?error (TS\d+): (.*)$/;
  * The diagnostics in `--pretty false` output, in order: the file as printed
  * (undefined for one about the configuration as a whole), its line and column,
  * the code, and the message with its indented continuation lines.
+ *
+ * `chain` keeps those continuation lines as printed, indentation included,
+ * because the indentation is the depth of each step in the message chain: a
+ * caller rendering the chain on one line, as the compiler API's
+ * `flattenDiagnosticMessageText` did, needs it to say the same thing.
  */
 export function diagnosticsIn(output) {
   const found = [];
@@ -78,8 +83,10 @@ export function diagnosticsIn(output) {
         column: column === undefined ? undefined : Number(column),
         code,
         message,
+        chain: [],
       });
     } else if (found.length > 0 && /^\s+\S/.test(line)) {
+      found.at(-1).chain.push(line);
       found.at(-1).message += `\n${line.trim()}`;
     }
   }

@@ -1,5 +1,7 @@
 "use client";
 
+import type { JSX } from "react";
+
 import { Eye, EyeOff } from "@admin/components/icons";
 
 export interface PasswordVisibilityToggleProps {
@@ -28,7 +30,7 @@ export interface PasswordVisibilityToggleProps {
 export function PasswordVisibilityToggle({
   visible,
   onToggle,
-}: PasswordVisibilityToggleProps) {
+}: PasswordVisibilityToggleProps): JSX.Element {
   return (
     <button
       type="button"

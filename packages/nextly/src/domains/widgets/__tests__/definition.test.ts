@@ -755,11 +755,19 @@ describe("a widget whose data core builds on the server", () => {
       label: "Collection",
       type: "collection",
     };
+    // A Filter no knob of a registered widget's query drives yet: the widget
+    // whose data core builds holds it, and one with its own query may not.
+    const filter = {
+      name: "filter",
+      label: "Filter",
+      type: "filter",
+      of: "collection",
+    };
     expect(() =>
-      validateWidgetDefinition({ ...built, settings: [collection] })
+      validateWidgetDefinition({ ...built, settings: [collection, filter] })
     ).not.toThrow();
     expect(() =>
-      validateWidgetDefinition({ ...valid, settings: [collection] })
+      validateWidgetDefinition({ ...valid, settings: [collection, filter] })
     ).toThrow(/WIDGET_CONTENT_SETTING_NOT_DRAWN/);
   });
 });

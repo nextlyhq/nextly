@@ -44,7 +44,7 @@ export function PermissionGuard({
   requiredPermission,
   subject,
   children,
-}: PermissionGuardProps) {
+}: PermissionGuardProps): React.JSX.Element {
   const {
     hasPermission,
     isLoading: permissionsLoading,
