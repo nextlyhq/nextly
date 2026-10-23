@@ -140,6 +140,17 @@ function parseMeRoutes(
     };
   }
 
+  // GET /api/me/capabilities → what the current caller may do with each
+  // collection, Single and system resource, as the route gates decide it
+  if (subresource === "capabilities" && httpMethod === "GET") {
+    return {
+      service: "users",
+      operation: "list",
+      method: "getCurrentUserCapabilities",
+      routeParams,
+    };
+  }
+
   // Sub-resource routes that don't match above → not found
   if (subresource) {
     return null;

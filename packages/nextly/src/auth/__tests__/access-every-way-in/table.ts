@@ -193,8 +193,10 @@ export type Target = (typeof TARGETS)[number];
  *   permission is offered to the caller (`widgetAudience`).
  * - `lock`: claiming a document lock on the entry or Single, which is a
  *   statement that the caller is editing it.
+ * - `capabilities`: what `GET /me/capabilities` tells the admin the caller
+ *   may do, which is what the admin offers and withholds.
  *
- * The last two were added after the others, and come last, so every column
+ * The last three were added after the others, and come last, so every column
  * already in the answers file keeps its place.
  */
 export const DOORS = [
@@ -210,6 +212,7 @@ export const DOORS = [
   "system",
   "widget",
   "lock",
+  "capabilities",
 ] as const;
 export type Door = (typeof DOORS)[number];
 
@@ -358,6 +361,25 @@ const REACH: Record<Door, Reach> = {
     callers: NOT_PRINCIPAL,
     targets: { collection: ["update"], single: ["update"] },
   },
+  // One answer names every entity and system resource with every action it
+  // has, so it is asked whatever a permission-shaped door is asked. Only a
+  // caller `/me` authenticates reaches it, which is a person or a key; a
+  // plugin's person signs in to the plugin, never to the admin, and a
+  // visitor is refused before the handler runs. A collection is asked no
+  // `list` or `count`: the answer names one read for an entity, as the
+  // admin's own capability does.
+  capabilities: {
+    callers: STAFF,
+    targets: {
+      collection: ENTRY_ACTIONS,
+      single: READ_UPDATE,
+      media: READ,
+      users: CRUD,
+      "single-pub": PUBLISHING,
+      roles: CRUD,
+      providers: CRUD,
+    },
+  },
 };
 
 /** What each door asks without the access-control service. */
@@ -372,6 +394,10 @@ const REACH_WITHOUT_SERVICE: Partial<Record<Door, Reach>> = {
   },
   system: { callers: NOT_PRINCIPAL, targets: { media: READ, users: READ } },
   widget: { callers: STAFF, targets: { collection: READ, single: READ } },
+  capabilities: {
+    callers: STAFF,
+    targets: { collection: READ, single: READ },
+  },
 };
 
 /**

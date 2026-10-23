@@ -18,13 +18,26 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import {
+  routeGateCapabilities,
+  type GateCaller,
+} from "../../auth/access/route-gate-adapters";
+import {
+  currentCallerScope,
+  currentRequestCaller,
+} from "../../auth/caller-scope";
+import { getRBACService } from "../../auth/code-access";
+import { requestLanguage } from "../../auth/middleware";
+import { NextlyError } from "../../errors/nextly-error";
 import { permissionSlug } from "../../schemas/_zod/rbac";
 import type { ServiceContainer } from "../../services";
 import {
   isSuperAdmin,
   listEffectivePermissions,
   listRoleSlugsForUser,
+  resolveUserRoles,
 } from "../../services/lib/permissions";
+import { registeredContentSnapshot } from "../../services/lib/registered-content-slugs";
 import { readAuthenticatedActor } from "../helpers/authenticated-actor";
 import { toPaginationMeta } from "../helpers/service-envelope";
 import {
@@ -37,6 +50,19 @@ import {
 import type { MethodHandler, Params } from "../types";
 
 type UsersService = ServiceContainer["users"];
+
+/**
+ * Who the capabilities answer is about, as the route gates judge the request
+ * it arrived on: a key on its own scope, pinned for the dispatch, and a
+ * session as the user the route authenticated.
+ */
+function capabilitiesCaller(userId: string): GateCaller {
+  const scope = currentCallerScope();
+  if (scope?.actorType !== "apiKey") return { userId };
+  const actor = currentRequestCaller()?.actor;
+  const keyId = actor?.type === "apiKey" ? actor.id : undefined;
+  return { userId, key: scope, ...(keyId === undefined ? {} : { keyId }) };
+}
 
 const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
   listUsers: {
@@ -178,6 +204,58 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
         isSuperAdmin: superAdmin,
         roles: roleSlugs,
       });
+    },
+  },
+  /**
+   * What the caller may do with each collection, Single and system resource,
+   * for the admin to offer only what the server allows.
+   *
+   * @experimental The shape may change until the admin's access screens
+   * settle.
+   */
+  getCurrentUserCapabilities: {
+    execute: async (_svc, p) => {
+      const userId = requireParam(p, "userId", "UserId");
+      const caller = capabilitiesCaller(userId);
+      const [{ kinds, degraded }, roles] = await Promise.all([
+        registeredContentSnapshot(),
+        resolveUserRoles(userId),
+      ]);
+      // The answer states what the caller may do with EVERY entity, so a
+      // registry that could not be enumerated leaves a floor rather than the
+      // whole list. Handing that over as the answer would have the admin hide
+      // collections the caller may in fact use, with nothing saying so.
+      // Refusing leaves the admin on the answer it already holds.
+      if (degraded) {
+        throw NextlyError.serviceUnavailable({
+          logMessage:
+            "A content registry could not be enumerated, so capabilities would name only some entities.",
+        });
+      }
+      // A rule is told the languages the REST operation behind an action
+      // involves, framed by the same function that frames a REST request, so
+      // a rule answering by language answers here as it would at that door.
+      // Only `locale` is read from the query: the other language controls
+      // belong to operations that carry an entry, and reading them would let
+      // a caller widen the framing through a parameter this route does not
+      // offer.
+      const asked = { locale: p.locale ?? "" };
+      const capabilities = await routeGateCapabilities(
+        caller,
+        kinds,
+        getRBACService(),
+        operation => requestLanguage({ method: operation, params: asked })
+      );
+      return respondData(
+        {
+          // A key never carries super-admin authority through the gates.
+          isSuperAdmin: caller.key ? false : await isSuperAdmin(userId),
+          // When the answer stops holding: the soonest role assignment to end.
+          validUntil: roles.validUntil ?? null,
+          ...capabilities,
+        },
+        { headers: { "Cache-Control": "private, no-store" } }
+      );
     },
   },
 };

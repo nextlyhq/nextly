@@ -56,6 +56,7 @@ import {
   userHoldsPermission,
   userIsSuperAdmin,
 } from "./resolve-actor";
+import { withRuleLanguage, type RuleLanguage } from "./rule-language";
 
 /** Where a route gate reads the rules apps declare; absent without the service. */
 export type RouteRules = CollectionQuestion["rules"];
@@ -70,7 +71,7 @@ export interface RoutePermission {
  * Who a gate judges: the user the request names and, when a key made the
  * request, the key's own scope and id.
  */
-interface GateCaller {
+export interface GateCaller {
   readonly userId: string;
   /** The key's scope; absent for a session. */
   readonly key?: AuthenticatedScope;
@@ -154,6 +155,140 @@ export function routeGateVerdict(
   return gateVerdict(callerOf(auth), action, resource, rules, () =>
     hasPermission(auth.userId, action, resource)
   );
+}
+
+/** The actions a collection's capabilities answer. */
+const COLLECTION_ACTIONS = [
+  "create",
+  "read",
+  "update",
+  "delete",
+  "publish",
+  "unpublish",
+] as const;
+
+/** The actions a Single's capabilities answer: it has no create or delete. */
+const SINGLE_ACTIONS = ["read", "update", "publish", "unpublish"] as const;
+
+/** The system resources the admin's screens are offered by permission. */
+export const CAPABILITY_SYSTEM_RESOURCES = [
+  "users",
+  "roles",
+  "media",
+  "settings",
+  "email-providers",
+  "email-templates",
+] as const;
+
+const SYSTEM_ACTIONS = ["read", "create", "update", "delete"] as const;
+
+/** What the caller may do with one collection or Single. */
+export type EntityCapabilities =
+  | ({ readonly kind: "collection" } & Readonly<
+      Record<(typeof COLLECTION_ACTIONS)[number], boolean>
+    >)
+  | ({ readonly kind: "single" } & Readonly<
+      Record<(typeof SINGLE_ACTIONS)[number], boolean>
+    >);
+
+/** What the caller may do with each collection, Single and system resource. */
+export interface RouteCapabilities {
+  readonly entities: Readonly<Record<string, EntityCapabilities>>;
+  readonly system: Readonly<
+    Record<
+      (typeof CAPABILITY_SYSTEM_RESOURCES)[number],
+      Readonly<Record<(typeof SYSTEM_ACTIONS)[number], boolean>>
+    >
+  >;
+}
+
+/**
+ * The REST operation that performs each action on a collection or a Single,
+ * whose languages a rule is told when that request asks the gate.
+ */
+const OPERATION_OF: Record<"collection" | "single", Record<string, string>> = {
+  collection: {
+    create: "createEntry",
+    read: "getEntry",
+    update: "updateEntry",
+    delete: "deleteEntry",
+    publish: "updateEntry",
+    unpublish: "updateEntry",
+  },
+  single: {
+    read: "getSingleDocument",
+    update: "updateSingleDocument",
+    publish: "updateSingleDocument",
+    unpublish: "updateSingleDocument",
+  },
+};
+
+/**
+ * What `caller` may do with each of `entities` and each system resource: the
+ * route gate's answer for every action, as a REST request asking it would
+ * get, so the admin offers what the server allows and nothing else.
+ * `languageOf` gives the languages the REST operation behind an action is
+ * told, so a rule hears the languages that request would.
+ *
+ * Asked one at a time: the caller's lookups are kept for the request, so the
+ * first answer reads them and the rest are worked out from what was read. A
+ * lookup that fails throws, as it does at the route gate, rather than being
+ * answered as a refusal.
+ */
+export async function routeGateCapabilities(
+  caller: GateCaller,
+  entities: ReadonlyMap<string, "collection" | "single">,
+  rules: RouteRules,
+  languageOf: (operation: string) => RuleLanguage
+): Promise<RouteCapabilities> {
+  const answers = async (
+    resource: string,
+    actions: readonly string[],
+    operations?: Record<string, string>
+  ): Promise<Record<string, boolean>> => {
+    const answered: Record<string, boolean> = {};
+    for (const action of actions) {
+      const operation = operations?.[action];
+      const asked = () => capability(caller, action, resource, rules);
+      answered[action] = await (operation === undefined
+        ? asked()
+        : withRuleLanguage(languageOf(operation), asked));
+    }
+    return answered;
+  };
+  const byEntity: Record<string, EntityCapabilities> = {};
+  for (const [slug, kind] of entities) {
+    const actions = kind === "single" ? SINGLE_ACTIONS : COLLECTION_ACTIONS;
+    byEntity[slug] = {
+      kind,
+      ...(await answers(slug, actions, OPERATION_OF[kind])),
+    } as EntityCapabilities;
+  }
+  // A system resource declares no rule, so no language is asked of one.
+  const system: Record<string, Record<string, boolean>> = {};
+  for (const resource of CAPABILITY_SYSTEM_RESOURCES) {
+    system[resource] = await answers(resource, SYSTEM_ACTIONS);
+  }
+  return {
+    entities: byEntity,
+    system: system as RouteCapabilities["system"],
+  };
+}
+
+/** The route gate's answer for one action, decided as its own subject. */
+async function capability(
+  caller: GateCaller,
+  action: string,
+  resource: string,
+  rules: RouteRules
+): Promise<boolean> {
+  const verdict = await aboutSubject(permissionSlug(action, resource), () =>
+    gateVerdict(caller, action, resource, rules, () =>
+      hasPermission(caller.userId, action, resource)
+    )
+  );
+  if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
+  return verdict.allowed;
 }
 
 /**

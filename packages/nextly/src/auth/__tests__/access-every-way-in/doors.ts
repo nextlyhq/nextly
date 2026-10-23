@@ -637,6 +637,60 @@ async function widget(
   };
 }
 
+const capabilityAnswers = new WeakMap<
+  World,
+  Map<string, Promise<Observed<Answer | CapabilitiesBody>>>
+>();
+
+/** What `GET /me/capabilities` answers, as the admin reads it. */
+interface CapabilitiesBody {
+  entities: Record<string, Record<string, unknown>>;
+  system: Record<string, Record<string, unknown>>;
+}
+
+/**
+ * What the admin is told this caller may do with the row's target, from one
+ * `GET /me/capabilities`. The endpoint answers about every entity and system
+ * resource at once, as the admin asks it once per sign-in, so it is asked
+ * once per caller and setup and each row reads its own cell; the row's
+ * deviations are the ones that request recorded in deciding that cell.
+ *
+ * A target the answer never names is `=absent` rather than a refusal. An
+ * endpoint that dropped an entity would otherwise be pinned here as having
+ * refused it, which is the answer a caller with no access gets, so the two
+ * would be indistinguishable in the file.
+ */
+async function capabilities(
+  world: World,
+  row: Row,
+  who: CallerHandle
+): Promise<Attributed | Answer> {
+  let cache = capabilityAnswers.get(world);
+  if (!cache) {
+    cache = new Map();
+    capabilityAnswers.set(world, cache);
+  }
+  const key = `${row.setup} ${row.caller}`;
+  let asked = cache.get(key);
+  if (!asked) {
+    asked = observing(async (): Promise<Answer | CapabilitiesBody> => {
+      const res = await request("GET", ["me", "capabilities"], who.headers);
+      if (res.status !== 200) return String(res.status);
+      return (await res.json()) as CapabilitiesBody;
+    });
+    cache.set(key, asked);
+  }
+  const { answer, bySubject } = await asked;
+  if (typeof answer === "string") return answer;
+  const slug = targetSlug(row);
+  const cell = answer.entities[slug] ?? answer.system[slug];
+  const deviations = bySubject.get(`${row.action}-${slug}`) ?? [];
+  if (cell === undefined || !(row.action in cell)) {
+    return { answer: "=absent", deviations };
+  }
+  return { answer: fromBoolean(cell[row.action]), deviations };
+}
+
 /** The id of a Single's one document, made by the reads that came before. */
 async function singleDocumentId(world: World, slug: string): Promise<string> {
   const [row] = await world.t.adapter.select<{ id: unknown }>(
@@ -701,6 +755,7 @@ const ADAPTERS: Record<
   system,
   widget,
   lock,
+  capabilities,
 };
 
 /**
