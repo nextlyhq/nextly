@@ -85,7 +85,7 @@
     "react-dom": "19.2.0",
     "tailwindcss": "^4.3.2",
     "terser": "^5.44.1",
-    "tsup": "^8.5.0",
+    "tsup": "^9.0.0",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^4.1.0"
