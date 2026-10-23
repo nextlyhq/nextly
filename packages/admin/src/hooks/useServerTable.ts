@@ -20,10 +20,12 @@ import { usePagination } from "./usePagination";
  * Default configuration constants
  * Exported for reuse in other components or tests
  */
-export const DEFAULT_PAGE_SIZE = PAGINATION.TABLE_DEFAULT_PAGE_SIZE;
-export const DEFAULT_PAGE_SIZE_OPTIONS = [10, 20, 30, 50];
+export const DEFAULT_PAGE_SIZE: typeof PAGINATION.TABLE_DEFAULT_PAGE_SIZE =
+  PAGINATION.TABLE_DEFAULT_PAGE_SIZE;
+export const DEFAULT_PAGE_SIZE_OPTIONS: number[] = [10, 20, 30, 50];
 export const DEFAULT_MAX_VISIBLE_PAGES = 5;
-export const DEFAULT_SEARCH_DELAY = UI.SEARCH_DEBOUNCE_MS;
+export const DEFAULT_SEARCH_DELAY: typeof UI.SEARCH_DEBOUNCE_MS =
+  UI.SEARCH_DEBOUNCE_MS;
 
 /**
  * Configuration options for useServerTable hook

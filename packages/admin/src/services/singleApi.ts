@@ -71,6 +71,63 @@ export const deleteSingle = async (slug: string): Promise<void> => {
   );
 };
 
+/** The type of {@link singleApi}. */
+type SingleApiType = {
+  readonly fetchSingles: typeof fetchSingles;
+  readonly deleteSingle: typeof deleteSingle;
+  readonly list: () => Promise<ApiSingle[]>;
+  readonly get: (slug: string) => Promise<ApiSingle>;
+  readonly getSchema: (slug: string) => Promise<ApiSingle>;
+  readonly create: (
+    payload: UpdateSinglePayload
+  ) => Promise<{ message: string; data: ApiSingle }>;
+  readonly update: (
+    slug: string,
+    payload: UpdateSinglePayload
+  ) => Promise<{ message: string }>;
+  readonly previewSchemaChanges: (
+    slug: string,
+    fields: unknown[],
+    localized?: boolean
+  ) => Promise<SchemaPreviewResponse>;
+  readonly applySchemaChanges: (
+    slug: string,
+    fields: unknown[],
+    schemaVersion: number,
+    resolutions?: Record<string, FieldResolution>,
+    renameResolutions?: SchemaRenameResolution[],
+    localized?: boolean
+  ) => Promise<SchemaApplyResponse>;
+  readonly remove: (slug: string) => Promise<{ message: string }>;
+  readonly getDocument: (
+    slug: string,
+    options?: {
+      depth?: number;
+      // i18n: read the document in this content language. `fallbackLocale: "none"` returns
+      // untranslated fields empty (admin editor); `translationStatus` attaches the per-locale
+      // `_translations` map for the language pills. Omitted params no-op for non-localized singles.
+      locale?: string;
+      fallbackLocale?: string;
+      translationStatus?: boolean;
+      /**
+       * Opt into the working-draft overlay, so an editor sees this Single's
+       * pending change rather than the published document. Gated server-side on
+       * an update-capability probe, so passing it never widens what a
+       * read-only caller can see.
+       */
+      draft?: boolean;
+    }
+  ) => Promise<SingleDocument>;
+  readonly updateDocument: (
+    slug: string,
+    data: Record<string, unknown>,
+    options?: { locale?: string }
+  ) => Promise<SingleDocument>;
+  readonly publishAllLocales: (
+    slug: string
+  ) => Promise<{ id: string; status?: string }>;
+};
+
 /**
  * Single API client object with all operations.
  *
@@ -81,7 +138,7 @@ export const deleteSingle = async (slug: string): Promise<void> => {
  * callers expect (bare arrays for `list`, `{ message, data }` for
  * `create`, etc.).
  */
-export const singleApi = {
+export const singleApi: SingleApiType = {
   fetchSingles,
   deleteSingle,
 

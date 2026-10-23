@@ -11,6 +11,8 @@
  * @module pages/dashboard/releases/[id]
  */
 
+import type { JSX } from "react";
+
 import { ReleaseDetail } from "@admin/components/features/releases/ReleaseDetail";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -22,7 +24,9 @@ interface ReleaseDetailPageProps {
   params?: { id?: string };
 }
 
-export default function ReleaseDetailPage({ params }: ReleaseDetailPageProps) {
+export default function ReleaseDetailPage({
+  params,
+}: ReleaseDetailPageProps): JSX.Element {
   const id = typeof params?.id === "string" ? params.id : undefined;
 
   return (

@@ -112,7 +112,9 @@ const ALWAYS_VISIBLE = new Set(["label", "createdAt"]);
  * the UI. Data + mutations run through TanStack Query; rendering is delegated to
  * the unified DataTableView.
  */
-export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
+export default function SinglesTable({
+  mode = "builder",
+}: SinglesTableProps): React.JSX.Element {
   const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);

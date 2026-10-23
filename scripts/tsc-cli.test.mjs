@@ -26,6 +26,8 @@ describe("reading --pretty false output", () => {
         code: "TS2322",
         message:
           "Type 'string' is not assignable to type 'number'.\nThe expected type comes from property 'x'.",
+        // As printed: the indentation is the step's depth in the chain.
+        chain: ["  The expected type comes from property 'x'."],
       },
       {
         file: "src/b.ts",
@@ -33,6 +35,7 @@ describe("reading --pretty false output", () => {
         column: 1,
         code: "TS2304",
         message: "Cannot find name 'y'.",
+        chain: [],
       },
       {
         file: undefined,
@@ -40,6 +43,7 @@ describe("reading --pretty false output", () => {
         column: undefined,
         code: "TS5023",
         message: "Unknown compiler option '--bogus'.",
+        chain: [],
       },
     ]);
   });

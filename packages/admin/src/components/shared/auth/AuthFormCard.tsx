@@ -7,7 +7,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@nextlyhq/ui";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode, type JSX } from "react";
 
 import { ThemeAwareLogo } from "@admin/components/shared/ThemeAwareLogo";
 import { useAppName } from "@admin/context/providers/BrandingProvider";
@@ -39,7 +39,7 @@ export function AuthFormCard({
   title,
   description,
   children,
-}: AuthFormCardProps) {
+}: AuthFormCardProps): JSX.Element {
   const appName = useAppName();
   const [isVisible, setIsVisible] = useState(false);
 

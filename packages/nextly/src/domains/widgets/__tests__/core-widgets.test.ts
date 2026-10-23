@@ -8,8 +8,9 @@
  * literal REFERS to was renamed underneath it. What is checked here is each
  * declaration against the module that consumes it.
  */
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
+import { registerRecentEditsWidgetSource } from "../../../services/dashboard/recent-edits-widget-source";
 import { parsePermissionSlug } from "../../../plugins/routes/permission-slug";
 import { RELEASES_RESOURCE } from "../../releases/services/releases-service";
 import { CORE_WIDGETS } from "../core-widgets";
@@ -18,7 +19,9 @@ import {
   validateWidgetDefinition,
 } from "../definition";
 import { MAX_WIDGET_LIMIT } from "../query-limits";
+import { clearSources } from "../sources";
 import { CONTENT_SOURCE_ID, TEAM_SOURCE_ID } from "../system-source-ids";
+import { clearSystemResolvers } from "../system-sources";
 import { TEAM_GATE } from "../team-gate";
 
 function card(id: string) {
@@ -29,6 +32,14 @@ function card(id: string) {
   if (!found) throw new Error(`no core widget with id "${id}"`);
   return found;
 }
+
+// As boot orders it: a card's settings are admitted against the filters its
+// source declares, so the sources a card names are registered first.
+beforeAll(() => {
+  clearSources();
+  clearSystemResolvers();
+  registerRecentEditsWidgetSource();
+});
 
 describe("core widget definitions", () => {
   /*

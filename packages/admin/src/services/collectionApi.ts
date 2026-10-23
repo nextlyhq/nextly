@@ -75,6 +75,32 @@ export const deleteCollection = async (collectionId: string): Promise<void> => {
   );
 };
 
+/** The type of {@link collectionApi}. */
+type CollectionApiType = {
+  readonly fetchCollections: typeof fetchCollections;
+  readonly deleteCollection: typeof deleteCollection;
+  readonly list: () => Promise<Collection[]>;
+  readonly get: (collectionName: string) => Promise<Collection>;
+  readonly getSchema: (collectionName: string) => Promise<Collection>;
+  readonly create: (
+    payload: CreateCollectionPayload
+  ) => Promise<{ message: string }>;
+  readonly update: (
+    collectionName: string,
+    payload: UpdateCollectionPayload
+  ) => Promise<{ message: string }>;
+  readonly remove: (collectionName: string) => Promise<{ message: string }>;
+  readonly listEntries: (collectionName: string) => Promise<Entry[]>;
+  readonly createEntry: (
+    collectionName: string,
+    data: Record<string, unknown>
+  ) => Promise<{ message: string }>;
+  readonly deleteEntry: (
+    collectionName: string,
+    entryId: string
+  ) => Promise<{ message: string }>;
+};
+
 /**
  * Collection API client surface.
  *
@@ -85,7 +111,7 @@ export const deleteCollection = async (collectionId: string): Promise<void> => {
  * `MutationResponse<T>`. The legacy `{ message }` projection is
  * preserved by mapping `response.message` from the mutation envelope.
  */
-export const collectionApi = {
+export const collectionApi: CollectionApiType = {
   fetchCollections,
   deleteCollection,
   list: async (): Promise<Collection[]> => {

@@ -24,7 +24,7 @@
  *
  * @module collections/component-usage-index
  */
-import { defineCollection, text } from "nextly/config";
+import { defineCollection, text, type CollectionConfig } from "nextly/config";
 
 import type { UsageSubject } from "../usage-index";
 
@@ -76,7 +76,7 @@ export type ComponentUsageRow = UsageSubject & {
  * spans every collection that mounts a blocks field, and a single has no row
  * to relate to.
  */
-export function componentUsageIndexCollection() {
+export function componentUsageIndexCollection(): CollectionConfig {
   return defineCollection({
     slug: COMPONENT_USAGE_INDEX_SLUG,
     labels: { singular: "Component usage", plural: "Component usage" },

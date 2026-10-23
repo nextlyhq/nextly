@@ -24,7 +24,16 @@ export function formatDateWithAdminTimezone(
  * Centralized date formatter that applies General Settings timezone
  * to all admin date/time rendering.
  */
-export function useAdminDateFormatter() {
+export function useAdminDateFormatter(): {
+  timezone: string | undefined;
+  dateFormat: string | undefined;
+  timeFormat: string | undefined;
+  formatDate: (
+    value: string | number | Date | null | undefined,
+    options: FormatDateOptions,
+    fallback?: string
+  ) => string;
+} {
   const { data: settings } = useGeneralSettings();
 
   const timezone = settings?.timezone || resolveLocalTimezone();

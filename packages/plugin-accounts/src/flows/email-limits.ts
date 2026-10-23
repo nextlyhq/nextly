@@ -15,15 +15,31 @@ export type EmailRequestVerdict =
   /** The limit store did not answer: nothing is sent rather than sent uncounted. */
   | { status: "refused"; reason: "try-again" };
 
+/** The type of {@link EMAIL_REQUESTS}, its rules named by reference. */
+type EmailRequests = {
+  readonly signUp: {
+    readonly address: typeof LIMIT_RULES.signUpAddress;
+    readonly token: null;
+  };
+  readonly resend: {
+    readonly address: typeof LIMIT_RULES.resendAddress;
+    readonly token: typeof LIMIT_RULES.resendToken;
+  };
+  readonly reset: {
+    readonly address: typeof LIMIT_RULES.resetAddress;
+    readonly token: typeof LIMIT_RULES.resetToken;
+  };
+};
+
 /** Each kind of request that sends an email: its address's rule, and its tokens' where it takes them. */
-export const EMAIL_REQUESTS = {
+export const EMAIL_REQUESTS: EmailRequests = {
   signUp: { address: LIMIT_RULES.signUpAddress, token: null },
   resend: {
     address: LIMIT_RULES.resendAddress,
     token: LIMIT_RULES.resendToken,
   },
   reset: { address: LIMIT_RULES.resetAddress, token: LIMIT_RULES.resetToken },
-} as const;
+};
 
 /**
  * Reserves a request that sends an email, before any of its work runs,

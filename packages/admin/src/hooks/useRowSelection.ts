@@ -4,7 +4,10 @@ import { useCallback, useState } from "react";
 
 import { toast } from "@admin/components/ui";
 
-import type { UseRowSelectionOptions } from "../types/hooks/row-selection";
+import type {
+  UseRowSelectionOptions,
+  UseRowSelectionReturn,
+} from "../types/hooks/row-selection";
 
 /**
  * Custom hook for managing bulk row selection state in tables
@@ -107,7 +110,9 @@ import type { UseRowSelectionOptions } from "../types/hooks/row-selection";
  *
  * @see {@link https://nextly-docs.com/hooks/useRowSelection | Documentation}
  */
-export function useRowSelection(options: UseRowSelectionOptions = {}) {
+export function useRowSelection(
+  options: UseRowSelectionOptions = {}
+): UseRowSelectionReturn {
   const { maxSelections = 1000, onMaxSelectionsReached } = options;
 
   // Internal state: Set for O(1) lookups

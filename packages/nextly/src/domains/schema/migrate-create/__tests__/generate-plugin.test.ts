@@ -314,7 +314,7 @@ describe("formatPluginMigrationsIndex", () => {
     expect(aPos).toBeGreaterThan(-1);
     expect(bPos).toBeGreaterThan(-1);
     expect(aPos).toBeLessThan(bPos);
-    expect(index).toContain("export const migrations = [");
+    expect(index).toContain("export const migrations: PluginMigration[] = [");
   });
 
   it("imports modules whose names fold alike under bindings of their own", () => {
@@ -341,7 +341,7 @@ describe("formatPluginMigrationsIndex", () => {
     }
     // And the exported list is those bindings, in import order.
     expect(index).toContain(
-      `export const migrations = [\n  ${bindings.join(",\n  ")},\n];`
+      `export const migrations: PluginMigration[] = [\n  ${bindings.join(",\n  ")},\n];`
     );
   });
 });

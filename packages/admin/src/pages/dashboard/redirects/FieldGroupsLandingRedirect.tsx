@@ -8,12 +8,12 @@
  * equivalent, so the section icon goes straight there.
  */
 
-import { useEffect } from "react";
+import { useEffect, type JSX } from "react";
 
 import { ROUTES } from "@admin/constants/routes";
 import { navigateTo } from "@admin/lib/navigation";
 
-export default function FieldGroupsLandingRedirect() {
+export default function FieldGroupsLandingRedirect(): JSX.Element {
   useEffect(() => {
     navigateTo(ROUTES.BUILDER_FIELD_GROUPS);
   }, []);

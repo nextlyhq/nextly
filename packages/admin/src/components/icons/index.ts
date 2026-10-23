@@ -208,7 +208,10 @@ export { ChevronUp as ChevronUpIcon } from "lucide-react";
 /**
  * Custom Discord icon (Lucide-compatible)
  */
-export const Discord = ({ size = 24, ...props }: LucideProps) => {
+export const Discord = ({
+  size = 24,
+  ...props
+}: LucideProps): React.ReactSVGElement => {
   return React.createElement(
     "svg",
     {

@@ -18,8 +18,12 @@ import {
   type WidgetLifecycle,
 } from "./lifecycle";
 import type { WidgetQuery, WidgetQuerySpec } from "./query";
-import { validateWidgetSettings, type AnyWidgetSetting } from "./settings";
-import type { WidgetOp } from "./sources";
+import {
+  knobSourceFor,
+  validateWidgetSettings,
+  type AnyWidgetSetting,
+} from "./settings";
+import type { WidgetOp, WidgetSourceFilter } from "./sources";
 import { WIDGET_WIDTHS, type WidgetWidth } from "./widths";
 
 /*
@@ -335,6 +339,18 @@ export interface WidgetDefinition {
     message?: string;
     action?: { label: string; link: string; requiredPermission?: string };
   };
+  /**
+   * The settings the widget's source narrows by rather than being replaced by
+   * (`WidgetSource.filters`), so the admin's knobs build the card's query as
+   * the server admits its settings.
+   *
+   * 🔴 Set by core when it publishes a registered widget, read from the source
+   * registry then, and never taken from the registration: a stated value is
+   * replaced, so a widget cannot claim a filter its source does not take.
+   *
+   * @experimental The shape may grow while the content widgets are built.
+   */
+  sourceFilters?: readonly WidgetSourceFilter[];
   /**
    * Where this widget sits by default, ascending. Omitted means "after
    * everything that states one".
@@ -1593,5 +1609,15 @@ export function validateWidgetDefinition(
   validateCells(d);
   validateDefaultOrder(d);
   validateChrome(d);
-  validateWidgetSettings(d.settings, d.id ?? "widget", d.serverData === true);
+  // Judged on the widget's own source, with the filters that source declares:
+  // a content setting is admitted where core builds the query, or where a knob
+  // drives it on that source.
+  validateWidgetSettings(
+    d.settings,
+    d.id ?? "widget",
+    d.serverData === true,
+    typeof d.query?.source === "string"
+      ? knobSourceFor(d.query.source)
+      : undefined
+  );
 }

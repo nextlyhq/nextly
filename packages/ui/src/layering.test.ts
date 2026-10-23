@@ -58,8 +58,9 @@ import {
   walk,
 } from "@nextlyhq/module-specifiers/parse-source";
 import type { MemberExpression, Node, Program } from "oxc-parser";
-import ts from "typescript";
 import { describe, expect, it } from "vitest";
+
+import { listedFiles, showConfig } from "../../../scripts/tsc-cli.mjs";
 
 const SRC = join(__dirname);
 
@@ -117,14 +118,33 @@ function isShippedModule(entry: string): boolean {
  * scan. Asking the compiler makes the next convention added to `exclude` apply here for free.
  */
 function tsconfigShippedFiles(): string[] {
-  const path = join(SRC, "..", "tsconfig.json");
-  const parsed = ts.parseConfigFileTextToJson(path, readFileSync(path, "utf8"));
-  const resolved = ts.parseJsonConfigFileContent(
-    parsed.config,
-    ts.sys,
-    join(SRC, "..")
-  );
-  return resolved.fileNames.map(file => resolve(file)).sort();
+  const dir = join(SRC, "..");
+  return resolvedConfig("tsconfig.json")
+    .files.map(file => resolve(dir, file))
+    .sort();
+}
+
+/**
+ * One of this package's tsconfigs as `tsc` resolves it — `extends` followed, and `files` the list
+ * `include` and `exclude` matched, relative to the config — refused unless `tsc` read it whole.
+ *
+ * `--showConfig` alone does not establish that on every version. TypeScript 7 prints a config it
+ * could not parse as empty options, and one whose `extends` it could not read without the base's
+ * options, and exits 0 for both; read as clean, either would answer "no aliases" for a file nobody
+ * read. `--listFilesOnly` loads the program and fails on both, so it is asked first. A resolved
+ * config listing no files is refused too: that is a compiler that answered differently, never a
+ * package that ships nothing.
+ */
+function resolvedConfig(
+  name: string
+): ReturnType<typeof showConfig> & { files: string[] } {
+  const path = join(SRC, "..", name);
+  listedFiles(path);
+  const config = showConfig(path);
+  const { files } = config;
+  if (!files?.length)
+    throw new Error(`tsc --showConfig listed no files for ${name}`);
+  return { ...config, files };
 }
 
 /**
@@ -1251,32 +1271,15 @@ describe("this package resolves no module at runtime", () => {
     // Read from the RESOLVED options, not the file's own JSON. `tsconfig.json` extends
     // `@nextlyhq/tsconfig/react-library-bundler.json`, so an alias declared in the base is one
     // TypeScript and the bundler both honour while a check reading the local file sees nothing.
-    // `parseJsonConfigFileContent` follows `extends`, which is why the scanned-file assertion
-    // above uses it too.
+    // `resolvedConfig` follows `extends`, which is why the scanned-file assertion above uses it
+    // too, and it refuses a config that does not parse or resolve, so a broken file cannot read as
+    // one with no aliases.
     const aliases = ["tsconfig.json", "tsconfig.tests.json"].flatMap(name => {
-      const path = join(SRC, "..", name);
-      const parsed = ts.parseConfigFileTextToJson(
-        path,
-        readFileSync(path, "utf8")
-      );
-      // A failed parse leaves `config` undefined, which yields empty options and an empty alias
-      // list — the same answer as "there are no aliases". Reported as a failure of the CHECK
-      // rather than allowed to read as a clean result.
-      expect(parsed.error, `${name} must be parseable`).toBeUndefined();
-      const resolved = ts.parseJsonConfigFileContent(
-        parsed.config,
-        ts.sys,
-        join(SRC, "..")
-      );
-      expect(
-        resolved.errors.map(diagnostic =>
-          ts.flattenDiagnosticMessageText(diagnostic.messageText, " ")
-        ),
-        `${name} must resolve, including anything it extends`
-      ).toEqual([]);
-      return Object.keys(resolved.options.paths ?? {}).map(
-        alias => `${name}: ${alias}`
-      );
+      const { compilerOptions } = resolvedConfig(name);
+      const paths = compilerOptions?.paths;
+      return Object.keys(
+        typeof paths === "object" && paths !== null ? paths : {}
+      ).map(alias => `${name}: ${alias}`);
     });
 
     expect(
