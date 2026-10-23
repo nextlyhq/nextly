@@ -33,6 +33,7 @@
  * ```
  */
 
+import { warnIfCacheComponentsOn } from "./cache-components";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { checkConsumerDrizzleVersion } from "./database/drizzle-version";
 import {
@@ -569,11 +570,23 @@ export async function getCachedNextly(): Promise<Nextly> {
  *
  * export const register = createRegister(nextlyConfig);
  * ```
+ *
+ * @param host - What the app's own `instrumentation.ts` knows about the Next.js
+ *               build it runs in. `cacheComponents` is the value Next.js
+ *               inlines there for `process.env.__NEXT_CACHE_COMPONENTS`; Nextly
+ *               warns when it says Cache Components is on, which it does not
+ *               support yet.
  */
 export function createRegister(
-  config: SanitizedNextlyConfig
+  config: SanitizedNextlyConfig,
+  host: { cacheComponents?: string | boolean } = {}
 ): () => Promise<void> {
   return async function register() {
+    // Before anything starts. Nextly cannot read this itself: Next.js inlines
+    // the setting only into code it bundles, and Nextly is a server-external
+    // package. `__NEXT_CACHE_COMPONENTS` is an undocumented Next.js internal;
+    // `cache-components.test.ts` pins it, so a rename fails loudly there.
+    warnIfCacheComponentsOn(host.cacheComponents, "this Next.js build");
     await getNextly({ config });
   };
 }

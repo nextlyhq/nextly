@@ -14,7 +14,10 @@ export default defineConfig({
   ],
   format: ["esm"],
   // Declarations without a type check: `check-types` is the type check.
-  dts: { sourcemap: false, compilerOptions: { noCheck: true } },
+  // Declarations written by oxc from the source's own annotations, which
+  // `isolatedDeclarations` requires; set explicitly so a build can never fall
+  // back to the type checker without anyone noticing.
+  dts: { generator: "oxc", sourcemap: false },
   clean: true,
   sourcemap: true,
   treeshake: true,

@@ -25,6 +25,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { WhereFilter } from "../collections/query/query-operators";
 
+import { answerAsAsked } from "./answer-as-asked";
 import { resolveExecutableSource } from "./executable-source";
 import type { WidgetQuery } from "./query";
 import type { ResolverOptions } from "./resolved-sources";
@@ -425,7 +426,7 @@ export async function executeWidgetQuery(
     // widget chooses them. A resolver that uses one as a destination is
     // exploitable, which is why `resolved-sources` states that as the
     // contract's rule rather than implying the host removed the possibility.
-    return executable.resolve(query, caller, opts);
+    return answerAsAsked(query, await executable.resolve(query, caller, opts));
   }
 
   const source = executable.source;

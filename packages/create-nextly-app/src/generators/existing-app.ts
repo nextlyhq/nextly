@@ -5,7 +5,12 @@ import { generateConfig } from "./config";
 import type { GeneratedFiles } from "./generated-files";
 import { generateInstrumentation } from "./instrumentation";
 import { generateMediaRoutes, type MediaRouteTemplates } from "./media-routes";
-import { nextConfigFiles, patchNextConfig } from "./next-config";
+import {
+  cacheComponentsFiles,
+  nextConfigFiles,
+  patchNextConfig,
+  turnOffCacheComponents,
+} from "./next-config";
 import { generateRoutes } from "./routes";
 import { generateTypesDirectory } from "./types";
 
@@ -35,5 +40,7 @@ export async function generateIntoExistingApp(
     await generateInstrumentation(cwd, projectInfo),
     await generateTypesDirectory(cwd, projectInfo),
     nextConfigFiles(await patchNextConfig(cwd, database)),
+    // After the packages, so it reads the config that step left.
+    cacheComponentsFiles(await turnOffCacheComponents(cwd)),
   ];
 }

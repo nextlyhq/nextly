@@ -86,6 +86,7 @@
     "@types/react-dom": "19.3.0",
     "jsdom": "^27.1.0",
     "lucide-react": "^0.544.0",
+    "oxc-parser": "^0.155.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "rimraf": "^6.1.3",

@@ -102,6 +102,15 @@ describe("validateWidgetQuery", () => {
     );
   });
 
+  it("refuses a query asking for core's own data result, which is an answer and never a question", () => {
+    // `data` is the result core's runner makes for a declared widget drawn by its own component.
+    // A raw query naming it would ask a source for something no source answers.
+    const err = caught(() =>
+      validateWidgetQuery({ source: "collection:posts", op: "data" })
+    );
+    expect(err.publicMessage).toBe(SOURCE_OR_OP_REFUSAL);
+  });
+
   it("gives an unknown source and an unsupported op the SAME public message", () => {
     // The oracle, stated directly: a caller who can tell the two apart can
     // walk collection names and learn which exist.

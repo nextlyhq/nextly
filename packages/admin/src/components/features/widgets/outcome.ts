@@ -45,7 +45,7 @@ import type {
   CellSlotLookup,
   DeclaredWidget,
 } from "./archetypes/types";
-import type { CardEmptyContent } from "./frame/states";
+import { EMPTY_DEFAULT, type CardEmptyContent } from "./frame/states";
 
 /**
  * The archetypes core draws from a query result.
@@ -123,7 +123,29 @@ export function coreCannotDraw(definition: DeclaredWidget): string | undefined {
     return `The "${archetype}" widget archetype is not rendered yet.`;
   }
 
+  // What an archetype accepts is judged from the declaration's query, and a
+  // card core answers on the server has none: its answer was held to the
+  // display's shape before it was sent, so there is nothing left to refuse.
+  if (definition.serverData === true) return undefined;
   return renderer.accepts?.(definition);
+}
+
+/**
+ * A card's empty state with its widget's declared one in place of the frame's:
+ * the declared message as its title, with no detail of the frame's beneath it,
+ * and the declared action as its one action. The frame's or the body's own,
+ * as it is, for a widget that declares none.
+ */
+function emptyFor(
+  definition: DashboardWidget,
+  own: CardEmptyContent = EMPTY_DEFAULT
+): CardEmptyContent {
+  const declared = definition.declaredEmpty;
+  if (declared === undefined) return own;
+  const words = declared.title === undefined ? own : { title: declared.title };
+  return declared.action === undefined
+    ? words
+    : { ...words, action: declared.action };
 }
 
 /** Whether core can draw this declaration at all. */
@@ -199,6 +221,13 @@ export function resolveWidgetOutcome(
    */
   slotFor?: CellSlotLookup
 ): WidgetOutcome {
+  // A declared widget's empty test held: the frame draws its empty state, the
+  // widget's own words in place of its own, whatever draws the card when it
+  // has something to show -- its own component included.
+  if (slot?.ok === true && slot.empty === true) {
+    return { state: "empty", empty: emptyFor(definition) };
+  }
+
   // The escape hatch. A plugin component owns its own body and its own states.
   if (definition.archetype === "custom") return { state: "self-drawn" };
 
@@ -245,7 +274,7 @@ export function resolveWidgetOutcome(
     // the page -- with nothing on screen, in the live region or in the console
     // saying why. `resolve-widgets` prefers a contributed component over this,
     // so reaching here means there was none to prefer.
-    if (!definition.query) {
+    if (!definition.query && definition.serverData !== true) {
       return {
         state: "failed",
         message: `The "${definition.archetype}" archetype is drawn from a query, and this widget declares none.`,
@@ -261,5 +290,10 @@ export function resolveWidgetOutcome(
       : { state: "failed", message: slot.error };
   }
 
-  return asOutcome(renderer.body(slot.result, definition));
+  const drawn = asOutcome(renderer.body(slot.result, definition));
+  // A display that finds nothing in its answer draws its empty state with the
+  // widget's declared one in place of its own, as the server's verdict does.
+  return drawn.state === "empty"
+    ? { state: "empty", empty: emptyFor(definition, drawn.empty) }
+    : drawn;
 }
