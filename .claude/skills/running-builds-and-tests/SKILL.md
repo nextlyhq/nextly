@@ -25,12 +25,12 @@ held in every session.
   | command                                         | result on a clean tree                    |
   | ----------------------------------------------- | ----------------------------------------- |
   | `pnpm turbo run check-types --continue --force` | `AGENTS.measured.md` → `check-types-cold` |
-  | `pnpm turbo run lint --continue --force`        | `AGENTS.measured.md` → `lint-cold`        |
 
   `check-types` fails because a workspace import resolves through the sibling's
-  package exports to a `dist/index.d.ts` that does not exist yet. `lint` fails
-  for the same underlying reason through a different rule: `import-x/no-unresolved`
-  resolves the same specifiers, so an unbuilt sibling is an unresolved import.
+  package exports to a `dist/index.d.ts` that does not exist yet. `lint` reads
+  the same specifiers for its type-aware rules, and on an unbuilt sibling those
+  rules judge types the checker cannot see: a finding there can name your
+  expression for a defect that is only the missing build.
 
   Run `pnpm build` first. The failure is workspace-wide rather than local to one
   package, so the whole-repo build is the honest default.

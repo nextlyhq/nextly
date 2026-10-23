@@ -27,7 +27,6 @@ NC='\033[0m' # No Color
 # These are pre-existing issues, NOT caused by refactoring.
 # The gate fails only if counts INCREASE beyond these baselines.
 BASELINE_TS_ERRORS=8        # TS2742 in test-setup.ts
-BASELINE_LINT_WARNINGS=3118 # Mostly .tsup/declaration/ artifacts
 BASELINE_TEST_FAILURES=610  # Tests requiring DATABASE_URL (updated Phase 5: includes all workspace tests)
 
 NEW_REGRESSIONS=0
@@ -56,19 +55,17 @@ else
 fi
 
 # ─── 2. Lint ───
-echo -e "\n${YELLOW}=== Lint (eslint) ===${NC}"
-LINT_OUTPUT=$(pnpm lint 2>&1 || true)
-# Strip ANSI codes, then parse "N problems" from the summary line
-LINT_CLEAN=$(echo "$LINT_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g')
-LINT_WARNINGS=$(echo "$LINT_CLEAN" | grep -oP '\d+(?= problems)' | tail -1 || echo "0")
-
-if [ "$LINT_WARNINGS" -le "$BASELINE_LINT_WARNINGS" ]; then
-  echo -e "${GREEN}PASS: Lint — $LINT_WARNINGS warnings (baseline: $BASELINE_LINT_WARNINGS)${NC}"
-  RESULTS+=("PASS: Lint — $LINT_WARNINGS warnings (baseline: $BASELINE_LINT_WARNINGS)")
+# The repository lints every package in one oxlint run from its root, with no
+# finding allowed (`maxWarnings: 0`), so that run's exit status IS the verdict.
+# There is no package-level lint script to call, and a count parsed from the
+# output would read a run that never happened as zero findings.
+echo -e "\n${YELLOW}=== Lint (oxlint, repository root) ===${NC}"
+if pnpm --workspace-root lint 2>&1; then
+  echo -e "${GREEN}PASS: Lint${NC}"
+  RESULTS+=("PASS: Lint")
 else
-  NEW_COUNT=$((LINT_WARNINGS - BASELINE_LINT_WARNINGS))
-  echo -e "${RED}FAIL: Lint — $LINT_WARNINGS warnings ($NEW_COUNT NEW, baseline: $BASELINE_LINT_WARNINGS)${NC}"
-  RESULTS+=("FAIL: Lint — $NEW_COUNT new warnings")
+  echo -e "${RED}FAIL: Lint${NC}"
+  RESULTS+=("FAIL: Lint")
   NEW_REGRESSIONS=$((NEW_REGRESSIONS + 1))
 fi
 
@@ -136,7 +133,7 @@ for result in "${RESULTS[@]}"; do
   fi
 done
 echo ""
-echo -e "  ${CYAN}Baselines: TS=$BASELINE_TS_ERRORS errors, Lint=$BASELINE_LINT_WARNINGS warnings, Tests=$BASELINE_TEST_FAILURES failures${NC}"
+echo -e "  ${CYAN}Baselines: TS=$BASELINE_TS_ERRORS errors, Lint=no findings, Tests=$BASELINE_TEST_FAILURES failures${NC}"
 echo "========================================="
 
 if [ "$NEW_REGRESSIONS" -gt 0 ]; then

@@ -36,6 +36,7 @@ import {
 } from "./CustomizingFence";
 import { DismissWidgetButton } from "./DismissWidgetButton";
 import { DraggableWidgetCell, type CellDrag } from "./DraggableWidgetCell";
+import { SettingsPreview } from "./SettingsPreview";
 import {
   useCardQuickSetting,
   type CellSettingsWrite,
@@ -299,7 +300,7 @@ function CardBody(props: {
 
 /**
  * What a card offers at rest: its quick setting, its dismiss control and menu (in its header,
- * or floated over an unframed card), and where its sheet's save goes.
+ * or floated over an unframed card), and where its sheet's Done goes.
  */
 function useRestingControls(
   props: ArrangedCellProps,
@@ -322,7 +323,7 @@ function useRestingControls(
   return {
     quick,
     ...dismissAffordance(widget, props, props.on.dismiss, menu),
-    saveSettings: settingsSaverFor(props),
+    done: doneFor(props),
   };
 }
 
@@ -347,16 +348,35 @@ function restingMenuFor(
 }
 
 /**
- * Where the sheet's save goes. Outside customise mode it is saved at once, through the same
- * write as the quick setting; while customising it is recorded in the draft, saved with the rest.
+ * Where the sheet's Done goes, decided by where the reader is when they press it, since the
+ * sheet stays open across a change of mode. While customising it is recorded in the draft, kept
+ * with the dashboard's other unsaved changes, and the sheet closes. Outside it, it is saved at
+ * once through the same write as the quick setting, and the sheet hears how that ended: it
+ * closes when the save lands and says why in place when it does not.
  */
-function settingsSaverFor(
-  props: ArrangedCellProps
-): (config: Record<string, unknown>) => void {
+function doneFor(props: ArrangedCellProps): {
+  done: ComponentProps<typeof WidgetSettingsSheet>["onDone"];
+  blocked: string | undefined;
+} {
   const write = props.settingsWrite;
-  if (props.isEditing || !write) return props.on.saveSettings;
-  return config =>
-    write.write(config, { onLanded: () => {}, onFailed: () => {} });
+  if (props.isEditing || !write) {
+    return {
+      done: (config, settled) => {
+        props.on.saveSettings(config);
+        settled.saved();
+      },
+      blocked: undefined,
+    };
+  }
+  return {
+    done: (config, settled) =>
+      write.write(config, {
+        onLanded: settled.saved,
+        onFailed: settled.failed,
+        showsFailure: true,
+      }),
+    blocked: write.unavailable,
+  };
 }
 
 /** The cell's classes: its width, its collapse when empty, and its spacing. */
@@ -411,6 +431,65 @@ function editActionsOf(
   );
 }
 
+/**
+ * The card's width and menu while customising, where its frame keeps them: over a framed card's
+ * own header, or in the small header the cell draws for an unframed one. Nothing at rest.
+ */
+function CellEditActions({
+  unframed,
+  title,
+  actions,
+}: {
+  unframed: boolean;
+  title: string;
+  actions: ReactNode;
+}) {
+  if (!actions) return null;
+  if (!unframed) return <CardControlsOverlay>{actions}</CardControlsOverlay>;
+  return <UnframedEditHeader title={title}>{actions}</UnframedEditHeader>;
+}
+
+/**
+ * The card's settings sheet, beside the card as the sheet's values would draw it: the declared
+ * widget, the reader's stored settings it was asked with, and the answer it shows now.
+ */
+function CellSettings({
+  row,
+  widget,
+  data,
+  done,
+  open,
+  onOpenChange,
+}: {
+  row: ArrangedCellProps["row"];
+  widget: DashboardWidget;
+  data: ArrangedCellProps["data"];
+  done: ReturnType<typeof doneFor>;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <WidgetSettingsSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title={widget.title}
+      settings={widget.settings ?? []}
+      config={row.config}
+      onDone={done.done}
+      {...(done.blocked === undefined ? {} : { blocked: done.blocked })}
+      renderPreview={draft => (
+        <SettingsPreview
+          widget={row.widget}
+          placementId={row.placementId}
+          stored={row.config}
+          draft={draft}
+          shown={data}
+        />
+      )}
+    />
+  );
+}
+
 export function ArrangedCell(props: ArrangedCellProps) {
   const { row, isEditing, data } = props;
   /*
@@ -441,7 +520,7 @@ export function ArrangedCell(props: ArrangedCellProps) {
     quick,
     floating: floatingControl,
     header: dismissControl,
-    saveSettings,
+    done,
   } = useRestingControls(props, widget, hasSettings, setSettingsOpen);
   const width = drawnWidth(row.width, row.allowedWidths);
 
@@ -470,27 +549,21 @@ export function ArrangedCell(props: ArrangedCellProps) {
       data-testid={`widget-cell-${widget.id}`}
       className={cellClassName(row, unframed, isEditing)}
     >
-      {!unframed && editActions ? (
-        <CardControlsOverlay>{editActions}</CardControlsOverlay>
-      ) : null}
-      {unframed && editActions ? (
-        <UnframedEditHeader title={widget.title}>
-          {editActions}
-        </UnframedEditHeader>
-      ) : null}
+      <CellEditActions
+        unframed={unframed}
+        title={widget.title}
+        actions={editActions}
+      />
       {floatingControl}
       {/* Mounted whenever the widget offers settings, not only while
           customising. A closed `Sheet` renders nothing, so this costs a card
           nothing — and it is what lets the panel outlive customise mode rather
           than being torn out from under a reader still filling it in. */}
       {hasSettings ? (
-        <WidgetSettingsSheet
+        <CellSettings
+          {...{ row, widget, data, done }}
           open={settingsOpen}
           onOpenChange={setSettingsOpen}
-          title={widget.title}
-          settings={widget.settings ?? []}
-          config={row.config}
-          onSave={saveSettings}
         />
       ) : null}
       <CardBody

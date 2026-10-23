@@ -22,7 +22,7 @@
  *
  * ## The directory is emptied first, so presence proves emission
  *
- * Both tsup configs set `clean: false`. Against `dist` that made existence
+ * Both tsdown configs set `clean: false`. Against `dist` that made existence
  * meaningless — an entry point dropped from a config leaves its previous
  * declaration behind, present and stale, so the guard would check a file
  * nothing had produced. Starting from an empty directory answers the same
@@ -105,23 +105,25 @@ export const DECLARATION_ENTRIES: string[] = declarationFiles();
 export function buildDeclarations(): string {
   rmSync(OUT_DIR, { recursive: true, force: true });
 
-  // tsup's own entry, run by this Node. Spawning `npx` fails on Windows, where
-  // it is `npx.cmd` and `execFileSync` starts only an executable without a
-  // shell; resolving the package also pins the tsup this package depends on.
-  const tsupPackage = createRequire(join(pkgRoot, "package.json")).resolve(
-    "tsup/package.json"
+  // tsdown's own entry, run by this Node. Spawning `npx` fails on Windows,
+  // where it is `npx.cmd` and `execFileSync` starts only an executable without
+  // a shell; resolving the package also pins the tsdown this package depends
+  // on. The configs import their entry list through tsx, as `build:js` does.
+  const tsdownPackage = createRequire(join(pkgRoot, "package.json")).resolve(
+    "tsdown/package.json"
   );
-  const { bin } = JSON.parse(readFileSync(tsupPackage, "utf8")) as {
-    bin: { tsup: string };
+  const { bin } = JSON.parse(readFileSync(tsdownPackage, "utf8")) as {
+    bin: { tsdown: string };
   };
-  const tsup = join(dirname(tsupPackage), bin.tsup);
+  const tsdown = join(dirname(tsdownPackage), bin.tsdown);
   const run = (args: string[]) =>
-    execFileSync(process.execPath, [tsup, ...args, "--out-dir", OUT_DIR], {
-      cwd: pkgRoot,
-      stdio: "inherit",
-    });
+    execFileSync(
+      process.execPath,
+      [tsdown, "--config-loader", "tsx", ...args, "--out-dir", OUT_DIR],
+      { cwd: pkgRoot, stdio: "inherit" }
+    );
   run([]);
-  run(["--config", "tsup.server-safe.config.ts"]);
+  run(["--config", "tsdown.server-safe.config.ts"]);
 
   const missing = DECLARATION_ENTRIES.filter(
     entry => !existsSync(join(OUT_DIR, entry))
@@ -130,7 +132,7 @@ export function buildDeclarations(): string {
     throw new Error(
       `The declaration build did not produce: ${missing.join(", ")}. ` +
         "Every entry in DECLARATION_ENTRIES is a published entry point, so " +
-        "one the current tsup config no longer emits would otherwise be " +
+        "one the current tsdown config no longer emits would otherwise be " +
         "checked in its previous form. Add the entry back, or remove it here " +
         "and from the package's `exports` together."
     );
@@ -157,8 +159,8 @@ const BUILD_INPUTS = [
   // derives the entry list from the exports map, so a change there changes the
   // output without touching anything under `src`.
   "scripts",
-  "tsup.config.ts",
-  "tsup.server-safe.config.ts",
+  "tsdown.config.ts",
+  "tsdown.server-safe.config.ts",
   "tsconfig.json",
   // The config `tsconfig.json` EXTENDS, which lives in another package and so
   // is not reached by anything above. The declaration build reads the resolved
@@ -175,7 +177,7 @@ const BUILD_INPUTS = [
   join("..", EXTENDS_PACKAGE_DIR),
   "package.json",
   // The workspace lockfile, because the TOOLCHAIN is an input too. A
-  // dependency-only upgrade changes the installed TypeScript or tsup without
+  // dependency-only upgrade changes the installed TypeScript or tsdown without
   // touching a byte in this package, and the declarations it produced are then
   // the previous compiler's work while every path above still looks current.
   join("..", "..", "pnpm-lock.yaml"),

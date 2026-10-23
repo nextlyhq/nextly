@@ -20,6 +20,7 @@ import type {
 } from "../types";
 
 import { binaryRunner, scriptRunner } from "./package-manager-commands";
+import { PLUGIN_NODE_ENGINES } from "./plugin-node";
 
 /**
  * Templates whose `nextly.config.ts` registers `formBuilderPlugin`. The
@@ -1235,9 +1236,13 @@ let resolvedRuntimeVersions: Record<string, string> | null = null;
 async function resolveRuntimeVersions(): Promise<Record<string, string>> {
   if (resolvedRuntimeVersions) return resolvedRuntimeVersions;
 
+  // The lowest Next.js 16 release Nextly's own `next` peer accepts, the first
+  // without the advisories that peer excludes: an offline cache or a private
+  // mirror installs whatever this range admits.
+  const NEXT_FLOOR = "^16.4.1";
   const FALLBACKS: Record<string, string> = {
-    next: "^16.1.0",
-    "eslint-config-next": "^16.1.0",
+    next: NEXT_FLOOR,
+    "eslint-config-next": NEXT_FLOOR,
   };
 
   const entries = await Promise.all(
@@ -1531,7 +1536,7 @@ async function generatePluginPackageJson(
     "@nextlyhq/admin": peerRange("@nextlyhq/admin"),
     "@nextlyhq/plugin-sdk": peerRange("@nextlyhq/plugin-sdk"),
     // The UI kit is supplied by the host admin at run time, so a plugin must
-    // declare it rather than carry a copy. As a devDependency alone, tsup
+    // declare it rather than carry a copy. As a devDependency alone, tsdown
     // treats it as bundleable and inlines the whole kit into the published
     // plugin — first-party plugins declare it as a peer for this reason.
     "@nextlyhq/ui": peerRange("@nextlyhq/ui"),
@@ -1539,7 +1544,7 @@ async function generatePluginPackageJson(
     "react-dom": PINNED_VERSIONS["react-dom"],
   };
 
-  // devDeps cover: build (tsup/tsc), test (vitest), lint (eslint), AND the
+  // devDeps cover: build (tsdown/tsc), test (vitest), lint (eslint), AND the
   // embedded dev/ playground (next + nextly + admin + sqlite adapter).
   const devDependencies: Record<string, string> = {
     nextly: range("nextly"),
@@ -1556,8 +1561,11 @@ async function generatePluginPackageJson(
     "@types/react": PINNED_VERSIONS["@types/react"],
     "@types/react-dom": PINNED_VERSIONS["@types/react-dom"],
     typescript: PINNED_VERSIONS.typescript,
-    tsup: "^8.5.0",
-    vitest: "^4.1.0",
+    tsdown: "^0.23.1",
+    vitest: "^5.0.5",
+    // Vitest's peer, declared because Yarn installs no peers: without it a
+    // Yarn-scaffolded plugin installs, and then `yarn test` cannot load Vite.
+    vite: "^7.3.5",
     eslint: PINNED_VERSIONS.eslint,
     "@eslint/js": PINNED_VERSIONS.eslint,
     "typescript-eslint": "^8.0.0",
@@ -1588,8 +1596,11 @@ async function generatePluginPackageJson(
     // Only the built library ships. The dev/ playground is never published.
     files: ["dist"],
     keywords: ["nextly", "nextly-plugin"],
+    // The Node its build and test tools both run on, so a plugin never
+    // promises one its own `build` or `test` script refuses.
+    engines: { node: PLUGIN_NODE_ENGINES },
     scripts: {
-      build: "tsup",
+      build: "tsdown",
       // Runs the embedded playground (next dev with dev/ as the project root).
       dev: "next dev dev --turbopack",
       "check-types": "tsc --noEmit",
@@ -2128,7 +2139,7 @@ export async function copyTemplate(
 
 /**
  * Copy the plugin template (D44/D45): the whole tree (src/ + embedded dev/ +
- * tsconfig/tsup/vitest/eslint), a generated plugin package.json, the dev/
+ * tsconfig/tsdown/vitest/eslint), a generated plugin package.json, the dev/
  * playground's .env, then fill `{{pluginName}}` / `{{nextlyRange}}`. No app
  * base, next.config, or root .env.
  */

@@ -14,11 +14,11 @@
  * Node's `spawn` is the portable equivalent, and it is a dozen lines rather
  * than a dependency.
  *
- * **Each watcher is pointed at `src` rather than left to default.** Bare
- * `tsup --watch` watches `.`, and at that root it never notices an edit at all:
- * no `Change detected`, no rebuild, and an artifact that is byte-identical
- * afterwards. Measured back to back in one session on tsup 8.5.0 — `--watch .`
- * saw nothing, `--watch src` detected the same edit and rebuilt it. Anyone who
+ * **Each watcher is pointed at `src` rather than left to default.** Under tsup
+ * 8.5.0 a bare `--watch` watched `.`, and at that root it never noticed an edit:
+ * no `Change detected`, no rebuild, and an artifact that was byte-identical
+ * afterwards, while `--watch src` detected the same edit and rebuilt it. Naming
+ * the root keeps that true whatever the bundler's default. Anyone who
  * then debugs a stale artifact is debugging code that was never rebuilt, and
  * the failure is the ABSENCE of a build line among output that scrolls.
  *
@@ -32,10 +32,16 @@ import { spawn } from "node:child_process";
 
 /** Each long-lived producer, with a label for whose output is whose. */
 const PRODUCERS = [
-  { label: "client", args: ["tsup", "--watch", "src"] },
+  { label: "client", args: ["tsdown", "--watch", "src"] },
   {
     label: "server-safe",
-    args: ["tsup", "--config", "tsup.server-safe.config.ts", "--watch", "src"],
+    args: [
+      "tsdown",
+      "--config",
+      "tsdown.server-safe.config.ts",
+      "--watch",
+      "src",
+    ],
   },
   { label: "css", args: ["pnpm", "run", "dev:css"] },
 ];
@@ -44,7 +50,7 @@ const children = PRODUCERS.map(({ label, args }) => {
   const [command, ...rest] = args;
   const child = spawn(command, rest, {
     stdio: "inherit",
-    // Resolves `tsup` and `pnpm` through the platform's own lookup rules,
+    // Resolves `tsdown` and `pnpm` through the platform's own lookup rules,
     // including the `.cmd` shims npm writes on Windows.
     shell: true,
   });

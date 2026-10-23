@@ -166,6 +166,12 @@ const clientEntries = [
   // uses them from builds SQL — so a client reaching the list through it would
   // reach the ORM, and one writing its own copy would drift from the server.
   "src/domains/i18n/translation-filter-states.ts",
+  // The keys a filter may carry only at its top level, as their own entry. The
+  // admin keeps exactly these at the top level beside its own filters, and the
+  // module the server judges them in imports the shape check's graph -- so a
+  // client reaching the list through it would take more than the list, and one
+  // writing its own copy would drift from the server.
+  "src/domains/collections/query/reserved-filter-keys.ts",
   // The query-parameter formats, so a caller writes one with the same code the
   // server reads it with. Imported by the admin's API Playground and by plugin
   // admin components, which is why it is a leaf rather than a root export.
@@ -253,7 +259,7 @@ export default defineConfig({
   // loaded by Turbopack on Vercel. Code that needs __dirname already has ESM
   // fallbacks via import.meta.url.
   shims: false,
-  async onSuccess() {
+  onSuccess() {
     // Copy migration files to dist after build
     console.log("\nCopying migration files to dist...");
     try {

@@ -61,6 +61,14 @@ import { createPasswordStrategy } from "../../pipeline/password-strategy";
 
 import { fakeSessionRows } from "./session-row-fake";
 
+/**
+ * The cost the fixture password hashes are made at. bcrypt writes its cost into
+ * the hash, so the login handler's verification runs the same code against a
+ * cost-4 hash as against a cost-12 one, in a fraction of the time; these tests
+ * are about the handler's answers, not the hashing.
+ */
+const FIXTURE_SALT_ROUNDS = 4;
+
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
 
 /**
@@ -183,7 +191,7 @@ describe("login handler: respondAction shape", () => {
 
     // verifyCredentials uses bcryptjs; supply a real hash so the compare
     // succeeds without us having to monkey-patch the credentials module.
-    const passwordHash = await hashPassword("Pass1234!");
+    const passwordHash = await hashPassword("Pass1234!", FIXTURE_SALT_ROUNDS);
 
     const findUserByEmail = vi
       .fn()
@@ -252,7 +260,7 @@ describe("login handler: respondAction shape", () => {
     // Failures are recorded already. Without the matching success an operator
     // reading the trail after a credential leak can see that someone tried and
     // not whether they got in, which is the question that actually matters.
-    const passwordHash = await hashPassword("Pass1234!");
+    const passwordHash = await hashPassword("Pass1234!", FIXTURE_SALT_ROUNDS);
     const fakeUser = {
       id: "u1",
       email: "a@example.com",
@@ -324,7 +332,7 @@ describe("login handler: respondAction shape", () => {
    * parameterised rather than fixed to one error type.
    */
   async function loginWithRejectingAfterLogin(failure: unknown) {
-    const passwordHash = await hashPassword("Pass1234!");
+    const passwordHash = await hashPassword("Pass1234!", FIXTURE_SALT_ROUNDS);
     const fakeUser = {
       id: "u1",
       email: "a@example.com",
@@ -486,7 +494,7 @@ describe("login handler: respondAction shape", () => {
   });
 
   it("returns password_change_required with a pending token (no session) for a must-change account", async () => {
-    const passwordHash = await hashPassword("Pass1234!");
+    const passwordHash = await hashPassword("Pass1234!", FIXTURE_SALT_ROUNDS);
     const fakeUser = {
       id: "u1",
       email: "a@example.com",
@@ -586,7 +594,7 @@ describe("login handler: an unverified account", () => {
     password: string,
     deactivatedAt: Date | null = null
   ): Promise<Response> {
-    const passwordHash = await hashPassword("Pass1234!");
+    const passwordHash = await hashPassword("Pass1234!", FIXTURE_SALT_ROUNDS);
     const fakeUser = {
       id: "u1",
       email: "a@example.com",

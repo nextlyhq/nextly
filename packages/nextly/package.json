@@ -71,6 +71,10 @@
       "types": "./dist/domains/i18n/translation-filter-states.d.mts",
       "import": "./dist/domains/i18n/translation-filter-states.mjs"
     },
+    "./reserved-filter-keys": {
+      "types": "./dist/domains/collections/query/reserved-filter-keys.d.mts",
+      "import": "./dist/domains/collections/query/reserved-filter-keys.mjs"
+    },
     "./query": {
       "types": "./dist/query/index.d.mts",
       "import": "./dist/query/index.mjs"
@@ -242,8 +246,6 @@
   "scripts": {
     "build": "tsdown && node scripts/postbuild.cjs",
     "dev": "tsdown --watch",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix",
     "check-types": "tsc --noEmit -p tsconfig.tests.json",
     "clean": "rimraf dist",
     "test": "vitest run",
@@ -261,7 +263,6 @@
     "@nextlyhq/adapter-mysql": "workspace:*",
     "@nextlyhq/adapter-postgres": "workspace:*",
     "@nextlyhq/adapter-sqlite": "workspace:*",
-    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/telemetry": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@types/bcryptjs": "^2.4.6",
@@ -271,30 +272,29 @@
     "@types/pg": "^8.15.5",
     "@types/react": "19.2.0",
     "@types/semver": "^7.5.8",
-    "@vitest/coverage-v8": "^4.1.0",
-    "@vitest/ui": "^4.1.0",
+    "@vitest/coverage-v8": "^5.0.5",
+    "@vitest/ui": "^5.0.5",
     "better-sqlite3": "^12.10.0",
     "esbuild": "^0.28.1",
-    "eslint": "^9.39.1",
     "mysql2": "^3.23.1",
     "nodemailer": "^9.0.1",
     "pg": "^8.16.3",
     "rimraf": "^6.1.3",
-    "sharp": "^0.35.0",
+    "sharp": "^0.35.5",
     "tsdown": "^0.23.1",
     "tsx": "^4.20.5",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.5"
   },
   "peerDependencies": {
     "@nextlyhq/adapter-mysql": "workspace:*",
     "@nextlyhq/adapter-postgres": "workspace:*",
     "@nextlyhq/adapter-sqlite": "workspace:*",
     "esbuild": "^0.28.1",
-    "next": "^14.0.0 || ^15.0.0 || ^16.0.0",
+    "next": "^15.5.28 || ^16.4.1",
     "nodemailer": "^9.0.1",
-    "sharp": "^0.35.0"
+    "sharp": "^0.35.5"
   },
   "peerDependenciesMeta": {
     "@nextlyhq/adapter-mysql": {
