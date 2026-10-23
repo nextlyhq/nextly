@@ -517,13 +517,25 @@ function editTime(
  * shown only the fields taken, a rule asking about another field sees it
  * missing and answers for a document that will never exist.
  *
- * Judged again whenever that set shrinks, because the document it was judged
- * against shrinks with it. A rule reading a sibling was answered beside that
- * sibling's live value; drop the sibling and the change keeps its own value
- * there instead, which is a different document and may be one the rule
- * refuses. Each pass leaves at least one field behind, so the answer settles
- * after at most as many passes as there are fields, on the one document the
- * save will actually write.
+ * A rule reading a sibling answers for the document it is shown, and which
+ * document that is depends on which fields are taken: a sibling taken shows
+ * its live value, a sibling left behind shows the change's own. So the set is
+ * settled in two steps, each judging the whole set on the one document it
+ * would write:
+ *
+ * 1. Shrink: judge the set, drop what the rules refuse, and judge again until
+ *    nothing is dropped. A field allowed only beside a sibling's live value
+ *    goes when that sibling does.
+ * 2. Grow: offer each field left out back, one at a time, and keep it when
+ *    the whole set with it still passes. A field refused only beside a
+ *    sibling's live value is taken once that sibling is left behind and the
+ *    change's own value allows it; and a field it in turn allows is offered
+ *    again on the next sweep.
+ *
+ * Every pass either settles or moves a field, so this ends after a number of
+ * passes bounded by the square of the field count, and the fields are the
+ * out-of-date shared fields of one document. Whatever it returns passes every
+ * rule together, on exactly the document the save writes.
  *
  * @param pending The pending change the fields would be taken into.
  * @param applyWriteRules The caller's field write rules, which remove what
@@ -535,20 +547,39 @@ export async function wholeWritableFields(
   pending: Record<string, unknown>,
   applyWriteRules: (data: Record<string, unknown>) => Promise<void>
 ): Promise<string[]> {
-  let candidates = names;
-  while (candidates.length > 0) {
+  // Of these fields, those the rules leave as they were on the document
+  // taking all of them would write.
+  const passing = async (fields: readonly string[]) => {
     const data = structuredClone({
       ...pending,
-      ...Object.fromEntries(candidates.map(name => [name, live[name]])),
+      ...Object.fromEntries(fields.map(name => [name, live[name]])),
     });
     await applyWriteRules(data);
-    const kept = candidates.filter(
+    return fields.filter(
       name => name in data && sameSharedValue(data[name], live[name])
     );
-    if (kept.length === candidates.length) return kept;
-    candidates = kept;
+  };
+
+  let taken = [...names];
+  for (;;) {
+    const kept = await passing(taken);
+    if (kept.length === taken.length) break;
+    taken = kept;
   }
-  return [];
+
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const name of names) {
+      if (taken.includes(name)) continue;
+      const offered = [...taken, name];
+      if ((await passing(offered)).length === offered.length) {
+        taken = offered;
+        grew = true;
+      }
+    }
+  }
+  // In the order the fields were asked about.
+  return names.filter(name => taken.includes(name));
 }
 
 /**

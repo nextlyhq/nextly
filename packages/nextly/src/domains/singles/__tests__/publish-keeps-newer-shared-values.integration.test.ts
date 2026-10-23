@@ -646,6 +646,48 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    // The other way round: judged beside the gate's live "closed" the fee is
+    // refused, but the gate is left behind, so the change keeps its own open
+    // gate, and beside that the fee may be written. The fee is taken.
+    it("takes a field refused only beside a sibling that is itself left behind", async () => {
+      const singles = await boot(dialect);
+      await live(singles);
+      expect(
+        (
+          await save(singles, "en", {
+            gate: "open",
+            fee: 5,
+            status: "published",
+          })
+        ).success
+      ).toBe(true);
+      // English begins a change from the open gate and the fee of 5.
+      expect(
+        (await save(singles, "en", { siteName: "EN edited" })).success
+      ).toBe(true);
+      // Spanish publishes a closed gate and a new fee, so both are out of date.
+      expect(
+        (await save(singles, "es", { gate: "closed", fee: 20 })).success
+      ).toBe(true);
+      expect((await save(singles, "es", { status: "published" })).success).toBe(
+        true
+      );
+
+      const result = await singles.takeLiveSharedValues({
+        slug: SLUG,
+        locale: "en",
+        overrideAccess: false,
+        user: { id: "u1" },
+      });
+
+      expect(result.data).toEqual({ taken: ["fee"], outOfDate: ["gate"] });
+      const pending = await pendingSnapshot("en");
+      expect({ gate: pending.gate, fee: pending.fee }).toEqual({
+        gate: "open",
+        fee: 20,
+      });
+    });
+
     it("judges taking the live values by the rules of the language asked for", async () => {
       const singles = await boot(dialect);
       await live(singles);
