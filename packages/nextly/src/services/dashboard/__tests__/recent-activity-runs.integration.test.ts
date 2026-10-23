@@ -11,6 +11,8 @@
  * @module services/dashboard/__tests__/recent-activity-runs.integration.test
  */
 
+import { randomUUID } from "crypto";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../../config";
@@ -158,7 +160,7 @@ async function feed(
   options: {
     limit?: number;
     scope?: ReadableResources;
-    before?: { createdAt: string; id: string };
+    before?: { createdAt: string; id: string; run?: string };
   } = {}
 ) {
   return t.getService("activityLogService").getRecentActivity({
@@ -237,6 +239,43 @@ describe.each(getConfiguredTestDialects())(
         [olderSave.id, 1],
       ]);
       expect(second.hasMore).toBe(false);
+    });
+
+    it("never shows part of a run again after the walk's bound cut it", async () => {
+      const t = await boot(dialect);
+      const busy = await entry(t, NOTES);
+      const older = await entry(t, NOTES);
+      // Longer than the walk reads in one page (ten rounds of a hundred), one
+      // save a second, then an older save of another note.
+      const saves = Array.from({ length: 1_005 }, (_, i) => ({
+        id: randomUUID(),
+        actor_type: "user",
+        user_id: ANA.id,
+        user_name: ANA.name,
+        user_email: ANA.email,
+        action: "update",
+        collection: NOTES,
+        entry_id: busy,
+        entry_title: "Busy",
+        subject_kind: "collection",
+        metadata: JSON.stringify({ changedFields: ["title", "updatedAt"] }),
+        created_at: new Date(T0 - i * 1_000),
+      }));
+      await t.adapter.insertMany("activity_log", saves);
+      const olderSave = await written(t, at(120), () =>
+        logSave(t, ANA, NOTES, older)
+      );
+
+      const first = await feed(t, as(ANA), { limit: 5 });
+      expect(
+        first.activities.map(row => [row.entryId, row.count, row.countAtLeast])
+      ).toEqual([[busy, 1_000, true]]);
+      expect(first.next?.run).toBeDefined();
+
+      const second = await feed(t, as(ANA), { limit: 5, before: first.next });
+      // The five saves past the bound are the same run, so they are left out:
+      // the next row is the older note's.
+      expect(second.activities.map(row => row.id)).toEqual([olderSave.id]);
     });
 
     it("does not split a run on a save its reader may not see, and does for one who may", async () => {

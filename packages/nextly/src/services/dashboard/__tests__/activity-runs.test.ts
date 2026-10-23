@@ -152,6 +152,26 @@ describe("a run of saves", () => {
     ).toEqual([2, 1, 1, 1, 1]);
   });
 
+  it("keeps an entry's update that records no changed fields out of a run", () => {
+    // Written before changed fields were recorded, or by a save that changed
+    // nothing: either way it cannot show it was not a publish.
+    expect(
+      counts([
+        row({ createdAt: before(0), metadata: null }),
+        row({ createdAt: before(1), metadata: null }),
+      ])
+    ).toEqual([1, 1]);
+  });
+
+  it("still joins a Single's saves, which record no changed fields yet", () => {
+    expect(
+      counts([
+        row({ createdAt: before(0), subjectKind: "single", metadata: null }),
+        row({ createdAt: before(1), subjectKind: "single", metadata: null }),
+      ])
+    ).toEqual([2]);
+  });
+
   it("takes in a save of an already published entry that changed only its title", () => {
     // `status` is listed only when it changed: a plain save of a live document
     // carries no `status`, so it joins the run before it.

@@ -17,7 +17,7 @@
 
 import { SETTINGS_ACTIVITY_NAMESPACES } from "../../domains/audit/settings-activity-namespaces";
 
-import { changesStatus } from "./activity-changes";
+import { changedFieldsOf, changesStatus } from "./activity-changes";
 
 /** The longest gap between two saves of one run: ten minutes. */
 export const RUN_GAP_MS = 10 * 60 * 1000;
@@ -70,16 +70,27 @@ function instantOf(value: unknown): number | undefined {
  * event in its own right; an install-level settings change names no entry or
  * Single, and each stays its own row even when it carries an id. An update
  * that changed the status is a publish or an unpublish, which stays visible as
- * its own row even when it also carried edits. The actor is the kind and the reference together, as
- * a row written before the kind was recorded is a person's.
+ * its own row even when it also carried edits. So does an entry's update that
+ * records no changed fields, written before they were recorded or by a save
+ * that changed nothing: it cannot show it was not a publish, and a run would
+ * hide one if it was. A Single's save records none yet, so a Single's saves
+ * still join, a publish of one among them. The actor is the kind and the
+ * reference together, as a row written before the kind was recorded is a
+ * person's.
  */
-function runKeyOf(row: Record<string, unknown>): string | undefined {
+export function runKeyOf(row: Record<string, unknown>): string | undefined {
   if (row.action !== "update") return undefined;
   if (typeof row.entryId !== "string" || row.entryId.length === 0) {
     return undefined;
   }
   if (isSettingsChange(row)) return undefined;
   if (changesStatus(row.metadata)) return undefined;
+  if (
+    row.subjectKind !== "single" &&
+    changedFieldsOf(row.metadata) === undefined
+  ) {
+    return undefined;
+  }
   return JSON.stringify([
     row.actorType ?? "user",
     row.userId,
@@ -117,4 +128,46 @@ export function runsOf(
     }
   }
   return runs;
+}
+
+/** A run a previous page was cut inside: its key, and its oldest save read so far. */
+export interface CutRun {
+  key: string;
+  createdAt: Date | string;
+}
+
+/**
+ * `rows`, newest first, without the leading rows that continue `cut`: the rest
+ * of a run the previous page already showed, as a floor, and must not show
+ * again as a row of its own. Stops at the first row of another run, or one
+ * past the gap. Also the last row it left out, where a page that left out
+ * every row it read continues from.
+ */
+export function afterRun(
+  rows: readonly Record<string, unknown>[],
+  cut: CutRun | undefined
+): {
+  rest: readonly Record<string, unknown>[];
+  skipped?: Record<string, unknown>;
+} {
+  if (!cut) return { rest: rows };
+  let later = instantOf(cut.createdAt);
+  let index = 0;
+  for (; index < rows.length; index++) {
+    const row = rows[index];
+    const at = instantOf(row?.createdAt);
+    if (
+      !row ||
+      runKeyOf(row) !== cut.key ||
+      later === undefined ||
+      at === undefined ||
+      later - at > RUN_GAP_MS
+    ) {
+      break;
+    }
+    later = at;
+  }
+  return index === 0
+    ? { rest: rows }
+    : { rest: rows.slice(index), skipped: rows[index - 1] };
 }

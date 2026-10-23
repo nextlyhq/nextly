@@ -15,6 +15,7 @@ import { randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
 import { type Column, type Table } from "drizzle-orm";
+import { z } from "zod";
 
 import { authorizationGroups } from "../../auth/entity-read-access";
 import type { RequestActorType } from "../../auth/request-actor";
@@ -38,7 +39,14 @@ import { existingDocumentIds } from "../lib/readable-documents";
 import type { Logger } from "../shared";
 
 import { activityMetadataOf } from "./activity-changes";
-import { isSettingsNamespace, runsOf, type ActivityRun } from "./activity-runs";
+import {
+  afterRun,
+  isSettingsNamespace,
+  runKeyOf,
+  runsOf,
+  type ActivityRun,
+  type CutRun,
+} from "./activity-runs";
 import {
   someResources,
   type ReadableResources,
@@ -182,6 +190,13 @@ export interface ActivityLogResult {
 export interface ActivityPosition {
   createdAt: string;
   id: string;
+  /**
+   * Present when the page before was cut inside a run, which it showed as a
+   * floor: the run's own key, so the page after leaves out the rest of it
+   * rather than showing it again as a row of its own. Opaque; it names only
+   * what the run's row already showed (who, which document).
+   */
+  run?: string;
 }
 
 /** Options for querying the activity log. */
@@ -682,16 +697,83 @@ function withCursor(
 }
 
 /**
+ * A position as a caller hands it back, parsed rather than trusted: an instant,
+ * an id, and a run key shaped as `runKeyOf` writes one. Nothing about it is
+ * believed beyond where to start and which run's leading rows to leave out, and
+ * those rows are the caller's own visible ones, already authorized.
+ */
+const positionSchema = z.object({
+  createdAt: z.string().datetime(),
+  id: z.string().min(1),
+  run: z
+    .string()
+    .max(2_000)
+    .refine(isRunKey, "Not a run this feed wrote.")
+    .optional(),
+});
+
+/** Whether `value` is a run key as `runKeyOf` writes one: a JSON array of five scalars. */
+function isRunKey(value: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return (
+      Array.isArray(parsed) &&
+      parsed.length === 5 &&
+      parsed.every(part => part === null || typeof part === "string")
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Where the feed's first read starts, and the cut run it continues, if any. */
+interface FirstRead {
+  start: ActivityCursor | number;
+  cut?: CutRun;
+}
+
+/**
  * Where the feed's first read starts: after the previous page's position, or a
  * number of trail rows in. A position that cannot be read starts nowhere
  * (`null`) rather than at the top, which would show the first page again as the
- * second.
+ * second. A position that is not one this feed wrote is refused outright.
  */
 function firstReadOf(
   options: ActivityLogQueryOptions | undefined
-): ActivityCursor | number | null {
-  if (options?.before) return cursorOf(options.before) ?? null;
-  return options?.offset ?? 0;
+): FirstRead | null {
+  if (!options?.before) return { start: options?.offset ?? 0 };
+  const parsed = positionSchema.safeParse(options.before);
+  if (!parsed.success) {
+    throw NextlyError.validation({
+      errors: parsed.error.issues.map(issue => ({
+        path: ["before", ...issue.path].join("."),
+        code: "invalid",
+        message: issue.message,
+      })),
+    });
+  }
+  const cursor = cursorOf(parsed.data);
+  if (!cursor) return null;
+  return parsed.data.run
+    ? {
+        start: cursor,
+        cut: { key: parsed.data.run, createdAt: cursor.createdAt },
+      }
+    : { start: cursor };
+}
+
+/**
+ * Where the feed continues after `row`. When the run `row` closes was cut by the
+ * walk's bound, its key travels too, so the page after leaves out the rest of
+ * that run.
+ */
+function continuingAfter(
+  row: Record<string, unknown>,
+  cut: boolean
+): ActivityPosition | undefined {
+  const position = positionOf(row);
+  const key = cut ? runKeyOf(row) : undefined;
+  return position && key ? { ...position, run: key } : position;
 }
 
 /**
@@ -769,14 +851,33 @@ function pageOf(
 ): FeedPage {
   const shown = runs.slice(0, limit);
   const hasMore = runs.length > limit || !end;
+  const lastCutShort = !end && runs.length <= limit;
   const last = shown[shown.length - 1];
-  const next = hasMore && last ? positionOf(last.oldest) : undefined;
-  return {
-    shown,
-    lastCutShort: !end && runs.length <= limit,
-    hasMore,
-    ...(next ? { next } : {}),
-  };
+  const next =
+    hasMore && last ? continuingAfter(last.oldest, lastCutShort) : undefined;
+  return { shown, lastCutShort, hasMore, ...(next ? { next } : {}) };
+}
+
+/**
+ * The page the walk's `rows` make once the rest of a run the previous page was
+ * cut inside is left out.
+ *
+ * A page that left out every row it read, the run being longer than the walk's
+ * bound again, shows nothing and continues from the last row it left out, still
+ * carrying the run: each page reads at most the bound and moves strictly older,
+ * so the run is passed in steps and never read twice.
+ */
+function feedPage(
+  rows: readonly Record<string, unknown>[],
+  end: boolean,
+  limit: number,
+  cut: CutRun | undefined
+): FeedPage {
+  const { rest, skipped } = afterRun(rows, cut);
+  const page = pageOf(runsOf(rest), end, limit);
+  if (page.shown.length > 0 || end || !skipped) return page;
+  const next = continuingAfter(skipped, true);
+  return { ...page, ...(next ? { next } : {}) };
 }
 
 /** A stored instant as the feed publishes it: ISO text, or the driver's own text. */
@@ -951,8 +1052,8 @@ export class ActivityLogService extends BaseService {
     // The one clamp for every door onto the feed, the endpoint's and the
     // widget source's: what any widget query is held to.
     const limit = effectiveWidgetLimit(options?.limit);
-    const start = firstReadOf(options);
-    if (start === null) return { activities: [], hasMore: false };
+    const first = firstReadOf(options);
+    if (first === null) return { activities: [], hasMore: false };
 
     // Fail-closed default: an omitted scope must deny, not grant. This feed
     // exposes entry titles across every collection, so a caller that forgets
@@ -973,11 +1074,11 @@ export class ActivityLogService extends BaseService {
       // and AUTHORIZED like the rest, then dropped.
       const visible = await this.visibleActivity(
         where,
-        start,
+        first.start,
         caller,
-        rows => runsOf(rows).length > limit
+        rows => runsOf(afterRun(rows, first.cut).rest).length > limit
       );
-      const page = pageOf(runsOf(visible.rows), visible.end, limit);
+      const page = feedPage(visible.rows, visible.end, limit, first.cut);
       return {
         activities: page.shown.map((run, index) =>
           this.mapRun(

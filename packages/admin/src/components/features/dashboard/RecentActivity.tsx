@@ -77,8 +77,8 @@ const RepeatCount: React.FC<{ activity: Activity }> = ({ activity }) => (
   <span className="text-muted-foreground font-medium">
     <span aria-hidden="true"> · </span>
     <span className="sr-only">, </span>
-    {activity.count}
-    {activity.countAtLeast ? "+" : ""} times
+    {activity.count ?? 1}
+    {activity.countAtLeast === true ? "+" : ""} times
   </span>
 );
 
@@ -154,7 +154,10 @@ const ActivityItem: React.FC<{ activity: Activity; now: number }> = ({
               {activity.target}
             </span>
           )}
-          {activity.count > 1 && <RepeatCount activity={activity} />}
+          {/* A floor is drawn even at one: "1+" says the server stopped reading inside it. */}
+          {((activity.count ?? 1) > 1 || activity.countAtLeast === true) && (
+            <RepeatCount activity={activity} />
+          )}
         </p>
 
         <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-muted-foreground">
