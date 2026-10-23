@@ -16,7 +16,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import { parseSource } from "@nextlyhq/module-specifiers/parse-source";
+import { Visitor } from "oxc-parser";
+import type { MethodDefinition, Property } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 
 /** The package's whole source tree. */
@@ -37,51 +39,54 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
-/** The name of the function or method a node sits in. */
-function enclosingName(node: ts.Node): string {
-  for (let at: ts.Node | undefined = node.parent; at; at = at.parent) {
-    if (
-      (ts.isMethodDeclaration(at) || ts.isFunctionDeclaration(at)) &&
-      at.name
-    ) {
-      return at.name.getText();
-    }
-  }
-  return "(module)";
-}
-
 /**
  * Every `.insert(...)` whose target names the delivery table, as
  * `file#enclosing function`. Matched on the argument's text: the table is
  * reached as `deliveries`, `emailDeliveries…` or `"email_deliveries"`, and an
  * insert into anything else names none of them.
+ *
+ * The enclosing name is the nearest named function declaration or method,
+ * class or object-literal, around the call; arrow functions and function
+ * expressions are not names a reader looks for, so they are passed through.
  */
 function deliveryInserts(): string[] {
   const found: string[] = [];
   for (const file of sourceFiles(SRC)) {
     const text = readFileSync(file, "utf8");
     if (!/deliver/i.test(text)) continue;
-    const source = ts.createSourceFile(
-      file,
-      text,
-      ts.ScriptTarget.Latest,
-      true
-    );
-    const visit = (node: ts.Node): void => {
-      if (
-        ts.isCallExpression(node) &&
-        ts.isPropertyAccessExpression(node.expression) &&
-        node.expression.name.text === "insert" &&
-        node.arguments.some(arg =>
-          /deliveries|email_deliveries/i.test(arg.getText())
-        )
-      ) {
-        const at = relative(SRC, file).split(sep).join("/");
-        found.push(`${at}#${enclosingName(node)}`);
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(source);
+    const at = relative(SRC, file).split(sep).join("/");
+    // One entry per function or method the walk is inside, null for one with
+    // no name, so the nearest named one is the last non-null entry.
+    const enclosing: (string | null)[] = [];
+    const methodName = (node: MethodDefinition | Property): string =>
+      text.slice(node.key.start, node.key.end);
+    new Visitor({
+      FunctionDeclaration: node => enclosing.push(node.id?.name ?? null),
+      "FunctionDeclaration:exit": () => enclosing.pop(),
+      MethodDefinition: node => enclosing.push(methodName(node)),
+      "MethodDefinition:exit": () => enclosing.pop(),
+      Property: node => {
+        if (node.method) enclosing.push(methodName(node));
+      },
+      "Property:exit": node => {
+        if (node.method) enclosing.pop();
+      },
+      CallExpression: node => {
+        const callee = node.callee;
+        if (
+          callee.type === "MemberExpression" &&
+          !callee.computed &&
+          callee.property.type === "Identifier" &&
+          callee.property.name === "insert" &&
+          node.arguments.some(arg =>
+            /deliveries|email_deliveries/i.test(text.slice(arg.start, arg.end))
+          )
+        ) {
+          const name = enclosing.findLast(entry => entry !== null);
+          found.push(`${at}#${name ?? "(module)"}`);
+        }
+      },
+    }).visit(parseSource(text, file).program);
   }
   return found.sort();
 }

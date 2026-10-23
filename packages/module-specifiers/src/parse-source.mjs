@@ -1,4 +1,4 @@
-import { parseSync } from "oxc-parser";
+import { parseSync, visitorKeys } from "oxc-parser";
 
 /**
  * Parse one JavaScript or TypeScript file, refusing a file the parser could not read.
@@ -25,4 +25,26 @@ export function parseSource(text, fileName) {
     );
   }
   return parsed;
+}
+
+/**
+ * Visit `node` and everything under it in source order, each with the chain of
+ * nodes above it, nearest last.
+ *
+ * oxc's nodes carry no parent links, and a check that asks what ENCLOSES a node
+ * — the function it sits in, the call it is an argument of — needs one. Built
+ * from oxc's own `visitorKeys`, so every child the parser defines is reached,
+ * type annotations included. `visit` returning `false` skips that node's
+ * children.
+ */
+export function walk(node, visit, ancestors = []) {
+  if (visit(node, ancestors) === false) return;
+  ancestors.push(node);
+  for (const key of visitorKeys[node.type] ?? []) {
+    const child = node[key];
+    for (const each of Array.isArray(child) ? child : [child]) {
+      if (each && typeof each.type === "string") walk(each, visit, ancestors);
+    }
+  }
+  ancestors.pop();
 }
