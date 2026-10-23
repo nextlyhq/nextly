@@ -871,6 +871,51 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("a release's readiness", () => {
+      it("reports a pending field-group edit its author may not write, where only field groups have rules", async () => {
+        const { item } = await trusted.create({
+          collection: "groupdrafted",
+          data: {
+            title: "rel",
+            status: "published",
+            one: { heading: "h", ...guardedValues("rel") },
+          },
+        } as never);
+        const id = String(item.id);
+        const live = await stored("groupdrafted", id);
+        // A pending change to `locked`, which the editor may not write.
+        await checkedAs("allowed").update({
+          collection: "groupdrafted",
+          id,
+          data: { one: { ...(live.one as Doc), locked: "locked-rel-draft" } },
+        } as never);
+        const handler = t.getService("collectionsHandler") as unknown as {
+          releasePublishIssues: (params: {
+            collectionName: string;
+            entryIds: readonly string[];
+            user: Doc;
+            action: "publish" | "unpublish";
+          }) => Promise<Map<string, { path?: string }[]>>;
+        };
+        const issuesFor = async (user: Doc) =>
+          (
+            await handler.releasePublishIssues({
+              collectionName: "groupdrafted",
+              entryIds: [id],
+              user,
+              action: "publish",
+            })
+          ).get(id) ?? [];
+
+        // As the publish would: refused for the editor, and not for the
+        // allowed person, who may write it.
+        expect(
+          (await issuesFor({ id: editorId })).map(issue => issue.path)
+        ).toEqual(["one.locked"]);
+        expect(await issuesFor({ id: allowedId, email: ALLOWED })).toEqual([]);
+      });
+    });
+
     describe("an update that removes a stored instance", () => {
       it("keeps one holding a value the updater may not change", async () => {
         const id = await seeded("rm");

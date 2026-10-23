@@ -1381,6 +1381,55 @@ describe("FieldGroupDataService", () => {
       expect(row.code ?? null).toBeNull();
     });
 
+    describe("a single field group's stored instance", () => {
+      /** A stored `owned` instance, and a rule writable only for `allowedId`. */
+      function storedOwned(allowedId: string) {
+        ctx.registry.registerComponent("owned", {
+          slug: "owned",
+          tableName: "comp_owned",
+          fields: [
+            { name: "title", type: "text" },
+            { name: "code", type: "text" },
+          ],
+        });
+        registerFieldFunctions("fieldGroup", "owned", [
+          {
+            name: "code",
+            access: { update: ({ id }: { id?: string }) => id === allowedId },
+          },
+        ]);
+        ctx.adapter.select.mockResolvedValue([
+          { id: "real-1", _parent_id: "e1", _order: 0, code: "C0" },
+        ]);
+      }
+      const save = (data: Record<string, unknown>) =>
+        ctx.service.saveComponentData({
+          parentId: "e1",
+          parentTable: "dc_pages",
+          access: CHECKED,
+          fields: [{ name: "owned", type: "component", component: "owned" }],
+          data: { owned: data },
+        });
+      const written = () =>
+        ctx.adapter.update.mock.calls.map(
+          ([table, row]: unknown[]) =>
+            [table, (row as Record<string, unknown>).code] as const
+        );
+
+      it("is judged by the stored row's id, not an id the caller sends", async () => {
+        // Allowed only for an id the caller can name but the row does not have.
+        storedOwned("spoofed");
+        await save({ id: "spoofed", title: "t", code: "X" });
+        expect(written()).toEqual([["comp_owned", undefined]]);
+      });
+
+      it("tells a rule the stored row's id when the caller sends none", async () => {
+        storedOwned("real-1");
+        await save({ title: "t", code: "Y" });
+        expect(written()).toEqual([["comp_owned", "Y"]]);
+      });
+    });
+
     it("does not update a stored block through a type it was not stored as", async () => {
       ctx.registry.registerComponent("secure", {
         slug: "secure",
