@@ -339,6 +339,37 @@ describe("useCurrentUserPermissions", () => {
     expect(result.current.hasPermission("read-posts")).toBe(false);
   });
 
+  it("keeps an end an answer named, though a later answer drops it before it arrives", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    server.capabilities = answering({ read: true }, Date.now() + 60_000);
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(newClient()),
+    });
+    await waitFor(() => expect(result.current.hasAnswer).toBe(true));
+
+    // A refresh a second before the end: the content answer comes back at
+    // once with no end, and the permission list, as it stood then, after it.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(59_000);
+    });
+    server.capabilities = answering({ read: true }, null);
+    server.permissionsDelayMs = 2_000;
+    await act(async () => {
+      result.current.retry();
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+    // POPULATION CONTROL: the end is gone from the answer that named it.
+    expect(capabilityAsks()).toBeGreaterThan(1);
+
+    server.permissions = new Error("permissions unavailable");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+
+    expect(result.current.hasAnswer).toBe(false);
+  });
+
   it("stops counting an answer once a change invalidates it, until a new one arrives", async () => {
     server.capabilities = answering({ read: true });
     const client = newClient();

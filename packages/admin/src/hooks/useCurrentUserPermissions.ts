@@ -3,7 +3,7 @@ import {
   useQueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
 import { LOCALE_PARAM } from "../constants/search-params";
@@ -248,6 +248,12 @@ type CurrentUserPermissions = AnswerState & {
   ) => boolean;
 };
 
+/** The latest of `ends` that has passed by `now`, or null. */
+function latestPassed(ends: readonly number[], now: number): number | null {
+  const passed = ends.filter(end => end <= now);
+  return passed.length === 0 ? null : Math.max(...passed);
+}
+
 /**
  * Where one query's answer stands, once it may no longer hold: an answer that
  * arrived before `endedAt`, the end of the role assignment it was given for,
@@ -354,52 +360,74 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // the admin offering what an ended role allowed.
   const validUntil = answer.data?.validUntil ?? null;
   const answeredAt = answer.dataUpdatedAt;
-  // The end, once it has passed. Read at render, so an answer already past its
-  // end when this mounts never counts, not even until a timer fires. The
-  // latest end the timer reached is also kept apart from the answer that gave
-  // it: a refresh can replace `validUntil` (with null, once the ending
-  // assignment is gone) while the request beside it fails, and that request's
-  // answer from before the end must still not count.
-  const [reachedEnd, setReachedEnd] = useState<number | null>(null);
-  const endedNow =
-    validUntil !== null && Date.now() >= validUntil ? validUntil : null;
-  const endedAt =
-    endedNow === null || reachedEnd === null
-      ? (endedNow ?? reachedEnd)
-      : Math.max(endedNow, reachedEnd);
+  // Every end an answer has named, kept apart from the answer that named it:
+  // a later answer can drop an end (with null, once the ending assignment is
+  // gone) before that end arrives, and the other request's answer from before
+  // it must still not count once it passes. Recorded in the render that first
+  // sees it, so no ordering of responses and timers can lose one.
+  const [ends, setEnds] = useState<readonly number[]>([]);
+  if (validUntil !== null && !ends.includes(validUntil)) {
+    setEnds([...ends, validUntil]);
+  }
+  const knownEnds = useMemo(
+    () =>
+      validUntil === null || ends.includes(validUntil)
+        ? ends
+        : [...ends, validUntil],
+    [ends, validUntil]
+  );
+  // The latest end that has passed, read at render, so an answer already past
+  // its end when this mounts never counts, not even until a timer fires.
+  const endedAt = latestPassed(knownEnds, Date.now());
+  const permissionsAnsweredAt = permissionsQuery.dataUpdatedAt;
+  const [, setEndsReached] = useState(0);
   useEffect(() => {
-    if (validUntil === null) return undefined;
+    const askAgain = (): void => {
+      setEndsReached(reached => reached + 1);
+      // A refresh already under way may have been asked before the end, and
+      // its answer would arrive after it looking current, so it is replaced
+      // rather than joined: only an answer asked after the end counts.
+      void refetch();
+      void refetchAnswer();
+    };
+    const now = Date.now();
+    const passed = latestPassed(knownEnds, now);
+    // An end has passed and an answer from before it is all there is.
+    if (
+      passed !== null &&
+      (permissionsAnsweredAt < passed || answeredAt < passed)
+    ) {
+      askAgain();
+      return undefined;
+    }
+    // The next end to come, and, for an answer the server gave after its own
+    // end, a check at most once a second for the answer that follows it.
+    const upcoming = knownEnds.filter(end => end > now);
+    const recheck =
+      validUntil !== null && validUntil <= now ? now + MIN_RECHECK_MS : null;
+    const at = Math.min(...upcoming, recheck ?? Infinity);
+    if (at === Infinity) return undefined;
     let timer: ReturnType<typeof setTimeout>;
     const arm = (): void => {
-      const remaining = validUntil - Date.now();
+      const remaining = at - Date.now();
       // Timers overflow past about 24.8 days, so a later end is waited for in
       // steps rather than asked about early.
       if (remaining > MAX_TIMER_MS) {
         timer = setTimeout(arm, MAX_TIMER_MS);
         return;
       }
-      timer = setTimeout(
-        () => {
-          setReachedEnd(reached =>
-            reached === null ? validUntil : Math.max(reached, validUntil)
-          );
-          // A refresh already under way may have been asked before the end,
-          // and its answer would arrive after it looking current, so it is
-          // replaced rather than joined: only an answer asked after the end
-          // counts.
-          void refetch();
-          void refetchAnswer();
-        },
-        // An answer the server gave after its own end is asked about again at
-        // most once a second; any other is asked about at its end.
-        answeredAt >= validUntil
-          ? Math.max(remaining, MIN_RECHECK_MS)
-          : Math.max(remaining, 0)
-      );
+      timer = setTimeout(askAgain, Math.max(remaining, 0));
     };
     arm();
     return () => clearTimeout(timer);
-  }, [validUntil, answeredAt, refetch, refetchAnswer]);
+  }, [
+    knownEnds,
+    validUntil,
+    answeredAt,
+    permissionsAnsweredAt,
+    refetch,
+    refetchAnswer,
+  ]);
 
   // A change the admin made invalidates both answers; the old ones stop
   // counting then, not once a refresh succeeds, since a refresh that fails

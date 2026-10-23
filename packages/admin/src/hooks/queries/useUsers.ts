@@ -10,7 +10,6 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
-
 import {
   createUser,
   deleteUser,
@@ -352,6 +351,12 @@ export function useUpdateUser(): UseMutationResult<
         queryClient.setQueryData(["users", userId], context.previousUser);
       }
     },
+    // What the signed-in user may do is asked again only once the change has
+    // landed: a failed edit changed nothing, and invalidating would leave the
+    // admin without an answer if that refresh then failed too.
+    onSuccess: () => {
+      invalidateCurrentUserAccess(queryClient);
+    },
     onSettled: (_, __, { userId }) => {
       // Always refetch after mutation (success or error) to ensure cache is up-to-date
       void queryClient.invalidateQueries({ queryKey: ["users"] });
@@ -360,7 +365,6 @@ export function useUpdateUser(): UseMutationResult<
       // avatar and name are now stale. /me is small, so refresh it either way
       // rather than plumb the current user's id in here to compare.
       void queryClient.invalidateQueries({ queryKey: currentUserKey });
-      invalidateCurrentUserAccess(queryClient);
     },
   });
 }

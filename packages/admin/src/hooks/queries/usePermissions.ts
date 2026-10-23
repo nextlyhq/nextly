@@ -7,7 +7,6 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
-
 import {
   deletePermission,
   fetchPermissions,
@@ -267,10 +266,15 @@ export function useUpdatePermission(): UseMutationResult<
         );
       }
     },
+    // What the signed-in user may do is asked again only once the change has
+    // landed: a failed edit changed nothing, and invalidating would leave the
+    // admin without an answer if that refresh then failed too.
+    onSuccess: () => {
+      invalidateCurrentUserAccess(queryClient);
+    },
     onSettled: (_, __, { permissionId }) => {
       // Always refetch after mutation (success or error) to ensure cache is up-to-date
       void queryClient.invalidateQueries({ queryKey: ["permissions"] });
-      invalidateCurrentUserAccess(queryClient);
       void queryClient.invalidateQueries({
         queryKey: ["permissions", permissionId],
       });
