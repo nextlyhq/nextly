@@ -34,7 +34,7 @@
   },
   "devDependencies": {
     "tailwindcss": "^4.3.2",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.5"
   },
   "publishConfig": {
     "access": "public",

@@ -548,6 +548,9 @@
         "*.md",
         "package.json",
         "vitest.config.ts",
+        // A JavaScript-only package's config, so it keeps no TypeScript that
+        // nothing type-checks.
+        "vitest.config.mjs",
         "tsconfig.json",
         // Scripts and build configs are read BY tests, not only by builds: the ui suite derives
         // its entry-point guards from `scripts/published-entries.ts`, which the tsdown configs

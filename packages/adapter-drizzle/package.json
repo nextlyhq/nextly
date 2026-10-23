@@ -66,12 +66,12 @@
   "devDependencies": {
     "@nextlyhq/tsconfig": "workspace:*",
     "@types/node": "^22.20.5",
-    "@vitest/coverage-v8": "^4.1.0",
-    "@vitest/ui": "^4.1.0",
+    "@vitest/coverage-v8": "^5.0.5",
+    "@vitest/ui": "^5.0.5",
     "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.5"
   },
   "repository": {
     "type": "git",

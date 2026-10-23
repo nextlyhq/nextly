@@ -34,12 +34,12 @@
     "@nextlyhq/ui": "workspace:^",
     "drizzle-orm": "1.0.0-rc.4",
     "mysql2": "^3.23.1",
-    "next": "^16.2.11",
+    "next": "^16.4.2",
     "nextly": "workspace:^",
     "pg": "^8.16.3",
     "react": "19.2.0",
     "react-dom": "19.2.0",
-    "sharp": "^0.35.0"
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@nextlyhq/admin-css": "workspace:^",
@@ -57,6 +57,6 @@
     "postcss": "^8.5.6",
     "tailwindcss": "^4.3.2",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.5"
   }
 }

@@ -1937,7 +1937,7 @@ jobs:
   # only when NO file matches its filters; with both suites named in a single
   # command a rename of either one leaves the other matching, so vitest runs
   # that one and exits 0 with the missing suite silently dropped. Measured on
-  # 4.1.10: two named, one absent -> `Test Files 1 passed`, exit 0; one named
+  # 4.1.10 and 5.0.5: two named, one absent -> `Test Files 1 passed`, exit 0; one named
   # and absent -> `No test files found, exiting with code 1`. Split, each name
   # is the sole filter of its step, so losing it means zero matches and a red.
   #

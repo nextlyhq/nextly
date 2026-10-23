@@ -51,7 +51,7 @@
     "@nextlyhq/blocks-engine": "workspace:*"
   },
   "peerDependencies": {
-    "next": "^15.0.0 || ^16.0.0",
+    "next": "^15.5.28 || ^16.4.1",
     "nextly": "workspace:*",
     "react": "^19.0.0"
   },
@@ -75,7 +75,7 @@
     "rimraf": "^6.1.3",
     "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.5"
   },
   "publishConfig": {
     "access": "public",

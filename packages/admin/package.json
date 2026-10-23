@@ -48,7 +48,7 @@
   },
   "peerDependencies": {
     "@nextlyhq/ui": "workspace:^",
-    "next": "^14.0.0 || ^15.0.0 || ^16.0.0",
+    "next": "^15.5.28 || ^16.4.1",
     "nextly": "0.0.2-alpha.68",
     "react": "^18.0.0 || ^19.0.0",
     "react-dom": "^18.0.0 || ^19.0.0"
@@ -70,8 +70,8 @@
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
     "@vitejs/plugin-react": "^5.1.0",
-    "@vitest/coverage-v8": "^4.1.0",
-    "@vitest/ui": "^4.1.0",
+    "@vitest/coverage-v8": "^5.0.5",
+    "@vitest/ui": "^5.0.5",
     "autoprefixer": "^10.4.21",
     "chokidar": "^5.0.0",
     "jsdom": "^27.1.0",
@@ -84,7 +84,7 @@
     "tsdown": "^0.23.1",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.5"
   },
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",
