@@ -22,6 +22,10 @@
  * the last pass without anyone listing it. `scripts/lint.test.mjs` holds that
  * the passes together lint exactly the files one pass would.
  *
+ * The scaffold templates, which the repository's configuration leaves out, get
+ * a fourth pass under their own configuration, which runs only the guard that
+ * reads call sites of the Tabs a scaffolded project depends on.
+ *
  * Usage: `pnpm lint` (through scripts/bounded.mjs); any further arguments, such
  * as `--fix`, go to every pass.
  */
@@ -43,6 +47,18 @@ export const NAMED_PASSES = [
   ["packages/nextly"],
   ["packages/admin", "packages/ui", "packages/builder"],
 ];
+
+/** The templates' pass: their configuration, then their directory. */
+export const TEMPLATES_PASS = [
+  "-c",
+  "oxlint.templates.config.mjs",
+  "templates",
+];
+
+/** Every pass `pnpm lint` runs, the repository's and then the templates'. */
+export function everyPass(extra = []) {
+  return [...passes(CONFIG, extra), [...TEMPLATES_PASS, ...extra]];
+}
 
 /** The oxlint arguments of every pass, each followed by `extra`. */
 export function passes(config = CONFIG, extra = []) {
@@ -80,7 +96,7 @@ function runPass(args) {
 
 function main(extra) {
   // Every pass runs even after one fails, so a single run reports everything.
-  const results = passes(CONFIG, extra).map(runPass);
+  const results = everyPass(extra).map(runPass);
   process.exitCode = results.every(Boolean) ? 0 : 1;
 }
 

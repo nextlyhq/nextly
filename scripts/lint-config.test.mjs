@@ -22,11 +22,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
 import committed from "../oxlint.config.mjs";
-import { oxlintCommand } from "./lint.mjs";
+import { everyPass, oxlintCommand, TEMPLATES_PASS } from "./lint.mjs";
 
 const root = join(import.meta.dirname, "..");
 const nextly = join(root, "packages/nextly");
@@ -143,7 +144,7 @@ function withoutExemptions(rule) {
  * file there without its React rules.) A plugin named by a relative path is
  * given its absolute one. The directory is the only thing removed.
  */
-function lintProbes(probes) {
+function lintProbes(probes, config = committed) {
   const parent = join(root, ".turbo");
   mkdirSync(parent, { recursive: true });
   const dir = mkdtempSync(join(parent, "lint-probes-"));
@@ -152,14 +153,14 @@ function lintProbes(probes) {
       mkdirSync(dirname(join(dir, path)), { recursive: true });
       writeFileSync(join(dir, path), source, { flag: "wx" });
     }
-    const config = join(dir, "oxlint.config.mjs");
+    const written = join(dir, "oxlint.config.mjs");
     writeFileSync(
-      config,
-      `export default ${JSON.stringify(withRootPlugins(syntacticOnly(committed)))};\n`,
+      written,
+      `export default ${JSON.stringify(withRootPlugins(syntacticOnly(config)))};\n`,
       { flag: "wx" }
     );
     const report = runOxlint(
-      ["-c", config, "-f", "json", ...Object.keys(probes)],
+      ["-c", written, "-f", "json", ...Object.keys(probes)],
       dir
     );
     expect(report.number_of_files, "every probe is a file lint reads").toBe(
@@ -362,6 +363,46 @@ describe("each guard, at a path no allowlist names", () => {
         `${rule} at ${path}`
       ).toBeGreaterThan(0);
     }
+  }, 120_000);
+});
+
+// The tab-indicator guard reads every file a call site can live in: each
+// extension JSX is legal in, outside `src` as well as in it, and in an app as
+// well as a package. A path the committed `files` miss is a call site never
+// read, and the repository-wide silence would look the same.
+describe("the tab-indicator guard, wherever a call site can live", () => {
+  const violation = ext =>
+    `import { TabsTrigger } from "@nextlyhq/ui";\nexport const probe = <TabsTrigger value="a" className="border-b-0" />;\n// ${ext}\n`;
+  const probes = {
+    "packages/admin/src/lint-probe-tab.tsx": violation("tsx"),
+    "packages/create-nextly-app/examples/lint-probe-tab.jsx": violation("jsx"),
+    "apps/playground/app/lint-probe-tab.js": violation("js"),
+    // Named like build output, and an ordinary route segment all the same.
+    "apps/playground/app/build/lint-probe-tab.tsx": violation("tsx"),
+  };
+
+  it("reports a repainted indicator in each of them", () => {
+    const counts = countsPerFile(lintProbes(probes), "nextly(tab-indicator)");
+    expect(counts).toEqual(
+      Object.fromEntries(Object.keys(probes).map(path => [path, 1]))
+    );
+  }, 120_000);
+
+  // A scaffolded project depends on `@nextlyhq/ui`, so a template is a call
+  // site too. The repository's configuration ignores the templates, so they
+  // are read by a pass of their own, with its own configuration.
+  it("reports one in a scaffold template, through the pass `pnpm lint` runs there", async () => {
+    expect(everyPass()).toContainEqual(TEMPLATES_PASS);
+    const [, configFile, templates] = TEMPLATES_PASS;
+    const { default: config } = await import(
+      pathToFileURL(join(root, configFile)).href
+    );
+    const probe = `${templates}/base/src/app/lint-probe-tab.tsx`;
+    const counts = countsPerFile(
+      lintProbes({ [probe]: violation("tsx") }, config),
+      "nextly(tab-indicator)"
+    );
+    expect(counts).toEqual({ [probe]: 1 });
   }, 120_000);
 });
 

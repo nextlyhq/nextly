@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 /**
- * The directories the tab-contract scan walks.
+ * The directories this package's cross-package scans read from.
  *
  * Real paths, not globs, because these are handed to the WATCHER. chokidar
  * removed glob support in v4, so `watcher.add("<root>/packages/**")` subscribes
@@ -60,25 +60,15 @@ export default defineConfig({
       "**/package.json/**",
       "**/vitest.config.*/**",
       "**/vite.config.*/**",
-      // Every extension the tab-contract scan reads, not only the TypeScript
-      // ones. That scan walks the repository with `readFileSync`, so a `.js` or
-      // `.jsx` call site is in no module graph Vitest can invalidate — without
-      // this a watch session keeps showing the previous green after a real
-      // violation is added. Kept in step with `CALL_SITE_EXTENSIONS` in
-      // `src/components/__tests__/tabs-contract.test.ts`, which asserts this
-      // list covers it.
+      // Every extension the cross-package scans read, not only the TypeScript
+      // ones. Those scans read with `readFileSync`, so a `.js` or `.jsx` file is
+      // in no module graph Vitest can invalidate — without this a watch session
+      // keeps showing the previous green after a real violation is added.
       "**/src/**/*.{ts,tsx,js,jsx}",
-      // And every ROOT that scan walks, not only this package, and the WHOLE
-      // of each root rather than its `src`. The traversal recurses from the
-      // root, so `packages/foo/examples/demo.jsx` is a call site it reads — and
-      // a `src`-only trigger left that file able to gain a violation with the
-      // suite never rerunning. The scan's reach is what these have to match,
-      // not the convention most files happen to follow.
-      //
-      // Absolute for the reason given above. The contract in
-      // `src/components/__tests__/tabs-contract.test.ts` runs every file the
-      // scan actually reads through the matcher Vitest uses, so a glob that
-      // matches nothing fails there rather than passing as a string.
+      // And every ROOT those scans reach, not only this package, and the WHOLE
+      // of each root rather than its `src`: the comment guard reads all of
+      // `apps/playground`, whose routes live under `app/`. Absolute for the
+      // reason given above.
       `${REPO_ROOT}packages/**/*.{ts,tsx,js,jsx}`,
       `${REPO_ROOT}apps/**/*.{ts,tsx,js,jsx}`,
       `${REPO_ROOT}templates/**/*.{ts,tsx,js,jsx}`,
