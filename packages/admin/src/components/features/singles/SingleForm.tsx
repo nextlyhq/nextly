@@ -73,6 +73,7 @@ import {
   passwordFieldNames,
   type EntryFormIntent,
 } from "@admin/components/features/entries/EntryForm/useEntryForm";
+import { useRefusedForm } from "@admin/components/features/entries/EntryForm/useRefusedForm";
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
 import { LanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
@@ -101,6 +102,7 @@ import {
   useDocumentAutosave,
 } from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
@@ -185,9 +187,14 @@ export interface SingleFormProps {
   schema: SingleSchema;
   /** Current document data */
   document: SingleDocumentData;
-  /** Callback when form is successfully submitted */
+  /**
+   * Writes a submission. With the values, the form itself: a publish refused
+   * over out-of-date shared fields is resolved on the form as it is when the
+   * author acts on the refusal, not as it was submitted.
+   */
   onSubmit: (
-    data: Record<string, unknown>
+    data: Record<string, unknown>,
+    form: RefusedForm
   ) => Promise<SingleDocumentData | void>;
   /** Whether the form is currently submitting */
   isSubmitting?: boolean;
@@ -534,10 +541,42 @@ export function SingleForm({
   const ownSave = useRef<{ inFlight: boolean; storedKey?: string }>({
     inFlight: false,
   });
+
+  //
+  // The synchronous half of the write gate. `isSubmitting` is render state: it
+  // publishes one render behind the mutation, so two submissions in the same
+  // turn both read false and both write. The latch is set the moment the
+  // first submission enters and released when it settles, closing that gap.
+  // A refused publish's recovery takes it too.
+  //
+  const submissionLatch = useRef(false);
+  // Whether this Single's writes are held, as decided below once the lock and
+  // the version on screen are known; read when a recovery runs.
+  const writesHeldNow = useRef(false);
+
+  // The form as a refused publish's way out reaches it: saved as the pending
+  // change the way a status-less save sends it, given the live values it
+  // takes when the Single carrying them arrives, and run inside this form's
+  // own write gate.
+  const { refusedForm, adoptArrived } = useRefusedForm(
+    form,
+    values =>
+      withoutPlaceholders(
+        schema.fields,
+        mapIntentToPayload(values, "save-working-draft", blankPasswordFields)
+      ),
+    { writesHeld: () => writesHeldNow.current, latch: submissionLatch }
+  );
+
   useEffect(() => {
     if (!document) return;
     const resetKey = singleResetKey(document, locale);
-    if (lastResetKeyRef.current === resetKey) return;
+    if (lastResetKeyRef.current === resetKey) {
+      // Taking the live values keeps the Single's key, so there is no reset
+      // to follow; the fields taken still have to show what arrived.
+      adoptArrived(defaultValuesRef.current);
+      return;
+    }
     const place = JSON.stringify([document.id, locale ?? null]);
     const sameDocument = lastResetPlaceRef.current === place;
     lastResetKeyRef.current = resetKey;
@@ -546,7 +585,8 @@ export function SingleForm({
       sameDocument &&
       (ownSave.current.inFlight || resetKey === ownSave.current.storedKey);
     form.reset(defaultValuesRef.current, { keepDirtyValues: echoOfOwnSave });
-  }, [document, locale, form]);
+    adoptArrived(defaultValuesRef.current);
+  }, [document, locale, form, adoptArrived]);
 
   // submitCount gates the top-level "Please fix" toast so the user
   // doesn't see it until they actually click Save Draft / Publish.
@@ -616,14 +656,9 @@ export function SingleForm({
   // component creates, so a context read here would report no version on
   // screen even while one is.
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
-
-  //
-  // The synchronous half of the same gate. `isSubmitting` is render state: it
-  // publishes one render behind the mutation, so two submissions in the same
-  // turn both read false and both write. The latch is set the moment the
-  // first submission enters and released when it settles, closing that gap.
-  //
-  const submissionLatch = useRef(false);
+  writesHeldNow.current = writesHeld;
+  // The synchronous half of the same gate is `submissionLatch`, declared above
+  // because a refused publish's recovery takes it too.
 
   // Throwing away this language's pending change. Scoped to the active locale:
   // a localized Single holds one per language, so discarding without naming one
@@ -675,7 +710,8 @@ export function SingleForm({
             // placeholder and written as the reference it stands for.
             ownSave.current.inFlight = true;
             const stored = await onSubmit(
-              withoutPlaceholders(schema.fields, data)
+              withoutPlaceholders(schema.fields, data),
+              refusedForm
             ).finally(() => {
               ownSave.current.inFlight = false;
             });
@@ -709,6 +745,7 @@ export function SingleForm({
     [
       form,
       onSubmit,
+      refusedForm,
       blankPasswordFields,
       busy,
       writesHeld,

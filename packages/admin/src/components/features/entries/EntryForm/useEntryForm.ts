@@ -37,6 +37,7 @@ import {
   type DeleteOutcome,
   type SubmitOutcome,
 } from "./submit-outcome";
+import { useRefusedForm } from "./useRefusedForm";
 
 // ============================================================================
 // Types
@@ -166,6 +167,13 @@ export interface UseEntryFormOptions {
    * collection's split when unset — the full-page editor's read mode.
    */
   readDraft?: boolean;
+  /**
+   * Whether the host holds the document's writes now (it is someone else's,
+   * or a past version is on screen). The host gates its own saves; this is
+   * asked when a refused publish's recovery runs, which writes too. Absent,
+   * writes are never held.
+   */
+  writesHeld?: () => boolean;
 }
 
 /**
@@ -451,6 +459,9 @@ function storedAfterSave(
   return holdsPlaceholders(fields, sent) ? sent : getDefaultValues(fields, row);
 }
 
+/** A host that holds nothing: writes are never held. */
+const writesNeverHeld = () => false;
+
 export function useEntryForm({
   collection,
   entry = null,
@@ -461,6 +472,7 @@ export function useEntryForm({
   onCancel,
   locale,
   readDraft,
+  writesHeld,
 }: UseEntryFormOptions): UseEntryFormReturn {
   // Get fields from collection (supports both old and new API formats)
   const fields = getCollectionFields(collection);
@@ -529,6 +541,36 @@ export function useEntryForm({
   const ownSave = useRef<{ inFlight: boolean; storedVersion?: string }>({
     inFlight: false,
   });
+
+  // Password fields submit "" to mean "keep the stored hash", so they are
+  // exempt from the blank-to-null normalization applied on submit.
+  const blankPasswordFields = useMemo(
+    () => passwordFieldNames(fields),
+    [fields]
+  );
+
+  //
+  // The synchronous half of the submit guard. `isSubmitting` is render state:
+  // it publishes one render behind the mutation, so two submissions in the
+  // same turn both read false and both write — two identical creates. The
+  // latch is set the moment the first submission enters and released when it
+  // settles, closing that gap. A refused publish's recovery takes it too.
+  //
+  const submissionLatch = useRef(false);
+
+  // The form as a refused publish's way out reaches it: saved as the pending
+  // change the way a status-less save sends it, and given the live values it
+  // takes when the entry carrying them arrives.
+  const { refusedForm, adoptArrived } = useRefusedForm(
+    form,
+    values =>
+      withoutPlaceholders(
+        fields,
+        mapIntentToPayload(values, "save-working-draft", blankPasswordFields)
+      ),
+    { writesHeld: writesHeld ?? writesNeverHeld, latch: submissionLatch }
+  );
+
   useEffect(() => {
     if (!entry || mode !== "edit") return;
     const next = entryIdentity(entry, locale, readDraft);
@@ -538,8 +580,10 @@ export function useEntryForm({
       defaultValues,
       decision === "keep-unsaved" ? KEEP_UNSAVED : undefined
     );
+    // A reset keeping unsaved values keeps a taken field's stale one.
+    adoptArrived(defaultValues);
     setAwaitingEntry(false);
-  }, [entry, mode, defaultValues, form, locale, readDraft]);
+  }, [entry, mode, defaultValues, form, locale, readDraft, adoptArrived]);
 
   // Mutations - pass setError to enable server error mapping to form fields
   const createMutation = useCreateEntry({
@@ -562,14 +606,8 @@ export function useEntryForm({
     // caller passes how it read the entry; absent that, assume the full-page
     // editor's mode (the working-draft overlay for a drafts collection).
     draft: readDraft ?? collection.draftsEnabled === true,
+    refusedForm,
   });
-
-  // Password fields submit "" to mean "keep the stored hash", so they are
-  // exempt from the blank-to-null normalization applied on submit.
-  const blankPasswordFields = useMemo(
-    () => passwordFieldNames(fields),
-    [fields]
-  );
 
   const deleteMutation = useDeleteEntry({
     collectionSlug: collection.name,
@@ -598,14 +636,8 @@ export function useEntryForm({
     discardMutation.isPending ||
     awaitingEntry;
 
-  //
-  // The synchronous half of the same guard. `isSubmitting` is render state:
-  // it publishes one render behind the mutation, so two submissions in the
-  // same turn both read false and both write — two identical creates. The
-  // latch is set the moment the first submission enters and released when it
-  // settles, closing that gap.
-  //
-  const submissionLatch = useRef(false);
+  // The synchronous half of the same guard: `submissionLatch`, declared above
+  // because a refused publish's recovery takes it too.
 
   // Submit handler. The intent arg names the user's button click and
   // determines payload shape (see EntryFormIntent). Without an intent,
