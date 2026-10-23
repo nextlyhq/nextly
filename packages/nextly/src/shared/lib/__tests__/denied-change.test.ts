@@ -12,7 +12,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { declaredFieldNames, resolvePromotedDocument } from "../denied-change";
+import {
+  declaredFieldNames,
+  keepDeniedAtStored,
+  resolvePromotedDocument,
+} from "../denied-change";
 
 /** Removes the named top-level or nested paths, as the field rules would. */
 function denies(...paths: string[]) {
@@ -329,5 +333,63 @@ describe("resolvePromotedDocument", () => {
       live: { title: "old", subtitle: "going away" },
     });
     expect(Object.prototype.hasOwnProperty.call(out, "subtitle")).toBe(false);
+  });
+});
+
+describe("keepDeniedAtStored", () => {
+  /** Removes `locked` from every row of `rows`, as a rule denying it would. */
+  const deniesLockedRows = (document: Record<string, unknown>) => {
+    const rows = document.rows;
+    for (const row of Array.isArray(rows) ? rows : []) {
+      delete (row as Record<string, unknown>).locked;
+    }
+    return Promise.resolve();
+  };
+
+  it("keeps each denied value on its own row when the rows are reordered", async () => {
+    // A container written whole: the update swaps the rows and sends a
+    // forged `locked` on one. Each row keeps its own stored value.
+    const kept = await keepDeniedAtStored({
+      update: {
+        rows: [
+          { id: "b", heading: "b2", locked: "forged" },
+          { id: "a", heading: "a2" },
+        ],
+      },
+      stored: {
+        rows: [
+          { id: "a", heading: "a", locked: "locked-a" },
+          { id: "b", heading: "b", locked: "locked-b" },
+        ],
+      },
+      applyRules: deniesLockedRows,
+    });
+
+    expect(kept.rows).toEqual([
+      { id: "b", heading: "b2", locked: "locked-b" },
+      { id: "a", heading: "a2", locked: "locked-a" },
+    ]);
+  });
+
+  it("pairs rows by position when they carry no id", async () => {
+    // The control: rows that cannot be told apart keep the value at their
+    // index, as they always have.
+    const kept = await keepDeniedAtStored({
+      update: {
+        rows: [{ heading: "x2" }, { heading: "y2", locked: "forged" }],
+      },
+      stored: {
+        rows: [
+          { heading: "x", locked: "locked-x" },
+          { heading: "y", locked: "locked-y" },
+        ],
+      },
+      applyRules: deniesLockedRows,
+    });
+
+    expect(kept.rows).toEqual([
+      { heading: "x2", locked: "locked-x" },
+      { heading: "y2", locked: "locked-y" },
+    ]);
   });
 });

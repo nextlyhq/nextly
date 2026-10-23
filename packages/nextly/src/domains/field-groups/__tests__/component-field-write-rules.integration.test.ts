@@ -75,6 +75,34 @@ const guarded = () => [
   text({ name: "sealed", access: { create: false, update: false } }),
 ];
 
+/**
+ * A field writable on update only by a judgment told the instance's id, so a
+ * test can see whether a judgment was told the stored instance's id or
+ * nothing at all.
+ */
+const needsId = () =>
+  text({
+    name: "owned",
+    access: { update: ({ id }) => typeof id === "string" },
+  });
+
+/**
+ * A group whose `gated` value may be written only while its own `mode` is
+ * open: a rule that reads a sibling, so an update changing that sibling
+ * changes the answer.
+ */
+const gateGroup = () =>
+  group({
+    name: "gate",
+    fields: [
+      text({ name: "mode" }),
+      text({
+        name: "gated",
+        access: { update: ({ data }) => data?.mode !== "closed" },
+      }),
+    ],
+  });
+
 /** Values for both guarded fields, marked with where they were written. */
 function guardedValues(tag: string): Doc {
   return { locked: `locked-${tag}`, sealed: `sealed-${tag}` };
@@ -366,6 +394,7 @@ describe.each(getConfiguredTestDialects())(
           name: "box",
           fields: [fieldGroup({ name: "inBox", component: "note" })],
         }),
+        gateGroup(),
       ];
       const singleFields = () => [
         text({ name: "title" }),
@@ -386,6 +415,7 @@ describe.each(getConfiguredTestDialects())(
               ...guarded(),
               // Never set on a new instance; any update may change it.
               text({ name: "later", access: { create: false } }),
+              needsId(),
             ],
           }),
           defineFieldGroup({
@@ -878,6 +908,105 @@ describe.each(getConfiguredTestDialects())(
         const after = await stored("pages", id);
         expect(list(after.one)).toEqual([]);
         expect(list(after.many).map(note => note.heading)).toEqual(["a"]);
+      });
+    });
+
+    describe("an update whose own change turns a rule against a stored value", () => {
+      it("keeps the value the document it writes denies", async () => {
+        // `gated` may be written only while `mode` is open. The update closes
+        // `mode` and does not mention `gated`, so the rule is never asked
+        // about `gated` on the update; judged against the document this write
+        // LEAVES, it is denied, and a container written whole must not drop it.
+        const { item } = await trusted.create({
+          collection: "pages",
+          data: { title: "sib", gate: { mode: "open", gated: "keep-me" } },
+        } as never);
+        const id = String(item.id);
+
+        await updateAs("direct", "editor", id, { gate: { mode: "closed" } });
+
+        const after = (await stored("pages", id)).gate as Doc;
+        expect(after.mode).toBe("closed");
+        expect(after.gated).toBe("keep-me");
+      });
+    });
+
+    describe("a held draft that removes a stored instance", () => {
+      it("keeps one holding a value its author may not change", async () => {
+        const id = await seeded("hdrm", "drafted");
+        await trusted.update({
+          collection: "drafted",
+          id,
+          data: { status: "published" },
+        } as never);
+        const live = await stored("drafted", id);
+        // Held, so no save judges the instances it removes.
+        await checkedAs("editor").update({
+          collection: "drafted",
+          id,
+          data: { one: null, many: list(live.many).slice(0, 1) },
+        } as never);
+        // The publisher may write everything, so nothing stops the removal
+        // except the draft having been judged when it was held.
+        await checkedAs("allowed").update({
+          collection: "drafted",
+          id,
+          data: { status: "published" },
+        } as never);
+
+        // Each instance is the stored one, kept whole with its id: a partial
+        // copy of its denied values would be a new instance, and lose what no
+        // create may set.
+        const after = await stored("drafted", id);
+        const one = after.one as Doc;
+        expect([one.id, one.locked, one.sealed]).toEqual([
+          (live.one as Doc).id,
+          "locked-hdrm-one",
+          "sealed-hdrm-one",
+        ]);
+        expect(
+          list(after.many).map(note => [note.id, note.locked, note.sealed])
+        ).toEqual(
+          list(live.many).map((note, index) => [
+            note.id,
+            `locked-hdrm-many${index}`,
+            `sealed-hdrm-many${index}`,
+          ])
+        );
+      });
+    });
+
+    describe("the promotion's judgment of a stored instance", () => {
+      it("tells an id-dependent rule the id the save will tell it", async () => {
+        // `owned` is writable only on the instance whose id the rule is told,
+        // and the gate must be told the same id the save is, or it answers a
+        // question the save does not ask.
+        const id = await seeded("idr", "drafted");
+        await trusted.update({
+          collection: "drafted",
+          id,
+          data: { status: "published" },
+        } as never);
+        const live = await stored("drafted", id);
+
+        // The draft changes `owned`, which any judgment told the stored
+        // instance's id allows, and one told nothing denies.
+        await checkedAs("allowed").update({
+          collection: "drafted",
+          id,
+          data: { one: { ...(live.one as Doc), owned: "owned-idr" } },
+        } as never);
+        await checkedAs("allowed").update({
+          collection: "drafted",
+          id,
+          data: { status: "published" },
+        } as never);
+
+        const one = (await stored("drafted", id)).one as Doc;
+        expect([one.id, one.owned]).toEqual([
+          (live.one as Doc).id,
+          "owned-idr",
+        ]);
       });
     });
 
