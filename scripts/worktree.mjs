@@ -999,12 +999,16 @@ function sweepContext() {
   const common = commonDir();
   const claims = readClaims(claimDir(common));
   const facts = currentFacts();
+  // When this run last removed something in each checkout, so its own
+  // removals do not read as someone using the checkout.
+  const ownRemovals = new Map();
   return {
     common,
     now: facts.now,
     others: records.slice(1).filter(record => resolve(record.path) !== root),
     gate: inUseGate(claims, facts),
-    recheck: recheckGate(claims),
+    recheck: recheckGate(claims, currentFacts, ownRemovals),
+    ownRemovals,
     leaving: new Set(),
   };
 }
@@ -1020,9 +1024,9 @@ function currentFacts() {
  * next one. A candidate's own late reasons, such as build output written
  * since it was found, are read again too.
  */
-export function recheckGate(claims, readFacts = currentFacts) {
+export function recheckGate(claims, readFacts = currentFacts, ownRemovals = new Map()) {
   return async candidate => {
-    const lastActive = candidate.readLastActive();
+    const lastActive = candidate.readLastActive(ownRemovals.get(candidate.checkout) ?? 0);
     const reasons = await inUseGate(claims, readFacts())(candidate.checkout, candidate.idleDays, lastActive);
     return [...reasons, ...candidate.lateReasons()];
   };
@@ -1039,7 +1043,7 @@ function inUseGate(claims, facts) {
 
 /** What `recheck` needs to ask about a candidate again: its checkout, its threshold, and its own late reasons. */
 function owned(checkout, idleDays, lateReasons) {
-  return { checkout, idleDays, readLastActive: () => lastActivity(checkout), lateReasons };
+  return { checkout, idleDays, readLastActive: ownUntil => lastActivity(checkout, ownUntil), lateReasons };
 }
 
 async function staleCandidates(context) {
@@ -1121,7 +1125,10 @@ async function buildCandidatesIn(record, { gate, now }) {
   if (ignored === null) return [{ path: record.path, reasons: ["cannot list its ignored files"] }];
   const found = buildOutputOf(ignored, classifier.isBuildOutput);
   if (found.length === 0) return [];
-  const late = (at = Date.now()) => [buildActivityReason(record.path, found, IDLE_DAYS.builds, at)].filter(Boolean);
+  // Only the outputs still there: one this run has already removed has no
+  // time to read, and reading it would answer "cannot tell".
+  const remaining = () => found.filter(relative => existsSync(join(record.path, relative)));
+  const late = (at = Date.now()) => [buildActivityReason(record.path, remaining(), IDLE_DAYS.builds, at)].filter(Boolean);
   const reasons = [...(await gate(record.path, IDLE_DAYS.builds, lastActive)), ...late(now)];
   if (reasons.length > 0) return [{ path: record.path, what: `${found.length} build output path(s)`, reasons }];
   return found.map(relative => ({ ...owned(record.path, IDLE_DAYS.builds, late), path: join(record.path, relative), reasons }));
@@ -1175,6 +1182,8 @@ async function removeOne(candidate, bytes, { tally, kind, context }) {
     return console.log(`  NOT removed ${candidate.path}: ${outcome.reason}`);
   }
   logRemoval(context.common, kind.log, candidate.path, bytes);
+  // A millisecond past now, since the directory's time can carry a fraction.
+  context.ownRemovals.set(candidate.checkout, Date.now() + 1);
   countFreed(tally, bytes);
   console.log(`  removed ${candidate.path} (${formatBytes(bytes)})`);
 }

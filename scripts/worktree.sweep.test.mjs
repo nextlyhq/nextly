@@ -106,7 +106,7 @@ function scratch() {
   writeFileSync(join(world.repo, "tools", "cli", "package.json"), '{"name":"scratch-cli"}\n');
   writeFileSync(
     join(world.repo, ".gitignore"),
-    "dist\nnode_modules\n.env.local\n.claude/settings.local.json\ntemplates\n"
+    "dist\nnode_modules\n.env.local\n.claude/settings.local.json\ntemplates\n.turbo\n"
   );
   writeFileSync(join(world.repo, "index.js"), "export const a = 1;\n");
   git(world, dir, "init", "-q", "--bare", world.origin);
@@ -670,5 +670,21 @@ describe.runIf(process.platform !== "win32")("worktree sweep on real checkouts",
 
     expect(existsSync(join(snapshot, "src", "index.js")), stdout).toBe(true);
     expect(existsSync(`${snapshot}.last-used`)).toBe(true);
+  }, 60_000);
+  it("removes two output paths of one checkout, rechecking the second without the first it just removed", () => {
+    const world = scratch();
+    const idle = checkout(world, "idle");
+    for (const dir of ["dist", ".turbo"]) {
+      mkdirSync(join(idle.path, dir));
+      writeFileSync(join(idle.path, dir, "out.txt"), "built\n");
+    }
+    idle.age();
+
+    const { code, stdout } = worktreeCommand(world, "sweep", "--builds", "--apply");
+
+    expect(code, stdout).toBe(0);
+    expect(existsSync(join(idle.path, "dist")), stdout).toBe(false);
+    expect(existsSync(join(idle.path, ".turbo")), stdout).toBe(false);
+    expect(stdout).not.toContain("cannot tell when its build output was last written");
   }, 60_000);
 });

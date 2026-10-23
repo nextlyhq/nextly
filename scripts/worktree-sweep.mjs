@@ -319,17 +319,20 @@ function modifiedAt(path) {
  * When a checkout was last used, as the newest of its directory, its HEAD,
  * its index and its HEAD's log: a commit, a checkout, a staged change or a
  * file made at its top all move one. Null when git cannot name its git
- * directory, so the gate skips it rather than guessing.
+ * directory, so the gate skips it rather than guessing. The directory's own
+ * time counts only after `ownUntil`: removing an output at its top moves that
+ * time, and the sweep's own removal is not someone using the checkout.
  */
-export function lastActivity(checkout) {
+export function lastActivity(checkout, ownUntil = 0) {
   let gitDir;
   try {
     gitDir = git(["rev-parse", "--absolute-git-dir"], checkout);
   } catch {
     return null;
   }
+  const top = modifiedAt(checkout);
   return Math.max(
-    modifiedAt(checkout),
+    top > ownUntil ? top : 0,
     ...["HEAD", "index", join("logs", "HEAD")].map(name => modifiedAt(join(gitDir, name)))
   );
 }
