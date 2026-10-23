@@ -90,7 +90,12 @@ describe("widget-registry reset at boot", () => {
       listSources()
         .map(source => source.id)
         .sort()
-    ).toEqual(["system:attention", "system:releases", "system:versions"]);
+    ).toEqual([
+      "system:activity",
+      "system:attention",
+      "system:releases",
+      "system:versions",
+    ]);
     // The previous boot's widget is gone; core's own cards are what boot
     // itself writes, so the store is not empty afterwards and asserting that
     // it was would only have held while core declared no widget.

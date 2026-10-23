@@ -199,7 +199,7 @@ describe("RecentActivity", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders empty state when no activities", async () => {
+  it("says it has nothing to show with the dashboard's standard empty state", async () => {
     mockUseRecentActivity.mockReturnValue({
       data: { activities: [] },
       isLoading: false,
@@ -211,11 +211,14 @@ describe("RecentActivity", () => {
 
     render(<RecentActivity />);
 
+    // The one empty state every card draws, in this card's words, not a
+    // shape of its own.
     await waitFor(() => {
-      expect(
-        screen.getByText(/activity log is currently silent/i)
-      ).toBeInTheDocument();
+      expect(screen.getByTestId("card-empty")).toHaveTextContent(
+        "No activity yet"
+      );
     });
+    expect(screen.queryByText(/currently silent/i)).not.toBeInTheDocument();
   });
 
   it("renders activities successfully", async () => {

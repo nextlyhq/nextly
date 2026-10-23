@@ -57,12 +57,28 @@
  * @module domains/widgets/core-widgets
  */
 
-import type { WidgetDefinition } from "./definition";
+import { settings } from "./declaration/setting-builders";
+import type { WidgetDefinition, WidgetSetting } from "./definition";
 import {
+  ACTIVITY_SOURCE_ID,
   ATTENTION_SOURCE_ID,
   RELEASES_SOURCE_ID,
   VERSIONS_SOURCE_ID,
 } from "./system-source-ids";
+
+/**
+ * Recent activity's "Number of items": the one offer every card makes, from the
+ * builder, named `limit` so it sets the card's query.
+ *
+ * Held as the public `WidgetSetting` rather than written into the list: the
+ * builder's own type carries a value brand only declarations read, which the
+ * published list of core's widgets has no name for.
+ */
+const RECENT_ACTIVITY_ITEMS: WidgetSetting = {
+  name: "limit",
+  label: "Number of items",
+  ...settings.items(),
+};
 
 /**
  * The prefix core's dashboard components resolve under.
@@ -333,13 +349,22 @@ const CORE_WIDGET_LITERALS = [
     id: "core/recent-activity",
     title: "Recent activity",
     description: "Who changed what, most recent first.",
+    // Its own component, because a row is a sentence with an avatar, a badge and
+    // a time read relative to now, which no list line draws. Framed, so the
+    // heading, the size tiers and the empty state are the card's like any
+    // other's, and answered by `system:activity` through the batch, the same
+    // read the activity endpoint makes.
     archetype: "custom",
-    chrome: "none",
     defaultSize: "full",
     // The narrowest width it still draws at: a feed whose rows need at least a third.
     minSize: "md",
     defaultOrder: 45,
     component: "core#RecentActivity",
+    query: { source: ACTIVITY_SOURCE_ID, op: "list" },
+    // Asked like core's own lists: the rows its size draws and one more, so the
+    // card can say more exist at every size.
+    sizedQuery: true,
+    settings: [RECENT_ACTIVITY_ITEMS],
   },
 ] as const satisfies readonly WidgetDefinition[];
 
