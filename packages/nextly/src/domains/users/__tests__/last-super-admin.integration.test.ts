@@ -940,6 +940,50 @@ describe.each(getConfiguredTestDialects())(
         ).toBeNull();
       });
 
+      // An expiry set on an assignment already in force would take super-admin
+      // away at the moment it names, so the two cases below pin that no route
+      // can reach one. They hold while another super-admin remains, where the
+      // guard above does not apply, so what refuses them is the assignment
+      // itself and the caller rule, not the install running out of
+      // super-admins.
+      it("is refused on an assignment in force while another super-admin remains", async () => {
+        const install = await boot(on);
+        const second = await secondSuperAdmin(install);
+        const res = await rest(
+          install,
+          "POST",
+          ["users", second, "roles"],
+          {
+            roleId: install.superAdminRole,
+            expiresAt: IN_AN_HOUR().toISOString(),
+          },
+          { session: install.first }
+        );
+        const text = await res.text();
+        expect(res.status, text).toBe(409);
+        expect(await expiryOf(second, install.superAdminRole)).toBeNull();
+        expect(await activeSuperAdmin(second)).toBe(true);
+      });
+
+      it("is refused to a caller who is no super-admin", async () => {
+        const install = await boot(on);
+        const second = await secondSuperAdmin(install);
+        const res = await rest(
+          install,
+          "POST",
+          ["users", second, "roles"],
+          {
+            roleId: install.superAdminRole,
+            expiresAt: IN_AN_HOUR().toISOString(),
+          },
+          { session: install.operator }
+        );
+        const text = await res.text();
+        expect(res.status, text).toBe(403);
+        expect(await expiryOf(second, install.superAdminRole)).toBeNull();
+        expect(await activeSuperAdmin(second)).toBe(true);
+      });
+
       it("may be given the role with an expiry beside a permanent one", async () => {
         const install = await boot(on);
         const temporary = await makeUser("temporary@example.com");
