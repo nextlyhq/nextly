@@ -168,4 +168,42 @@ describeEachDialect("making another language the default", dialect => {
     expect(saved).toBe(true);
     expect(registry.current()?.defaultLocale).toBe("en");
   });
+
+  // The preview is read before every default change, so its cost stays the same however many
+  // translated collections, Singles and field groups the site has: no query per entity.
+  it("asks the database the same number of times for three translated collections as for one", async () => {
+    const { settings } = await boot();
+    await settings.change({ kind: "add", code: "fr", label: "French" });
+    const handler = current!.getService(
+      "collectionsHandler"
+    ) as unknown as CollectionsHandler;
+    const translated = async (name: string) => {
+      const created = await handler.createCollection({
+        name,
+        label: name,
+        localized: true,
+        fields: [{ name: "heading", type: "text" }],
+      });
+      expect(created.success, JSON.stringify(created)).toBe(true);
+    };
+    const callsOfPreview = async () => {
+      const adapter = current!.adapter;
+      const spies = [
+        vi.spyOn(adapter, "tableExists"),
+        vi.spyOn(adapter, "queryStatement"),
+        vi.spyOn(adapter, "select"),
+      ];
+      await settings.previewDefaultChange("fr");
+      const calls = spies.reduce((n, spy) => n + spy.mock.calls.length, 0);
+      for (const spy of spies) spy.mockRestore();
+      return calls;
+    };
+
+    await translated("posts");
+    const forOne = await callsOfPreview();
+    await translated("pages");
+    await translated("notes");
+
+    expect(await callsOfPreview()).toBe(forOne);
+  });
 });

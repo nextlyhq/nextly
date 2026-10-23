@@ -221,17 +221,23 @@ function fallbackList(
 
 /** A code in canonical BCP 47 form, or a refusal for one that is not a language code. */
 function canonicalCode(code: string): string {
-  if (isReservedLocaleCode(code)) {
-    throw refused(
+  // Asked whatever the letter case, and of the canonical form too: "ALL" canonicalizes to "all",
+  // and a language stored under a selector's spelling would be read as that selector.
+  const reserved = () =>
+    refused(
       code,
       "reserved_code",
       `"${code}" is reserved: it selects languages rather than naming one.`
     );
-  }
+  if (isReservedLocaleCode(code.toLowerCase())) throw reserved();
   try {
     const [canonical] = Intl.getCanonicalLocales(code);
+    if (canonical && isReservedLocaleCode(canonical.toLowerCase())) {
+      throw reserved();
+    }
     if (canonical) return canonical;
-  } catch {
+  } catch (error) {
+    if (error instanceof NextlyError) throw error;
     // Not a language tag; refused below.
   }
   throw refused(

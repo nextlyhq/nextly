@@ -5,7 +5,7 @@
  * declares the languages locks them.
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
@@ -21,6 +21,7 @@ describeEachDialect("the site's languages in Settings", dialect => {
   let current: TestNextly | undefined;
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await current?.destroy();
     current = undefined;
   });
@@ -195,6 +196,51 @@ describeEachDialect("the site's languages in Settings", dialect => {
       await holds(before);
     }
   );
+
+  // With nothing stored, a change's locked read locks no row, so two first changes both plan
+  // from the implicit English list and both insert it. The second is run again once the first has
+  // committed, in a transaction of its own, and plans from what the first stored.
+  it("applies two first changes made at the same moment on a site with nothing stored", async () => {
+    const { registry } = await boot();
+    const held = new LanguageSettingsService(
+      heldAfterFirstReads(current!.adapter, 2),
+      registry
+    );
+
+    await Promise.all([
+      held.change({ kind: "add", code: "fr", label: "French" }),
+      held.change({ kind: "add", code: "de", label: "German" }),
+    ]);
+
+    expect(
+      registry
+        .current()
+        ?.locales.map(l => l.code)
+        .sort()
+    ).toEqual(["de", "en", "fr"]);
+    expect(await storedRows()).toBe(3);
+  });
+
+  // The rows are committed by then, so a failure after it must not read as the change failing:
+  // retried, an add would be refused as a duplicate of itself.
+  it("answers a committed change with the list it wrote when the refresh after it fails", async () => {
+    const { registry, settings } = await boot();
+    vi.spyOn(registry, "refresh").mockRejectedValueOnce(
+      new Error("the database went away")
+    );
+
+    const list = await settings.change({
+      kind: "add",
+      code: "fr",
+      label: "French",
+    });
+
+    expect(list.languages.filter(l => l.active).map(l => l.code)).toEqual([
+      "en",
+      "fr",
+    ]);
+    expect(await storedRows()).toBe(2);
+  });
 
   it("refuses to remove the default language", async () => {
     const { settings } = await boot();

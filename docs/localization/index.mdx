@@ -48,14 +48,14 @@ A locale is either a bare code or an object. The object form carries:
 ### Or keep the list out of your code
 
 Leave the `localization` block out, and the site's languages are stored in its database instead,
-managed through the languages API that Settings uses. A site starts with one language, English,
-and nothing is stored until a change is made.
+managed through the languages API. The admin has no screen for them yet. A site starts with one
+language, English, and nothing is stored until a change is made.
 
-| Request                                | What it does                                                                            |
-| -------------------------------------- | --------------------------------------------------------------------------------------- |
-| `GET /api/languages`                   | Lists the languages, removed ones included, and whether the configuration locks them    |
-| `GET /api/languages?defaultPreview=fr` | Says how many translations each language holds, before French becomes the default       |
-| `POST /api/languages`                  | Makes one change, named by `kind`: `add`, `update`, `reorder`, `remove` or `setDefault` |
+| Request                                | What it does                                                                              |
+| -------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `GET /api/languages`                   | Lists the languages, removed ones included: `{ items, meta }`, with `meta.lockedByConfig` |
+| `GET /api/languages?defaultPreview=fr` | Says how many translations each language holds, before French becomes the default         |
+| `POST /api/languages`                  | Makes one change, named by `kind`: `add`, `update`, `reorder`, `remove` or `setDefault`   |
 
 ```json
 { "kind": "add", "code": "fr", "label": "Français", "fallback": ["en"] }

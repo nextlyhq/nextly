@@ -1045,7 +1045,7 @@ async function registerServicesOnce(
   );
   container.registerSingleton<LanguageSettingsService>(
     "languageSettingsService",
-    () => new LanguageSettingsService(adapter, ctx.languages)
+    () => new LanguageSettingsService(adapter, ctx.languages, ctx.logger)
   );
 
   registerDomainServices(ctx);

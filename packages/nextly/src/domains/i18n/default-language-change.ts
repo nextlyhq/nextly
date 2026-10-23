@@ -22,8 +22,13 @@ export interface DefaultChangeSummary {
   pendingInCurrentDefault: number;
 }
 
-/** The translation tables of every translated entity, the ones that exist. */
+/**
+ * The translation tables of every translated entity, the ones that exist. Which tables exist is
+ * read once, so the cost is the same however many entities the site has: one listing, and one read
+ * of each of the three registries.
+ */
 async function translationTables(adapter: DrizzleAdapter): Promise<string[]> {
+  const existing = new Set(await adapter.listTables());
   const registries = [
     "dynamic_collections",
     "dynamic_singles",
@@ -32,7 +37,7 @@ async function translationTables(adapter: DrizzleAdapter): Promise<string[]> {
   const tables: string[] = [];
   for (const registry of registries) {
     // Checked before reading: on PostgreSQL a failed read would abort the transaction around it.
-    if (!(await adapter.tableExists(registry))) continue;
+    if (!existing.has(registry)) continue;
     const rows = await adapter.select<{
       tableName: string;
       localized: unknown;
@@ -41,7 +46,7 @@ async function translationTables(adapter: DrizzleAdapter): Promise<string[]> {
     });
     for (const row of rows) {
       const companion = `${row.tableName}_locales`;
-      if (Boolean(row.localized) && (await adapter.tableExists(companion))) {
+      if (Boolean(row.localized) && existing.has(companion)) {
         tables.push(companion);
       }
     }
@@ -78,14 +83,23 @@ export async function summarizeDefaultChange(
   to: string
 ): Promise<DefaultChangeSummary> {
   const translationsPerLanguage: Record<string, number> = {};
-  for (const table of await translationTables(adapter)) {
-    const counts = await adapter.queryStatement<{ locale: string; n: unknown }>(
-      sql`SELECT ${sql.identifier("_locale")} AS locale, COUNT(*) AS n FROM ${sql.identifier(table)} GROUP BY ${sql.identifier("_locale")}`
-    );
-    for (const { locale, n } of counts) {
-      translationsPerLanguage[locale] =
-        (translationsPerLanguage[locale] ?? 0) + Number(n);
-    }
+  const tables = await translationTables(adapter);
+  // Every table's count in one statement, so the round trips do not grow with the entities.
+  const counts =
+    tables.length === 0
+      ? []
+      : await adapter.queryStatement<{ locale: string; n: unknown }>(
+          sql.join(
+            tables.map(
+              table =>
+                sql`SELECT ${sql.identifier("_locale")} AS locale, COUNT(*) AS n FROM ${sql.identifier(table)} GROUP BY ${sql.identifier("_locale")}`
+            ),
+            sql` UNION ALL `
+          )
+        );
+  for (const { locale, n } of counts) {
+    translationsPerLanguage[locale] =
+      (translationsPerLanguage[locale] ?? 0) + Number(n);
   }
   return {
     from,

@@ -14,6 +14,8 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { NextlyError } from "../../../errors/nextly-error";
 import { LANGUAGES_TABLE } from "../../../schemas/languages/table-name";
 import type { LanguageDirection } from "../../../schemas/languages/types";
+import { isUniqueViolation } from "../../../shared/lib/unique-violation";
+import type { Logger } from "../../../shared/types/index";
 import { fallbackCodes } from "../config/stored-languages";
 import {
   countPendingChangesIn,
@@ -56,6 +58,15 @@ const COLUMNS = [
   "revision",
 ] as const;
 
+/** The languages as Settings shows them, from the stored rows: English alone while none are. */
+function viewOf(rows: readonly LanguageRow[]): LanguageListView {
+  return {
+    lockedByConfig: false,
+    languages:
+      rows.length > 0 ? rows.map(toView).sort(byPosition) : [IMPLICIT_ENGLISH],
+  };
+}
+
 /** English, the site's one language while nothing is stored, as Settings shows it. */
 const IMPLICIT_ENGLISH: LanguageView = {
   code: "en",
@@ -70,7 +81,9 @@ const IMPLICIT_ENGLISH: LanguageView = {
 export class LanguageSettingsService {
   constructor(
     private readonly adapter: DrizzleAdapter,
-    private readonly registry: LanguageRegistry
+    private readonly registry: LanguageRegistry,
+    /** Told when the registry cannot be read again after a change has committed. */
+    private readonly logger?: Pick<Logger, "warn">
   ) {}
 
   /** The languages, the removed ones included so they can be added back. */
@@ -92,14 +105,7 @@ export class LanguageSettingsService {
         })),
       };
     }
-    const rows = await this.storedRows();
-    return {
-      lockedByConfig: false,
-      languages:
-        rows.length > 0
-          ? rows.map(toView).sort(byPosition)
-          : [IMPLICIT_ENGLISH],
-    };
+    return viewOf(await this.storedRows());
   }
 
   /**
@@ -134,51 +140,98 @@ export class LanguageSettingsService {
     if (change.kind === "setDefault") {
       await this.refusePendingDefaultChanges();
     }
-    await this.adapter.transaction(async tx => {
-      // Locked, so a second change made at the same moment plans from this one's result: planned
-      // from the same rows, both would write the same next revision, and the fingerprint would
-      // stay where the first left it, hiding the second from every other instance. SQLite takes
-      // no row lock and needs none, as its writers already run one at a time.
-      const rows = await tx.select<LanguageRow>(LANGUAGES_TABLE, {
-        columns: [...COLUMNS],
-        forUpdate: true,
+    // With nothing stored the locked read locks no row, so a change made at the same moment also
+    // planned from the implicit English list, and its insert of English met this one's. Run
+    // again, in a transaction of its own now the failed one has rolled back, it plans from what
+    // the other stored and is locked behind it as every later change is.
+    const written =
+      (await this.writeChange(change, draftsKept)) ??
+      (await this.writeChange(change, draftsKept));
+    if (!written) {
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          "Another change to the languages was being saved at the same moment. Try again.",
       });
-      // Asked again where the change is written: the admin confirms from a summary that can stay
-      // open for minutes, and a draft saved meanwhile in the current default would be left behind.
-      if (draftsKept) {
-        const current = defaultCodeOf(rows);
-        refuseWhenPending(current, await countPendingChangesIn(tx, current));
-      }
-      const was = new Map(rows.map(row => [row.code, row]));
-      const now = new Date();
-      for (const row of planLanguageChange(rows, change)) {
-        const old = was.get(row.code);
-        if (old && old.revision === row.revision) continue;
-        const values = {
-          label: row.label,
-          direction: row.direction,
-          fallback: row.fallback,
-          position: row.position,
-          isDefault: row.isDefault,
-          active: row.active,
-          revision: row.revision,
-          updatedAt: now,
-        };
-        if (old) {
-          await tx.update(LANGUAGES_TABLE, values, {
-            and: [{ column: "code", op: "=", value: row.code }],
-          });
-        } else {
-          await tx.insert(LANGUAGES_TABLE, {
-            code: row.code,
-            ...values,
-            createdAt: now,
-          });
-        }
-      }
+    }
+    // The rows are committed: a failure from here on must not read as the change failing, since
+    // a retried add would then be refused as a duplicate of itself. The answer is the list as
+    // written, and an instance that cannot read it again now does so within its interval.
+    await this.registry.refresh({ force: true }).catch((error: unknown) => {
+      this.logger?.warn(
+        `[languages] The language list was saved, but this server could not read it again: ${
+          error instanceof Error ? error.message : String(error)
+        }. It reads it again within a second.`
+      );
     });
-    await this.registry.refresh({ force: true });
-    return this.list();
+    return viewOf(written);
+  }
+
+  /**
+   * Plans `change` against the stored rows, locked, and writes the rows it changes, in one
+   * transaction.
+   *
+   * @returns the stored list as the change left it, or null when, with nothing stored, another
+   *   change stored the list first (rolled back, nothing written)
+   */
+  private async writeChange(
+    change: LanguageChange,
+    draftsKept: boolean
+  ): Promise<LanguageRow[] | null> {
+    let wasEmpty = false;
+    try {
+      return await this.adapter.transaction(async tx => {
+        // Locked, so a second change made at the same moment plans from this one's result:
+        // planned from the same rows, both would write the same next revision, and the
+        // fingerprint would stay where the first left it, hiding the second from every other
+        // instance. SQLite takes no row lock and needs none, as its writers already run one at
+        // a time.
+        const rows = await tx.select<LanguageRow>(LANGUAGES_TABLE, {
+          columns: [...COLUMNS],
+          forUpdate: true,
+        });
+        wasEmpty = rows.length === 0;
+        // Asked again where the change is written: the admin confirms from a summary that can
+        // stay open for minutes, and a draft saved meanwhile in the current default would be
+        // left behind.
+        if (draftsKept) {
+          const current = defaultCodeOf(rows);
+          refuseWhenPending(current, await countPendingChangesIn(tx, current));
+        }
+        const planned = planLanguageChange(rows, change);
+        const was = new Map(rows.map(row => [row.code, row]));
+        const now = new Date();
+        for (const row of planned) {
+          const old = was.get(row.code);
+          if (old && old.revision === row.revision) continue;
+          const values = {
+            label: row.label,
+            direction: row.direction,
+            fallback: row.fallback,
+            position: row.position,
+            isDefault: row.isDefault,
+            active: row.active,
+            revision: row.revision,
+            updatedAt: now,
+          };
+          if (old) {
+            await tx.update(LANGUAGES_TABLE, values, {
+              and: [{ column: "code", op: "=", value: row.code }],
+            });
+          } else {
+            await tx.insert(LANGUAGES_TABLE, {
+              code: row.code,
+              ...values,
+              createdAt: now,
+            });
+          }
+        }
+        return planned;
+      });
+    } catch (error) {
+      if (wasEmpty && isUniqueViolation(error)) return null;
+      throw error;
+    }
   }
 
   private refuseWhenLocked(): void {

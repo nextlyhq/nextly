@@ -2179,7 +2179,12 @@ async function handleAdminMetaWorkspaceRequest(
   const caller = readAccessCaller(await readCaller(auth));
   const audience = await widgetAudience(caller);
 
-  const { workspace } = await buildAdminMeta(audience);
+  // Dispatched outside the content requests that bring the language list up to date, so it does
+  // so itself: a language added on another server reaches the admin within the registry's
+  // interval rather than whenever unrelated content traffic next arrives here.
+  const { workspace } = await withCurrentLanguages(() =>
+    buildAdminMeta(audience)
+  );
   return withSessionCacheHeaders(respondAdminMeta(workspace));
 }
 

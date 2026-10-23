@@ -14,7 +14,9 @@ import {
 import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
 import { seedLiveAuthor } from "../../releases/__tests__/helpers/live-author";
-import type { LanguageRegistry } from "../language-registry";
+import { LanguageRegistry } from "../language-registry";
+import { LanguageSettingsService } from "../services/language-settings-service";
+import { storedLanguageReader } from "../stored-language-reader";
 
 describeEachDialect("the languages route", dialect => {
   let current: TestNextly | undefined;
@@ -97,11 +99,14 @@ describeEachDialect("the languages route", dialect => {
 
     const listed = await rest(reader, "GET");
     expect(listed.status).toBe(200);
+    // The canonical list envelope, as every list endpoint answers: the languages in `items`, and
+    // whether the configuration locks them beside the page facts in `meta`.
     const body = (await listed.json()) as {
-      languages?: Array<{ code: string }>;
-      data?: unknown;
+      items?: Array<{ code: string }>;
+      meta?: { total?: number; lockedByConfig?: boolean };
     };
-    expect(JSON.stringify(body)).toContain('"en"');
+    expect(body.items?.map(l => l.code)).toEqual(["en"]);
+    expect(body.meta).toMatchObject({ total: 1, lockedByConfig: false });
 
     const change = await rest(reader, "POST", {
       kind: "add",
@@ -124,6 +129,35 @@ describeEachDialect("the languages route", dialect => {
     expect(change.status).toBe(200);
     const registry = t.getService("languageRegistry") as LanguageRegistry;
     expect(registry.current()?.locales.map(l => l.code)).toEqual(["en", "fr"]);
+  });
+
+  // The admin's workspace is read outside a content request, so it brings the list up to date
+  // itself: a language added on another server reaches it within the registry's interval.
+  it("tells the admin's workspace of a language another server added", async () => {
+    const t = await boot();
+    const reader = await keyHolding(t, ["read-settings"]);
+    // Another server: its own registry, writing to the same database.
+    const elsewhere = new LanguageSettingsService(
+      t.adapter,
+      new LanguageRegistry({ reader: storedLanguageReader(t.adapter) })
+    );
+    await elsewhere.change({ kind: "add", code: "fr", label: "French" });
+    // Past this server's interval for trusting the list it last read.
+    await new Promise(resolve => setTimeout(resolve, 1100));
+
+    const handlers = createDynamicHandlers();
+    const response = await handlers.GET(
+      new Request("http://localhost/api/admin-meta/workspace", {
+        headers: { authorization: `Bearer ${reader}` },
+      }),
+      { params: Promise.resolve({ params: ["admin-meta", "workspace"] }) }
+    );
+
+    expect(response.status).toBe(200);
+    const workspace = (await response.json()) as {
+      locales?: { locales?: Array<{ code: string }> };
+    };
+    expect(workspace.locales?.locales?.map(l => l.code)).toEqual(["en", "fr"]);
   });
 
   it("refuses a caller without a Settings permission either way", async () => {

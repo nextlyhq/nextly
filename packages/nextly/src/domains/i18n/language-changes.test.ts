@@ -72,7 +72,8 @@ describe("a change to the stored language list", () => {
         })
       )
     ).toMatch(/BCP 47/);
-    for (const code of ["all", "none"]) {
+    // Judged after canonicalizing, so a case variant cannot be stored under a selector's spelling.
+    for (const code of ["all", "none", "ALL", "None"]) {
       expect(
         refusal(() =>
           planLanguageChange([en], { kind: "add", code, label: "x" })

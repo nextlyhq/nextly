@@ -1,11 +1,12 @@
 /**
- * The site's content languages, for Settings.
+ * The site's content languages, through the API.
  *
- * `GET /api/languages` lists them, removed ones included, and says whether the configuration
- * locks them; `?defaultPreview=<code>` says instead what making that language the default would
- * touch. `POST /api/languages` makes one change, named by `kind`, and answers with the list after
- * it; making another language the default must be `confirmed`. Reading needs the settings `read` or `manage` permission, changing needs `update` or
- * `manage`, as the rest of Settings does.
+ * `GET /api/languages` lists them, removed ones included, in the list envelope (`{ items, meta }`,
+ * with `meta.lockedByConfig` saying whether the configuration locks them). With
+ * `?defaultPreview=<code>` it says instead what making that language the default would touch.
+ * `POST /api/languages` makes one change, named by `kind`, and answers with the list after it;
+ * making another language the default must be `confirmed`. Reading needs the settings `read` or
+ * `manage` permission, changing needs `update` or `manage`, as the rest of Settings does.
  *
  * @module api/languages
  */
@@ -18,7 +19,12 @@ import type { LanguageSettingsService } from "../domains/i18n/services/language-
 import { getCachedNextly } from "../init";
 
 import { readJsonBody } from "./read-json-body";
-import { respondData, respondMutation } from "./response-shapes";
+import {
+  type PaginationMeta,
+  respondData,
+  respondList,
+  respondMutation,
+} from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -77,7 +83,20 @@ export const getLanguages = withErrorHandler(async (req: Request) => {
   if (preview !== null) {
     return respondData({ ...(await settings.previewDefaultChange(preview)) });
   }
-  return respondData({ ...(await settings.list()) });
+  const { lockedByConfig, languages } = await settings.list();
+  // The canonical list envelope, as every list endpoint answers. Not server-paginated (a site has
+  // a handful of languages), so the meta is one page; whether the configuration locks the list is
+  // a fact about the list as a whole, so it travels beside the page facts.
+  const meta: PaginationMeta & { lockedByConfig: boolean } = {
+    total: languages.length,
+    page: 1,
+    limit: languages.length,
+    totalPages: 1,
+    hasNext: false,
+    hasPrev: false,
+    lockedByConfig,
+  };
+  return respondList(languages, meta);
 });
 
 export const changeLanguages = withErrorHandler(async (req: Request) => {
