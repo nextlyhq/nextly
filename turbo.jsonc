@@ -557,11 +557,13 @@
         "tsconfig.json",
         // Scripts and build configs are read BY tests, not only by builds: the ui suite derives
         // its entry-point guards from `scripts/published-entries.ts`, which the tsup configs
-        // also consume. Without these, retargeting a source barrel or changing an entry's
-        // client/server classification leaves the cache key untouched, so CI replays the previous
-        // pass precisely when the source of truth those guards read has changed.
+        // also consume, and nextly's suites read the client entries out of its tsdown config.
+        // Without these, retargeting a source barrel or changing an entry's client/server
+        // classification leaves the cache key untouched, so CI replays the previous pass
+        // precisely when the source of truth those guards read has changed.
         "scripts/**",
-        "tsup*.config.ts"
+        "tsup*.config.ts",
+        "tsdown*.config.ts"
       ],
       "outputs": ["coverage/**"], // Coverage reports
       "cache": true // Cache test results (only re-run if inputs change)

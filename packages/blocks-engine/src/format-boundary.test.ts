@@ -44,7 +44,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  *
  * Two instruments replace it, each complete in a dimension the other is not.
  *
- * **The build's own module graph.** `tsup` writes esbuild's metafile beside the
+ * **The build's own module graph.** The build writes a metafile beside the
  * bundles, recording every import edge with its KIND — including the ones
  * nothing executes. A `import("css-tree/parser")` behind a function is a real
  * edge to a real dependency, and no amount of loading the entry point asks the
@@ -398,11 +398,10 @@ describe("the module graph the build recorded", () => {
     // leaves a stale graph saying whatever it said last time — which is the
     // flattering direction, because the boundary was intact then.
     //
-    // NOT by comparing recorded sizes against the files. Measured, they do not
-    // agree and are not meant to: esbuild records what IT emitted, and tsup
-    // rewrites both the module and its map afterwards — `dist/format.mjs` is
-    // 890 bytes in the record and 490 on disk. A guard built on that would fail
-    // on every correct build, and be removed.
+    // NOT by comparing recorded sizes against the files. They need not agree:
+    // the record holds the code the bundler emitted, and the file on disk adds
+    // what is appended after it, such as the source map comment. A guard built
+    // on that would fail on correct builds, and be removed.
     //
     // Two things that do hold. The record names exactly the modules that exist,
     // so an entry point added or dropped without rewriting it is caught; and no

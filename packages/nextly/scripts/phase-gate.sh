@@ -91,7 +91,7 @@ else
 fi
 
 # ─── 4. Build ───
-echo -e "\n${YELLOW}=== Build (tsup + tsc + rollup-dts + postbuild) ===${NC}"
+echo -e "\n${YELLOW}=== Build (tsdown + postbuild) ===${NC}"
 if pnpm build 2>&1; then
   echo -e "${GREEN}PASS: Build${NC}"
   RESULTS+=("PASS: Build")
