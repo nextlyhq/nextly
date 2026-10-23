@@ -13,6 +13,8 @@
  * @module pages/dashboard/singles/[slug]/versions
  */
 
+import type { JSX } from "react";
+
 import { useVersionDocumentTitle } from "@admin/components/features/versions/useVersionDocumentTitle";
 import {
   readLocaleParam,
@@ -26,7 +28,7 @@ import type { PageProps } from "@admin/lib/routing";
 export default function SingleVersionsPage({
   params,
   searchParams,
-}: PageProps) {
+}: PageProps): JSX.Element {
   const slug = typeof params?.slug === "string" ? params.slug : "";
   const document = useSingleDocument(slug);
   const documentId = document.data?.id;

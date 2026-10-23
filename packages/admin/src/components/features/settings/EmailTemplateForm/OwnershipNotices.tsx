@@ -64,7 +64,9 @@ export function OwnershipNotices({
       ) : null}
 
       {!ownsContent ? (
-        <Alert variant="info">
+        // Foreground ink rather than the info variant's primary: a site's
+        // brand primary can be light, and this notice is body text to read.
+        <Alert variant="info" className="text-foreground">
           <Lock className="h-4 w-4" />
           <AlertDescription className="flex flex-1 flex-wrap items-center gap-3">
             <span className="flex-1">

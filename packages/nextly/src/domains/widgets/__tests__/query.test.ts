@@ -1218,3 +1218,64 @@ describe("validateWidgetQuery, a localized date key", () => {
     });
   });
 });
+
+describe("validateWidgetQuery, a source's declared filters", () => {
+  beforeEach(() => {
+    registerSource({
+      id: "system:edits",
+      label: "Edits",
+      kind: "system",
+      supports: ["list"],
+      fields: [
+        { name: "entryTitle", type: "string" },
+        { name: "collection", type: "string" },
+      ],
+      filters: ["collection", "onlyMine"],
+    });
+  });
+
+  it("admits a filter the source declares, in the value it takes", () => {
+    const q = validateWidgetQuery({
+      source: "system:edits",
+      op: "list",
+      where: { collection: "posts", onlyMine: true },
+    });
+    expect(q.where).toEqual({ collection: "posts", onlyMine: true });
+  });
+
+  it("refuses a filter in a value it does not take, and one the source does not declare", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "system:edits",
+        op: "list",
+        where: { onlyMine: "yes" },
+      })
+    ).toThrow(NextlyError);
+    expect(() =>
+      validateWidgetQuery({
+        source: "system:edits",
+        op: "list",
+        where: { collection: { equals: "posts" } },
+      })
+    ).toThrow(NextlyError);
+    // 🔴 A source that declares no filters gets none: `onlyMine` is no field of
+    // a collection, so it is refused as any undeclared name is.
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:posts",
+        op: "list",
+        where: { onlyMine: true },
+      })
+    ).toThrow(NextlyError);
+  });
+
+  it("never admits a filter inside a combinator, where it would be a field condition", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "system:edits",
+        op: "list",
+        where: { or: [{ onlyMine: true }, { collection: "posts" }] },
+      })
+    ).toThrow(NextlyError);
+  });
+});

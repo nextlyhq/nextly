@@ -23,7 +23,16 @@ export function widgetAsAsked(
   config: Record<string, unknown> | undefined
 ): DashboardWidget {
   if (!widget.query) return widget;
-  const query = applyWidgetSettings(widget.query, widget.settings, config);
+  // The widget's own source, with the filters it narrows by: a knob such as
+  // Collection then sets a key of the query's `where` on a source that reads
+  // across collections, where on a collection source it would replace the
+  // source itself.
+  const query = applyWidgetSettings(widget.query, widget.settings, config, {
+    source: {
+      id: widget.query.source,
+      ...(widget.sourceFilters ? { filters: widget.sourceFilters } : {}),
+    },
+  });
   return query === widget.query ? widget : { ...widget, query };
 }
 

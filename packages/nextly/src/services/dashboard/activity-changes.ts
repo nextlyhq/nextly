@@ -5,11 +5,15 @@
  * `metadata.changedFields`, computed by value (`computeChangedFields`), so a
  * name is there only when that field's value differed. The trail has no
  * publish action of its own: a publish is an update whose changed fields hold
- * `status`. Everything here reads that one record through one parser, so two
- * readers cannot come to disagree about what a row changed.
+ * `status`. A publish that leaves the status published, a promotion of
+ * pending edits onto a live document, says so with `metadata.published`,
+ * written by every path that can publish. Everything here reads that one
+ * record through one parser, so two readers cannot come to disagree about what
+ * a row changed.
  *
- * A Single's row carries no changed fields, so for it every question here
- * answers "nothing changed" until its saves record them.
+ * A Single's rows record the same fields and the same mark. Rows written before
+ * they did carry neither, so for them every question here answers "nothing
+ * changed".
  *
  * @module services/dashboard/activity-changes
  */
@@ -56,6 +60,16 @@ export function changesStatus(metadata: unknown): boolean {
 }
 
 /**
+ * Whether the row was written by a publish: one that put the document live, or
+ * promoted its pending edits onto the live document. Kept apart from
+ * {@link changesStatus}, which stays literal: a promotion publishes and leaves
+ * the status as it was.
+ */
+export function publishes(metadata: unknown): boolean {
+  return activityMetadataOf(metadata)?.published === true;
+}
+
+/**
  * The fields the status lifecycle stamps on its own: `updatedAt`, which every
  * write stamps, and every system column that exists only with Draft/Published,
  * by the name a document carries it under. Taken from the declarations rather
@@ -80,4 +94,28 @@ export function isStatusOnlyChange(metadata: unknown): boolean {
     changed.includes("status") &&
     changed.every(name => LIFECYCLE_FIELDS.has(name))
   );
+}
+
+/**
+ * Whether the row is a save of the document's content by whoever wrote it, the
+ * row Recently edited names as the document's latest save, rather than only a
+ * change to whether it is live.
+ *
+ * - A create is a save.
+ * - A publish or an unpublish on its own is not, so it never takes the row of
+ *   the person who made the edits it puts live.
+ * - A publish that left the status as it was is not either. It promoted pending
+ *   edits, or put other languages live, and the edits were each recorded when
+ *   they were saved.
+ * - An update that does not say what it changed is read as a save: it was
+ *   written before the fields were recorded, or by a save that changed
+ *   nothing, and either way a person saved the document.
+ */
+export function isContentSave(action: unknown, metadata: unknown): boolean {
+  if (action === "create") return true;
+  if (action !== "update") return false;
+  if (publishes(metadata) && !changesStatus(metadata)) return false;
+  const changed = changedFieldsOf(metadata);
+  if (changed === undefined) return true;
+  return changed.some(name => !LIFECYCLE_FIELDS.has(name));
 }

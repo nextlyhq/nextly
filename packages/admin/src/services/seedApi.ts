@@ -103,4 +103,12 @@ async function setSkipped(): Promise<void> {
   });
 }
 
-export const seedApi = { probe, runSeed, getStatus, setSkipped };
+/** The type of {@link seedApi}. */
+type SeedApiType = {
+  probe: typeof probe;
+  runSeed: typeof runSeed;
+  getStatus: typeof getStatus;
+  setSkipped: typeof setSkipped;
+};
+
+export const seedApi: SeedApiType = { probe, runSeed, getStatus, setSkipped };

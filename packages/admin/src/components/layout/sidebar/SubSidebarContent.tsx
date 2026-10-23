@@ -1,3 +1,5 @@
+import type { JSX } from "react";
+
 import { DynamicCollectionNav } from "@admin/components/features/dashboard/DynamicCollectionNav";
 import { DynamicPluginNav } from "@admin/components/features/dashboard/DynamicPluginNav";
 import { DynamicPluginSectionItems } from "@admin/components/features/dashboard/DynamicPluginSectionItems";
@@ -50,7 +52,7 @@ export function SubSidebarContent({
   canAccessApiKeys,
   canAccessWebhooks,
   pluginCollectionsForSection,
-}: SubSidebarContentProps) {
+}: SubSidebarContentProps): JSX.Element | null {
   if (selectedMain === "media") {
     return <MediaSidebarContent />;
   }

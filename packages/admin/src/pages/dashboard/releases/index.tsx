@@ -11,7 +11,7 @@
  * @module pages/dashboard/releases
  */
 
-import { useState } from "react";
+import { useState, type JSX } from "react";
 
 import { CreateReleaseDialog } from "@admin/components/features/releases/CreateReleaseDialog";
 import { ReleaseCalendar } from "@admin/components/features/releases/ReleaseCalendar";
@@ -25,7 +25,7 @@ import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useCan } from "@admin/hooks/useCan";
 import { navigateTo } from "@admin/lib/navigation";
 
-export default function ReleasesPage() {
+export default function ReleasesPage(): JSX.Element {
   // The same authority the server checks, asked here so the button is not
   // offered to someone who would be refused. The refusal is deliberately
   // generic — `forbidden` ships one fixed sentence so a response cannot leak

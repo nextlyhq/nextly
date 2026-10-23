@@ -1,3 +1,5 @@
+import type { JSX } from "react";
+
 import { NotificationBell } from "@admin/components/features/notifications";
 import { Discord, Github, HelpCircle } from "@admin/components/icons";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
@@ -15,7 +17,9 @@ interface DashboardHeaderProps {
   className?: string;
 }
 
-export function DashboardHeader({ className }: DashboardHeaderProps) {
+export function DashboardHeader({
+  className,
+}: DashboardHeaderProps): JSX.Element {
   const { user } = useDashboardUser();
   const logout = useLogout();
   const branding = useBranding();

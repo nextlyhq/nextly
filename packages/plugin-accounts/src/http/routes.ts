@@ -25,7 +25,7 @@ import {
 import { ACCOUNT_KIND } from "./principal";
 
 /** The plugin's kind of signed-in person, as a route names it: `<plugin>:account`. */
-export const ACCOUNT_PRINCIPAL = `${pluginAdminSlug(PLUGIN_NAME)}:${ACCOUNT_KIND}`;
+export const ACCOUNT_PRINCIPAL: string = `${pluginAdminSlug(PLUGIN_NAME)}:${ACCOUNT_KIND}`;
 
 /**
  * The plugin's REST endpoints. Those a visitor uses before signing in are
