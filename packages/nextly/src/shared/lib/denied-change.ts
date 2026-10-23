@@ -340,7 +340,7 @@ function keepDeniedLiveOnlyRows(
 ): void {
   for (const [index, row] of rows.entries()) {
     if (paired.has(index)) continue;
-    if (sameStoredValue(row, itemAt(permittedLive, index))) continue;
+    if (!removedAValue(row, itemAt(permittedLive, index))) continue;
     out.splice(Math.min(index, out.length), 0, row);
   }
 }
@@ -383,18 +383,20 @@ function rowId(row: unknown): string | undefined {
 }
 
 /**
- * The rows by id, or nothing when they cannot be told apart that way: a row
- * without an id, a repeated id, or an empty list all fall back to position.
+ * The rows that carry an id, by it, or nothing when no row can be told apart
+ * that way: a list with no ids, a repeated id, or an empty list all fall back
+ * to position. A row without an id is left out rather than spoiling the rest,
+ * so an id-less row inserted among identified ones leaves them paired by id.
  */
 function idIndex(rows: readonly unknown[]): Map<string, number> | undefined {
-  if (rows.length === 0) return undefined;
   const map = new Map<string, number>();
   for (const [index, row] of rows.entries()) {
     const id = rowId(row);
-    if (id === undefined || map.has(id)) return undefined;
+    if (id === undefined) continue;
+    if (map.has(id)) return undefined;
     map.set(id, index);
   }
-  return map;
+  return map.size > 0 ? map : undefined;
 }
 
 /**
@@ -502,8 +504,31 @@ function holdsDenied(
   permittedLive: Record<string, unknown> | undefined,
   key: string
 ): boolean {
-  if (!permittedLive || !hasOwn(permittedLive, key)) return true;
-  return !sameStoredValue(value, permittedLive[key]);
+  const judged =
+    permittedLive && hasOwn(permittedLive, key)
+      ? permittedLive[key]
+      : undefined;
+  return removedAValue(value, judged);
+}
+
+/**
+ * Whether judging `value` removed something it holds: an empty field (`null`
+ * or absent) is no value to protect, so a rule removing one removes nothing.
+ */
+function removedAValue(value: unknown, judged: unknown): boolean {
+  return !sameStoredValue(withoutEmpty(value), withoutEmpty(judged));
+}
+
+/** `value` with its empty fields left out, at any depth. */
+function withoutEmpty(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutEmpty);
+  if (!isRecord(value)) return value;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    const held = withoutEmpty(value[key]);
+    if (held !== null && held !== undefined) assign(out, key, held);
+  }
+  return out;
 }
 
 function recordOrUndefined(
