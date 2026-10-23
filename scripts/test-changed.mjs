@@ -31,8 +31,8 @@
  * @module scripts/test-changed
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, posix } from "node:path";
 
 import {
   changedPaths,
@@ -96,17 +96,70 @@ function isGlobalInput(path) {
 }
 
 /**
- * The workspaces a push tests: the ones gate-scope scoped it to, or EVERY
- * workspace when a global input changed. Gate-scope scopes `.nvmrc` and a root
- * `tsconfig` to no package and `packages/tsconfig/` to itself, so without the
- * widening the packages that compile against them are never reached at all.
+ * What turbo declares the test tasks read OUTSIDE the packages that own them,
+ * from one `turbo run test --dry=json`: the files it hashes into every task,
+ * and per package the root files its test task lists as inputs (templates,
+ * skills, a shared Vitest setup file). Path ownership cannot see those, and
+ * turbo's own `--affected` does not follow a task's root inputs either, so the
+ * declaration itself is read rather than a second list kept here.
+ *
+ * Returns `{ everyReason, packages }`: why every package must run in full, or
+ * null, and for each package one of these root inputs reached, why it must.
+ * Null when the dry run cannot be read as one, which the caller treats as
+ * "everything", never as "nothing declared".
+ */
+export function declaredReaders(dry, paths) {
+  if (!Array.isArray(dry?.tasks)) return null;
+  const changed = new Set(paths);
+  return { everyReason: globalInputReason(dry, changed), packages: testTaskHits(dry.tasks, changed) };
+}
+
+/** Each test task's package mapped to why a changed root input it declares runs it in full. */
+function testTaskHits(tasks, changed) {
+  const hits = tasks
+    .filter(task => task?.task === "test")
+    .map(task => [task.package, rootInputHit(task, changed)])
+    .filter(([, hit]) => hit);
+  return new Map(hits.map(([name, hit]) => [name, `${hit} changed, which its test task declares as an input`]));
+}
+
+/** Why a changed file turbo hashes into every task runs everything, or null. */
+function globalInputReason(dry, changed) {
+  const files = Object.keys(dry.globalCacheInputs?.files ?? {});
+  const global = files.find(file => changed.has(file));
+  return global ? `${global} changed, which turbo hashes into every task` : null;
+}
+
+/** The first changed file a test task declares outside its own package, as a repository path. */
+function rootInputHit(task, changed) {
+  return Object.keys(task.inputs ?? {})
+    .filter(input => input.startsWith("../"))
+    .map(input => posix.normalize(posix.join(String(task.directory), input)))
+    .find(path => changed.has(path));
+}
+
+/** The declaration when turbo could not give one: everything runs. */
+const UNDECLARED = {
+  everyReason: "turbo could not list what the test tasks read",
+  packages: new Map(),
+};
+
+/**
+ * The workspaces a push tests: the ones gate-scope scoped it to, the ones whose
+ * test task declares a changed root file (`declared`, from `declaredReaders`),
+ * or EVERY workspace when a global input changed. Gate-scope scopes `.nvmrc`
+ * and a root `tsconfig` to no package and `packages/tsconfig/` to itself, so
+ * without the widening the packages that compile against them are never
+ * reached at all.
  *
  * `testScriptOf` answers a workspace's `test` script. A workspace without one
  * has nothing to run, and is returned under `untestable` so the run can say so.
  */
-export function workspacesToTest({ workspaces, filters, paths, testScriptOf }) {
-  const every = paths.some(isGlobalInput);
-  const scoped = workspaces.filter(workspace => every || filters.includes(workspace.name));
+export function workspacesToTest({ workspaces, filters, paths, testScriptOf, declared = UNDECLARED }) {
+  const every = paths.some(isGlobalInput) || declared.everyReason !== null;
+  const scoped = workspaces.filter(
+    workspace => every || filters.includes(workspace.name) || declared.packages.has(workspace.name)
+  );
   return {
     testable: scoped.filter(workspace => typeof testScriptOf(workspace) === "string"),
     untestable: scoped.filter(workspace => typeof testScriptOf(workspace) !== "string"),
@@ -129,6 +182,29 @@ export function emptySelectionReason(discoverable) {
     return "Vitest discovers no test file in it, so its own test script decides whether that passes";
   }
   return null;
+}
+
+/**
+ * Why a package's dependency records cannot be trusted for this push, or null
+ * when they can.
+ *
+ * A record is what a test imported when it last ran, so it lags behind an
+ * import gained since. A change on this branch is in the push's diff, and the
+ * test reaching it through a file it already imported is selected. A change
+ * that arrived any other way — a pull, a rebase, a switch from another branch —
+ * is not, and a test that now reaches a changed file through it is missed. So
+ * the records are trusted only when every file in the package that changed
+ * since the last full run passed (`sinceFullRun`, null when that commit is
+ * unknown here) is one this push changes too (`pushed`).
+ */
+export function staleRecordsReason(sinceFullRun, pushed) {
+  if (sinceFullRun === null) {
+    return "no full run here has recorded the commit its dependency records describe";
+  }
+  const arrived = sinceFullRun.find(path => !pushed.has(path));
+  return arrived
+    ? `${arrived} changed since the last full run without being part of this push, and a record lags behind an import it gained`
+    : null;
 }
 
 /** Whether a repository path is a unit test file, as the packages' Vitest configs name them. */
@@ -274,7 +350,9 @@ export function testArgs(name, files, workers) {
 function testPackage(root, workspace, plan, workers) {
   if (plan.full) {
     console.log(`test-changed: ${workspace.name}: every test, because ${plan.reason}`);
-    return run(testArgs(workspace.name, [], workers), root);
+    const status = run(testArgs(workspace.name, [], workers), root);
+    if (status === 0) stampFullRun(root, workspace.dir);
+    return status;
   }
   if (plan.files.length === 0) {
     console.log(`test-changed: ${workspace.name}: no test file this change can affect`);
@@ -291,11 +369,67 @@ function manifestOf(root, workspace) {
   return JSON.parse(readFileSync(join(root, workspace.dir, "package.json"), "utf8"));
 }
 
+/**
+ * Where a package keeps the commit its last passing full run tested, beside the
+ * dependency records that run refreshed. Local and untracked, like the records.
+ */
+function stampPath(root, dir) {
+  return join(root, dir, "node_modules", ".vite", "test-changed-full-run");
+}
+
+/** Records that every test of a package just passed at HEAD, so every record describes HEAD. */
+function stampFullRun(root, dir) {
+  const path = stampPath(root, dir);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${git(root, ["rev-parse", "HEAD"]).trim()}\n`);
+}
+
+/** The package's files changed since its last passing full run, or null when that commit is unknown here. */
+function changedSinceFullRun(root, dir) {
+  const stamped = (() => {
+    try {
+      return readFileSync(stampPath(root, dir), "utf8").trim();
+    } catch {
+      return "";
+    }
+  })();
+  if (!/^[0-9a-f]{40}$/.test(stamped)) return null;
+  const diff = spawnSync("git", ["diff", "--name-only", stamped, "HEAD", "--", dir], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  return diff.status === 0 ? diff.stdout.split("\n").filter(Boolean) : null;
+}
+
+/** Why one package must run in full, checked cheapest first, or null when its tests can be selected. */
+function fullReasonFor(root, workspace, context) {
+  const { paths, filters, declared, all } = context;
+  // Lazily, in this order, so a package already sent to its full suite never
+  // reads its manifest or asks git about its records.
+  const checks = [
+    () => all,
+    () => declared.everyReason,
+    () => declared.packages.get(workspace.name),
+    () =>
+      fullRunReason({
+        dir: workspace.dir,
+        manifest: manifestOf(root, workspace),
+        changed: paths,
+        changedPackages: filters,
+      }),
+    () => staleRecordsReason(changedSinceFullRun(root, workspace.dir), new Set(paths)),
+  ];
+  for (const check of checks) {
+    const reason = check();
+    if (reason) return reason;
+  }
+  return null;
+}
+
 /** What to run for one package. */
-function planFor(root, workspace, paths, changedPackages, mergeBase) {
-  const manifest = manifestOf(root, workspace);
-  const reason = fullRunReason({ dir: workspace.dir, manifest, changed: paths, changedPackages });
-  return reason ? { full: true, reason } : selectionPlan(root, workspace.dir, mergeBase);
+function planFor(root, workspace, context) {
+  const reason = fullReasonFor(root, workspace, context);
+  return reason ? { full: true, reason } : selectionPlan(root, workspace.dir, context.mergeBase);
 }
 
 /** The selected files for a package that need not run in full, or the reason it must after all. */
@@ -321,24 +455,36 @@ function workersFrom(argv) {
   return /^--max-workers=(\d+)$/.exec(flag)?.[1] ?? "2";
 }
 
-/** Tests every package the change touches, and returns how many failed. */
-function testTouchedPackages(root, base, paths, workers) {
+/** What turbo declares the test tasks read outside their packages, or everything when it cannot say. */
+function turboDeclaration(root, paths) {
+  const { command, args, shell } = pnpmInvocation(["turbo", "run", "test", "--dry=json"]);
+  const dry = spawnSync(command, args, { cwd: root, encoding: "utf8", maxBuffer: 1024 * 1024 * 64, shell });
+  return (dry.status === 0 && declaredReaders(parsedJson(dry.stdout), paths)) || UNDECLARED;
+}
+
+/**
+ * Tests every package the change reaches, and returns how many failed. `all`
+ * is the reason to run each of them in full regardless, or null.
+ */
+function testTouchedPackages(root, base, paths, workers, all) {
   const mergeBase = git(root, ["merge-base", base, "HEAD"]).trim();
   const workspaces = workspacesFrom(pnpmWorkspaces(root), root);
   const { filters } = filtersFor(paths, workspaces, new Set(deletedPaths(root, base)));
+  const declared = turboDeclaration(root, paths);
   const { testable, untestable } = workspacesToTest({
     workspaces,
     filters,
     paths,
+    declared,
     testScriptOf: workspace => manifestOf(root, workspace)?.scripts?.test,
   });
   for (const workspace of untestable) {
     console.log(`test-changed: ${workspace.name}: no test script, nothing to run`);
   }
+  const context = { paths, filters, declared, all, mergeBase };
   let failed = 0;
   for (const workspace of testable) {
-    const plan = planFor(root, workspace, paths, filters, mergeBase);
-    if (testPackage(root, workspace, plan, workers) !== 0) failed += 1;
+    if (testPackage(root, workspace, planFor(root, workspace, context), workers) !== 0) failed += 1;
   }
   return failed;
 }
@@ -351,16 +497,26 @@ function testScripts(root, paths) {
   return run(["test:scripts"], root) === 0 ? 0 : 1;
 }
 
+/**
+ * The command line as options. `--scripts-only` is for a run whose packages are
+ * already being tested in full, as the pre-push does when the change redefines
+ * the workspace graph. `--all` keeps the same scope and runs each package in
+ * full, for `NEXTLY_PREPUSH_ALL_TESTS=1`.
+ */
+function optionsFrom(argv) {
+  return {
+    base: argv.find(arg => !arg.startsWith("--")) ?? "origin/main",
+    scriptsOnly: argv.includes("--scripts-only"),
+    all: argv.includes("--all") ? "every test was asked for (NEXTLY_PREPUSH_ALL_TESTS=1)" : null,
+    workers: workersFrom(argv),
+  };
+}
+
 function main() {
-  const argv = process.argv.slice(2);
-  const base = argv.find(arg => !arg.startsWith("--")) ?? "origin/main";
+  const { base, scriptsOnly, all, workers } = optionsFrom(process.argv.slice(2));
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]).trim();
   const paths = changedPaths(root, base);
-  // `--scripts-only` is for a run whose packages are already being tested in
-  // full, as the pre-push does when the change redefines the workspace graph.
-  const packageFailures = argv.includes("--scripts-only")
-    ? 0
-    : testTouchedPackages(root, base, paths, workersFrom(argv));
+  const packageFailures = scriptsOnly ? 0 : testTouchedPackages(root, base, paths, workers, all);
   process.exitCode = packageFailures + testScripts(root, paths) === 0 ? 0 : 1;
 }
 

@@ -205,8 +205,11 @@ set -e
 # each test left on its last run, always adds the tests that read files or spawn
 # processes (which no record names), runs the whole package when its tsconfig or
 # a workspace dependency changed beside it, runs EVERY package for a change every
-# test compiles against (the lockfile, `.nvmrc`, a root or shared tsconfig), and
-# runs the root scripts tests when any root file or a Vitest config changed.
+# test compiles against (the lockfile, `.nvmrc`, a root or shared tsconfig, a
+# file turbo hashes into every task), runs a package whose test task declares a
+# changed root file, runs a package in full when its dependency records may
+# predate the tree, and runs the root scripts tests when any root file or a
+# Vitest config changed.
 # NEXTLY_PREPUSH_ALL_TESTS=1 runs every test of the touched packages instead.
 if [ "$GATE_STATUS" -eq 2 ]; then
   echo "pre-push: the diff redefines the workspace or task graph — testing every workspace."
@@ -215,9 +218,10 @@ if [ "$GATE_STATUS" -eq 2 ]; then
 elif [ "$GATE_STATUS" -ne 0 ]; then
   echo "pre-push: gate-scope could not derive a trustworthy scope; refusing." >&2
   exit "$GATE_STATUS"
-elif [ "${NEXTLY_PREPUSH_ALL_TESTS:-}" = 1 ] && [ -n "$GATE_FILTERS" ]; then
-  # shellcheck disable=SC2086 -- one flag per line, intentionally word-split
-  pnpm turbo test --continue $GATE_FILTERS -- --maxWorkers="$VITEST_WORKERS"
+elif [ "${NEXTLY_PREPUSH_ALL_TESTS:-}" = 1 ]; then
+  # The same scope as below, widened the same way, with every package in full:
+  # turbo on gate-scope's filters alone would miss what the widening adds.
+  node scripts/test-changed.mjs --all --max-workers="$VITEST_WORKERS"
 else
   node scripts/test-changed.mjs --max-workers="$VITEST_WORKERS"
 fi

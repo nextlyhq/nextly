@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  declaredReaders,
   emptySelectionReason,
   fullRunReason,
   isUnitTestFile,
@@ -15,6 +16,7 @@ import {
   scriptTestsNeeded,
   selectedFiles,
   testArgs,
+  staleRecordsReason,
   workspacesToTest,
 } from "./test-changed.mjs";
 
@@ -215,8 +217,10 @@ describe("which workspaces a push tests", () => {
     { name: "@nextlyhq/e2e", dir: "e2e" },
   ];
   const scripts = { nextly: "vitest run", "@nextlyhq/ui": "vitest run" };
+  // Turbo declaring no root input for any of them, as for a source change.
+  const nothingDeclared = { everyReason: null, packages: new Map() };
   const plan = (paths, filters) =>
-    workspacesToTest({ workspaces, filters, paths, testScriptOf: w => scripts[w.name] });
+    workspacesToTest({ workspaces, filters, paths, testScriptOf: w => scripts[w.name], declared: nothingDeclared });
   const names = list => list.map(w => w.name);
 
   it("are the ones gate-scope scoped it to", () => {
@@ -256,5 +260,80 @@ describe("a selection that came back empty", () => {
 
   it("runs the package in full when Vitest could not say", () => {
     expect(emptySelectionReason(null)).toMatch(/could not say/);
+  });
+});
+
+describe("what turbo declares the test tasks read outside their packages", () => {
+  // The shape `turbo run test --dry=json` prints, cut down to what is read.
+  const dry = {
+    globalCacheInputs: { files: { "scripts/vitest-dom-setup.ts": "h", "packages/tsconfig/base.json": "h" } },
+    tasks: [
+      {
+        task: "test",
+        package: "create-nextly-app",
+        directory: "packages/create-nextly-app",
+        inputs: { "src/a.ts": "h", "../../templates/plugin/README.md": "h", "../../skills/a/SKILL.md": "h" },
+      },
+      { task: "test", package: "nextly", directory: "packages/nextly", inputs: { "src/a.ts": "h" } },
+      { task: "build", package: "nextly", directory: "packages/nextly", inputs: { "../../docs/a.mdx": "h" } },
+    ],
+  };
+
+  it("runs a package whose test task declares a changed root file", () => {
+    const declared = declaredReaders(dry, ["templates/plugin/README.md"]);
+    expect(declared.everyReason).toBeNull();
+    expect([...declared.packages.keys()]).toEqual(["create-nextly-app"]);
+    expect(declared.packages.get("create-nextly-app")).toMatch(/templates\/plugin\/README\.md changed/);
+  });
+
+  it("runs every package for a file turbo hashes into every task", () => {
+    expect(declaredReaders(dry, ["scripts/vitest-dom-setup.ts"]).everyReason).toMatch(/vitest-dom-setup/);
+  });
+
+  it("reads only test tasks, and only files outside the package", () => {
+    const declared = declaredReaders(dry, ["docs/a.mdx", "packages/nextly/src/a.ts"]);
+    expect(declared.everyReason).toBeNull();
+    expect(declared.packages.size).toBe(0);
+  });
+
+  // An unreadable dry run must not read as "nothing declared".
+  it("is unreadable, never empty, when it is not a dry run", () => {
+    expect(declaredReaders(undefined, ["templates/a"])).toBeNull();
+    expect(declaredReaders({ tasks: "x" }, ["templates/a"])).toBeNull();
+  });
+
+  it("widens the workspaces a push tests", () => {
+    const workspaces = [
+      { name: "nextly", dir: "packages/nextly" },
+      { name: "create-nextly-app", dir: "packages/create-nextly-app" },
+    ];
+    const testScriptOf = () => "vitest run";
+    const names = declared =>
+      workspacesToTest({ workspaces, filters: [], paths: ["templates/plugin/README.md"], testScriptOf, declared }).testable.map(w => w.name);
+    expect(names(declaredReaders(dry, ["templates/plugin/README.md"]))).toEqual(["create-nextly-app"]);
+    expect(names(declaredReaders(dry, ["scripts/vitest-dom-setup.ts"]))).toEqual(["nextly", "create-nextly-app"]);
+    // No declaration at all is treated as everything.
+    expect(names(undefined)).toEqual(["nextly", "create-nextly-app"]);
+  });
+});
+
+describe("whether a package's dependency records describe the tree", () => {
+  const pushed = new Set(["packages/nextly/src/a.ts"]);
+
+  it("do when everything changed since the last full run is in this push", () => {
+    expect(staleRecordsReason(["packages/nextly/src/a.ts"], pushed)).toBeNull();
+    expect(staleRecordsReason([], pushed)).toBeNull();
+  });
+
+  // A pull, a rebase or a branch switch changes files the push does not: a
+  // test reaching a changed file through an import gained there is missed.
+  it("do not when a file changed some other way", () => {
+    expect(staleRecordsReason(["packages/nextly/src/a.ts", "packages/nextly/src/b.ts"], pushed)).toMatch(
+      /src\/b\.ts changed since the last full run/
+    );
+  });
+
+  it("do not when no full run here recorded the commit they describe", () => {
+    expect(staleRecordsReason(null, pushed)).toMatch(/no full run here/);
   });
 });
