@@ -36,7 +36,9 @@ vi.mock("./permissions", () => ({
 }));
 vi.mock("./registered-content-slugs", () => ({ registeredSlugsOfKind }));
 
-const { readableSlugAllowlist } = await import("./readable-slug-allowlist");
+const { readableSlugAllowlist, readableSlugsOfKind } = await import(
+  "./readable-slug-allowlist"
+);
 
 const session: ReadAccessCaller = {
   userId: "u1",
@@ -130,5 +132,35 @@ describe("which slugs a caller may read", () => {
     registeredSlugsOfKind.mockResolvedValue({ slugs: [], reachable: false });
     expect(await readableSlugAllowlist(session, "single")).toEqual([]);
     expect(readableEntities).not.toHaveBeenCalled();
+  });
+});
+
+describe("which slugs a caller may read, and whether the registry answered", () => {
+  it("says the registry could not be read, rather than that nothing is readable", async () => {
+    // The allowlist above answers both cases with an empty list, which is right for scoping a
+    // list. What a reader is TOLD must keep them apart: "you have nothing" and "we could not
+    // check" are different statements, and only the first is a fact about the install.
+    registeredSlugsOfKind.mockResolvedValue({ slugs: [], reachable: false });
+    expect(await readableSlugsOfKind(session, "collection")).toEqual({
+      slugs: [],
+      reachable: false,
+    });
+    expect(readableEntities).not.toHaveBeenCalled();
+  });
+
+  it("answers the readable slugs, in registry order, when the registry answered", async () => {
+    readableEntities.mockResolvedValue(new Set(["notes", "posts"]));
+    expect(await readableSlugsOfKind(session, "collection")).toEqual({
+      slugs: ["posts", "notes"],
+      reachable: true,
+    });
+  });
+
+  it("answers a caller admitted to nothing as readable and empty, not as unreachable", async () => {
+    readableEntities.mockResolvedValue(new Set());
+    expect(await readableSlugsOfKind(session, "single")).toEqual({
+      slugs: [],
+      reachable: true,
+    });
   });
 });
