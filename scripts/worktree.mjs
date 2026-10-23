@@ -57,16 +57,20 @@ import { fileURLToPath } from "node:url";
 import {
   IDLE_DAYS,
   answeringPorts,
-  buildOutputIn,
+  buildActivityReason,
+  buildOutputOf,
   diskUsage,
   errorText,
   formatBytes,
   heldCwds,
+  ignoredIn,
+  ignoredWorkReason,
   inUseReasons,
   lastActivity,
   logRemoval,
   moveAsideAndRemove,
   processCwds,
+  removeIfStillFree,
   staleReasons,
 } from "./worktree-sweep.mjs";
 
@@ -946,7 +950,7 @@ async function reclaimIdle(options) {
   const tally = { freed: 0, failed: 0 };
   console.log(words.header);
   for (const kind of SWEEP_KINDS.filter(entry => entry.always || options[entry.flag])) {
-    reportKind(kind, await kind.candidates(context), options.apply, tally, context.common);
+    await reportKind(kind, await kind.candidates(context), { apply: options.apply, tally, kind, context });
   }
   console.log(`${words.freed} ${formatBytes(tally.freed)} in all`);
   printSweepHint(options);
@@ -987,21 +991,45 @@ function printSweepHint({ builds, stale }) {
 }
 
 /**
- * What every kind reads once per run: the checkouts, the snapshots, and the
- * in-use gate. A process that starts after these were read is a race the
- * trash rename and `worktree remove`'s own refusal still stand behind.
+ * What every kind reads once per run to find its candidates: the checkouts,
+ * the snapshots, and the in-use facts. Those facts are minutes old by the time
+ * a removal comes, so `recheck` reads them again just before each one.
  */
 function sweepContext() {
   const records = worktreeRecords(git(["worktree", "list", "--porcelain"]));
   const common = commonDir();
-  const facts = { processCwds: processCwds(), heldCwds: heldCwds(), now: Date.now() };
+  const claims = readClaims(claimDir(common));
+  const facts = currentFacts();
   return {
     records,
     common,
+    now: facts.now,
     others: records.slice(1).filter(record => resolve(record.path) !== root),
     known: fallowSnapshots(fallowTempDir()),
-    gate: inUseGate(readClaims(claimDir(common)), facts),
+    gate: inUseGate(claims, facts),
+    recheck: recheckGate(claims),
     leaving: new Set(),
+  };
+}
+
+function currentFacts() {
+  return { processCwds: processCwds(), heldCwds: heldCwds(), now: Date.now() };
+}
+
+/**
+ * The gate asked again with facts read now, for the candidate about to go.
+ * Removals inside one checkout follow each other within milliseconds, so one
+ * answer serves a checkout for a second rather than reading every process
+ * again per directory.
+ */
+function recheckGate(claims) {
+  let last = { checkout: null, at: 0, reasons: [] };
+  return async candidate => {
+    if (last.checkout !== candidate.checkout || Date.now() - last.at > 1000) {
+      const reasons = await inUseGate(claims, currentFacts())(candidate.checkout, candidate.idleDays, candidate.readLastActive());
+      last = { checkout: candidate.checkout, at: Date.now(), reasons };
+    }
+    return last.reasons;
   };
 }
 
@@ -1019,10 +1047,16 @@ async function snapshotCandidates({ records, known, gate }) {
   for (const record of records) {
     for (const snapshot of snapshotsOwnedBy(known, record.path)) {
       const reasons = await gate(record.path, IDLE_DAYS.snapshot, snapshotUsedAt(snapshot));
-      candidates.push({ path: snapshot.path, what: `of ${record.path}`, snapshot, reasons });
+      const usedAt = () => snapshotUsedAt(snapshot);
+      candidates.push({ ...owned(record.path, IDLE_DAYS.snapshot, usedAt), path: snapshot.path, what: `of ${record.path}`, snapshot, reasons });
     }
   }
   return candidates;
+}
+
+/** What `recheck` needs to ask the gate again about the checkout a candidate belongs to. */
+function owned(checkout, idleDays, readLastActive) {
+  return { checkout, idleDays, readLastActive };
 }
 
 /** When fallow last used a snapshot: its owner record and its ready marker move then. */
@@ -1038,12 +1072,46 @@ async function staleCandidates(context) {
     const reasons = [
       ...recordReasons(record),
       ...staleReasons(record.path),
+      ...ignoredReasons(record.path, listedIgnored(record.path), context.now),
       ...(await context.gate(record.path, IDLE_DAYS.stale, lastActive)),
     ];
     if (reasons.length === 0) context.leaving.add(record.path);
-    candidates.push({ path: record.path, reasons });
+    const readLastActive = () => lastActivity(record.path);
+    candidates.push({ ...owned(record.path, IDLE_DAYS.stale, readLastActive), path: record.path, reasons });
   }
   return candidates;
+}
+
+/**
+ * What its ignored files say about a stale checkout: whether any of them may
+ * be work, which `git worktree remove` would delete even without `--force`,
+ * and whether its build output was written lately.
+ */
+function ignoredReasons(checkout, ignored, now) {
+  if (ignored === null) return ["cannot list its ignored files"];
+  return [
+    ignoredWorkReason(checkout, ignored, isOwnSettings),
+    buildActivityReason(checkout, buildOutputOf(ignored), IDLE_DAYS.stale, now),
+  ].filter(Boolean);
+}
+
+/**
+ * Whether `file` is the settings file `worktree new` writes and holds nothing
+ * anyone added: only `env`, and only the slot's own variables in it.
+ */
+function isOwnSettings(file) {
+  if (!file.endsWith(join(".claude", "settings.local.json"))) return false;
+  try {
+    return onlySlotEnv(JSON.parse(readFileSync(file, "utf8")));
+  } catch {
+    return false;
+  }
+}
+
+function onlySlotEnv(settings) {
+  const slotKeys = Object.keys(slotEnv(0));
+  const envOnly = Object.keys(settings).every(key => key === "env");
+  return envOnly && Object.keys(settings.env ?? {}).every(key => slotKeys.includes(key));
 }
 
 function recordReasons(record) {
@@ -1056,25 +1124,31 @@ function recordReasons(record) {
 async function buildCandidates(context) {
   const candidates = [];
   for (const record of context.others.filter(entry => !context.leaving.has(entry.path))) {
-    candidates.push(...(await buildCandidatesIn(record, context.gate)));
+    candidates.push(...(await buildCandidatesIn(record, context)));
   }
   return candidates;
 }
 
-/** One checkout's build output; a checkout in use is one line, not one per directory it holds. */
-async function buildCandidatesIn(record, gate) {
+/**
+ * One checkout's build output, held to the gate and to when the output itself
+ * was last written. A checkout in use is one line, not one per directory.
+ */
+async function buildCandidatesIn(record, { gate, now }) {
   const lastActive = lastActivity(record.path);
-  const found = listedBuildOutput(record.path);
-  if (found === null) return [{ path: record.path, reasons: ["cannot list its ignored files"] }];
+  const ignored = listedIgnored(record.path);
+  if (ignored === null) return [{ path: record.path, reasons: ["cannot list its ignored files"] }];
+  const found = buildOutputOf(ignored);
   if (found.length === 0) return [];
-  const reasons = await gate(record.path, IDLE_DAYS.builds, lastActive);
+  const activity = buildActivityReason(record.path, found, IDLE_DAYS.builds, now);
+  const reasons = [...(await gate(record.path, IDLE_DAYS.builds, lastActive)), activity].filter(Boolean);
   if (reasons.length > 0) return [{ path: record.path, what: `${found.length} build output dir(s)`, reasons }];
-  return found.map(relative => ({ path: join(record.path, relative), reasons }));
+  const readLastActive = () => lastActivity(record.path);
+  return found.map(relative => ({ ...owned(record.path, IDLE_DAYS.builds, readLastActive), path: join(record.path, relative), reasons }));
 }
 
-function listedBuildOutput(checkout) {
+function listedIgnored(checkout) {
   try {
-    return buildOutputIn(checkout);
+    return ignoredIn(checkout);
   } catch {
     return null;
   }
@@ -1084,12 +1158,12 @@ function listedBuildOutput(checkout) {
  * Print one kind's candidates, and with `apply` remove the ones the gate let
  * through. Sizes come from one `du` run per kind, taken before anything goes.
  */
-function reportKind(kind, candidates, apply, tally, common) {
+async function reportKind(kind, candidates, run) {
   console.log(`${kind.title}:`);
   if (candidates.length === 0) return console.log("  none");
   const sizes = diskUsage(candidates.filter(isFree).map(candidate => candidate.path));
   for (const candidate of candidates) {
-    settle(candidate, sizes.get(candidate.path), { apply, tally, kind, common });
+    await settle(candidate, sizes.get(candidate.path), run);
   }
 }
 
@@ -1112,13 +1186,14 @@ function offer(candidate, bytes, tally) {
   console.log(`  would remove ${candidate.path} (${formatBytes(bytes)})${aside(candidate)}`);
 }
 
-function removeOne(candidate, bytes, { tally, kind, common }) {
-  const outcome = kind.remove(candidate);
+async function removeOne(candidate, bytes, { tally, kind, context }) {
+  const outcome = await removeIfStillFree(candidate, { recheck: context.recheck, remove: kind.remove });
+  if (outcome.skipped) return console.log(`  skipped ${candidate.path}: ${outcome.reason}`);
   if (!outcome.removed) {
     tally.failed += 1;
     return console.log(`  NOT removed ${candidate.path}: ${outcome.reason}`);
   }
-  logRemoval(common, kind.log, candidate.path, bytes);
+  logRemoval(context.common, kind.log, candidate.path, bytes);
   tally.freed += bytes ?? 0;
   console.log(`  removed ${candidate.path} (${formatBytes(bytes)})`);
 }
@@ -1142,9 +1217,11 @@ function removedQuietly(act) {
 
 /**
  * Remove a stale checkout through `worktree remove` itself, never `--force`:
- * git's refusal to remove a dirty checkout is what protects uncommitted work,
- * and the slot, databases and snapshot are given back as for any removal. Its
- * report goes straight to this run's output.
+ * git's refusal to remove a dirty checkout protects uncommitted work, and the
+ * slot, databases and snapshot are given back as for any removal. Git deletes
+ * ignored files even so, which is why a stale checkout holding ignored files
+ * that may be work is never offered. Its report goes straight to this run's
+ * output.
  */
 function removedThroughRemove(checkout) {
   const run = spawnSync(process.execPath, [fileURLToPath(import.meta.url), "remove", checkout], {

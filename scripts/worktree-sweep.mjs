@@ -31,7 +31,16 @@
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { appendFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
+import {
+  appendFileSync,
+  lstatSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { connect } from "node:net";
 import { join, resolve, sep } from "node:path";
 
@@ -189,10 +198,14 @@ function answers(port, timeoutMs) {
 
 /** Run git in `cwd` with the hook environment cleared, as `worktree.mjs` does. */
 function git(args, cwd) {
+  return execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+
+function gitEnv() {
   const env = { ...process.env };
   delete env.GIT_DIR;
   delete env.GIT_WORK_TREE;
-  return execFileSync("git", args, { cwd, encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] }).trim();
+  return env;
 }
 
 function modifiedAt(path) {
@@ -222,22 +235,114 @@ export function lastActivity(checkout) {
   );
 }
 
-/** The ignored build output in a checkout, relative paths without the trailing slash. */
-export function buildOutputIn(checkout) {
-  const listed = git(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"], checkout);
-  return listed
-    .split("\n")
-    .filter(Boolean)
-    .filter(isBuildOutput)
-    .map(path => path.replace(/\/$/, ""));
+/**
+ * Every ignored path in a checkout, without a trailing slash. Git names a
+ * wholly ignored directory as one entry, which hides what it holds, so one
+ * that is not regenerated is listed file by file: a `.claude` directory
+ * holding only the slot's settings must be judged by that file. Regenerated
+ * directories such as `node_modules` stay one entry and are never walked.
+ */
+export function ignoredIn(checkout) {
+  const entries = lsIgnored(checkout, ["--directory"]);
+  return [...new Set(entries.flatMap(entry => (opaque(entry) ? lsIgnored(checkout, ["--", entry]) : [entry])))].map(
+    withoutSlash
+  );
+}
+
+function lsIgnored(checkout, args) {
+  return git(["ls-files", "--others", "--ignored", "--exclude-standard", ...args], checkout).split("\n").filter(Boolean);
+}
+
+function opaque(entry) {
+  return entry.endsWith("/") && !isRegenerated(withoutSlash(entry));
+}
+
+function withoutSlash(path) {
+  return path.replace(/\/$/, "");
+}
+
+export function buildOutputOf(ignored) {
+  return ignored.filter(isBuildOutput);
+}
+
+/**
+ * Ignored paths something regenerates without anyone's input: build output,
+ * dependencies, husky's hook shims, TypeScript's build info and fallow's
+ * cache. Everything else ignored may be someone's work — an `.env`, a local
+ * database, uploads, a generated migration being inspected — and
+ * `git worktree remove` deletes ignored files even without `--force`.
+ */
+const REGENERATED = [
+  isBuildOutput,
+  path => path.split("/").includes("node_modules"),
+  path => path.startsWith(".husky/_"),
+  path => path.endsWith(".tsbuildinfo"),
+  path => path === ".fallow" || path.startsWith(".fallow/"),
+];
+
+function isRegenerated(path) {
+  return REGENERATED.some(test => test(path));
+}
+
+/**
+ * Why a checkout's ignored files hold work, or null when every one is
+ * regenerated. `isOwnSettings` says whether a path is a settings file this
+ * tooling wrote and nobody added to, which `worktree new` leaves in each.
+ */
+export function ignoredWorkReason(checkout, ignored, isOwnSettings) {
+  const work = ignored.filter(path => !isRegenerated(path) && !isOwnSettings(join(checkout, path)));
+  if (work.length === 0) return null;
+  const more = work.length > 3 ? ` and ${work.length - 3} more` : "";
+  return `it holds ignored files that may be work: ${work.slice(0, 3).join(", ")}${more}`;
+}
+
+/**
+ * Why a checkout's build output says it is in use, or null: a build that only
+ * overwrites files inside an existing `dist` moves none of the times
+ * `lastActivity` reads, so the output itself is asked. Unknown counts as used.
+ */
+export function buildActivityReason(checkout, outputs, idleDays, now) {
+  const since = now - idleDays * DAY_MS;
+  const verdicts = outputs.map(relative => writtenSince(join(checkout, relative), since));
+  if (verdicts.includes(null)) return "cannot tell when its build output was last written";
+  return verdicts.includes(true) ? `its build output was written within ${idleDays} d` : null;
+}
+
+/**
+ * Whether anything under `dir` was modified at or after `since`: true, false,
+ * or null when it could not all be read or holds more than `limit` entries,
+ * which is too many to have looked at every one.
+ */
+export function writtenSince(dir, since, limit = 50_000) {
+  const walk = { stack: [dir], seen: 0, since, limit };
+  try {
+    let verdict = false;
+    while (verdict === false && walk.stack.length > 0) verdict = step(walk);
+    return verdict;
+  } catch {
+    return null;
+  }
+}
+
+/** Look at one entry: true when it is new enough, null at the limit, false to keep going. */
+function step(walk) {
+  walk.seen += 1;
+  if (walk.seen > walk.limit) return null;
+  const entry = walk.stack.pop();
+  const info = lstatSync(entry);
+  return info.mtimeMs >= walk.since || expand(walk, entry, info);
+}
+
+function expand(walk, entry, info) {
+  if (info.isDirectory()) walk.stack.push(...readdirSync(entry).map(name => join(entry, name)));
+  return false;
 }
 
 /**
  * Why a checkout is not stale, or an empty list when it is: no uncommitted or
  * untracked change, and no commit that is on no remote and not already in
- * `mainRef`. "Already in" is the merged tree, not ancestry: a squash merge
- * leaves the branch's commits unmerged to git while `main` holds their content,
- * and merging HEAD into `mainRef` then changes nothing.
+ * `mainRef`. "Already in" is content, not ancestry: a squash merge leaves the
+ * branch's commits unmerged to git while `main` holds what they changed.
  */
 export function staleReasons(checkout, mainRef = MAIN_REF) {
   const state = gitState(checkout);
@@ -270,19 +375,30 @@ function aheadReason(checkout, { ahead }, mainRef) {
   return inMain ? null : `${ahead} commit(s) on no remote and not in ${mainRef}`;
 }
 
-/** Whether merging HEAD into `mainRef` leaves `mainRef`'s tree as it is; null when git cannot say. */
+/**
+ * Whether every path the branch changed since it left `mainRef` is the same in
+ * `mainRef` as in HEAD; null when git cannot say. Only reads: a comparison
+ * that wrote a merged tree would leave an object behind on a report run. A
+ * path `main` has changed again since reads as different, which keeps the
+ * checkout — the safe direction.
+ */
 function contentInMain(checkout, mainRef) {
-  let mainTree;
   try {
-    mainTree = git(["rev-parse", `${mainRef}^{tree}`], checkout);
+    const base = git(["merge-base", mainRef, "HEAD"], checkout);
+    const changed = git(["diff", "--name-only", "--no-renames", base, "HEAD"], checkout).split("\n").filter(Boolean);
+    return changed.length === 0 || samePaths(checkout, mainRef, changed);
   } catch {
     return null;
   }
-  const merge = spawnSync("git", ["merge-tree", "--write-tree", mainRef, "HEAD"], { cwd: checkout, encoding: "utf8" });
-  // Exit 1 is a conflicted merge: the checkout holds a change `main` lacks.
-  if (merge.status === 1) return false;
-  if (merge.status !== 0) return null;
-  return merge.stdout.split("\n")[0].trim() === mainTree;
+}
+
+/** `git diff --quiet` over exactly these paths, literally: exit 0 is the same, 1 is different. */
+function samePaths(checkout, mainRef, paths) {
+  const args = ["--literal-pathspecs", "diff", "--quiet", "--no-renames", mainRef, "HEAD", "--", ...paths];
+  const run = spawnSync("git", args, { cwd: checkout, env: gitEnv() });
+  if (run.status === 0) return true;
+  if (run.status === 1) return false;
+  throw new Error(`git diff exited ${run.status}`);
 }
 
 /**
@@ -333,6 +449,19 @@ export function moveAsideAndRemove(dir, now = Date.now()) {
   } catch (error) {
     return { removed: false, reason: `moved to ${trash} but not removed (${errorText(error)})` };
   }
+}
+
+/**
+ * Remove a candidate only if, asked again right now, nothing uses it. What
+ * the run read at its start is minutes old by the time sizing, port probes
+ * and earlier removals are done, and a shell or a build may have entered
+ * since: neither a rename nor `git worktree remove` refuses a directory a
+ * process merely sits in.
+ */
+export async function removeIfStillFree(candidate, { recheck, remove }) {
+  const late = await recheck(candidate);
+  if (late.length > 0) return { removed: false, skipped: true, reason: `in use by now: ${late.join("; ")}` };
+  return remove(candidate);
 }
 
 export function errorText(error) {

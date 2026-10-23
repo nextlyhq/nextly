@@ -39,10 +39,19 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { worktreeRecords } from "./worktree.mjs";
-import { DAY_MS, inUseReasons, isBuildOutput, parseLsofCwds } from "./worktree-sweep.mjs";
+import {
+  DAY_MS,
+  buildActivityReason,
+  ignoredWorkReason,
+  inUseReasons,
+  isBuildOutput,
+  parseLsofCwds,
+  removeIfStillFree,
+  writtenSince,
+} from "./worktree-sweep.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPTS = ["worktree.mjs", "worktree-sweep.mjs", "bounded.mjs", "local-limits.mjs"];
@@ -75,7 +84,7 @@ function scratch() {
   mkdirSync(join(world.repo, "scripts"), { recursive: true });
   for (const name of SCRIPTS) copyFileSync(join(HERE, name), join(world.repo, "scripts", name));
   writeFileSync(join(world.repo, "package.json"), '{"name":"scratch","type":"module"}\n');
-  writeFileSync(join(world.repo, ".gitignore"), "dist\nnode_modules\n.env.local\n");
+  writeFileSync(join(world.repo, ".gitignore"), "dist\nnode_modules\n.env.local\n.claude/settings.local.json\n");
   writeFileSync(join(world.repo, "index.js"), "export const a = 1;\n");
   git(world, dir, "init", "-q", "--bare", world.origin);
   git(world, world.repo, "init", "-q", "-b", "main");
@@ -101,13 +110,27 @@ function checkout(world, branch, days = 10) {
   return { path, branch, age: () => leaveAlone(world, path, days) };
 }
 
-/** Move every time the sweep reads a checkout's last use back by `days`. */
+/**
+ * Move back by `days` every time the sweep reads for a checkout's last use:
+ * everything in the checkout, its build output included, and its HEAD, index
+ * and HEAD's log. A test then writes whatever it wants to read as fresh.
+ */
 function leaveAlone(world, path, days) {
   const when = new Date(Date.now() - days * DAY_MS);
   const gitDir = git(world, path, "rev-parse", "--absolute-git-dir");
-  for (const file of [path, join(gitDir, "HEAD"), join(gitDir, "index"), join(gitDir, "logs", "HEAD")]) {
+  for (const file of [join(gitDir, "HEAD"), join(gitDir, "index"), join(gitDir, "logs", "HEAD")]) {
     if (existsSync(file)) utimesSync(file, when, when);
   }
+  ageTree(path, when);
+}
+
+function ageTree(dir, when) {
+  for (const name of readdirSync(dir)) {
+    const entry = join(dir, name);
+    if (lstatSync(entry).isDirectory()) ageTree(entry, when);
+    utimesSync(entry, when, when);
+  }
+  utimesSync(dir, when, when);
 }
 
 /** Run the scratch copy of the script and collect what it did, rather than what it threw. */
@@ -208,6 +231,73 @@ describe("reading the facts the gate is given", () => {
   });
 });
 
+describe("ignored files that may be work", () => {
+  const own = path => path.endsWith(".claude/settings.local.json");
+
+  it("finds none where every ignored path is regenerated", () => {
+    const ignored = ["dist", "packages/x/node_modules", ".husky/_", "packages/x/.tsbuildinfo", ".fallow", ".turbo"];
+    expect(ignoredWorkReason("/w/one", ignored, own)).toBeNull();
+  });
+
+  it("names the paths that may be work, and counts the rest", () => {
+    const ignored = [".env.local", "packages/nextly/data", "dist", "uploads", "notes.md"];
+    expect(ignoredWorkReason("/w/one", ignored, own)).toBe(
+      "it holds ignored files that may be work: .env.local, packages/nextly/data, uploads and 1 more"
+    );
+  });
+
+  it("lets the slot's own settings file through only when the predicate says it is untouched", () => {
+    expect(ignoredWorkReason("/w/one", [".claude/settings.local.json"], own)).toBeNull();
+    expect(ignoredWorkReason("/w/one", [".claude/settings.local.json"], () => false)).toMatch(/settings\.local\.json/);
+  });
+});
+
+describe("when build output was last written", () => {
+  it("sees a file overwritten inside an old directory, which moves no directory's time", () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "worktree-sweep-built-")));
+    scratchDirs.push(dir);
+    mkdirSync(join(dir, "dist", "chunks"), { recursive: true });
+    writeFileSync(join(dir, "dist", "chunks", "a.js"), "old\n");
+    ageTree(dir, new Date(Date.now() - 10 * DAY_MS));
+    const since = Date.now() - 3 * DAY_MS;
+    expect(writtenSince(join(dir, "dist"), since)).toBe(false);
+
+    writeFileSync(join(dir, "dist", "chunks", "a.js"), "rebuilt\n");
+
+    expect(writtenSince(join(dir, "dist"), since)).toBe(true);
+    expect(buildActivityReason(dir, ["dist"], 3, Date.now())).toBe("its build output was written within 3 d");
+  });
+
+  it("answers null, so the gate skips, past the entry limit or for a path it cannot read", () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "worktree-sweep-many-")));
+    scratchDirs.push(dir);
+    for (const name of ["a", "b", "c"]) writeFileSync(join(dir, name), "x\n");
+    ageTree(dir, new Date(Date.now() - 10 * DAY_MS));
+    expect(writtenSince(dir, Date.now() - DAY_MS, 2)).toBeNull();
+    expect(writtenSince(join(dir, "missing"), Date.now() - DAY_MS)).toBeNull();
+    expect(buildActivityReason(dir, ["missing"], 3, Date.now())).toBe("cannot tell when its build output was last written");
+  });
+});
+
+describe("asking again just before a removal", () => {
+  it("does not remove a candidate that is in use by now, whatever the first look said", async () => {
+    const remove = vi.fn(() => ({ removed: true }));
+    const outcome = await removeIfStillFree(
+      { path: "/w/one/dist", checkout: "/w/one" },
+      { recheck: async () => ["a process runs inside it (/w/one)"], remove }
+    );
+    expect(remove).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ removed: false, skipped: true, reason: "in use by now: a process runs inside it (/w/one)" });
+  });
+
+  it("removes it when the second look still finds nothing", async () => {
+    const remove = vi.fn(() => ({ removed: true }));
+    const outcome = await removeIfStillFree({ path: "/w/one/dist" }, { recheck: async () => [], remove });
+    expect(remove).toHaveBeenCalledOnce();
+    expect(outcome).toEqual({ removed: true });
+  });
+});
+
 describe.runIf(process.platform !== "win32")("worktree sweep on real checkouts", () => {
   it("only reports without --apply: nothing on disk changes, though there is something to remove", () => {
     const world = scratch();
@@ -215,13 +305,26 @@ describe.runIf(process.platform !== "win32")("worktree sweep on real checkouts",
     mkdirSync(join(merged.path, "dist"));
     writeFileSync(join(merged.path, "dist", "index.js"), "built\n");
     merged.age();
+    // A branch with its own commit while main moved on independently: the
+    // comparison with main must not write a merged tree into the object store.
+    const ahead = checkout(world, "ahead");
+    writeFileSync(join(ahead.path, "branch.js"), "export const b = 1;\n");
+    git(world, ahead.path, "add", "branch.js");
+    git(world, ahead.path, "commit", "-q", "-m", "branch work");
+    writeFileSync(join(world.repo, "main.js"), "export const m = 1;\n");
+    git(world, world.repo, "add", "main.js");
+    git(world, world.repo, "commit", "-q", "-m", "main work");
+    git(world, world.repo, "push", "-q", "origin", "main");
+    ahead.age();
     const before = treeHash(world.dir);
 
     const { code, stdout } = worktreeCommand(world, "sweep", "--stale", "--builds");
 
     expect(code, stdout).toBe(0);
-    // The control: there was something it would have removed.
+    // The controls: there was something it would have removed, and the
+    // branch with its own work was compared with main.
     expect(stdout).toContain(`would remove ${merged.path}`);
+    expect(stdout).toContain(`skipped ${ahead.path}: 1 commit(s) on no remote and not in origin/main`);
     expect(treeHash(world.dir)).toBe(before);
   }, 60_000);
 
@@ -334,5 +437,51 @@ describe.runIf(process.platform !== "win32")("worktree sweep on real checkouts",
 
     expect(existsSync(join(recent.path, "dist")), stdout).toBe(true);
     expect(stdout).toMatch(/under 3 d idle/);
+  }, 60_000);
+  it("leaves a stale checkout holding ignored work, which git would delete, beside one it removes", () => {
+    const world = scratch();
+    const kept = checkout(world, "kept");
+    writeFileSync(join(kept.path, ".env.local"), "SECRET=only-here\n");
+    kept.age();
+    const merged = checkout(world, "merged");
+    merged.age();
+
+    const { stdout } = worktreeCommand(world, "sweep", "--stale", "--apply");
+
+    expect(existsSync(merged.path), stdout).toBe(false);
+    expect(readFileSync(join(kept.path, ".env.local"), "utf8")).toContain("only-here");
+    expect(stdout).toContain(`skipped ${kept.path}: it holds ignored files that may be work: .env.local`);
+  }, 60_000);
+
+  it("removes a stale checkout whose only ignored file is the slot settings `worktree new` wrote", () => {
+    const world = scratch();
+    const merged = checkout(world, "merged");
+    mkdirSync(join(merged.path, ".claude"));
+    writeFileSync(join(merged.path, ".claude", "settings.local.json"), '{"env":{"NEXTLY_WORKTREE_SLOT":"3","PORT":"3220"}}\n');
+    merged.age();
+    const edited = checkout(world, "edited");
+    mkdirSync(join(edited.path, ".claude"));
+    writeFileSync(join(edited.path, ".claude", "settings.local.json"), '{"env":{"PORT":"3230"},"permissions":{"allow":["Bash"]}}\n');
+    edited.age();
+
+    const { stdout } = worktreeCommand(world, "sweep", "--stale", "--apply");
+
+    expect(existsSync(merged.path), stdout).toBe(false);
+    expect(existsSync(join(edited.path, ".claude", "settings.local.json"))).toBe(true);
+  }, 60_000);
+
+  it("leaves build output rebuilt in place in a checkout whose git state is old", () => {
+    const world = scratch();
+    const rebuilt = checkout(world, "rebuilt");
+    mkdirSync(join(rebuilt.path, "dist"));
+    writeFileSync(join(rebuilt.path, "dist", "index.js"), "built\n");
+    rebuilt.age();
+    // A build overwrites a file in place: no directory's time moves.
+    writeFileSync(join(rebuilt.path, "dist", "index.js"), "rebuilt\n");
+
+    const { stdout } = worktreeCommand(world, "sweep", "--builds", "--apply");
+
+    expect(existsSync(join(rebuilt.path, "dist", "index.js")), stdout).toBe(true);
+    expect(stdout).toContain("its build output was written within 3 d");
   }, 60_000);
 });

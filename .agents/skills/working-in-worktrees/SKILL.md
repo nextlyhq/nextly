@@ -92,8 +92,11 @@ idle three days (`--builds`), and a whole checkout idle seven days whose work is
 all on a remote or already in `main` (`--stale`; a squash-merged branch counts,
 by comparing trees). Each is skipped, with the reason printed, when a process
 runs inside the checkout, a heavy job holds a slot there, its slot's port
-answers, or any of those cannot be read. A stale checkout goes through
-`worktree remove` without `--force`, so uncommitted work stays. Every removal is
+answers, or any of those cannot be read, and each is asked again just before
+its removal. A stale checkout goes through `worktree remove` without `--force`,
+so uncommitted work stays; git still deletes ignored files, so one holding any
+ignored file that is not regenerated (an `.env`, a local database, uploads) is
+never offered. Build output written lately counts as use. Every removal is
 logged to `nextly-sweep.log` in the git common directory.
 
 `NEXTLY_TEST_DB` carries a database NAME, never a URL: Postgres 15 is on 5434
