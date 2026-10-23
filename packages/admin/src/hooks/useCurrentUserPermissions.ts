@@ -67,12 +67,31 @@ const SYSTEM_CAPABILITY_SLUGS: Record<
 };
 
 /**
+ * Every action on every collection and Single: what the server's answer gives
+ * a super-admin, including an entity added since it was asked.
+ */
+const EVERY_ENTITY: Record<string, CollectionCapabilities> = new Proxy(
+  {},
+  {
+    get: () => ({
+      canRead: true,
+      canCreate: true,
+      canUpdate: true,
+      canDelete: true,
+      canPublish: true,
+      canUnpublish: true,
+    }),
+  }
+);
+
+/**
  * Everything, for a super-admin.
  *
  * Named rather than returned inline: it is a fifth of `buildCapabilities` and
  * has nothing to do with the permission parsing that follows it, so keeping it
  * in the function made the interesting half harder to read. Frozen so a caller
- * cannot mutate the shared object into a narrower one for everybody.
+ * cannot mutate the shared object into a narrower one for everybody. The
+ * collections in it are replaced by the server's answer about them.
  */
 const SUPER_ADMIN_CAPABILITIES: AdminCapabilities = Object.freeze({
   isSuperAdmin: true,
@@ -83,19 +102,7 @@ const SUPER_ADMIN_CAPABILITIES: AdminCapabilities = Object.freeze({
   canViewSettings: true,
   canViewWebhooks: true,
   canViewReleases: true,
-  collections: new Proxy(
-    {},
-    {
-      get: () => ({
-        canRead: true,
-        canCreate: true,
-        canUpdate: true,
-        canDelete: true,
-        canPublish: true,
-        canUnpublish: true,
-      }),
-    }
-  ),
+  collections: EVERY_ENTITY,
   canManageUsers: true,
   canManageRoles: true,
   canManageMedia: true,
@@ -143,14 +150,23 @@ export function buildCapabilities(
   isSuperAdmin: boolean,
   answer: CapabilitiesResponse | undefined
 ): AdminCapabilities {
-  // Super-admin gets everything.
-  if (isSuperAdmin) return SUPER_ADMIN_CAPABILITIES;
+  // What may be done with each collection and Single is the server's answer
+  // alone, its own super-admin verdict included. The permission list is a
+  // separate request, and a super-admin standing it still reports after the
+  // answer stopped giving one must not grant every entity.
+  const collections = answer?.isSuperAdmin
+    ? EVERY_ENTITY
+    : collectionsFrom(answer);
+  const canViewCollections =
+    answer?.isSuperAdmin === true ||
+    Object.values(collections).some(c => c.canRead);
+
+  // Super-admin gets every system section.
+  if (isSuperAdmin) {
+    return { ...SUPER_ADMIN_CAPABILITIES, canViewCollections, collections };
+  }
 
   const permSet = new Set(permissions);
-  const collections = collectionsFrom(answer);
-
-  // Check if user can view any collection
-  const canViewCollections = Object.values(collections).some(c => c.canRead);
 
   const holdsAny = (slugs: readonly string[]): boolean =>
     slugs.some(slug => permSet.has(slug));
@@ -176,7 +192,10 @@ export function buildCapabilities(
 /** The longest delay a browser timer holds without overflowing. */
 const MAX_TIMER_MS = 2_147_483_647;
 
-/** The shortest wait before asking again about an answer past its end. */
+/**
+ * The shortest wait before asking again about an answer fetched after its own
+ * end, as a server clock behind this one gives.
+ */
 const MIN_RECHECK_MS = 1_000;
 
 /** The capability flag each action is answered by. */
@@ -246,7 +265,7 @@ type CurrentUserPermissions = AnswerState & {
 
 /**
  * Where one query's answer stands, once the role assignment it was given for
- * may have ended: an answer that arrived before `expiredAt` no longer counts,
+ * may have ended: an answer that arrived before `endedAt` no longer counts,
  * and its refresh is what is being waited for.
  */
 function answerState(
@@ -254,9 +273,9 @@ function answerState(
     UseQueryResult<unknown>,
     "data" | "dataUpdatedAt" | "error" | "isFetching" | "isPending"
   >,
-  expiredAt: number | null
+  endedAt: number | null
 ): AnswerState {
-  const expired = expiredAt !== null && query.dataUpdatedAt < expiredAt;
+  const expired = endedAt !== null && query.dataUpdatedAt < endedAt;
   return {
     isLoading: query.isPending || (expired && query.isFetching),
     error: query.error,
@@ -340,7 +359,12 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // the admin offering what an ended role allowed.
   const validUntil = answer.data?.validUntil ?? null;
   const answeredAt = answer.dataUpdatedAt;
-  const [expiredAt, setExpiredAt] = useState<number | null>(null);
+  // The end, once it has passed. Read at render, so an answer already past its
+  // end when this mounts never counts, not even until a timer fires; the
+  // timer below only renders again when the end arrives.
+  const [, setEndsReached] = useState(0);
+  const endedAt =
+    validUntil !== null && Date.now() >= validUntil ? validUntil : null;
   useEffect(() => {
     if (validUntil === null) return undefined;
     let timer: ReturnType<typeof setTimeout>;
@@ -354,23 +378,25 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
       }
       timer = setTimeout(
         () => {
-          setExpiredAt(Date.now());
+          setEndsReached(reached => reached + 1);
           // Every mounted caller arms the same deadline; joining a refresh
           // already under way asks the server once.
           void refetch({ cancelRefetch: false });
           void refetchAnswer({ cancelRefetch: false });
         },
-        // An answer already past its end, as a clock ahead of the server's
-        // reads it, is asked about again at most once a second.
-        Math.max(remaining, MIN_RECHECK_MS)
+        // An answer the server gave after its own end is asked about again at
+        // most once a second; any other is asked about at its end.
+        answeredAt >= validUntil
+          ? Math.max(remaining, MIN_RECHECK_MS)
+          : Math.max(remaining, 0)
       );
     };
     arm();
     return () => clearTimeout(timer);
   }, [validUntil, answeredAt, refetch, refetchAnswer]);
 
-  const permissionsState = answerState(permissionsQuery, expiredAt);
-  const content = answerState(answer, expiredAt);
+  const permissionsState = answerState(permissionsQuery, endedAt);
+  const content = answerState(answer, endedAt);
 
   const permissions = permissionsState.hasAnswer
     ? (data?.permissions ?? [])
@@ -399,13 +425,12 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
 
   /**
    * Whether the current user may perform an action on a collection or
-   * Single, as the server answers it.
+   * Single, as the server answers it, a super-admin's answer included.
    */
   const canAccessCollection = (
     collectionSlug: string,
     action: "read" | "create" | "update" | "delete" | "publish" | "unpublish"
   ): boolean => {
-    if (isSuperAdmin) return true;
     const entity = capabilities.collections[collectionSlug];
     if (!entity) return false;
     return entity[CAPABILITY_OF_ACTION[action]];

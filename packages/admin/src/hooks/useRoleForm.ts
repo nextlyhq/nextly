@@ -21,6 +21,8 @@ import { roleApi } from "../services/roleApi";
 import type { FetchRolesParams } from "../types/role";
 import type { Permission, RoleWithPermissions } from "../types/ui/form";
 
+import { invalidateCurrentUserAccess } from "./current-user-access";
+
 /**
  * Loading state for async data fetching
  */
@@ -216,6 +218,9 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         const nextIds = values.permissions;
         await roleApi.updateRolePermissions(roleId, currentIds, nextIds);
         await queryClient.invalidateQueries({ queryKey: ["roles"] });
+        // The signed-in user may hold this role, so what they may do is asked
+        // again, as every other role, permission and assignment change does.
+        invalidateCurrentUserAccess(queryClient);
         toast.success("Role updated successfully");
       } else {
         debugLog("useRoleForm", "Creating role...");

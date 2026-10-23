@@ -58,6 +58,7 @@ vi.mock("../useLocaleParam", () => ({
 import {
   CURRENT_USER_CAPABILITIES_KEY,
   CURRENT_USER_PERMISSIONS_KEY,
+  currentUserCapabilitiesKey,
   invalidateCurrentUserAccess,
 } from "../current-user-access";
 import { useCurrentUserPermissions } from "../useCurrentUserPermissions";
@@ -213,6 +214,62 @@ describe("useCurrentUserPermissions", () => {
     expect(result.current.hasAnswer).toBe(false);
     expect(result.current.canAccessCollection("posts", "read")).toBe(false);
     expect(result.current.hasPermission("read-posts")).toBe(false);
+  });
+
+  it("never counts an answer already past its end, not even before asking again", async () => {
+    // Both answers are in the cache from before the role assignment ended,
+    // as they are when a page mounts the hook after the end.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const ended = Date.now() - 60_000;
+    const before = { updatedAt: ended - 60_000 };
+    client.setQueryData(CURRENT_USER_PERMISSIONS_KEY, EDITOR, before);
+    client.setQueryData(
+      currentUserCapabilitiesKey(undefined),
+      answering({ read: true }, ended),
+      before
+    );
+    server.capabilities = answering({ read: true });
+
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+
+    // The first render, before any request has answered.
+    expect(result.current.content.hasAnswer).toBe(false);
+    expect(result.current.hasAnswer).toBe(false);
+    expect(result.current.canAccessCollection("posts", "read")).toBe(false);
+  });
+
+  it("decides content from the server's answer, its super-admin verdict included", async () => {
+    // The permission list still says super-admin; the content answer, asked
+    // separately, no longer gives it.
+    server.permissions = { ...EDITOR, isSuperAdmin: true };
+    server.capabilities = answering({ read: false });
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(newClient()),
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+
+    expect(result.current.canAccessCollection("posts", "read")).toBe(false);
+    expect(result.current.capabilities.collections.posts?.canRead).toBe(false);
+    // POPULATION CONTROL: the system sections still follow the permission
+    // list, which is what reports super-admin authority for them.
+    expect(result.current.isSuperAdmin).toBe(true);
+    expect(result.current.capabilities.canViewUsers).toBe(true);
+  });
+
+  it("gives a super-admin's answer every entity, one added since included", async () => {
+    server.permissions = { ...EDITOR, isSuperAdmin: true };
+    server.capabilities = { ...answering({}), isSuperAdmin: true };
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(newClient()),
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+
+    expect(result.current.canAccessCollection("pages", "delete")).toBe(true);
+    expect(result.current.capabilities.canViewCollections).toBe(true);
   });
 
   it("asks at an end further off than a timer holds, and not before", async () => {
