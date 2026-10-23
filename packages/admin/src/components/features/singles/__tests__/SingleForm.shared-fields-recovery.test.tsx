@@ -211,4 +211,58 @@ describe("a Single's form, for a publish refused over shared values", () => {
       tagline: "Later",
     });
   });
+
+  it("won't run the recovery once another author holds the Single", async () => {
+    const user = userEvent.setup();
+    const onSubmit = refusedOnce();
+    const { rerenderWith } = renderSingle(onSubmit);
+    await user.click(
+      screen.getByRole("button", { name: "Save from the view" })
+    );
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+
+    // Someone else takes the Single after the refusal; the toast still offers
+    // the action, so the action itself has to ask.
+    useDocumentLock.mockReturnValue({
+      state: {
+        status: "held-by-other",
+        holder: { ownerId: "u2", ownerLabel: "Bob", expiresInSeconds: 90 },
+      },
+      takeOver: vi.fn(),
+      requestAccess: vi.fn(),
+    });
+    act(() => {
+      rerenderWith(first);
+    });
+
+    const work = vi.fn(async () => undefined);
+    await expect(refusedFormOf(onSubmit)?.run(work)).rejects.toThrow();
+    expect(work).not.toHaveBeenCalled();
+  });
+
+  it("holds the Single's own saves while the recovery runs", async () => {
+    const user = userEvent.setup();
+    const onSubmit = refusedOnce();
+    renderSingle(onSubmit);
+    await user.click(
+      screen.getByRole("button", { name: "Save from the view" })
+    );
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+
+    let done: () => void = () => {};
+    const running = refusedFormOf(onSubmit)?.run(
+      () =>
+        new Promise<void>(resolve => {
+          done = resolve;
+        })
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Save from the view" })
+    );
+    // Nothing written while the recovery holds the gate.
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+
+    done();
+    await running;
+  });
 });

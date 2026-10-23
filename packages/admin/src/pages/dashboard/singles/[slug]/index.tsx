@@ -484,8 +484,10 @@ function useSingleSaveFailure(args: {
         singleApi.updateDocument(slug, values, { locale }),
       [slug, locale]
     ),
+    // Answers once the reloaded document is back, which the recovery waits
+    // for before letting the editor save again.
     onTaken: useCallback(() => {
-      void queryClient.invalidateQueries({
+      return queryClient.invalidateQueries({
         queryKey: singleDocumentKeys.detail(slug),
       });
     }, [queryClient, slug]),

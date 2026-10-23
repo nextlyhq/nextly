@@ -49,7 +49,10 @@ function refusal(data: Record<string, unknown>) {
 }
 
 function renderRecovery(
-  args: { onTaken?: () => void; save?: (values: unknown) => unknown } = {}
+  args: {
+    onTaken?: () => unknown;
+    save?: (values: unknown) => unknown;
+  } = {}
 ) {
   const rendered = renderHook(() =>
     useSharedFieldsRecovery({
@@ -76,6 +79,16 @@ function formHolding(
     adoptTaken: vi.fn((fields: readonly string[]) => {
       order.push(`adopt ${fields.join(",")}`);
     }),
+    // A mock of the generic gate, typed as the port's: the mock itself only
+    // sees `unknown`, which is all the recovery hands back through it.
+    run: vi.fn(async (work: () => Promise<unknown>) => {
+      order.push("hold");
+      try {
+        return await work();
+      } finally {
+        order.push("release");
+      }
+    }) as unknown as RefusedForm["run"],
   };
 }
 
@@ -145,11 +158,13 @@ describe("useSharedFieldsRecovery", () => {
     await vi.waitFor(() => expect(onTaken).toHaveBeenCalled());
 
     expect(order).toEqual([
+      "hold",
       "read",
       "save",
       "take",
       "adopt articleCount",
       "reload",
+      "release",
     ]);
     expect(save).toHaveBeenCalledWith({
       articleCount: 3,
@@ -302,6 +317,83 @@ describe("useSharedFieldsRecovery", () => {
     expect(toast.success).toHaveBeenCalledWith(
       "Spanish now uses the live Article Count. Its earlier value is in History."
     );
+  });
+
+  it("runs the save, the take and the reload inside the form's write gate, held until the reload finishes", async () => {
+    const order: string[] = [];
+    take.mockImplementation(async () => {
+      order.push("take");
+      return {
+        message: "ok",
+        item: { taken: ["articleCount"], outOfDate: [] },
+      };
+    });
+    let reloaded: () => void = () => {};
+    const onTaken = vi.fn(
+      () =>
+        new Promise<void>(resolve => {
+          order.push("reload");
+          reloaded = () => {
+            order.push("reloaded");
+            resolve();
+          };
+        })
+    );
+    const { recover } = renderRecovery({
+      onTaken,
+      save: values => {
+        order.push("save");
+        return values;
+      },
+    });
+    recover(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      formHolding({ articleCount: 3 }, order)
+    );
+
+    actionOf(toast.error.mock.calls[0])();
+    await vi.waitFor(() => expect(onTaken).toHaveBeenCalled());
+    // Still held while the reloaded document is on its way: a Publish now
+    // would send the value the take just replaced.
+    expect(order).not.toContain("release");
+    reloaded();
+    await vi.waitFor(() => expect(order).toContain("release"));
+
+    expect(order).toEqual([
+      "hold",
+      "read",
+      "save",
+      "take",
+      "adopt articleCount",
+      "reload",
+      "reloaded",
+      "release",
+    ]);
+  });
+
+  it("saves and takes nothing when the form won't run it, its writes being held", async () => {
+    const save = vi.fn();
+    const { recover } = renderRecovery({ save });
+    const form = formHolding({ articleCount: 3 });
+    vi.mocked(form.run).mockRejectedValue(
+      new Error("This document can't be saved right now.")
+    );
+    recover(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      form
+    );
+
+    actionOf(toast.error.mock.calls[0])();
+    await vi.waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2));
+
+    expect(save).not.toHaveBeenCalled();
+    expect(take).not.toHaveBeenCalled();
   });
 
   it("leaves any other error to the caller", () => {

@@ -79,6 +79,8 @@ describe("a publish refused over out-of-date shared fields", () => {
         bio: "Typed after the refusal",
       })),
       adoptTaken: vi.fn(),
+      // The editor's write gate, open: the work runs as handed over.
+      run: <T,>(work: () => Promise<T>) => work(),
     };
     const { result } = renderHook(
       () =>

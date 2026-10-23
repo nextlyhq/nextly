@@ -15,7 +15,7 @@
  * @since 1.0.0
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { autosaveIntervalFrom } from "@admin/components/features/versions/autosave-interval";
 import { DocumentHistoryContext } from "@admin/components/features/versions/document-history-context";
@@ -322,6 +322,11 @@ export function EntryForm({
    */
   const [savedCount, setSavedCount] = useState(0);
 
+  // Whether this document's writes are held, as decided below once the lock
+  // and the version on screen are known. Read by the form when a refused
+  // publish's recovery runs, which writes like the handlers below do.
+  const writesHeldNow = useRef(false);
+
   const {
     form,
     handleSubmit: submitEntry,
@@ -336,6 +341,7 @@ export function EntryForm({
     mode,
     locale,
     readDraft,
+    writesHeld: () => writesHeldNow.current,
     onSuccess: data => {
       // Before the caller's handler, which may navigate away: this is the only
       // point that knows a write landed, and a revision that misses one leaves
@@ -600,6 +606,7 @@ export function EntryForm({
   // context — this body renders ABOVE the provider this component creates, so
   // a context read here would report no version on screen even while one is.
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
+  writesHeldNow.current = writesHeld;
 
   /*
    * The one gate every write passes through.

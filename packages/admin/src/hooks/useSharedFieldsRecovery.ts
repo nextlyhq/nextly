@@ -96,6 +96,13 @@ export interface RefusedForm {
    * keeping every other edit.
    */
   adoptTaken: (fields: readonly string[]) => void;
+  /**
+   * Run the recovery inside the editor's own write gate: refused, without
+   * running, while the editor's writes are held (the document is someone
+   * else's, or a past version is on screen) or a save is in flight; and
+   * while it runs, the editor's own saves and publishes are held in turn.
+   */
+  run: <T>(work: () => Promise<T>) => Promise<T>;
 }
 
 /** The refusal toast of one document in one language. */
@@ -123,8 +130,11 @@ export function useSharedFieldsRecovery(args: {
   fields: readonly LabelledFieldConfig[];
   /** Save values as the pending change, without publishing. */
   save: (values: Record<string, unknown>) => Promise<unknown>;
-  /** Reload the editor once the live values are taken. */
-  onTaken: () => void;
+  /**
+   * Reload the editor once the live values are taken, answering when the
+   * reloaded document has arrived.
+   */
+  onTaken: () => unknown;
 }): (error: unknown, form: RefusedForm) => boolean {
   const { scope, locale, fields, save, onTaken } = args;
   const { getLocale, defaultLocale } = useLocalization();
@@ -165,19 +175,28 @@ export function useSharedFieldsRecovery(args: {
       const refusedFor = refusalToastId(scope, locale);
       const take = async () => {
         try {
-          // Read now, not when refused: edits made since are part of it.
-          await save(await form.pendingChangeNow());
-          const { item } = await versionApi.takeLiveSharedValues(scope, locale);
-          // Before the reload, so the document it brings is the one the form
-          // takes the live values from. Only while the editor still shows the
-          // document and language this was refused for: moving to a language
-          // already loaded keeps the same form, and showing this language's
-          // live values in it would overwrite the other one's edits. The take
-          // itself named its own document and language, so it stands either
-          // way, and the reload below brings it to whatever is on screen.
-          if (onScreen.current === refusedFor) form.adoptTaken(item.taken);
-          toast.success(takenMessage(item, language, labelOf));
-          onTaken();
+          // The whole sequence inside the editor's write gate, through to
+          // the reloaded document: a Publish between the take and the reload
+          // would still send the value the take replaced.
+          await form.run(async () => {
+            // Read now, not when refused: edits made since are part of it.
+            await save(await form.pendingChangeNow());
+            const { item } = await versionApi.takeLiveSharedValues(
+              scope,
+              locale
+            );
+            // Before the reload, so the document it brings is the one the
+            // form takes the live values from. Only while the editor still
+            // shows the document and language this was refused for: moving to
+            // a language already loaded keeps the same form, and showing this
+            // language's live values in it would overwrite the other one's
+            // edits. The take itself named its own document and language, so
+            // it stands either way, and the reload below brings it to
+            // whatever is on screen.
+            if (onScreen.current === refusedFor) form.adoptTaken(item.taken);
+            toast.success(takenMessage(item, language, labelOf));
+            await onTaken();
+          });
         } catch (failure) {
           toast.error(
             apiErrorMessage(failure, "The live values couldn't be taken.")

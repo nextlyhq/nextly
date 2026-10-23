@@ -272,8 +272,10 @@ export function useUpdateEntry<
         ),
       [collectionSlug, entryId, locale, fallbackLocale]
     ),
+    // Answers once the reloaded document is back, which the recovery waits
+    // for before letting the editor save again.
     onTaken: useCallback(() => {
-      void queryClient.invalidateQueries({
+      return queryClient.invalidateQueries({
         queryKey: entryKeys.detail(collectionSlug, entryId),
       });
     }, [queryClient, collectionSlug, entryId]),

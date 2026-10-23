@@ -542,14 +542,30 @@ export function SingleForm({
     inFlight: false,
   });
 
+  //
+  // The synchronous half of the write gate. `isSubmitting` is render state: it
+  // publishes one render behind the mutation, so two submissions in the same
+  // turn both read false and both write. The latch is set the moment the
+  // first submission enters and released when it settles, closing that gap.
+  // A refused publish's recovery takes it too.
+  //
+  const submissionLatch = useRef(false);
+  // Whether this Single's writes are held, as decided below once the lock and
+  // the version on screen are known; read when a recovery runs.
+  const writesHeldNow = useRef(false);
+
   // The form as a refused publish's way out reaches it: saved as the pending
-  // change the way a status-less save sends it, and given the live values it
-  // takes when the Single carrying them arrives.
-  const { refusedForm, adoptArrived } = useRefusedForm(form, values =>
-    withoutPlaceholders(
-      schema.fields,
-      mapIntentToPayload(values, "save-working-draft", blankPasswordFields)
-    )
+  // change the way a status-less save sends it, given the live values it
+  // takes when the Single carrying them arrives, and run inside this form's
+  // own write gate.
+  const { refusedForm, adoptArrived } = useRefusedForm(
+    form,
+    values =>
+      withoutPlaceholders(
+        schema.fields,
+        mapIntentToPayload(values, "save-working-draft", blankPasswordFields)
+      ),
+    { writesHeld: () => writesHeldNow.current, latch: submissionLatch }
   );
 
   useEffect(() => {
@@ -640,14 +656,9 @@ export function SingleForm({
   // component creates, so a context read here would report no version on
   // screen even while one is.
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
-
-  //
-  // The synchronous half of the same gate. `isSubmitting` is render state: it
-  // publishes one render behind the mutation, so two submissions in the same
-  // turn both read false and both write. The latch is set the moment the
-  // first submission enters and released when it settles, closing that gap.
-  //
-  const submissionLatch = useRef(false);
+  writesHeldNow.current = writesHeld;
+  // The synchronous half of the same gate is `submissionLatch`, declared above
+  // because a refused publish's recovery takes it too.
 
   // Throwing away this language's pending change. Scoped to the active locale:
   // a localized Single holds one per language, so discarding without naming one
