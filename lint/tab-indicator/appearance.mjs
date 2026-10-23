@@ -24,8 +24,10 @@
 //
 // Everything here is computed when the module loads, from the BUILT
 // `@nextlyhq/ui` and its stylesheet, which is why lint needs a build first as
-// every type-aware rule already does. Loading refuses rather than answering
-// from nothing: an empty owned set would make every call site read as clean.
+// every type-aware rule already does. Without that build the rule refuses
+// every element that renders the primitive, rather than answering from nothing,
+// which would make every call site read as clean; the plugin still loads, so a
+// hook linting other files on a fresh checkout is not stopped by it.
 
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -86,20 +88,36 @@ function ownedClassesOf(slot) {
     .filter(c => APPEARANCE.test(c));
 }
 
+/**
+ * Why the primitive cannot be asked, when its build is missing; undefined when
+ * it can. Resolving the package's entry is what fails before a build.
+ */
+export const UNAVAILABLE = (() => {
+  try {
+    fromUi.resolve("@nextlyhq/ui");
+    return undefined;
+  } catch {
+    return "@nextlyhq/ui is not built, so the appearance its Tabs own cannot be read: run `pnpm build` first";
+  }
+})();
+
 /** The owned classes of each component, by exported name. */
-const OWNED_BY_SLOT = {
-  TabsList: ownedClassesOf("tabs-list"),
-  TabsTrigger: ownedClassesOf("tabs-trigger"),
-};
+const OWNED_BY_SLOT = UNAVAILABLE
+  ? { TabsList: [], TabsTrigger: [] }
+  : {
+      TabsList: ownedClassesOf("tabs-list"),
+      TabsTrigger: ownedClassesOf("tabs-trigger"),
+    };
 
 // The structural witness. The rule exists only because the primitive draws an
 // indicator; if it stops, or the render above finds no element, the rule is not
 // merely unscoped but meaningless, and loading fails rather than passing every
 // call site.
 if (
-  !OWNED_BY_SLOT.TabsTrigger.includes("border-b-2") ||
-  !OWNED_BY_SLOT.TabsTrigger.some(c => /^data-\[state=active\]:/.test(c)) ||
-  !OWNED_BY_SLOT.TabsList.includes("rounded-none")
+  !UNAVAILABLE &&
+  (!OWNED_BY_SLOT.TabsTrigger.includes("border-b-2") ||
+    !OWNED_BY_SLOT.TabsTrigger.some(c => /^data-\[state=active\]:/.test(c)) ||
+    !OWNED_BY_SLOT.TabsList.includes("rounded-none"))
 ) {
   throw new Error(
     `tab-indicator: the rendered Tabs primitive no longer draws the indicator this rule protects (owned: ${JSON.stringify(OWNED_BY_SLOT)}). Rebuild @nextlyhq/ui, or update the rule with the primitive.`
@@ -1174,8 +1192,11 @@ const unmapped = Object.values(OWNED_BY_SLOT)
   .flat()
   .filter(cls => reachedBy(cls).length === 0);
 if (
-  unmapped.length > 0 ||
-  Object.values(ownedCssProperties()).some(properties => properties.size === 0)
+  !UNAVAILABLE &&
+  (unmapped.length > 0 ||
+    Object.values(ownedCssProperties()).some(
+      properties => properties.size === 0
+    ))
 ) {
   throw new Error(
     `tab-indicator: the design system maps no CSS to ${JSON.stringify(unmapped)}. The stylesheet in packages/ui/src/styles may have stopped loading its theme.`

@@ -35,7 +35,7 @@ import { fileURLToPath } from "node:url";
 
 import { literalText as wholeLiteral } from "@nextlyhq/module-specifiers/parse-source";
 
-import { displacedBy, ownsStyleProperty } from "./appearance.mjs";
+import { displacedBy, ownsStyleProperty, UNAVAILABLE } from "./appearance.mjs";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -936,6 +936,11 @@ export const tabIndicator = {
       JSXOpeningElement(node) {
         const exported = ownedReference(node.name, state, resolver);
         if (!exported) return;
+        // An element this rule cannot judge is refused, not passed.
+        if (UNAVAILABLE) {
+          context.report({ node, message: UNAVAILABLE });
+          return;
+        }
         for (const { node: at, why } of violationsAt(
           node,
           exported,
