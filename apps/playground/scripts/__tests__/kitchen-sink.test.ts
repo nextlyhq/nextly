@@ -82,12 +82,12 @@ function walk(nodes: readonly BlockNode[]): BlockNode[] {
   return nodes.flatMap(node => [
     node,
     ...Object.values(node.slots ?? {}).flatMap(children =>
-      walk((children ?? []) as BlockNode[])
+      walk(children ?? [])
     ),
   ]);
 }
 
-const NODES = walk(KITCHEN_SINK_DOCUMENT.nodes as BlockNode[]);
+const NODES = walk(KITCHEN_SINK_DOCUMENT.nodes);
 
 describe("the kitchen-sink document", () => {
   it("was actually walked", () => {
@@ -234,7 +234,7 @@ describe("the kitchen-sink document", () => {
         partClass: () => "",
         ctx: context,
         renderSlot: () => null,
-      } as unknown as BlockRenderArgs<never>);
+      });
 
       const markup =
         element === null || element === undefined
@@ -284,7 +284,7 @@ describe("the kitchen-sink document", () => {
         resolveEntryPath: () => Promise.resolve(null),
       },
       renderSlot: () => ITEM,
-    } as unknown as BlockRenderArgs<never>);
+    });
 
     const markup =
       element === null || element === undefined

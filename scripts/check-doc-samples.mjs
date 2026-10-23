@@ -2861,7 +2861,7 @@ async function auditDocs() {
  * may not get worse, and a page that gets better has to say so here, which is
  * how the number reaches zero and the entry disappears.
  *
- * The same shape as `eslint-bare-error-allowlist.json`, for the same reason.
+ * The same shape as `bare-error-allowlist.json`, for the same reason.
  */
 const BASELINE = join(ROOT, "scripts", "doc-samples-baseline.json");
 

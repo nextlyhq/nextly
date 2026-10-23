@@ -22,14 +22,14 @@ const adapterThatCannotKeyExpressions = (
   seen: string[]
 ) => ({
   dialect: "mysql" as const,
-  getDrizzle: () => ({}),
+  getDrizzle: <T>(): T => ({}) as T,
   getCapabilities: () =>
     ({ dialect: "mysql", functionalIndexes: false }) as never,
-  queryStatement: (statement: { queryChunks?: unknown }) => {
+  queryStatement: <T>(statement: { queryChunks?: unknown }): Promise<T[]> => {
     seen.push(JSON.stringify(statement.queryChunks ?? statement));
-    return Promise.resolve(rows);
+    return Promise.resolve(rows as T[]);
   },
-  executeQuery: (statement: string) => {
+  executeQuery: <T>(statement: string): Promise<T[]> => {
     seen.push(statement);
     return Promise.resolve([]);
   },

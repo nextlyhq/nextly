@@ -15,7 +15,11 @@
         ".env*",
         "$TURBO_ROOT$/packages/plugin-form-builder/src/admin/**",
         "$TURBO_ROOT$/packages/plugin-page-builder/src/admin/**"
-      ]
+      ],
+      // ANALYZE only turns on the size report the build prints; the files it
+      // writes are the same either way, so it reaches the build without
+      // keying the cache.
+      "passThroughEnv": ["ANALYZE"]
     },
     "test": {
       // `build` because the bundle-report suite reads this package's OWN
