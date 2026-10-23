@@ -12,6 +12,7 @@
  * @module components/features/releases/CreateReleaseDialog
  */
 
+import type { JSX } from "react";
 import { useState } from "react";
 
 import {
@@ -42,7 +43,7 @@ export function CreateReleaseDialog({
   open,
   onOpenChange,
   onCreated,
-}: CreateReleaseDialogProps) {
+}: CreateReleaseDialogProps): JSX.Element {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const create = useCreateRelease();

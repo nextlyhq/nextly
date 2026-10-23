@@ -17,6 +17,7 @@ import {
   Badge,
 } from "@nextlyhq/ui";
 import { CheckCircle2 } from "lucide-react";
+import type { JSX } from "react";
 
 import type { SchemaPreviewChange } from "@admin/services/schemaApi";
 
@@ -36,7 +37,7 @@ export function SafeChangeConfirmDialog({
   changes,
   onConfirm,
   isApplying,
-}: SafeChangeConfirmDialogProps) {
+}: SafeChangeConfirmDialogProps): JSX.Element {
   const hasChanges =
     changes.added.length > 0 ||
     changes.removed.length > 0 ||

@@ -24,6 +24,7 @@
  */
 
 import { Button, Input } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useId, useState } from "react";
 
 import { useLocalization } from "@admin/hooks/useLocalization";
@@ -630,7 +631,7 @@ export function LanguagePanel({
   hasStatus,
   actionsDisabled = false,
   className,
-}: LanguagePanelProps) {
+}: LanguagePanelProps): JSX.Element | null {
   const [confirmPublishAll, setConfirmPublishAll] = useState(false);
   const [filter, setFilter] = useState("");
   const filterId = useId();

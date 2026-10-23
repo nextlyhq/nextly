@@ -456,7 +456,7 @@ export function MediaUploadDropzone({
   className,
   activeFolderId,
   activeFolderName,
-}: MediaUploadDropzoneProps) {
+}: MediaUploadDropzoneProps): React.JSX.Element {
   // Collapsed state is fully controlled by parent; kept for backward-compat API
   const isCollapsed =
     controlledIsCollapsed !== undefined ? controlledIsCollapsed : false;

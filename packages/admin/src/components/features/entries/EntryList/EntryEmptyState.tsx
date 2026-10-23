@@ -9,6 +9,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { FileText, Plus } from "@admin/components/icons";
 
@@ -57,7 +58,7 @@ export function EntryEmptyState({
   collectionName,
   singularName,
   onCreateClick,
-}: EntryEmptyStateProps) {
+}: EntryEmptyStateProps): JSX.Element {
   return (
     <div className="flex flex-col items-center justify-center py-16 px-4  border border-border border-dashed rounded-lg bg-card">
       <div className="rounded-lg bg-primary/5 p-4 mb-4">

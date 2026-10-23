@@ -151,8 +151,10 @@ enforced there; these are the forms to write it in.
 - Types are imported with `import type`, which oxlint's
   `consistent-type-imports` holds. A value import for a type pulls a runtime
   module into the declaration's graph.
-- A component returns `React.JSX.Element`, or `React.ReactNode` when it may
-  render nothing.
+- A component returns `JSX.Element`, with `JSX` imported as a type from
+  `react` (`import type { JSX } from "react"`), or `React.JSX.Element` where
+  `React` is already in scope; `ReactNode` when it may render nothing. Never
+  from `react/jsx-runtime`, which is the runtime the compiler imports for you.
 - A type too long to read inline gets a name: a type alias beside the export,
   unexported unless consumers need it. Spelling a large inferred type out in
   full, as for a Drizzle table, states thousands of lines that go stale with

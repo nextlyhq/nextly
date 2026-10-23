@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useState } from "react";
 import { FormProvider } from "react-hook-form";
 
@@ -23,7 +24,7 @@ import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ActionResponse } from "@admin/lib/api/response-types";
 import { navigateTo } from "@admin/lib/navigation";
 
-export function Signup() {
+export function Signup(): JSX.Element {
   const { api } = useApi();
   const appName = useAppName();
 

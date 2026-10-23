@@ -43,6 +43,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useId } from "react";
 
 import * as Icons from "@admin/components/icons";
@@ -88,7 +89,7 @@ export function DismissWidgetButton({
   floating = false,
   buttonRef,
   onDismiss,
-}: DismissWidgetButtonProps) {
+}: DismissWidgetButtonProps): JSX.Element {
   const reasonId = useId();
   const unavailable = unavailableReason !== undefined;
   return (

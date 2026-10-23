@@ -27,6 +27,7 @@ import {
   Switch,
 } from "@nextlyhq/ui";
 import { useState, useCallback, useMemo } from "react";
+import type { JSX } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { FormLabelWithTooltip } from "@admin/components/ui/form-label-with-tooltip";
@@ -56,7 +57,7 @@ export function RelationshipEditor({
   onFilterOptionsChange,
   appearance,
   onAppearanceChange,
-}: RelationshipEditorProps) {
+}: RelationshipEditorProps): JSX.Element {
   const [isCollectionPickerOpen, setIsCollectionPickerOpen] = useState(false);
   const [collectionSearch, setCollectionSearch] = useState("");
 

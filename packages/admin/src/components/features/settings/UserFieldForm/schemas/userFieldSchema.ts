@@ -207,7 +207,30 @@ export function fieldToFormValues(
  */
 const GENERATED_NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
 
-export function buildUserFieldSchema(mode: "create" | "edit") {
+export function buildUserFieldSchema(mode: "create" | "edit"): z.ZodObject<{
+  label: z.ZodString;
+  name: z.ZodString;
+  type: z.ZodString;
+  required: z.ZodBoolean;
+  defaultValue: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  options: z.ZodArray<
+    z.ZodObject<
+      {
+        label: z.ZodString;
+        value: z.ZodString;
+      },
+      z.core.$strip
+    >
+  >;
+  hasMany: z.ZodBoolean;
+  minLength: z.ZodString;
+  maxLength: z.ZodString;
+  minValue: z.ZodString;
+  maxValue: z.ZodString;
+  placeholder: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  description: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  isActive: z.ZodBoolean;
+}> {
   // Checked only while the form is inventing the name. In edit mode the input
   // is disabled, the stored value is submitted back untouched, and the server
   // refuses to change it regardless, so holding it to this form's house style

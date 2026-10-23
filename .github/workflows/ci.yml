@@ -1850,8 +1850,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # No step builds @nextlyhq/ui's workspace dependencies, deliberately.
-      # There is nothing to build: all four of them — admin-css,
-      # module-specifiers, tsconfig and eslint-config — publish SOURCE rather
+      # There is nothing to build: all three of them — admin-css,
+      # module-specifiers and tsconfig — publish SOURCE rather
       # than a compiled artifact (`./src/index.mjs`, `./src/index.ts`, plain
       # `.js` config files), and none declares a `build` script. The checkout
       # is already the thing the client entry resolves against.

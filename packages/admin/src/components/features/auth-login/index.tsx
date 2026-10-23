@@ -2,6 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Alert, AlertDescription, Button, Input } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useState } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 import { z } from "zod";
@@ -65,7 +66,7 @@ function hasPreFormUi(authUi: ReturnType<typeof useAuthUi>): boolean {
   );
 }
 
-export function Login() {
+export function Login(): JSX.Element {
   const { api } = useApi();
   const appName = useAppName();
 

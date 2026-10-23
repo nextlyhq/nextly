@@ -10,7 +10,7 @@
  */
 
 import { DndContext, DragOverlay } from "@dnd-kit/core";
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import * as Icons from "@admin/components/icons";
 
@@ -46,7 +46,7 @@ export function CardDragContext({
 }: {
   drag: CardDrag;
   children: ReactNode;
-}) {
+}): JSX.Element {
   const held = drag.drag;
   return (
     <DndContext

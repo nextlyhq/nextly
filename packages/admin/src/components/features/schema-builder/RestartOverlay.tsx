@@ -2,9 +2,11 @@
 // Displays pulsing dots animation with status text that updates over time.
 "use client";
 
+import type { JSX } from "react";
+
 import { useRestart } from "@admin/context/RestartContext";
 
-export function RestartOverlay() {
+export function RestartOverlay(): JSX.Element | null {
   const { isRestarting, statusMessage, statusDetail } = useRestart();
 
   if (!isRestarting) return null;

@@ -17,6 +17,7 @@
  * @module components/features/versions/diff/VersionDiffView
  */
 
+import type { JSX } from "react";
 import { useState } from "react";
 
 import {
@@ -154,7 +155,11 @@ function ChangeAnchor({
   );
 }
 
-export function VersionDiffView({ scope, from, to }: VersionDiffViewProps) {
+export function VersionDiffView({
+  scope,
+  from,
+  to,
+}: VersionDiffViewProps): JSX.Element {
   const [preference, setLayout] = useChangesLayoutPreference();
   const [showUnchanged, setShowUnchanged] = useState(false);
   const [showSystem, setShowSystem] = useState(false);

@@ -6,6 +6,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { Search } from "@admin/components/icons";
 import {
@@ -23,7 +24,7 @@ export function PermissionMatrix({
   onChange,
   disabled = false,
   lockedIds = [],
-}: PermissionMatrixProps) {
+}: PermissionMatrixProps): JSX.Element {
   const {
     searchTerm,
     setSearchTerm,

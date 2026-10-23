@@ -118,7 +118,9 @@ export const SILENT_DRAG: Announcements = {
 };
 
 /** What dnd-kit reads to a screen reader on a handle: how to drag from the keyboard. */
-export const DRAG_SCREEN_READER = { draggable: DRAG_INSTRUCTIONS };
+export const DRAG_SCREEN_READER: {
+  draggable: string;
+} = { draggable: DRAG_INSTRUCTIONS };
 
 /** The pointer's position on the page, from where the drag started and how far it has gone. */
 function pointerAt(event: DragMoveEvent): { x: number; y: number } | undefined {
