@@ -24,6 +24,7 @@ import {
   TooltipTrigger,
 } from "@nextlyhq/ui";
 import { UNDO_COMMAND, REDO_COMMAND } from "lexical";
+import type { JSX } from "react";
 
 import {
   ALargeSmall,
@@ -103,7 +104,7 @@ export interface RichTextToolbarProps {
 export function RichTextToolbar({
   features = [],
   disabled = false,
-}: RichTextToolbarProps) {
+}: RichTextToolbarProps): JSX.Element {
   const [editor] = useLexicalComposerContext();
   const {
     isBold,

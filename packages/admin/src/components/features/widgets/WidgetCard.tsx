@@ -48,7 +48,7 @@
  */
 
 import { Card, CardContent, CardFooter, CardHeader } from "@nextlyhq/ui";
-import { useId, useRef, type ReactNode } from "react";
+import { useId, useRef, type ReactNode, type JSX } from "react";
 
 import { Link } from "@admin/components/ui/link";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
@@ -61,6 +61,7 @@ import {
   CardError,
   CardSkeleton,
   CardUnavailable,
+  EMPTY_DEFAULT,
   type CardEmptyContent,
   type SkeletonShape,
 } from "./frame/states";
@@ -164,8 +165,6 @@ export interface WidgetCardProps {
   className?: string;
 }
 
-const EMPTY_DEFAULT: CardEmptyContent = { title: "Nothing to show yet" };
-
 /**
  * What the card's state and error come to: what `data-state` says, whether content is on show,
  * and whether the card has an answer its freshness is true of.
@@ -242,7 +241,7 @@ function bodyClassName(refreshing: boolean, customizing: boolean): string {
   );
 }
 
-export function WidgetCard(props: WidgetCardProps) {
+export function WidgetCard(props: WidgetCardProps): JSX.Element {
   const { title, cardId } = props;
   const generatedId = useId();
   const titleId = cardId ? frameIds(cardId).titleId : generatedId;

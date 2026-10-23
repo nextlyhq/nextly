@@ -16,6 +16,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import {
   ChevronDown,
@@ -64,7 +65,7 @@ export function InsertDropdown({
   insertTable,
   insertCollapsible,
   insertGallery,
-}: InsertDropdownProps) {
+}: InsertDropdownProps): JSX.Element {
   const hasMediaItems = hasFeature("upload") || hasFeature("video");
   const hasInteractiveItems =
     hasFeature("table") ||

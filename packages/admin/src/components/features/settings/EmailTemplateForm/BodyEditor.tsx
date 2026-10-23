@@ -22,6 +22,7 @@
  * `useVariableInsertion`, which owns that rule.
  */
 import type { EditorView } from "@codemirror/view";
+import type { JSX } from "react";
 import { Suspense, lazy } from "react";
 import { useFormState, type useForm } from "react-hook-form";
 
@@ -94,7 +95,7 @@ export function BodyEditor({
   chips?: React.ReactNode;
   /** The bodies are the owner's until the site overrides them. */
   readOnly: boolean;
-}) {
+}): JSX.Element {
   return (
     <>
       {/* Bounded and scrollable. The strip is `shrink-0` and the editor is the

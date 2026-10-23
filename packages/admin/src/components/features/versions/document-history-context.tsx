@@ -15,6 +15,7 @@
  * @module components/features/versions/document-history-context
  */
 
+import type { Context } from "react";
 import { createContext, useContext } from "react";
 
 import type { VersionMeta, VersionScope } from "@admin/services/versionApi";
@@ -100,12 +101,13 @@ export interface DocumentHistoryValue {
  * harness — behaves exactly as it did before history existed rather than
  * throwing. Both full-page editors provide it through the shared host.
  */
-export const DocumentHistoryContext = createContext<DocumentHistoryValue>({
-  viewing: null,
-  setViewing: () => {},
-  restore: null,
-  setRestore: () => {},
-});
+export const DocumentHistoryContext: Context<DocumentHistoryValue> =
+  createContext<DocumentHistoryValue>({
+    viewing: null,
+    setViewing: () => {},
+    restore: null,
+    setRestore: () => {},
+  });
 
 export function useDocumentHistory(): DocumentHistoryValue {
   return useContext(DocumentHistoryContext);

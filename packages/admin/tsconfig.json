@@ -1,6 +1,12 @@
 {
   "extends": "@nextlyhq/tsconfig/react-library-bundler.json",
   "compilerOptions": {
+    // The common directory of every input, as TypeScript infers it today:
+    // `paths` below map `nextly` to its source, so inputs sit in `../nextly`
+    // as well as here. TypeScript 7 defaults `rootDir` to this directory and
+    // would refuse them (TS6059).
+    "rootDir": "..",
+    "types": ["node"],
     "target": "ES2020",
     "emitDeclarationOnly": false,
     "outDir": "dist",

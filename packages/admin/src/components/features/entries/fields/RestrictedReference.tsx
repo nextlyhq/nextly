@@ -10,6 +10,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { EyeOff, X } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
@@ -35,7 +36,7 @@ export function RestrictedReference({
   disabled = false,
   variant = "row",
   className,
-}: RestrictedReferenceProps) {
+}: RestrictedReferenceProps): JSX.Element {
   const remove = (
     <Button
       type="button"

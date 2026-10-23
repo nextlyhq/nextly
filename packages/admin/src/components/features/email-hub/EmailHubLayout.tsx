@@ -41,7 +41,7 @@ export function EmailHubLayout({
   tab,
   actions,
   children,
-}: EmailHubLayoutProps) {
+}: EmailHubLayoutProps): React.JSX.Element {
   const { hasPermission, hasAnswer } = useCurrentUserPermissions();
   const tabs = hasAnswer
     ? visibleEmailHubTabs(hasPermission)

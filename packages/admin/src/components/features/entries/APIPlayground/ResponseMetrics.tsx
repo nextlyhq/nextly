@@ -13,6 +13,8 @@
  * @module components/entries/APIPlayground/ResponseMetrics
  */
 
+import type { JSX } from "react";
+
 import { cn } from "@admin/lib/utils";
 
 /**
@@ -82,7 +84,11 @@ export interface ResponseMetricsProps {
   size?: number;
 }
 
-export function ResponseMetrics({ status, time, size }: ResponseMetricsProps) {
+export function ResponseMetrics({
+  status,
+  time,
+  size,
+}: ResponseMetricsProps): JSX.Element {
   /* Always rendered, and every value reserves the width its populated form
   needs. The metrics used to appear with the first reply, so the header
   reflowed at the moment somebody was reading it -- and a placeholder

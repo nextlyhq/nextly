@@ -18,6 +18,7 @@
  * into — so it gets the `{{content}}` guidance in this space instead.
  */
 import { Input } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import type { useForm } from "react-hook-form";
 
 import {
@@ -66,7 +67,7 @@ export function EnvelopeBar({
    * Reply-To are the site's settings on any email.
    */
   ownsContent: boolean;
-}) {
+}): JSX.Element {
   if (isLayoutRow) {
     return (
       <div className="border-b border-border bg-muted/40 px-4 py-2.5">

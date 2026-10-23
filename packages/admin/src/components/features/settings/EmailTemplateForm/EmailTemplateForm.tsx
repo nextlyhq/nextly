@@ -2,6 +2,7 @@
 
 import { type EditorView } from "@codemirror/view";
 import { zodResolver } from "@hookform/resolvers/zod";
+import type { JSX } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm, type Resolver, type SubmitHandler } from "react-hook-form";
 
@@ -135,7 +136,7 @@ export function EmailTemplateForm({
   initialValues,
   isPending,
   onSubmit,
-}: EmailTemplateFormProps) {
+}: EmailTemplateFormProps): JSX.Element {
   const isEdit = mode === "edit";
   const slugTouchedRef = useRef(false);
   const editorWrapRef = useRef<HTMLDivElement>(null);

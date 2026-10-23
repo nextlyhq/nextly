@@ -19,7 +19,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
-import { widgetAsAsked } from "../widget-as-asked";
+import { questionOf } from "../widget-as-asked";
 
 import { CardQuickSetting } from "./CardQuickSetting";
 import {
@@ -64,10 +64,7 @@ function changesQuery(
   current: Record<string, unknown> | undefined,
   config: Record<string, unknown>
 ): boolean {
-  return (
-    JSON.stringify(widgetAsAsked(widget, current).query) !==
-    JSON.stringify(widgetAsAsked(widget, config).query)
-  );
+  return questionOf(widget, current) !== questionOf(widget, config);
 }
 
 /** A card's quick setting, for the controls that change it: the header's and the menu's. */

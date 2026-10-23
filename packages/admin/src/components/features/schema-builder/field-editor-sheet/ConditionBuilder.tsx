@@ -10,6 +10,7 @@
 // renders it as if operator = equals. Always emits the new
 // { field, operator, value } shape on change.
 import { Button, Label } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import {
   ConditionRow,
@@ -100,7 +101,7 @@ export function ConditionBuilder({
   siblingFields,
   readOnly = false,
   onChange,
-}: Props) {
+}: Props): JSX.Element {
   const eligible = siblingFields.filter(f => ELIGIBLE_SOURCE_TYPES.has(f.type));
   const c = normalizeIncoming(condition);
 

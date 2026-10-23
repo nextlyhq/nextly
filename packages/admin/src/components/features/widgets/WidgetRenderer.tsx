@@ -24,7 +24,7 @@
 
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetComponentProps } from "nextly/widget-result";
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import type {
@@ -72,7 +72,9 @@ function awaitsFreshnessFor(
   definition: DashboardWidget,
   slot: WidgetSlot | undefined
 ): boolean {
-  return definition.query !== undefined && slot?.ok !== false;
+  // A card core answers on the server asks for its data as surely as one with a query does.
+  const asks = definition.query !== undefined || definition.serverData === true;
+  return asks && slot?.ok !== false;
 }
 
 function skeletonFor(archetype: string): SkeletonShape {
@@ -292,7 +294,7 @@ export function WidgetRenderer({
   updatedAt = null,
   isFetching = false,
   answerTier,
-}: WidgetRendererProps) {
+}: WidgetRendererProps): JSX.Element {
   const shared = sharedCardProps(definition, slot, placement, {
     headerAction,
     quick,

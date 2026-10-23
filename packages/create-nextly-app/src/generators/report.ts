@@ -24,5 +24,9 @@ export function reportGeneratedFiles(
     p.log.warn(`Left ${path} as it was: ${why}`);
     if (toAdd) p.log.message(toAdd);
   }
+  // After the changes they explain, so a setting turned off is not missed.
+  for (const notice of reported.flatMap(files => files.notices ?? [])) {
+    p.log.warn(notice);
+  }
   for (const warning of warnings) p.log.warn(warning);
 }

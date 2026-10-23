@@ -116,6 +116,13 @@ export interface ResolverOptions {
    * @experimental
    */
   scope?: WidgetScope;
+  /**
+   * The batch's one instant: every read in it measures "since" and "until"
+   * from it, so two cards asking for the last 30 days ask for the same days.
+   *
+   * @experimental
+   */
+  now?: Date;
 }
 
 /**

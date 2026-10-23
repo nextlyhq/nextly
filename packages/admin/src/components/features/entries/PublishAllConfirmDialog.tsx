@@ -26,6 +26,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { Loader2 } from "@admin/components/icons";
 
@@ -47,7 +48,7 @@ export function PublishAllConfirmDialog({
   pendingCount,
   onConfirm,
   isLoading = false,
-}: PublishAllConfirmDialogProps) {
+}: PublishAllConfirmDialogProps): JSX.Element {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>

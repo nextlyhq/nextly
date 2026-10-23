@@ -18,6 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { Loader2 } from "@admin/components/icons";
 
@@ -78,7 +79,7 @@ export function BulkDeleteDialog({
   collectionName,
   onConfirm,
   isLoading = false,
-}: BulkDeleteDialogProps) {
+}: BulkDeleteDialogProps): JSX.Element {
   const itemLabel = count === 1 ? "entry" : "entries";
 
   return (

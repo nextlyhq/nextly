@@ -12,6 +12,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import type { JSX } from "react";
 
 import * as Icons from "@admin/components/icons";
 import type { LucideIcon } from "@admin/components/icons";
@@ -52,7 +53,7 @@ export function NestedFieldGroup({
   onDeleteField,
   onDuplicateField,
   onAddInsideParent,
-}: Props) {
+}: Props): JSX.Element {
   const children = parentField.fields ?? [];
   const parentLabel = parentField.label || parentField.name || "parent";
 

@@ -259,7 +259,7 @@ export function MediaEditDialog({
   onDownload,
   onCopyUrl,
   isLoading = false,
-}: MediaEditDialogProps) {
+}: MediaEditDialogProps): React.JSX.Element | null {
   const [isSaving, setIsSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [focalX, setFocalX] = React.useState(media?.focalX ?? 50);

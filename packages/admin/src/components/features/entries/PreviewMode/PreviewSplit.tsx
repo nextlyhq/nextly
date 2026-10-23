@@ -23,6 +23,7 @@
  * @module components/features/entries/PreviewMode/PreviewSplit
  */
 
+import type { JSX } from "react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { GripVertical } from "@admin/components/icons";
@@ -77,7 +78,7 @@ export function PreviewSplit({
   preview,
   label,
   preferPreviewWidth = null,
-}: PreviewSplitProps) {
+}: PreviewSplitProps): JSX.Element {
   /*
    * Generated rather than fixed: the id is what `aria-controls` points at, and
    * two splits on one page sharing a literal would aim both separators at the

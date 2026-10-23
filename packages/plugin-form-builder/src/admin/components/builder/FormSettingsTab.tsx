@@ -270,7 +270,7 @@ export function FormSettingsTab({
   spamDefaults,
   redirectCollections,
   redirectConfigFailed,
-}: FormSettingsTabProps) {
+}: FormSettingsTabProps): React.JSX.Element {
   const { settings, updateSettings } = useFormBuilder();
 
   return (

@@ -10,6 +10,8 @@
 // "Tip" boxes Mobeen called AI-ish. Mobeen explicitly asked for
 // muted grey, not tinted, so a thinner local component is the right
 // fit here.
+import type { JSX } from "react";
+
 import * as Icons from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
@@ -18,7 +20,7 @@ type Props = {
   className?: string;
 };
 
-export function EditorAlert({ children, className }: Props) {
+export function EditorAlert({ children, className }: Props): JSX.Element {
   return (
     <div
       className={cn(

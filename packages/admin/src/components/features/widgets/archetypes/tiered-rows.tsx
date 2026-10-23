@@ -13,6 +13,8 @@
  * @module components/features/widgets/archetypes/tiered-rows
  */
 
+import type { JSX } from "react";
+
 import { cn } from "@admin/lib/utils";
 import type { WidgetResultField } from "@admin/types/dashboard/widgets";
 
@@ -50,7 +52,7 @@ export function TieredRows({
   labelField,
   detailField,
   query,
-}: TieredRowsProps) {
+}: TieredRowsProps): JSX.Element {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
   // Laid out at the card's tier, counted at its answer's when that is smaller; see `useRowsTier`.
