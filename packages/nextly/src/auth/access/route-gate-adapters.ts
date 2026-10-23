@@ -199,6 +199,11 @@ export type EntityCapabilities =
  * the caller's permission list already states.
  */
 export interface RouteCapabilities {
+  /**
+   * Whether the caller holds super-admin authority, from the same read the
+   * cells were answered from. A key never does.
+   */
+  readonly isSuperAdmin: boolean;
   readonly entities: Readonly<Record<string, EntityCapabilities>>;
 }
 
@@ -233,18 +238,23 @@ const OPERATION_OF: Record<"collection" | "single", Record<string, string>> = {
  *
  * The caller is read once for the whole answer: a key from its scope, and a
  * signed-in user's permissions held for every cell, so an added entity adds
- * no question about the caller. A lookup that fails throws, as it does at the
- * route gate, rather than being answered as a refusal.
+ * no question about the caller, and the super-admin flag comes from that same
+ * read. A lookup that fails throws, as it does at the route gate, rather than
+ * being answered as a refusal or asked again cell by cell.
  */
-export function routeGateCapabilities(
+export async function routeGateCapabilities(
   caller: GateCaller,
   entities: ReadonlyMap<string, "collection" | "single">,
   rules: RouteRules,
   languageOf: (operation: string) => RuleLanguage
 ): Promise<RouteCapabilities> {
-  const answer = (): Promise<RouteCapabilities> =>
-    entityCapabilities(caller, entities, rules, languageOf);
-  return caller.key ? answer() : withHeldPermissions(caller.userId, answer);
+  const answer = () => entityCapabilities(caller, entities, rules, languageOf);
+  // A key never carries super-admin authority through the gates.
+  if (caller.key) return { isSuperAdmin: false, entities: await answer() };
+  return withHeldPermissions(caller.userId, async held => ({
+    isSuperAdmin: held.superAdmin,
+    entities: await answer(),
+  }));
 }
 
 async function entityCapabilities(
@@ -252,7 +262,7 @@ async function entityCapabilities(
   entities: ReadonlyMap<string, "collection" | "single">,
   rules: RouteRules,
   languageOf: (operation: string) => RuleLanguage
-): Promise<RouteCapabilities> {
+): Promise<RouteCapabilities["entities"]> {
   const byEntity: Record<string, EntityCapabilities> = {};
   for (const [slug, kind] of entities) {
     const actions = kind === "single" ? SINGLE_ACTIONS : COLLECTION_ACTIONS;
@@ -272,7 +282,7 @@ async function entityCapabilities(
     }
     byEntity[slug] = { kind, ...answered } as EntityCapabilities;
   }
-  return { entities: byEntity };
+  return byEntity;
 }
 
 /** The route gate's answer for one action, decided as its own subject. */

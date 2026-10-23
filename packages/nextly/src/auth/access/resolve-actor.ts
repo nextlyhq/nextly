@@ -22,6 +22,7 @@ import type { Principal } from "../../plugins/principals/types";
 import {
   hasPermission,
   isSuperAdmin,
+  isSuperAdminOrRefuse,
   listEffectiveGrants,
   listRoleSlugsForUser,
 } from "../../services/lib/permissions";
@@ -88,7 +89,7 @@ export async function actorForUserFailingClosed(
 }
 
 /** A signed-in user's permissions, read once for work that asks about many. */
-interface HeldPermissions {
+export interface HeldPermissions {
   readonly userId: string;
   readonly superAdmin: boolean;
   readonly grants: readonly PermissionGrant[];
@@ -100,29 +101,29 @@ const heldPermissions = new AsyncLocalStorage<HeldPermissions>();
  * Runs `work` with `userId`'s permissions read once, so each permission check
  * inside it answers from what was read instead of asking the database about
  * one resource at a time. For work that asks the same caller about every
- * entity at once; any other work asks as it always has.
+ * entity at once; any other work asks as it always has. `work` is handed what
+ * was read, so anything it states about the user comes from the same read as
+ * the checks.
  *
  * The answers are the targeted check's: a role set holding the permission,
  * super-admin authority included, read through the same effective-grant
- * lookup a rule's context uses. When that lookup fails, `work` runs without
- * the snapshot, each check then asking on its own and failing closed as
- * before.
+ * lookup a rule's context uses. A read that fails refuses the work rather
+ * than letting each check ask on its own, which would multiply the reads
+ * exactly while the database is failing, and rather than taking a super-admin
+ * whose roles could not be read for a non-admin.
+ *
+ * @throws NextlyError when the user's roles or permissions cannot be read.
  */
 export async function withHeldPermissions<T>(
   userId: string,
-  work: () => Promise<T>
+  work: (held: HeldPermissions) => Promise<T>
 ): Promise<T> {
-  let held: HeldPermissions;
-  try {
-    const [superAdmin, grants] = await Promise.all([
-      isSuperAdmin(userId),
-      listEffectiveGrants(userId),
-    ]);
-    held = { userId, superAdmin, grants };
-  } catch {
-    return work();
-  }
-  return heldPermissions.run(held, work);
+  const [superAdmin, grants] = await Promise.all([
+    isSuperAdminOrRefuse(userId),
+    listEffectiveGrants(userId),
+  ]);
+  const held: HeldPermissions = { userId, superAdmin, grants };
+  return heldPermissions.run(held, () => work(held));
 }
 
 /**

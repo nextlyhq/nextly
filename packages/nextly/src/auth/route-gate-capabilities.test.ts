@@ -21,6 +21,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
+import { hasPermission } from "../services/lib/permissions";
 import type { CollectionAccessControl } from "../shared/types/access";
 
 import { recordingDeviations } from "./access/deviations";
@@ -70,6 +71,8 @@ const STORED: Record<string, { roles: string[]; grants: GrantedPermission[] }> =
       grants: [grant("read", POSTS), grant("publish", POSTS)],
     },
     "grants-unreadable": { roles: ["editor"], grants: [] },
+    // A super-admin whose roles cannot be read.
+    "roles-unreadable": { roles: ["super-admin"], grants: [] },
   };
 
 const stored = (userId: string) => STORED[userId] ?? { roles: [], grants: [] };
@@ -88,6 +91,10 @@ vi.mock("../services/lib/permissions", async importOriginal => {
     isSuperAdmin: vi.fn(async (userId: string) =>
       stored(userId).roles.includes("super-admin")
     ),
+    isSuperAdminOrRefuse: vi.fn(async (userId: string) => {
+      if (userId === "roles-unreadable") throw new Error("roles unreadable");
+      return stored(userId).roles.includes("super-admin");
+    }),
     hasPermission: vi.fn(async (userId: string, action: string, r: string) =>
       holds(userId, action, r)
     ),
@@ -420,5 +427,56 @@ describe("routeGateCapabilities", () => {
         LANGUAGE_OF
       )
     ).rejects.toThrow("grants unreadable");
+  });
+
+  it("refuses, without asking cell by cell, when the caller's permissions cannot be read at once", async () => {
+    // No rule anywhere: every cell is a permission check alone, which is
+    // what a failed read would otherwise be answered by, one query each.
+    registered.rbac = serviceFor("service", RULES.none);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(hasPermission).mockClear();
+
+    await expect(
+      routeGateCapabilities(
+        { userId: "grants-unreadable" },
+        ENTITIES,
+        registered.rbac,
+        LANGUAGE_OF
+      )
+    ).rejects.toThrow("grants unreadable");
+    expect(hasPermission).not.toHaveBeenCalled();
+  });
+
+  it("states super-admin authority from the read its cells were answered from", async () => {
+    registered.rbac = serviceFor("service", RULES.none);
+    const admin = await routeGateCapabilities(
+      { userId: "admin" },
+      ENTITIES,
+      registered.rbac,
+      LANGUAGE_OF
+    );
+    expect(admin.isSuperAdmin).toBe(true);
+    expect(admin.entities[POSTS]).toMatchObject({ read: true, delete: true });
+
+    // A key never carries the authority, whoever made it.
+    const keyed = await routeGateCapabilities(
+      REQUESTS["key-with"].caller,
+      ENTITIES,
+      registered.rbac,
+      LANGUAGE_OF
+    );
+    expect(keyed.isSuperAdmin).toBe(false);
+
+    // A super-admin whose roles cannot be read is refused, not answered as a
+    // non-admin beside cells that say otherwise.
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      routeGateCapabilities(
+        { userId: "roles-unreadable" },
+        ENTITIES,
+        registered.rbac,
+        LANGUAGE_OF
+      )
+    ).rejects.toThrow("roles unreadable");
   });
 });

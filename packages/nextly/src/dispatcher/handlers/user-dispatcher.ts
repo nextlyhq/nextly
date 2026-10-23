@@ -278,10 +278,11 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
       );
       return respondData(
         {
-          // A key never carries super-admin authority through the gates.
-          isSuperAdmin: caller.key ? false : await isSuperAdmin(userId),
+          // From the read the cells were answered from, so the flag and the
+          // cells cannot describe two different moments.
+          isSuperAdmin: capabilities.isSuperAdmin,
           validUntil,
-          ...capabilities,
+          entities: capabilities.entities,
         },
         { headers: { "Cache-Control": "private, no-store" } }
       );
