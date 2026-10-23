@@ -322,15 +322,7 @@ export class ServiceDispatcher {
     return Array.from(this.availableServices);
   }
 
-  /** Executes a function within a database transaction. */
-  async withTransaction<T>(
-    fn: (dispatcher: ServiceDispatcher) => Promise<T>
-  ): Promise<T> {
-    return this.container.withTransaction(async txServices => {
-      const txDispatcher = new ServiceDispatcher();
-      txDispatcher.container = txServices;
-      txDispatcher.availableServices = new Set(this.availableServices);
-      return fn(txDispatcher);
-    });
-  }
+  // No `withTransaction` here, for the reason the container has none: the
+  // services it dispatches to run on the pooled adapter. A transaction is the
+  // adapter's own `transaction()`.
 }
