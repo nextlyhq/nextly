@@ -1,6 +1,7 @@
 {
   "extends": "../../packages/tsconfig/nextjs.json",
   "compilerOptions": {
+    "types": ["node"],
     "target": "ES2017",
     "incremental": true,
     "paths": {

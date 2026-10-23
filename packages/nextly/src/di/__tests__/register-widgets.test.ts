@@ -41,6 +41,8 @@ import { VERSIONS_SOURCE_ID } from "../../domains/versions/versions-widget-sourc
 import {
   ACTIVITY_SOURCE_ID,
   ATTENTION_SOURCE_ID,
+  CONTENT_SOURCE_ID,
+  TEAM_SOURCE_ID,
 } from "../../domains/widgets/system-source-ids";
 import { resetWidgetRegistries } from "../registrations/register-widgets";
 
@@ -91,7 +93,9 @@ describe("resetWidgetRegistries", () => {
       [
         ACTIVITY_SOURCE_ID,
         ATTENTION_SOURCE_ID,
+        CONTENT_SOURCE_ID,
         RELEASES_SOURCE_ID,
+        TEAM_SOURCE_ID,
         VERSIONS_SOURCE_ID,
       ].sort()
     );

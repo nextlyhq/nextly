@@ -27,3 +27,9 @@ export const ACTIVITY_SOURCE_ID = "system:activity";
 
 /** What is waiting for someone: pending changes, releases due soon and overdue. */
 export const ATTENTION_SOURCE_ID = "system:attention";
+
+/** The Team card's figures: the number of people, and of roles for a reader who may see them. */
+export const TEAM_SOURCE_ID = "system:team";
+
+/** The Content card's collections, each with its entries and how many are drafts. */
+export const CONTENT_SOURCE_ID = "system:content";

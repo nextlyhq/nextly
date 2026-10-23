@@ -142,9 +142,12 @@ describe("core list cards select only fields that get drawn", () => {
 
   // The population: `filter` returning nothing would make `it.each` register no
   // cases at all, and a describe block with no tests reports as passing.
+  // Upcoming releases is no longer one of them: its own component draws the
+  // attention line from `kind`, `reason` and `count`, and its rows' title and
+  // date through the same `TieredRows` a list card uses.
   it("finds the list cards to check", () => {
     expect(listCards.map(([id]) => id)).toEqual(
-      expect.arrayContaining(["core/recently-edited", "core/upcoming-releases"])
+      expect.arrayContaining(["core/recently-edited"])
     );
   });
 

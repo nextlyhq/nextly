@@ -365,25 +365,40 @@ export function cardQueryFor(
   stored: Record<string, unknown> | undefined
 ): WidgetQuery | undefined {
   const declared = store().get(widgetId);
-  if (declared === undefined) return undefined;
+  return declared === undefined
+    ? undefined
+    : checkedCardQuery(declared, stored);
+}
+
+/**
+ * The query core runs for a card of this declared widget, from the card's
+ * stored settings, held to what the widget's display draws; `undefined` when
+ * its data is not a query or a setting it needs has no value.
+ *
+ * 🔴 The ONE builder of a card's query, so the card that runs it and anything
+ * that asks for it judge the same query. Judged here as well as at startup.
+ * Startup builds the query from the starting settings, and a Collection setting
+ * with no default leaves it unbuilt there, so a plain JavaScript list with no
+ * fields passed startup and was first built here, for a card, with no check in
+ * between; and a query function that changes its op for a setting other than
+ * the starting one is only ever built here.
+ */
+export function checkedCardQuery(
+  declared: DeclaredWidget,
+  stored: Record<string, unknown> | undefined
+): WidgetQuery | undefined {
   const query = buildCardQuery(
     declared.declaration,
     stored,
     declared.collections
   );
   if (query === undefined) return undefined;
-  /*
-   * 🔴 Judged here as well as at startup. Startup builds the query from the
-   * starting settings, and a Collection setting with no default leaves it
-   * unbuilt there, so a plain JavaScript list with no fields passed startup
-   * and was first built here, for a card, with no check in between.
-   */
   const problem = declaredQueryProblem(declared.declaration.display, query);
   if (problem !== undefined) {
     throw new NextlyError({
       code: "INTERNAL_ERROR",
       publicMessage: "An unexpected error occurred.",
-      logMessage: `Declared widget "${widgetId}" cannot draw its query: ${problem}.`,
+      logMessage: `Declared widget "${declared.declaration.id}" cannot draw its query: ${problem}.`,
     });
   }
   return query;

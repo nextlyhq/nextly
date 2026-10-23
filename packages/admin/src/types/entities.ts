@@ -178,6 +178,11 @@ export interface ApiCollection {
     useAsTitle?: string;
     /** Whether this collection is provided by a plugin */
     isPlugin?: boolean;
+    /**
+     * Whether only a machine creates this collection's documents (form
+     * submissions do): no "New" is offered for it anywhere in the admin.
+     */
+    disableCreate?: boolean;
     /** Custom component configuration for plugin views */
     components?: {
       /** Custom view components */

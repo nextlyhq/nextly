@@ -1,6 +1,7 @@
 {
   "extends": "@nextlyhq/tsconfig/base-bundler.json",
   "compilerOptions": {
+    "types": [],
     "rootDir": "src",
     "outDir": "dist",
     "jsx": "react-jsx"

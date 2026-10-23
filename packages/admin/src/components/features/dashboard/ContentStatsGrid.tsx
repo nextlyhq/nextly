@@ -3,7 +3,10 @@
  *
  * Displays four content-centric stat cards: Total Entries, Media Assets,
  * Content Types, and Recent Changes (24h). Uses real data from the
- * dashboard stats API via useDashboardStats() hook.
+ * dashboard stats API via useDashboardStats() hook, and nothing else: no
+ * trend, sparkline or "this week" line, since nothing records the history
+ * one could be drawn from, and an invented one beside a real number reads
+ * as a fact.
  *
  * @module components/features/dashboard/ContentStatsGrid
  */
@@ -63,10 +66,6 @@ export const ContentStatsGrid: React.FC = () => {
         title="Total Entries"
         value={stats.content.totalEntries}
         icon={<FileText className="h-5 w-5" />}
-        sparklineData={[12, 14, 13, 15, 18, 17, 20]} // Mock trend for visual
-        footer="+2 this week"
-        trend="up"
-        change={15}
       />
       {/* Left out, not drawn as 0, when the reader may not read media. */}
       {stats.content.totalMedia !== undefined && (
@@ -74,20 +73,12 @@ export const ContentStatsGrid: React.FC = () => {
           title="Media Assets"
           value={stats.content.totalMedia}
           icon={<Image className="h-5 w-5" />}
-          sparklineData={[45, 48, 47, 52, 50, 55, 58]} // Mock trend
-          footer="+6 this week"
-          trend="up"
-          change={8}
         />
       )}
       <StatsCard
         title="Content Types"
         value={stats.content.contentTypes}
         icon={<Layers className="h-5 w-5" />}
-        sparklineData={[10, 10, 11, 11, 11, 12, 12]} // Mock trend
-        footer="+1 this week"
-        trend="up"
-        change={2}
       />
       <StatsCard
         title="Changes (24h)"
@@ -99,10 +90,6 @@ export const ContentStatsGrid: React.FC = () => {
             : stats.content.recentChanges24h
         }
         icon={<Clock className="h-5 w-5" />}
-        sparklineData={[5, 4, 3, 2, 1, 0, 0]} // Mock trend showing decline/zero
-        footer="No changes today"
-        trend="down"
-        change={-100}
       />
     </div>
   );
