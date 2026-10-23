@@ -8,6 +8,8 @@
  * two publish paths. Every refusal is paired with what stayed live, and every
  * success with what went live.
  */
+import { randomUUID } from "node:crypto";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineSingle, group, number, text } from "../../../config";
@@ -532,7 +534,9 @@ describe.each(getConfiguredTestDialects())(
             });
             await tx.insert(TABLE, {
               ...row,
-              id: `${authorised}-put-in-place`,
+              // A new document's id, of the shape an id column holds: a
+              // suffixed one is longer than MySQL's column and is refused.
+              id: randomUUID(),
             });
             await held;
           });

@@ -14,6 +14,8 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import { randomUUID } from "node:crypto";
+
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
@@ -145,7 +147,9 @@ describe.each(getConfiguredTestDialects())(
             await tx.delete(TABLE, {
               and: [{ column: "id", op: "=", value: liveId }],
             });
-            await tx.insert(TABLE, { ...row, id: `${liveId}-put-in-place` });
+            // A new document's id, of the shape an id column holds: a
+            // suffixed one is longer than MySQL's column and is refused.
+            await tx.insert(TABLE, { ...row, id: randomUUID() });
             await held;
           });
 
