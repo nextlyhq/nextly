@@ -63,6 +63,25 @@ describe("the settings sheet's Done", () => {
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 
+  it("freezes the form and Reset while the change is being kept, and gives them back if refused", async () => {
+    // 🔴 The save carries the values Done was pressed on. A field changed while it ran was
+    // dropped without a word when the sheet closed, and after a refusal the form no longer said
+    // what had been refused.
+    const { onDone, settle } = sheet();
+    const items = () =>
+      screen.getByRole("spinbutton", { name: /Number of items/ });
+    const reset = () =>
+      screen.getByRole("button", { name: "Reset to defaults" });
+    expect(items()).toBeEnabled();
+    await userEvent.click(done());
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(items()).toBeDisabled();
+    expect(reset()).toBeDisabled();
+    act(() => settle().failed("This change was not saved."));
+    expect(items()).toBeEnabled();
+    expect(reset()).toBeEnabled();
+  });
+
   it("closes once the change has been kept", async () => {
     const { onDone, onOpenChange, settle } = sheet();
     await userEvent.click(done());

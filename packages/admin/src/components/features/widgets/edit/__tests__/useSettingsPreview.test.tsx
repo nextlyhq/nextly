@@ -71,15 +71,24 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function preview(initialDraft: Record<string, unknown>) {
+function preview(
+  initialDraft: Record<string, unknown>,
+  {
+    widget = WIDGET,
+    shown = {},
+  }: {
+    widget?: DashboardWidget;
+    shown?: { answerTier?: "small" | "medium" | "large" };
+  } = {}
+) {
   return renderHook(
     ({ draft }: { draft: Record<string, unknown> }) =>
       useSettingsPreview({
-        widget: WIDGET,
+        widget,
         placementId: "p1",
         stored: undefined,
         draft,
-        shown: { slot: SHOWN, updatedAt: null, isFetching: false },
+        shown: { slot: SHOWN, updatedAt: null, isFetching: false, ...shown },
       }),
     { wrapper, initialProps: { draft: initialDraft } }
   );
@@ -112,11 +121,39 @@ describe("the settings sheet's preview", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(400);
     });
+    await waitFor(() => expect(titleOf(result.current.slot)).toBe("limit 13"));
+    // One request, for the settled question only, with the settings it would keep. Sized as a
+    // card the dashboard draws: one row more than the twelve it draws, which is how a list learns
+    // that more exist, at the widest tier, which serves whatever width the sheet gives it.
+    expect(sent()).toEqual([
+      [{ source: "collection:posts", op: "list", limit: 13 }],
+    ]);
+    expect(result.current.answerTier).toBe("large");
+    expect(result.current.placement.settings).toMatchObject({ limit: 12 });
+  });
+
+  it("draws the card's own answer with the tier it was fetched at", () => {
+    // 🔴 A small card's answer is three rows and a fourth that says more exist. Drawn without its
+    // tier, a wider preview shows all four as rows, and nothing says more exist.
+    const { result } = preview({}, { shown: { answerTier: "small" } });
+    expect(result.current.slot).toBe(SHOWN);
+    expect(result.current.answerTier).toBe("small");
+  });
+
+  it("asks a custom card's changed question as declared, since its own component draws it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { result, rerender } = preview(
+      {},
+      { widget: { ...WIDGET, archetype: "custom" } }
+    );
+    rerender({ draft: { limit: 12 } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
     await waitFor(() => expect(titleOf(result.current.slot)).toBe("limit 12"));
-    // One request, for the settled question only, with the settings it would keep.
     expect(sent()).toEqual([
       [{ source: "collection:posts", op: "list", limit: 12 }],
     ]);
-    expect(result.current.placement.settings).toMatchObject({ limit: 12 });
+    expect(result.current.answerTier).toBeUndefined();
   });
 });

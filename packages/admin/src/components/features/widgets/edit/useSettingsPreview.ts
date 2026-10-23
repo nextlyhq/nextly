@@ -16,6 +16,7 @@
  * @module components/features/widgets/edit/useSettingsPreview
  */
 
+import type { SizeTier } from "@nextlyhq/ui/format";
 import { resolveWidgetSettings } from "nextly/config";
 import { useMemo } from "react";
 
@@ -30,10 +31,18 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import type { CellSlotLookup } from "../archetypes/types";
+import { queryForTier } from "../tier-query";
 import { widgetAsAsked } from "../widget-as-asked";
 
 /** How long the values must stay still before a changed question is asked. */
 const PREVIEW_ASK_DELAY_MS = 300;
+
+/**
+ * The tier the preview's own question is asked at: the widest. The preview draws at whatever
+ * width the sheet gives it, measured only once it renders, and an answer fetched for a wider card
+ * serves a narrower one, which draws a prefix of it and still knows more exist (`asksAgainAt`).
+ */
+const PREVIEW_TIER: SizeTier = "large";
 
 /** What the card itself shows now, which the preview draws while the question is unchanged. */
 export interface ShownAnswer {
@@ -41,6 +50,8 @@ export interface ShownAnswer {
   slotFor?: CellSlotLookup;
   updatedAt: Date | null;
   isFetching: boolean;
+  /** The tier that answer was fetched at, for a sized card. */
+  answerTier?: SizeTier;
 }
 
 export interface SettingsPreview {
@@ -53,6 +64,8 @@ export interface SettingsPreview {
   updatedAt: Date | null;
   /** The preview is waiting for an answer to the question its values ask. */
   isFetching: boolean;
+  /** The tier the answer drawn was fetched at, so a list knows whether more exist. */
+  answerTier?: SizeTier;
 }
 
 /** The query a widget asks with `config`, as one comparable value. */
@@ -88,8 +101,22 @@ export function useSettingsPreview(args: {
   const requests = useMemo<WidgetQueryRequest[]>(() => {
     if (sameQuestion || settled !== asking || !definition.query) return [];
     // The settled question itself is the request's query, so each new question is a new one.
-    return [{ placementId: previewId, query: definition.query }];
-  }, [sameQuestion, settled, asking, definition.query, previewId]);
+    // Sized as the batch sizes a card it draws, and asked as declared for a custom card, whose
+    // own component draws the raw answer with no tier.
+    if (definition.archetype === "custom") {
+      return [{ placementId: previewId, query: definition.query }];
+    }
+    return [
+      {
+        placementId: previewId,
+        query: definition.query,
+        sized: {
+          query: queryForTier(definition.query, PREVIEW_TIER),
+          tier: PREVIEW_TIER,
+        },
+      },
+    ];
+  }, [sameQuestion, settled, asking, definition, previewId]);
   const asked = useWidgetQueries(requests);
 
   const placement = useMemo(
@@ -108,6 +135,9 @@ export function useSettingsPreview(args: {
       ...(shown.slotFor === undefined ? {} : { slotFor: shown.slotFor }),
       updatedAt: shown.updatedAt,
       isFetching: shown.isFetching,
+      ...(shown.answerTier === undefined
+        ? {}
+        : { answerTier: shown.answerTier }),
     };
   }
   return {
@@ -118,5 +148,6 @@ export function useSettingsPreview(args: {
     slot: settled === asking ? asked.slots[previewId] : undefined,
     updatedAt: settled === asking ? asked.updatedAt : null,
     isFetching: settled !== asking || asked.fetchingPlacementIds.has(previewId),
+    ...(definition.archetype === "custom" ? {} : { answerTier: PREVIEW_TIER }),
   };
 }

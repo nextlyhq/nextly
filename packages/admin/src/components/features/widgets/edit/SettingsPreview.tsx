@@ -41,6 +41,9 @@ export function SettingsPreview(props: {
             : { slotFor: preview.slotFor })}
           updatedAt={preview.updatedAt}
           isFetching={preview.isFetching}
+          {...(preview.answerTier === undefined
+            ? {}
+            : { answerTier: preview.answerTier })}
         />
       </div>
     </section>

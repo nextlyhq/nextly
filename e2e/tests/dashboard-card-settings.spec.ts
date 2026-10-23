@@ -228,6 +228,26 @@ test.describe("the settings sheet", () => {
     );
   });
 
+  test("keeps Done within reach on a short phone screen, where the form is taller than it", async ({
+    page,
+  }) => {
+    // 🔴 The sheet's base is not a flex box, so the area below its header took its own height and
+    // ran past the screen with nothing to scroll: on a phone the footer, Done included, was off
+    // the bottom and out of reach. The area now scrolls inside the sheet, so Done can be brought
+    // into view, and pressing it keeps the change.
+    await page.setViewportSize({ width: 390, height: 560 });
+    await page.reload();
+    await expect(rows(page)).toHaveCount(3);
+    const sheet = await openSettings(page);
+    await chooseRows(sheet, 2);
+    const done = sheet.getByRole("button", { name: "Done" });
+    await done.scrollIntoViewIfNeeded();
+    await expect(done).toBeInViewport();
+    await done.click();
+    await expect(sheet).toBeHidden();
+    await expect(rows(page)).toHaveCount(2);
+  });
+
   test("Done at rest saves the change for the reader at once", async ({
     page,
   }) => {

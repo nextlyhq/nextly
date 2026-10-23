@@ -398,12 +398,21 @@ function SheetNotices({
 function SheetFields({
   settings,
   sources,
+  saving,
 }: {
   settings: readonly AnyWidgetSetting[];
   sources: WidgetSources;
+  saving: boolean;
 }) {
+  // Frozen while Done saves: the save carries the values Done was pressed on, so a field changed
+  // after it would be dropped without a word when the sheet closes, and one changed before a
+  // refusal would leave the form saying something other than what was refused. A disabled
+  // fieldset disables every control inside it, the custom ones included.
   return (
-    <>
+    <fieldset
+      disabled={saving}
+      className="m-0 flex min-w-0 flex-col gap-4 border-0 p-0"
+    >
       {settings.map(setting =>
         isContentSetting(setting) ? (
           <ContentSettingControl
@@ -417,7 +426,7 @@ function SheetFields({
           <FieldRenderer key={setting.name} field={setting} mode="edit" />
         )
       )}
-    </>
+    </fieldset>
   );
 }
 
@@ -439,6 +448,7 @@ function SheetActions({
         type="button"
         variant="ghost"
         className="mr-auto"
+        disabled={saving}
         onClick={onReset}
       >
         Reset to defaults
@@ -473,11 +483,13 @@ export function WidgetSettingsSheet(props: WidgetSettingsSheetProps) {
       <SheetContent
         side="right"
         // Wider with a preview, so the card and the form sit side by side on a wide screen; on a
-        // narrow one the preview stacks above the form.
+        // narrow one the preview stacks above the form. A column whose own overflow is hidden, so
+        // the area below the header takes the height that is left and scrolls inside it: the
+        // sheet's base is not a flex box, and without this a tall form ran past the screen.
         className={
           renderPreview
-            ? "w-full sm:max-w-md lg:max-w-4xl"
-            : "w-full sm:max-w-md"
+            ? "flex w-full flex-col overflow-hidden sm:max-w-md lg:max-w-4xl"
+            : "flex w-full flex-col overflow-hidden sm:max-w-md"
         }
       >
         <SheetHeader>
@@ -505,7 +517,11 @@ export function WidgetSettingsSheet(props: WidgetSettingsSheetProps) {
               className="flex flex-1 flex-col gap-4 overflow-y-auto px-4"
             >
               <SheetNotices {...{ blocked, failure, stale }} />
-              <SheetFields settings={settings} sources={sources} />
+              <SheetFields
+                settings={settings}
+                sources={sources}
+                saving={saving}
+              />
               <SheetActions
                 saving={saving}
                 blocked={blocked}
