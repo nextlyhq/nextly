@@ -10,8 +10,10 @@
  * @module domains/field-groups/field-group-write-access
  */
 
+import { isFieldGroupField } from "../../collections/fields/guards";
 import type { FieldConfig } from "../../collections/fields/types";
 import { keepDeniedAtStored } from "../../shared/lib/denied-change";
+import { detachData } from "../../shared/lib/detach";
 import {
   anyFieldGroupHasAccessRule,
   applyFieldWriteAccess,
@@ -21,6 +23,9 @@ import { resolveComponentFieldMap } from "../versions/tag-component-types";
 
 import {
   forEachFieldGroupInstance,
+  nameOf,
+  rowsOf,
+  subFieldsOf,
   type FieldGroupFieldsBySlug,
 } from "./field-group-instances";
 import {
@@ -28,6 +33,8 @@ import {
   type FieldGroupFieldsSource,
 } from "./live-read-access";
 import type { FieldGroupWriteAccess } from "./services/field-group-mutation-service";
+import { extractFieldGroupReferences } from "./storage/field-group-field-type";
+import { readFieldGroupType } from "./storage/field-group-type-key";
 
 /**
  * An update's field rules, applied in place, with every value they deny
@@ -54,6 +61,19 @@ export async function keepDeniedAtStoredOnUpdate(params: {
   ownRules: (document: Record<string, unknown>) => Promise<void>;
 }): Promise<void> {
   if (params.access.overrideAccess) return;
+  if (anyFieldGroupHasAccessRule("update")) {
+    await keepProtectedStoredInstances({
+      data: params.data,
+      stored: params.stored,
+      fields: params.fields,
+      fieldGroupFields: await resolveFieldGroupFields(
+        params.fields,
+        params.source,
+        params.executor
+      ),
+      access: withGrants(params.access, params.executor),
+    });
+  }
   const kept = await keepDeniedAtStored({
     update: params.data,
     stored: params.stored,
@@ -94,34 +114,101 @@ export async function applyInlineFieldGroupWriteAccess(params: {
   const { access, operation } = params;
   if (access.overrideAccess) return;
   if (!anyFieldGroupHasAccessRule(operation)) return;
-  const source = params.source;
-  const fieldGroupFields = source
-    ? await resolveComponentFieldMap(
-        [...params.fields],
-        lookupOncePerFieldGroup({
-          getComponentFields: slug =>
-            source.getComponentFields(slug, params.executor),
-        })
-      )
-    : new Map<string, FieldConfig[]>();
   await judgeFieldGroupInstances({
     data: params.data,
     fields: params.fields,
-    fieldGroupFields,
+    fieldGroupFields: await resolveFieldGroupFields(
+      params.fields,
+      params.source,
+      params.executor
+    ),
     operation,
-    access: {
-      ...access,
-      grants:
-        access.grants ??
-        callerAccessGrants(
-          access.user,
-          access.authenticatedScope,
-          params.executor
-        ),
-    },
+    access: withGrants(access, params.executor),
     // One stored in its own table is judged by the save that writes it there.
     inlineOnly: true,
   });
+}
+
+/**
+ * The schemas of the field groups `fields` reach, looked up once each, on the
+ * write's own connection; none without a source, which leaves only the
+ * instances `fields` hold directly to judge.
+ */
+async function resolveFieldGroupFields(
+  fields: readonly FieldConfig[],
+  source: FieldGroupFieldsSource | undefined,
+  executor: unknown
+): Promise<FieldGroupFieldsBySlug> {
+  if (!source) return new Map<string, FieldConfig[]>();
+  return resolveComponentFieldMap(
+    [...fields],
+    lookupOncePerFieldGroup({
+      getComponentFields: slug => source.getComponentFields(slug, executor),
+    })
+  );
+}
+
+/**
+ * What reading an entity's stored field-group instances asks of the
+ * field-group service: the one read that answers it, so this judgment and an
+ * ordinary read describe the same stored document.
+ */
+export interface StoredFieldGroupSource {
+  populateComponentData(params: {
+    entry: Record<string, unknown>;
+    parentTable: string;
+    fields: FieldConfig[];
+    depth?: number;
+    strict?: boolean;
+    executor?: unknown;
+  }): Promise<Record<string, unknown>>;
+}
+
+/**
+ * `stored` with the field-group instances the entity holds in their own
+ * tables.
+ *
+ * The parent row does not carry them, so a stored document assembled from it
+ * alone describes an entity with no field groups at all — and an update that
+ * removes an instance would be judged against nothing. Read at `depth: 0`, as
+ * every other write-path read of them is: an expanded relationship would put a
+ * whole related row where an id belongs.
+ *
+ * Read only where a field group's update rules can judge an instance, so an
+ * installation that declares none pays no query.
+ */
+export async function withStoredFieldGroups(params: {
+  stored: Record<string, unknown>;
+  parentTable: string;
+  fields: readonly FieldConfig[];
+  source: StoredFieldGroupSource | undefined;
+  access: FieldGroupWriteAccess;
+  executor?: unknown;
+}): Promise<Record<string, unknown>> {
+  if (params.access.overrideAccess) return params.stored;
+  if (!params.source) return params.stored;
+  if (!anyFieldGroupHasAccessRule("update")) return params.stored;
+  return params.source.populateComponentData({
+    entry: { ...params.stored },
+    parentTable: params.parentTable,
+    fields: [...params.fields],
+    depth: 0,
+    strict: true,
+    executor: params.executor,
+  });
+}
+
+/** `access` with a grants resolver, read on the write's own connection. */
+function withGrants(
+  access: FieldGroupWriteAccess,
+  executor: unknown
+): FieldGroupWriteAccess {
+  return {
+    ...access,
+    grants:
+      access.grants ??
+      callerAccessGrants(access.user, access.authenticatedScope, executor),
+  };
 }
 
 /**
@@ -140,9 +227,19 @@ export async function applyFieldGroupWriteAccessToDocument(params: {
   fields: readonly FieldConfig[];
   fieldGroupFields: FieldGroupFieldsBySlug;
   access: FieldGroupWriteAccess;
+  /**
+   * The live document. An instance in its own table that live does not hold
+   * is new, and judged as the save will write it: as a create.
+   */
+  live: Record<string, unknown>;
 }): Promise<void> {
   if (params.access.overrideAccess) return;
-  if (!anyFieldGroupHasAccessRule("update")) return;
+  if (
+    !anyFieldGroupHasAccessRule("update") &&
+    !anyFieldGroupHasAccessRule("create")
+  ) {
+    return;
+  }
   await judgeFieldGroupInstances({
     data: params.document,
     fields: params.fields,
@@ -150,7 +247,245 @@ export async function applyFieldGroupWriteAccessToDocument(params: {
     operation: "update",
     access: params.access,
     inlineOnly: false,
+    existing: await storedInstanceKeys(
+      params.live,
+      params.fields,
+      params.fieldGroupFields
+    ),
   });
+}
+
+/**
+ * A held draft's field-group values, judged as its publish will judge them,
+ * in place: each value the writer may not set is kept at what the draft
+ * replaces (the previous draft, or the live document).
+ *
+ * A held save writes no instance, so no save judges what it holds; judged
+ * only by a pass over a copy, the draft would keep a denied value for a later
+ * publisher who may write it to promote. `names` are the field-group fields
+ * the save touched; an instance the replaced document does not hold is new,
+ * and judged as a create.
+ */
+export async function keepDeniedFieldGroupsInDraft(params: {
+  draft: Record<string, unknown>;
+  replaces: Record<string, unknown>;
+  names: readonly string[];
+  fields: readonly FieldConfig[];
+  fieldGroupFields: FieldGroupFieldsBySlug;
+  access: FieldGroupWriteAccess;
+}): Promise<void> {
+  if (params.access.overrideAccess) return;
+  if (
+    !anyFieldGroupHasAccessRule("update") &&
+    !anyFieldGroupHasAccessRule("create")
+  ) {
+    return;
+  }
+  const pick = (document: Record<string, unknown>) =>
+    Object.fromEntries(
+      params.names
+        .filter(name => Object.prototype.hasOwnProperty.call(document, name))
+        .map(name => [name, document[name]])
+    );
+  const stored = pick(params.replaces);
+  const existing = await storedInstanceKeys(
+    stored,
+    params.fields,
+    params.fieldGroupFields
+  );
+  const kept = await keepDeniedAtStored({
+    update: pick(params.draft),
+    stored,
+    applyRules: document =>
+      judgeFieldGroupInstances({
+        data: document,
+        fields: params.fields,
+        fieldGroupFields: params.fieldGroupFields,
+        operation: "update",
+        access: params.access,
+        inlineOnly: false,
+        existing,
+      }),
+  });
+  for (const [name, value] of Object.entries(kept)) params.draft[name] = value;
+}
+
+/** A stored instance's identity: its field group, and its id there. */
+function instanceKey(slug: string, id: string): string {
+  return `${slug}\u0000${id}`;
+}
+
+/** The identities of the instances `document` holds in their own tables. */
+async function storedInstanceKeys(
+  document: Record<string, unknown>,
+  fields: readonly FieldConfig[],
+  fieldGroupFields: FieldGroupFieldsBySlug
+): Promise<Set<string>> {
+  const keys = new Set<string>();
+  await forEachFieldGroupInstance(
+    detachData(document),
+    fields,
+    fieldGroupFields,
+    ({ instance, slug, inline }) => {
+      if (!inline && typeof instance.id === "string") {
+        keys.add(instanceKey(slug, instance.id));
+      }
+      return Promise.resolve();
+    },
+    { declaredComponentDecides: true }
+  );
+  return keys;
+}
+
+/**
+ * Put back, in place, each stored instance an update removes (by clearing its
+ * field or leaving it out of the list) that holds a value the writer may not
+ * change: removing it would change that value, and its save never judges an
+ * instance it is not sent. Put back with its id, it is updated in place, so
+ * its denied values keep what they hold and its allowed ones are rewritten
+ * as they are. A single field group's value is replaced in place by any value
+ * sent, so only clearing it removes it.
+ */
+async function keepProtectedStoredInstances(params: {
+  data: Record<string, unknown>;
+  stored: Record<string, unknown>;
+  fields: readonly FieldConfig[];
+  fieldGroupFields: FieldGroupFieldsBySlug;
+  access: FieldGroupWriteAccess;
+}): Promise<void> {
+  for (const field of directFieldGroupFields(params.fields)) {
+    const name = nameOf(field);
+    if (name === undefined) continue;
+    const sent = params.data[name];
+    const storedRows = rowsOf(params.stored[name]);
+    if (sent === undefined || storedRows.length === 0) continue;
+    const { single, many } = extractFieldGroupReferences(field);
+    const slugOf = (row: Record<string, unknown>) =>
+      many !== undefined ? readFieldGroupType(row) : single;
+    const holdsOne =
+      many === undefined &&
+      (field as { repeatable?: unknown }).repeatable !== true;
+    const kept = holdsOne
+      ? await keptSingleInstance(sent, storedRows[0], single, params)
+      : await keptInstanceList(sent, storedRows, slugOf, params);
+    if (kept !== undefined) params.data[name] = kept;
+  }
+}
+
+/**
+ * The value a field holding ONE instance keeps: the stored instance where a
+ * clear would remove a value the writer may not change, and nothing
+ * otherwise. Any instance sent replaces the stored one in place, so only a
+ * clear can remove it.
+ */
+async function keptSingleInstance(
+  sent: unknown,
+  storedRow: Record<string, unknown> | undefined,
+  slug: string | undefined,
+  params: ProtectedInstanceParams
+): Promise<unknown> {
+  if (sent !== null || storedRow === undefined || slug === undefined) {
+    return undefined;
+  }
+  return (await holdsProtectedValue(storedRow, slug, params))
+    ? storedRow
+    : undefined;
+}
+
+/**
+ * The list a repeatable field or a dynamic zone keeps: the sent list with
+ * each stored instance it drops that holds a value the writer may not change
+ * put back at its stored place, or nothing when it drops none of them.
+ */
+async function keptInstanceList(
+  sent: unknown,
+  storedRows: Record<string, unknown>[],
+  slugOf: (row: Record<string, unknown>) => string | undefined,
+  params: ProtectedInstanceParams
+): Promise<unknown> {
+  const kept = Array.isArray(sent) ? [...(sent as unknown[])] : [];
+  const sentKeys = new Set(
+    rowsOf(kept).flatMap(row => {
+      const slug = slugOf(row);
+      return typeof row.id === "string" && slug
+        ? [instanceKey(slug, row.id)]
+        : [];
+    })
+  );
+  let changed = false;
+  for (const [index, row] of storedRows.entries()) {
+    const slug = slugOf(row);
+    if (!slug || typeof row.id !== "string") continue;
+    if (sentKeys.has(instanceKey(slug, row.id))) continue;
+    if (!(await holdsProtectedValue(row, slug, params))) continue;
+    kept.splice(Math.min(index, kept.length), 0, row);
+    changed = true;
+  }
+  return changed ? kept : undefined;
+}
+
+/** What judging a stored instance needs: the schemas, and who writes. */
+interface ProtectedInstanceParams {
+  fieldGroupFields: FieldGroupFieldsBySlug;
+  access: FieldGroupWriteAccess;
+}
+
+/**
+ * Whether a stored instance holds a value the writer may not change, by its
+ * field group's update rules and those of the field groups it holds inline.
+ */
+async function holdsProtectedValue(
+  row: Record<string, unknown>,
+  slug: string,
+  params: ProtectedInstanceParams
+): Promise<boolean> {
+  // Only what it holds: an empty field has no value to change.
+  const held = Object.fromEntries(
+    Object.entries(row).filter(
+      ([, value]) => value !== null && value !== undefined
+    )
+  );
+  const probe = detachData(held);
+  const { access } = params;
+  await applyFieldWriteAccess({
+    kind: "fieldGroup",
+    slug,
+    data: probe,
+    operation: "update",
+    user: access.user,
+    authenticatedScope: access.authenticatedScope,
+    overrideAccess: false,
+    id: typeof row.id === "string" ? row.id : undefined,
+    grants: access.grants,
+  });
+  const inner = params.fieldGroupFields.get(slug);
+  if (inner) {
+    await judgeFieldGroupInstances({
+      data: probe,
+      fields: inner,
+      fieldGroupFields: params.fieldGroupFields,
+      operation: "update",
+      access,
+      inlineOnly: false,
+    });
+  }
+  return JSON.stringify(probe) !== JSON.stringify(held);
+}
+
+/** The field-group fields directly on a document, through its layout containers. */
+function directFieldGroupFields(fields: readonly FieldConfig[]): FieldConfig[] {
+  const found: FieldConfig[] = [];
+  const seen = new WeakSet<object>();
+  const pending = [...fields];
+  while (pending.length > 0) {
+    const field = pending.pop()!;
+    if (seen.has(field)) continue;
+    seen.add(field);
+    if (nameOf(field) === undefined)
+      pending.push(...(subFieldsOf(field) ?? []));
+    else if (isFieldGroupField(field)) found.push(field);
+  }
+  return found;
 }
 
 /** The one judgment both passes make, over the instances the walk reaches. */
@@ -161,19 +496,33 @@ async function judgeFieldGroupInstances(params: {
   operation: "create" | "update";
   access: FieldGroupWriteAccess;
   inlineOnly: boolean;
+  /**
+   * The identities of the instances already stored in their own tables
+   * (`storedInstanceKeys`). Given, one in its own table that is not among
+   * them is new, and judged as a create; an inline one has no row of its own
+   * and takes `operation`, the document's.
+   */
+  existing?: ReadonlySet<string>;
 }): Promise<void> {
-  const { access } = params;
+  const { access, existing } = params;
   await forEachFieldGroupInstance(
     params.data,
     params.fields,
     params.fieldGroupFields,
     async ({ instance, slug, inline }) => {
       if (params.inlineOnly && !inline) return;
+      const isNew =
+        existing !== undefined &&
+        !inline &&
+        !(
+          typeof instance.id === "string" &&
+          existing.has(instanceKey(slug, instance.id))
+        );
       await applyFieldWriteAccess({
         kind: "fieldGroup",
         slug,
         data: instance,
-        operation: params.operation,
+        operation: isNew ? "create" : params.operation,
         user: access.user,
         authenticatedScope: access.authenticatedScope,
         overrideAccess: false,

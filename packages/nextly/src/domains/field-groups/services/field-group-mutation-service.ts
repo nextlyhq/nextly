@@ -1371,32 +1371,15 @@ export class FieldGroupMutationService extends BaseService {
           continue;
         }
 
-        const meta = metaCache.get(componentType);
-        if (!meta) continue;
-
-        const tableName = meta.tableName;
-        const componentFields = meta.fields;
-        const instanceId = instance.id;
-        // Prepare BEFORE splitting: splitLocalizedComponent copies `main` and
-        // `companion` out of the instance by value when the field group is
-        // localized, so a default filled in, a relationship normalized or a
-        // password hashed after the split stays on the instance and never
-        // reaches the rows this write stores.
-        // An update only of a block stored as the type it claims: the id of
-        // one stored as another type names a row this block's rules and
-        // schema do not describe, so it is a new block of the type it claims.
-        const storedAs = instanceId
-          ? globalExistingMap.get(instanceId)
-          : undefined;
-        const existingEntry =
-          storedAs?.tableName === tableName ? storedAs : undefined;
-        await this.prepareInstanceForWrite(
+        const prepared = await this.prepareZoneBlock({
           instance,
-          componentFields,
-          existingEntry ? "update" : "create",
+          componentType,
+          metaCache,
+          globalExistingMap,
           req,
-          meta.slug
-        );
+        });
+        if (!prepared) continue;
+        const { meta, componentFields, instanceId, existingEntry } = prepared;
 
         // i18n: split translatable values out per instance using its own component meta.
         const { schema, main, companion } = await this.splitLocalizedComponent(
@@ -1437,7 +1420,9 @@ export class FieldGroupMutationService extends BaseService {
             componentType,
           });
 
-          await this.adapter.insert(tableName, row, { returning: ["id"] });
+          await this.adapter.insert(meta.tableName, row, {
+            returning: ["id"],
+          });
           if (schema) {
             await this.upsertLocalizedComponent(
               schema,
@@ -1549,32 +1534,15 @@ export class FieldGroupMutationService extends BaseService {
 
         if (!componentType || !allowedSlugs.includes(componentType)) continue;
 
-        const meta = metaCache.get(componentType);
-        if (!meta) continue;
-
-        const tableName = meta.tableName;
-        const componentFields = meta.fields;
-        const instanceId = instance.id;
-        // Prepare BEFORE splitting: splitLocalizedComponent copies `main` and
-        // `companion` out of the instance by value when the field group is
-        // localized, so a default filled in, a relationship normalized or a
-        // password hashed after the split stays on the instance and never
-        // reaches the rows this write stores.
-        // An update only of a block stored as the type it claims: the id of
-        // one stored as another type names a row this block's rules and
-        // schema do not describe, so it is a new block of the type it claims.
-        const storedAs = instanceId
-          ? globalExistingMap.get(instanceId)
-          : undefined;
-        const existingEntry =
-          storedAs?.tableName === tableName ? storedAs : undefined;
-        await this.prepareInstanceForWrite(
+        const prepared = await this.prepareZoneBlock({
           instance,
-          componentFields,
-          existingEntry ? "update" : "create",
+          componentType,
+          metaCache,
+          globalExistingMap,
           req,
-          meta.slug
-        );
+        });
+        if (!prepared) continue;
+        const { meta, componentFields, instanceId, existingEntry } = prepared;
         // Validation only: judge every instance, store none.
         if (validateOnly) continue;
 
@@ -1622,7 +1590,7 @@ export class FieldGroupMutationService extends BaseService {
             componentType,
           });
 
-          await tx.insert(tableName, row, { returning: ["id"] });
+          await tx.insert(meta.tableName, row, { returning: ["id"] });
           if (schema) {
             await this.upsertLocalizedComponent(
               schema,
@@ -2005,6 +1973,60 @@ export class FieldGroupMutationService extends BaseService {
     }
 
     return result;
+  }
+
+  /**
+   * Resolve one dynamic-zone block for writing, and judge and prepare it: the
+   * field group's record, the stored row the block updates, and the mode that
+   * row decides.
+   *
+   * A block updates only a row stored as the type it claims. The id of a row
+   * stored as another type names a row this block's rules and schema do not
+   * describe, so a block carrying one is new, of the type it claims, and is
+   * judged by a create.
+   *
+   * Prepared BEFORE the caller splits: `splitLocalizedComponent` copies
+   * `main` and `companion` out of the instance by value when the field group
+   * is localized, so a default filled in, a relationship normalized or a
+   * password hashed after the split stays on the instance and never reaches
+   * the rows the write stores.
+   *
+   * Both save paths resolve a block exactly this way, and this is where the
+   * block's own field rules run, so it has one implementation: a second copy
+   * of a judgment is how two paths come to allow different things.
+   *
+   * Null when this write resolved no record for the type the block claims.
+   */
+  private async prepareZoneBlock(args: {
+    instance: ComponentInstanceData;
+    componentType: string;
+    metaCache: Map<string, DynamicFieldGroupRecord>;
+    globalExistingMap: Map<string, { row: ComponentRow; tableName: string }>;
+    req?: Record<string, unknown>;
+  }): Promise<{
+    meta: DynamicFieldGroupRecord;
+    componentFields: FieldConfig[];
+    instanceId: string | undefined;
+    existingEntry: { row: ComponentRow; tableName: string } | undefined;
+  } | null> {
+    const meta = args.metaCache.get(args.componentType);
+    if (!meta) return null;
+    const componentFields = meta.fields;
+    const instanceId = args.instance.id;
+    const storedAs =
+      instanceId !== undefined
+        ? args.globalExistingMap.get(instanceId)
+        : undefined;
+    const existingEntry =
+      storedAs?.tableName === meta.tableName ? storedAs : undefined;
+    await this.prepareInstanceForWrite(
+      args.instance,
+      componentFields,
+      existingEntry ? "update" : "create",
+      args.req,
+      meta.slug
+    );
+    return { meta, componentFields, instanceId, existingEntry };
   }
 
   private buildRowMap(rows: ComponentRow[]): Map<string, ComponentRow> {

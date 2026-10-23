@@ -89,6 +89,7 @@ import {
 } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
+  anyFieldGroupHasAccessRule,
   applyFieldReadAccess,
   applyFieldWriteAccess,
   hasFieldAccessRule,
@@ -130,6 +131,8 @@ import {
   applyFieldGroupWriteAccessToDocument,
   applyInlineFieldGroupWriteAccess,
   keepDeniedAtStoredOnUpdate,
+  keepDeniedFieldGroupsInDraft,
+  withStoredFieldGroups,
 } from "../../field-groups/field-group-write-access";
 import {
   liveFieldGroupReadPass,
@@ -2104,6 +2107,8 @@ export class CollectionMutationService extends BaseService {
     entryId: string;
     collectionName: string;
     stored: Record<string, unknown>;
+    /** The entry's table, to read the instances it holds in their own. */
+    tableName: string;
     fields: FieldDefinition[];
     params: {
       user?: UserContext;
@@ -2120,12 +2125,22 @@ export class CollectionMutationService extends BaseService {
       args.params.authenticatedScope,
       args.executor
     );
+    const access = { ...fieldGroupWriteAccessOf(args.params), grants };
     await keepDeniedAtStoredOnUpdate({
       data: args.data,
-      stored: args.stored,
+      // The parent row alone carries no field-group instance, so what an
+      // update removes is read here or judged against nothing.
+      stored: await withStoredFieldGroups({
+        stored: args.stored,
+        parentTable: args.tableName,
+        fields: args.fields as unknown as FieldConfig[],
+        source: this.fieldGroupDataService,
+        access,
+        executor: args.executor,
+      }),
       fields: args.fields as unknown as FieldConfig[],
       source: this.fieldGroupDataService,
-      access: { ...fieldGroupWriteAccessOf(args.params), grants },
+      access,
       executor: args.executor,
       // The entry's own rules, in the same judgment: a group is written whole,
       // so a denied child of one keeps its stored value rather than clearing.
@@ -7019,6 +7034,7 @@ export class CollectionMutationService extends BaseService {
             get: slug => args.componentSchemas?.get(slug)?.fields,
           },
           access: { ...fieldGroupWriteAccessOf(args), grants: args.grants },
+          live: args.live,
         });
       },
       // What the schema declares, so a field named like one of the store's
@@ -7681,6 +7697,29 @@ export class CollectionMutationService extends BaseService {
       ctx,
       existingDraft
     );
+    // The held field-group values, judged by their own rules before anything
+    // is recorded, each denied one kept at what this draft replaces: no save
+    // judges a held instance, and a later publisher allowed to write a value
+    // would otherwise promote one its author was not.
+    const heldNames = Object.keys(ctx.componentFieldData ?? {});
+    await keepDeniedFieldGroupsInDraft({
+      draft: draftDocument,
+      replaces,
+      names: heldNames,
+      fields: fields as unknown as FieldConfig[],
+      fieldGroupFields: {
+        get: slug => splitComponentSchemas?.get(slug)?.fields,
+      },
+      access: {
+        ...fieldGroupWriteAccessOf(params),
+        // Still inside the write's transaction.
+        grants: callerAccessGrants(
+          params.user,
+          params.authenticatedScope,
+          tx.getDrizzle()
+        ),
+      },
+    });
     // The held component values are judged as the publish would judge them:
     // merged into the draft, since a save carries only the sub-fields it
     // changed, and without the type tags the draft holds, which no ordinary
@@ -8166,6 +8205,7 @@ export class CollectionMutationService extends BaseService {
           fields,
           tableName
         ),
+        tableName,
         fields,
         params,
       });
@@ -8513,10 +8553,14 @@ export class CollectionMutationService extends BaseService {
       // every publish, unpublish and republish on a draft-enabled collection
       // would pay for the roles and permissions queries to answer a question
       // nothing asks. Both tests are map reads.
+      // A field group's update rule asks too: the promotion judges every
+      // instance the document holds by its own rules.
       const promoteRulesCouldRun =
         promotePossible &&
         params.overrideAccess !== true &&
-        hasFieldAccessRule("collection", params.collectionName, "update");
+        (hasFieldAccessRule("collection", params.collectionName, "update") ||
+          anyFieldGroupHasAccessRule("update") ||
+          anyFieldGroupHasAccessRule("create"));
       const promoteGrants = promoteRulesCouldRun
         ? await resolvedCallerGrants(params.user, params.authenticatedScope)
         : undefined;
@@ -11624,6 +11668,7 @@ export class CollectionMutationService extends BaseService {
         entryId: entryId,
         collectionName: params.collectionName,
         stored: this.readShapeEventDocument(existingEntry, fields, tableName),
+        tableName,
         fields,
         params,
         // Still inside the caller-owned transaction.

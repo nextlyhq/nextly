@@ -463,6 +463,7 @@ async function resolveForLocale(
         fields: ctx.fields,
         fieldGroupFields: { get: slug => ctx.componentFields?.(slug) },
         access: { ...fieldGroupWriteAccessOf(ctx), grants: ctx.grants },
+        live,
       });
     },
     // What this Single declares, so a field named like one of the store's own

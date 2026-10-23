@@ -86,7 +86,11 @@ import {
   recordTransitionEvents,
   recordWriteEvent,
 } from "../../content-events/write-event";
-import { keepDeniedAtStoredOnUpdate } from "../../field-groups/field-group-write-access";
+import {
+  keepDeniedAtStoredOnUpdate,
+  keepDeniedFieldGroupsInDraft,
+  withStoredFieldGroups,
+} from "../../field-groups/field-group-write-access";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { fieldGroupWriteAccessOf } from "../../field-groups/services/field-group-mutation-service";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
@@ -1223,12 +1227,24 @@ export class SingleMutationService extends BaseService {
         options.user,
         options.authenticatedScope
       );
+      const singleWriteAccess = {
+        ...fieldGroupWriteAccessOf(options),
+        grants: writeGrants,
+      };
       await keepDeniedAtStoredOnUpdate({
         data: currentData,
-        stored: existingDeserialized,
+        // The Single's row alone carries no field-group instance, so what an
+        // update removes is read here or judged against nothing.
+        stored: await withStoredFieldGroups({
+          stored: existingDeserialized,
+          parentTable: singleMeta.tableName,
+          fields: fieldConfigs,
+          source: this.fieldGroupDataService,
+          access: singleWriteAccess,
+        }),
         fields: fieldConfigs,
         source: this.fieldGroupDataService,
-        access: { ...fieldGroupWriteAccessOf(options), grants: writeGrants },
+        access: singleWriteAccess,
         ownRules: document =>
           applyFieldWriteAccess({
             kind: "single",
@@ -3011,6 +3027,27 @@ export class SingleMutationService extends BaseService {
                   singleComponentSchemas
                 );
               }
+              // The held field-group values, judged by their own rules before
+              // anything is recorded, each denied one kept at what this draft
+              // replaces: no save judges a held instance, and a later
+              // publisher allowed to write a value would otherwise promote one
+              // its author was not.
+              await keepDeniedFieldGroupsInDraft({
+                draft: pending,
+                replaces,
+                names: Object.keys(attemptComponentFields),
+                fields: fieldConfigs,
+                fieldGroupFields: { get: componentResolver },
+                access: {
+                  ...fieldGroupWriteAccessOf(options),
+                  // Inside the write's transaction.
+                  grants: callerAccessGrants(
+                    options.user,
+                    options.authenticatedScope,
+                    tx.getDrizzle()
+                  ),
+                },
+              });
               // The held component values are judged as the publish would
               // judge them: merged into the draft, since a save carries only the
               // sub-fields it changed, and without the type tags the draft
