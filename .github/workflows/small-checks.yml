@@ -61,6 +61,9 @@ jobs:
       issues: read
     outputs:
       error_message: ${{ steps.lint_pr_title.outputs.error_message }}
+      # `success` only when the title step ran and passed. An empty message
+      # alone also follows a job that failed before the title was checked.
+      title_outcome: ${{ steps.lint_pr_title.outcome }}
     steps:
       # The code that judges: `main` on a pull request or a push, and in the
       # queue its base, with the history the queued commits are read from.
@@ -249,10 +252,12 @@ jobs:
             - `fix(adapter-postgres): handle connection pool exhaustion`
             - `chore(deps): bump zod to 4.2.0`
 
-      # The title passed when it left no message. The job's other steps can
-      # fail it without the title being at fault, so its result is not asked.
+      # Only a title step that ran and passed clears the comment. The job's
+      # other steps can fail it without the title being at fault, so the job's
+      # result is not asked; and a job that failed before the title step ran
+      # leaves no verdict, so the comment stays.
       - name: Clear sticky comment on success
-        if: ${{ needs.checks.result != 'cancelled' && needs.checks.outputs.error_message == '' }}
+        if: ${{ needs.checks.outputs.title_outcome == 'success' }}
         uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: pr-title-lint-error

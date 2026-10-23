@@ -578,10 +578,12 @@ export function missingRequired(checkRuns, changedPaths, required) {
     throw new TypeError("missingRequired needs an array of check-runs");
   }
   const present = new Set(checkRuns.map(run => run?.name));
+  // A check with an `or` list is also covered when every name on it reported.
+  const covered = check => present.has(check.name) || (Array.isArray(check.or) && check.or.length > 0 && check.or.every(name => present.has(name)));
   return required
     .filter(check => workflowApplies(check.pathsIgnore, changedPaths))
-    .map(check => check.name)
-    .filter(name => !present.has(name));
+    .filter(check => !covered(check))
+    .map(check => check.name);
 }
 
 /**
@@ -716,7 +718,7 @@ export function workflowPathsIgnore(workflowText, trigger) {
  * Checks whose absence means the revision has no coverage, not that it is
  * clean, each with the filter deciding whether it was due to report.
  */
-export function requiredChecks(integrationPathsIgnore) {
+export function requiredChecks(integrationPathsIgnore, { merged = false } = {}) {
   return [
     // Every other job in `ci.yml` hangs off this one through `needs: [ci]`, so
     // if it never reported then the browser, scaffold and dev-script jobs did
@@ -726,7 +728,15 @@ export function requiredChecks(integrationPathsIgnore) {
     // Its own workflow, unfiltered, on every pull request, in the queue and on
     // every push to the base branch: the title, AI-credit, secret-scan and
     // review steps in one job, so its absence leaves all four unjudged.
-    { name: "Small checks (title, AI credit, secret scan, review)", pathsIgnore: [] },
+    // A revision whose runs started from a base without that workflow reports
+    // the checks it replaced instead: `gitleaks` everywhere, and the title
+    // before a merge, since a push to the base branch had no title to check.
+    // All of those together cover it; any one alone does not.
+    {
+      name: "Small checks (title, AI credit, secret scan, review)",
+      pathsIgnore: [],
+      or: merged ? ["gitleaks"] : ["gitleaks", "Validate PR title follows Conventional Commits"],
+    },
     // Listed for the reason this whole list exists: it is an INDEPENDENT job in
     // `ci.yml`, hanging off nothing, so removing or renaming it produces no
     // check-run for a failure check to reject - the control would disappear in
@@ -1247,7 +1257,7 @@ export function main(argv) {
     workflowAt(filterRevision, ".github/workflows/integration.yml"),
     merged ? "push" : "pull_request"
   );
-  const required = requiredChecks(integrationIgnore);
+  const required = requiredChecks(integrationIgnore, { merged });
   // Paginated. A pull request with more than 100 review threads would
   // otherwise have everything past the first page counted as resolved, which
   // is the reassuring direction.

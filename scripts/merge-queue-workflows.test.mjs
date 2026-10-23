@@ -1468,6 +1468,30 @@ describe("the title check's permissions", () => {
     expect(heads.map(step => step.with.path)).toEqual(["change"]);
   });
 
+  /*
+   * The comment is cleared only on a title verdict that passed. A job that
+   * failed before the title step ran leaves the message empty too, and
+   * clearing on that would delete a standing refusal no new verdict replaced.
+   */
+  it("clears the title comment only after the title step ran and passed", () => {
+    expect(workflow.jobs.checks.outputs.title_outcome).toBe("${{ steps.lint_pr_title.outcome }}");
+    const clear = workflow.jobs.comment.steps.find(step => step.name === "Clear sticky comment on success").if;
+    const clears = ({ outcome, message = "", result }) =>
+      evaluate(conditionTokens(clear), clear, {
+        "needs.checks.outputs.title_outcome": outcome,
+        "needs.checks.outputs.error_message": message,
+        "needs.checks.result": result,
+      });
+    // The title step never ran: the checkout or Node failed first.
+    expect(clears({ outcome: "", result: "failure" })).toBe(false);
+    expect(clears({ outcome: "skipped", result: "failure" })).toBe(false);
+    // The title was refused.
+    expect(clears({ outcome: "failure", message: "bad title", result: "failure" })).toBe(false);
+    // The title passed and another step failed the job: the title's comment still goes.
+    expect(clears({ outcome: "success", result: "failure" })).toBe(true);
+    expect(clears({ outcome: "success", result: "success" })).toBe(true);
+  });
+
   it("hands the script every rule the workflow sets, through the environment", () => {
     const action = read(".github/actions/pr-title/action.yml");
     const env = action.runs.steps[0].env;

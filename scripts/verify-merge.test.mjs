@@ -1101,7 +1101,30 @@ describe("requiredChecks after a merge", () => {
     // workflow runs on a push to the base branch too, where it scans the
     // pushed commits; so its absence is a gap on either side of the merge.
     expect(requiredChecks([]).map(c => c.name)).toContain(SMALL);
+    expect(requiredChecks([], { merged: true }).map(c => c.name)).toContain(SMALL);
     expect(requiredChecks([]).map(c => c.name)).not.toContain("gitleaks");
+  });
+
+  // A revision whose runs started from a base without the combined workflow
+  // reports the checks it replaced; all of them together cover it.
+  const OLD_TITLE = "Validate PR title follows Conventional Commits";
+  const withoutSmall = required => required.filter(check => check.name !== SMALL).map(check => green(check.name));
+
+  it("takes the secret scan and the title together for the small checks before a merge", () => {
+    const required = requiredChecks([]);
+    expect(missingRequired([...withoutSmall(required), green("gitleaks"), green(OLD_TITLE)], CODE_CHANGE, required)).toEqual([]);
+  });
+
+  it("does not take either one alone before a merge", () => {
+    const required = requiredChecks([]);
+    expect(missingRequired([...withoutSmall(required), green("gitleaks")], CODE_CHANGE, required)).toEqual([SMALL]);
+    expect(missingRequired([...withoutSmall(required), green(OLD_TITLE)], CODE_CHANGE, required)).toEqual([SMALL]);
+  });
+
+  it("takes the secret scan alone after a merge, where a push had no title to check", () => {
+    const required = requiredChecks([], { merged: true });
+    expect(missingRequired([...withoutSmall(required), green("gitleaks")], CODE_CHANGE, required)).toEqual([]);
+    expect(missingRequired(withoutSmall(required), CODE_CHANGE, required)).toEqual([SMALL]);
   });
 });
 
