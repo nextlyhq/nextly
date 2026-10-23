@@ -37,6 +37,7 @@ import {
   generatedWidgets,
 } from "./collection-widgets";
 import type { WidgetDefinition } from "./definition";
+import type { WidgetPermissionGate } from "./gate";
 import { publishableWidgets } from "./publish";
 import { allowedWidths, widthFromSize, type WidgetWidth } from "./widths";
 
@@ -94,7 +95,7 @@ export interface CanonicalWidget {
    * so the admin asks for its cards by card rather than by query.
    */
   serverData?: true;
-  requiredPermission?: string | readonly string[];
+  requiredPermission?: WidgetPermissionGate;
   defaultSize?: string;
   /**
    * The smallest and largest size the declaration allows, carried so the

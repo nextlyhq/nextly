@@ -20,6 +20,11 @@
     // TS5074. tsdown's declaration step writes no build info at all.
     "tsBuildInfoFile": "${configDir}/.tsbuildinfo",
     "isolatedModules": true,
+    // TypeScript 7's defaults, written out so 5.9 checks the same way now:
+    // a side-effect import (`import "./x"`) must resolve, and `lib` files are
+    // never replaced by a package named `@typescript/lib-*`.
+    "libReplacement": false,
+    "noUncheckedSideEffectImports": true,
     "lib": ["es2022", "DOM", "DOM.Iterable"],
     "module": "NodeNext",
     "moduleDetection": "force",

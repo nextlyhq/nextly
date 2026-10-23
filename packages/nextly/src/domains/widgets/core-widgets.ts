@@ -32,12 +32,13 @@
  * holds the halves together; it reads this file.
  *
  * Deliberately no `requiredPermission` on the cards that predate the widget
- * grid. Every one of those is visible to any authenticated admin today, and
+ * grid but one. Every one of those is visible to any authenticated admin, and
  * adding a gate would hide a card someone currently sees -- a behaviour change
- * wearing the costume of a refactor. The gate that belongs on `core/team` in
- * particular waits on a question this repository has not answered: which
- * permission gates a bare COUNT of users, given `dashboard-service` computes it
- * unscoped.
+ * wearing the costume of a refactor. The exception is `core/team`, decided
+ * rather than inherited: it is for the people who manage the team, so it is
+ * offered to a reader who may read people AND may add or change them
+ * (`TEAM_GATE`), and its `system:team` source asks the same gate before it
+ * counts anyone.
  *
  * 🔴 A card added HERE is new to every reader, so that argument does not extend
  * to it: nothing is hidden that was previously visible, so the gate is decided
@@ -59,12 +60,16 @@
 
 import { settings } from "./declaration/setting-builders";
 import type { WidgetDefinition, WidgetSetting } from "./definition";
+import { MAX_WIDGET_LIMIT } from "./query-limits";
 import {
   ACTIVITY_SOURCE_ID,
   ATTENTION_SOURCE_ID,
+  CONTENT_SOURCE_ID,
   RELEASES_SOURCE_ID,
+  TEAM_SOURCE_ID,
   VERSIONS_SOURCE_ID,
 } from "./system-source-ids";
+import { TEAM_GATE } from "./team-gate";
 
 /**
  * Recent activity's "Number of items": the one offer every card makes, from the
@@ -173,6 +178,10 @@ const CORE_WIDGET_LITERALS = [
     minSize: "lg",
     defaultOrder: 10,
     component: "core#CollectionQuickLinks",
+    // Each collection's entries and drafts, counted as the reader, in the batch like every card.
+    // Asked the most any widget query may return: an omitted limit is the default 5, and this
+    // card lists every collection, saying "more exist" past the last one it draws.
+    query: { source: CONTENT_SOURCE_ID, op: "list", limit: MAX_WIDGET_LIMIT },
     /*
      * Offered only while this reader has a collection to see. The card used to
      * answer that for itself, drawing a get-started panel of its own when it
@@ -227,6 +236,10 @@ const CORE_WIDGET_LITERALS = [
     minSize: "md",
     defaultOrder: 30,
     component: "core#TeamSummary",
+    link: { label: "All users", href: "/admin/users" },
+    // Offered to the readers its source answers, by the one constant both read.
+    requiredPermission: TEAM_GATE,
+    query: { source: TEAM_SOURCE_ID, op: "list" },
   },
   {
     id: "core/needs-attention",
@@ -287,13 +300,17 @@ const CORE_WIDGET_LITERALS = [
     id: "core/upcoming-releases",
     title: "Upcoming releases",
     description: "Scheduled releases that have not shipped yet, soonest first.",
-    archetype: "list",
+    // Its own component, so the line naming releases that need attention can sit above the
+    // rows; the rows themselves are drawn as core's list cards draw them.
+    archetype: "custom",
+    component: "core#UpcomingReleases",
+    link: { label: "All releases", href: "/admin/releases" },
     defaultSize: "md",
     // The narrowest width it still draws at: a list whose rows need at least a third.
     minSize: "md",
     defaultOrder: 40,
     /*
-     * 🔴 The ONLY core card with a gate, and the asymmetry is deliberate rather
+     * 🔴 One of the two core cards with a gate, and the asymmetry is deliberate rather
      * than an inconsistency. `ReleasesService.find` opens with
      * `authorize(actor, "read")`, which THROWS -- so an ungranted reader does
      * not get an empty card, they get one stuck in its error state, reporting a
@@ -341,9 +358,12 @@ const CORE_WIDGET_LITERALS = [
     query: {
       source: RELEASES_SOURCE_ID,
       op: "list",
-      select: ["title", "scheduledAt"],
+      // Selecting `reason` is what asks the source for the attention rows; see `system:releases`.
+      select: ["kind", "title", "scheduledAt", "reason", "count"],
       limit: 5,
     },
+    // Asked like core's lists: the rows its size draws and one more, for "more exist".
+    sizedQuery: true,
   },
   {
     id: "core/recent-activity",

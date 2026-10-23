@@ -38,6 +38,7 @@ import type { CollectionDbOptions } from "../../domains/collections/services/col
 import type { PreviewViewportsDeclaration } from "../../domains/collections/services/preview-viewports";
 import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import type { WebhookEventType } from "../../domains/webhooks/types";
+import type { Workflow } from "../../domains/workflows/types";
 import type { RevalidateConfig } from "../../revalidation/types";
 import type { VersionsConfig } from "../../schemas/versions/types";
 import { simplePluralize } from "../../shared/lib/pluralization";
@@ -834,6 +835,18 @@ export interface CollectionConfig {
    * @default undefined (unversioned)
    */
   versions?: boolean | VersionsConfig;
+
+  /**
+   * The editorial workflow this collection's documents move through on their way
+   * to publishing, from `defineWorkflow` or `reviewWorkflow`. One workflow may
+   * serve any number of collections and Singles; each has at most one. It
+   * needs drafts kept beside the live version: `status` on and drafts enabled
+   * in `versions`, or the configuration is refused, saying which is missing.
+   * Declaring it changes nothing at runtime yet.
+   *
+   * @experimental
+   */
+  workflow?: Workflow;
 
   /**
    * Enable multilingual content for this collection. When `true`, translatable

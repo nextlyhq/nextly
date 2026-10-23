@@ -513,9 +513,13 @@ function WidgetCardFooter({
         <span />
       )}
       {link !== undefined && (
+        // Foreground, with the brand on the underline: a brand primary is any colour its owner
+        // picked, and small text in it can fall under AA contrast (a mid-tone indigo is about
+        // 4.47:1 on white). The underline keeps it reading as a link, and solid on hover and
+        // focus.
         <Link
           href={link.href}
-          className="text-xs font-medium text-primary hover:underline focus-visible:underline"
+          className="text-xs font-medium text-foreground underline decoration-primary/40 underline-offset-4 hover:decoration-primary focus-visible:decoration-primary"
         >
           {link.label}
         </Link>
