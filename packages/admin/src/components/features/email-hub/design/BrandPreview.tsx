@@ -153,9 +153,9 @@ export function BrandPreview({
             {layoutKept && (
               <p className="flex items-start gap-2 text-xs text-muted-foreground">
                 <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                Your site changed the Default layout, so emails don&apos;t look
-                like this yet. This is how they&apos;ll look once it&apos;s
-                reset.
+                Your site changed the Default layout, and the preview shows your
+                version, which the brand settings don&apos;t reach until the
+                layout is reset.
               </p>
             )}
           </div>

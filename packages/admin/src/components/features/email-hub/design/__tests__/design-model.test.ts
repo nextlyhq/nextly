@@ -8,6 +8,7 @@ import {
   changeOf,
   emailSafeFontFor,
   emailsByLayout,
+  previewEmailOrder,
   namesLine,
   normalizeHex,
   previewChangeOf,
@@ -204,9 +205,32 @@ describe("Match my site", () => {
       same: false,
       font: { key: "arial" },
     });
+    expect(emailSafeFontFor("system-ui, sans-serif", FONTS)?.font.key).toBe(
+      "system"
+    );
     expect(emailSafeFontFor("JetBrains Mono, monospace", FONTS)?.font.key).toBe(
       "courier"
     );
+  });
+});
+
+describe("the emails to preview", () => {
+  it("puts those the settings reach first, and keeps the rest", () => {
+    const emails = [
+      record({ id: "a", name: "A" }),
+      record({ id: "b", name: "B" }),
+      record({ id: "c", name: "C" }),
+    ];
+    const reach = [
+      { templateId: "b", reached: true },
+      { templateId: "a", reached: false },
+      { templateId: "c", reached: false },
+    ];
+    expect(previewEmailOrder(reach, emails).map(e => e.id)).toEqual([
+      "b",
+      "a",
+      "c",
+    ]);
   });
 });
 

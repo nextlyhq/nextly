@@ -145,6 +145,11 @@ function LogoField({
   );
 }
 
+/** A width within the server's bounds, in whole pixels. */
+function clampWidth(value: number): number {
+  return Math.min(LOGO_WIDTH.max, Math.max(LOGO_WIDTH.min, Math.round(value)));
+}
+
 function LogoWidthField({
   draft,
   edit,
@@ -156,12 +161,16 @@ function LogoWidthField({
 }) {
   const id = useId();
   const off = disabled || !draft.logoUrl;
+  // What is typed, held until the field is left: a width typed digit by
+  // digit passes through numbers below the minimum on its way.
+  const [typed, setTyped] = useState<string | null>(null);
   const set = (value: number) => {
     if (!Number.isFinite(value)) return;
-    edit(
-      "logoWidth",
-      Math.min(LOGO_WIDTH.max, Math.max(LOGO_WIDTH.min, Math.round(value)))
-    );
+    edit("logoWidth", clampWidth(value));
+  };
+  const commit = () => {
+    if (typed !== null && typed.trim() !== "") set(Number(typed));
+    setTyped(null);
   };
   return (
     <div className="space-y-2">
@@ -173,9 +182,13 @@ function LogoWidthField({
             type="number"
             min={LOGO_WIDTH.min}
             max={LOGO_WIDTH.max}
-            value={draft.logoWidth}
+            value={typed ?? draft.logoWidth}
             disabled={off}
-            onChange={event => set(Number(event.target.value))}
+            onChange={event => setTyped(event.target.value)}
+            onBlur={commit}
+            onKeyDown={event => {
+              if (event.key === "Enter") commit();
+            }}
           />
           <span className="text-xs text-muted-foreground">px</span>
         </div>
@@ -334,10 +347,8 @@ function FooterTextField({
         onChange={event => edit("footerText", event.target.value || null)}
       />
       <Hint>
-        Leave it empty for the standard line. Liquid works here:{" "}
-        <code className="font-mono">{"{{year}}"}</code> and{" "}
-        <code className="font-mono">{"{{appName}}"}</code> fill in when the
-        email is sent.
+        Shown as written. Leave it empty for the standard line, which gives the
+        year and the site&apos;s name.
       </Hint>
     </div>
   );

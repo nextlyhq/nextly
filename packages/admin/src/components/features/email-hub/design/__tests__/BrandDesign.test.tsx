@@ -5,7 +5,7 @@
  * site's light-theme colours, and a reader sees the settings without changing
  * them.
  */
-import { waitFor } from "@testing-library/react";
+import { act, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -15,7 +15,8 @@ import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
 import { BrandDesign } from "../BrandDesign";
 
-const { save, preview, grants, getDocument } = vi.hoisted(() => ({
+const { save, preview, grants, getDocument, overview } = vi.hoisted(() => ({
+  overview: { current: null as unknown as BrandOverview },
   save: vi.fn(),
   preview: vi.fn(),
   grants: new Set<string>(),
@@ -143,7 +144,11 @@ const SITE_STYLE = {
 };
 
 vi.mock("@admin/hooks/queries/useEmailBrand", () => ({
-  useEmailBrand: () => ({ data: OVERVIEW, isError: false, error: null }),
+  useEmailBrand: () => ({
+    data: overview.current,
+    isError: false,
+    error: null,
+  }),
   useUpdateEmailBrand: () => ({ mutate: save, isPending: false }),
   useBrandPreview: (...args: unknown[]) => {
     preview(...args);
@@ -211,6 +216,7 @@ beforeEach(() => {
   getDocument.mockResolvedValue({ id: "s", updatedAt: "", tokens: SITE_STYLE });
   grants.clear();
   grants.add("manage-email-templates");
+  overview.current = OVERVIEW;
 });
 
 /** The brand change the preview was last asked to render. */
@@ -282,10 +288,91 @@ describe("the brand settings", () => {
 
   it("say which emails they reach, and why not the others", () => {
     render(<BrandDesign />);
-    expect(
-      screen.getByText("Reaches 2 emails that use the Default layout")
-    ).toBeTruthy();
+    expect(screen.getByText("Reaches 2 emails")).toBeTruthy();
     expect(screen.getByText("On Plain layout, your own")).toBeTruthy();
+  });
+});
+
+describe("the brand settings, in harder cases", () => {
+  it("keep an edit made while a save is still on its way", async () => {
+    const user = userEvent.setup();
+    render(<BrandDesign />);
+    await typeAccent(user, "#2f6b4f");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    // Changed again before the save answers.
+    const background = screen.getByLabelText("Email background");
+    await user.clear(background);
+    await user.click(background);
+    await user.paste("#abcdef");
+    // As the mutation calls it: the saved settings, then what was sent.
+    act(() =>
+      save.mock.calls[0][1].onSuccess(undefined, save.mock.calls[0][0])
+    );
+
+    expect(lastPreviewBrand()).toMatchObject({ backgroundColor: "#abcdef" });
+    expect(screen.getByText("Unsaved")).toBeTruthy();
+  });
+
+  it("don't preview for someone who may read templates but not preview them", () => {
+    grants.clear();
+    grants.add("read-email-templates");
+    render(<BrandDesign />);
+    expect(preview).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(/Previewing needs permission to create templates/)
+    ).toBeTruthy();
+  });
+
+  it("count the emails a save reaches even when the Default layout is kept", async () => {
+    overview.current = {
+      ...OVERVIEW,
+      reach: [
+        ...OVERVIEW.reach.slice(0, 1),
+        {
+          templateId: "reset",
+          slug: "reset",
+          name: "Password reset",
+          reached: false,
+          reason: "layoutWithoutBrand",
+          via: { body: false, layout: false },
+          layout: {
+            id: "layout",
+            slug: "default-layout",
+            name: "Default layout",
+            overridden: true,
+          },
+        },
+      ],
+    };
+    const user = userEvent.setup();
+    render(<BrandDesign />);
+    await typeAccent(user, "#2f6b4f");
+    expect(
+      screen.getByText("Saving changes the look of 1 email.")
+    ).toBeTruthy();
+  });
+
+  it("take a typed logo width as typed, and keep it in bounds when left", async () => {
+    overview.current = {
+      ...OVERVIEW,
+      settings: { ...OVERVIEW.settings, logoUrl: "https://cdn.test/logo.png" },
+    };
+    const user = userEvent.setup();
+    render(<BrandDesign />);
+    const width = screen.getByRole("spinbutton", {
+      name: "Logo width",
+    }) as HTMLInputElement;
+    await user.clear(width);
+    await user.type(width, "40");
+    expect(width.value).toBe("40");
+    await user.tab();
+    expect(lastPreviewBrand()).toMatchObject({ logoWidth: 40 });
+
+    await user.clear(width);
+    await user.type(width, "4");
+    await user.tab();
+    expect(width.value).toBe("16");
   });
 });
 

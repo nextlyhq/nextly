@@ -182,6 +182,20 @@ export function unreachedReason(entry: BrandReach): string {
   }
 }
 
+/** The emails to preview: those the settings reach first, then the rest. */
+export function previewEmailOrder(
+  reach: ReadonlyArray<Pick<BrandReach, "templateId" | "reached">>,
+  emails: EmailTemplateRecord[]
+): EmailTemplateRecord[] {
+  const reached = new Set(
+    reach.filter(entry => entry.reached).map(entry => entry.templateId)
+  );
+  return [
+    ...emails.filter(email => reached.has(email.id)),
+    ...emails.filter(email => !reached.has(email.id)),
+  ];
+}
+
 // ============================================================
 // Layouts and the emails they wrap
 // ============================================================
@@ -342,9 +356,10 @@ function firstFamily(stack: string): string {
 function genericOf(stack: string): "serif" | "monospace" | "system" | "sans" {
   const lower = stack.toLowerCase();
   if (/\bmonospace\b/.test(lower)) return "monospace";
+  // Before the generic fallbacks: `system-ui, sans-serif` is a system stack.
+  if (/system-ui|-apple-system/.test(lower)) return "system";
   if (/\bsans-serif\b/.test(lower)) return "sans";
   if (/\bserif\b/.test(lower)) return "serif";
-  if (/system-ui|-apple-system/.test(lower)) return "system";
   return "sans";
 }
 

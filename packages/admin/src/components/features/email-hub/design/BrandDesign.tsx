@@ -13,6 +13,7 @@ import { AlertTriangle, Loader2 } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import {
+  EMAIL_TEMPLATE_PREVIEW_PERMISSIONS,
   EMAIL_TEMPLATE_UPDATE_PERMISSIONS,
   holdsAny,
 } from "@admin/constants/email-hub";
@@ -26,6 +27,7 @@ import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type {
   BrandOverview,
   BrandSettings,
+  BrandSettingsChange,
 } from "@admin/services/emailBrandApi";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
@@ -42,8 +44,23 @@ import {
   isEmptyChange,
   plural,
   previewChangeOf,
+  previewEmailOrder,
 } from "./design-model";
 import { MatchMySite, useSiteStyle, type SiteMatch } from "./MatchMySite";
+
+/** The edits still to save once a save carrying `sent` has gone through. */
+function withoutSent(
+  edits: Partial<BrandSettings>,
+  sent: BrandSettingsChange
+): Partial<BrandSettings> {
+  const left: Partial<BrandSettings> = { ...edits };
+  for (const key of Object.keys(sent) as Array<keyof BrandSettings>) {
+    if (JSON.stringify(left[key]) === JSON.stringify(sent[key])) {
+      delete left[key];
+    }
+  }
+  return left;
+}
 
 /** The settings being edited, over the saved ones, and what a save changes. */
 function useBrandDraft(saved: BrandSettings) {
@@ -60,17 +77,35 @@ function useBrandDraft(saved: BrandSettings) {
     []
   );
   const discard = useCallback(() => setEdits({}), []);
-  return { draft, change, edit, apply, discard };
+  // After a save, only the edits it carried are dropped: one made while it
+  // was on its way is still waiting to be saved.
+  const settle = useCallback(
+    (sent: BrandSettingsChange) =>
+      setEdits(current => withoutSent(current, sent)),
+    []
+  );
+  return { draft, change, edit, apply, discard, settle };
 }
 
 /** Unsaved changes, with what saving them changes, and Discard and Save. */
+/** What a save changes, said under Unsaved changes. */
+function saveEffect(reached: number, layoutKept: boolean): string {
+  if (reached > 0)
+    return `Saving changes the look of ${plural(reached, "email")}.`;
+  return layoutKept
+    ? "Saving keeps them for when the Default layout is reset."
+    : "No email uses these settings yet.";
+}
+
 function SaveBar({
   reached,
+  layoutKept,
   saving,
   onDiscard,
   onSave,
 }: {
   reached: number;
+  layoutKept: boolean;
   saving: boolean;
   onDiscard: () => void;
   onSave: () => void;
@@ -88,9 +123,7 @@ function SaveBar({
       <div className="min-w-0 flex-1 text-sm">
         <span className="font-semibold">Unsaved changes</span>{" "}
         <span className="text-muted-foreground">
-          {reached > 0
-            ? `Saving changes the look of ${plural(reached, "email")}.`
-            : "Saving keeps them for when the Default layout is reset."}
+          {saveEffect(reached, layoutKept)}
         </span>
       </div>
       <Button
@@ -140,16 +173,16 @@ function LayoutKeptNotice({
   );
 }
 
-/** The emails to preview: those the settings reach first, then the rest. */
-function previewEmails(
-  overview: BrandOverview,
-  emails: EmailTemplateRecord[]
-): EmailTemplateRecord[] {
-  const reached = new Set(
-    overview.reach.filter(entry => entry.reached).map(entry => entry.templateId)
+/**
+ * Said in the preview's place to someone who may read the settings but not
+ * render a preview, which the server asks a create grant for.
+ */
+function NoPreview(): JSX.Element {
+  return (
+    <section className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
+      Previewing needs permission to create templates.
+    </section>
   );
-  const first = emails.filter(email => reached.has(email.id));
-  return first.length > 0 ? first : emails;
 }
 
 function BrandEditor({
@@ -161,8 +194,12 @@ function BrandEditor({
 }) {
   const { hasPermission } = useCurrentUserPermissions();
   const canEdit = holdsAny(hasPermission, EMAIL_TEMPLATE_UPDATE_PERMISSIONS);
+  const canPreview = holdsAny(
+    hasPermission,
+    EMAIL_TEMPLATE_PREVIEW_PERMISSIONS
+  );
   const { canOpen } = useTemplateActions();
-  const { draft, change, edit, apply, discard } = useBrandDraft(
+  const { draft, change, edit, apply, discard, settle } = useBrandDraft(
     overview.settings
   );
   const { mutate: save, isPending: saving } = useUpdateEmailBrand();
@@ -179,8 +216,8 @@ function BrandEditor({
 
   const onSave = () =>
     save(change, {
-      onSuccess: () => {
-        discard();
+      onSuccess: (_settings, sent) => {
+        settle(sent);
         toast.success("Brand settings saved");
       },
       onError: error =>
@@ -220,12 +257,16 @@ function BrandEditor({
             ) : null
           }
         />
-        <BrandPreview
-          emails={previewEmails(overview, emails)}
-          change={previewChange}
-          unsaved={unsaved}
-          layoutKept={kept}
-        />
+        {canPreview ? (
+          <BrandPreview
+            emails={previewEmailOrder(overview.reach, emails)}
+            change={previewChange}
+            unsaved={unsaved}
+            layoutKept={kept}
+          />
+        ) : (
+          <NoPreview />
+        )}
       </div>
       <BrandReachCard
         reach={overview.reach}
@@ -234,7 +275,8 @@ function BrandEditor({
       />
       {canEdit && unsaved && (
         <SaveBar
-          reached={kept ? 0 : reachedCount}
+          reached={reachedCount}
+          layoutKept={kept}
           saving={saving}
           onDiscard={discard}
           onSave={onSave}
