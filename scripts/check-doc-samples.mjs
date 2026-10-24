@@ -40,12 +40,12 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
 
 import { exportedNames as declarationExports } from "@nextlyhq/module-specifiers/declaration-exports";
 import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
 
 import { topLevelOnly } from "./top-level-text.mjs";
+import { deprecatedPropertiesOf } from "./deprecated-properties.mjs";
 import { compile as compileWithTsc } from "./tsc-cli.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -217,6 +217,18 @@ export const extensionFor = sample => {
 };
 
 /**
+ * The start of the diagnostic for a module that does not resolve. TS2307 is an
+ * import that binds something; TS2882 is a side-effect import, `import "./x"`,
+ * which TypeScript 7 checks by default (`noUncheckedSideEffectImports`) and
+ * TypeScript 5 let through silently. One unresolved module either way, and
+ * either leaves the sample unchecked: a side-effect import binds no names but
+ * can load global or module augmentations, so the rest of the sample was
+ * checked against types it never received.
+ */
+const CANNOT_FIND_MODULE =
+  "error TS(?:2307: Cannot find module|2882: Cannot find module or type declarations for side-effect import of) ";
+
+/**
  * A file the sample quotes and the reader writes: ./collections/Posts, or the
  * same reached through the `@/` alias a Next.js app sets up.
  *
@@ -227,8 +239,9 @@ export const extensionFor = sample => {
  * produces no diagnostic and the sample reads as clean while never having been
  * read at all — which is what the audit already says about unresolved packages.
  */
-export const READER_OWNED_FILE =
-  /error TS2307: Cannot find module '(?:\.{1,2}|@)\//;
+export const READER_OWNED_FILE = new RegExp(
+  `${CANNOT_FIND_MODULE}'(?:\\.{1,2}|@)/`
+);
 
 /**
  * A callback parameter left implicit because the value it maps over is untyped.
@@ -656,6 +669,41 @@ const SEMANTIC_PROBE = {
 };
 
 /**
+ * A file audited beside the samples that writes one property its own type
+ * deprecates, so a run says whether the deprecated-property audit could answer
+ * at all: an audit that answered nothing reads exactly like a corpus with no
+ * deprecated property in it.
+ */
+const DEPRECATION_PROBE = {
+  file: "__deprecation_probe__.ts",
+  source:
+    "export interface Probe {\n  /** @deprecated probe */\n  old?: number;\n}\nexport const probe: Probe = { old: 1 };\n",
+  name: "old",
+};
+
+/**
+ * `{ file, found }` for each of `files`: the deprecated properties it writes,
+ * from the compiler's language server through `audit`. The probe is audited
+ * with them, and a run that did not report it, or left a file unanswered, is
+ * refused.
+ */
+export function deprecationsIn(
+  dir,
+  files,
+  probe,
+  audit = deprecatedPropertiesOf
+) {
+  const found = audit(dir, [...files, probe]);
+  const answered = [...files, probe].every(file => Array.isArray(found[file]));
+  if (!answered || !found[probe].some(d => d.name === DEPRECATION_PROBE.name)) {
+    throw new Error(
+      "doc samples: the deprecated-property audit did not answer for every file and its probe, so its silence proves nothing"
+    );
+  }
+  return files.map(file => ({ file, found: found[file] }));
+}
+
+/**
  * Whether a run type-checked, and the diagnostics that are not the probe's.
  *
  * tsc stops before type-checking when any file fails to parse, and reports the
@@ -685,6 +733,9 @@ function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
   // to the file a person can open.
   const origin = new Map();
   const fileNames = [];
+  // The samples the deprecated-property audit can read: it parses each one, and
+  // a sample that does not parse has its parse error reported by the compile.
+  const parsed = [];
   try {
     // A counter, not the path with its punctuation replaced. That mapping is
     // not injective — `guides/foo-bar.mdx` and `guides/foo/bar.mdx` both become
@@ -708,16 +759,22 @@ function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
       // harness artefacts. Appended, so no diagnostic's line number moves.
       writeFileSync(full, `${s.code}\n\nexport {};\n`);
       fileNames.push(full);
+      if (parseSample(s.code, extensionFor(s)) !== UNPARSED) parsed.push(full);
     }
     linkResolutionTree(dir);
 
     const options = samplesCompilerOptions(dir);
     const probe = join(dir, SEMANTIC_PROBE.file);
     writeFileSync(probe, SEMANTIC_PROBE.source);
+    const deprecationProbe = join(dir, DEPRECATION_PROBE.file);
+    writeFileSync(deprecationProbe, DEPRECATION_PROBE.source);
     const config = join(dir, "tsconfig.json");
     writeFileSync(
       config,
-      JSON.stringify({ compilerOptions: options, files: [...fileNames, probe] })
+      JSON.stringify({
+        compilerOptions: options,
+        files: [...fileNames, probe, deprecationProbe],
+      })
     );
     // The compiler's command line, which every TypeScript version answers the
     // same way, rather than its JavaScript API.
@@ -769,30 +826,25 @@ function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
       .filter(keep);
     // A run that never reached type-checking reported parse errors only.
     const unparsed = checked ? [] : inFiles;
-    // Deprecations, asked of the checker rather than read off the diagnostics,
-    // for the reason written on `deprecatedPropertiesIn`. Rendered in the same
-    // shape as everything else and put in the same list, so the classifier
-    // charges the page and the conservation count downstream sees it without a
-    // bucket of its own. TS6385 is TypeScript's own code for this sentence,
-    // used rather than an invented one so a reader can look it up. The program
-    // is built from the same options the command line compiled with.
-    const program = ts.createProgram(
-      fileNames,
-      ts.convertCompilerOptionsFromJson(options, dir).options
+    // Deprecations, asked of the compiler's language server rather than read
+    // off the diagnostics: the compiler reports none for a deprecated property
+    // written in an object literal (`deprecated-properties.mjs` says why).
+    // Rendered in the same shape as everything else and put in the same list,
+    // so the classifier charges the page and the conservation count downstream
+    // sees it without a bucket of its own. TS6385 is TypeScript's own code for
+    // this sentence, used rather than an invented one so a reader can look it
+    // up.
+    const deprecated = deprecationsIn(dir, parsed, deprecationProbe).flatMap(
+      ({ file, found }) => {
+        const where = origin.get(file) ?? file;
+        return found.map(d => ({
+          origin: where,
+          text:
+            `${where}:${String(d.line)}  error TS6385: '${d.name}' is deprecated.` +
+            (d.note ? ` ${d.note}` : ""),
+        }));
+      }
     );
-    const checker = program.getTypeChecker();
-    const deprecated = fileNames.flatMap(file => {
-      const sourceFile = program.getSourceFile(file);
-      if (!sourceFile) return [];
-      const where = origin.get(file) ?? file;
-      return deprecatedPropertiesIn(sourceFile, checker).map(d => ({
-        origin: where,
-        text:
-          `${where}:${String(sourceFile.getLineAndCharacterOfPosition(d.start).line + 1)}  ` +
-          `error TS6385: '${d.name}' is deprecated.` +
-          (d.note ? ` ${d.note}` : ""),
-      }));
-    });
     const diagnostics = [
       ...setup.map(d => d.text),
       ...inFiles.map(d => d.text),
@@ -805,166 +857,6 @@ function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
 }
 
 /**
- * Properties a sample writes that the API it is writing them for has deprecated.
- *
- * TypeScript reports a deprecated FUNCTION as a suggestion diagnostic, and this
- * audit reads semantic ones, so adding suggestions was the obvious answer. It
- * was measured and it was wrong twice over: the corpus's suggestions are 24
- * "declared but never read" and a handful of others, all of them expected in a
- * sample that shows a shape rather than a program, and TypeScript does not
- * report this class at all. `{ collections: [...] }` written against a type
- * whose `collections` carries `@deprecated` produces no suggestion, no error and
- * no warning. A documented example taught the deprecated spelling of a plugin's
- * collections for as long as anyone had been reading it, and the gate compiled
- * it clean every time.
- *
- * So it is asked of the checker rather than read off the diagnostics. Every
- * object literal that has a contextual type is one the reader is filling in for
- * a declared API, and the property they wrote either exists on that type
- * carrying a `@deprecated` tag or it does not.
- *
- * The contextual type is what makes this narrow. A bare literal with no
- * declared shape has nothing to be deprecated against and is skipped, and a
- * nested literal is judged against its own property's type, so the `collections`
- * inside `contributes` is a different property from the one beside it.
- */
-export function deprecatedPropertiesIn(sourceFile, checker) {
-  const found = [];
-  const walk = node => {
-    if (ts.isObjectLiteralExpression(node)) {
-      const contextual = checker.getContextualType(node);
-      if (contextual) {
-        for (const property of node.properties) {
-          const name = writtenPropertyName(property);
-          if (name === null) continue;
-          const tag = deprecationOf(contextual, name, checker, node);
-          if (!tag) continue;
-          found.push({
-            name,
-            start: property.getStart(sourceFile),
-            note: (tag.text ?? [])
-              .map(part => part.text)
-              .join("")
-              .trim(),
-          });
-        }
-      }
-    }
-    ts.forEachChild(node, walk);
-  };
-  ts.forEachChild(sourceFile, walk);
-  return found;
-}
-
-/**
- * The property name a literal member writes, when it can be known from the text.
- *
- * `{ collections: [] }` and `{ "collections": [] }` name the same member, and
- * reading only identifiers meant the quoted spelling walked past the check. The
- * test is `.text`, which every static property name carries, rather than a list
- * of the node kinds that have one.
- *
- * Null for a computed name and for a spread, which writes no name here at all:
- * neither can be resolved against a declared property without evaluating
- * something, and a guess is worse than the silence.
- */
-function writtenPropertyName(property) {
-  const name = property.name;
-  if (!name) return null;
-  // `{ ["collections"]: [] }` names the same member as the other two
-  // spellings, and TypeScript resolves it the same way. Only the expression
-  // inside decides: a literal is read, anything that has to be evaluated is
-  // not.
-  if (ts.isComputedPropertyName(name)) {
-    const inner = name.expression;
-    return ts.isStringLiteralLike(inner) || ts.isNumericLiteral(inner)
-      ? inner.text
-      : null;
-  }
-  return typeof name.text === "string" ? name.text : null;
-}
-
-/**
- * The union constituents a literal could still be, after its own discriminants.
- *
- * `{ kind: "legacy", old: "x" }` against `Legacy | Current` is not ambiguous:
- * the literal says which arm it is. Asking every arm and requiring them to
- * agree gave that up, so a key deprecated on the arm actually being written
- * passed whenever the other arm still offered it.
- *
- * A constituent is dropped when the literal writes a literal value for a
- * property that constituent declares as a different literal type. Nothing else
- * narrows: a property whose value is computed, or whose declared type is not a
- * literal, says nothing about which arm this is and is left alone.
- */
-function applicableConstituents(constituents, literal, checker) {
-  const discriminants = [];
-  for (const property of literal.properties) {
-    if (!ts.isPropertyAssignment(property)) continue;
-    const name = writtenPropertyName(property);
-    if (name === null) continue;
-    const written = checker.getTypeAtLocation(property.initializer);
-    if (
-      !written.isLiteral() &&
-      !(written.flags & ts.TypeFlags.BooleanLiteral)
-    ) {
-      continue;
-    }
-    discriminants.push({ name, written });
-  }
-  if (discriminants.length === 0) return constituents;
-
-  const applicable = constituents.filter(constituent =>
-    discriminants.every(({ name, written }) => {
-      const declared = constituent.getProperty(name);
-      if (!declared) return true;
-      const type = checker.getTypeOfSymbolAtLocation(
-        declared,
-        declared.valueDeclaration ?? literal
-      );
-      if (!type.isLiteral() && !(type.flags & ts.TypeFlags.BooleanLiteral)) {
-        return true;
-      }
-      return checker.typeToString(type) === checker.typeToString(written);
-    })
-  );
-  // Every arm ruled out means the discriminants describe none of them, which is
-  // the compiler's complaint to make rather than this one's.
-  return applicable.length === 0 ? constituents : applicable;
-}
-
-/**
- * The `@deprecated` tag on a property, across everything the literal might be.
- *
- * A contextual type is often a union, and `getProperty` on one answers for the
- * union rather than for its parts: a property present on a single constituent
- * comes back `undefined`, so a deprecated option in a union-shaped API passed
- * unread. The constituents are asked one at a time instead.
- *
- * The constituents are narrowed by the literal's own discriminants first, so a
- * literal that says which arm it is gets answered by that arm. Where the
- * discriminants leave more than one arm standing, it reports only when every
- * remaining arm that declares the property deprecates it: charging a page for
- * writing the current spelling of a name that is merely obsolete on some other
- * arm would be claiming to know something this does not.
- */
-function deprecationOf(contextual, name, checker, literal) {
-  const constituents = applicableConstituents(
-    contextual.isUnion() ? contextual.types : [contextual],
-    literal,
-    checker
-  );
-  const declared = constituents
-    .map(type => type.getProperty(name))
-    .filter(symbol => symbol !== undefined);
-  if (declared.length === 0) return undefined;
-  const tags = declared.map(symbol =>
-    symbol.getJsDocTags(checker).find(tag => tag.name === "deprecated")
-  );
-  return tags.every(tag => tag !== undefined) ? tags[0] : undefined;
-}
-
-/**
  * What the reader-supplied rules dropped in the last compile.
  *
  * Module-level rather than returned, so the many callers of `compile` do not
@@ -974,10 +866,16 @@ function deprecationOf(contextual, name, checker, literal) {
 export const suppressedByTheReaderRule = [];
 
 /** An import this compilation could not resolve. */
-export const UNRESOLVED_IMPORT = /error TS2307: Cannot find module '([^']+)'/;
+export const UNRESOLVED_IMPORT = new RegExp(`${CANNOT_FIND_MODULE}'([^']+)'`);
 
-/** An undefined name, which may or may not be a defect. */
-export const MISSING_NAME = /error TS2304: Cannot find name '([^']+)'/;
+/**
+ * An undefined name, which may or may not be a defect. TS2552 is the same
+ * diagnostic with a spelling suggestion added, so it is read the same way:
+ * TypeScript 7 finds a lookalike far more often (`MyCollection` gets "Did you
+ * mean 'HTMLCollection'?"), and reading TS2304 alone set a reader's own name
+ * aside or charged it by whether the compiler found one.
+ */
+export const MISSING_NAME = /error TS(?:2304|2552): Cannot find name '([^']+)'/;
 
 /**
  * A shorthand property with nothing in scope to fill it.

@@ -7,9 +7,10 @@
  *
  * @module tests/axe-helper.spec
  */
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
 import { expectNoAxeViolations } from "./support/axe";
+import { test } from "./support/test";
 
 /** Scoped to the content, as a page's own region would be: the scan must measure its contrast. */
 const MAIN = { include: "main" };

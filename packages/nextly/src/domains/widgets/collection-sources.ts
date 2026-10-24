@@ -399,6 +399,26 @@ function useAsTitleOf(collection: RegisteredCollection): string | undefined {
   return trimmed === "" ? undefined : trimmed;
 }
 
+/** What the last registry read said about every collection, beside the sources it built. */
+interface RegistryRecord {
+  /** Every registered collection slug. */
+  slugs: ReadonlySet<string>;
+  /** The collections whose definition turns creating entries off (`admin.disableCreate`). */
+  createDisabled: ReadonlySet<string>;
+}
+
+/** The record, pinned where the other widget stores are. */
+const globalForRegistered = globalThis as unknown as {
+  __nextly_widgetRegistryRecord?: RegistryRecord;
+};
+
+/** A collection's `admin.disableCreate`, read defensively from the stored JSON. */
+function disablesCreate(collection: RegisteredCollection): boolean {
+  const admin = collection.admin;
+  if (typeof admin !== "object" || admin === null) return false;
+  return (admin as { disableCreate?: unknown }).disableCreate === true;
+}
+
 /**
  * Rebuild the `collection:` sources, answering whether the registry could be
  * read. On `false` the previous sources stand, as the note above explains.
@@ -440,5 +460,41 @@ export async function refreshCollectionSources(): Promise<boolean> {
   // registry refuses keeps the previous sources AND the previous record, so the sources and the
   // other surfaces that ask this record always describe one snapshot.
   recordKeptOffDashboard("collection", collections);
+  const slugged = collections.filter(
+    (collection): collection is RegisteredCollection & { slug: string } =>
+      typeof collection.slug === "string" && collection.slug !== ""
+  );
+  globalForRegistered.__nextly_widgetRegistryRecord = {
+    slugs: new Set(slugged.map(collection => collection.slug)),
+    createDisabled: new Set(
+      slugged.filter(disablesCreate).map(collection => collection.slug)
+    ),
+  };
   return true;
+}
+
+/**
+ * Every collection slug the registry held at the last refresh, or `undefined`
+ * before any refresh could read it.
+ *
+ * Wider than the sources on purpose: a collection kept off the dashboard, or
+ * withheld while its migration is pending, has no source and is still in the
+ * install. A saved card's collection is GONE only when it is not here, so a
+ * collection briefly without a source never reads as deleted. Recorded from
+ * the same read as the sources, and left standing when a refresh cannot reach
+ * the registry, as they are.
+ */
+export function registeredCollectionSlugs(): ReadonlySet<string> | undefined {
+  return globalForRegistered.__nextly_widgetRegistryRecord?.slugs;
+}
+
+/**
+ * The collections whose definition turned creating entries off at the last
+ * refresh, or `undefined` before any refresh could read the registry.
+ *
+ * From the read the source refresh already makes on every dashboard request,
+ * so asking costs no second read of every collection's definition.
+ */
+export function createDisabledCollections(): ReadonlySet<string> | undefined {
+  return globalForRegistered.__nextly_widgetRegistryRecord?.createDisabled;
 }

@@ -18,10 +18,17 @@ const root = join(import.meta.dirname, "..");
 const [node, oxlint] = oxlintCommand();
 const id = `${process.pid}-${Math.random().toString(36).slice(2)}`;
 
+// What the scripts' tests write at the repository's root for oxlint to read:
+// this file's plugin and configuration, and lint-config.test.mjs's
+// configurations. Another test's file appears and goes while this one lints, so
+// the one pass over the repository and the split passes could each see a
+// different set; ignored here, no pass sees any of them.
+const SCRATCH = ".oxlint-test-";
+
 // Written beside the committed configuration, because oxlint resolves a
 // configuration's globs and plugin paths from where the file is.
-const plugin = join(root, `.oxlint-test-files-${id}.mjs`);
-const config = join(root, `.oxlint-test-files-${id}.config.mjs`);
+const plugin = join(root, `${SCRATCH}files-${id}.mjs`);
+const config = join(root, `${SCRATCH}files-${id}.config.mjs`);
 writeFileSync(
   plugin,
   `export default { meta: { name: "visited" }, rules: { file: { create(context) {
@@ -36,8 +43,9 @@ writeFileSync(
   `export default ${JSON.stringify({
     ...committed,
     options: { ...committed.options, typeAware: false, maxWarnings: undefined },
-    jsPlugins: [...committed.jsPlugins, `./.oxlint-test-files-${id}.mjs`],
+    jsPlugins: [...committed.jsPlugins, `./${SCRATCH}files-${id}.mjs`],
     rules: { ...committed.rules, "visited/file": "error" },
+    ignorePatterns: [...committed.ignorePatterns, `${SCRATCH}*`],
   })};\n`,
   { flag: "wx" }
 );
@@ -90,6 +98,20 @@ describe("the lint passes", () => {
     // Each pass reaches something, so none is a path that stopped existing.
     for (const args of passes(config))
       expect(visited(args).length).toBeGreaterThan(0);
+  }, 180_000);
+
+  it("never count a configuration another test writes beside this one", () => {
+    // As lint-config.test.mjs writes one, at the root and for the length of a run.
+    const stray = join(root, `${SCRATCH}${id}-stray.config.mjs`);
+    writeFileSync(stray, "export default {};\n", { flag: "wx" });
+    try {
+      const whole = visited(["-c", config, "."]);
+      // The control: the same run does visit the repository.
+      expect(whole.length).toBeGreaterThan(1000);
+      expect(whole.filter(file => file.includes(SCRATCH))).toEqual([]);
+    } finally {
+      rmSync(stray, { force: true });
+    }
   }, 180_000);
 });
 

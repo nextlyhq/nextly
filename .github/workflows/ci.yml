@@ -1969,6 +1969,74 @@ jobs:
           fi
           echo "Both commands produced their output, and an edit rebuilt each one."
 
+      # nextly's `dev` runs three producers, since its declarations are written
+      # outside tsdown's JavaScript build: tsdown's watch (`dist/*.mjs`),
+      # `tsc --watch` (`.dts-tmp`), and the declaration bundler's watch
+      # (`dist/*.d.mts`). One edit is enough to require all three: the `.d.mts`
+      # changes only if tsc re-emitted the file AND the bundler rebuilt from it.
+      #
+      # nextly compiles against its workspace dependencies' `dist`, so those are
+      # built first, through turbo, which skips the ones that publish source.
+      - name: Build nextly's workspace dependencies
+        run: pnpm turbo run build --filter="nextly^..."
+
+      - name: Start nextly's dev script and require every watcher to rebuild
+        shell: bash
+        run: |
+          cd packages/nextly
+          rm -rf dist .dts-tmp
+          pnpm dev > /tmp/nextly-dev.log 2>&1 &
+          dev_pid=$!
+
+          # tsc writes its first pass before the bundler starts, so the
+          # declaration file is the later of the two to appear.
+          for _ in $(seq 1 300); do
+            if [ -f dist/zod.mjs ] && [ -f dist/zod.d.mts ]; then break; fi
+            sleep 1
+          done
+          missing=""
+          [ -f dist/zod.mjs ] || missing="$missing javascript(dist/zod.mjs)"
+          [ -f dist/zod.d.mts ] || missing="$missing declarations(dist/zod.d.mts)"
+
+          before_js=$(cksum dist/zod.mjs 2>/dev/null | awk '{print $1"-"$2}')
+          before_dts=$(cksum dist/zod.d.mts 2>/dev/null | awk '{print $1"-"$2}')
+
+          # An added export, repeated until both artifacts change, for the
+          # reasons the step above gives: a comment can be stripped, and a
+          # readiness line is only a proxy for a watcher that is listening.
+          js_rebuilt=no
+          dts_rebuilt=no
+          for i in $(seq 1 60); do
+            if [ "$js_rebuilt" = "no" ] || [ "$dts_rebuilt" = "no" ]; then
+              printf '\nexport const __watcherProbe%s = "probe";\n' "$i" >> src/zod.ts
+            fi
+            sleep 3
+            if [ "$(cksum dist/zod.mjs | awk '{print $1"-"$2}')" != "$before_js" ]; then
+              js_rebuilt=yes
+            fi
+            if [ "$(cksum dist/zod.d.mts | awk '{print $1"-"$2}')" != "$before_dts" ]; then
+              dts_rebuilt=yes
+            fi
+            if [ "$js_rebuilt" = "yes" ] && [ "$dts_rebuilt" = "yes" ]; then break; fi
+          done
+
+          alive=yes
+          kill -0 "$dev_pid" 2>/dev/null || alive=no
+
+          git checkout -- src/zod.ts
+          kill "$dev_pid" 2>/dev/null || true
+
+          if [ -n "$missing" ] || [ "$js_rebuilt" = "no" ] || [ "$dts_rebuilt" = "no" ] || [ "$alive" = "no" ]; then
+            [ -n "$missing" ] && echo "No artifact from:$missing"
+            [ "$alive" = "no" ] && echo "nextly's dev script exited, so its artifacts stop updating from here."
+            [ "$js_rebuilt" = "no" ] && echo "Editing src/zod.ts did not change dist/zod.mjs, so the JavaScript watch built once rather than watching."
+            [ "$dts_rebuilt" = "no" ] && echo "Editing src/zod.ts did not change dist/zod.d.mts, so tsc --watch or the declaration bundler is not watching."
+            echo "--- dev script output ---"
+            cat /tmp/nextly-dev.log
+            exit 1
+          fi
+          echo "nextly's three watchers produced their output, and an edit rebuilt the JavaScript and the declarations."
+
   # The CLI entry guard is wrong ONLY on Windows: `argv[1]` is a drive path, so
   # an interpolated `file://${argv[1]}` builds `file://C:\repo\x.mjs` while the
   # runtime reports `file:///C:/repo/x.mjs`. `Script tests` in the `ci` job runs

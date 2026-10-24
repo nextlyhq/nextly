@@ -11,7 +11,11 @@ vi.mock("../../../di/container", () => ({ container: { get: vi.fn() } }));
 
 import { container } from "../../../di/container";
 import { setNextlyLogger } from "../../../observability/logger";
-import { refreshCollectionSources } from "../collection-sources";
+import {
+  createDisabledCollections,
+  refreshCollectionSources,
+  registeredCollectionSlugs,
+} from "../collection-sources";
 import { setDeferredEntities } from "../deferred-entities";
 import { isKeptOffDashboard } from "../kept-off-dashboard";
 import { validateWidgetQuery } from "../query";
@@ -803,5 +807,40 @@ describe("a collection whose table is not there yet", () => {
 
     await refreshCollectionSources();
     expect(getSource("collection:legacy")).toBeDefined();
+  });
+});
+
+describe("the registry record a refresh keeps beside the sources", () => {
+  it("holds every registered collection, with or without a source, and which turn creating off", async () => {
+    registryHolds([
+      { slug: "posts", fields: [] },
+      // Kept off the dashboard: no source, still in the install.
+      { slug: "patterns", fields: [], admin: { hidden: true } },
+      { slug: "submissions", fields: [], admin: { disableCreate: true } },
+      // Not the flag: only an explicit `true` turns creating off.
+      { slug: "notes", fields: [], admin: { disableCreate: "yes" } },
+    ]);
+    await refreshCollectionSources();
+    expect(getSource("collection:patterns")).toBeUndefined();
+    expect([...(registeredCollectionSlugs() ?? [])].sort()).toEqual([
+      "notes",
+      "patterns",
+      "posts",
+      "submissions",
+    ]);
+    expect([...(createDisabledCollections() ?? [])]).toEqual(["submissions"]);
+  });
+
+  it("leaves the last record standing when a refresh cannot read the registry", async () => {
+    registryHolds([
+      { slug: "submissions", fields: [], admin: { disableCreate: true } },
+    ]);
+    await refreshCollectionSources();
+    containerGet.mockImplementation(() => {
+      throw new Error("the registry is unreachable");
+    });
+    expect(await refreshCollectionSources()).toBe(false);
+    expect([...(createDisabledCollections() ?? [])]).toEqual(["submissions"]);
+    expect([...(registeredCollectionSlugs() ?? [])]).toEqual(["submissions"]);
   });
 });

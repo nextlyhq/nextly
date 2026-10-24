@@ -21,7 +21,7 @@ import { describe, expect, it } from "vitest";
 const LOCKFILE = fileURLToPath(new URL("../pnpm-lock.yaml", import.meta.url));
 
 /** The one version the workspace compiles with. */
-export const WORKSPACE_TYPESCRIPT = "5.9.3";
+export const WORKSPACE_TYPESCRIPT = "7.0.2";
 
 /**
  * Tools that install a TypeScript of their own, which no workspace code
@@ -36,14 +36,6 @@ export const TOOL_PRIVATE_TYPESCRIPT = new Map([
       version: "5.6.1-rc",
       reason:
         "attw's analysis engine, pinned by attw; reached through `@arethetypeswrong/cli` and tsdown's `attw` option, and used only to read our packed declarations",
-    },
-  ],
-  [
-    "fallow-type-aware",
-    {
-      version: "7.0.2",
-      reason:
-        "fallow's type-aware analysis, which runs its own compiler over the source it audits; it compiles nothing that ships",
     },
   ],
 ]);

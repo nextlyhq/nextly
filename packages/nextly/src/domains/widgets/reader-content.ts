@@ -33,12 +33,13 @@ import {
   authorizationGroups,
   readAccessCaller,
 } from "../../auth/entity-read-access";
-import { getService } from "../../di";
 import { requireNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
+import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import { readableSlugsOfKind } from "../../services/lib/readable-slug-allowlist";
 
+import { createDisabledCollections } from "./collection-sources";
 import { isKeptOffDashboard } from "./kept-off-dashboard";
 import { listSources, sourceKindFromId, sourceTarget } from "./sources";
 
@@ -142,25 +143,40 @@ export async function readableSingleSlugs(
  * Short-circuits on the first grant, and walks in {@link authorizationGroups}
  * order otherwise: one decision, then bounded groups, so a cold per-user cache
  * is populated once rather than missed by every member of the first fan-out.
+ *
+ * `mayCreateIn` decides one collection, {@link createVerdict} by default. A
+ * caller asking this over two sets for one request passes one memoised across
+ * both, so no collection's rules are evaluated twice and the two answers cannot
+ * disagree about it.
  */
 export async function readerMayCreateEntry(
   caller: ReadCaller,
-  readable: readonly string[]
+  readable: readonly string[],
+  mayCreateIn: (slug: string) => Promise<boolean> = createVerdict(caller)
 ): Promise<boolean> {
   for (const group of authorizationGroups(readable)) {
     // `allSettled`, as the read decision beside it: a lookup that threw has
     // told us nothing, and nothing must not read as a grant. The slug counts
     // as refused and the rest of the set still answers.
     const settled = await Promise.allSettled(
-      group.map(slug =>
-        callerMayPerform(caller.authenticatedScope, "create", slug, caller.user)
-      )
+      group.map(slug => mayCreateIn(slug))
     );
     if (settled.some(result => result.status === "fulfilled" && result.value)) {
       return true;
     }
   }
   return false;
+}
+
+/**
+ * Whether this reader may create an entry in one collection: the decision a
+ * real write makes, through {@link callerMayPerform}.
+ */
+export function createVerdict(
+  caller: ReadCaller
+): (slug: string) => Promise<boolean> {
+  return slug =>
+    callerMayPerform(caller.authenticatedScope, "create", slug, caller.user);
 }
 
 /**
@@ -191,27 +207,29 @@ export function queryableSlugs(
  * (`admin.disableCreate`, as a form's submissions do). The Create card offers
  * none of them, so neither may the condition that offers the card.
  *
- * One registry read. When it fails, none: a card is never withheld on the
- * strength of a read that did not answer, and the card itself draws what it
- * finds.
+ * Read from the record the source refresh keeps (`createDisabledCollections`),
+ * which every dashboard request makes before it asks a condition: one read of
+ * every collection's definition per request, not a second one here.
+ *
+ * THROWS while the registry has never been read. "Unknown" must not read as
+ * "none turn creating off", which would offer Create on a collection the card
+ * then leaves out; a condition that throws goes unanswered, and the optional
+ * card it decides is withheld.
  */
-export async function createDisabledSlugs(): Promise<ReadonlySet<string>> {
-  try {
-    const collections = await getService(
-      "collectionRegistryService"
-    ).getAllCollections();
-    return new Set(
-      collections
-        .filter(
-          collection =>
-            (collection.admin as { disableCreate?: unknown } | undefined)
-              ?.disableCreate === true
-        )
-        .map(collection => collection.slug)
+export function createDisabledSlugs(): Promise<ReadonlySet<string>> {
+  const recorded = createDisabledCollections();
+  // A rejection rather than a throw: the probe asks this inside `Promise.all`,
+  // and the refusal belongs to the one condition that asked.
+  if (recorded === undefined) {
+    return Promise.reject(
+      NextlyError.internal({
+        logContext: {
+          reason: "the collection registry has not been read this process",
+        },
+      })
     );
-  } catch {
-    return new Set();
   }
+  return Promise.resolve(recorded);
 }
 
 /**

@@ -124,7 +124,7 @@
     "tailwindcss": "^4.3.2",
     "tsdown": "^0.23.1",
     "tsx": "^4.20.5",
-    "typescript": "^5.9.3",
+    "typescript": "^7.0.2",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^5.0.5"
   },

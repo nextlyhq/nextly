@@ -43,8 +43,10 @@ import {
   type CanonicalWidget,
   type WidgetWidthFacts,
 } from "../domains/widgets/canonical";
+import { registeredCollectionSlugs } from "../domains/widgets/collection-sources";
 import { conditionProbe } from "../domains/widgets/condition-probe";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
+import { countCardConversion } from "../domains/widgets/count-conversion";
 import {
   getStartedDrawn,
   getStartedPlacement,
@@ -55,6 +57,7 @@ import { GET_STARTED_WIDGET_ID } from "../domains/widgets/get-started-steps";
 import {
   MAX_LAYOUT_BYTES,
   MAX_PLACEMENTS,
+  applyRetirements,
   defaultPlacements,
   dismissalsApplied,
   layoutIsArranged,
@@ -66,7 +69,9 @@ import {
   visibilityToken,
   type StoredLayout,
   type WidgetPlacement,
+  type WidgetRetirements,
 } from "../domains/widgets/layout";
+import { readableCollectionsOf } from "../domains/widgets/publish";
 import { getWidget } from "../domains/widgets/registry";
 import { widgetAudience } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
@@ -165,10 +170,20 @@ function followedDefault(unarranged?: StoredLayout): WidgetPlacement[] {
  * in place. Otherwise a permission granted after that save could never bring
  * them back: the default is consulted only while the reader follows it.
  */
-function wholeArrangement(stored: StoredLayout | undefined): WidgetPlacement[] {
-  return stored && layoutIsArranged(stored)
-    ? stored.placements
-    : followedDefault(stored);
+function wholeArrangement(
+  stored: StoredLayout | undefined,
+  conversion: WidgetRetirements
+): WidgetPlacement[] {
+  // The saved count and health cards as Count cards, for THIS reader
+  // (`countCardConversion`): applied here, so what a reader is shown, what a
+  // writer carries back and what a query may ask for are one converted
+  // arrangement.
+  return applyRetirements(
+    stored && layoutIsArranged(stored)
+      ? stored.placements
+      : followedDefault(stored),
+    conversion
+  );
 }
 
 /**
@@ -187,9 +202,12 @@ function wholeArrangement(stored: StoredLayout | undefined): WidgetPlacement[] {
  */
 function visibleArrangement(
   stored: StoredLayout | undefined,
-  visibleIds: ReadonlySet<string>
+  view: { visibleIds: ReadonlySet<string>; conversion: WidgetRetirements }
 ): WidgetPlacement[] {
-  const { visible } = partitionPlacements(wholeArrangement(stored), visibleIds);
+  const { visible } = partitionPlacements(
+    wholeArrangement(stored, view.conversion),
+    view.visibleIds
+  );
   return stored && layoutIsArranged(stored)
     ? visible
     : visible.slice(0, MAX_PLACEMENTS);
@@ -284,6 +302,14 @@ async function visibleWidgets(auth: AuthContext) {
     probe,
     widgets,
     visibleIds: new Set(widgets.map(widget => widget.id)),
+    // Over the collections this reader may read as their cards show them, and
+    // every collection the install holds, from the refresh the audience pass
+    // just ran.
+    conversion: countCardConversion(
+      readableCollectionsOf(audience.visible),
+      registeredCollectionSlugs(),
+      new Set(declaredWidgets().map(widget => widget.id))
+    ),
     scope: visibilityToken(
       widgets.map(widget => widget.id),
       audience.heldActionGates
@@ -311,7 +337,7 @@ export async function askableCards(auth: AuthContext): Promise<{
   const stored = await service.getLayout(SCOPE_KIND, view.caller.userId);
   return {
     handed: new Map(
-      visibleArrangement(stored.layout, view.visibleIds)
+      visibleArrangement(stored.layout, view)
         .filter(placement => placement.removed !== true)
         .map(placement => [placement.id, placement])
     ),
@@ -354,7 +380,7 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
     : stored.layout
       ? "own"
       : "default";
-  const arrangement = visibleArrangement(stored.layout, view.visibleIds);
+  const arrangement = visibleArrangement(stored.layout, view);
   // The Get started card is drawn or left dormant from its step answer and its
   // own settings, which is why this is decided here, after the row is read,
   // and not by a condition before it. `?getStarted=1` asks for the answer of a
@@ -371,7 +397,7 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   const steps =
     getStarted.answer === null ? null : await view.probe.getStarted();
   const defaults = withoutDormantCard(
-    visibleArrangement(undefined, view.visibleIds),
+    visibleArrangement(undefined, view),
     card => steps !== null && getStartedDrawn(steps, card.config)
   );
   const widths = widthsOf(view.widgets);
@@ -834,7 +860,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     writeArranges,
     replaceUnreadable
   );
-  const shown = visibleArrangement(stored.layout, view.visibleIds);
+  const shown = visibleArrangement(stored.layout, view);
   const widths = widthsOf(view.widgets);
   refuseDisallowedWidths(submitted, shown, widths);
   refuseExtraCards(submitted, shown, widths);
@@ -853,7 +879,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     view.caller.userId,
     mergePreservingHidden(
       submitted,
-      wholeArrangement(stored.layout),
+      wholeArrangement(stored.layout, view.conversion),
       carriedUnlessSubmitted(submitted, view.visibleIds)
     ),
     expectedVersion,
