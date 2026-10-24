@@ -21,7 +21,9 @@ process.env.NEXTLY_SECRET =
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { container } from "../../../di/container";
 import { env } from "../../../lib/env";
+import { _resetEnvCache } from "../../../shared/lib/env";
 import {
   type NextlyLogger,
   setNextlyLogger,
@@ -190,7 +192,7 @@ async function recipientsOf(t: TestNextly, id: string): Promise<string[]> {
 
 /** One jobs trigger, past any backoff the queue scheduled. */
 function trigger(t: TestNextly) {
-  return runJobsPass(t.adapter, t.getService("jobRegistry") as JobRegistry, {
+  return runJobsPass(t.adapter, container.get<JobRegistry>("jobRegistry"), {
     now: () => new Date(Date.now() + 2 * 60 * 60_000),
   });
 }
@@ -308,6 +310,48 @@ describe.each(getConfiguredTestDialects())(
         recipientDigest(SHARED),
       ]);
       expect((await queued(t, elsewhere.id)).state).toBe("waiting");
+    });
+
+    it("is cancelled when a copied address is erased, though it names a person", async () => {
+      // The person named is the email's `to`; a copy is someone else, and
+      // erasing them must stop the email reaching them.
+      const t = await boot(dialect);
+      const someone = await person("acc_with_copy");
+      behaviour.failures = Number.MAX_SAFE_INTEGER;
+      const result = await plugin().services.email.queue({
+        ...message,
+        to: SHARED,
+        cc: ["copied@example.com"],
+        person: someone,
+      });
+
+      await new EmailDeliveryService(
+        t.adapter as never,
+        logger as never
+      ).eraseRecipient("copied@example.com");
+
+      expect(await queued(t, result.id)).toMatchObject({
+        state: "cancelled",
+        message: null,
+      });
+      expect(await recipientsOf(t, result.id)).toEqual([]);
+    });
+
+    it("has its recipients' digests removed with it when it is pruned", async () => {
+      const t = await boot(dialect);
+      const result = await t.nextly.email.queue({ ...message, to: SHARED });
+      expect(result.state).toBe("sent");
+      expect(await recipientsOf(t, result.id)).toHaveLength(1);
+
+      await runJobsPass(t.adapter, container.get<JobRegistry>("jobRegistry"), {
+        now: () => new Date(Date.now() + 8 * 24 * 60 * 60_000),
+      });
+
+      const rows = await t.adapter.select("email_queue", {
+        where: { and: [{ column: "id", op: "=", value: result.id }] },
+      });
+      expect(rows).toEqual([]);
+      expect(await recipientsOf(t, result.id)).toEqual([]);
     });
 
     it("is stored cancelled, and never sent, when its person was deleted first", async () => {
@@ -482,18 +526,36 @@ describe.each(getConfiguredTestDialects())(
           secrets
         ) !== undefined;
 
-      // The first boot after a rotation, with the old secret kept as previous.
-      expect(await resealQueuedMessages(t.adapter, [second, first])).toEqual({
-        resealed: 1,
-        unreadable: 0,
-      });
-      expect(await opens([second])).toBe(true);
-      // A second rotation soon after: the first secret is gone by now.
-      expect(await resealQueuedMessages(t.adapter, [third, second])).toEqual({
-        resealed: 1,
-        unreadable: 0,
-      });
-      expect(await opens([third])).toBe(true);
+      // The install's secret as each boot after a rotation has it, which is
+      // what the recipients' digests are keyed with.
+      const original = process.env.NEXTLY_SECRET;
+      const rotateTo = (secret: string) => {
+        process.env.NEXTLY_SECRET = secret;
+        _resetEnvCache();
+      };
+      const digests = async () => recipientsOf(t, stored.id);
+      try {
+        // The first boot after a rotation, with the old secret kept as previous.
+        rotateTo(second);
+        expect(await resealQueuedMessages(t.adapter, [second, first])).toEqual({
+          resealed: 1,
+          unreadable: 0,
+        });
+        expect(await opens([second])).toBe(true);
+        expect(await digests()).toEqual([recipientDigest(SHARED)]);
+        // A second rotation soon after: the first secret is gone by now, and
+        // an erasure must still find the email by its address.
+        rotateTo(third);
+        expect(await resealQueuedMessages(t.adapter, [third, second])).toEqual({
+          resealed: 1,
+          unreadable: 0,
+        });
+        expect(await opens([third])).toBe(true);
+        expect(await digests()).toEqual([recipientDigest(SHARED)]);
+      } finally {
+        process.env.NEXTLY_SECRET = original;
+        _resetEnvCache();
+      }
       // Nothing left to move, and a boot that does not know the secret says so.
       expect(await resealQueuedMessages(t.adapter, [third, second])).toEqual({
         resealed: 0,
