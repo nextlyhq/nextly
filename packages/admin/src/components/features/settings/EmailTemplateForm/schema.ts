@@ -3,6 +3,7 @@ import { z } from "zod";
 import type {
   CreateEmailTemplatePayload,
   EmailTemplateRecord,
+  TemplateTestDraft,
   UpdateEmailTemplatePayload,
 } from "@admin/services/emailTemplateApi";
 
@@ -246,6 +247,26 @@ function payloadFields(
     description: orNull(values.description),
     cc: listOrNull(values.cc),
     bcc: listOrNull(values.bcc),
+  };
+}
+
+/**
+ * The form's values as a test send's draft: what is on screen, unsaved edits
+ * included. Converted as a save converts them, so a test sends what a save
+ * would store.
+ */
+export function testDraftOf(values: TemplateFormValues): TemplateTestDraft {
+  const fields = payloadFields(values);
+  return {
+    subject: fields.subject,
+    preheader: fields.preheader,
+    htmlContent: fields.htmlContent,
+    plainTextContent: fields.plainTextContent,
+    useLayout: fields.useLayout,
+    layoutId: fields.layoutId,
+    fromOverride: fields.fromOverride,
+    replyTo: fields.replyTo,
+    providerId: fields.providerId,
   };
 }
 
