@@ -1,6 +1,6 @@
 ---
 title: Page Builder
-description: Let your team compose pages from blocks you define, rendered on the server with no client JavaScript by default.
+description: Let your team compose pages from blocks you define, rendered on the server; the core blocks add no JavaScript of their own.
 ---
 
 The Page Builder gives non-developers a canvas. They drag blocks onto a page, arrange
@@ -19,9 +19,11 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
   image, gallery, button, embed, form), and one that reads from your content
   ([collection loop](#reading-content-into-a-page)).
 - **Your own blocks**, defined in code, sitting beside the built-in ones.
-- **Responsive control** per block, against breakpoints you declare.
-- **Server-first rendering.** A page ships no client JavaScript unless a block on it
-  needs some.
+- **Per-breakpoint styling.** Style a block separately for each breakpoint: the Style tab
+  edits the breakpoint the canvas is sized to, and the canvas resizes to each breakpoint's
+  width. See [Breakpoints](#breakpoints).
+- **Server rendering.** Pages render on the server, and the core blocks add no JavaScript
+  of their own. See [What reaches the browser](#what-reaches-the-browser).
 
 ## Availability
 
@@ -136,6 +138,77 @@ breakpoint.
 `next build`. A wholly public site calls `createPublicBlocksPage` instead: it reads
 trusted, pre-renders, and returns a `generateStaticParams` to export alongside the other
 two. Which one you call *is* the security posture — there is no option to flip.
+
+## Breakpoints
+
+Breakpoints are desktop-first. The `base` breakpoint applies at every width. Each other
+breakpoint has a `maxWidth`, and the values a block is given for it apply at that width
+and below, as an `@media (max-width: …)` rule.
+
+In the editor, the breakpoint switcher sizes the canvas to a breakpoint's width, and the
+Style tab edits the values for the breakpoint the canvas is sized to. The breakpoint
+manager beside it adds, changes and removes the site's breakpoints.
+
+### Limits
+
+- **Styles only.** What changes per breakpoint is what the Style tab sets. A block's
+  content and settings are the same at every width.
+- **A width, not a device.** The switcher sizes the canvas; it does not show the page as a
+  phone or tablet would. The canvas is not an iframe, so sizes in `vw` or `vh`, `@media`
+  rules you write yourself and code that reads the window's width follow the admin
+  window, not the canvas.
+- **Saved breakpoints reach a page only when its route reads them.** Breakpoints you save
+  in the editor are stored in the plugin's `site-style` single. The route above compiles
+  against the breakpoints it declares in `styleContext` and never reads that single, so a
+  breakpoint added in the editor styles the canvas but not the published page. To serve
+  what the editor saved, pass `siteStyles` to `createBlocksPage`, with `loadSiteStyle` and
+  `SITE_STYLE_SLUG` from `@nextlyhq/plugin-page-builder`, and give the reader
+  `findSingle`, adding `NextlySingleReader` from `nextly/runtime` to its type:
+
+```tsx
+const { ContentPage, generateMetadata } = createBlocksPage({
+  // ...the options above. `reader` is typed
+  // `NextlyContentReader & NextlySingleReader & { media: ... }`, and gains:
+  //   findSingle: async args => (await instance()).findSingle(args),
+  siteStyles: {
+    read: () => loadSiteStyle({ nextly: reader }),
+    // Named so that saving the site style refreshes cached pages.
+    singles: [SITE_STYLE_SLUG],
+  },
+});
+```
+
+## What reaches the browser
+
+A published page is rendered on the server by `@nextlyhq/blocks-react`. What a visitor's
+browser receives is the page's HTML and CSS, plus whatever JavaScript the page itself
+loads:
+
+- **The editor stays in the admin.** `@nextlyhq/builder` and the plugin's editor code run
+  only on the admin's builder screen. Your page route imports `@nextlyhq/blocks-react`, a
+  server renderer with no client components, so none of the editor is sent to visitors.
+- **The core blocks add no JavaScript of their own.** None of the 20 core blocks is a
+  client component. The accordion is a native `<details>`, and the form block is a plain
+  HTML form that posts where you point it.
+- **The page still loads Next.js.** Every App Router page carries the Next.js and React
+  runtime, and whatever your layout adds. "No JavaScript of their own" is about the blocks,
+  not the page.
+- **The embed block can run scripts.** It is an iframe sandboxed with `allow-scripts`, so
+  what you embed runs in the visitor's browser, inside the frame.
+- **Your own blocks decide for themselves.** A block whose component is, or renders, a
+  client component sends that component's JavaScript with every page that uses it.
+- **Styles arrive as CSS.** They are compiled on the server into `<style>` elements in the
+  page: the site's shared sheet and the page's own rules.
+- **Editor markers stay out.** The `data-nx-*` attributes the canvas uses to select blocks
+  are written only when the editor asks for them.
+- **Hidden is not always absent.** A block hidden at a breakpoint is in the HTML and hidden
+  with CSS. A block that carries display conditions is left out of the HTML, styles
+  included.
+
+The editor's canvas draws your page with the same React renderer that serves it,
+`PageRenderer` from `@nextlyhq/blocks-react`. It is not pixel-identical to the published
+page: the canvas adds editing outlines and markers, and, not being an iframe, it answers
+viewport units and your own `@media` rules with the admin window's width.
 
 ## Use it as a field instead
 
