@@ -109,6 +109,12 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
       releases.getByRole("link", { name: "All releases" })
     ).toHaveAttribute("href", /\/admin\/releases$/);
 
+    // A card refreshing its data dims its body and marks it aria-busy until the
+    // answer lands, and a scan in that window measures dimmed text no reader is
+    // left with: wait for every card to settle first.
+    await expect(
+      page.locator('[data-testid="widget-card-body"][aria-busy="true"]')
+    ).toHaveCount(0, { timeout: 30_000 });
     await expectNoAxeViolations(page);
   });
 }
