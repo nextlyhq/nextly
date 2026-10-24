@@ -2,7 +2,9 @@
   "extends": "../../packages/tsconfig/nextjs.json",
   "compilerOptions": {
     "types": ["node"],
-    "target": "ES2017",
+    // Written out, because Next writes its own suggestion into a config that
+    // has none.
+    "target": "ES2024",
     "incremental": true,
     "paths": {
       "@/*": ["./src/*"],

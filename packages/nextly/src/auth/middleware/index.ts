@@ -23,7 +23,7 @@ import {
   type RuleLanguage,
   withRuleLanguage,
 } from "../access/rule-language";
-import { type GrantedPermission } from "../authenticated-scope";
+import type { GrantedPermission } from "../authenticated-scope";
 import { getSession } from "../session";
 
 import { apiKeyRateLimitRefusal } from "./api-key-budget";

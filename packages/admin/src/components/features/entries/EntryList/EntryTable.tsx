@@ -42,7 +42,7 @@ import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
 import { BulkActionBar } from "./BulkActionBar";
-import { type TranslationListFilter } from "./entryFilters";
+import type { TranslationListFilter } from "./entryFilters";
 import {
   buildEntryColumns,
   getEntryTitleField,
