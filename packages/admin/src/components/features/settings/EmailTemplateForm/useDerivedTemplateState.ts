@@ -36,6 +36,10 @@ export interface DerivedTemplateState {
   previewHtml: string;
   previewText: string;
   previewSubject: string;
+  /** The preview text, rendered as an inbox shows it. */
+  previewPreheader: string;
+  /** The From line with its name rendered, or null when the draft sets none. */
+  previewFrom: string | null;
   /** A render is in flight and no earlier one is being shown in its place. */
   isPreviewPending: boolean;
   /** The render was refused or unreachable; the pane says so rather than lying. */
@@ -52,6 +56,8 @@ export function useDerivedTemplateState({
   useLayout,
   layoutId,
   kind,
+  fromOverride,
+  templateId,
 }: {
   variables: TemplateFormVariable[] | undefined;
   sampleOverride: string | null;
@@ -62,6 +68,9 @@ export function useDerivedTemplateState({
   useLayout: boolean;
   layoutId: string | undefined;
   kind: EmailTemplateKind;
+  fromOverride?: string;
+  /** The saved template these fields are a draft of, when editing one. */
+  templateId?: string;
 }): DerivedTemplateState {
   const isLayoutRow = kind === "layout";
 
@@ -123,6 +132,10 @@ export function useDerivedTemplateState({
       useLayout,
       kind,
       layoutId: layoutId ?? null,
+      fromOverride: fromOverride || null,
+      // The saved template's engine decides the preview's: one kept on the
+      // previous engine previews as it sends, not as Liquid.
+      ...(templateId ? { id: templateId } : {}),
     }),
     [
       subject,
@@ -132,6 +145,8 @@ export function useDerivedTemplateState({
       useLayout,
       kind,
       layoutId,
+      fromOverride,
+      templateId,
     ]
   );
 
@@ -139,6 +154,8 @@ export function useDerivedTemplateState({
     previewHtml,
     previewText,
     previewSubject,
+    previewPreheader,
+    previewFrom,
     isPreviewPending,
     previewError,
   } = useDraftPreview(
@@ -159,6 +176,8 @@ export function useDerivedTemplateState({
     previewHtml,
     previewText,
     previewSubject,
+    previewPreheader,
+    previewFrom,
     isPreviewPending,
     previewError,
   };

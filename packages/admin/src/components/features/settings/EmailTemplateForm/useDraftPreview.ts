@@ -49,6 +49,10 @@ export interface DraftPreviewState {
   previewHtml: string;
   previewText: string;
   previewSubject: string;
+  /** The preview text, rendered as an inbox shows it. */
+  previewPreheader: string;
+  /** The From line with its name rendered, or null when the draft sets none. */
+  previewFrom: string | null;
   /** A render is in flight and there is no earlier one to show in its place. */
   isPreviewPending: boolean;
   /** The render was refused or unreachable; the pane says so rather than lying. */
@@ -106,6 +110,8 @@ export function useDraftPreview(
       previewHtml: shown?.html ?? "",
       previewText: shown?.text ?? "",
       previewSubject: shown?.subject ?? "",
+      previewPreheader: shown?.preheader ?? "",
+      previewFrom: shown?.from ?? null,
       isPreviewPending: isPending && shown === null,
       previewError: error ? error.message : null,
     }),
