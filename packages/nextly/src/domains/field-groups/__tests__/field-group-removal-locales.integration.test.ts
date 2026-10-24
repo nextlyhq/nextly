@@ -282,45 +282,97 @@ describe.each(getConfiguredTestDialects())(
       expect(after.box).toEqual({ open: "o2", kept: "K" });
     });
 
-    it("keeps it in a held draft that leaves it out of a list", async () => {
-      const { item } = await trusted.create({
-        collection: "ldrafted",
-        data: {
-          title: "d",
-          status: "published",
-          many: [{ heading: "a" }, { heading: "b" }],
-        },
-      } as never);
-      const id = String(item.id);
-      const read = async (args: Doc = {}) =>
-        (
-          (await trusted.findByID({
+    /** A PATCH through REST, as the signed-in writer. */
+    async function restPatch(path: string[], body: unknown): Promise<number> {
+      const handlers = createDynamicHandlers() as unknown as Record<
+        string,
+        (request: Request, context: unknown) => Promise<Response>
+      >;
+      const res = await handlers.PATCH!(
+        new Request(`http://localhost/api/${path.join("/")}`, {
+          method: "PATCH",
+          headers: { cookie: writerCookie, "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+        { params: Promise.resolve({ params: path }) }
+      );
+      return res.status;
+    }
+
+    describe("a held draft that leaves an instance out of a list", () => {
+      /**
+       * A published `ldrafted` entry with two instances; the second holds
+       * `spanish` as its secret in Spanish only, when it is given.
+       */
+      async function publishedTwo(spanish?: string) {
+        const { item } = await trusted.create({
+          collection: "ldrafted",
+          data: {
+            title: "d",
+            status: "published",
+            many: [{ heading: "a" }, { heading: "b" }],
+          },
+        } as never);
+        const id = String(item.id);
+        const read = async (args: Doc = {}) =>
+          (
+            (await trusted.findByID({
+              collection: "ldrafted",
+              id,
+              depth: 1,
+              ...args,
+            } as never)) as Doc
+          ).many as Doc[];
+        const [first, second] = await read();
+        if (spanish !== undefined) {
+          // Published with it, so the Spanish value is stored rather than held.
+          await trusted.update({
             collection: "ldrafted",
             id,
-            depth: 1,
-            ...args,
-          } as never)) as Doc
-        ).many as Doc[];
-      const [first, second] = await read();
-      // Published with it, so the Spanish value is stored rather than held.
-      await trusted.update({
-        collection: "ldrafted",
-        id,
-        locale: "es",
-        data: {
-          status: "published",
-          many: [{ id: first.id }, { id: second.id, secret: "es-only" }],
-        },
-      } as never);
-      // Held, since the entry is published: no save judges what it removes.
-      await checked.update({
-        collection: "ldrafted",
-        id,
-        data: { many: [{ id: first.id, heading: "a" }] },
-      } as never);
+            locale: "es",
+            data: {
+              status: "published",
+              many: [{ id: first.id }, { id: second.id, secret: spanish }],
+            },
+          } as never);
+        }
+        return { id, first, second, read };
+      }
 
-      const draft = await read({ draft: true });
-      expect(draft.map(instance => instance.id)).toEqual([first.id, second.id]);
+      /** A held save of `data`: the entry is published, so it is held. */
+      async function hold(door: "direct" | "rest", id: string, data: Doc) {
+        if (door === "rest") {
+          expect(
+            await restPatch(["collections", "ldrafted", "entries", id], data)
+          ).toBe(200);
+          return;
+        }
+        await checked.update({ collection: "ldrafted", id, data } as never);
+      }
+
+      it.each(["direct", "rest"] as const)(
+        "keeps one holding a protected value only in another language, through %s",
+        async door => {
+          const { id, first, second, read } = await publishedTwo("es-only");
+          // No save judges what a held draft removes.
+          await hold(door, id, { many: [{ id: first.id, heading: "a" }] });
+
+          const draft = await read({ draft: true });
+          expect(draft.map(instance => instance.id)).toEqual([
+            first.id,
+            second.id,
+          ]);
+        }
+      );
+
+      it("leaves out one that holds no protected value in any language", async () => {
+        // The control: nothing it holds is beyond the writer, so it goes.
+        const { id, first, read } = await publishedTwo();
+        await hold("direct", id, { many: [{ id: first.id, heading: "a" }] });
+
+        const draft = await read({ draft: true });
+        expect(draft.map(instance => instance.id)).toEqual([first.id]);
+      });
     });
 
     it("keeps a denied child of the collection's own translated group", async () => {
@@ -372,23 +424,12 @@ describe.each(getConfiguredTestDialects())(
         async door => {
           const id = await wrapped(`w-${door}`);
           if (door === "rest") {
-            const path = ["collections", "lwrap", "entries", id];
-            const handlers = createDynamicHandlers() as unknown as Record<
-              string,
-              (request: Request, context: unknown) => Promise<Response>
-            >;
-            const res = await handlers.PATCH!(
-              new Request(`http://localhost/api/${path.join("/")}`, {
-                method: "PATCH",
-                headers: {
-                  cookie: writerCookie,
-                  "content-type": "application/json",
-                },
-                body: JSON.stringify(change(door)),
-              }),
-              { params: Promise.resolve({ params: path }) }
-            );
-            expect(res.status).toBe(200);
+            expect(
+              await restPatch(
+                ["collections", "lwrap", "entries", id],
+                change(door)
+              )
+            ).toBe(200);
           } else {
             await checked.update({
               collection: "lwrap",
