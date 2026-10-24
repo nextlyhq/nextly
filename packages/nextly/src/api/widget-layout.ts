@@ -78,6 +78,7 @@ import {
   type WidgetRetirements,
 } from "../domains/widgets/layout";
 import { readableCollectionsOf } from "../domains/widgets/publish";
+import { getWidget } from "../domains/widgets/registry";
 import type { TextBound } from "../domains/widgets/settings";
 import { widgetAudience } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
