@@ -639,6 +639,27 @@ describe("the retired stored answers, while an upgraded database has them", () =
     expect(await storedAnswerCount()).toBe(1);
     expect(rbacRevision()).toBe(before);
   });
+
+  it("announces regardless where the stored answers were turned off", async () => {
+    // An instance on a release that reads them, running with them turned off,
+    // reads none, so silence would protect nobody while every other instance
+    // kept serving what it holds, an API key's copied grants for five minutes
+    // among them.
+    const userId = `stored-${randomUUID()}`;
+    await leftoverStoredAnswers(userId);
+    await refuseEmptyingStoredAnswers();
+    const setting = process.env.PERMISSION_CACHE_ENABLED;
+    const before = rbacRevision();
+    process.env.PERMISSION_CACHE_ENABLED = "false";
+    try {
+      await invalidatePermissionCache({ userId });
+    } finally {
+      if (setting === undefined) delete process.env.PERMISSION_CACHE_ENABLED;
+      else process.env.PERMISSION_CACHE_ENABLED = setting;
+    }
+
+    expect(rbacRevision()).not.toBe(before);
+  });
 });
 
 describe("a sweep of permission writes", () => {
