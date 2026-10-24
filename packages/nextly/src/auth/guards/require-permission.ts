@@ -1,4 +1,5 @@
 import { permissionSlug } from "../../schemas/_zod/rbac";
+import { createJsonErrorResponse as answerRefusal } from "../middleware/error-response";
 import type { AuthContext } from "../session/session-types";
 
 export interface ErrorResponse {
@@ -22,18 +23,21 @@ export function createErrorResponse(
 }
 
 /**
- * Create a JSON Response from an ErrorResponse.
+ * Create a JSON Response from an ErrorResponse: the one error body every
+ * refusal is answered with, as the auth middleware answers it.
+ *
+ * These guards put what a caller should read in `message` and the HTTP
+ * reason in `error` (`"Missing API key"`, `"Unauthorized"`), the other way
+ * round from the middleware, so `message` is the one answered.
+ *
+ * Pass the `request` to answer with its own request id (`x-request-id`, or a
+ * proxy's); without it a new id is made.
  */
-export function createJsonErrorResponse(errResp: ErrorResponse): Response {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(errResp.headers || {}),
-  };
-
-  return new Response(JSON.stringify(errResp), {
-    status: errResp.statusCode,
-    headers,
-  });
+export function createJsonErrorResponse(
+  errResp: ErrorResponse,
+  request?: Request
+): Response {
+  return answerRefusal({ ...errResp, error: errResp.message }, request);
 }
 
 /**
