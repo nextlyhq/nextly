@@ -10,13 +10,10 @@
 import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
-import {
-  KEPT_HELP,
-  KEPT_LABEL,
-} from "@admin/components/features/email-hub/messages/messages-model";
 import { Info, Lock, RotateCcw } from "@admin/components/icons";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
+import { KeptOnOldEngineNotice } from "./KeptOnOldEngineNotice";
 import { ownerName } from "./workbench-model";
 
 /** An act just done that can still be undone. */
@@ -30,6 +27,7 @@ export function OwnershipNotices({
   record,
   ownsContent,
   keptOnOldEngine,
+  isDirty = false,
   undo,
   onOverride,
   onReview,
@@ -38,6 +36,8 @@ export function OwnershipNotices({
   record?: EmailTemplateRecord;
   ownsContent: boolean;
   keptOnOldEngine: boolean;
+  /** Unsaved edits, which reading as Liquid waits for. */
+  isDirty?: boolean;
   undo: UndoNote | null;
   onOverride: () => void;
   onReview: () => void;
@@ -106,16 +106,7 @@ export function OwnershipNotices({
       ) : null}
 
       {keptOnOldEngine ? (
-        <Alert variant="warning" data-testid="kept-on-old-engine">
-          <Info className="h-4 w-4" />
-          <AlertDescription className="flex flex-1 flex-wrap items-center gap-3">
-            <span className="flex-1">
-              <strong>{KEPT_LABEL}.</strong> {KEPT_HELP}
-            </span>
-            {/* The act that reads it as Liquid goes here, beside the reason,
-                once the server offers it. */}
-          </AlertDescription>
-        </Alert>
+        <KeptOnOldEngineNotice record={record} isDirty={isDirty} />
       ) : null}
     </div>
   );

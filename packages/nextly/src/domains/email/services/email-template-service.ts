@@ -53,12 +53,17 @@ import {
   type BrandSettings,
   type BrandSettingsUpdate,
 } from "../brand-settings";
+import type { DraftPreview } from "../draft-preview-request";
 import {
   changedTemplateFields,
   recordTemplateActivity,
   type EmailTemplateActivityInput,
 } from "../template-activity";
-import { checkTemplateEnvelope, type SavedCopies } from "../template-envelope";
+import {
+  checkTemplateEnvelope,
+  renderTemplateFrom,
+  type SavedCopies,
+} from "../template-envelope";
 import {
   applyOwnerChoices,
   ownerChanges,
@@ -398,6 +403,49 @@ type EmailTemplatesTable =
   | typeof emailTemplatesPg
   | typeof emailTemplatesMysql
   | typeof emailTemplatesSqlite;
+
+/**
+ * A field rendered as one line of plain text, as a subject is: with the same
+ * data, engine and brand the email renders with. The preview text shows this
+ * way in an inbox.
+ */
+function renderAsLine(
+  source: string,
+  template: TemplateFields,
+  data: Record<string, unknown>,
+  options: Parameters<typeof renderTemplate>[3]
+): string {
+  return renderTemplate(
+    {
+      ...template,
+      subject: source,
+      htmlContent: "",
+      plainTextContent: null,
+      preheader: null,
+      useLayout: false,
+      kind: "template",
+    },
+    null,
+    data,
+    options
+  ).subject;
+}
+
+/**
+ * The From line a reader would see, for a preview. One a save would refuse
+ * (a variable in the address) comes back as written: the preview shows the
+ * draft, and the save says what is wrong with it.
+ */
+function previewFrom(
+  fromOverride: string,
+  data: Record<string, unknown>
+): string {
+  try {
+    return renderTemplateFrom(fromOverride, data, "preview");
+  } catch {
+    return fromOverride;
+  }
+}
 
 export class EmailTemplateService extends BaseService {
   private emailTemplates: EmailTemplatesTable;
@@ -1917,9 +1965,12 @@ export class EmailTemplateService extends BaseService {
    */
   async previewDraft(
     draft: TemplateFields &
-      Pick<EmailTemplateRecord, "layoutId"> & { id?: string },
+      Pick<EmailTemplateRecord, "layoutId"> & {
+        id?: string;
+        fromOverride?: string | null;
+      },
     sampleData: Record<string, unknown>
-  ): Promise<RenderedTemplate> {
+  ): Promise<DraftPreview> {
     const layout = draft.useLayout ? await this.getLayoutFor(draft) : null;
     // A draft of a saved template previews with that template's engine unless
     // the caller chose one, so a kept template's draft looks as it would send.
@@ -1928,18 +1979,33 @@ export class EmailTemplateService extends BaseService {
       (draft.id
         ? await this.keptOnOldEngine({ ...draft, id: draft.id })
         : false);
-    return renderTemplate(
+    const options = {
+      appName: this.appName,
+      brand: await this.brandFor({ ...draft, legacy }, layout),
+    };
+    const rendered = renderTemplate(
       { ...draft, legacy },
       layout && {
         ...layout,
         legacy: await this.keptOnOldEngine(layout),
       },
       sampleData,
-      {
-        appName: this.appName,
-        brand: await this.brandFor({ ...draft, legacy }, layout),
-      }
+      options
     );
+    return {
+      ...rendered,
+      preheader: draft.preheader?.trim()
+        ? renderAsLine(
+            draft.preheader,
+            { ...draft, legacy },
+            sampleData,
+            options
+          )
+        : "",
+      from: draft.fromOverride
+        ? previewFrom(draft.fromOverride, sampleData)
+        : null,
+    };
   }
 
   // ============================================================
