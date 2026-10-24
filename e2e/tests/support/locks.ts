@@ -2,9 +2,11 @@
  * The named locks that keep specs sharing one piece of state off each other.
  *
  * The suite runs on one dev server, one SQLite database and one signed-in user.
- * In CI it runs on two workers: two spec FILES at once (`fullyParallel` is off,
- * so a file's own tests stay in order on one worker). Two specs may run side by
- * side only when neither can change what the other reads. A spec that writes a
+ * It runs on one worker by default (`playwright.config.ts` says why), and is
+ * written to run on more with `--workers=2`: two spec FILES at once
+ * (`fullyParallel` is off, so a file's own tests stay in order on one worker).
+ * Two specs may run side by side only when neither can change what the other
+ * reads. A spec that writes a
  * piece of state listed here, or reads it as a whole (a full list, a count, an
  * exact tree), takes that piece's lock:
  *

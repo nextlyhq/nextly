@@ -63,15 +63,16 @@ export default defineConfig({
   // report adds nothing but minutes on a runner. A green run still needs every
   // test, so this only shortens a run that has already failed.
   maxFailures: process.env.CI ? 25 : 0,
-  // Two workers in CI, one elsewhere. Every worker shares the one dev server,
-  // the one database and the one signed-in user, so two spec FILES run side by
-  // side only when neither can change what the other reads: a spec that writes
-  // shared state, or reads it as a whole, takes that state's named lock
-  // (`tests/support/locks.ts`), and files holding the same lock never overlap.
-  // `fullyParallel: false` keeps each file's tests in order on one worker.
-  // Locally one worker stays the default, since a dev server and two browsers
-  // are more than an ordinary laptop runs comfortably; `--workers=2` asks.
-  workers: process.env.CI ? 2 : 1,
+  // One worker, in CI as well. A second was measured on the CI runner and
+  // gained nothing: both workers stayed busy, and every test took about twice
+  // as long, because `next dev` compiling routes already takes the runner's
+  // CPU. The suite is still written to run side by side, for `--workers=2` on a
+  // machine with room: every worker shares the one dev server, the one database
+  // and the one signed-in user, so a spec that writes shared state, or reads it
+  // as a whole, takes that state's named lock (`tests/support/locks.ts`), and
+  // files holding the same lock never overlap. `fullyParallel: false` keeps each
+  // file's tests in order on one worker.
+  workers: 1,
   // A retry runs ALONE, after everything else, rather than beside another
   // file. A test that fails only next to another one then passes on its
   // retry and is reported flaky, which names the coupling, instead of failing
