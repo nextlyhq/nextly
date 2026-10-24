@@ -86,8 +86,13 @@ anonymous writes on purpose, such as a contact form, says so with a rule:
 defineCollection({
   slug: "contact-messages",
   access: {
-    // Visitors may send a message; reading and changing them needs a grant.
+    // Visitors may send a message.
     create: () => true,
+    // Reading them needs the grant. Without this rule a visitor could read
+    // them too, since a read with no rule keeps the public default.
+    read: ({ permissions }) => permissions.includes("read-contact-messages"),
+    // Update and delete need no rule: a visitor is refused, and a signed-in
+    // user needs the grant.
   },
   fields: [/* ... */],
 });
