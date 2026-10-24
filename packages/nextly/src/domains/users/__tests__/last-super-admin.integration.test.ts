@@ -158,6 +158,7 @@ interface DirectRoles {
   create: (a: {
     data: Record<string, unknown>;
   }) => Promise<{ item: { id: string } }>;
+  delete: (a: { id: string }) => Promise<unknown>;
 }
 
 function direct(): { users: DirectUsers; roles: DirectRoles } {
@@ -701,12 +702,25 @@ describe.each(getConfiguredTestDialects())(
           target: Target,
           as: Caller
         ) => Promise<Response>;
+        /**
+         * The same change made by trusted server code with no caller, through
+         * the Direct API, where it offers one. Unassigning a role, removing
+         * inheritance and replacing `childRoleIds` it doesn't: trusted code
+         * reaches those only through the services, and the guard's unit test
+         * holds that a change with no caller is let through.
+         */
+        trusted?: (install: Install, target: Target) => Promise<unknown>;
       }> = [
         {
           name: "replacing their roles",
           target: holder,
           take: (i, t, as) =>
             rest(i, "PATCH", ["users", t.id], { roles: [i.editorRole] }, as),
+          trusted: (i, t) =>
+            direct().users.update({
+              id: t.id,
+              data: { roles: [i.editorRole] },
+            }),
         },
         {
           name: "replacing their roles while deactivating them",
@@ -719,6 +733,11 @@ describe.each(getConfiguredTestDialects())(
               { roles: [i.editorRole], isActive: false },
               as
             ),
+          trusted: (i, t) =>
+            direct().users.update({
+              id: t.id,
+              data: { roles: [i.editorRole], isActive: false },
+            }),
         },
         {
           name: "unassigning the role",
@@ -749,6 +768,21 @@ describe.each(getConfiguredTestDialects())(
           target: heir,
           take: (i, t, as) =>
             rest(i, "DELETE", ["roles", t.role], undefined, as),
+          trusted: (_, t) => direct().roles.delete({ id: t.role }),
+        },
+        {
+          name: "deleting their account",
+          target: holder,
+          take: (i, t, as) => rest(i, "DELETE", ["users", t.id], undefined, as),
+          trusted: (_, t) => direct().users.delete({ id: t.id }),
+        },
+        {
+          name: "deactivating their account",
+          target: holder,
+          take: (i, t, as) =>
+            rest(i, "PATCH", ["users", t.id], { isActive: false }, as),
+          trusted: (_, t) =>
+            direct().users.update({ id: t.id, data: { isActive: false } }),
         },
       ];
 
@@ -790,6 +824,19 @@ describe.each(getConfiguredTestDialects())(
           expect(await activeSuperAdmin(target.id)).toBe(false);
           expect(await activeSuperAdmin(install.first)).toBe(true);
         });
+
+        it.runIf(taking.trusted !== undefined)(
+          "is carried out for trusted code with no caller",
+          async () => {
+            const install = await boot(on);
+            const target = await taking.target(install);
+
+            await taking.trusted!(install, target);
+
+            expect(await activeSuperAdmin(target.id)).toBe(false);
+            expect(await activeSuperAdmin(install.first)).toBe(true);
+          }
+        );
       });
     });
 
