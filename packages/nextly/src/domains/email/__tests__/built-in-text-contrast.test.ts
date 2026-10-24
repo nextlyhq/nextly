@@ -11,7 +11,10 @@
 import { describe, expect, it } from "vitest";
 
 import { STARTING_BRAND } from "../brand-settings";
-import { renderTemplate } from "../services/render-template";
+import {
+  renderTemplate,
+  type TemplateFields,
+} from "../services/render-template";
 import {
   BUILT_IN_TEMPLATES,
   DEFAULT_LAYOUT_SLUG,
@@ -27,6 +30,20 @@ const DATA = {
   resetLink: "https://example.com/reset",
   expiresIn: "24 hours",
 };
+
+/** A built-in as the render reads it. */
+function fieldsOf(
+  template: (typeof BUILT_IN_TEMPLATES)[number]
+): TemplateFields {
+  return {
+    subject: template.subject,
+    htmlContent: template.htmlContent,
+    plainTextContent: template.plainTextContent ?? null,
+    preheader: template.preheader ?? null,
+    useLayout: template.useLayout ?? true,
+    kind: template.kind ?? "template",
+  };
+}
 
 function luminance(hex: string): number {
   const [r, g, b] = [1, 3, 5].map(i => {
@@ -72,7 +89,7 @@ describe("the built-in emails' text contrast", () => {
   it.each(bodies.map(t => [t.slug, t] as const))(
     "%s: every body text colour reads on the card",
     (_slug, template) => {
-      const { html } = renderTemplate(template, null, DATA, {
+      const { html } = renderTemplate(fieldsOf(template), null, DATA, {
         appName: "Nextly",
       });
       const colours = textColours(html);
@@ -85,7 +102,7 @@ describe("the built-in emails' text contrast", () => {
 
   it("the layout's footer and its links read on the page", () => {
     const { html } = renderTemplate(
-      defaultLayoutTemplate,
+      fieldsOf(defaultLayoutTemplate),
       null,
       {},
       {
