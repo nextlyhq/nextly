@@ -3,12 +3,15 @@ import type { ApiKeyService } from "@nextly/domains/auth/services/api-key-servic
 import type { RBACAccessControlService } from "@nextly/domains/auth/services/rbac-access-control-service";
 import { env } from "@nextly/lib/env";
 
+import { readOrGenerateRequestId } from "../../api/request-id";
 import {
   isTruthyParam,
   parseWhereParam,
 } from "../../dispatcher/helpers/validation";
+import { NextlyError } from "../../errors/nextly-error";
 import { presentedApiKey } from "../../middleware/rest-callers";
 import { currentRestLimitGate } from "../../middleware/rest-limit-gate";
+import { getNextlyLogger } from "../../observability/logger";
 // getSession from ../session is a backward-compat wrapper that delegates
 // to the new jose-based session/get-session.ts module internally.
 import {
@@ -25,6 +28,7 @@ import {
 } from "../access/rule-language";
 import type { GrantedPermission } from "../authenticated-scope";
 import { getSession } from "../session";
+import { startServicesForAuthentication } from "../session/session-standing";
 
 import { apiKeyRateLimitRefusal } from "./api-key-budget";
 import { createErrorResponse, type ErrorResponse } from "./error-response";
@@ -73,6 +77,65 @@ function getApiKeyService(): ApiKeyService | undefined {
     // DI container not initialized yet — safe to ignore
   }
   return undefined;
+}
+
+/**
+ * The key service, with the services started first when this process has not
+ * started them, through the same start the session check uses
+ * (`startServicesForAuthentication`).
+ *
+ * A key was presented, so a service that cannot be had is answered as a
+ * refusal rather than as "no key": falling through would treat a bearer token
+ * as unauthenticated. The refusal is the typed error's own status and generic
+ * message; why it happened goes to the log only, as a failed start can carry a
+ * driver's message naming hosts and credentials.
+ */
+async function startedApiKeyService(
+  req: Request
+): Promise<ApiKeyService | ErrorResponse> {
+  // A process whose key service is registered looks the key up with it, as
+  // the REST limit's own lookup does: the start is for a process that has
+  // none, and asking it of one already up only adds a wait to every request.
+  const registered = getApiKeyService();
+  if (registered) return registered;
+  let failure: NextlyError;
+  try {
+    await startServicesForAuthentication();
+    const service = getApiKeyService();
+    if (service) return service;
+    failure = NextlyError.serviceUnavailable({
+      logContext: {
+        reason: "api-key-read-before-nextly-initialised",
+        remedy:
+          "An API key was presented before Nextly was initialised in this " +
+          "process, and nothing loaded here can start it, so the key cannot " +
+          "be looked up. Call `await getNextly({ config })` before " +
+          "authenticating, or initialise Nextly in `instrumentation.ts` " +
+          "with `createRegister(config)`.",
+      },
+    });
+  } catch (error) {
+    // A typed error from the boot or its migrations gate already says what
+    // went wrong; anything else is a start that failed for a reason only the
+    // log may carry.
+    failure = NextlyError.is(error)
+      ? error
+      : NextlyError.serviceUnavailable({
+          cause: error instanceof Error ? error : undefined,
+          logContext: { reason: "api-key-services-failed-to-start" },
+        });
+  }
+  getNextlyLogger().error({
+    kind: "api-key-auth-unavailable",
+    ...failure.toLogJSON(readOrGenerateRequestId(req)),
+  });
+  return createErrorResponse(
+    failure.statusCode,
+    failure.publicMessage,
+    failure.publicMessage,
+    undefined,
+    failure.code
+  );
 }
 
 /**
@@ -145,6 +208,11 @@ export interface AuthContext {
  *   `X-RateLimit-Remaining` headers. Callers MUST propagate this via
  *   `createJsonErrorResponse()` so headers are forwarded to the client.
  *
+ * - `ErrorResponse { statusCode: 503 }` — the services a key is looked up
+ *   through could not be started in this process. A cold process starts them
+ *   first, as a session check does, so this answers only a start that failed
+ *   or a process where nothing can start them.
+ *
  * - `{ userId, permissions, roles }` — the key is valid and within rate limit.
  *   `permissions` is the resolved array of permission slugs for this key's token type.
  *   `roles` is the resolved array of role slugs (single role for role-based keys;
@@ -177,17 +245,11 @@ export async function requireApiKeyAuth(req: Request): Promise<
   // budget when it resolved: its answer stands, so the key is neither looked
   // up again nor counted twice.
   const known = currentRestLimitGate(req)?.knownKey(rawKey);
-  const apiKeyService = getApiKeyService();
-  if (!apiKeyService) {
-    // Service unavailable during early bootstrap — key was attempted but cannot
-    // be validated. Return 503 rather than null so the caller does not silently
-    // treat a bearer token as "unauthenticated".
-    return createErrorResponse(
-      503,
-      "Service Unavailable",
-      "API key authentication service is not available"
-    );
-  }
+  // A key can only be judged from the database, so a process that has not
+  // started its services starts them here, as a session check does, rather
+  // than refusing the first keyed request a cold instance receives.
+  const apiKeyService = await startedApiKeyService(req);
+  if ("statusCode" in apiKeyService) return apiKeyService;
 
   // 3. Hash and look up the key — returns null for not-found, revoked, or expired
   const keyAuth = known

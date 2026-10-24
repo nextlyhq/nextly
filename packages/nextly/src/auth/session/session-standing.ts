@@ -364,17 +364,43 @@ export function standingAdmits(
 let boot: (() => Promise<void>) | undefined;
 
 /**
- * Let the session check start services that are not registered yet.
+ * Let the authentication checks start services that are not registered yet.
  *
  * Some routes authenticate before the process has booted, so that a request
- * without a session cannot make it boot. A token reaching this check has
- * already had its signature verified, so starting here is reached only by a
- * request carrying a token core signed, which the route would boot for next.
+ * without a credential cannot make it boot. Both credentials that need the
+ * database to be judged start the services through this one boot, by way of
+ * `startServicesForAuthentication`: a session token whose signature has
+ * already verified, and an API key, which can only be looked up there. Each is
+ * a request the route would boot for next.
  */
 export function setSessionStandingBoot(
   start: (() => Promise<void>) | undefined
 ): void {
   boot = start;
+}
+
+/**
+ * Start the services when none are registered and something can start them,
+ * then wait on the boot migrations, so a credential is never judged against a
+ * schema this process has not confirmed.
+ *
+ * The one way an authentication check reaches a cold process: the session
+ * standing read and the API key lookup both call it, so a signed-in request
+ * and a request with a key start the same boot and wait on the same gate.
+ * Ready only once registration has finished, not as soon as a service is in
+ * the container: registration puts its services there before it runs the boot
+ * migrations, and a read in between may meet a column those migrations are
+ * still adding. Throws what the boot or the gate throws.
+ */
+export async function startServicesForAuthentication(): Promise<void> {
+  // Loaded on first use, as this module is imported by every session read and
+  // the registry imports most of core.
+  const { isServicesRegistered } = await import("../../di/register");
+  if (!isServicesRegistered() && boot) await boot();
+  // The gate every serving surface waits on (`getCachedNextly()` does too):
+  // a boot still migrating is waited for, and one that refused keeps
+  // refusing here.
+  await awaitBootMigrations();
 }
 
 function adapterIsRegistered(): boolean {
@@ -411,18 +437,10 @@ interface StandingSelect {
  * names the one line that fixes it.
  */
 async function standingAdapter(): Promise<DrizzleAdapter> {
-  // Ready only once registration has finished, not as soon as the adapter is
-  // in the container: registration puts it there before it runs the boot
-  // migrations, and a read in between may meet a column those migrations are
-  // still adding. Loaded on first use, as this module is imported by every
-  // session read and the registry imports most of core.
+  // The start an API key's lookup shares, so both credentials meet a cold
+  // process the same way.
+  await startServicesForAuthentication();
   const { isServicesRegistered } = await import("../../di/register");
-  if (!isServicesRegistered() && boot) await boot();
-  // The gate every serving surface waits on (`getCachedNextly()` does too):
-  // a boot still migrating is waited for, and one that refused keeps
-  // refusing here, rather than this check reading a schema it has not
-  // confirmed.
-  await awaitBootMigrations();
   if (!isServicesRegistered() || !adapterIsRegistered()) {
     throw NextlyError.internal({
       logContext: {
