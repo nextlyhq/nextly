@@ -244,12 +244,15 @@ jobs:
         ports:
           - 5432:5432
         # Health-gate so test steps never race a database that is still
-        # starting up.
+        # starting up. The data directory lives in memory, as the mysql leg's
+        # does: the job throws the database away, so nothing gains from
+        # surviving a crash, and the runner's shared disk sets no pace.
         options: >-
           --health-cmd "pg_isready -U nextly"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+          --tmpfs /var/lib/postgresql/data
 
     steps:
       - name: Checkout
@@ -259,6 +262,31 @@ jobs:
 
       - name: Setup
         uses: ./.github/actions/integration-setup
+
+      # PostgreSQL makes every commit survive a crash: it waits for the
+      # commit's WAL to reach the disk (synchronous_commit), forces writes out
+      # with fsync, and writes whole pages after each checkpoint
+      # (full_page_writes). A test database the job throws away needs none of
+      # it, and PostgreSQL's own "Non-Durable Settings" turns all three off for
+      # this case. Each takes effect on a reload, so the service image stays as
+      # it is. The server's answer is printed, and the job fails while any of
+      # the three still reads on, so a run can never quietly keep them.
+      - name: Run the test database without crash durability
+        env:
+          PGPASSWORD: nextly
+        run: |
+          psql -h 127.0.0.1 -U nextly -d nextly_test -v ON_ERROR_STOP=1 \
+            -c "ALTER SYSTEM SET fsync = off" \
+            -c "ALTER SYSTEM SET synchronous_commit = off" \
+            -c "ALTER SYSTEM SET full_page_writes = off" \
+            -c "SELECT pg_reload_conf()"
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            settings=$(psql -h 127.0.0.1 -U nextly -d nextly_test -At -c "SHOW fsync" -c "SHOW synchronous_commit" -c "SHOW full_page_writes" | tr '\n' ' ')
+            [ "$settings" = "off off off " ] && break
+            sleep 1
+          done
+          echo "fsync, synchronous_commit, full_page_writes: $settings"
+          [ "$settings" = "off off off " ] || { echo "::error::the test database still runs with crash durability: $settings"; exit 1; }
 
       # The adapter suites read TEST_POSTGRES_URL / TEST_MYSQL_URL and fail
       # (rather than skip) when their database is unreachable, so each leg
