@@ -24,6 +24,7 @@ import {
 } from "../../auth/entity-read-access";
 
 import { allWidgets, type CanonicalWidget } from "./canonical";
+import { registeredCollectionSlugs } from "./collection-sources";
 import {
   generatedWidgets,
   refreshCollectionWidgets,
@@ -98,6 +99,7 @@ async function decide(caller: ReadAccessCaller): Promise<{
   visible: CanonicalWidget[];
   verdicts: Map<string, boolean>;
   generated: WidgetDefinition[];
+  registeredCollections: ReadonlySet<string> | undefined;
 }> {
   // The same freshness on every surface that asks. A set derived on some
   // earlier request would offer a card for a collection deleted since and
@@ -111,6 +113,9 @@ async function decide(caller: ReadAccessCaller): Promise<{
   // re-read that may hold a different definition under the same id.
   const generated = generatedWidgets();
   const all = allWidgets();
+  // The registry record the same refresh wrote, taken in the same span for
+  // the same reason: a later read could hold another request's refresh.
+  const registeredCollections = registeredCollectionSlugs();
 
   const verdicts = await permissionVerdicts(
     all.map(widget => widget.requiredPermission),
@@ -141,7 +146,7 @@ async function decide(caller: ReadAccessCaller): Promise<{
     }
     return holdsWidgetPermission(widget.requiredPermission, verdicts);
   });
-  return { visible, verdicts, generated };
+  return { visible, verdicts, generated, registeredCollections };
 }
 
 /**
@@ -200,12 +205,19 @@ export interface WidgetAudience {
    * whether a transient card is worth showing is the layout's business alone.
    */
   token: string;
+  /**
+   * Every collection the install held at this answer's refresh, or `undefined`
+   * when the registry has never been read (`registeredCollectionSlugs`). From
+   * the same refresh as `visible`, so the two describe one snapshot.
+   */
+  registeredCollections: ReadonlySet<string> | undefined;
 }
 
 export async function widgetAudience(
   caller: ReadAccessCaller
 ): Promise<WidgetAudience> {
-  const { visible, verdicts, generated } = await decide(caller);
+  const { visible, verdicts, generated, registeredCollections } =
+    await decide(caller);
   const declared = new Set<string>();
   const generatedIds = new Set<string>();
   for (const widget of visible) {
@@ -231,6 +243,7 @@ export async function widgetAudience(
     holds: requiredPermission =>
       holdsWidgetPermission(requiredPermission, every),
     heldActionGates,
+    registeredCollections,
     token: visibilityToken(
       visible.map(widget => widget.id),
       heldActionGates

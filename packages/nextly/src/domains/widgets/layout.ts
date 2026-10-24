@@ -1014,21 +1014,36 @@ export function defaultPlacements(
  *
  * Each half resolves its repeats AGAINST ITSELF, never against the other: what
  * a caller is handed then depends only on placements that caller can see.
+ *
+ * `withheld` hides one CARD of a widget the caller may see: a card set to
+ * something the caller may not know about, as a card set to a collection they
+ * may not read is. Such a card goes to the `invisible` half, exactly as a card
+ * of a widget they may not see does.
  */
 export function partitionPlacements(
   placements: readonly WidgetPlacement[],
-  visibleWidgetIds: ReadonlySet<string>
+  visibleWidgetIds: ReadonlySet<string>,
+  withheld: (placement: WidgetPlacement) => boolean = () => false
 ): { visible: WidgetPlacement[]; invisible: WidgetPlacement[] } {
   const visible: WidgetPlacement[] = [];
   const invisible: WidgetPlacement[] = [];
   for (const placement of placements) {
-    if (visibleWidgetIds.has(placement.widgetId)) visible.push(placement);
+    if (shownTo(placement, visibleWidgetIds, withheld)) visible.push(placement);
     else invisible.push(placement);
   }
   return {
     visible: resolvePlacementIds(visible).placements,
     invisible: resolvePlacementIds(invisible).placements,
   };
+}
+
+/** Whether a caller was shown this card: its widget, and not the card withheld. */
+function shownTo(
+  placement: WidgetPlacement,
+  visibleWidgetIds: ReadonlySet<string>,
+  withheld: (placement: WidgetPlacement) => boolean
+): boolean {
+  return visibleWidgetIds.has(placement.widgetId) && !withheld(placement);
 }
 
 /** A fresh, opaque placement id. Used when a copy of a widget is placed. */
@@ -1050,8 +1065,8 @@ export function newPlacementId(): string {
  * made without it.
  *
  * `stored` is the whole stored arrangement (or the default the caller was
- * following), in order; `visibleWidgetIds` says which of its cards the caller
- * was shown.
+ * following), in order; `visibleWidgetIds` and `withheld` say which of its
+ * cards the caller was shown, as {@link partitionPlacements} decided it.
  *
  * 🔴 A carried placement whose id collides with a submitted one is RE-KEYED,
  * never refused: refusing would answer differently depending on whether a
@@ -1065,7 +1080,8 @@ export function newPlacementId(): string {
 export function mergePreservingHidden(
   submitted: readonly WidgetPlacement[],
   stored: readonly WidgetPlacement[],
-  visibleWidgetIds: ReadonlySet<string>
+  visibleWidgetIds: ReadonlySet<string>,
+  withheld: (placement: WidgetPlacement) => boolean = () => false
 ): WidgetPlacement[] {
   const room = Math.max(0, MAX_STORED_PLACEMENTS - submitted.length);
   // Each carried card, with the id of the visible card it followed.
@@ -1073,7 +1089,7 @@ export function mergePreservingHidden(
     [];
   let after: string | null = null;
   for (const placement of stored) {
-    if (visibleWidgetIds.has(placement.widgetId)) {
+    if (shownTo(placement, visibleWidgetIds, withheld)) {
       after = placement.id;
     } else if (carried.length < room) {
       carried.push({ after, placement });
@@ -1148,16 +1164,22 @@ export const MAX_CONFIG_DEPTH = 16;
  */
 export function visibilityToken(
   widgetIds: readonly string[],
-  heldActionGates: Iterable<string>
+  heldActionGates: Iterable<string>,
+  // The collections the reader may read, where what they are handed depends
+  // on them by name: a card set to a collection, or a saved card resolved to
+  // one. Renaming `a_b` to `a-b` leaves every widget id as it was and changes
+  // these, so a snapshot taken before is refused rather than written back.
+  readableCollections: Iterable<string> = []
 ): string {
   return (
     createHash("sha256")
       // Sorted, so the token depends on the SETS and not on registration order.
-      // The gates are prefixed so a slug can never read as an id.
+      // Gates and collections are prefixed so a slug can never read as an id.
       .update(
         [
           ...[...widgetIds].sort(),
           ...[...heldActionGates].sort().map(slug => `holds:${slug}`),
+          ...[...readableCollections].sort().map(slug => `reads:${slug}`),
         ].join("\n")
       )
       .digest("base64url")

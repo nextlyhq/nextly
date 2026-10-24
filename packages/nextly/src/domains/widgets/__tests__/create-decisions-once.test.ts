@@ -60,7 +60,10 @@ describe("the create decision, asked by the onboarding step and Create alike", (
       probe.mayCreateEntry(),
       probe.mayCreateOnDashboard(),
     ]);
-    expect(step).toBe(card);
+    // The one grant reaches both: equal answers alone would also pass for a
+    // decision both consumers threw away.
+    expect([step, card]).toEqual([true, true]);
+    expect(asked().filter(slug => slug === "posts")).toHaveLength(1);
   });
 
   it("withholds Create while the collection registry has never been read", async () => {

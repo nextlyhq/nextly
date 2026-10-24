@@ -43,10 +43,16 @@ import {
   type CanonicalWidget,
   type WidgetWidthFacts,
 } from "../domains/widgets/canonical";
-import { registeredCollectionSlugs } from "../domains/widgets/collection-sources";
+import {
+  collectionSettingNames,
+  unreadableCollectionCard,
+} from "../domains/widgets/collection-cards";
 import { conditionProbe } from "../domains/widgets/condition-probe";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
-import { countCardConversion } from "../domains/widgets/count-conversion";
+import {
+  COUNT_WIDGET_ID,
+  countCardConversion,
+} from "../domains/widgets/count-conversion";
 import {
   getStartedDrawn,
   getStartedPlacement,
@@ -202,11 +208,16 @@ function wholeArrangement(
  */
 function visibleArrangement(
   stored: StoredLayout | undefined,
-  view: { visibleIds: ReadonlySet<string>; conversion: WidgetRetirements }
+  view: {
+    visibleIds: ReadonlySet<string>;
+    conversion: WidgetRetirements;
+    withheld: (placement: WidgetPlacement) => boolean;
+  }
 ): WidgetPlacement[] {
   const { visible } = partitionPlacements(
     wholeArrangement(stored, view.conversion),
-    view.visibleIds
+    view.visibleIds,
+    view.withheld
   );
   return stored && layoutIsArranged(stored)
     ? visible
@@ -296,23 +307,39 @@ async function visibleWidgets(auth: AuthContext) {
     reader,
     probe
   );
+  // The collections this reader may read as their cards show them, and every
+  // collection the install holds, both from the refresh the audience pass
+  // just ran: the one answer the conversion, the withheld cards and the scope
+  // are all taken from.
+  const readable = readableCollectionsOf(audience.visible);
+  const registered = audience.registeredCollections;
+  const count = audience.visible.find(widget => widget.id === COUNT_WIDGET_ID);
   return {
     caller,
     audience,
     probe,
     widgets,
     visibleIds: new Set(widgets.map(widget => widget.id)),
-    // Over the collections this reader may read as their cards show them, and
-    // every collection the install holds, from the refresh the audience pass
-    // just ran.
     conversion: countCardConversion(
-      readableCollectionsOf(audience.visible),
-      registeredCollectionSlugs(),
-      new Set(declaredWidgets().map(widget => widget.id))
+      readable,
+      registered,
+      new Set(declaredWidgets().map(widget => widget.id)),
+      count === undefined ? undefined : widthFacts(count).allowedWidths
+    ),
+    // A card set to a collection this reader may not read, withheld as a card
+    // of a widget they may not see is. Settings are read from the registered
+    // definitions, which the canonical summary does not carry.
+    withheld: unreadableCollectionCard(
+      collectionSettingNames(
+        widgets.map(widget => getWidget(widget.id) ?? widget)
+      ),
+      readable,
+      registered
     ),
     scope: visibilityToken(
       widgets.map(widget => widget.id),
-      audience.heldActionGates
+      audience.heldActionGates,
+      readable
     ),
   };
 }
@@ -880,7 +907,8 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     mergePreservingHidden(
       submitted,
       wholeArrangement(stored.layout, view.conversion),
-      carriedUnlessSubmitted(submitted, view.visibleIds)
+      carriedUnlessSubmitted(submitted, view.visibleIds),
+      view.withheld
     ),
     expectedVersion,
     arranged

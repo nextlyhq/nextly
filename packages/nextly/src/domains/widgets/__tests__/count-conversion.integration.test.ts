@@ -199,6 +199,33 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
+    it("withholds a Count card set to a collection the reader may not read, and keeps it in the row", async () => {
+      const own = [
+        card("mine", "core/count", { config: { collection: POSTS } }),
+        card("theirs", "core/count", { config: { collection: SECRET } }),
+        card("old", "core/count", { config: { collection: "cv_deleted" } }),
+      ];
+      const reader = await account("cv-reader@example.com");
+      await service().saveLayout("user", reader, own, 0);
+
+      const seen = await read(reader);
+      // 🔴 Handed over, the card's settings would name the collection.
+      expect(seen.placements.map(placement => placement.id)).toEqual([
+        "mine",
+        "old",
+      ]);
+      expect(JSON.stringify(seen)).not.toMatch(/cv[-_]secret/);
+
+      const res = await call(reader, "PUT", {
+        placements: seen.placements,
+        version: seen.version,
+        scope: seen.scope,
+      });
+      expect(res.status).toBe(200);
+      const stored = await service().getLayout("user", reader);
+      expect(stored.layout?.placements).toEqual(own);
+    });
+
     it("converts the same card for a reader who may read its collection", async () => {
       await service().saveLayout("user", admin, SAVED, 0);
 

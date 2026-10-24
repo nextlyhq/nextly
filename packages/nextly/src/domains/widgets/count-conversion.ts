@@ -45,17 +45,18 @@ import type {
   WidgetRetirement,
   WidgetRetirements,
 } from "./layout";
-import { allowedWidths } from "./widths";
+import { allowedWidths, type WidgetWidth } from "./widths";
 
 /** The widget saved count and health cards become. */
-const COUNT_WIDGET_ID = "core/count";
+export const COUNT_WIDGET_ID = "core/count";
 
 /** A generated count or health card's id, capturing the slug as the id spells it. */
 const GENERATED_COUNT_CARD = /^collection\/([a-z0-9-]+)-(?:count|stats)$/;
 
 /**
- * The widths Count allows, read from its own declaration so the merged card's
- * width is chosen by the same rule the dashboard draws Count with.
+ * The widths Count allows by its own declaration, for a caller with no
+ * registered Count to read them from: the merged card's width is chosen by the
+ * rule the dashboard draws Count with.
  */
 const COUNT_ALLOWED_WIDTHS = (() => {
   const count = CORE_WIDGETS.find(widget => widget.id === COUNT_WIDGET_ID);
@@ -86,14 +87,21 @@ export function resolveCountCardCollection(
   readable: ReadonlySet<string>,
   existing: ReadonlySet<string> | undefined
 ): CountCardCollection {
-  const mine = [...readable].filter(slug => asIdSlug(slug) === idSlug);
-  if (mine.length === 1) return { kind: "one", collection: mine[0] };
-  if (mine.length > 1) return { kind: "none" };
+  const spells = (slug: string) => asIdSlug(slug) === idSlug;
+  const mine = [...readable].filter(spells);
+  const anywhere =
+    existing === undefined ? undefined : [...existing].filter(spells);
+  if (mine.length > 0) {
+    // Ambiguous when the INSTALL holds two collections the id spells, whichever
+    // of them this reader may read: the card may have been the other's. The
+    // generator drops both collections' cards for the same reason.
+    const ambiguous = mine.length > 1 || (anywhere?.length ?? 0) > 1;
+    return ambiguous ? { kind: "none" } : { kind: "one", collection: mine[0] };
+  }
   // Nothing this reader may read. A collection still in the install that
   // matches is one they may not read: withheld, never named.
-  if (existing === undefined) return { kind: "withheld" };
-  const anywhere = [...existing].some(slug => asIdSlug(slug) === idSlug);
-  return anywhere ? { kind: "withheld" } : { kind: "none" };
+  if (anywhere === undefined) return { kind: "withheld" };
+  return anywhere.length > 0 ? { kind: "withheld" } : { kind: "none" };
 }
 
 /** Which Count card a card is: the collection it is set to. */
@@ -107,19 +115,22 @@ function countIdentity(placement: WidgetPlacement): string | undefined {
  * `applyRetirements` takes: `readable` is the collections this reader may
  * read, `existing` every collection the install holds
  * (`registeredCollectionSlugs`, which counts one without a source as held),
- * and `declared` the ids a declared widget answers to, whose cards stay its.
+ * `declared` the ids a declared widget answers to, whose cards stay its, and
+ * `countWidths` the widths the REGISTERED Count allows (a plugin may extend
+ * or override it), defaulting to its own declaration's.
  */
 export function countCardConversion(
   readable: ReadonlySet<string>,
   existing: ReadonlySet<string> | undefined,
-  declared: ReadonlySet<string> = new Set()
+  declared: ReadonlySet<string> = new Set(),
+  countWidths: readonly WidgetWidth[] = COUNT_ALLOWED_WIDTHS
 ): WidgetRetirements {
   // The identity a Count card ALREADY in the layout merges by, so a converted
   // card joins the Count card set to the same collection.
   const asCount: WidgetRetirement = {
     successor: COUNT_WIDGET_ID,
     identity: countIdentity,
-    allowedWidths: COUNT_ALLOWED_WIDTHS,
+    allowedWidths: countWidths,
   };
   return {
     get: widgetId => {
