@@ -875,6 +875,37 @@ describe.each(getConfiguredTestDialects())(
       expect(held).toHaveLength(1);
     });
 
+    // MySQL matches ids case-insensitively, so an id spelled in another case
+    // names the same row there, and must be judged as that row.
+    describe.runIf(on === "mysql")(
+      "an id spelled in another case, which MySQL matches",
+      () => {
+        it("refuses an admin who isn't a super-admin deleting a super-admin by it", async () => {
+          const install = await boot(on);
+          const second = await secondSuperAdmin(install);
+
+          const res = await rest(
+            install,
+            "DELETE",
+            ["users", second.toUpperCase()],
+            undefined,
+            { session: install.operator }
+          );
+
+          expect(res.status, await res.text()).toBe(403);
+          expect(await activeSuperAdmin(second)).toBe(true);
+        });
+
+        it("refuses deleting the last super-admin by it", async () => {
+          const install = await boot(on);
+          await expectDirectRefused(
+            direct().users.delete({ id: install.first.toUpperCase() })
+          );
+          expect(await activeSuperAdmin(install.first)).toBe(true);
+        });
+      }
+    );
+
     describe("a super-admin through a role that inherits the role", () => {
       /** A role built on `super-admin`, as creating a role with a base role writes it. */
       async function ownerRole(
@@ -923,6 +954,19 @@ describe.each(getConfiguredTestDialects())(
         expect(await activeSuperAdmin(h.heir)).toBe(true);
         return h;
       }
+
+      it.runIf(on === "mysql")(
+        "is refused deleting the last one's role by its id spelled in another case",
+        async () => {
+          const install = await boot(on);
+          const h = await heirOnly(install);
+          // MySQL matches ids case-insensitively, so this names the same role.
+          await expectRestRefused(
+            await rest(install, "DELETE", ["roles", h.owner.toUpperCase()])
+          );
+          expect(await activeSuperAdmin(h.heir)).toBe(true);
+        }
+      );
 
       it("stands in for the last holder of the role itself", async () => {
         const install = await boot(on);
