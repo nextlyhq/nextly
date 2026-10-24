@@ -14,6 +14,7 @@ import {
   levelOf,
   levelsFor,
   permissionsFor,
+  standardActions,
 } from "./levels";
 
 /** A resource's permissions, one per action, each id naming its action. */
@@ -117,6 +118,13 @@ describe("reading a row's level", () => {
     expect(levelOf("system", ["manage", "read"])).toBe("edit");
   });
 
+  it("counts a built-in resource's legacy manage among the actions its level decides", () => {
+    // So a row moved off Can edit loses it with the rest, rather than keeping
+    // edit access through it under the switch.
+    expect(standardActions("system").has("manage")).toBe(true);
+    expect(standardActions("collection").has("manage")).toBe(false);
+  });
+
   it("does not read manage into a collection's level", () => {
     expect(levelOf("collection", ["manage"])).toBe("none");
   });
@@ -136,6 +144,27 @@ describe("saving a level", () => {
     expect(permissionsFor("collection", "edit", withExtra)).not.toContain(
       "id-export-submissions"
     );
+  });
+
+  it("moves a legacy manage row to plain permissions when its level changes", () => {
+    // Settings as it is seeded before `nextly upgrade`: read and manage, both
+    // held. The row reads Can edit; set to Can view, what the caller keeps is
+    // the held actions outside the level, and manage is not among them.
+    const seeded = resource("read", "manage");
+    const held = ["read", "manage"];
+    expect(levelOf("system", held)).toBe("edit");
+    const kept = held.filter(action => !standardActions("system").has(action));
+    const saved = [...kept, ...permissionsFor("system", "view", seeded)];
+    expect(saved).toEqual(["id-read"]);
+  });
+
+  it("never saves manage, whatever the level", () => {
+    const withPlain = resource("create", "read", "update", "delete", "manage");
+    for (const level of levelsFor("system")) {
+      expect(permissionsFor("system", level, withPlain)).not.toContain(
+        "id-manage"
+      );
+    }
   });
 
   it("refuses a level the kind does not offer", () => {

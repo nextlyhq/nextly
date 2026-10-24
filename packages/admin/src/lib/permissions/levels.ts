@@ -81,11 +81,21 @@ export function levelsFor(kind: LevelKind): AccessLevel[] {
   return LEVEL_ORDER.filter(level => LEVEL_ACTIONS[kind][level] !== undefined);
 }
 
-/** Every action some level of `kind` grants: the ones a level is read over. */
+/**
+ * Every action the level of a row of `kind` decides: the ones a level is read
+ * over, and the ones a changed level replaces.
+ *
+ * A built-in resource's legacy `manage` is among them. It is read as the Can
+ * edit it gave, so a row moved to another level must lose it with the rest,
+ * or a row set to Can view would keep editing through it. It is never saved:
+ * no level's permissions include it.
+ */
 export function standardActions(kind: LevelKind): ReadonlySet<string> {
-  return new Set(
+  const decided = new Set(
     levelsFor(kind).flatMap(level => LEVEL_ACTIONS[kind][level] ?? [])
   );
+  if (kind === "system") decided.add(LEGACY_MANAGE);
+  return decided;
 }
 
 /**
@@ -124,7 +134,10 @@ export function levelOf(kind: LevelKind, held: Iterable<string>): RowLevel {
  * Only permissions that exist are returned: a level names actions, and a
  * resource missing one simply has nothing to tick for it. Actions outside the
  * level, standard or not, are not returned; the caller keeps whatever it holds
- * under the switch.
+ * outside {@link standardActions}, under the switch, and replaces the rest
+ * with these. A built-in resource's legacy `manage` is never returned, so a
+ * row whose level changes saves plain permissions only; Can edit on one
+ * therefore needs its plain create, update and delete permissions seeded.
  */
 export function permissionsFor(
   kind: LevelKind,
