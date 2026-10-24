@@ -18,6 +18,11 @@
  * that instance, judged as an update, while one sent without is a new instance,
  * judged as a create. The allowed person and trusted server code are the
  * controls.
+ *
+ * The field group `card` holds the field group `chip` inline, in a group;
+ * `chip`'s `stamp` may be set on a new instance but changed only by the
+ * allowed person. An inline instance is created with the instance it is held
+ * in, so a new `card` sent in an update creates its `chip` too.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -112,6 +117,22 @@ function typed(type: string, data: Doc): Doc {
   const instance: Doc = { ...data };
   writeFieldGroupType(instance, type);
   return instance;
+}
+
+/** A `card` instance whose inline `chip` carries a stamp marked with `tag`. */
+function card(tag: string): Doc {
+  return { heading: `h-${tag}`, wrap: { held: chip(tag) } };
+}
+
+function chip(tag: string): Doc {
+  return { heading: "c", stamp: `stamp-${tag}` };
+}
+
+/** The stamp each `card` instance in `value` holds inline. */
+function stamps(value: unknown): unknown[] {
+  return list(value).map(
+    instance => list(list(instance.wrap)[0]?.held)[0]?.stamp ?? null
+  );
 }
 
 /** The collection's own group, and the group inside it, with guarded fields. */
@@ -424,6 +445,24 @@ describe.each(getConfiguredTestDialects())(
             slug: "quote",
             fields: [text({ name: "line" })],
           }),
+          defineFieldGroup({
+            slug: "chip",
+            fields: [
+              text({ name: "heading" }),
+              // Set freely on a new instance; changed only by the allowed person.
+              text({ name: "stamp", access: { update: onlyAllowed } }),
+            ],
+          }),
+          defineFieldGroup({
+            slug: "card",
+            fields: [
+              text({ name: "heading" }),
+              group({
+                name: "wrap",
+                fields: [fieldGroup({ name: "held", component: "chip" })],
+              }),
+            ],
+          }),
         ],
         collections: [
           defineCollection({ slug: "pages", fields: pageFields() }),
@@ -449,6 +488,15 @@ describe.each(getConfiguredTestDialects())(
             slug: "versioned",
             versions: true,
             fields: pageFields(),
+          }),
+          // Field groups holding a field group inline.
+          defineCollection({
+            slug: "cards",
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "deck", component: "card", repeatable: true }),
+              fieldGroup({ name: "solo", component: "card" }),
+            ],
           }),
         ],
         singles: [
@@ -488,7 +536,7 @@ describe.each(getConfiguredTestDialects())(
             name: "editors",
             slug: "editors",
             permissionIds: [
-              ...["pages", "drafted", "versioned"].flatMap(slug => [
+              ...["pages", "drafted", "versioned", "cards"].flatMap(slug => [
                 `create-${slug}`,
                 `read-${slug}`,
                 `update-${slug}`,
@@ -622,6 +670,96 @@ describe.each(getConfiguredTestDialects())(
         await updateAs("direct", "allowed", id, changedFrom(doc, "a2"));
         const after = await stored("pages", id);
         expect(inNotes(after, "locked")[0]).toBe("locked-a2-changed");
+      });
+    });
+
+    describe("a field group held inline in another field group's instance", () => {
+      /** A `cards` entry written by trusted code: one card in each field. */
+      async function seededCards(tag: string): Promise<string> {
+        const { item } = await trusted.create({
+          collection: "cards",
+          data: { title: tag, deck: [card(tag)], solo: card(`${tag}-solo`) },
+        } as never);
+        return String(item.id);
+      }
+
+      async function updateCards(
+        door: "rest" | "direct",
+        who: "editor" | "allowed",
+        id: string,
+        data: Doc
+      ): Promise<void> {
+        if (door === "rest") {
+          const res = await rest(
+            who,
+            "PATCH",
+            ["collections", "cards", "entries", id],
+            data
+          );
+          expect(res.status).toBe(200);
+          return;
+        }
+        await checkedAs(who).update({
+          collection: "cards",
+          id,
+          data,
+        } as never);
+      }
+
+      /** `instance` sent back with its inline chip's stamp changed. */
+      function restamped(instance: Doc, tag: string): Doc {
+        const held = list(list(instance.wrap)[0]?.held)[0] ?? {};
+        return { ...instance, wrap: { held: { ...held, ...chip(tag) } } };
+      }
+
+      describe.each(["rest", "direct"] as const)("through %s", door => {
+        it("creates the inline instance of a new one, and updates a stored one's", async () => {
+          const id = await seededCards(`n-${door}`);
+          const before = await stored("cards", id);
+
+          await updateCards(door, "editor", id, {
+            deck: [
+              restamped(list(before.deck)[0]!, `n-${door}-changed`),
+              card(`n-${door}-new`),
+            ],
+          });
+          const after = await stored("cards", id);
+
+          // The stored card's chip keeps its stamp; the new card's chip is
+          // new with it, so its stamp is set.
+          expect(stamps(after.deck)).toEqual([
+            `stamp-n-${door}`,
+            `stamp-n-${door}-new`,
+          ]);
+        });
+
+        it("updates a single field group's inline instance sent without its id", async () => {
+          const id = await seededCards(`s-${door}`);
+
+          // The stored instance is updated whatever id is sent, so what it
+          // holds inline is updated, not created.
+          await updateCards(door, "editor", id, {
+            solo: card(`s-${door}-changed`),
+          });
+          const after = await stored("cards", id);
+
+          expect(list(after.solo)[0]?.heading).toBe(`h-s-${door}-changed`);
+          expect(stamps(after.solo)).toEqual([`stamp-s-${door}-solo`]);
+        });
+      });
+
+      it("lets the allowed person change a stored instance's inline child", async () => {
+        const id = await seededCards("a");
+        const before = await stored("cards", id);
+
+        await updateCards("direct", "allowed", id, {
+          deck: [restamped(list(before.deck)[0]!, "a-changed")],
+          solo: card("a-solo-changed"),
+        });
+        const after = await stored("cards", id);
+
+        expect(stamps(after.deck)).toEqual(["stamp-a-changed"]);
+        expect(stamps(after.solo)).toEqual(["stamp-a-solo-changed"]);
       });
     });
 
