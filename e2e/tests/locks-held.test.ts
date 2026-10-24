@@ -1,6 +1,8 @@
 import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
 import { expect, test } from "@playwright/test";
-import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -55,14 +57,28 @@ const WRITERS: {
   },
 ];
 
-/** Every spec file this config runs. */
-function specs(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory())
-      return entry.name === "production" ? [] : specs(path);
-    return entry.name.endsWith(".spec.ts") ? [path] : [];
-  });
+/**
+ * Every test file this config runs, as Playwright itself resolves them: its
+ * own `--list`, so the files match whatever `testMatch` and `testIgnore` say,
+ * `.test.ts` files and every other suffix included. This file is left out:
+ * its self-tests spell writes as strings, and it writes nothing.
+ */
+function suiteFiles(): string[] {
+  const require = createRequire(import.meta.url);
+  const cli = join(
+    dirname(require.resolve("@playwright/test/package.json")),
+    "cli.js"
+  );
+  const listed = execFileSync(
+    process.execPath,
+    [cli, "test", "--list", "--reporter=json"],
+    { cwd: join(TESTS, ".."), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
+  );
+  const { suites } = JSON.parse(listed) as { suites: { file: string }[] };
+  const self = fileURLToPath(import.meta.url);
+  return [...new Set(suites.map(suite => join(TESTS, suite.file)))].filter(
+    file => file !== self
+  );
 }
 
 /**
@@ -112,7 +128,7 @@ function lockMember(element: Parsed | null): string[] {
 }
 
 test("every spec that writes shared state holds its lock", () => {
-  const files = specs(TESTS);
+  const files = suiteFiles();
   // Read before judged: an empty list would pass with nothing checked.
   expect(files.length).toBeGreaterThan(50);
   const unlocked = files.flatMap(file => {
