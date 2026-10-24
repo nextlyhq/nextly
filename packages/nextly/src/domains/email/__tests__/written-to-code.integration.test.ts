@@ -68,6 +68,8 @@ for (const dialect of getConfiguredTestDialects()) {
       it(`sends exactly what it sent, under every kind of data (switch to Liquid ${switchRecorded ? "recorded" : "not recorded yet"})`, async () => {
         current = await createTestNextly({ dialect });
         const service = templates(current);
+        // The first boot: core's templates and its default layout.
+        await service.ensureBuiltInTemplates();
         if (!switchRecorded) {
           // As the first boot on Liquid, before its switch is recorded: the
           // written template is saved, and converted, in that window.
@@ -98,8 +100,9 @@ for (const dialect of getConfiguredTestDialects()) {
           );
         }
         // The control: the comparison above rendered the blocks' chips,
-        // conditions and list items.
+        // conditions and list items, inside the default layout.
         const typical = JSON.stringify(before.typical);
+        expect(typical).toContain("<!DOCTYPE html>");
         expect(typical).toContain("Priya");
         expect(typical).toContain("Cake");
       });

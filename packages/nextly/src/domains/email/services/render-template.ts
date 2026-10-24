@@ -30,7 +30,11 @@ import {
   type BrandSettings,
 } from "../brand-settings";
 import { compileWrittenHtml, compileWrittenText } from "../written/compile";
-import type { TemplateFormat, WrittenDocument } from "../written/document";
+import {
+  WRITTEN_LINK_CLASS,
+  type TemplateFormat,
+  type WrittenDocument,
+} from "../written/document";
 
 import {
   markHtml,
@@ -182,8 +186,13 @@ export function renderTemplate(
 ): RenderedTemplate {
   const template = fromBlocks(given);
   const legacy = template.legacy;
+  // The rule that keeps written links readable in dark mode, for an email
+  // that carries them: a written one, or one converted from it to code.
+  // Every other email's layout is unchanged.
   const layoutData = withLayoutChrome(data, options, {
-    writtenLinks: given.format === "written" && !!given.blocks,
+    writtenLinks: template.htmlContent.includes(
+      `class="${WRITTEN_LINK_CLASS}"`
+    ),
   });
   // The body reads the brand settings as `brand` too, so a site's template
   // can write in them. A send's own `brand` wins there, as every explicit value
