@@ -48,8 +48,16 @@ import type { ValidationIssue } from "./entry-validation";
  * Names, not paths, because the caller compares the last segment of a path: a
  * field is content wherever it is declared, and the store's own columns are
  * what the name list is for.
+ *
+ * `reaches` gives the fields a field reaches beyond its own `fields`: a
+ * field-group field's are its field groups' schemas, which a document holds
+ * as instances like any other value, so a field one of them declares is
+ * content too.
  */
-export function declaredFieldNames(fields: unknown): Set<string> {
+export function declaredFieldNames(
+  fields: unknown,
+  reaches?: (field: unknown) => readonly unknown[]
+): Set<string> {
   const names = new Set<string>();
   const seen = new WeakSet<object>();
   const pending: unknown[] = Array.isArray(fields) ? [...fields] : [];
@@ -61,6 +69,7 @@ export function declaredFieldNames(fields: unknown): Set<string> {
     const record = field as { name?: unknown; fields?: unknown };
     if (typeof record.name === "string") names.add(record.name);
     if (Array.isArray(record.fields)) pending.push(...record.fields);
+    if (reaches) pending.push(...reaches(field));
   }
   return names;
 }

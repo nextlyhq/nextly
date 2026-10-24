@@ -144,7 +144,10 @@ import {
   fieldGroupWriteAccessOf,
   type FieldGroupWriteAccess,
 } from "../../field-groups/services/field-group-mutation-service";
-import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
+import {
+  fieldGroupSlugList,
+  referencedFieldGroupFields,
+} from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import {
   COMPANION_LOCALE_COLUMN,
@@ -7121,9 +7124,15 @@ export class CollectionMutationService extends BaseService {
           live: args.live,
         });
       },
-      // What the schema declares, so a field named like one of the store's
-      // own columns is still judged as the content it is.
-      authoredFieldNames: declaredFieldNames(args.fields),
+      // What the schema declares, its field groups' schemas included, so a
+      // field named like one of the store's own columns is still judged as the
+      // content it is.
+      authoredFieldNames: declaredFieldNames(args.fields, field =>
+        referencedFieldGroupFields(
+          field,
+          slug => args.componentSchemas?.get(slug)?.fields
+        )
+      ),
       slug: args.collectionName,
       locale: args.locale,
     });
