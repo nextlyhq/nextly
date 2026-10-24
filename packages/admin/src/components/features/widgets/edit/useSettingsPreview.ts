@@ -161,47 +161,64 @@ export function useSettingsPreview(args: {
     [previewId, widget, draft, sources]
   );
 
-  // The changed question's cell answers, once asked: a cell that asks nothing is not available,
-  // as on the dashboard, and the rest are on their way until the preview's own answer lands.
+  // The changed question's cell answers, once asked; see `previewCellLookup`.
+  const ready = settled === asking;
   const previewCells = asked.cellSlots[previewId];
-  const slotFor = useMemo<CellSlotLookup | undefined>(() => {
-    if (!definition.cells?.length) return undefined;
-    const unsourced = new Set(
-      definition.cells
-        .filter(cell => !sourcedQuery(cell.query))
-        .map(cell => cell.key)
-    );
-    return key => {
-      if (unsourced.has(key)) return UNSOURCED_SLOT;
-      return settled === asking ? previewCells?.[key] : undefined;
-    };
-  }, [definition.cells, previewCells, settled, asking]);
+  const slotFor = useMemo(
+    () => previewCellLookup(definition.cells, previewCells, ready),
+    [definition.cells, previewCells, ready]
+  );
 
-  if (sameQuestion) {
-    return {
-      definition,
-      placement,
-      slot: shown.slot,
-      ...(shown.slotFor === undefined ? {} : { slotFor: shown.slotFor }),
-      updatedAt: shown.updatedAt,
-      isFetching: shown.isFetching,
-      ...(shown.answerTier === undefined
-        ? {}
-        : { answerTier: shown.answerTier }),
-    };
-  }
+  if (sameQuestion) return shownPreview(definition, placement, shown);
   return {
     definition,
     placement,
     // Nothing until the changed question is answered: the card's own answer was asked another
     // way, and drawing it here would preview what the change does not show.
-    slot: settled === asking ? asked.slots[previewId] : undefined,
+    slot: ready ? asked.slots[previewId] : undefined,
     ...(slotFor === undefined ? {} : { slotFor }),
-    updatedAt: settled === asking ? asked.updatedAt : null,
-    isFetching: settled !== asking || asked.fetchingPlacementIds.has(previewId),
+    updatedAt: ready ? asked.updatedAt : null,
+    isFetching: !ready || asked.fetchingPlacementIds.has(previewId),
     // Only an answer asked sized has a tier: a custom card's and a server card's were not.
     ...(definition.archetype === "custom" || widget.serverData === true
       ? {}
       : { answerTier: PREVIEW_TIER }),
+  };
+}
+
+/**
+ * A cells card's answers for the preview, by key: a cell that asks nothing is not available, as
+ * on the dashboard, and the rest are on their way until the preview's own question is answered.
+ * `undefined` for a card with no cells.
+ */
+function previewCellLookup(
+  cells: DashboardWidget["cells"],
+  answers: Record<string, WidgetSlot> | undefined,
+  ready: boolean
+): CellSlotLookup | undefined {
+  if (!cells?.length) return undefined;
+  const unsourced = new Set(
+    cells.filter(cell => !sourcedQuery(cell.query)).map(cell => cell.key)
+  );
+  return key => {
+    if (unsourced.has(key)) return UNSOURCED_SLOT;
+    return ready ? answers?.[key] : undefined;
+  };
+}
+
+/** The preview while its question is the card's own: the card's answer, as the card shows it. */
+function shownPreview(
+  definition: DashboardWidget,
+  placement: SettingsPreview["placement"],
+  shown: ShownAnswer
+): SettingsPreview {
+  return {
+    definition,
+    placement,
+    slot: shown.slot,
+    ...(shown.slotFor === undefined ? {} : { slotFor: shown.slotFor }),
+    updatedAt: shown.updatedAt,
+    isFetching: shown.isFetching,
+    ...(shown.answerTier === undefined ? {} : { answerTier: shown.answerTier }),
   };
 }

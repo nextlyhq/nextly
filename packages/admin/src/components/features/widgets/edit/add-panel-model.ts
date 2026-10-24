@@ -213,6 +213,30 @@ export function addPanelRows(input: {
   return [...removed, ...rows];
 }
 
+/**
+ * What a widget's row says about the widget, whichever row it is: its name, and the description,
+ * category, sketch and widths core states for it, each shown and searched alike on every row.
+ */
+function rowFacts(
+  widgetId: string,
+  facts: WidgetWidthFacts,
+  widget: DashboardWidget | undefined
+): Pick<
+  AddPanelRow,
+  "name" | "description" | "category" | "sketch" | "widths"
+> {
+  const widths = widthsLabel(facts);
+  return {
+    name: widget?.title ?? widgetId,
+    ...(facts.description === undefined
+      ? {}
+      : { description: facts.description }),
+    ...(facts.category === undefined ? {} : { category: facts.category }),
+    ...(facts.sketch === undefined ? {} : { sketch: facts.sketch }),
+    ...(widths === undefined ? {} : { widths }),
+  };
+}
+
 /** One widget's row in its add-panel group, carrying only the facts it states. */
 function widgetRowOf(
   widgetId: string,
@@ -221,18 +245,11 @@ function widgetRowOf(
   placed: number,
   action: AddPanelAction
 ): AddPanelRow {
-  const widths = widthsLabel(facts);
   return {
     key: widgetId,
     section: facts.group as AddPanelGroup,
     ...(facts.subgroup === undefined ? {} : { subgroup: facts.subgroup }),
-    name: widget?.title ?? widgetId,
-    ...(facts.description === undefined
-      ? {}
-      : { description: facts.description }),
-    ...(facts.category === undefined ? {} : { category: facts.category }),
-    ...(facts.sketch === undefined ? {} : { sketch: facts.sketch }),
-    ...(widths === undefined ? {} : { widths }),
+    ...rowFacts(widgetId, facts, widget),
     placed,
     action,
   };
@@ -264,16 +281,7 @@ function perCollectionRows(
       key: `${widgetId}:${collection}`,
       section: "content" as const,
       subgroup: label,
-      name: widget?.title ?? widgetId,
-      ...(facts.description === undefined
-        ? {}
-        : { description: facts.description }),
-      // Shown and searched as on any widget's row.
-      ...(facts.category === undefined ? {} : { category: facts.category }),
-      ...(facts.sketch === undefined ? {} : { sketch: facts.sketch }),
-      ...(widthsLabel(facts) === undefined
-        ? {}
-        : { widths: widthsLabel(facts) }),
+      ...rowFacts(widgetId, facts, widget),
       placed,
       action:
         placed > 0
