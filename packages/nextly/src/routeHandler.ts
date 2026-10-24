@@ -1810,6 +1810,8 @@ const NO_WIDGETS: WidgetAudience = {
   holds: () => false,
   heldActionGates: new Set(),
   token: visibilityToken([], []),
+  // No reader and no cards, so no collection a card could name.
+  registeredCollections: undefined,
 };
 
 /**
