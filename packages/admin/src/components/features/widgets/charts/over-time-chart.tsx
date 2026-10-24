@@ -69,6 +69,11 @@ export interface OverTimeChartProps {
   series: readonly OverTimeSeries[];
   /** Heads the table's first column. */
   labelHeading?: string;
+  /**
+   * How a single series is drawn: a line, or one bar per interval. Several series are always
+   * lines, since bars side by side in one interval would no longer read as a sequence.
+   */
+  chartStyle?: "line" | "bars";
 }
 
 /**
@@ -90,6 +95,7 @@ export function OverTimeChart({
   intervals,
   series: given,
   labelHeading = "Interval",
+  chartStyle = "line",
 }: OverTimeChartProps): JSX.Element {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
@@ -175,14 +181,12 @@ export function OverTimeChart({
                 >
                   <desc id={descId}>{text}</desc>
                   {tier === "small" ? null : <Gridlines />}
-                  {series.map((line, index) => (
-                    <SeriesLine
-                      key={line.key}
-                      plotted={plots[index] ?? []}
-                      slot={seriesSlot(index)}
-                      filled={series.length === 1}
-                    />
-                  ))}
+                  <SeriesMarks
+                    series={series}
+                    plots={plots}
+                    size={domain.labels.length}
+                    chartStyle={chartStyle}
+                  />
                 </svg>
                 {series.map((line, index) => (
                   <LatestPoint
@@ -457,6 +461,75 @@ function SeriesLine({
           vectorEffect="non-scaling-stroke"
         />
       ) : null}
+    </g>
+  );
+}
+
+/** Every series' marks: bars for a single series drawn as bars, lines otherwise. */
+function SeriesMarks({
+  series,
+  plots,
+  size,
+  chartStyle,
+}: {
+  series: readonly OverTimeSeries[];
+  plots: ReadonlyArray<ReadonlyArray<{ x: number; y: number }>>;
+  size: number;
+  chartStyle: "line" | "bars";
+}) {
+  if (chartStyle === "bars" && series.length === 1) {
+    return (
+      <SeriesBars plotted={plots[0] ?? []} slot={seriesSlot(0)} size={size} />
+    );
+  }
+  return (
+    <>
+      {series.map((line, index) => (
+        <SeriesLine
+          key={line.key}
+          plotted={plots[index] ?? []}
+          slot={seriesSlot(index)}
+          filled={series.length === 1}
+        />
+      ))}
+    </>
+  );
+}
+
+/**
+ * One series as bars, in its chart colour: one per interval, standing on the zero line and
+ * centred where the line would place its point, so the latest point, the pointer's strips and the
+ * dates beneath line up with the bars as they do with a line.
+ */
+function SeriesBars({
+  plotted,
+  slot,
+  size,
+}: {
+  plotted: ReadonlyArray<{ x: number; y: number }>;
+  slot: ChartSlot;
+  size: number;
+}) {
+  const base = BOX.height - BOX.padding;
+  const span = BOX.width - BOX.padding * 2;
+  // Six tenths of an interval's width, so neighbouring bars keep a gap between them.
+  const width = Math.max(1, (size > 1 ? span / (size - 1) : span) * 0.6);
+  return (
+    <g
+      data-testid="chart-series"
+      data-chart-style="bars"
+      style={{ color: chartColour(slot) }}
+    >
+      {plotted.map(point => (
+        <rect
+          key={point.x}
+          x={point.x - width / 2}
+          y={point.y}
+          width={width}
+          height={Math.max(0, base - point.y)}
+          fill="currentColor"
+        />
+      ))}
     </g>
   );
 }

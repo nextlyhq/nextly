@@ -47,13 +47,18 @@ function cellConditionOf(
   return source?.lifecycle === true ? "lifecycle" : "no-lifecycle";
 }
 
-/** What the knobs consult: the fields each collection offers this reader, as published. */
+/**
+ * What the knobs consult: each collection as the server published it to this reader, and the
+ * fields it offers. The one place a knob reads the reader's collections from.
+ */
 function readerContext(
   sources: readonly PublishedContentSource[] | undefined
 ): KnobContext {
+  const sourceOf = (collection: string) =>
+    sources?.find(source => source.collection === collection);
   return {
-    fieldsOf: (collection: string) =>
-      sources?.find(source => source.collection === collection)?.fields,
+    sourceOf,
+    fieldsOf: (collection: string) => sourceOf(collection)?.fields,
   };
 }
 
@@ -107,7 +112,9 @@ function cellsAsAsked(
   const unchanged =
     asked.length === cells.length &&
     asked.every((cell, index) => cell === cells[index]);
-  return unchanged ? widget.cells : asked;
+  // Each asked cell is the card's own cell, or that cell with its query applied, so the array
+  // holds one kind of cell as the card's does; the compiler reads a union of the two kinds.
+  return unchanged ? widget.cells : (asked as DashboardWidget["cells"]);
 }
 
 /**

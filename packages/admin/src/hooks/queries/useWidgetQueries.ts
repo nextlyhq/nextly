@@ -1198,15 +1198,19 @@ function appliedSent(
 /**
  * What each cell sent in `partition` was asked with, by placement then cell key: cached with the
  * answer, so a card whose settings change asks again alone. A cell not sent was asked nothing.
+ *
+ * Every cells card in the partition has a record, an empty one when its tier sent none of its
+ * cells: without it, a card widened to draw a cell would have nothing to compare against, and
+ * would never ask for the cell it now draws.
  */
 function cellsAppliedSent(
   partition: readonly WidgetQueryRequest[]
 ): Record<string, Record<string, string>> {
   const cells: Record<string, Record<string, string>> = emptyRecord();
   for (const entry of partition) {
-    if (entry.cellKey === undefined || !isSent(entry)) continue;
-    (cells[entry.placementId] ??= emptyRecord())[entry.cellKey] =
-      appliedKey(entry);
+    if (entry.cellKey === undefined) continue;
+    const record = (cells[entry.placementId] ??= emptyRecord());
+    if (isSent(entry)) record[entry.cellKey] = appliedKey(entry);
   }
   return cells;
 }
