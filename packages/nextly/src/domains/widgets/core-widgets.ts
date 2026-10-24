@@ -97,6 +97,20 @@ const RECENT_ACTIVITY_ITEMS: WidgetSetting = {
   ...settings.items(),
 };
 
+/**
+ * The most a note holds, in characters (code points). A note is the reader's
+ * own text in their layout row, which is bounded as a whole
+ * (`MAX_LAYOUT_BYTES`), so one note cannot take the whole of it.
+ */
+const NOTE_MAX_LENGTH = 2000;
+
+/** A note's text: Markdown over several lines, empty until its reader writes it. */
+const NOTE_TEXT: WidgetSetting = {
+  name: "text",
+  label: "Note",
+  ...settings.textarea({ default: "", maxLength: NOTE_MAX_LENGTH }),
+};
+
 /** Recently edited's "Number of items", the same offer under the same name. */
 const RECENTLY_EDITED_ITEMS: WidgetSetting = RECENT_ACTIVITY_ITEMS;
 
@@ -493,6 +507,20 @@ const CORE_WIDGET_LITERALS = [
         },
       },
     ],
+  },
+  {
+    id: "core/note",
+    title: "Note",
+    description: "A note of your own, in Markdown, that only you see.",
+    // Its own component: the reader's Markdown, drawn read-only through the
+    // text archetype's renderer, from the card's own setting.
+    archetype: "custom",
+    component: "core#Note",
+    // Added from the add panel when a reader wants one, never placed on the
+    // default dashboard, where it would be an empty card; several allowed.
+    offered: "on-request",
+    defaultSize: "md",
+    settings: [NOTE_TEXT],
   },
 ] as const satisfies readonly WidgetDefinition[];
 

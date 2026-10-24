@@ -378,6 +378,9 @@ export {
   MAX_LAYOUT_BYTES,
   layoutSizeProblem,
 } from "./domains/widgets/layout-payload";
+// A text's length in characters, as the layout write counts a note against its
+// bound, so the settings sheet counts it the same way. Import-free.
+export { textLength } from "./shared/text-length";
 // The width vocabulary a dashboard stores and draws: the five widths in their
 // ranking, and the one conversion from a declared size. The admin derives its
 // own list, check and size map from these rather than restating them, since a

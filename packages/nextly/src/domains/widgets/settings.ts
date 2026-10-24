@@ -41,6 +41,7 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 import { SLUG_PATTERN } from "../../shared/slug-pattern";
+import { textLength } from "../../shared/text-length";
 
 import { RELATIVE_SPANS, whereFieldNames, type RelativeSpan } from "./query";
 import {
@@ -115,6 +116,20 @@ export type WidgetSetting =
       type: "select";
       defaultValue?: string;
       options: { label: string; value: string }[];
+    })
+  /**
+   * Text over several lines, drawn as the field system's own textarea, at
+   * most `maxLength` characters when it declares one, counted in code points
+   * (`textLength`) by the sheet and the server alike.
+   *
+   * @experimental Added for a note a reader writes on their own dashboard; the
+   * shape may still change, and it is not yet covered by the plugin SDK's
+   * stability promise.
+   */
+  | (WidgetSettingBase & {
+      type: "textarea";
+      defaultValue?: string;
+      maxLength?: number;
     });
 
 /**
@@ -191,6 +206,7 @@ const FIELD_DRAWN: Record<WidgetSetting["type"], true> = {
   number: true,
   checkbox: true,
   select: true,
+  textarea: true,
 };
 
 /** Whether a setting is one a registered widget's query cannot apply yet. */
@@ -231,6 +247,8 @@ interface SettingLimits {
   options?: readonly { value: string }[];
   min?: number;
   max?: number;
+  /** The most characters a textarea takes, counted by `textLength`. */
+  maxLength?: number;
 }
 
 const USABLE_AS: Record<
@@ -238,6 +256,9 @@ const USABLE_AS: Record<
   (value: unknown, limits: SettingLimits) => boolean
 > = {
   text: value => typeof value === "string",
+  textarea: (value, limits) =>
+    typeof value === "string" &&
+    (limits.maxLength === undefined || textLength(value) <= limits.maxLength),
   number: (value, limits) =>
     typeof value === "number" &&
     Number.isFinite(value) &&
@@ -276,6 +297,7 @@ function withinBounds(value: number, limits: SettingLimits): boolean {
 function limitsOf(setting: AnyWidgetSetting): SettingLimits {
   if (setting.type === "select") return { options: setting.options };
   if (setting.type === "number") return { min: setting.min, max: setting.max };
+  if (setting.type === "textarea") return { maxLength: setting.maxLength };
   return {};
 }
 
@@ -565,7 +587,12 @@ function settingProblem(
  */
 function problemForType(
   type: AnyWidgetSetting["type"],
-  setting: { options?: unknown; min?: unknown; max?: unknown },
+  setting: {
+    options?: unknown;
+    min?: unknown;
+    max?: unknown;
+    maxLength?: unknown;
+  },
   defaultValue: unknown,
   name: string
 ): string | undefined {
@@ -584,16 +611,28 @@ function problemForType(
  */
 function declaredLimits(
   type: AnyWidgetSetting["type"],
-  setting: { options?: unknown; min?: unknown; max?: unknown }
-): SettingLimits | string {
-  if (type === "select") {
-    return isSelectOptions(setting.options)
-      ? { options: setting.options }
-      : 'is a select and needs a non-empty "options" array of { label, value } entries with non-blank values';
+  setting: {
+    options?: unknown;
+    min?: unknown;
+    max?: unknown;
+    maxLength?: unknown;
   }
-  if (type !== "number") return {};
+): SettingLimits | string {
+  if (type === "textarea") return textareaLimits(setting.maxLength);
+  if (type === "select") return selectLimits(setting.options);
+  if (type === "number") return numberLimits(setting.min, setting.max);
+  return {};
+}
 
-  const { min, max } = setting;
+/** A select's declared options, or why they cannot be read. */
+function selectLimits(options: unknown): SettingLimits | string {
+  return isSelectOptions(options)
+    ? { options }
+    : 'is a select and needs a non-empty "options" array of { label, value } entries with non-blank values';
+}
+
+/** A number's declared range, or why it cannot be read. */
+function numberLimits(min: unknown, max: unknown): SettingLimits | string {
   if (!isOptionalFiniteNumber(min) || !isOptionalFiniteNumber(max)) {
     return 'declares a "min" or "max" that is not a finite number';
   }
@@ -604,6 +643,20 @@ function declaredLimits(
     return `declares min ${min} above max ${max}, a range no value can satisfy`;
   }
   return { min, max };
+}
+
+/**
+ * A textarea's declared length, or why it cannot be read: absent, or a whole
+ * number of characters above zero. A bound of zero would accept only an empty
+ * note, and a fraction no length can meet.
+ */
+function textareaLimits(maxLength: unknown): SettingLimits | string {
+  if (maxLength === undefined) return {};
+  return typeof maxLength === "number" &&
+    Number.isInteger(maxLength) &&
+    maxLength > 0
+    ? { maxLength }
+    : 'declares a "maxLength" that is not a whole number of characters above zero';
 }
 
 /** Whether an optional bound is absent or a number JSON can carry. */
@@ -644,9 +697,21 @@ function defaultProblem(
    * who wrote it is standing.
    */
   if (USABLE_AS[type](defaultValue, limits)) return undefined;
+  return defaultMismatch(type, limits, defaultValue, name);
+}
 
+/** Why a declared default the table refuses is refused, in the author's terms. */
+function defaultMismatch(
+  type: AnyWidgetSetting["type"],
+  limits: SettingLimits,
+  defaultValue: unknown,
+  name: string
+): string {
   if (type === "select") {
     return `setting "${name}" defaults to ${describeValue(defaultValue)}, which is not one of its options`;
+  }
+  if (type === "textarea" && typeof defaultValue === "string") {
+    return `setting "${name}" defaults to text longer than its maxLength of ${limits.maxLength} characters`;
   }
   const bounded = limits.min !== undefined || limits.max !== undefined;
   return bounded && typeof defaultValue === "number"
