@@ -157,8 +157,10 @@ function fill(
  * A written template as the render reads it: its body and plain text written
  * from its blocks as they are now, on Liquid. Compiled here, at every render,
  * so a preview, a test and a send of the same blocks write the same email.
+ * Anything that decides about a render from its text (what the brand settings
+ * reach) reads this too.
  */
-function fromBlocks(template: TemplateFields): TemplateFields {
+export function fromBlocks<T extends TemplateFields>(template: T): T {
   if (template.format !== "written" || !template.blocks) return template;
   return {
     ...template,

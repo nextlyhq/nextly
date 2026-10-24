@@ -57,6 +57,30 @@ export function writtenFields(blocks: unknown): WrittenFields {
   };
 }
 
+/**
+ * The format a version the site chose is stored in (an override, an applied
+ * review of its owner's update, its undo): written, with these blocks, while
+ * the version still holds exactly what they compile to; coded otherwise,
+ * holding the version as it is. So a written template that takes an owner's
+ * lines becomes coded with them, rather than keeping blocks that no longer
+ * say what it sends.
+ *
+ * @throws NextlyError VALIDATION_ERROR for blocks that don't pass their rules
+ */
+export function sitesVersionFormat(
+  blocks: WrittenDocument | null | undefined,
+  version: { htmlContent: string; plainTextContent: string | null }
+): { format: TemplateFormat; blocks: WrittenDocument | null } {
+  if (!blocks) return { format: "code", blocks: null };
+  const compiled = writtenFields(blocks);
+  const holdsBlocks =
+    version.htmlContent === compiled.htmlContent &&
+    (version.plainTextContent ?? null) === compiled.plainTextContent;
+  return holdsBlocks
+    ? { format: "written", blocks: compiled.blocks }
+    : { format: "code", blocks: null };
+}
+
 /** A stored format as the record reads it: anything but `written` is coded. */
 function formatOf(stored: unknown): TemplateFormat {
   return stored === "written" ? "written" : "code";
