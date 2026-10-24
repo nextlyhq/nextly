@@ -218,7 +218,7 @@ function inputOf(job: JobRow): unknown {
 
 /** One jobs trigger, as `/api/jobs/run` makes it, at `now`. */
 function trigger(t: TestNextly, now = new Date()) {
-  return runJobsPass(t.adapter, t.getService("jobRegistry") as JobRegistry, {
+  return runJobsPass(t.adapter, container.get<JobRegistry>("jobRegistry"), {
     now: () => now,
   });
 }
