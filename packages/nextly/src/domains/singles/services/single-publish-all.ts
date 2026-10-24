@@ -56,13 +56,13 @@ import {
   unaskedLanguages,
 } from "../../i18n/languages-going-live";
 import {
-  perLanguageFieldNames,
-  reachesLocalizedFieldGroup,
-} from "../../i18n/per-language-fields";
-import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
+import {
+  perLanguageFieldNames,
+  reachesLocalizedFieldGroup,
+} from "../../i18n/per-language-fields";
 import {
   buildCompanionSchema,
   type CompanionSchema,

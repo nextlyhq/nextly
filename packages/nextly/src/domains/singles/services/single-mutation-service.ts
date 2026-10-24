@@ -119,11 +119,11 @@ import {
   unaskedLanguages,
 } from "../../i18n/languages-going-live";
 import { EVERY_LOCALE } from "../../i18n/locale-selector";
-import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
 import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
+import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
 import {
   isValidLocale,
   resolveRequestedLocale,
