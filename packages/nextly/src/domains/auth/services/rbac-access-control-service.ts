@@ -216,32 +216,39 @@ export class RBACAccessControlService {
           operationAccess,
           executor
         );
-        let answer: unknown;
-        try {
-          answer = await operationAccess(ctx);
-        } catch (error) {
-          // Code access function threw — fail-secure
-          consoleLogger.error(
-            `[rbac] Code access function for ${operation}:${resource} threw`,
-            { error: error }
-          );
-          return false;
-        }
-        // A rule allows only by answering `true`. A truthy answer that is
-        // not `true` let a signed-in user in before, so it is named once.
-        if (answer !== true && Boolean(answer)) {
-          noticeRuleNoLongerAllows(
-            resource,
-            operation,
-            "signed-in user",
-            answer
-          );
-        }
-        return answer === true;
+        return this.userRuleAllows(operationAccess, ctx, operation, resource);
       }
     }
 
     return hasPermission(userId, operation, resource, executor);
+  }
+
+  /**
+   * Whether a signed-in user's rule function allows: only by answering
+   * `true`. A rule that throws refuses. A truthy answer that is not `true`
+   * let the user in before, so that refusal is named once.
+   */
+  private async userRuleAllows(
+    rule: (ctx: AccessControlContext) => unknown,
+    ctx: AccessControlContext,
+    operation: AccessOperation,
+    resource: string
+  ): Promise<boolean> {
+    let answer: unknown;
+    try {
+      answer = await rule(ctx);
+    } catch (error) {
+      // Code access function threw — fail-secure
+      consoleLogger.error(
+        `[rbac] Code access function for ${operation}:${resource} threw`,
+        { error: error }
+      );
+      return false;
+    }
+    if (answer !== true && Boolean(answer)) {
+      noticeRuleNoLongerAllows(resource, operation, "signed-in user", answer);
+    }
+    return answer === true;
   }
 
   /**
