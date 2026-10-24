@@ -133,6 +133,7 @@ import {
   applyInlineFieldGroupWriteAccess,
   keepDeniedAtStoredOnUpdate,
   keepDeniedFieldGroupsInDraft,
+  reachesFieldGroup,
   withStoredFieldGroups,
 } from "../../field-groups/field-group-write-access";
 import {
@@ -2108,8 +2109,9 @@ export class CollectionMutationService extends BaseService {
    * stored value a denied child of it would be erased rather than kept.
    *
    * The companion is read only where a field rule can ask: the collection's
-   * own, or a field group's, which judges an instance held inline in a
-   * translated container. An update with no such rule pays nothing more.
+   * own, or a field group's when the collection holds one, which judges an
+   * instance held inline in a translated container. A trusted write runs no
+   * rule, and an update with no such rule pays nothing more.
    */
   private async storedForCarryForward(args: {
     row: Record<string, unknown>;
@@ -2120,11 +2122,14 @@ export class CollectionMutationService extends BaseService {
     locale?: string;
     /** The caller's transaction, when the update runs inside one. */
     tx?: { getDrizzle<T = unknown>(): T };
+    overrideAccess?: boolean;
   }): Promise<Record<string, unknown>> {
     const translated =
       this.localization &&
+      args.overrideAccess !== true &&
       (hasFieldAccessRule("collection", args.collectionName, "update") ||
-        anyFieldGroupHasAccessRule("update"))
+        (anyFieldGroupHasAccessRule("update") &&
+          reachesFieldGroup(args.fields as unknown as FieldConfig[])))
         ? await this.readCompanionLocalizedValues(
             args.tx ?? { getDrizzle: <T = unknown>() => this.db as T },
             args.collectionName,
@@ -8351,6 +8356,7 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           entryId: params.entryId,
           locale: params.locale,
+          overrideAccess: params.overrideAccess,
         }),
         tableName,
         fields,
@@ -11856,6 +11862,7 @@ export class CollectionMutationService extends BaseService {
           entryId,
           // A transactional update writes the default language.
           tx,
+          overrideAccess: params.overrideAccess,
         }),
         tableName,
         fields,

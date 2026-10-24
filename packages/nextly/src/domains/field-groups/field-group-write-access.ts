@@ -10,6 +10,8 @@
  * @module domains/field-groups/field-group-write-access
  */
 
+import { randomUUID } from "node:crypto";
+
 import { isFieldGroupField } from "../../collections/fields/guards";
 import type { FieldConfig } from "../../collections/fields/types";
 import { keepDeniedAtStored } from "../../shared/lib/denied-change";
@@ -600,10 +602,15 @@ async function holdsProtectedValue(
 }
 
 /**
- * What a stored password is judged as holding while its hash is not read:
- * any value, since a rule asked whether it may change one is not told which.
+ * What a stored password is judged as holding while its hash is not read: a
+ * value made for this one judgment, which no rule can name. A rule that lets
+ * any value change lets the stored hash change too; one that lets only some
+ * values change refuses this one, and the instance is kept, as it must be
+ * when the value the rule would be asked about is unknown.
  */
-const STORED_PASSWORD = "stored-password";
+function unreadPassword(): string {
+  return `unread-${randomUUID()}`;
+}
 
 /** {@link holdsProtectedValue} for one language's view of the instance. */
 async function holdsProtectedValueHere(
@@ -625,7 +632,7 @@ async function holdsProtectedValueHere(
   // field is judged as holding one: removing the instance would delete it.
   const inner = params.fieldGroupFields.get(slug);
   if (inner) {
-    standInForPasswordFieldValues(held, inner, STORED_PASSWORD);
+    standInForPasswordFieldValues(held, inner, unreadPassword());
   }
   const probe = detachData(held);
   const { access } = params;
@@ -653,20 +660,51 @@ async function holdsProtectedValueHere(
   return JSON.stringify(probe) !== JSON.stringify(held);
 }
 
+/**
+ * Whether `fields` hold a field-group field at any depth: directly, or in a
+ * group, repeater or layout container. A field group's rules can judge only a
+ * document that holds one.
+ */
+export function reachesFieldGroup(fields: readonly FieldConfig[]): boolean {
+  let found = false;
+  walkFieldsOnce(fields, field => {
+    if (found || isFieldGroupField(field)) {
+      found = true;
+      return undefined;
+    }
+    return subFieldsOf(field);
+  });
+  return found;
+}
+
 /** The field-group fields directly on a document, through its layout containers. */
 function directFieldGroupFields(fields: readonly FieldConfig[]): FieldConfig[] {
   const found: FieldConfig[] = [];
+  walkFieldsOnce(fields, field => {
+    if (nameOf(field) === undefined) return subFieldsOf(field);
+    if (isFieldGroupField(field)) found.push(field);
+    return undefined;
+  });
+  return found;
+}
+
+/**
+ * Visit each field `fields` reach once, through the fields `visit` returns
+ * for each: a field reached twice, as a container shared by two places or
+ * one that reaches itself, is visited the first time only.
+ */
+function walkFieldsOnce(
+  fields: readonly FieldConfig[],
+  visit: (field: FieldConfig) => readonly FieldConfig[] | undefined
+): void {
   const seen = new WeakSet<object>();
   const pending = [...fields];
   while (pending.length > 0) {
     const field = pending.pop()!;
     if (seen.has(field)) continue;
     seen.add(field);
-    if (nameOf(field) === undefined)
-      pending.push(...(subFieldsOf(field) ?? []));
-    else if (isFieldGroupField(field)) found.push(field);
+    pending.push(...(visit(field) ?? []));
   }
-  return found;
 }
 
 /**
