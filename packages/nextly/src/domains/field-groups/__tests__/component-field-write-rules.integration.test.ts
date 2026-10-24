@@ -518,6 +518,26 @@ describe.each(getConfiguredTestDialects())(
               }),
             ],
           }),
+          // Two pins, the first changeable only while it equals the second: a
+          // judgment that does not read them cannot tell whether they do.
+          defineFieldGroup({
+            slug: "pinpair",
+            fields: [
+              text({ name: "heading" }),
+              password({
+                name: "pin",
+                access: {
+                  update: ({ data }) => {
+                    const pins = data as
+                      | { pin?: unknown; pin2?: unknown }
+                      | undefined;
+                    return pins?.pin === pins?.pin2;
+                  },
+                },
+              }),
+              password({ name: "pin2" }),
+            ],
+          }),
           defineFieldGroup({
             slug: "vault",
             fields: [
@@ -585,6 +605,13 @@ describe.each(getConfiguredTestDialects())(
             fields: [
               text({ name: "title" }),
               fieldGroup({ name: "one", component: "pinlit" }),
+            ],
+          }),
+          defineCollection({
+            slug: "pinpairs",
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "one", component: "pinpair" }),
             ],
           }),
           defineCollection({
@@ -684,6 +711,7 @@ describe.each(getConfiguredTestDialects())(
                 "pinboard",
                 "vaults",
                 "pinlits",
+                "pinpairs",
               ].flatMap(slug => [
                 `create-${slug}`,
                 `read-${slug}`,
@@ -943,6 +971,24 @@ describe.each(getConfiguredTestDialects())(
           );
         });
 
+        it("is kept when its rule compares it with another password", async () => {
+          const { item } = await trusted.create({
+            collection: "pinpairs",
+            data: {
+              title: door,
+              one: { heading: `h-${door}`, pin: "first", pin2: "second" },
+            },
+          } as never);
+          const id = String(item.id);
+
+          // The stored pins differ, so the rule refuses to change the first.
+          await updateIn("pinpairs", door, "editor", id, { one: null });
+
+          expect(list((await stored("pinpairs", id)).one)[0]?.heading).toBe(
+            `h-${door}`
+          );
+        });
+
         it("keeps a nested password it may change as stored, when another value keeps the instance", async () => {
           const { item } = await trusted.create({
             collection: "vaults",
@@ -990,18 +1036,44 @@ describe.each(getConfiguredTestDialects())(
         });
       });
 
-      it("lets the allowed person remove it", async () => {
+      it("keeps it for the allowed person too, since its stored password is not read", async () => {
+        // A rule on an unread password is never asked about a value it was
+        // not given, so the instance is kept for every checked writer.
         const id = await pinnedBoard("ok");
-        const [first] = list((await stored("pinboard", id)).many);
 
-        await updateIn("pinboard", "direct", "allowed", id, {
-          one: null,
-          many: [{ id: first!.id, heading: "a2" }],
-        });
-        const after = await stored("pinboard", id);
+        await updateIn("pinboard", "direct", "allowed", id, { one: null });
 
-        expect(list(after.one)).toEqual([]);
-        expect(list(after.many).map(row => row.heading)).toEqual(["a2"]);
+        expect(list((await stored("pinboard", id)).one)[0]?.heading).toBe(
+          "h-ok"
+        );
+      });
+
+      it("lets the allowed person remove one whose password carries no rule", async () => {
+        // The control: `locked` allows them, and the password has no rule.
+        const { item } = await trusted.create({
+          collection: "vaults",
+          data: {
+            title: "ok",
+            one: { heading: "h", locked: "L", keys: { code: "secret-code" } },
+          },
+        } as never);
+        const id = String(item.id);
+
+        await updateIn("vaults", "direct", "allowed", id, { one: null });
+
+        expect(list((await stored("vaults", id)).one)).toEqual([]);
+      });
+
+      it("lets trusted code remove it", async () => {
+        const id = await pinnedBoard("tr");
+
+        await trusted.update({
+          collection: "pinboard",
+          id,
+          data: { one: null },
+        } as never);
+
+        expect(list((await stored("pinboard", id)).one)).toEqual([]);
       });
     });
 
