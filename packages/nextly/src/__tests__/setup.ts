@@ -15,15 +15,17 @@ import {
   releaseWorker,
 } from "./worker-database-guard";
 
-// This worker's claim on its pool id, and so on its database: a second live
-// worker with the same id fails here, before any file shares a database. Only
-// integration runs set the claims directory (its global setup); a unit run,
+// This file's claim on its worker's pool id, and so on its database, for as
+// long as its tests run. Vitest may start a slot's next process while the last
+// one is still exiting, so the claim is held per file rather than per process:
+// what must never happen is two files running at once on one database. Only
+// integration runs set the claims directory (their global setup); a unit run,
 // which loads this file too, has none.
 const claims = process.env[CLAIMS_ENV];
 if (claims) {
   const poolId = process.env.VITEST_POOL_ID ?? "unknown";
-  claimWorker(claims, poolId);
-  process.once("exit", () => releaseWorker(claims, poolId));
+  beforeAll(() => claimWorker(claims, poolId));
+  afterAll(() => releaseWorker(claims, poolId));
 }
 
 beforeAll(() => {

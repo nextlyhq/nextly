@@ -6,8 +6,9 @@
  * SQLite it is the worker process's own in-memory database, and a per-worker
  * server database is named after the id. So two live workers holding one id
  * would share a database, and files running at the same moment would drop and
- * recreate each other's tables. Each worker claims its id in a directory the
- * run creates; a second live process claiming the same id fails the run rather
+ * recreate each other's tables. Each test file claims its worker's id, in a
+ * directory the run creates, for as long as its tests run; a second file
+ * claiming the same id while the first still holds it fails the run rather
  * than letting the two collide in silence.
  *
  * The default export is the run's global setup: it creates that directory and
@@ -74,8 +75,8 @@ function isRunning(pid: number): boolean {
 
 /**
  * Claim a worker's pool id for this process, or fail when another live process
- * holds it. A claim left by a process that has ended is taken over: Vitest may
- * replace a worker, and the replacement inherits the id.
+ * holds it. A claim left by a process that has ended without giving it back (a
+ * crashed file) is taken over.
  */
 export function claimWorker(
   dir: string,
@@ -102,9 +103,9 @@ export function claimWorker(
 }
 
 /**
- * Give a worker's pool id back as its process exits, so the process Vitest
- * starts next in that slot finds no claim rather than one whose holder is
- * still on its way out. Only the holder's own claim is removed.
+ * Give a worker's pool id back when a file's tests end. Vitest may start the
+ * slot's next process while this one is still exiting, so the claim cannot
+ * wait for the exit. Only the holder's own claim is removed.
  */
 export function releaseWorker(
   dir: string,
