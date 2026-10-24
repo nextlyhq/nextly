@@ -12,6 +12,7 @@ import type {
   EmailTemplateComparison as TemplateComparison,
   OwnerUpdateUndo as UpdateUndo,
 } from "../../domains/email/services/email-template-service";
+import type { RecipientOutcome } from "../../domains/email/services/recipient-outcomes";
 import type { RefusedRecipient } from "../../domains/email/services/send-failures";
 import type {
   OwnerChange as Change,
@@ -563,6 +564,16 @@ export interface SendEmailResult {
    * key; nothing was sent this time.
    */
   repeat?: true;
+  /**
+   * @experimental Some recipients were accepted and the send still did not
+   * succeed. Present only then, beside `recipients`.
+   */
+  partlyDelivered?: true;
+  /**
+   * @experimental Each recipient's outcome by line and position, never by
+   * address, listed only for a partly delivered send.
+   */
+  recipients?: RecipientOutcome[];
 }
 
 /**
