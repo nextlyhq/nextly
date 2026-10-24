@@ -840,6 +840,41 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("lets an admin who isn't a super-admin edit a deactivated super-admin, resending their inactive state", async () => {
+      const install = await boot(on);
+      const second = await secondSuperAdmin(install, { active: false });
+      const { users, userRoles } = m.getDialectTables();
+
+      // As the admin's edit form sends it: the account's state as it stands,
+      // beside the field actually changed. Deactivating an account that is
+      // already inactive takes nothing from anyone.
+      const res = await rest(
+        install,
+        "PATCH",
+        ["users", second],
+        { name: "Renamed", isActive: false },
+        { session: install.operator }
+      );
+
+      expect(res.status, await res.text()).toBeLessThan(300);
+      const [row] = await raw()
+        .select({ name: users.name, isActive: users.isActive })
+        .from(users)
+        .where(eq(users.id, second));
+      expect(row).toMatchObject({ name: "Renamed" });
+      expect(Boolean(row.isActive)).toBe(false);
+      const held = await raw()
+        .select({ id: userRoles.id })
+        .from(userRoles)
+        .where(
+          and(
+            eq(userRoles.userId, second),
+            eq(userRoles.roleId, install.superAdminRole)
+          )
+        );
+      expect(held).toHaveLength(1);
+    });
+
     describe("a super-admin through a role that inherits the role", () => {
       /** A role built on `super-admin`, as creating a role with a base role writes it. */
       async function ownerRole(
