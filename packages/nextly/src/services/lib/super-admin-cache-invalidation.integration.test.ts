@@ -25,7 +25,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getDialectTables } from "../../database/index";
 import { container } from "../../di/container";
 import { ApiKeyService } from "../../domains/auth/services/api-key-service";
-import { PermissionCacheService } from "../../domains/auth/services/permission-cache-service";
 import { PermissionService } from "../../domains/auth/services/permission-service";
 
 import {
@@ -367,34 +366,6 @@ describe("an API key's grants are retired when the roles behind them change", ()
     expect(insideBatch).not.toContain(ONLY_IN_THE_CATALOGUE);
   });
 
-  it("loses it here when the stored rows could not be retired, though nothing is announced", async () => {
-    // A failed retirement withholds the epoch from every other instance, so
-    // the epoch alone would let this process's own copy of the key's grants
-    // stand for the rest of their life. This process knows the roles changed
-    // whatever the stored tier did.
-    await seedDeputy();
-    expect(await grants()).toContain(ONLY_IN_THE_CATALOGUE);
-    await revokeInheritance();
-
-    const proto = PermissionCacheService.prototype as unknown as Record<
-      string,
-      () => Promise<unknown>
-    >;
-    const original = proto.invalidateAll;
-    const before = rbacRevision();
-    proto.invalidateAll = () =>
-      Promise.reject(new Error("the stored tier is unreachable"));
-    try {
-      await invalidateAllPermissionCaches();
-    } finally {
-      proto.invalidateAll = original;
-    }
-
-    // POPULATION CONTROL: the failure path ran, so nothing was announced.
-    expect(rbacRevision()).toBe(before);
-    expect(await grants()).not.toContain(ONLY_IN_THE_CATALOGUE);
-  });
-
   it("loses it here when the stored table cannot even be asked about, though nothing is announced", async () => {
     // A probe that fails tells nothing about the stored answers, so it is
     // handled as a failed emptying: nothing announced, and what this process
@@ -567,20 +538,19 @@ describe("an API key's grants are retired when the roles behind them change", ()
 });
 
 /**
- * A batch of permission writes retires the caches ONCE.
+ * A batch of permission writes publishes the role version ONCE.
  *
- * The database tier is tombstoned by an unfiltered update of every cached row.
+ * Every publish sends every instance back to read its users' access again.
  * That is the right cost once and the wrong cost per row: a seeder ensures one
- * permission at a time, so a single new collection would rewrite and lock the
- * whole table once per permission, each pass after the first expiring rows the
- * previous one had already expired.
+ * permission at a time, so a single new collection would publish once per
+ * permission, each publish after the first retiring access the previous one
+ * had already retired.
  */
 describe("a sweep of permission writes", () => {
   it("files nothing as current while the batch is open", async () => {
     // A resolution running alongside the batch has to be refused. What refuses
-    // it is not the counter: the counter stays where it is until the stored
-    // rows have actually been retired, because announcing sooner tells every
-    // other instance to drop its own answer and read one of those rows.
+    // it is not the counter, which stays where it is until the batch exits:
+    // the open retirement is.
     harness = harness ?? (await createTestNextly());
     const before = rbacRevision();
     const cacheable: boolean[] = [];
@@ -597,10 +567,11 @@ describe("a sweep of permission writes", () => {
 
     // Nothing was cacheable at any point inside the batch...
     expect(cacheable).toEqual([false, false]);
-    // ...and nothing was announced while the stored rows were still live.
+    // ...and nothing was announced while it ran.
     expect(new Set(announced)).toEqual(new Set([before]));
-    // The announcement happens once, on the way out, after the retirement.
-    expect(rbacRevision()).not.toBe(before);
+    // The announcement happens once, on the way out, however many writes.
+    const count = (revision: string) => Number(revision.split(":")[1]);
+    expect(count(rbacRevision())).toBe(count(before) + 1);
   });
 
   it("still empties the tiers it holds in memory, per write", async () => {
@@ -670,68 +641,6 @@ describe("a sweep of permission writes", () => {
     expect(duringBatch).toBe(false);
   });
 
-  it("still defers the expensive table write, which is what the batch is for", async () => {
-    // The control, on the deferral that remains. The in-memory tiers no longer
-    // wait for the batch — the epoch moves the moment anything invalidates, so
-    // a demoted user stops reading as an admin immediately, inside a batch or
-    // out of it. What a batch still saves is the unfiltered rewrite of every
-    // stored row, which is the cost it was built for.
-    //
-    // Observed on a row put there directly, because `setCachedPermission` does
-    // not take effect under `createTestNextly`. A far-future expiry is what the
-    // flush overwrites, so its survival IS the deferral.
-    const db = harness!.adapter.getDrizzle() as unknown as {
-      insert: (t: unknown) => { values: (row: unknown) => Promise<unknown> };
-      select: (p: unknown) => {
-        from: (t: unknown) => { where: (c: unknown) => Promise<unknown[]> };
-      };
-    };
-    const tables = getDialectTables();
-    const rowId = `defer-${randomUUID()}`;
-    const owner = `defer-user-${randomUUID()}`;
-    await promote(owner, `${owner}@example.com`);
-    const farFuture = new Date(Date.now() + 3_600_000);
-    await db.insert(tables.userPermissionCache).values({
-      id: rowId,
-      userId: owner,
-      action: "read",
-      resource: "notes",
-      hasPermission: true,
-      roleIds: "[]",
-      expiresAt: farFuture,
-      createdAt: new Date(),
-    });
-
-    const stillFuture = async () => {
-      const rows = (await db
-        .select({ expiresAt: tables.userPermissionCache.expiresAt })
-        .from(tables.userPermissionCache)
-        .where(eq(tables.userPermissionCache.id, rowId))) as Array<{
-        expiresAt: Date | number;
-      }>;
-      const value = rows[0]?.expiresAt;
-      const ms = value instanceof Date ? value.getTime() : Number(value) * 1000;
-      return ms > Date.now() + 60_000;
-    };
-
-    let releaseBatch: () => void = () => {};
-    const batchRunning = new Promise<void>(resolve => {
-      releaseBatch = resolve;
-    });
-    const batch = inPermissionSweep(async () => {
-      await invalidateAllPermissionCaches();
-      const duringBatch = await stillFuture();
-      await batchRunning;
-      return duringBatch;
-    });
-
-    releaseBatch();
-    // Untouched while the batch was open...
-    expect(await batch, "deferred during the batch").toBe(true);
-    // ...and rewritten on the way out, so deferred is not skipped.
-    expect(await stillFuture(), "flushed on exit").toBe(false);
-  });
-
   it("flushes even when the batch throws, since a partial write still changed rows", async () => {
     const userId = `sweep-throw-${randomUUID()}`;
     await promote(userId, `${userId}@example.com`);
@@ -746,208 +655,6 @@ describe("a sweep of permission writes", () => {
     ).rejects.toThrow("half of the batch landed");
 
     expect(await isSuperAdmin(userId)).toBe(false);
-  });
-});
-
-/**
- * The stored tier is emptied BEFORE the epoch that retires the rest is
- * published.
- *
- * The epoch is the only signal another instance receives, and it is a one-way
- * barrier: an answer filed before it moves is retired by the move, an answer
- * filed after it is not. Announce first and every other instance gets a window
- * in which it rejects its own in-memory answer, reads the stored row the
- * tombstone has not reached yet, and files that retired decision under the NEW
- * epoch, where nothing still to happen can reach it. Empty the stored rows
- * first and both halves close: an instance that has not seen the move files
- * under the old epoch and the move retires it, and one that has seen the move
- * finds nothing to file.
- *
- * The interleaving is the subject, and both steps have finished by the time the
- * call returns, so it cannot be seen from outside. The real retirement is left
- * to run and only asked which epoch it ran under, which is the one fact that
- * tells the two orders apart.
- */
-describe("the order the two tiers are retired in", () => {
-  type Tombstone = (...args: never[]) => Promise<unknown>;
-
-  async function epochsAround(
-    method: "invalidateAll" | "invalidateByUser",
-    invalidate: () => Promise<void>
-  ): Promise<{ before: string; during: string; after: string }> {
-    const proto = PermissionCacheService.prototype as unknown as Record<
-      string,
-      Tombstone
-    >;
-    const original = proto[method];
-    const before = rbacRevision();
-    let during = "";
-    proto[method] = function (this: unknown, ...args: never[]) {
-      during = rbacRevision();
-      return original.apply(this, args);
-    };
-    try {
-      await invalidate();
-    } finally {
-      proto[method] = original;
-    }
-    return { before, during, after: rbacRevision() };
-  }
-
-  it("empties the stored rows before it announces the new epoch", async () => {
-    const { before, during, after } = await epochsAround("invalidateAll", () =>
-      invalidateAllPermissionCaches()
-    );
-
-    // The tombstone ran while the epoch was still the one every instance had.
-    expect(during).toBe(before);
-    // And the announcement did happen, so the assertion above is not passing
-    // because nothing moved at all.
-    expect(after).not.toBe(before);
-  });
-
-  it("raises when the stored tier refuses, rather than reporting nothing done", async () => {
-    // The half the cases below cannot reach. They replace `invalidateAll` with
-    // a rejection to exercise the caller, which proves nothing about whether
-    // the real one rejects — and it used to catch its own database error and
-    // answer `0`, which is also what a successful tombstone over an empty table
-    // answers. The caller could not tell those apart, so it published either
-    // way. This asks the real method, over an adapter whose write fails.
-    const real = harness!.adapter;
-    const unwritable = Object.create(real) as typeof real;
-    (unwritable as { getDrizzle: unknown }).getDrizzle = () => ({
-      update: () => ({
-        set: () => Promise.reject(new Error("the stored tier is unreachable")),
-      }),
-    });
-
-    const service = new PermissionCacheService(unwritable, console, {
-      cacheTtlSeconds: 300,
-    });
-
-    await expect(service.invalidateAll()).rejects.toThrow(
-      "the stored tier is unreachable"
-    );
-  });
-
-  it("answers a count when the write succeeds, so raising is not its only mode", async () => {
-    // The control. Without it, "rejects on failure" is equally satisfied by a
-    // method that rejects on every call.
-    const service = new PermissionCacheService(harness!.adapter, console, {
-      cacheTtlSeconds: 300,
-    });
-
-    await expect(service.invalidateAll()).resolves.toBeTypeOf("number");
-  });
-
-  it("announces nothing when the stored rows could not be retired", async () => {
-    // The epoch means "everything filed before this is gone". A tombstone that
-    // failed leaves those rows live, so the sentence is false — and announcing
-    // it anyway is worse than silence: every other instance rejects its own
-    // in-memory answer BECAUSE the epoch moved, reads one of those rows, and
-    // files it under the new epoch where nothing left to happen can reach it.
-    const proto = PermissionCacheService.prototype as unknown as Record<
-      string,
-      Tombstone
-    >;
-    const original = proto.invalidateAll;
-    const before = rbacRevision();
-    proto.invalidateAll = () =>
-      Promise.reject(new Error("the stored tier is unreachable"));
-    try {
-      await invalidateAllPermissionCaches();
-    } finally {
-      proto.invalidateAll = original;
-    }
-
-    expect(rbacRevision()).toBe(before);
-  });
-
-  it("announces when the stored answers' table is gone", async () => {
-    // A later release drops the table once nothing reads it, possibly while
-    // this one still serves. Gone, it holds nothing a reader could serve, so
-    // failing on it would only withhold the version from every instance.
-    await harness!.adapter.executeQuery("DROP TABLE user_permission_cache");
-    const before = rbacRevision();
-
-    await invalidateAllPermissionCaches();
-
-    expect(rbacRevision()).not.toBe(before);
-  });
-
-  it("announces regardless where the stored answers were turned off", async () => {
-    // An instance on the release that reads them, running with them turned
-    // off, reads none, so silence would protect nobody while every other
-    // instance kept serving what it holds, an API key's copied grants for five
-    // minutes among them.
-    const proto = PermissionCacheService.prototype as unknown as Record<
-      string,
-      Tombstone
-    >;
-    const original = proto.invalidateAll;
-    const setting = process.env.PERMISSION_CACHE_ENABLED;
-    const before = rbacRevision();
-    proto.invalidateAll = () =>
-      Promise.reject(new Error("the stored tier is unreachable"));
-    process.env.PERMISSION_CACHE_ENABLED = "false";
-    try {
-      await invalidateAllPermissionCaches();
-    } finally {
-      proto.invalidateAll = original;
-      if (setting === undefined) delete process.env.PERMISSION_CACHE_ENABLED;
-      else process.env.PERMISSION_CACHE_ENABLED = setting;
-    }
-
-    expect(rbacRevision()).not.toBe(before);
-  });
-
-  it("announces when it CAN retire them, which is what makes silence a choice", async () => {
-    // The control. Without it, "announces nothing on failure" is equally
-    // satisfied by an epoch that never moves at all.
-    const before = rbacRevision();
-
-    await invalidateAllPermissionCaches();
-
-    expect(rbacRevision()).not.toBe(before);
-  });
-
-  it("still empties its own memory when the stored tier refuses", async () => {
-    // Withholding the announcement must not withhold the local retirement:
-    // this process knows the rows changed whatever the shared tier did.
-    const userId = `unreachable-${randomUUID()}`;
-    await promote(userId, `${userId}@example.com`);
-    expect(await isSuperAdmin(userId)).toBe(true);
-    await demote(userId);
-
-    const proto = PermissionCacheService.prototype as unknown as Record<
-      string,
-      Tombstone
-    >;
-    const original = proto.invalidateAll;
-    proto.invalidateAll = () =>
-      Promise.reject(new Error("the stored tier is unreachable"));
-    try {
-      await invalidateAllPermissionCaches();
-    } finally {
-      proto.invalidateAll = original;
-    }
-
-    expect(await isSuperAdmin(userId)).toBe(false);
-  });
-
-  it("does the same for an invalidation scoped to one user", async () => {
-    // A scoped tombstone is smaller, not faster: it is still an awaited write,
-    // so announcing ahead of it opens the same window.
-    const userId = `order-${randomUUID()}`;
-    await promote(userId, `${userId}@example.com`);
-
-    const { before, during, after } = await epochsAround(
-      "invalidateByUser",
-      () => invalidatePermissionCache({ userId })
-    );
-
-    expect(during).toBe(before);
-    expect(after).not.toBe(before);
   });
 });
 

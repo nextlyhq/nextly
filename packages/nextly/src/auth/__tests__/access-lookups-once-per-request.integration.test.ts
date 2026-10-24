@@ -69,7 +69,6 @@ const ACCESS_TABLES = new Set([
   "role_permissions",
   "user_roles",
   "role_inherits",
-  "user_permission_cache",
   "api_keys",
 ]);
 

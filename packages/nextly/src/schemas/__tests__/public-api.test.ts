@@ -54,6 +54,14 @@ describe("schemas public API", () => {
       expect(schemas.CORE_TABLE_NAMES).not.toContain("sessions");
     });
 
+    it("no longer names the stored permission answers", () => {
+      // Nothing reads or writes `user_permission_cache` any more: a user's
+      // access is kept in memory. Out of this list, an existing database's
+      // copy is left alone until `nextly migrate` is asked to drop it.
+      expect(schemas.CORE_TABLE_NAMES).not.toContain("user_permission_cache");
+      expect(schemas).not.toHaveProperty("userPermissionCache");
+    });
+
     it("includes the canonical core tables", () => {
       const required = [
         "users",
@@ -65,7 +73,6 @@ describe("schemas public API", () => {
         "role_permissions",
         "user_roles",
         "role_inherits",
-        "user_permission_cache",
         "api_keys",
         "audit_log",
         "activity_log",

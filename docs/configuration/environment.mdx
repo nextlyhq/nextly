@@ -304,7 +304,7 @@ The variables below configured the permission cache this replaced. They no longe
 | `PERMISSION_CACHE_TTL_SECONDS` | No longer read. |
 | `PERMISSION_CACHE_MEMORY_SIZE` | No longer read. |
 
-Nothing is written to the stored permission cache any more, so it needs no scheduled cleanup.
+Nothing reads or writes the stored permission table, `user_permission_cache`, any more, and a new install no longer creates it. An existing database keeps it until `nextly migrate` runs with `NEXTLY_DROP_RETIRED_AUTH_TABLES=1`, which drops it even when it holds rows: they were only copies of answers recomputed from roles. Until then, on MySQL, where the table has no foreign key to `users`, a deleted user's rows stay in it; they name only the user's id and permissions. See [Production migrations](/docs/guides/production-migrations).
 
 ---
 
@@ -313,7 +313,6 @@ Nothing is written to the stored permission cache any more, so it needs no sched
 | Variable | Required | Default | Description | Read by |
 |---|---|---|---|---|
 | `DEBUG_RBAC` | No | — | Set `1` to log detailed RBAC permission decisions. | `packages/nextly/src/services/lib/permissions.ts` |
-| `DEBUG_CACHE` | No | — | Set `1` to log permission-cache hit/miss/eviction details. | `packages/nextly/src/domains/auth/services/permission-cache-service.ts` |
 
 ---
 
