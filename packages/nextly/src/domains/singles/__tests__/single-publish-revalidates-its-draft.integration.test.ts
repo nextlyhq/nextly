@@ -385,6 +385,53 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     expect(issues?.map(i => i.path)).toEqual(["ops.runbook"]);
   });
 
+  it("refuses, and keeps the draft, when the publisher's group echoes a protected child the draft edited", async () => {
+    const singles = await boot(false);
+    await singles.update(
+      SLUG,
+      {
+        siteName: "Live",
+        ops: { runbook: "live-runbook" },
+        status: "published",
+      },
+      { overrideAccess: true }
+    );
+    await singles.update(
+      SLUG,
+      { ops: { runbook: "boss-runbook" } },
+      { routeAuthorized: true, user: BOSS }
+    );
+
+    // The publisher sends the whole group, the child at its live value. Kept
+    // at the stored value, the child would read as their own input, and the
+    // publish would consume the draft and lose the author's edit.
+    const published = await singles.update(
+      SLUG,
+      { status: "published", ops: { runbook: "live-runbook" } },
+      { routeAuthorized: true, user: CLERK }
+    );
+
+    expect(published.success, JSON.stringify(published)).toBe(false);
+    const issues = (
+      published as { publicData?: { errors?: Array<{ path: string }> } }
+    ).publicData?.errors;
+    expect(issues?.map(i => i.path)).toEqual(["ops.runbook"]);
+    const drafts = await current!.adapter.select<{ snapshot: unknown }>(
+      "nextly_versions",
+      {
+        where: {
+          and: [
+            { column: "scopeKind", op: "=", value: "single" },
+            { column: "scopeSlug", op: "=", value: SLUG },
+            { column: "versionNo", op: "IS NULL" },
+            { column: "status", op: "=", value: "draft" },
+          ],
+        },
+      }
+    );
+    expect(drafts).toHaveLength(1);
+  });
+
   it("gates a publish a beforeChange hook decides on", async () => {
     // The caller sends no status; the hook turns the write into a publish. A
     // gate placed before the hooks would never see this one.
