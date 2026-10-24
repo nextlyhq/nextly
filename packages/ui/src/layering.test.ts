@@ -58,7 +58,7 @@ import {
   walk,
 } from "@nextlyhq/module-specifiers/parse-source";
 import type { MemberExpression, Node, Program } from "oxc-parser";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import { listedFiles, showConfig } from "../../../scripts/tsc-cli.mjs";
 
@@ -135,9 +135,50 @@ function tsconfigShippedFiles(): string[] {
  * config listing no files is refused too: that is a compiler that answered differently, never a
  * package that ships nothing.
  */
-function resolvedConfig(
-  name: string
-): ReturnType<typeof showConfig> & { files: string[] } {
+function resolvedConfig(name: string): ResolvedConfig {
+  let answer = resolvedConfigs.get(name);
+  if (answer === undefined) {
+    try {
+      answer = { config: askResolvedConfig(name) };
+    } catch (error) {
+      answer = { error };
+    }
+    resolvedConfigs.set(name, answer);
+  }
+  // A config that could not be read is refused by the test that reads it, every time it is read,
+  // rather than by whichever asked first.
+  if ("error" in answer) throw answer.error;
+  return answer.config;
+}
+
+type ResolvedConfig = ReturnType<typeof showConfig> & { files: string[] };
+
+/**
+ * Each config's answer, asked once per run of this file. Asking is two cold `tsc` runs, one of
+ * which loads the whole program, and nothing a test does changes a config; see
+ * {@link CONFIG_RESOLUTION_TIMEOUT_MS}.
+ */
+const resolvedConfigs = new Map<
+  string,
+  { config: ResolvedConfig } | { error: unknown }
+>();
+
+/** The tsconfigs the tests below read, resolved before them. */
+const READ_CONFIGS = ["tsconfig.json", "tsconfig.tests.json"] as const;
+
+/**
+ * How long resolving {@link READ_CONFIGS} may take.
+ *
+ * Measured on a CI runner, `tsc --listFilesOnly` and `--showConfig` for `tsconfig.json` took
+ * 3.3 s, and `tsconfig.tests.json`, whose program holds every test as well, about twice that:
+ * about 10 s for the two, where an in-process parse took milliseconds. Asked inside a test, that
+ * cost ran into the default 5 s limit. This allows six times the measured cost, for a runner
+ * loaded by the rest of the suite.
+ */
+const CONFIG_RESOLUTION_TIMEOUT_MS = 60_000;
+
+/** The config as `tsc` resolves it; see {@link resolvedConfig}. */
+function askResolvedConfig(name: string): ResolvedConfig {
   const path = join(SRC, "..", name);
   listedFiles(path);
   const config = showConfig(path);
@@ -978,6 +1019,18 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
 }
 
 describe("this package resolves no module at runtime", () => {
+  // Resolved here, under a limit sized to the cost, rather than inside the tests that read them.
+  // A failure is kept and thrown by the test that reads the config.
+  beforeAll(() => {
+    for (const name of READ_CONFIGS) {
+      try {
+        resolvedConfig(name);
+      } catch {
+        // Kept by `resolvedConfig`, and thrown by the test that reads it.
+      }
+    }
+  }, CONFIG_RESOLUTION_TIMEOUT_MS);
+
   it("is exercised — the reader finds each construct it bans", () => {
     // Without this the assertion below passes against a reader that finds nothing, which is the
     // shape of a guard reporting success because it looked for the wrong thing.
@@ -1274,7 +1327,7 @@ describe("this package resolves no module at runtime", () => {
     // `resolvedConfig` follows `extends`, which is why the scanned-file assertion above uses it
     // too, and it refuses a config that does not parse or resolve, so a broken file cannot read as
     // one with no aliases.
-    const aliases = ["tsconfig.json", "tsconfig.tests.json"].flatMap(name => {
+    const aliases = READ_CONFIGS.flatMap(name => {
       const { compilerOptions } = resolvedConfig(name);
       const paths = compilerOptions?.paths;
       return Object.keys(

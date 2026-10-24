@@ -13,6 +13,8 @@ import { setNextlyLogger } from "../../../observability/logger";
 import type { WidgetDefinition } from "../definition";
 import { publishableWidgets } from "../publish";
 import { clearWidgets, registerWidget } from "../registry";
+import { clearSources } from "../sources";
+import { clearSystemResolvers, registerSystemSource } from "../system-sources";
 
 const def = (
   id: string,
@@ -26,7 +28,11 @@ const def = (
   ...over,
 });
 
-beforeEach(() => clearWidgets());
+beforeEach(() => {
+  clearWidgets();
+  clearSources();
+  clearSystemResolvers();
+});
 afterEach(() => setNextlyLogger(undefined));
 
 describe("publishableWidgets", () => {
@@ -44,6 +50,35 @@ describe("publishableWidgets", () => {
         query: { source: "collection:posts", op: "count" },
       },
     ]);
+  });
+
+  it("publishes the filters a widget's source takes, read from the source registry", () => {
+    // The admin's knobs build a card's query from what is published, so a
+    // source narrowing by Collection and Only mine has to say so here.
+    registerSystemSource(
+      {
+        id: "system:edits",
+        label: "Edits",
+        kind: "system",
+        supports: ["list"],
+        fields: [{ name: "entryTitle", type: "string" }],
+        filters: ["collection", "onlyMine"],
+      },
+      async () => ({ op: "list", items: [] })
+    );
+    registerWidget(
+      def("acme/edits", {
+        archetype: "list",
+        defaultSize: "md",
+        query: { source: "system:edits", op: "list", select: ["entryTitle"] },
+      })
+    );
+    registerWidget(def("acme/count"));
+
+    const [edits, count] = publishableWidgets();
+    expect(edits?.sourceFilters).toEqual(["collection", "onlyMine"]);
+    // A widget over a source that narrows by nothing carries no filters at all.
+    expect(count).not.toHaveProperty("sourceFilters");
   });
 
   it("publishes nothing when nothing is registered", () => {

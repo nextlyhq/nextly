@@ -1,7 +1,8 @@
 /**
  * What the activity feed needs to know about the content it reports on, read
- * from the registries: the Singles' labels, and which Singles and collections
- * are kept off the dashboard.
+ * from the registries: the Singles' labels, which Singles and collections are
+ * kept off the dashboard, and which collections have a draft and published
+ * lifecycle.
  *
  * @module services/dashboard/activity-subjects
  */
@@ -20,6 +21,16 @@ export interface ActivitySubjects {
   keptOffCollections: ActivityKeptOffCollections;
 }
 
+/** What Recently edited also needs: which collections' documents have a status. */
+export interface RecentEditSubjects extends ActivitySubjects {
+  /**
+   * The collections whose documents have a status, from the same read as the
+   * kept-off ones; empty when that read did not complete, so no status is
+   * asked of a collection that may not have one.
+   */
+  collectionsWithStatus: ReadonlySet<string>;
+}
+
 /**
  * The Singles and collections as the registries hold them now.
  *
@@ -34,11 +45,20 @@ export interface ActivitySubjects {
  * describes for each.
  */
 export async function readActivitySubjects(): Promise<ActivitySubjects> {
-  const [singles, keptOffCollections] = await Promise.all([
-    readSingles(),
-    readKeptOffCollections(),
-  ]);
+  const { singles, keptOffCollections } = await readRecentEditSubjects();
   return { singles, keptOffCollections };
+}
+
+/**
+ * The same answer as {@link readActivitySubjects}, from the same reads, with
+ * the collections that have a status beside it.
+ */
+export async function readRecentEditSubjects(): Promise<RecentEditSubjects> {
+  const [singles, collections] = await Promise.all([
+    readSingles(),
+    readCollections(),
+  ]);
+  return { singles, ...collections };
 }
 
 /** Each Single's label, which heads its rows in the feed, and which are kept off the dashboard. */
@@ -63,20 +83,33 @@ async function readSingles(): Promise<ActivitySingles> {
   }
 }
 
-/** The collections kept off the dashboard, by the one rule every dashboard surface asks. */
-async function readKeptOffCollections(): Promise<ActivityKeptOffCollections> {
+/**
+ * The collections kept off the dashboard, by the one rule every dashboard
+ * surface asks, and the ones with a status, from one read of the registry.
+ */
+async function readCollections(): Promise<
+  Pick<RecentEditSubjects, "keptOffCollections" | "collectionsWithStatus">
+> {
   try {
     const registry = container.get<{
       getAllCollections: () => Promise<
-        Array<{ slug: string; admin?: unknown }>
+        Array<{ slug: string; admin?: unknown; status?: unknown }>
       >;
     }>("collectionRegistryService");
     const slugs = new Set<string>();
+    const withStatus = new Set<string>();
     for (const collection of await registry.getAllCollections()) {
       if (keptOffDashboard(collection)) slugs.add(collection.slug);
+      if (collection.status === true) withStatus.add(collection.slug);
     }
-    return { slugs, complete: true };
+    return {
+      keptOffCollections: { slugs, complete: true },
+      collectionsWithStatus: withStatus,
+    };
   } catch {
-    return { slugs: new Set(), complete: false };
+    return {
+      keptOffCollections: { slugs: new Set(), complete: false },
+      collectionsWithStatus: new Set(),
+    };
   }
 }

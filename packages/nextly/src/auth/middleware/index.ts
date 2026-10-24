@@ -597,7 +597,9 @@ function requestedLanguage({
 }
 
 /** The languages the rule asked for a REST operation is told. */
-function requestLanguage(operation: RouteOperation | undefined): RuleLanguage {
+export function requestLanguage(
+  operation: RouteOperation | undefined
+): RuleLanguage {
   if (operation === undefined) return everyLanguage();
   const kind = OPERATION_LANGUAGES.get(operation.method);
   if (kind === undefined) return everyLanguage();

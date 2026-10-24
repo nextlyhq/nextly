@@ -229,7 +229,8 @@ TabsList.displayName = List.displayName;
  * The trigger's own appearance. `size` carries the type scale only: everything
  * that draws the tab -- the square corners, the 2px underline, the active and
  * hover colours, the focus ring -- is in the base and is not a caller's to
- * choose, which is the property `tabs-contract.test.ts` watches for.
+ * choose, which is the property the `tab-indicator` lint rule
+ * (`lint/tab-indicator`) holds every call site to.
  *
  * Arms declared separately for the same reason as the list's.
  */

@@ -17,9 +17,18 @@ import {
   type WidgetCondition,
   type WidgetLifecycle,
 } from "./lifecycle";
-import type { WidgetQuery, WidgetQuerySpec } from "./query";
-import { validateWidgetSettings, type AnyWidgetSetting } from "./settings";
-import type { WidgetOp } from "./sources";
+import type {
+  SettingSourcedQuerySpec,
+  WidgetQuery,
+  WidgetQuerySpec,
+} from "./query";
+import {
+  knobSourceFor,
+  validateWidgetSettings,
+  type AnyWidgetSetting,
+  type KnobSource,
+} from "./settings";
+import type { WidgetOp, WidgetSourceFilter } from "./sources";
 import { WIDGET_WIDTHS, type WidgetWidth } from "./widths";
 
 /*
@@ -202,6 +211,37 @@ const ARCHETYPE_RESULTS: ReadonlyMap<
 export const MAX_STAT_CELLS = 8;
 
 /**
+ * One read a `custom` card asks beside its others, its answer handed to the
+ * card's component under `key`.
+ *
+ * For a card that draws several answers together, such as a number beside the
+ * trend it comes from: each read is batched, streamed and refused on its own,
+ * so one the reader may not have is answered as not available while the rest
+ * draw. Any query a card may ask, including one whose source the card's
+ * Collection setting supplies.
+ *
+ * @experimental While the content widgets are being built.
+ */
+export interface WidgetQueryCell {
+  /** Identifies this cell's answer within the card. Unique across the card. */
+  key: string;
+  query: WidgetQuerySpec | SettingSourcedQuerySpec;
+  /**
+   * Asked only for a card whose collection has (`"lifecycle"`) or has not
+   * (`"no-lifecycle"`) a draft and published lifecycle, so a card reads a
+   * status split where there is one and a plain count where there is not,
+   * once either way. Absent, the cell is always asked.
+   */
+  when?: WidgetCellCondition;
+}
+
+/** When a cell is asked: the closed set of conditions. @experimental */
+export const WIDGET_CELL_CONDITIONS = ["lifecycle", "no-lifecycle"] as const;
+
+/** @experimental */
+export type WidgetCellCondition = (typeof WIDGET_CELL_CONDITIONS)[number];
+
+/**
  * One number on a `stats` card.
  *
  * 🔴 Each cell carries its OWN query rather than the card carrying one query
@@ -336,6 +376,18 @@ export interface WidgetDefinition {
     action?: { label: string; link: string; requiredPermission?: string };
   };
   /**
+   * The settings the widget's source narrows by rather than being replaced by
+   * (`WidgetSource.filters`), so the admin's knobs build the card's query as
+   * the server admits its settings.
+   *
+   * 🔴 Set by core when it publishes a registered widget, read from the source
+   * registry then, and never taken from the registration: a stated value is
+   * replaced, so a widget cannot claim a filter its source does not take.
+   *
+   * @experimental The shape may grow while the content widgets are built.
+   */
+  sourceFilters?: readonly WidgetSourceFilter[];
+  /**
    * Where this widget sits by default, ascending. Omitted means "after
    * everything that states one".
    *
@@ -449,8 +501,30 @@ export interface WidgetDefinition {
    * Typed as {@link WidgetQuerySpec} so a declaration pairing `groupBy` with an
    * op that ignores it, or a `groupBy` op carrying no key, fails to compile
    * rather than booting and failing on every request the card makes.
+   *
+   * A widget with a Collection setting declares no source
+   * ({@link SettingSourcedQuerySpec}): each card reads the collection it is
+   * set to.
    */
-  query?: WidgetQuerySpec;
+  query?: WidgetQuerySpec | SettingSourcedQuerySpec;
+  /**
+   * Where the add panel offers this widget, when not as one card for the
+   * whole dashboard.
+   *
+   * - Absent: placed on the default dashboard, and offered as one card.
+   * - `"per-collection"`: offered only inside each collection's group of the
+   *   add panel, one row per collection, a card starting with that collection
+   *   as its Collection setting.
+   * - `"on-request"`: offered only from the add panel, as a card a reader asks
+   *   for, such as a note; nothing to show until they set it up.
+   *
+   * Either value keeps the widget off the default dashboard and allows any
+   * number of cards, unless it says otherwise (`allowsSeveral`). One fact, so
+   * the placement, the panel and the count cannot disagree.
+   *
+   * @experimental While the content widgets are being built.
+   */
+  offered?: "per-collection" | "on-request";
   /**
    * The card's data is built on the server from the widget's declaration (a
    * data function, or a query written from its settings), so the definition
@@ -475,8 +549,11 @@ export interface WidgetDefinition {
    * bounds it at registration rather than letting a card carry a document.
    */
   content?: string;
-  /** Required for `stats`; forbidden otherwise. */
-  cells?: WidgetStatCell[];
+  /**
+   * Required for `stats`; optional for `custom`, whose component is handed
+   * each cell's answer by key ({@link WidgetQueryCell}); forbidden otherwise.
+   */
+  cells?: WidgetStatCell[] | WidgetQueryCell[];
   /** Where a "view all" footer link points. */
   link?: { label: string; href: string };
 }
@@ -1394,6 +1471,49 @@ export function cellsProblem(
 }
 
 /**
+ * Why a `custom` card's cells cannot be asked, or `undefined` when they can:
+ * at least one, at most {@link MAX_STAT_CELLS}, each a keyed query, no key
+ * twice. Each query's shape is judged with the card's own query
+ * ({@link widgetQueryShapeProblem}).
+ */
+function queryCellsProblem(cells: unknown): string | undefined {
+  if (!Array.isArray(cells) || cells.length === 0) {
+    return "a custom card's cells, when declared, must be a non-empty array";
+  }
+  if (cells.length > MAX_STAT_CELLS) {
+    return `a custom card may declare at most ${MAX_STAT_CELLS} cells, got ${cells.length}`;
+  }
+  const seen = new Set<string>();
+  for (const [index, cell] of cells.entries()) {
+    const problem = queryCellProblem(cell, index);
+    if (problem !== undefined) return problem;
+    // Well formed now, so the key is a string.
+    const key = (cell as WidgetQueryCell).key;
+    if (seen.has(key)) return `cells declare the key "${key}" more than once`;
+    seen.add(key);
+  }
+  return undefined;
+}
+
+/** Why one cell cannot be asked: no key, a condition it may not name, or no query. */
+function queryCellProblem(cell: unknown, index: number): string | undefined {
+  const { key, query, when } = (cell ?? {}) as Partial<WidgetQueryCell>;
+  if (typeof key !== "string" || key.trim() === "") {
+    return `cells[${index}] needs a non-empty key`;
+  }
+  if (
+    when !== undefined &&
+    !(WIDGET_CELL_CONDITIONS as readonly string[]).includes(when)
+  ) {
+    return `cells[${index}] ("${key}") has when "${String(when)}", which is not one of ${WIDGET_CELL_CONDITIONS.join(", ")}`;
+  }
+  if (typeof query !== "object" || query === null) {
+    return `cells[${index}] ("${key}") needs a query`;
+  }
+  return undefined;
+}
+
+/**
  * Confirms `cells` is present exactly for `stats`, and well formed.
  *
  * The duplicate-key check matters more than it looks: the card keys each
@@ -1402,9 +1522,14 @@ export function cellsProblem(
  * labels -- which is not wrong-looking in any way a reader could detect.
  */
 function validateCells(d: Partial<WidgetDefinition>): void {
+  if (d.archetype === "custom" && d.cells !== undefined) {
+    const problem = queryCellsProblem(d.cells);
+    if (problem !== undefined) fail(`${d.id}: ${problem}`);
+    return;
+  }
   if (d.archetype !== "stats") {
     if (d.cells !== undefined) {
-      fail(`${d.id}: cells are only valid for archetype "stats"`);
+      fail(`${d.id}: cells are only valid for archetype "stats" or "custom"`);
     }
     return;
   }
@@ -1420,7 +1545,9 @@ function validateCells(d: Partial<WidgetDefinition>): void {
  */
 export function archetypeResultProblem(
   archetype: WidgetArchetype,
-  query: WidgetQuerySpec | undefined
+  // Sourceless too: the op decides what an archetype can draw, whichever way
+  // the source arrives.
+  query: WidgetQuerySpec | SettingSourcedQuerySpec | undefined
 ): string | undefined {
   // A Map, not an object literal. A contribution's archetype is caller text,
   // and `"toString"` or `"constructor"` indexes an object literal to something
@@ -1547,7 +1674,7 @@ export function widgetQueryShapeProblem(
   if (DATA_ARCHETYPE_SET.has(archetype) && !d.query) {
     return `archetype "${d.archetype}" requires a query`;
   }
-  return undefined;
+  return sourceProblem(d);
 }
 
 function validateQuery(d: Partial<WidgetDefinition>): void {
@@ -1566,6 +1693,65 @@ function validateQuery(d: Partial<WidgetDefinition>): void {
   if (mismatch !== undefined) fail(`${d.id}: ${mismatch}`);
   const problem = querylessQueryProblem(archetype, d.query);
   if (problem !== undefined) fail(`${d.id}: ${problem}`);
+}
+
+/**
+ * Why a definition's query cannot name what it reads, or `undefined` when it
+ * can: it declares a source, or it declares none and a Collection setting
+ * supplies one. Both together is a source the card's Collection setting
+ * replaces once it is set, and reads while it is not.
+ */
+function sourceProblem(d: Partial<WidgetDefinition>): string | undefined {
+  // Read defensively: malformed settings are the settings rule's to refuse by
+  // name, so here they simply supply no source.
+  const settings: unknown = d.settings;
+  const fromSetting =
+    Array.isArray(settings) &&
+    settings.some(
+      (setting: unknown) =>
+        typeof setting === "object" &&
+        setting !== null &&
+        (setting as { type?: unknown }).type === "collection"
+    );
+  // The card's own query and each of a custom card's cells, judged alike: the
+  // Collection setting supplies every one of their sources, or none.
+  const asked: Array<[string, { source?: string } | undefined]> = [
+    ["its query", d.query],
+    // Judged before the cells' own rule runs, so a malformed list is left to
+    // that rule to refuse by name.
+    ...(d.archetype === "custom" && Array.isArray(d.cells)
+      ? (d.cells as Partial<WidgetQueryCell>[]).map(
+          (cell): [string, { source?: string } | undefined] => [
+            `its cell "${String(cell?.key)}"`,
+            typeof cell?.query === "object" && cell.query !== null
+              ? cell.query
+              : undefined,
+          ]
+        )
+      : []),
+  ];
+  for (const [what, query] of asked) {
+    if (query === undefined) continue;
+    if (query.source === undefined && !fromSetting) {
+      return `${what} names no source, and no Collection setting supplies one`;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The source a definition's settings knobs see: its query's own, with the
+ * filters that source declares; none yet
+ * (`undefined`) for a query or cells a Collection setting supplies; and `null`
+ * for a widget that asks nothing a knob could drive, whose content settings
+ * would be drawn and saved and change nothing.
+ */
+function knobSourceOfDefinition(
+  d: Partial<WidgetDefinition>
+): KnobSource | null | undefined {
+  if (typeof d.query?.source === "string") return knobSourceFor(d.query.source);
+  if (d.query !== undefined) return undefined;
+  return Array.isArray(d.cells) && d.cells.length > 0 ? undefined : null;
 }
 
 /** Throws with a named reason if `def` is not a usable definition. */
@@ -1593,12 +1779,13 @@ export function validateWidgetDefinition(
   validateCells(d);
   validateDefaultOrder(d);
   validateChrome(d);
-  // Judged on the widget's own source: a content setting is admitted where
-  // core builds the query, or where a knob drives it on that source.
+  // Judged on the widget's own source, with the filters that source declares:
+  // a content setting is admitted where core builds the query, or where a knob
+  // drives it on that source.
   validateWidgetSettings(
     d.settings,
     d.id ?? "widget",
     d.serverData === true,
-    typeof d.query?.source === "string" ? { id: d.query.source } : undefined
+    knobSourceOfDefinition(d)
   );
 }

@@ -179,6 +179,25 @@ describe("what a card core answers asks with", () => {
   });
 });
 
+describe("what a card that asks through its cells asks with", () => {
+  it("asks again when its Collection setting changes, though it has no query of its own", () => {
+    // A Count card's numbers come from its cells, each with no source until
+    // its Collection setting supplies one: a change of collection is a new
+    // question even though the card declares no top-level query.
+    const count = {
+      id: "core/count",
+      title: "Count",
+      archetype: "custom",
+      component: "core#Count",
+      settings: [{ name: "collection", type: "collection" }],
+      cells: [{ key: "total", query: { op: "count", status: "all" } }],
+    } as unknown as DashboardWidget;
+    const posts = questionOf(count, { collection: "posts" });
+    expect(questionOf(count, { collection: "posts" })).toBe(posts);
+    expect(questionOf(count, { collection: "pages" })).not.toBe(posts);
+  });
+});
+
 describe("the fields a card core answers is drawn by", () => {
   it("are the answer's own when it describes them", () => {
     expect(

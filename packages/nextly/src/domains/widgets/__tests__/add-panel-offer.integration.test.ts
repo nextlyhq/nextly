@@ -41,7 +41,11 @@ const POSTS = "posts";
 const INTERNAL = "nx_usage_index";
 const HIDDEN = "patterns";
 
-/** The one built-in with a permission: a reader without it may not see it. */
+/**
+ * A built-in gated on reading releases: a reader without the grant may not see
+ * it. It is also offered only once a release exists (`releases:present`), so
+ * each test starts with one.
+ */
 const GATED = "core/upcoming-releases";
 
 interface LayoutRead {
@@ -119,6 +123,12 @@ describeEachDialect("what the add panel is offered", dialect => {
     });
     admin = await account("admin@example.com");
     reader = await account("reader@example.com");
+    // A release, so Upcoming releases' condition holds and its gate alone
+    // decides who is offered it.
+    const nextly = handle!.nextly as unknown as {
+      releases: { create: (a: { title: string }) => Promise<unknown> };
+    };
+    await nextly.releases.create({ title: "Launch" });
     // A cold process: the derived cards below are the refresh's own work.
     clearSources();
     await refreshCollectionWidgets();
@@ -142,8 +152,11 @@ describeEachDialect("what the add panel is offered", dialect => {
     const layout = await read(reader);
     expect(named(layout).has(GATED)).toBe(false);
     expect(layout.widgets).not.toHaveProperty(GATED);
-    // The control: the same read names the ungated built-ins.
-    expect(named(layout).has("core/team")).toBe(true);
+    // The control: the same read names a built-in this reader may see. Recent
+    // activity, which has no gate and no condition. Not Team: it is offered
+    // only to someone who may read people and add or change them, which this
+    // reader, holding no grants, may not.
+    expect(named(layout).has("core/recent-activity")).toBe(true);
   });
 
   it("offers no card derived from a collection, and has none for content kept off the dashboard", async () => {

@@ -55,6 +55,15 @@ export interface CodeMirrorEditorProps {
    * equivalent in the value/onChange pair.
    */
   onCreateEditor?: (view: EditorView) => void;
+  /**
+   * The accessible name, where no `<label>` can point at the editor: its
+   * text area is CodeMirror's own element, not one the caller renders.
+   */
+  label?: string;
+  /** Whether the value is refused, for assistive technology. */
+  invalid?: boolean;
+  /** The id of the element that says why. */
+  describedBy?: string;
 }
 
 // ============================================================
@@ -90,9 +99,10 @@ function jsonLinter(view: EditorView): Diagnostic[] {
 }
 
 /**
- * XML/HTML linter - validates tag matching
+ * XML/HTML linter - validates tag matching. The email editor's HTML body runs
+ * it beside its Liquid checks, so the body keeps the warnings it had here.
  */
-function xmlLinter(view: EditorView): Diagnostic[] {
+export function xmlLinter(view: EditorView): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
   const content = view.state.doc.toString();
 
@@ -248,6 +258,25 @@ function getLanguageExtensions(language?: CodeLanguage | "plaintext") {
   return extensions;
 }
 
+/**
+ * The text area's name and state, where the caller has them. They belong on
+ * CodeMirror's own element, which is what focus reaches.
+ */
+function fieldAttributes({
+  label,
+  invalid,
+  describedBy,
+}: Pick<CodeMirrorEditorProps, "label" | "invalid" | "describedBy">): Record<
+  string,
+  string
+> {
+  const attributes: Record<string, string> = {};
+  if (label) attributes["aria-label"] = label;
+  if (invalid !== undefined) attributes["aria-invalid"] = String(invalid);
+  if (describedBy) attributes["aria-describedby"] = describedBy;
+  return attributes;
+}
+
 // ============================================================
 // Component
 // ============================================================
@@ -263,6 +292,9 @@ export function CodeMirrorEditor({
   editorOptions,
   placeholder,
   onCreateEditor,
+  label,
+  invalid,
+  describedBy,
 }: CodeMirrorEditorProps): JSX.Element {
   // Not a colour: see `EditorChromeOptions.dark`.
   const { resolvedTheme } = useTheme();
@@ -270,6 +302,9 @@ export function CodeMirrorEditor({
   const extensions = useMemo(
     () => [
       ...getLanguageExtensions(language),
+      EditorView.contentAttributes.of(
+        fieldAttributes({ label, invalid, describedBy })
+      ),
       nextlyHighlighting,
       nextlyEditorChrome({
         fontSize: editorOptions.fontSize ?? 14,
@@ -287,7 +322,15 @@ export function CodeMirrorEditor({
           ]
         : []),
     ],
-    [language, editorOptions.fontSize, editorOptions.fontFamily, resolvedTheme]
+    [
+      language,
+      label,
+      invalid,
+      describedBy,
+      editorOptions.fontSize,
+      editorOptions.fontFamily,
+      resolvedTheme,
+    ]
   );
 
   return (

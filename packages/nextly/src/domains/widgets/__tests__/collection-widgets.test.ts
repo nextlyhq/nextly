@@ -7,6 +7,7 @@ import {
   collectionWidgets,
   generatedCollectionSlug,
 } from "../collection-widgets";
+import type { WidgetStatCell } from "../definition";
 import type { WidgetSource } from "../sources";
 
 function source(patch: Partial<WidgetSource>): WidgetSource {
@@ -142,7 +143,11 @@ describe("what a collection gets", () => {
       }),
     ]).filter(w => w.archetype === "stats");
 
-    for (const cell of stats?.cells ?? []) {
+    // A stats card's cells are stat cells, each with its link.
+    const cells = (stats?.cells ?? []).filter(
+      (cell): cell is WidgetStatCell => "label" in cell
+    );
+    for (const cell of cells) {
       const url = new URL(cell.link!.href, "https://example.test");
       expect(url.pathname).toBe("/admin/collections/posts");
       const where = url.searchParams.get("where");

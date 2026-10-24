@@ -94,6 +94,7 @@ describe("widget-registry reset at boot", () => {
       "system:activity",
       "system:attention",
       "system:content",
+      "system:recent-edits",
       "system:releases",
       "system:team",
       "system:versions",

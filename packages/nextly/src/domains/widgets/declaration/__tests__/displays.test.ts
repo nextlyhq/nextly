@@ -25,10 +25,12 @@ const SAMPLES: { [D in CoreDisplay]: Canonical<D> } = {
   list: {
     items: [{ title: "A" }],
     fields: [{ name: "title", label: "Title", type: "string" }],
+    window: { days: 90 },
   },
   table: {
     items: [{ title: "A" }],
     fields: [{ name: "title", label: "Title", type: "string" }],
+    window: { days: 90 },
   },
   bars: {
     buckets: [{ value: "paid", count: 1 }],

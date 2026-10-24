@@ -10,6 +10,8 @@
  * @module domains/widgets/query
  */
 
+import { z } from "zod";
+
 import { NextlyError } from "../../errors/nextly-error";
 import {
   parseNearQuery,
@@ -21,15 +23,22 @@ import {
   isValidOperator,
 } from "../collections/query/query-operators";
 import {
+  intervalWindow,
   isTimeseriesInterval,
   TIMESERIES_INTERVALS,
   type TimeseriesInterval,
 } from "../collections/query/timeseries-interval";
+import {
+  isWorkflowKey,
+  workflowKeyProblem,
+  WORKFLOW_KEY_PURPOSE,
+} from "../collections/query/workflow-filter";
 
 import { effectiveWidgetLimit } from "./query-limits";
 import {
   failUnavailableSourceOrOp,
   getSource,
+  sourceKindFromId,
   type WidgetOp,
   type WidgetSource,
 } from "./sources";
@@ -57,6 +66,64 @@ export interface WidgetQuery {
   /** How wide each point of a `timeseries` is. */
   interval?: TimeseriesInterval;
   limit?: number;
+  /**
+   * The start of a `count` or `timeseries` read, as a span back from when the
+   * query runs: rows from that instant on. With {@link WidgetQuery.until}, the
+   * window is half-open, `[since, until)`. See {@link RelativeSpan}.
+   *
+   * @experimental While the content widgets are being built.
+   */
+  since?: RelativeSpan;
+  /**
+   * The end of the window `since` starts, as a span back from when the query
+   * runs: rows before that instant. Absent, the window ends at that moment.
+   *
+   * @experimental While the content widgets are being built.
+   */
+  until?: RelativeSpan;
+}
+
+/**
+ * The spans a query may reach back by, as one CLOSED list: a new one is a
+ * deliberate addition, not a grammar a caller can extend.
+ *
+ * A span is that many WHOLE intervals of its unit, ending with the one now
+ * falls in, on the same UTC calendar a timeseries buckets by:
+ *
+ * - `30d` starts at the start of today (UTC) less 29 days: the thirty calendar
+ *   days including today, exactly the thirty bars a daily chart draws.
+ * - `12m` starts at the start of this month (UTC) less 11 months.
+ *
+ * Whole intervals, so a window and the chart over it agree, and two adjacent
+ * windows (`since: "60d", until: "30d"` beside `since: "30d"`) leave no
+ * instant between them. Days are UTC days: for a reader east of UTC, "today"
+ * starts during their morning.
+ *
+ * Resolved by the server against the one "now" its batch took
+ * ({@link relativeSpanStart}), so every read in a batch measures from the same
+ * instant and no reader's clock decides a count.
+ *
+ * @experimental While the content widgets are being built.
+ */
+export const RELATIVE_SPANS = ["7d", "30d", "60d", "90d", "12m"] as const;
+
+/** @experimental */
+export type RelativeSpan = (typeof RELATIVE_SPANS)[number];
+
+/** The boundary's reading of a span: one of {@link RELATIVE_SPANS}, or a refusal. */
+const relativeSpanSchema = z.enum(RELATIVE_SPANS);
+
+/**
+ * The instant `span` before `now`, by the rules {@link RELATIVE_SPANS} states.
+ *
+ * @experimental
+ */
+export function relativeSpanStart(span: RelativeSpan, now: Date): Date {
+  const amount = Number(span.slice(0, -1));
+  const unit: TimeseriesInterval = span.endsWith("d") ? "day" : "month";
+  // The first of the `amount` intervals ending with now's: the timeseries'
+  // own window arithmetic, so a span and a chart share one calendar.
+  return intervalWindow(now, unit, amount)[0];
 }
 
 /**
@@ -107,6 +174,34 @@ export type WidgetQuerySpec =
     });
 
 /**
+ * A card's query before its Collection setting has given it a source: what a
+ * widget offered per collection carries until a card is set to a collection.
+ * Never sent: a card holding one asks nothing and is not available.
+ *
+ * @experimental While the content widgets are being built.
+ */
+export type SourcelessWidgetQuery = Omit<WidgetQuery, "source"> & {
+  source?: undefined;
+};
+
+/**
+ * A declared query whose source the card's Collection setting supplies: the
+ * same shapes as {@link WidgetQuerySpec}, with no source of its own.
+ *
+ * The collection knob of `applyWidgetSettings` fills `source` with the
+ * collection a card was set to, so a widget offered per collection asks the
+ * collection each card reads. A card whose Collection setting is empty asks
+ * nothing.
+ *
+ * @experimental While the content widgets are being built.
+ */
+export type SettingSourcedQuerySpec = WidgetQuerySpec extends infer Spec
+  ? Spec extends WidgetQuerySpec
+    ? Omit<Spec, "source"> & { source?: undefined }
+    : never
+  : never;
+
+/**
  * Product code in `packages/nextly/**` throws `NextlyError`, never a bare
  * `Error` (repo lint rule). `.message` is set verbatim from this string, so
  * the tests' regex assertions match unchanged.
@@ -144,6 +239,8 @@ export interface RawWidgetQuery {
   dateField: unknown;
   interval: unknown;
   limit: unknown;
+  since: unknown;
+  until: unknown;
 }
 
 /**
@@ -170,6 +267,8 @@ export function readWidgetQuery(query: unknown): RawWidgetQuery {
     interval: q.interval,
     groupBy: q.groupBy,
     limit: q.limit,
+    since: q.since,
+    until: q.until,
   };
 }
 
@@ -482,6 +581,32 @@ function assertCombinatorBranches(
  * an undeclared field, or a field condition using an unknown operator or
  * hiding a nested object under one.
  */
+/**
+ * Every field name a `where` clause names, through its `and` and `or`
+ * branches, in the order they appear.
+ *
+ * Reads the clause as {@link walkWhereClause} does and judges nothing: a
+ * malformed branch contributes no names here and is refused there, when the
+ * query is validated. For a caller deciding, before a query is built, whether
+ * a stored filter still names only fields it may use.
+ */
+export function whereFieldNames(where: Record<string, unknown>): string[] {
+  const names: string[] = [];
+  for (const [key, value] of Object.entries(where)) {
+    if (key === "and" || key === "or") {
+      if (!Array.isArray(value)) continue;
+      for (const branch of value) {
+        if (typeof branch === "object" && branch !== null) {
+          names.push(...whereFieldNames(branch as Record<string, unknown>));
+        }
+      }
+      continue;
+    }
+    names.push(key);
+  }
+  return names;
+}
+
 function walkWhereClause(
   where: Record<string, unknown>,
   depth: number,
@@ -491,19 +616,92 @@ function walkWhereClause(
     fail(`where clause is nested too deeply (max ${MAX_WHERE_DEPTH})`);
   }
   for (const [key, value] of Object.entries(where)) {
-    if (key === "and" || key === "or") {
-      const branches = assertCombinatorBranches(key, value);
-      for (const branch of branches) {
-        walkWhereClause(branch as Record<string, unknown>, depth + 1, scope);
-      }
-      continue;
+    walkWhereEntry(key, value, depth, scope);
+  }
+}
+
+/**
+ * One key of a `where` clause, at `depth`: a combinator's branches walked in
+ * turn, a filter the source declares, a collection's workflow condition, or a
+ * declared field's condition. Anything else is refused.
+ */
+function walkWhereEntry(
+  key: string,
+  value: unknown,
+  depth: number,
+  scope: WhereScope
+): void {
+  if (key === "and" || key === "or") {
+    for (const branch of assertCombinatorBranches(key, value)) {
+      walkWhereClause(branch as Record<string, unknown>, depth + 1, scope);
     }
-    if (!scope.declared.has(key)) {
-      fail(
-        `where references undeclared field "${key}" on "${scope.source.id}"`
-      );
-    }
-    assertFieldConditionShape(key, value, scope.op);
+    return;
+  }
+  if (heldAsSourceFilter(key, value, depth, scope)) return;
+  if (
+    isWorkflowKey(key) &&
+    sourceKindFromId(scope.source.id) === "collection"
+  ) {
+    assertWorkflowCondition(key, value, depth);
+    return;
+  }
+  if (!scope.declared.has(key)) {
+    fail(`where references undeclared field "${key}" on "${scope.source.id}"`);
+  }
+  assertFieldConditionShape(key, value, scope.op);
+}
+
+/**
+ * A collection's workflow condition (`_pendingChange`, `_inRelease`), judged as
+ * the entry list judges it: read only at the top level, in the forms the list
+ * reads, so a card's count and the list it links to are one read. Who may ask
+ * one is the list's decision too, made when the query runs.
+ */
+function assertWorkflowCondition(
+  key: Parameters<typeof workflowKeyProblem>[0],
+  value: unknown,
+  depth: number
+): void {
+  if (depth > 0) {
+    fail(
+      `where condition "${key}" ${WORKFLOW_KEY_PURPOSE[key]}, and is read only at the top level`
+    );
+  }
+  const problem = workflowKeyProblem(key, value);
+  if (problem !== undefined) fail(`where condition ${problem.message}`);
+}
+
+/**
+ * Whether `key` is a filter the source declares, judged and so held apart from
+ * the field conditions. A declared filter is one of the source's own TOP-LEVEL
+ * keys, read by the source itself rather than compiled as a field condition,
+ * so it is held to its own value and never admitted inside a combinator.
+ */
+function heldAsSourceFilter(
+  key: string,
+  value: unknown,
+  depth: number,
+  scope: WhereScope
+): boolean {
+  const filters: readonly string[] = scope.source.filters ?? [];
+  if (depth !== 0 || !filters.includes(key)) return false;
+  assertFilterValue(key, value, scope.source.id);
+  return true;
+}
+
+/**
+ * Confirms a source filter's value is the one it takes: a collection by its
+ * slug, Only mine as true or false. Who "mine" is, is never in the query: the
+ * source reads it from the caller.
+ */
+function assertFilterValue(key: string, value: unknown, source: string): void {
+  if (key === "collection" && (typeof value !== "string" || value === "")) {
+    fail(
+      `where filter "collection" on "${source}" must be a collection's slug`
+    );
+  }
+  if (key === "onlyMine" && typeof value !== "boolean") {
+    fail(`where filter "onlyMine" on "${source}" must be true or false`);
   }
 }
 
@@ -911,6 +1109,7 @@ export function validateReadWidgetQuery(
     select,
     sort
   );
+  const window = assertWindowAgreesWithOp(raw.since, raw.until, declared, op);
 
   return {
     source: source.id,
@@ -921,6 +1120,55 @@ export function validateReadWidgetQuery(
     ...(sort ? { sort } : {}),
     ...(groupBy ? { groupBy } : {}),
     ...(timeline ?? {}),
+    ...window,
     limit: effectiveWidgetLimit(raw.limit),
   };
+}
+
+/**
+ * A read's window, checked: spans from the closed list, on a `count` or a
+ * `timeseries` alone, an end only after a start, and the end later than the
+ * start. A `count` is bounded on `createdAt`, so its source must declare it.
+ */
+function assertWindowAgreesWithOp(
+  since: unknown,
+  until: unknown,
+  declared: ReadonlySet<string>,
+  op: WidgetOp
+): Pick<WidgetQuery, "since" | "until"> {
+  if (since === undefined && until === undefined) return {};
+  if (op !== "count" && op !== "timeseries") {
+    fail(`since and until bound a count or a timeseries, not a ${op}`);
+  }
+  const start = relativeSpanOf(since, "since");
+  if (op === "count" && !declared.has("createdAt")) {
+    fail(
+      'since bounds a count on "createdAt", which this source does not declare'
+    );
+  }
+  if (until === undefined) return { since: start };
+  const end = relativeSpanOf(until, "until");
+  assertEndsAfterStart(start, end);
+  return { since: start, until: end };
+}
+
+/** A window bound read as a span from the closed list, or refused by name. */
+function relativeSpanOf(value: unknown, name: "since" | "until"): RelativeSpan {
+  const parsed = relativeSpanSchema.safeParse(value);
+  if (!parsed.success) {
+    fail(`${name} must be one of ${RELATIVE_SPANS.join(", ")}`);
+  }
+  return parsed.data;
+}
+
+/** Refuses an end that does not come after the start it closes. */
+function assertEndsAfterStart(start: RelativeSpan, end: RelativeSpan): void {
+  // Measured against one instant, so the comparison holds for every "now".
+  const probe = new Date(Date.UTC(2000, 0, 31));
+  if (
+    relativeSpanStart(end, probe).getTime() <=
+    relativeSpanStart(start, probe).getTime()
+  ) {
+    fail(`until (${end}) must end the window after since (${start}) starts it`);
+  }
 }
