@@ -61,6 +61,12 @@ export interface VersionPin {
   versionNo: number;
 }
 
+/** One of a holder's own slots: its holder is the handle that read it. */
+export interface VersionPinSlot {
+  slot: string;
+  versionNo: number;
+}
+
 /** What a registered holder can do with its own slots. */
 export interface VersionPinHolder {
   /**
@@ -78,9 +84,18 @@ export interface VersionPinHolder {
   ): Promise<void>;
   /** Free every slot this holder has on the document. */
   releaseAll(tx: TransactionContext, ref: VersionRef): Promise<void>;
+  /**
+   * This holder's slots on the document: a plain read, taking the caller's
+   * transaction or the adapter. The holder is a predicate of the query, so
+   * what other holders pin on the same document is never read, however many
+   * slots they hold.
+   */
+  list(db: VersionsDbApi, ref: VersionRef): Promise<VersionPinSlot[]>;
 }
 
 const HOLDER_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+// A plugin's slug, as `pluginAdminSlug` makes it: it may start with a digit.
+const PLUGIN_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_HOLDER_LENGTH = 64;
 const MAX_SLOT_LENGTH = 191;
 
@@ -111,16 +126,53 @@ export function registerVersionPinHolder(
       logContext: { name },
     });
   }
+  return register(name, definition.label);
+}
+
+/**
+ * Register a holder in a plugin's namespace, recorded as `<namespace>.<name>`
+ * (`acme-billing.approvals`), as a plugin's events are named. The dot appears
+ * in neither a plugin's slug nor a kebab-case name, and core's own names
+ * cannot contain one, so two plugins naming a holder alike hold apart, and no
+ * plugin's holder is ever one of core's. Refuses a recorded name too long for
+ * its column. Returns the handle and the name its pins are recorded under.
+ */
+export function registerNamespacedVersionPinHolder(
+  namespace: string,
+  definition: VersionPinHolderDefinition
+): { handle: VersionPinHolder; recorded: string } {
+  const { name } = definition;
+  if (!HOLDER_NAME.test(name)) {
+    throw NextlyError.invalidInput({
+      message: `Version pin holder "${name}" must be kebab-case, such as "approvals".`,
+      logContext: { name, namespace },
+    });
+  }
+  const recorded = `${namespace}.${name}`;
+  if (!PLUGIN_SLUG.test(namespace) || recorded.length > MAX_HOLDER_LENGTH) {
+    throw NextlyError.invalidInput({
+      message: `Version pin holder "${name}" is too long for this plugin: with its name, "${recorded}" must be at most ${MAX_HOLDER_LENGTH} characters.`,
+      logContext: { name, namespace },
+    });
+  }
+  return { handle: register(recorded, definition.label), recorded };
+}
+
+/**
+ * Record a holder under `name`, or return the handle it already has: the same
+ * name and label again is the same feature reloading.
+ */
+function register(name: string, label: string): VersionPinHolder {
   const existing = holders.get(name);
-  if (existing?.definition.label === definition.label) return existing.handle;
+  if (existing?.definition.label === label) return existing.handle;
   if (existing) {
     throw NextlyError.invalidInput({
-      message: `A version pin holder is already registered as "${name}" (${existing.definition.label}); choose another name for ${definition.label}.`,
+      message: `A version pin holder is already registered as "${name}" (${existing.definition.label}); choose another name for ${label}.`,
       logContext: { name },
     });
   }
   const handle = holderHandle(name);
-  holders.set(name, { definition: { ...definition }, handle });
+  holders.set(name, { definition: { name, label }, handle });
   return handle;
 }
 
@@ -269,6 +321,17 @@ function holderHandle(name: string): VersionPinHolder {
           ...documentWhere(ref),
           { column: "holder", op: "=" as const, value: name },
         ],
+      });
+    },
+    list(db, ref) {
+      return db.select<VersionPinSlot>(PINS_TABLE, {
+        columns: ["slot", "versionNo"],
+        where: {
+          and: [
+            ...documentWhere(ref),
+            { column: "holder", op: "=" as const, value: name },
+          ],
+        },
       });
     },
   };

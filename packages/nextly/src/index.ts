@@ -534,6 +534,12 @@ export {
   type PluginMediaService,
   type PluginEmailService,
   type PluginVersionsService,
+  // `ctx.services.versions.pins`: version pins on the plugin's own transaction.
+  type PluginVersionPins,
+  type PluginVersionPinHolder,
+  type PluginVersionPin,
+  type PluginPinOptions,
+  type PluginPinTransaction,
   type PluginInsert,
   type PluginTransaction,
   type PluginHookPointDeclaration,
@@ -921,6 +927,7 @@ export {
   type VersionPin,
   type VersionPinHolder,
   type VersionPinHolderDefinition,
+  type VersionPinSlot,
 } from "./domains/versions/version-pins";
 export type { VersionRef } from "./domains/versions/versions-repository";
 

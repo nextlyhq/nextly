@@ -389,8 +389,13 @@ export type {
  *   `ctx.config.plugins`), `PluginEmailSettings` (`ctx.config.email`),
  *   `PluginUserService`, `PluginMediaService`, `PluginEmailService`,
  *   `PluginVersionsService` (the methods `ctx.services.users`, `media`,
- *   `email` and `versions` expose) and `PluginCollectionTransaction` (what
- *   `ctx.services.collections.withTransaction` hands its work). `FrozenCopy`
+ *   `email` and `versions` expose), `PluginCollectionTransaction` (what
+ *   `ctx.services.collections.withTransaction` hands its work), and the
+ *   version pins of `ctx.services.versions.pins`: `PluginVersionPins`,
+ *   `PluginVersionPinHolder`, `PluginVersionPin`, `PluginPinOptions`,
+ *   `PluginPinTransaction`, `VersionPinHolderDefinition` (what
+ *   `registerHolder` takes) and `VersionRef` (the document a pin is on).
+ *   `FrozenCopy`
  *   is the readonly-all-the-way-down type `PluginConfig` is built from, and
  *   `FrozenValue` the type of each of its properties, both exported so a
  *   plugin's declaration files can name them. See STABILITY.md.
@@ -406,6 +411,13 @@ export type {
   PluginEmailService,
   PluginVersionsService,
   PluginCollectionTransaction,
+  PluginVersionPins,
+  PluginVersionPinHolder,
+  PluginVersionPin,
+  PluginPinOptions,
+  PluginPinTransaction,
+  VersionPinHolderDefinition,
+  VersionRef,
 } from "nextly";
 
 /**

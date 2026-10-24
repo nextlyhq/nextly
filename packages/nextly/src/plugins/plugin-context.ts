@@ -2090,7 +2090,7 @@ export function createPluginContext(
         const versions = getServiceFn("versionsService");
         return Object.freeze({
           ...methodFacade(versions, PLUGIN_VERSIONS_READS),
-          ...pluginVersionWrites(() => versions),
+          ...pluginVersionWrites(() => versions, pluginName),
           listEvents: readEventsForPlugin,
         });
       },
