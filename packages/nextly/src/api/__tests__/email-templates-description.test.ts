@@ -276,9 +276,10 @@ describe("a written template through the standalone handlers", () => {
   it("refuses blocks on a coded template instead of dropping them", async () => {
     const id = await seed(null);
 
-    const { res } = await patch(id, { blocks: WRITTEN });
+    const { res, body } = await patch(id, { blocks: WRITTEN });
 
-    expect(res.ok).toBe(false);
+    expect(res.status).toBe(422);
+    expect(body).toMatchObject({ error: { code: "BUSINESS_RULE_VIOLATION" } });
     expect(await service.getTemplate(id)).toMatchObject({
       format: "code",
       htmlContent: "<p>Hi</p>",

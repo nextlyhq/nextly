@@ -33,6 +33,7 @@ import {
 } from "liquidjs";
 
 import { NextlyError } from "../../../errors";
+import { allowedUrl } from "../written/urls";
 
 import { escapeHtml, htmlToText } from "./template-engine";
 
@@ -246,9 +247,10 @@ function makeEngine(
  * - `has_value`: whether a value is present, and not null, an empty string or
  *   an empty list. 0 and false are values.
  * - `as_list`: the value when it is a list, otherwise no items.
- * - `safe_url`: the value when it is an http, https or mailto address (only
- *   http and https for `safe_url: 'image'`), otherwise nothing, so a value
- *   from a send can never become a `javascript:` link.
+ * - `safe_url`: the value when it is a complete http, https or mailto
+ *   address (only http and https for `safe_url: 'image'`), checked as a
+ *   written template's own addresses are (`written/urls`), otherwise
+ *   nothing, so a value from a send can never become a `javascript:` link.
  */
 function registerWrittenFilters(liquid: Liquid): void {
   liquid.registerFilter("has_value", (value: unknown) => {
@@ -260,9 +262,7 @@ function registerWrittenFilters(liquid: Liquid): void {
   );
   liquid.registerFilter("safe_url", (value: unknown, kind?: unknown) => {
     const url = asText(TrustedHtml.is(value) ? value.html : value).trim();
-    const allowed =
-      kind === "image" ? /^https?:\/\//i : /^(https?:\/\/|mailto:)/i;
-    return allowed.test(url) ? url : "";
+    return allowedUrl(url, kind === "image" ? "image" : "link") ? url : "";
   });
 }
 

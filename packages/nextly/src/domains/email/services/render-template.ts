@@ -182,7 +182,9 @@ export function renderTemplate(
 ): RenderedTemplate {
   const template = fromBlocks(given);
   const legacy = template.legacy;
-  const layoutData = withLayoutChrome(data, options);
+  const layoutData = withLayoutChrome(data, options, {
+    writtenLinks: given.format === "written" && !!given.blocks,
+  });
   // The body reads the brand settings as `brand` too, so a site's template
   // can write in them. A send's own `brand` wins there, as every explicit value
   // does in a body: a template written for a `brand` its sends supply keeps
@@ -250,14 +252,15 @@ export function renderTemplate(
  */
 function withLayoutChrome(
   data: Record<string, unknown>,
-  options: RenderTemplateOptions
+  options: RenderTemplateOptions,
+  markup: { writtenLinks?: boolean } = {}
 ): Record<string, unknown> {
   const chrome = {
     ...data,
     year: data.year ?? new Date().getFullYear().toString(),
     appName: data.appName ?? options.appName,
   };
-  const brand = brandVariables(options.brand ?? STARTING_BRAND, chrome);
+  const brand = brandVariables(options.brand ?? STARTING_BRAND, chrome, markup);
   return { ...chrome, brand, [BRAND_BINDING]: brand };
 }
 

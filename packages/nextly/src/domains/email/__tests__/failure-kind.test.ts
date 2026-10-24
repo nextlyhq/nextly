@@ -62,8 +62,6 @@ const TEMPLATE = {
   attachments: null,
   preheader: null,
   kind: "template",
-  format: "code",
-  blocks: null,
   layoutId: null,
   fromOverride: null,
   replyTo: null,
