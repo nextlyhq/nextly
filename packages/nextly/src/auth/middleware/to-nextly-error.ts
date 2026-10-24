@@ -13,7 +13,7 @@
  */
 import { NextlyError } from "../../errors/nextly-error";
 
-import type { ErrorResponse } from "./index";
+import { recordRefusal, type ErrorResponse } from "./error-response";
 
 /**
  * Convert a legacy auth `ErrorResponse` to the equivalent `NextlyError`.
@@ -41,6 +41,9 @@ import type { ErrorResponse } from "./index";
  * the original middleware decision.
  */
 export function toNextlyAuthError(legacy: ErrorResponse): NextlyError {
+  // Every caller throws what this returns to its own caller, so the refusal
+  // is answered here, and is recorded as every answered refusal is.
+  recordRefusal(legacy);
   const logContext = legacyLogContext(legacy);
 
   if (legacy.statusCode === 401) {

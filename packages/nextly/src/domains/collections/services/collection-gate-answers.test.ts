@@ -58,14 +58,15 @@ const OPERATIONS: readonly AccessOperation[] = [
   "unpublish",
 ];
 
-/** The gate's logger, recording the reason each refusal logs. */
+/** The gate's logger: a refusal it only returns is not logged by it. */
 const logger = { ...silentLogger, info: vi.fn() };
 
-/** Every reason a refusal logged, so each kind is seen to have been reached. */
-const loggedReasons = () =>
-  logger.info.mock.calls.map(
-    ([, fields]) => (fields as { reason?: string } | undefined)?.reason ?? ""
-  );
+/**
+ * Every reason a refusal carried for the server's log, so each kind is seen
+ * to have been reached. The gate returns it on the refusal; it is logged where
+ * the refusal reaches its caller.
+ */
+const reasons: string[] = [];
 
 const CALLERS = gateCallers(SLUG, OPERATIONS);
 const RULES = gateRules(SLUG);
@@ -112,6 +113,7 @@ async function answersFor(
           routeAuthorized: setup === "route-authorized",
         })
       );
+      if (refused?.refusalReason) reasons.push(refused.refusalReason);
       lines.push(
         refused === null
           ? `  ${operation}:A`
@@ -143,13 +145,18 @@ describe("the collection gate's answers", () => {
     expect(text).toContain(":A");
     // Both kinds of refusal were reached: a caller lacking the grant, and a
     // publish with no user. They read alike to the caller; their reasons are
-    // the server's, in its log.
+    // the server's, carried on the refusal for its log.
     expect(text).toContain(":403 You can't");
-    expect(loggedReasons()).toContainEqual(
+    expect(reasons).toContainEqual(
       expect.stringContaining("the caller may not")
     );
-    expect(loggedReasons()).toContainEqual(
+    expect(reasons).toContainEqual(
       expect.stringContaining("publish on posts requires an authenticated user")
+    );
+    // Returned, not logged: a caller asking only whether it may is not refused.
+    expect(logger.info).not.toHaveBeenCalledWith(
+      expect.stringContaining("Refused"),
+      expect.anything()
     );
     await expect(`${text}\n`).toMatchFileSnapshot(
       join(__dirname, "collection-gate-answers.txt")

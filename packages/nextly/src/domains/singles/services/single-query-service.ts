@@ -22,10 +22,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { inArray, type AnyColumn } from "drizzle-orm";
 
 import { singleGateVerdict } from "../../../auth/access/gate-adapters";
-import {
-  logRefusal,
-  refusalMessageFor,
-} from "../../../auth/access/refusal-message";
+import { refusalMessageFor } from "../../../auth/access/refusal-message";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { SYSTEM_ACTOR } from "../../../auth/request-actor";
@@ -341,20 +338,17 @@ export async function checkSingleAccess(params: {
       ...errorEnvelopeFields(error),
     };
   }
-  // The caller is told what was refused in the site's words; which check
-  // refused is logged here, on the server.
-  logRefusal(logger, {
-    status: NEXTLY_ERROR_STATUS.FORBIDDEN,
+  // The caller is told what was refused in the site's words. Which check
+  // refused rides along for the server's log, written where the refusal
+  // reaches its caller: a caller asking only whether it may is not refused.
+  return {
+    success: false,
+    statusCode: NEXTLY_ERROR_STATUS.FORBIDDEN,
     code: "FORBIDDEN",
-    reason:
+    refusalReason:
       verdict.refusal === "unauthenticated"
         ? `${operation} on single "${slug}" requires an authenticated user`
         : `the caller may not ${operation} single "${slug}"`,
-  });
-  return {
-    success: false,
-    statusCode: 403,
-    code: "FORBIDDEN",
     // Named by the service's caller, so its slug is the site's own.
     message: await refusalMessageFor(operation, slug, "all", { named: true }),
   };

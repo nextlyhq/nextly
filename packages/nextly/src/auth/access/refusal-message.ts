@@ -13,7 +13,7 @@
 import { servingRequestId } from "../../api/serving-request";
 import { container } from "../../di/container";
 import { SYSTEM_RESOURCES, type SystemResource } from "../../schemas/_zod/rbac";
-import type { Logger } from "../../shared/types";
+import { consoleLogger, type Logger } from "../../shared/types";
 
 /** Whether a refusal is about one entry, or about the collection as a whole. */
 export type RefusalScope = "one" | "all";
@@ -206,6 +206,15 @@ export interface RefusalLog {
    * request being served, where the refusal is made while serving one.
    */
   requestId?: string;
+}
+
+/**
+ * Records a refusal's reason in the installation's log, or the console where
+ * none is registered. Called where a refusal reaches its caller, never where
+ * a refusal is only asked about and then not given.
+ */
+export function recordRefusalReason(refusal: RefusalLog): void {
+  logRefusal(registered<Logger>("logger") ?? consoleLogger, refusal);
 }
 
 /**

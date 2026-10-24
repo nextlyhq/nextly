@@ -13,10 +13,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { collectionGateVerdict } from "../../../auth/access/gate-adapters";
-import {
-  logRefusal,
-  refusalMessageFor,
-} from "../../../auth/access/refusal-message";
+import { refusalMessageFor } from "../../../auth/access/refusal-message";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { effectiveCallerScope } from "../../../auth/caller-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
@@ -164,20 +161,17 @@ export class CollectionAccessService extends BaseService {
         ...errorEnvelopeFields(error),
       };
     }
-    // The caller is told what was refused in the site's words; which check
-    // refused is logged here, on the server.
-    logRefusal(this.logger, {
-      status: NEXTLY_ERROR_STATUS.FORBIDDEN,
+    // The caller is told what was refused in the site's words. Which check
+    // refused rides along for the server's log, written where the refusal
+    // reaches its caller: a caller asking only whether it may is not refused.
+    return {
+      success: false,
+      statusCode: NEXTLY_ERROR_STATUS.FORBIDDEN,
       code: "FORBIDDEN",
-      reason:
+      refusalReason:
         verdict.refusal === "unauthenticated"
           ? `${operation} on ${collectionName} requires an authenticated user`
           : `the caller may not ${operation} ${collectionName}`,
-    });
-    return {
-      success: false,
-      statusCode: 403,
-      code: "FORBIDDEN",
       // Named by the service's caller, so its slug is the site's own. Read
       // on the gate's own transaction, where it runs in one.
       message: await refusalMessageFor(

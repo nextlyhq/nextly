@@ -5,6 +5,7 @@
  * @module errors/from-service-envelope
  */
 
+import { recordRefusalReason } from "../auth/access/refusal-message";
 import { isDatabaseBusy } from "../database/errors";
 import { recordFlattenedError } from "../hooks/side-effect-warnings";
 
@@ -44,6 +45,12 @@ export interface ServiceErrorEnvelope {
    * write result carries it; any other envelope leaves it unset.
    */
   committed?: boolean;
+  /**
+   * Which check refused, for the server's log only, set by an access gate on
+   * its refusal. Logged where the refusal reaches its caller, which is never a
+   * gate asked only whether something is allowed.
+   */
+  refusalReason?: string;
 }
 
 /**
@@ -138,7 +145,22 @@ export function errorFromServiceEnvelope(
   // something bolted on after the fact.
   cause?: Error
 ): NextlyError {
-  const rebuilt = rebuildFromEnvelope(envelope, logContext, cause);
+  const { refusalReason } = envelope;
+  const rebuilt = rebuildFromEnvelope(
+    envelope,
+    refusalReason === undefined
+      ? logContext
+      : { ...logContext, reason: refusalReason },
+    cause
+  );
+  // The refusal reaches its caller here, so it is recorded here, once.
+  if (refusalReason !== undefined) {
+    recordRefusalReason({
+      status: rebuilt.statusCode,
+      code: String(rebuilt.code),
+      reason: refusalReason,
+    });
+  }
   // Decided here, on the rebuilt error, because every boundary rebuilds
   // through this function: a busy read in a post-commit step reaches it from a
   // collection write and a Single write alike, already flattened to a code.

@@ -315,6 +315,12 @@ export interface SingleResult<T = SingleDocument> {
    */
   code?: string;
   messageKey?: string;
+  /**
+   * Which check refused, for the server's log only, set by an access gate on
+   * its refusal. Logged where the refusal reaches its caller, which is never a
+   * gate asked only whether something is allowed.
+   */
+  refusalReason?: string;
   publicData?: unknown;
 
   /** Error details (on failure) */

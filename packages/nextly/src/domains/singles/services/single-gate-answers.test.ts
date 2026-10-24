@@ -59,6 +59,9 @@ function serviceFor(setup: GateSetup, rule: GateRule | undefined) {
 }
 
 /** Each caller's answers for one setup and rule, one line per action. */
+/** Every reason a refusal carried for the server's log. */
+const reasons: string[] = [];
+
 async function answersFor(
   setup: GateSetup,
   ruleName: string,
@@ -80,6 +83,7 @@ async function answersFor(
           logger: logger as never,
         })
       );
+      if (refused?.refusalReason) reasons.push(refused.refusalReason);
       lines.push(
         refused === null
           ? `  ${operation}:A`
@@ -111,10 +115,12 @@ describe("the Single gate's answers", () => {
     expect(text).toContain(":A");
     // Both kinds of refusal were reached: a caller lacking the grant, and a
     // publish with no user. They read alike to the caller; their reasons are
-    // the server's, in its log.
+    // the server's, carried on the refusal for its log.
     expect(text).toContain(":403 You can't");
-    const reasons = logger.info.mock.calls.map(
-      ([, fields]) => (fields as { reason?: string } | undefined)?.reason ?? ""
+    // Returned, not logged: a caller asking only whether it may is not refused.
+    expect(logger.info).not.toHaveBeenCalledWith(
+      expect.stringContaining("Refused"),
+      expect.anything()
     );
     expect(reasons).toContainEqual(
       expect.stringContaining("the caller may not")

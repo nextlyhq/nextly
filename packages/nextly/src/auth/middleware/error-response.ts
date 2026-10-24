@@ -12,14 +12,12 @@ import {
   generateRequestId,
   readOrGenerateRequestId,
 } from "../../api/request-id";
-import { container } from "../../di/container";
 import {
   NEXTLY_ERROR_STATUS,
   statusToErrorCode,
 } from "../../errors/error-codes";
 import { NextlyError } from "../../errors/nextly-error";
-import { consoleLogger, type Logger } from "../../shared/types";
-import { logRefusal } from "../access/refusal-message";
+import { recordRefusalReason } from "../access/refusal-message";
 
 /**
  * Standardized error response structure.
@@ -96,27 +94,17 @@ export function refusalError(refusal: ErrorResponse): NextlyError {
   });
 }
 
-/** The installation's logger, or the console where none is registered. */
-function logger(): Logger {
-  try {
-    if (container.has("logger")) return container.get<Logger>("logger");
-  } catch {
-    // The container is not initialized.
-  }
-  return consoleLogger;
-}
-
 /**
  * Records which check refused, and why, on the server alone. Called where a
  * refusal is answered: by {@link createJsonErrorResponse} for a request, and
- * by a Direct API check, which throws its refusal to its caller with no route
- * boundary to log it.
+ * by `toNextlyAuthError` for a refusal thrown to its caller, which a standalone
+ * route and a Direct API check do with no boundary of their own to log it.
  */
 export function recordRefusal(
   refusal: ErrorResponse,
   requestId?: string
 ): void {
-  logRefusal(logger(), {
+  recordRefusalReason({
     status: refusal.statusCode,
     code: refusal.code,
     reason: refusal.reason ?? refusal.message,
