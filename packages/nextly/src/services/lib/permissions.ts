@@ -1042,9 +1042,6 @@ async function publishRetirement(): Promise<void> {
   });
 }
 
-/** The table the earlier release stored permission answers in. */
-const STORED_ANSWERS_TABLE = "user_permission_cache";
-
 /**
  * Whether an instance on the release that reads the stored answers may be
  * reading them.
