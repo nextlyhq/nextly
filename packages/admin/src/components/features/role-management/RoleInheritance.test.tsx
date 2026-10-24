@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { act, render, screen, waitFor } from "@admin/__tests__/utils";
 import { Form } from "@admin/components/ui/form";
-import { RoleFormValuesType } from "@admin/hooks/useRoleForm";
+import type { RoleFormValuesType } from "@admin/hooks/useRoleForm";
 import { roleApi } from "@admin/services/roleApi";
 
 import { RoleInheritance } from "./RoleInheritance";

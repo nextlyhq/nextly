@@ -72,7 +72,7 @@ import {
   type WidgetRetirements,
 } from "../domains/widgets/layout";
 import { readableCollectionsOf } from "../domains/widgets/publish";
-import { getWidget } from "../domains/widgets/registry";
+import type { TextBound } from "../domains/widgets/settings";
 import { widgetAudience } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -658,14 +658,27 @@ function refuseDisallowedWidths(
  * Judged only where the value CHANGED from the one the caller was shown, as
  * widths are: a note saved before its widget lowered the bound can still be
  * saved as it is, while a new or edited one is held to the bound.
+ *
+ * The bounds come from the canonical set the caller sees, so a widget is held
+ * to its textarea's bound whichever channel declared it: a contribution's
+ * settings reach no registry, and reading the registry alone let a direct
+ * write store any length of text on a contributed widget.
  */
 function refuseOverlongText(
   submitted: readonly WidgetPlacement[],
-  shown: readonly WidgetPlacement[]
+  shown: readonly WidgetPlacement[],
+  widgets: readonly CanonicalWidget[]
 ): void {
   const shownById = new Map(shown.map(p => [p.id, p]));
+  const boundsById = new Map(
+    widgets.map(widget => [widget.id, widget.textBounds ?? []])
+  );
   for (const placement of submitted) {
-    const overlong = overlongTextIn(placement, shownById.get(placement.id));
+    const overlong = overlongTextIn(
+      placement,
+      shownById.get(placement.id),
+      boundsById.get(placement.widgetId) ?? []
+    );
     if (overlong) {
       throw NextlyError.validation({
         errors: [
@@ -686,32 +699,16 @@ function refuseOverlongText(
  */
 function overlongTextIn(
   placement: WidgetPlacement,
-  shown: WidgetPlacement | undefined
+  shown: WidgetPlacement | undefined,
+  bounds: readonly TextBound[]
 ): { label: string; maxLength: number } | undefined {
-  for (const bound of boundedTextareas(placement.widgetId)) {
+  for (const bound of bounds) {
     const value = changedText(placement, shown, bound.name);
     if (value !== undefined && textLength(value) > bound.maxLength) {
       return { label: bound.label, maxLength: bound.maxLength };
     }
   }
   return undefined;
-}
-
-/** A widget's textarea settings that declare a bound, each with the label a reader knows it by. */
-function boundedTextareas(
-  widgetId: string
-): { name: string; label: string; maxLength: number }[] {
-  return (getWidget(widgetId)?.settings ?? []).flatMap(setting =>
-    setting.type === "textarea" && setting.maxLength !== undefined
-      ? [
-          {
-            name: setting.name,
-            label: setting.label ?? setting.name,
-            maxLength: setting.maxLength,
-          },
-        ]
-      : []
-  );
 }
 
 /** The text `placement` holds for `name`, when it is text and changed from what `shown` held. */
@@ -864,7 +861,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const widths = widthsOf(view.widgets);
   refuseDisallowedWidths(submitted, shown, widths);
   refuseExtraCards(submitted, shown, widths);
-  refuseOverlongText(submitted, shown);
+  refuseOverlongText(submitted, shown, view.widgets);
 
   // 🔴 MONOTONIC. A row a reader has arranged stays arranged whatever a later
   // write says: a removal outside customise mode states `false` because IT is
