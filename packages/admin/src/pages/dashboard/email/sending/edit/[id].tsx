@@ -37,7 +37,7 @@ import {
   useEmailProviderTypes,
   useUpdateEmailProvider,
 } from "@admin/hooks/queries/useEmailProviders";
-import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { useHasPermission } from "@admin/hooks/useHasPermission";
 import { useRouter } from "@admin/hooks/useRouter";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
@@ -423,7 +423,7 @@ function EditProvider({
 
   const { submit, saveAnyway, checkNext, refused, isChecking, isPending } =
     useCheckedSave(providerId);
-  const { hasPermission } = useCurrentUserPermissions();
+  const hasPermission = useHasPermission();
   const canTest = holdsAny(hasPermission, EMAIL_PROVIDER_TEST_PERMISSIONS);
   const [testOpen, setTestOpen] = useState(false);
 

@@ -44,7 +44,7 @@ import {
   useEmailProviderTypes,
   useUpdateEmailProvider,
 } from "@admin/hooks/queries/useEmailProviders";
-import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { useHasPermission } from "@admin/hooks/useHasPermission";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
 import type {
@@ -233,7 +233,7 @@ function useGuidedSetup() {
   const [checkFailure, setCheckFailure] = useState<CheckProviderResult | null>(
     null
   );
-  const { hasPermission } = useCurrentUserPermissions();
+  const hasPermission = useHasPermission();
   const canTurnOn = holdsAny(hasPermission, EMAIL_PROVIDER_UPDATE_PERMISSIONS);
   const choice = useTurnOnChoice(canTurnOn);
   const { reset } = choice;
