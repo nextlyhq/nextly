@@ -147,12 +147,14 @@ export async function refuseRemovingLastSuperAdmin(
   dialect: SupportedDialect,
   requested: SuperAdminChange
 ): Promise<void> {
-  const superAdminRoleId = await lockSuperAdminRole(tx, tables, dialect);
+  const lockedRoleId = await lockSuperAdminRole(tx, tables, dialect);
   // No role, no super-admin to protect.
-  if (superAdminRoleId === undefined) return;
-  // Judged by the ids as stored, which every read below returns, so the
-  // comparisons with them are exact.
-  const change = await storedSpelling(tx, tables, dialect, requested);
+  if (lockedRoleId === undefined) return;
+  // Every id below, the change's and the rows', is compared by one key that
+  // matches as the database does.
+  const key = idKey(dialect);
+  const superAdminRoleId = key(lockedRoleId);
+  const change = keyedChange(requested, key);
 
   const { roleInherits } = tables;
   const edges = (
@@ -167,8 +169,8 @@ export async function refuseRemovingLastSuperAdmin(
       dialect
     )
   ).map(row => ({
-    parent: String(row.parentRoleId),
-    child: String(row.childRoleId),
+    parent: key(String(row.parentRoleId)),
+    child: key(String(row.childRoleId)),
   }));
 
   const before = conferringFrom(edges, superAdminRoleId);
@@ -181,7 +183,7 @@ export async function refuseRemovingLastSuperAdmin(
   // it, an account's deletion or deactivation as much as a role change,
   // since each takes the authority from whoever it removes.
   const held = holdersAround(
-    await assignments(tx, tables, dialect, roleIds, "in-force"),
+    keyed(await assignments(tx, tables, dialect, roleIds, "in-force"), key),
     before,
     after,
     change
@@ -196,7 +198,7 @@ export async function refuseRemovingLastSuperAdmin(
   }
 
   const kept = holdersAround(
-    await assignments(tx, tables, dialect, roleIds, "permanent"),
+    keyed(await assignments(tx, tables, dialect, roleIds, "permanent"), key),
     before,
     after,
     change
@@ -225,71 +227,64 @@ export async function refuseRemovingLastSuperAdmin(
 }
 
 /**
- * `change` with every id it names in the spelling the database stores.
+ * The form an id is compared in, matching ids as the database does.
  *
- * MySQL matches ids case-insensitively, so a request can name a row in a
- * spelling other than the one its reads return, and the comparisons below are
- * exact. So each id is read back through the database's own matching first,
- * and the change is judged by the ids as stored. PostgreSQL and SQLite match
- * ids exactly, as the comparisons here do, so there it is the change as
- * given. An id that names no row is kept as given: it removes nothing.
+ * MySQL matches ids case-insensitively, so one row can be named, and stored
+ * in the rows that point at it, in spellings that differ only in case: an id
+ * a request passes, an assignment row written with the spelling its request
+ * gave, and the account's own row. Compared as given, those would not match.
+ * So on MySQL every id is compared lower-cased, from the change and from the
+ * rows alike. PostgreSQL and SQLite match ids exactly, and so do the
+ * comparisons there.
  */
-async function storedSpelling(
-  tx: LastSuperAdminTx,
-  tables: LastSuperAdminTables,
-  dialect: SupportedDialect,
-  change: SuperAdminChange
-): Promise<SuperAdminChange> {
-  if (dialect !== "mysql") return change;
-  const stored = async (
-    table: { id: Column },
-    id: string | number
-  ): Promise<string> => {
-    const [row] = await tx
-      .select({ id: table.id })
-      .from(table)
-      .where(eq(table.id, String(id)))
-      .limit(1);
-    return row ? String(row.id) : String(id);
-  };
-  const user = (id: string | number) => stored(tables.users, id);
-  const role = (id: string | number) => stored(tables.roles, id);
-  const roles = async (ids: readonly string[]): Promise<string[]> => {
-    const out: string[] = [];
-    for (const id of ids) out.push(await role(id));
-    return out;
-  };
+function idKey(dialect: SupportedDialect): (id: string) => string {
+  return dialect === "mysql" ? id => id.toLowerCase() : id => id;
+}
+
+/** `change` with every id it names in its comparison form. */
+function keyedChange(
+  change: SuperAdminChange,
+  key: (id: string) => string
+): SuperAdminChange {
   switch (change.kind) {
     case "delete":
     case "deactivate":
-      return { ...change, userId: await user(change.userId) };
+      return { ...change, userId: key(String(change.userId)) };
     case "replaceRoles":
       return {
         ...change,
-        userId: await user(change.userId),
-        roleIds: await roles(change.roleIds),
+        userId: key(String(change.userId)),
+        roleIds: change.roleIds.map(id => key(String(id))),
       };
     case "unassignRole":
       return {
         ...change,
-        userId: await user(change.userId),
-        roleId: await role(change.roleId),
+        userId: key(String(change.userId)),
+        roleId: key(change.roleId),
       };
     case "removeInheritance":
       return {
         ...change,
-        parentRoleId: await role(change.parentRoleId),
-        childRoleId: await role(change.childRoleId),
+        parentRoleId: key(change.parentRoleId),
+        childRoleId: key(change.childRoleId),
       };
     case "replaceChildren":
       return {
         ...change,
-        roleId: await role(change.roleId),
-        childRoleIds: await roles(change.childRoleIds),
+        roleId: key(change.roleId),
+        childRoleIds: change.childRoleIds.map(id => key(String(id))),
       };
     case "deleteRole":
-      return { ...change, roleId: await role(change.roleId) };
+      return { ...change, roleId: key(change.roleId) };
   }
+}
+
+/** `held` with each assignment's ids in their comparison form. */
+function keyed(
+  held: readonly Assignment[],
+  key: (id: string) => string
+): Assignment[] {
+  return held.map(a => ({ userId: key(a.userId), roleId: key(a.roleId) }));
 }
 
 /** One role inheriting another: `parent` holds everything `child` does. */
