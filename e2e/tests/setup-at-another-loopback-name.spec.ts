@@ -42,6 +42,11 @@ test.describe("first-run setup at 127.0.0.1 for an app at localhost", () => {
   let playground: EmptyPlayground | undefined;
 
   test.beforeAll(async () => {
+    // A hook takes Playwright's default limit, not the group's: a second
+    // `next dev` compiling from cold beside the suite's own server and the
+    // other worker can take well past 30 s, and startEmptyPlayground allows
+    // itself 4 minutes for that.
+    test.setTimeout(5 * 60 * 1000);
     playground = await startEmptyPlayground("setup-loopback");
   });
 
