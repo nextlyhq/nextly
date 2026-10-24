@@ -20,10 +20,14 @@ set -euo pipefail
 # Re-running `fallow hooks install --target agent` OVERWRITES this file and
 # silently reintroduces both. Re-apply this version if that happens.
 #
-# Version floor (FALLOW_GATE_MIN_VERSION, default 2.85.0). The gate passes
-# --gate-marker agent (added in v2.85.0) so Impact can record containment;
-# older binaries reject the flag entirely, which would make every audit fail
-# open. The floor also covers the older uncommitted-changes inclusion fix
+# Version floor (FALLOW_GATE_MIN_VERSION, default 3.31.0). .fallowrc.jsonc sets
+# circularDependencies.ignoreLazyImports, which fallow first reads in v3.31.0;
+# an older binary rejects the unknown key, the audit exits 2, and the status
+# check below reads that as a runtime error and SKIPS the gate. A fallow on
+# PATH is preferred over the workspace one, so a global install older than
+# that would turn the gate off without a word. The gate also passes
+# --gate-marker agent (added in v2.85.0), which older binaries reject the same
+# way. The floor also covers the older uncommitted-changes inclusion fix
 # (aabb8e1b, v2.46.0). Set the env var to the empty string to disable.
 # The floor is compared numerically on major.minor.patch by node, below. A
 # prerelease suffix is IGNORED rather than ordered: the floor exists to reject
@@ -137,7 +141,7 @@ VERSION="${VERSION_RAW%%$'\n'*}"
 VERSION="${VERSION#fallow }"
 VERSION="${VERSION%% *}"
 
-MIN_VERSION="${FALLOW_GATE_MIN_VERSION-2.85.0}"
+MIN_VERSION="${FALLOW_GATE_MIN_VERSION-3.31.0}"
 if [ -n "$MIN_VERSION" ] && [ -n "$VERSION" ]; then
   # Numeric compare on major.minor.patch, so this works on macOS too.
   if node -e '
@@ -151,8 +155,8 @@ if [ -n "$MIN_VERSION" ] && [ -n "$VERSION" ]; then
   ' "$MIN_VERSION" "$VERSION"; then
     {
       echo "fallow-gate: blocked: $BIN_DESC is fallow $VERSION, below required $MIN_VERSION."
-      echo "fallow-gate: older binaries reject the --gate-marker flag this gate passes"
-      echo "fallow-gate: (added in fallow v2.85.0), so the audit cannot run."
+      echo "fallow-gate: older binaries reject .fallowrc.jsonc (circularDependencies, read"
+      echo "fallow-gate: from fallow v3.31.0), so the audit cannot run."
       echo "fallow-gate: upgrade the fallow on PATH (e.g. npm install -g fallow@latest or"
       echo "fallow-gate: cargo install fallow-cli), or set FALLOW_GATE_MIN_VERSION= to disable."
     } >&2
