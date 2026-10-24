@@ -53,6 +53,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
+import { verifyPassword } from "../../../auth/password";
 import { restoreVersion } from "../../versions/restore-version";
 import { writeFieldGroupType } from "../storage/field-group-type-key";
 
@@ -499,6 +500,16 @@ describe.each(getConfiguredTestDialects())(
               password({ name: "pin", access: { update: onlyAllowed } }),
             ],
           }),
+          // A protected value beside a password any writer may set, in a
+          // group: an instance kept for the first must keep the second's hash.
+          defineFieldGroup({
+            slug: "vault",
+            fields: [
+              text({ name: "heading" }),
+              text({ name: "locked", access: { update: onlyAllowed } }),
+              group({ name: "keys", fields: [password({ name: "code" })] }),
+            ],
+          }),
           defineFieldGroup({
             slug: "card",
             fields: [
@@ -551,6 +562,13 @@ describe.each(getConfiguredTestDialects())(
             fields: [
               text({ name: "title" }),
               fieldGroup({ name: "log", component: "logbook" }),
+            ],
+          }),
+          defineCollection({
+            slug: "vaults",
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "one", component: "vault" }),
             ],
           }),
           defineCollection({
@@ -641,6 +659,7 @@ describe.each(getConfiguredTestDialects())(
                 "cards",
                 "rowed",
                 "pinboard",
+                "vaults",
               ].flatMap(slug => [
                 `create-${slug}`,
                 `read-${slug}`,
@@ -879,6 +898,39 @@ describe.each(getConfiguredTestDialects())(
           expect(list((await stored("pinboard", id)).one)[0]?.heading).toBe(
             `h-c-${door}`
           );
+        });
+
+        it("keeps a nested password it may change as stored, when another value keeps the instance", async () => {
+          const { item } = await trusted.create({
+            collection: "vaults",
+            data: {
+              title: door,
+              one: { heading: "h", locked: "L", keys: { code: "secret-code" } },
+            },
+          } as never);
+          const id = String(item.id);
+          const instanceId = String(
+            list((await stored("vaults", id)).one)[0]!.id
+          );
+
+          // `locked` keeps the instance. The judgment of what removing it
+          // would delete must not write into the instance it keeps.
+          await updateIn("vaults", door, "editor", id, { one: null });
+          const row = (
+            await t.adapter.select<Doc>("comp_vault", {
+              where: { and: [{ column: "id", op: "=", value: instanceId }] },
+            })
+          )[0];
+          const keys = list(
+            typeof row?.keys === "string" ? JSON.parse(row.keys) : row?.keys
+          )[0];
+
+          expect(row?.locked).toBe("L");
+          const code = keys?.code;
+          expect(
+            typeof code === "string" &&
+              (await verifyPassword("stored-password", code))
+          ).toBe(false);
         });
 
         it("is kept when an update leaves it out of a list", async () => {
