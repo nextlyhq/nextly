@@ -24,10 +24,14 @@
 
 import { spawn } from "node:child_process";
 
+import { treeKillCommand } from "../../../scripts/pnpm-invocation.mjs";
+import { announcementReader } from "../../../scripts/watch-readiness.mjs";
+
 /** tsc's line once a pass is written, whether or not it found errors. */
-const PASS_WRITTEN = /Watching for file changes/;
+const PASS_WRITTEN = "Watching for file changes";
 
 const children = [];
+let stopping = false;
 
 /**
  * Start one long-lived producer. Any exit is a failure, a clean one included:
@@ -44,45 +48,81 @@ function start(label, command, onOutput) {
     shell: true,
   });
   if (onOutput) {
+    // Decoded as a stream, so a character split between two chunks arrives
+    // whole in the second rather than as two broken halves.
+    child.stdout.setEncoding("utf8");
     child.stdout.on("data", chunk => {
       process.stdout.write(chunk);
-      onOutput(String(chunk));
+      onOutput(chunk);
     });
   }
   child.on("exit", code => {
+    if (stopping) return;
     console.error(
       `[nextly] the ${label} watcher exited (code ${code ?? "null"}); ` +
         `stopping the others, because dist is no longer being rebuilt.`
     );
-    stopAll();
-    process.exit(code === 0 || code === null ? 1 : code);
+    stopAll().then(() => process.exit(code === 0 || code === null ? 1 : code));
   });
   children.push(child);
 }
 
 start("javascript", "tsdown --watch");
 
+// The bundler starts on the first pass tsc reports, read across chunks: the
+// line can arrive split between two of them.
+const passWritten = announcementReader(PASS_WRITTEN);
 let bundling = false;
 start(
   "declarations",
   "tsc -p tsconfig.dts.json --watch --preserveWatchOutput",
   output => {
-    if (bundling || !PASS_WRITTEN.test(output)) return;
+    if (bundling || !passWritten(output)) return;
     bundling = true;
     start("declaration bundle", "tsdown -c tsdown.dts.config.ts --watch");
   }
 );
 
+/**
+ * Stop one watcher, and everything under it. On Windows the handle is the
+ * `cmd.exe` that `shell: true` put in between, so killing it would leave the
+ * watcher itself running and writing into `dist`; `treeKillCommand` supplies
+ * the tree kill that reaches it, and is null on POSIX, where the signal
+ * reaches the shell's command. A tree kill that cannot run falls back to the
+ * handle rather than leaving the stop unanswered.
+ */
+function stop(child) {
+  return new Promise(resolve => {
+    const treeKill = treeKillCommand(child.pid);
+    if (!treeKill) {
+      child.kill();
+      resolve();
+      return;
+    }
+    const killer = spawn(treeKill.command, treeKill.args, { stdio: "ignore" });
+    killer.on("error", () => {
+      child.kill();
+      resolve();
+    });
+    killer.on("exit", code => {
+      if (code !== 0) child.kill();
+      resolve();
+    });
+  });
+}
+
 function stopAll() {
-  for (const child of children) {
-    if (child.exitCode === null && child.signalCode === null) child.kill();
-  }
+  stopping = true;
+  return Promise.all(
+    children
+      .filter(child => child.exitCode === null && child.signalCode === null)
+      .map(stop)
+  );
 }
 
 // Ctrl-C reaches this process; the children are separate and have to be told.
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
-    stopAll();
-    process.exit(0);
+    stopAll().then(() => process.exit(0));
   });
 }
