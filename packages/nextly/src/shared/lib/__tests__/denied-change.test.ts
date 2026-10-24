@@ -391,6 +391,32 @@ describe("keepDeniedAtStored", () => {
     ]);
   });
 
+  it("pairs rows sharing an id with stored rows sharing it, in order", async () => {
+    // A list already stored with a repeated id: the first row naming it is
+    // the first stored row with it, the second the second. Neither stored row
+    // is left over to be put back beside the rows sent.
+    const kept = await keepDeniedAtStored({
+      update: {
+        rows: [
+          { id: "a", heading: "x" },
+          { id: "a", heading: "y" },
+        ],
+      },
+      stored: {
+        rows: [
+          { id: "a", heading: "a", locked: "locked-1" },
+          { id: "a", heading: "copy", locked: "locked-2" },
+        ],
+      },
+      applyRules: deniesLockedRows,
+    });
+
+    expect(kept.rows).toEqual([
+      { id: "a", heading: "x", locked: "locked-1" },
+      { id: "a", heading: "y", locked: "locked-2" },
+    ]);
+  });
+
   it("judges a row by its own siblings when the update repeats another's id", async () => {
     // `child` may not change while its row is closed. The update sends the
     // open row twice and the closed one without its child: the closed row is

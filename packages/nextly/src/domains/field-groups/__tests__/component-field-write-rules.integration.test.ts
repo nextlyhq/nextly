@@ -502,6 +502,22 @@ describe.each(getConfiguredTestDialects())(
           }),
           // A protected value beside a password any writer may set, in a
           // group: an instance kept for the first must keep the second's hash.
+          // A pin whose rule allows one literal value and no other: a stored
+          // hash is never it, so an instance holding one is protected.
+          defineFieldGroup({
+            slug: "pinlit",
+            fields: [
+              text({ name: "heading" }),
+              password({
+                name: "pin",
+                access: {
+                  update: ({ data }) =>
+                    (data as { pin?: unknown } | undefined)?.pin ===
+                    "stored-password",
+                },
+              }),
+            ],
+          }),
           defineFieldGroup({
             slug: "vault",
             fields: [
@@ -562,6 +578,13 @@ describe.each(getConfiguredTestDialects())(
             fields: [
               text({ name: "title" }),
               fieldGroup({ name: "log", component: "logbook" }),
+            ],
+          }),
+          defineCollection({
+            slug: "pinlits",
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "one", component: "pinlit" }),
             ],
           }),
           defineCollection({
@@ -660,6 +683,7 @@ describe.each(getConfiguredTestDialects())(
                 "rowed",
                 "pinboard",
                 "vaults",
+                "pinlits",
               ].flatMap(slug => [
                 `create-${slug}`,
                 `read-${slug}`,
@@ -897,6 +921,25 @@ describe.each(getConfiguredTestDialects())(
 
           expect(list((await stored("pinboard", id)).one)[0]?.heading).toBe(
             `h-c-${door}`
+          );
+        });
+
+        it("is kept when its rule allows one value, which no stored hash is", async () => {
+          const { item } = await trusted.create({
+            collection: "pinlits",
+            data: {
+              title: door,
+              one: { heading: `h-${door}`, pin: "real-pin" },
+            },
+          } as never);
+          const id = String(item.id);
+
+          // The stored value is a hash, which the rule refuses to change; the
+          // judgment must not answer for a value of its own choosing.
+          await updateIn("pinlits", door, "editor", id, { one: null });
+
+          expect(list((await stored("pinlits", id)).one)[0]?.heading).toBe(
+            `h-${door}`
           );
         });
 
