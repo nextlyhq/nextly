@@ -475,6 +475,20 @@ describe.each(getConfiguredTestDialects())(
               text({ name: "stamp", access: { update: onlyAllowed } }),
             ],
           }),
+          // A field named like one of the store's own columns, in a group
+          // inside a field group: content, judged by its rule like any other.
+          defineFieldGroup({
+            slug: "logbook",
+            fields: [
+              text({ name: "heading" }),
+              group({
+                name: "trail",
+                fields: [
+                  text({ name: "updatedAt", access: { update: onlyAllowed } }),
+                ],
+              }),
+            ],
+          }),
           defineFieldGroup({
             slug: "card",
             fields: [
@@ -520,6 +534,15 @@ describe.each(getConfiguredTestDialects())(
               fieldGroup({ name: "solo", component: "card" }),
             ],
           }),
+          defineCollection({
+            slug: "logged",
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "log", component: "logbook" }),
+            ],
+          }),
           // A repeater stored whole, in its own column, whose rows carry ids.
           defineCollection({
             slug: "rowed",
@@ -550,6 +573,15 @@ describe.each(getConfiguredTestDialects())(
             status: true,
             versions: { drafts: true },
             fields: singleFields(),
+          }),
+          defineSingle({
+            slug: "ledger",
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "log", component: "logbook" }),
+            ],
           }),
         ],
       } as never);
@@ -593,6 +625,13 @@ describe.each(getConfiguredTestDialects())(
               "read-board",
               "update-board",
               "publish-board",
+              "create-logged",
+              "read-logged",
+              "update-logged",
+              "publish-logged",
+              "read-ledger",
+              "update-ledger",
+              "publish-ledger",
             ].map(id),
           },
         })
@@ -1006,6 +1045,131 @@ describe.each(getConfiguredTestDialects())(
           slug: "board",
         } as never)) as Doc;
         expect((after.one as Doc).locked).toBe("locked-board");
+      });
+    });
+
+    describe("the publish of a field-group child named like a store column", () => {
+      /** What the `log` instance's `trail.updatedAt` holds in `doc`. */
+      const trailOf = (doc: Doc) =>
+        list(list(list(doc.log)[0]?.trail)[0])[0]?.updatedAt ?? null;
+      const logWith = (doc: Doc, value: string): Doc => ({
+        ...(list(doc.log)[0] ?? {}),
+        trail: { updatedAt: value },
+      });
+
+      /** A published `logged` entry whose pending change, by the allowed person, edits the child. */
+      async function pendingEntry(tag: string): Promise<string> {
+        const { item } = await trusted.create({
+          collection: "logged",
+          data: {
+            title: tag,
+            status: "published",
+            log: { heading: "h", trail: { updatedAt: `live-${tag}` } },
+          },
+        } as never);
+        const id = String(item.id);
+        const live = await stored("logged", id);
+        await checkedAs("allowed").update({
+          collection: "logged",
+          id,
+          data: { log: logWith(live, `pending-${tag}`) },
+        } as never);
+        return id;
+      }
+
+      /** The `ledger` Single, published, with the same pending change. */
+      async function pendingLedger(tag: string): Promise<void> {
+        await trusted.updateSingle({
+          slug: "ledger",
+          data: {
+            title: tag,
+            status: "published",
+            log: { heading: "h", trail: { updatedAt: `live-${tag}` } },
+          },
+        } as never);
+        const live = (await trusted.findSingle({
+          slug: "ledger",
+        } as never)) as Doc;
+        await checkedAs("allowed").updateSingle({
+          slug: "ledger",
+          data: { log: logWith(live, `pending-${tag}`) },
+        } as never);
+      }
+
+      /** The status a publish through `door` answers with, as `who`. */
+      async function publish(
+        door: "rest" | "direct",
+        who: "editor" | "allowed",
+        target: { collection: string; id: string } | { single: string }
+      ): Promise<number> {
+        const body = { status: "published" };
+        if (door === "rest") {
+          const path =
+            "single" in target
+              ? ["singles", target.single]
+              : ["collections", target.collection, "entries", target.id];
+          return (await rest(who, "PATCH", path, body)).status;
+        }
+        try {
+          if ("single" in target) {
+            await checkedAs(who).updateSingle({
+              slug: target.single,
+              data: body,
+            } as never);
+          } else {
+            await checkedAs(who).update({ ...target, data: body } as never);
+          }
+          return 200;
+        } catch (error) {
+          return (error as { statusCode?: number }).statusCode ?? 500;
+        }
+      }
+
+      describe.each(["rest", "direct"] as const)("through %s", door => {
+        it("refuses a collection's publish when the pending change edits it", async () => {
+          const id = await pendingEntry(`c-${door}`);
+
+          // The publisher may not write the child, so the pending edit is
+          // refused, not dropped to the live value as if it were bookkeeping.
+          expect(
+            await publish(door, "editor", { collection: "logged", id })
+          ).toBe(400);
+          expect(trailOf(await stored("logged", id))).toBe(`live-c-${door}`);
+          const draft = (await trusted.findByID({
+            collection: "logged",
+            id,
+            depth: 1,
+            draft: true,
+          } as never)) as Doc;
+          expect(trailOf(draft)).toBe(`pending-c-${door}`);
+        });
+
+        it("refuses a Single's publish when the pending change edits it", async () => {
+          await pendingLedger(`s-${door}`);
+
+          expect(await publish(door, "editor", { single: "ledger" })).toBe(400);
+          const live = (await trusted.findSingle({
+            slug: "ledger",
+          } as never)) as Doc;
+          expect(trailOf(live)).toBe(`live-s-${door}`);
+        });
+      });
+
+      it("lets the allowed person publish it", async () => {
+        const id = await pendingEntry("a");
+        expect(
+          await publish("direct", "allowed", { collection: "logged", id })
+        ).toBe(200);
+        expect(trailOf(await stored("logged", id))).toBe("pending-a");
+
+        await pendingLedger("as");
+        expect(await publish("direct", "allowed", { single: "ledger" })).toBe(
+          200
+        );
+        const live = (await trusted.findSingle({
+          slug: "ledger",
+        } as never)) as Doc;
+        expect(trailOf(live)).toBe("pending-as");
       });
     });
 
