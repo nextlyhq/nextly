@@ -371,6 +371,62 @@ describe("keepDeniedAtStored", () => {
     ]);
   });
 
+  it("gives a row repeating another's id no stored value", async () => {
+    // One id names one stored row: the first row sent with it is that row,
+    // and a later one repeating it is new, so it takes none of its values.
+    const kept = await keepDeniedAtStored({
+      update: {
+        rows: [
+          { id: "a", heading: "a2" },
+          { id: "a", heading: "copy" },
+        ],
+      },
+      stored: { rows: [{ id: "a", heading: "a", locked: "locked-a" }] },
+      applyRules: deniesLockedRows,
+    });
+
+    expect(kept.rows).toEqual([
+      { id: "a", heading: "a2", locked: "locked-a" },
+      { id: "a", heading: "copy" },
+    ]);
+  });
+
+  it("judges a row by its own siblings when the update repeats another's id", async () => {
+    // `child` may not change while its row is closed. The update sends the
+    // open row twice and the closed one without its child: the closed row is
+    // judged as the update leaves it, not with the siblings of whichever row
+    // sits at its index, so its child stays.
+    const kept = await keepDeniedAtStored({
+      update: {
+        rows: [
+          { id: "a", mode: "open" },
+          { id: "a", mode: "open" },
+          { id: "b", mode: "closed" },
+        ],
+      },
+      stored: {
+        rows: [
+          { id: "a", mode: "open" },
+          { id: "b", mode: "closed", child: "keep" },
+        ],
+      },
+      applyRules: document => {
+        const rows = document.rows;
+        for (const row of Array.isArray(rows) ? rows : []) {
+          const record = row as Record<string, unknown>;
+          if (record.mode === "closed") delete record.child;
+        }
+        return Promise.resolve();
+      },
+    });
+
+    expect(kept.rows).toEqual([
+      { id: "a", mode: "open" },
+      { id: "a", mode: "open" },
+      { id: "b", mode: "closed", child: "keep" },
+    ]);
+  });
+
   it("gives a new row no stored value when the stored rows carry ids", async () => {
     // A row without an id, added ahead of rows that keep theirs, is new: the
     // stored row at its index is the one the next row names, not this one.

@@ -41,6 +41,7 @@ import {
   defineSingle,
   fieldGroup,
   group,
+  repeater,
   text,
 } from "../../../config";
 import { Nextly } from "../../../direct-api/nextly";
@@ -396,6 +397,27 @@ describe.each(getConfiguredTestDialects())(
       );
     }
 
+    /** An update of an entry of `collection` through REST or the checked Direct API. */
+    async function updateIn(
+      collection: string,
+      door: "rest" | "direct",
+      who: "editor" | "allowed",
+      id: string,
+      data: Doc
+    ): Promise<void> {
+      if (door === "rest") {
+        const res = await rest(
+          who,
+          "PATCH",
+          ["collections", collection, "entries", id],
+          data
+        );
+        expect(res.status).toBe(200);
+        return;
+      }
+      await checkedAs(who).update({ collection, id, data } as never);
+    }
+
     beforeAll(async () => {
       const pageFields = () => [
         text({ name: "title" }),
@@ -498,6 +520,28 @@ describe.each(getConfiguredTestDialects())(
               fieldGroup({ name: "solo", component: "card" }),
             ],
           }),
+          // A repeater stored whole, in its own column, whose rows carry ids.
+          defineCollection({
+            slug: "rowed",
+            fields: [
+              text({ name: "title" }),
+              repeater({
+                name: "lines",
+                fields: [
+                  text({ name: "heading" }),
+                  text({
+                    name: "locked",
+                    access: { create: onlyAllowed, update: onlyAllowed },
+                  }),
+                  text({ name: "mode" }),
+                  text({
+                    name: "gated",
+                    access: { update: ({ data }) => data?.mode !== "closed" },
+                  }),
+                ],
+              }),
+            ],
+          }),
         ],
         singles: [
           defineSingle({ slug: "site", fields: singleFields() }),
@@ -536,11 +580,9 @@ describe.each(getConfiguredTestDialects())(
             name: "editors",
             slug: "editors",
             permissionIds: [
-              ...["pages", "drafted", "versioned", "cards"].flatMap(slug => [
-                `create-${slug}`,
-                `read-${slug}`,
-                `update-${slug}`,
-              ]),
+              ...["pages", "drafted", "versioned", "cards", "rowed"].flatMap(
+                slug => [`create-${slug}`, `read-${slug}`, `update-${slug}`]
+              ),
               "publish-drafted",
               "create-groupdrafted",
               "read-groupdrafted",
@@ -683,29 +725,6 @@ describe.each(getConfiguredTestDialects())(
         return String(item.id);
       }
 
-      async function updateCards(
-        door: "rest" | "direct",
-        who: "editor" | "allowed",
-        id: string,
-        data: Doc
-      ): Promise<void> {
-        if (door === "rest") {
-          const res = await rest(
-            who,
-            "PATCH",
-            ["collections", "cards", "entries", id],
-            data
-          );
-          expect(res.status).toBe(200);
-          return;
-        }
-        await checkedAs(who).update({
-          collection: "cards",
-          id,
-          data,
-        } as never);
-      }
-
       /** `instance` sent back with its inline chip's stamp changed. */
       function restamped(instance: Doc, tag: string): Doc {
         const held = list(list(instance.wrap)[0]?.held)[0] ?? {};
@@ -717,7 +736,7 @@ describe.each(getConfiguredTestDialects())(
           const id = await seededCards(`n-${door}`);
           const before = await stored("cards", id);
 
-          await updateCards(door, "editor", id, {
+          await updateIn("cards", door, "editor", id, {
             deck: [
               restamped(list(before.deck)[0]!, `n-${door}-changed`),
               card(`n-${door}-new`),
@@ -738,7 +757,7 @@ describe.each(getConfiguredTestDialects())(
 
           // The stored instance is updated whatever id is sent, so what it
           // holds inline is updated, not created.
-          await updateCards(door, "editor", id, {
+          await updateIn("cards", door, "editor", id, {
             solo: card(`s-${door}-changed`),
           });
           const after = await stored("cards", id);
@@ -752,7 +771,7 @@ describe.each(getConfiguredTestDialects())(
         const id = await seededCards("a");
         const before = await stored("cards", id);
 
-        await updateCards("direct", "allowed", id, {
+        await updateIn("cards", "direct", "allowed", id, {
           deck: [restamped(list(before.deck)[0]!, "a-changed")],
           solo: card("a-solo-changed"),
         });
@@ -760,6 +779,80 @@ describe.each(getConfiguredTestDialects())(
 
         expect(stamps(after.deck)).toEqual(["stamp-a-changed"]);
         expect(stamps(after.solo)).toEqual(["stamp-a-solo-changed"]);
+      });
+    });
+
+    describe("a repeater stored whole, sent with a repeated row id", () => {
+      async function seededRows(rows: Doc[]): Promise<string> {
+        const { item } = await trusted.create({
+          collection: "rowed",
+          data: { title: "r", lines: rows },
+        } as never);
+        return String(item.id);
+      }
+
+      const rowsOf = async (id: string) =>
+        list((await stored("rowed", id)).lines);
+
+      describe.each(["rest", "direct"] as const)("through %s", door => {
+        it("gives the repeated row none of the stored row's values", async () => {
+          const id = await seededRows([
+            { id: "r1", heading: "h", locked: `locked-${door}` },
+          ]);
+
+          // One id names one stored row: the second row sent with it is new.
+          await updateIn("rowed", door, "editor", id, {
+            lines: [
+              { id: "r1", heading: "h2" },
+              { id: "r1", heading: "copy" },
+            ],
+          });
+          const rows = await rowsOf(id);
+
+          expect(rows.map(row => row.heading)).toEqual(["h2", "copy"]);
+          expect(rows.map(row => row.locked ?? null)).toEqual([
+            `locked-${door}`,
+            null,
+          ]);
+        });
+
+        it("judges a row by its own siblings when another row's id repeats", async () => {
+          const id = await seededRows([
+            { id: "r1", mode: "open" },
+            { id: "r2", mode: "closed", gated: `gated-${door}` },
+          ]);
+
+          // The closed row is sent without its child, behind a repeated id
+          // that moves it off its index: it is still judged as closed.
+          await updateIn("rowed", door, "editor", id, {
+            lines: [
+              { id: "r1", mode: "open" },
+              { id: "r1", mode: "open" },
+              { id: "r2", mode: "closed" },
+            ],
+          });
+          const rows = await rowsOf(id);
+
+          expect(rows.map(row => row.gated ?? null)).toEqual([
+            null,
+            null,
+            `gated-${door}`,
+          ]);
+        });
+      });
+
+      it("lets the allowed person set the repeated row's guarded value", async () => {
+        const id = await seededRows([{ id: "r1", heading: "h", locked: "l" }]);
+
+        await updateIn("rowed", "direct", "allowed", id, {
+          lines: [
+            { id: "r1", heading: "h2", locked: "l2" },
+            { id: "r1", heading: "copy", locked: "set" },
+          ],
+        });
+        const rows = await rowsOf(id);
+
+        expect(rows.map(row => row.locked ?? null)).toEqual(["l2", "set"]);
       });
     });
 
