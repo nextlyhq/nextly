@@ -45,6 +45,8 @@ const GROWING_ARTICLES = "growingarticles";
 const GROWING_BANNER = "growingbanner";
 const SHARED_ARTICLES = "sharedarticles";
 const SHARED_BANNER = "sharedbanner";
+const PENDING_PAGES = "pendingpages";
+const PENDING_BANNER = "pendingbanner";
 const USER = { id: "user-1", isActive: true };
 
 /** Every question the publish rule was asked, in order. */
@@ -175,6 +177,20 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [text({ name: "title" })],
       }),
       defineCollection({
+        slug: PENDING_PAGES,
+        localized: true,
+        status: true,
+        // Keeps drafts, so a status-less save on a published entry is held.
+        versions: { drafts: true },
+        access: {
+          create: () => true,
+          read: () => true,
+          update: () => true,
+          publish: englishRefused,
+        },
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
         slug: ARTICLES,
         localized: true,
         status: true,
@@ -225,6 +241,19 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         slug: NO_ENGLISH,
         localized: true,
         status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: englishRefused,
+        },
+        fields: [text({ name: "headline" })],
+      }),
+      defineSingle({
+        slug: PENDING_BANNER,
+        localized: true,
+        status: true,
+        // Keeps drafts, so a status-less save on a published Single is held.
+        versions: { drafts: true },
         access: {
           read: () => true,
           update: () => true,
@@ -822,6 +851,145 @@ describe.each(getConfiguredTestDialects())(
       const refused = await publishEvery(false);
       expect(refused.success).toBe(false);
       expect(refused.statusCode).toBe(403);
+    });
+
+    it("refuses a caller who may not publish a Single before the work only a publish needs", async () => {
+      const t = await boot(dialect);
+      await singlesOf(t).update(
+        UNPUBLISHABLE,
+        { headline: "en" },
+        { overrideAccess: true, locale: "en" }
+      );
+      // The field groups' readiness, which only a publish goes on to need,
+      // failing: a caller refused the publish never reaches it.
+      vi.spyOn(
+        t.getService("fieldGroupDataService"),
+        "assertLocalizedFieldGroupsWritable"
+      ).mockRejectedValue(new Error("field groups unavailable"));
+      const publishAll = (trusted: boolean) =>
+        singlesOf(t).publishAllLocales(
+          UNPUBLISHABLE,
+          trusted
+            ? { overrideAccess: true }
+            : { overrideAccess: false, user: USER }
+        );
+      // The control: a trusted publish of every language meets the failure.
+      await expect(publishAll(true)).rejects.toMatchObject({
+        code: "INTERNAL_ERROR",
+      });
+
+      const refused = await publishAll(false);
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(403);
+    });
+
+    it("asks the default language when a Single's every-language publish promotes its pending English change", async () => {
+      const t = await boot(dialect);
+      // Live in every language, then an English edit held as a draft: English
+      // is already published, but publishing every language puts the edit live.
+      for (const locale of ["en", "fr", "de"]) {
+        await singlesOf(t).update(
+          PENDING_BANNER,
+          { headline: locale, status: "published" },
+          { overrideAccess: true, locale }
+        );
+      }
+      await singlesOf(t).update(
+        PENDING_BANNER,
+        { headline: "en pending" },
+        { overrideAccess: true, locale: "en" }
+      );
+      const liveEnglish = async () =>
+        (
+          (
+            await singlesOf(t).get(PENDING_BANNER, {
+              locale: "en",
+              overrideAccess: true,
+            })
+          ).data as { headline?: unknown } | undefined
+        )?.headline;
+      expect(await liveEnglish()).toBe("en");
+
+      const everyLanguage = await singlesOf(t).update(
+        PENDING_BANNER,
+        { status: "published" },
+        { overrideAccess: false, user: USER, locale: "*" }
+      );
+      expect(everyLanguage.success).toBe(false);
+      expect(everyLanguage.statusCode).toBe(403);
+      expect(await liveEnglish()).toBe("en");
+      // Publishing every language, which promotes it too, answers the same.
+      const publishAll = await singlesOf(t).publishAllLocales(PENDING_BANNER, {
+        overrideAccess: false,
+        user: USER,
+      });
+      expect(publishAll.statusCode).toBe(403);
+      expect(await liveEnglish()).toBe("en");
+
+      // The control: a trusted publish of every language puts the edit live.
+      const trusted = await singlesOf(t).update(
+        PENDING_BANNER,
+        { status: "published" },
+        { overrideAccess: true, locale: "*" }
+      );
+      expect(trusted.success).toBe(true);
+      expect(await liveEnglish()).toBe("en pending");
+    });
+
+    it("asks the default language when an entry's every-language publish promotes its pending English change", async () => {
+      const t = await boot(dialect);
+      // Live in every language, then an English edit held as a draft.
+      const created = await handlerOf(t).createEntry(
+        { collectionName: PENDING_PAGES, overrideAccess: true, locale: "en" },
+        { title: "en", status: "published" }
+      );
+      const id = (created.data as { id?: string } | undefined)?.id;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      const write = (locale: string, data: Record<string, unknown>) =>
+        handlerOf(t).updateEntry(
+          {
+            collectionName: PENDING_PAGES,
+            entryId: id,
+            overrideAccess: true,
+            locale,
+          },
+          data
+        );
+      await write("fr", { title: "fr", status: "published" });
+      await write("de", { title: "de", status: "published" });
+      await write("en", { title: "en pending" });
+      const liveEnglish = async () =>
+        (
+          (
+            await handlerOf(t).getEntry({
+              collectionName: PENDING_PAGES,
+              entryId: id,
+              overrideAccess: true,
+              locale: "en",
+            })
+          ).data as { title?: unknown } | null
+        )?.title;
+      expect(await liveEnglish()).toBe("en");
+
+      const everyLanguage = await handlerOf(t).updateEntry(
+        {
+          collectionName: PENDING_PAGES,
+          entryId: id,
+          overrideAccess: false,
+          user: USER,
+          locale: "*",
+        },
+        { status: "published" }
+      );
+      expect(everyLanguage.success).toBe(false);
+      expect(everyLanguage.statusCode).toBe(403);
+      expect(await liveEnglish()).toBe("en");
+
+      // The control: a trusted publish of every language puts the edit live.
+      const trusted = await write("*", { status: "published" });
+      expect(trusted.success).toBe(true);
+      expect(await liveEnglish()).toBe("en pending");
     });
   }
 );

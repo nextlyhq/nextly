@@ -3185,7 +3185,8 @@ export class CollectionMutationService extends BaseService {
   /**
    * The languages a publish of every language puts live, each to be asked
    * about: those its statuses name, a main row going live with no translation
-   * of its own being the default language's, and every configured language
+   * of its own being the default language's, the language whose pending
+   * change a write to every language promotes, and every configured language
    * where the collection reaches a localized field group. Read on `tx` where
    * one is given, and on the pool otherwise.
    */
@@ -3195,6 +3196,12 @@ export class CollectionMutationService extends BaseService {
     row: Record<string, unknown>;
     /** The collection's fields, for whether it reaches a localized field group. */
     fields: readonly { type: string; name?: string }[];
+    /**
+     * The collection, where the write promotes the working draft kept in its
+     * own slot, as a write to every language does. Publishing every language
+     * promotes none, and passes nothing.
+     */
+    promotesDraftOf?: unknown;
     tx?: TransactionContext;
   }): Promise<string[]> {
     const defaultLocale = this.localization?.defaultLocale;
@@ -3211,6 +3218,7 @@ export class CollectionMutationService extends BaseService {
     )
       .map(locale => locale ?? defaultLocale)
       .filter((locale): locale is string => typeof locale === "string");
+    goingLive.push(...(await this.languagePromoted(args)));
     return languagesToAsk([...new Set(goingLive)], {
       configured: this.localization?.locales.map(locale => locale.code) ?? [],
       reachesLocalizedFieldGroup: await this.reachesLocalizedFieldGroup(
@@ -3218,6 +3226,40 @@ export class CollectionMutationService extends BaseService {
         args.tx
       ),
     });
+  }
+
+  /**
+   * The language whose pending change a write to every language promotes, as
+   * stored: the one holding a working draft in that write's own slot, where
+   * the collection is localized and keeps drafts. Already live, it is not
+   * among the languages going live, yet its pending change goes live with the
+   * write, so it is asked about too. A draft the schema has since made
+   * ineligible is not promoted, and is asked about all the same: asking about
+   * one more language can only refuse. Read on `tx` where one is given.
+   */
+  private async languagePromoted(args: {
+    collectionName: string;
+    entryId: string;
+    promotesDraftOf?: unknown;
+    tx?: TransactionContext;
+  }): Promise<string[]> {
+    const collection = args.promotesDraftOf;
+    if (collection === undefined || !this.keepsWorkingDrafts(collection)) {
+      return [];
+    }
+    const locale = this.wildcardDraftLocale(collection);
+    if (locale === null) return [];
+    const draft = await new VersionsRepository(
+      args.tx ?? this.adapter
+    ).findWorkingDraft(
+      {
+        scopeKind: "collection",
+        scopeSlug: args.collectionName,
+        entryId: args.entryId,
+      },
+      locale
+    );
+    return draft === undefined ? [] : [locale];
   }
 
   /**
@@ -8705,6 +8747,7 @@ export class CollectionMutationService extends BaseService {
             entryId: params.entryId,
             row: existingEntry as Record<string, unknown>,
             fields,
+            promotesDraftOf: collection,
           });
           transitionGuard = {
             op: transitionOp,
@@ -9210,6 +9253,7 @@ export class CollectionMutationService extends BaseService {
                   entryId: params.entryId,
                   row: preUpdateRow as Record<string, unknown>,
                   fields,
+                  promotesDraftOf: collection,
                   tx,
                   asked: askedLanguages,
                 });
