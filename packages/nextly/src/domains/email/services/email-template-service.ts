@@ -144,6 +144,9 @@ export interface OldEngineStatus {
   reasons: Array<{ field: string; label: string; reason: string }>;
 }
 
+/** The format of every owner's version: plugins and core contribute coded templates. */
+const OWNERS_FORMAT = { format: "code", blocks: null } as const;
+
 /** Legacy reserved slugs migrated into the unified layout row on boot. */
 const LEGACY_HEADER_SLUG = "_email-header";
 const LEGACY_FOOTER_SLUG = "_email-footer";
@@ -2194,6 +2197,8 @@ export class EmailTemplateService extends BaseService {
     return {
       ...entry.version,
       kind: entry.defaults.kind ?? "template",
+      // An owner's version is coded, so writing it replaces a site's blocks.
+      ...OWNERS_FORMAT,
       ...detailsOf(entry.defaults),
     };
   }
@@ -2394,6 +2399,7 @@ export class EmailTemplateService extends BaseService {
     const current = {
       ...versionOf(row),
       kind: row.kind ?? "template",
+      ...storedFormat(row),
       ...detailsOf(row),
     };
     if (sameStoredValue(current, wanted)) {

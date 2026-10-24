@@ -224,9 +224,38 @@ describe("the stored form", () => {
       { type: "text", text: [{ type: "chip", variable: "a | upcase" }] },
     ],
     ["a block it does not know", { type: "video" }],
+    [
+      "a chip reading a name the compiled email assigns",
+      { type: "text", text: [{ type: "chip", variable: "nextly_shown" }] },
+    ],
+    [
+      "a condition on a name the compiled email assigns",
+      {
+        type: "divider",
+        show: { variable: "nextly_items.length", when: "present" },
+      },
+    ],
+    [
+      "a list over a name the compiled email assigns",
+      { type: "list", variable: "nextly_items", blocks: [] },
+    ],
   ])("refuses %s", (_case, block) => {
     expect(
       writtenDocumentSchema.safeParse({ version: 1, blocks: [block] }).success
     ).toBe(false);
+  });
+
+  it("keeps a caller's value under a name that only resembles the compiler's", () => {
+    // The control: only the names the compiled Liquid assigns are refused.
+    const d = doc(
+      { type: "divider", show: { variable: "flag", when: "present" } },
+      {
+        type: "text",
+        text: [{ type: "chip", variable: "nextly_shown_at" }],
+      }
+    );
+    expect(html(d, { flag: "x", nextly_shown_at: "noon" })).toContain(
+      ">noon</p>"
+    );
   });
 });
