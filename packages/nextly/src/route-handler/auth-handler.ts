@@ -11,13 +11,13 @@ import { buildAuthRouterDeps } from "../auth/handlers/deps-bridge";
 import { routeAuthRequest } from "../auth/handlers/router";
 import { setSessionStandingBoot } from "../auth/session/session-standing";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
+import { isServicesRegistered, getService } from "../di";
+// Registration is its own import: the `../di` barrel leaves it out.
 import {
-  isServicesRegistered,
   registerServices,
-  getService,
   shutdownServices,
-} from "../di";
-import type { NextlyServiceConfig } from "../di/register";
+  type NextlyServiceConfig,
+} from "../di/register";
 import {
   localizationKey,
   recordRegisteredLocalization,
