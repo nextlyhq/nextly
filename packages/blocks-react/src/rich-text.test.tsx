@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   holdsBlockContent,
   holdsInteractive,
+  MAX_PARTITION_DEPTH,
   partitionPhrasing,
   RichText,
 } from "./rich-text";
@@ -2487,9 +2488,9 @@ describe("the scans themselves, at a depth no stack would survive recursively", 
   const DEPTH = 50_000;
 
   /** A chain of unknown containers around one leaf, built by a loop. */
-  function chain(leaf: RichTextNode): RichTextNode[] {
+  function chain(leaf: RichTextNode, levels = DEPTH): RichTextNode[] {
     let node = leaf;
-    for (let i = 0; i < DEPTH; i++)
+    for (let i = 0; i < levels; i++)
       node = { type: "wrapper", children: [node] };
     return [node];
   }
@@ -2506,7 +2507,46 @@ describe("the scans themselves, at a depth no stack would survive recursively", 
     expect(holdsInteractive(chain({ type: "text", text: "x" }))).toBe(false);
   });
 
-  it("partitions a heading's content, stopping at its bound", () => {
+  /*
+   * The bound itself, from both sides. A chain of N wrappers puts its last
+   * wrapper at depth N - 1, so a paragraph under MAX_PARTITION_DEPTH of them is
+   * still rearranged and one more level is not. Asserting only the deep case
+   * would pass for a partition that never moved anything; the case below the
+   * bound catches that, and the authored-depth case catches a bound lowered
+   * into the depths editors actually produce, which the two cases measured
+   * from the constant would follow down.
+   */
+  it("moves block content out at a depth an editor produces", () => {
+    const paragraph = { type: "paragraph", children: [] };
+    const { keeps, moves } = partitionPhrasing(chain(paragraph, 10), new Set());
+
+    expect(keeps).toEqual([]);
+    expect(holdsBlockContent(moves)).toBe(true);
+  });
+
+  it("moves a heading's block content out up to its bound", () => {
+    const paragraph = { type: "paragraph", children: [] };
+    const { keeps, moves } = partitionPhrasing(
+      chain(paragraph, MAX_PARTITION_DEPTH),
+      new Set()
+    );
+
+    expect(keeps).toEqual([]);
+    expect(holdsBlockContent(moves)).toBe(true);
+  });
+
+  it("keeps it where it is one level past the bound", () => {
+    const paragraph = { type: "paragraph", children: [] };
+    const { keeps, moves } = partitionPhrasing(
+      chain(paragraph, MAX_PARTITION_DEPTH + 1),
+      new Set()
+    );
+
+    expect(keeps).toHaveLength(1);
+    expect(moves).toEqual([]);
+  });
+
+  it("answers at any depth past the bound", () => {
     const paragraph = { type: "paragraph", children: [] };
     const { keeps, moves } = partitionPhrasing(chain(paragraph), new Set());
 
