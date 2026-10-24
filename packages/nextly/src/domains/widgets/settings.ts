@@ -624,13 +624,22 @@ function settingProblem(
   if (!isSettingType(type)) {
     return `setting "${name}" has type ${describeValue(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
   }
-  if (quick !== undefined && typeof quick !== "boolean") {
-    return `setting "${name}" has quick ${describeValue(quick)}; expected true or false`;
-  }
-  const rows = rowsProblem(type, (rest as { rows?: unknown }).rows);
-  if (rows !== undefined) return `setting "${name}" ${rows}`;
+  const flags = flagsProblem(type, quick, (rest as { rows?: unknown }).rows);
+  if (flags !== undefined) return `setting "${name}" ${flags}`;
 
   return problemForType(type, rest, defaultValue, name);
+}
+
+/** Why a setting's `quick` or `rows` is unusable, or `undefined`. */
+function flagsProblem(
+  type: AnyWidgetSetting["type"],
+  quick: unknown,
+  rows: unknown
+): string | undefined {
+  if (quick !== undefined && typeof quick !== "boolean") {
+    return `has quick ${describeValue(quick)}; expected true or false`;
+  }
+  return rowsProblem(type, rows);
 }
 
 /**
@@ -1079,6 +1088,28 @@ interface QueryKnob {
 }
 
 /**
+ * `query` reading the collection `slug` names. A titled list asks its rows'
+ * named fields too, or, where the collection publishes none, keeps no source
+ * and asks nothing at all.
+ */
+function readingCollection<T extends KnobQuery>(
+  query: T,
+  slug: string,
+  setting: AnyWidgetSetting,
+  ctx: KnobContext
+): T {
+  const titled =
+    setting.type === "collection" &&
+    setting.rows === "titled" &&
+    query.op === "list";
+  if (!titled) return { ...query, source: `collection:${slug}` };
+  const select = titledRows(ctx.sourceOf?.(slug));
+  return select === undefined
+    ? query
+    : { ...query, source: `collection:${slug}`, select };
+}
+
+/**
  * What a titled list asks of each row in `collection`: its title, its status
  * where it has a lifecycle, and when it was updated. `undefined` where the
  * collection is not known, names no title, or has no `updatedAt`.
@@ -1181,18 +1212,7 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
       if (!readsACollection(source) && narrowsBy(source, "collection")) {
         return { ...query, where: { ...query.where, collection: value } };
       }
-      if (
-        setting.type === "collection" &&
-        setting.rows === "titled" &&
-        query.op === "list"
-      ) {
-        // A titled list asks its rows' named fields, or nothing at all.
-        const select = titledRows(ctx.sourceOf?.(value));
-        return select === undefined
-          ? query
-          : { ...query, source: `collection:${value}`, select };
-      }
-      return { ...query, source: `collection:${value}` };
+      return readingCollection(query, value, setting, ctx);
     },
   },
   {

@@ -138,6 +138,17 @@ export function relativeSpanStart(span: RelativeSpan, now: Date): Date {
 }
 
 /**
+ * The window keys a source answering a fixed question refuses: it has no rows
+ * placed in time for a window to bound. One spelling for every such source's
+ * table of query keys, so a window key added here reaches each of them.
+ */
+export const WINDOW_KEYS_REFUSED = {
+  since: "refused",
+  until: "refused",
+  range: "refused",
+} as const satisfies Partial<Record<keyof WidgetQuery, "refused">>;
+
+/**
  * The ranges a chart over time may draw, as one CLOSED list.
  *
  * Unlike a span ({@link RELATIVE_SPANS}), a range starts at the exact instant

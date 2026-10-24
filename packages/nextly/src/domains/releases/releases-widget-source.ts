@@ -20,7 +20,7 @@
 import { container } from "../../di/container";
 import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
-import type { WidgetQuery } from "../widgets/query";
+import { WINDOW_KEYS_REFUSED, type WidgetQuery } from "../widgets/query";
 import type { WidgetResult, WidgetResultField } from "../widgets/result";
 import { refuseUnconsumedQueryFields } from "../widgets/sources";
 import { RELEASES_SOURCE_ID } from "../widgets/system-source-ids";
@@ -191,9 +191,7 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   interval: "refused",
   // A window bounds rows by when they were created; this source answers a
   // fixed question that has none.
-  since: "refused",
-  until: "refused",
-  range: "refused",
+  ...WINDOW_KEYS_REFUSED,
 };
 
 /** Refuse a query carrying anything this source cannot honour. */
