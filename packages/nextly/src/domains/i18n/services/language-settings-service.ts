@@ -11,6 +11,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import { LANGUAGES_TABLE } from "../../../schemas/languages/table-name";
 import type { LanguageDirection } from "../../../schemas/languages/types";
@@ -229,9 +230,27 @@ export class LanguageSettingsService {
         return planned;
       });
     } catch (error) {
-      if (wasEmpty && isUniqueViolation(error)) return null;
+      if (wasEmpty && this.metAnotherFirstChange(error)) return null;
       throw error;
     }
+  }
+
+  /**
+   * Whether a change that found nothing stored failed because another change made at the same
+   * moment stored the list first. On PostgreSQL and SQLite the second insert of English meets the
+   * first's as a duplicate key. On MySQL each locked read of the empty table takes a gap lock the
+   * other does not block, so the two inserts wait on each other and one is ended as a deadlock,
+   * rolled back like the duplicate: either way it is run again and plans from what was stored.
+   */
+  private metAnotherFirstChange(error: unknown): boolean {
+    if (isUniqueViolation(error)) return true;
+    const dialect = this.adapter.dialect;
+    let cursor: unknown = error;
+    for (let depth = 0; depth < 10 && cursor != null; depth++) {
+      if (toDbError(dialect, cursor).kind === "deadlock") return true;
+      cursor = (cursor as { cause?: unknown }).cause;
+    }
+    return false;
   }
 
   private refuseWhenLocked(): void {
