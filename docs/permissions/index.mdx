@@ -13,7 +13,7 @@ collection or Single, and which fields inside its documents it may see or change
 |---|---|
 | Built in | No plugin required, and not gated behind a paid tier |
 | Admin | A **Roles** screen for managing roles and their grants |
-| Applies to | The REST API and the admin. The Direct API runs as trusted server code and **bypasses collection and document rules by default** — see below |
+| Applies to | The REST API and the admin. The Direct API runs as trusted server code and **bypasses collection, Single and field rules by default** — see below |
 
 ## Roles and grants
 
@@ -153,16 +153,16 @@ also sees the fields describing what it cost.
 
 ## The Direct API bypasses these rules by default
 
-The Direct API is trusted server code, so `overrideAccess` defaults to `true` and collection
-and document rules are **skipped**. This is deliberate — server code fetching content for a
+The Direct API is trusted server code, so `overrideAccess` defaults to `true` and collection,
+Single and field rules are **skipped**. This is deliberate — server code fetching content for a
 page should not be filtered as though it were an anonymous visitor — but it means a query
 written on behalf of a request does not enforce anything unless you say so:
 
 ```ts
 const posts = await nextly.find({
   collection: "posts",
-  // Both are required. Without a user, an owner rule has nobody to compare
-  // against, so it is skipped rather than failed.
+  // Both are needed to judge the request's own caller. Without `user`, the
+  // call is judged as an anonymous visitor.
   overrideAccess: false,
   user: requestUser,
 });
@@ -174,11 +174,14 @@ visitor without setting `overrideAccess: false` returns rows that visitor was no
 see. This is the easiest way to expose data with Nextly.
 </Callout>
 
-Forgetting the `user` is a different and much less dangerous mistake. An owner-based rule has
-nobody to compare against, so the request is refused rather than answered loosely — you get
-an authorization error, not somebody else's rows. If a query that should return data returns
-"authentication required", a missing `user` alongside `overrideAccess: false` is the first
-thing to check.
+Forgetting the `user` is a different mistake: the call is then judged as an anonymous
+visitor. A collection's or Single's rule is asked with `user: null` and no permissions, and an
+operation it declares no rule for is allowed, as it is for any visitor, except a
+publish or an unpublish. So pass the request's `user` whenever the request has one.
+
+Passing a `user` lets a rule decide by who is asking, never by which document. Collection and
+Single rules never see a document: they answer yes or no before any document is read, so no
+rule can limit someone to their own entries (see [Limits](#limits)).
 
 Field-level rules behave differently: they run whenever `overrideAccess` is `false`, user or
 not, because "which fields may this writer set" has a sensible answer for nobody. Internal
@@ -196,7 +199,7 @@ code that genuinely needs to write a protected field says so with `overrideAcces
   Builder, and a collection made in the Visual Schema Builder can't carry rule functions,
   so its access comes from grants alone.
 - **Two callers skip the rules.** A super-admin is admitted before any rule runs, and the
-  Direct API skips collection and document rules unless you pass `overrideAccess: false`
+  Direct API skips collection, Single and field rules unless you pass `overrideAccess: false`
   (see above).
 
 ## Related
