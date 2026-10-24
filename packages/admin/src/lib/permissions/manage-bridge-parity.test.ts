@@ -14,7 +14,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { manageCounts } from "../../../../nextly/src/auth/access/actor";
+import { manageCounts } from "../../../../nextly/src/auth/access/manage-bridge";
 import { SYSTEM_RESOURCES } from "../../../../nextly/src/schemas/_zod/rbac";
 
 import { MANAGE_BRIDGE_RESOURCES } from "./levels";
