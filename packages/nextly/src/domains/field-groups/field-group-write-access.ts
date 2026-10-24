@@ -611,10 +611,14 @@ async function holdsProtectedValueHere(
   slug: string,
   params: ProtectedInstanceParams
 ): Promise<boolean> {
-  // Only what it holds: an empty field has no value to change.
-  const held = Object.fromEntries(
-    Object.entries(row).filter(
-      ([, value]) => value !== null && value !== undefined
+  // Only what it holds: an empty field has no value to change. A copy all
+  // the way down, since the stand-ins below go into its containers, and the
+  // row itself may be kept and written back.
+  const held = detachData(
+    Object.fromEntries(
+      Object.entries(row).filter(
+        ([, value]) => value !== null && value !== undefined
+      )
     )
   );
   // A stored instance is read without its password hashes, so each password
