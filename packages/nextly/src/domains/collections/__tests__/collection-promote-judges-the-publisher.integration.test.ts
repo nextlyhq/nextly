@@ -669,15 +669,15 @@ describe.each(getConfiguredTestDialects())(
       expect(doc?.ops).toEqual({ note: "published-note" });
     });
 
-    it("refuses, and keeps the draft, when a group the caller sends drops a protected child", async () => {
-      // A KNOWN over-refusal, pinned so it cannot change unnoticed. A group the
-      // caller sends replaces the pending change's group whole, and the field gate
-      // has already stripped the protected child the caller included, so the
-      // promoted group lacks it and it reads as a deletion. Crediting the caller
-      // from their raw request would allow it, and would also credit a caller who
-      // echoes a protected path with the pending change's edit, so this refuses.
-      // It fails closed: the publish is refused and the pending change is kept.
-      // Judging each leaf by the source that won the merge is what would allow it.
+    it("publishes, keeping a protected child at its stored value, when a group the caller sends carries it", async () => {
+      // A group the caller sends replaces the pending change's group whole. The
+      // field gate keeps a child the caller may not write at the value the row
+      // holds rather than stripping it, so the promoted group still has it and
+      // nothing reads as a deletion: the publish goes through with the caller's
+      // allowed edit, and the protected child is unchanged. It was refused while
+      // the gate stripped such a child. The case after this one keeps the
+      // dangerous direction refused: a publisher echoing a protected path the
+      // pending change edited.
       const slug = "provenance";
       current = await createTestNextly({
         dialect,
@@ -732,7 +732,6 @@ describe.each(getConfiguredTestDialects())(
         },
         { body: "edited" }
       );
-      const unchanged = await heldStill(current, slug, id);
 
       // CLERK sends the whole group: an allowed edit to `note`, and `runbook` at
       // the value it already holds, which the gate will strip from their payload.
@@ -749,25 +748,18 @@ describe.each(getConfiguredTestDialects())(
         }
       );
 
-      expect(published.success).toBe(false);
-      const issues = (
-        published as {
-          publicData?: { errors?: Array<{ path: string; code: string }> };
-        }
-      ).publicData?.errors;
-      expect(issues?.map(i => i.path)).toEqual(["ops.runbook"]);
-      expect(issues?.[0]?.code).toBe("FORBIDDEN");
-      // Nothing published, and the pending change is still there.
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      // The pending change and the caller's allowed edit are live, and the
+      // protected child keeps the value it had; the pending change is consumed.
       const doc = (await current.nextly.findByID({
         collection: slug as never,
         id,
         overrideAccess: true,
         status: "all",
       } as never)) as Record<string, unknown> | null;
-      expect(doc?.body).toBe("live");
-      expect(doc?.ops).toEqual({ note: "live-note", runbook: "live-runbook" });
-      expect(await pendingDrafts(current, id)).toHaveLength(1);
-      await unchanged();
+      expect(doc?.body).toBe("edited");
+      expect(doc?.ops).toEqual({ note: "clerk-note", runbook: "live-runbook" });
+      expect(await pendingDrafts(current, id)).toHaveLength(0);
     });
 
     it("refuses, and keeps the draft, when the publisher echoes a protected path the pending change edited", async () => {
