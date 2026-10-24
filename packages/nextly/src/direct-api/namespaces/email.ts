@@ -456,6 +456,8 @@ export function createEmailTemplatesNamespace(
           variables: args.data.variables,
           attachments: args.data.attachments,
           description: args.data.description,
+          format: args.data.format,
+          blocks: args.data.blocks,
         },
         directApiActor(ctx.defaultConfig, args)
       );

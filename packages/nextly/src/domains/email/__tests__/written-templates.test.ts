@@ -10,6 +10,7 @@ import { getDrizzleKitForDialect } from "../../../database/drizzle-kit-lazy";
 import { emailBrandTables } from "../../../schemas/email-brand";
 import { emailTemplatesSqlite } from "../../../schemas/email-templates/sqlite";
 import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
+import { draftPreviewSchema } from "../draft-preview-request";
 import { EmailTemplateService } from "../services/email-template-service";
 import type { WrittenDocument } from "../written/document";
 
@@ -233,5 +234,95 @@ describe("a coded template", () => {
         blocks: BLOCKS,
       })
     ).rejects.toMatchObject({ code: "BUSINESS_RULE_VIOLATION" });
+  });
+});
+
+describe("a draft", () => {
+  const draft = (fields: Record<string, unknown>) =>
+    draftPreviewSchema.safeParse({
+      template: {
+        subject: "Hi",
+        htmlContent: "",
+        useLayout: false,
+        kind: "template",
+        ...fields,
+      },
+      data: {},
+    });
+
+  it.each([
+    ["blocks on a coded draft", { format: "code", blocks: BLOCKS }],
+    ["blocks with no format", { blocks: BLOCKS }],
+    ["a written draft without blocks", { format: "written", blocks: null }],
+    ["a written layout", { format: "written", blocks: BLOCKS, kind: "layout" }],
+    [
+      "a written partial",
+      { format: "written", blocks: BLOCKS, kind: "partial" },
+    ],
+  ])("refuses %s, as a save does", async (_case, fields) => {
+    expect(draft(fields).success).toBe(false);
+    await expect(
+      service.createTemplate({
+        name: "Draft",
+        slug: "draft",
+        subject: "Hi",
+        htmlContent: "",
+        ...(fields as object),
+      })
+    ).rejects.toMatchObject({ code: "BUSINESS_RULE_VIOLATION" });
+  });
+
+  it("accepts what a save accepts", () => {
+    // The control: the refusals above are about the combination, not the fields.
+    expect(draft({ format: "written", blocks: BLOCKS }).success).toBe(true);
+    expect(draft({ format: "code", blocks: null }).success).toBe(true);
+    expect(draft({}).success).toBe(true);
+  });
+});
+
+describe("a written template a plugin later claims", () => {
+  it("is coded again once reset to the plugin's version", async () => {
+    const created = await service.createTemplate({
+      name: "Paid",
+      slug: "orders-paid",
+      subject: "Paid",
+      htmlContent: "",
+      format: "written",
+      blocks: BLOCKS,
+    });
+    const claimed = new EmailTemplateService(adapter, silentLogger);
+    claimed.configureOwnership({
+      plugins: [
+        {
+          name: "@acme/plugin-orders",
+          templates: [
+            {
+              slug: "orders-paid",
+              name: "Order paid",
+              subject: "Thanks for your payment",
+              htmlContent: "<p>We received {{amount}}.</p>",
+            },
+          ],
+        },
+      ],
+    });
+    await claimed.ensureBuiltInTemplates();
+    expect(await claimed.getTemplate(created.id)).toMatchObject({
+      overridden: true,
+      format: "written",
+    });
+
+    await claimed.resetTemplate(created.id);
+
+    const reset = await claimed.getTemplate(created.id);
+    expect(reset).toMatchObject({
+      overridden: false,
+      format: "code",
+      blocks: null,
+      htmlContent: "<p>We received {{amount}}.</p>",
+    });
+    const sent = await claimed.renderStored(reset, { amount: "$5" });
+    expect(sent.html).toContain("We received $5.");
+    expect(sent.html).not.toContain("Thanks, ");
   });
 });
