@@ -19,6 +19,7 @@
 
 import {
   actionGatesOf,
+  textBoundsField,
   type CanonicalWidget,
 } from "../domains/widgets/canonical";
 import type { WidgetArchetype } from "../domains/widgets/definition";
@@ -662,6 +663,10 @@ function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
       ? { defaultOrder }
       : {}),
     ...lifecycleOf(declaration),
+    // The bounds its textarea settings state, which the layout write holds
+    // a placement's text to: a contribution's settings passed the registry's
+    // own check above, so they are read as declared.
+    ...textBoundsField(widget.settings),
   };
 }
 
