@@ -15,6 +15,7 @@ export const emailQueueRecipientsMysql = mysqlTable(
   {
     queuedId: varchar("queued_id", { length: 36 }).notNull(),
     recipientHash: varchar("recipient_hash", { length: 64 }).notNull(),
+    recipientKind: varchar("recipient_kind", { length: 8 }).notNull(),
   },
   t => [
     primaryKey({ columns: [t.queuedId, t.recipientHash] }),

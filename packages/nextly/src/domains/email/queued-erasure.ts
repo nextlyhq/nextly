@@ -20,8 +20,9 @@
  */
 
 import type { Column, SQL, Table } from "drizzle-orm";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, or } from "drizzle-orm";
 
+import { NextlyError } from "../../errors";
 import { emailDeliveriesMysql } from "../../schemas/email-deliveries/mysql";
 import { emailDeliveriesPg } from "../../schemas/email-deliveries/postgres";
 import { emailDeliveriesSqlite } from "../../schemas/email-deliveries/sqlite";
@@ -45,7 +46,11 @@ export interface EmailQueueTables {
     settledAt: Column;
     updatedAt: Column;
   };
-  recipients: Table & { queuedId: Column; recipientHash: Column };
+  recipients: Table & {
+    queuedId: Column;
+    recipientHash: Column;
+    recipientKind: Column;
+  };
 }
 
 /** The Drizzle surface an erasure of queued email needs. */
@@ -54,6 +59,15 @@ export interface QueuedErasureDb {
     from(table: unknown): {
       where(condition: unknown): {
         limit(count: number): PromiseLike<unknown[]>;
+      };
+      /** Every Drizzle handle has it; optional so a narrower one can be passed. */
+      innerJoin?(
+        table: unknown,
+        on: unknown
+      ): {
+        where(condition: unknown): {
+          limit(count: number): PromiseLike<unknown[]>;
+        };
       };
     };
   };
@@ -142,9 +156,11 @@ export async function cancelQueuedEmailsOf(
 }
 
 /**
- * Cancel and clear every queued email to `address` that names nobody. One
- * that names a person belongs to that person, whoever else holds the
- * address, and is cancelled by their own deletion instead.
+ * Cancel and clear every queued email to `address`, unless it is the `to`
+ * of one that names a person: that address is the person's, whoever else
+ * holds it, and goes with their own deletion instead. A copy (`cc`, `bcc`)
+ * is someone else, so erasing it cancels the email even when it names a
+ * person, as the delivery records name the person on the `to` row only.
  */
 export async function cancelQueuedEmailsTo(
   db: QueuedErasureDb,
@@ -152,29 +168,29 @@ export async function cancelQueuedEmailsTo(
   address: string
 ): Promise<void> {
   const { queue, recipients } = tables;
-  const digests = recipientDigests(address);
-  // Each batch removes the recipient rows it read, so the next reads the
-  // rest. One that names a person keeps its rows and is passed over.
-  const passedOver = new Set<string>();
+  const reaches = and(
+    inArray(recipients.recipientHash, recipientDigests(address)),
+    or(isNull(queue.principalKind), ne(recipients.recipientKind, "to"))
+  );
+  // Decided in the database, a batch at a time: each removes the digests of
+  // the emails it cancels, so the next reads only those left.
   for (;;) {
-    const sent = (await db
-      .select({ queuedId: recipients.queuedId })
-      .from(recipients)
-      .where(inArray(recipients.recipientHash, digests))
-      .limit(BATCH + passedOver.size)) as Array<{ queuedId: string }>;
-    const candidates = [
-      ...new Set(
-        sent.map(row => row.queuedId).filter(id => !passedOver.has(id))
-      ),
-    ];
-    if (candidates.length === 0) return;
-    const unnamed = (await db
-      .select({ id: queue.id })
-      .from(queue)
-      .where(and(inArray(queue.id, candidates), isNull(queue.principalKind)))
-      .limit(candidates.length)) as Array<{ id: string }>;
-    const ids = unnamed.map(row => row.id);
-    for (const id of candidates) if (!ids.includes(id)) passedOver.add(id);
-    if (ids.length > 0) await cancelAndClear(db, tables, ids, {});
+    const from = db.select({ queuedId: recipients.queuedId }).from(recipients);
+    if (!from.innerJoin) {
+      throw NextlyError.internal({
+        logContext: { reason: "queued-email erasure needs a joining handle" },
+      });
+    }
+    const rows = (await from
+      .innerJoin(queue, eq(queue.id, recipients.queuedId))
+      .where(reaches)
+      .limit(BATCH)) as Array<{ queuedId: string }>;
+    if (rows.length === 0) return;
+    await cancelAndClear(
+      db,
+      tables,
+      [...new Set(rows.map(row => row.queuedId))],
+      {}
+    );
   }
 }

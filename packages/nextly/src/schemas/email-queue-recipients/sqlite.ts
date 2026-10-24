@@ -15,6 +15,7 @@ export const emailQueueRecipientsSqlite = sqliteTable(
   {
     queuedId: text("queued_id").notNull(),
     recipientHash: text("recipient_hash").notNull(),
+    recipientKind: text("recipient_kind").notNull(),
   },
   t => [
     primaryKey({ columns: [t.queuedId, t.recipientHash] }),

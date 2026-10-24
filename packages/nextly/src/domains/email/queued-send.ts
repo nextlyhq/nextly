@@ -44,6 +44,7 @@ import { emailQueueRecipientsMysql } from "../../schemas/email-queue-recipients/
 import { emailQueueRecipientsPg } from "../../schemas/email-queue-recipients/postgres";
 import { emailQueueRecipientsSqlite } from "../../schemas/email-queue-recipients/sqlite";
 import type { RowLockServer } from "../../shared/lib/row-lock";
+import { runAdapterTransaction } from "../../shared/lib/run-adapter-transaction";
 import {
   type PrincipalDigestDb,
   principalDigestTablesOf,
@@ -163,6 +164,7 @@ interface QueueDb {
   update(table: unknown): {
     set(values: unknown): { where(condition: unknown): PromiseLike<unknown> };
   };
+  delete(table: unknown): { where(condition: unknown): PromiseLike<unknown> };
 }
 
 // ============================================================
@@ -437,31 +439,57 @@ export async function storeQueuedEmail(
     updatedAt: now,
     settledAt: null,
   });
-  // Each address by its keyed digest, once, as the delivery records keep it:
-  // what erasing an address finds this email by.
-  const digests = [
-    ...new Set(queuedRecipients(input.message).map(recipientDigest)),
-  ];
-  if (digests.length > 0) {
-    await db
-      .insert(emailQueueRecipientsTableFor(input.dialect))
-      .values(digests.map(recipientHash => ({ queuedId: id, recipientHash })));
-  }
+  await insertRecipientDigests(db, input.dialect, id, input.message);
   return { id, state: "waiting", jobId };
 }
 
 /**
- * Every address a queued email goes to, `to`, `cc` and `bcc`, as the caller
- * gave them. A template's own copies are fixed addresses of the site's, not
- * the recipient's, and are not among them.
+ * Every address a queued email goes to, with its kind, `to` first, as the
+ * caller gave them. A template's own copies are fixed addresses of the
+ * site's, not the recipient's, and are not among them.
  */
-function queuedRecipients(message: QueuedMessage): string[] {
+function queuedRecipients(
+  message: QueuedMessage
+): Array<{ kind: "to" | "cc" | "bcc"; address: string }> {
   const { to, cc, bcc } =
     message.kind === "message"
       ? message.send
       : { to: message.to, ...message.options };
-  return [...toAddressList(to), ...(cc ?? []), ...(bcc ?? [])].filter(
-    (address): address is string => typeof address === "string"
+  const of = (kind: "to" | "cc" | "bcc", list: readonly unknown[]) =>
+    list
+      .filter((address): address is string => typeof address === "string")
+      .map(address => ({ kind, address }));
+  return [
+    ...of("to", toAddressList(to)),
+    ...of("cc", cc ?? []),
+    ...of("bcc", bcc ?? []),
+  ];
+}
+
+/**
+ * Write a queued email's recipients by keyed digest, once each, as the
+ * delivery records keep them, under the current secret: what erasing an
+ * address finds the email by. An address that is both `to` and a copy is
+ * kept as `to`.
+ */
+async function insertRecipientDigests(
+  db: QueueDb,
+  dialect: string,
+  id: string,
+  message: QueuedMessage
+): Promise<void> {
+  const byDigest = new Map<string, "to" | "cc" | "bcc">();
+  for (const { kind, address } of queuedRecipients(message)) {
+    const digest = recipientDigest(address);
+    if (!byDigest.has(digest)) byDigest.set(digest, kind);
+  }
+  if (byDigest.size === 0) return;
+  await db.insert(emailQueueRecipientsTableFor(dialect)).values(
+    [...byDigest].map(([recipientHash, recipientKind]) => ({
+      queuedId: id,
+      recipientHash,
+      recipientKind,
+    }))
   );
 }
 
@@ -791,12 +819,14 @@ function resealedForm(
   stored: string,
   id: string,
   secrets: readonly string[]
-): string | undefined {
+): { stored: string; text: string } | undefined {
   const [current] = secrets;
   if (current === undefined) return undefined;
-  if (stored.startsWith(UNSEALED)) {
-    return `${SEALED}${sealSetting(stored.slice(UNSEALED.length), current, SEAL_OWNER, sealPath(id))}`;
-  }
+  const sealed = (text: string) => ({
+    stored: `${SEALED}${sealSetting(text, current, SEAL_OWNER, sealPath(id))}`,
+    text,
+  });
+  if (stored.startsWith(UNSEALED)) return sealed(stored.slice(UNSEALED.length));
   if (!stored.startsWith(SEALED)) return undefined;
   const opened = openSetting(
     stored.slice(SEALED.length),
@@ -805,7 +835,7 @@ function resealedForm(
     sealPath(id)
   );
   if (!opened.readable || !opened.stale) return undefined;
-  return `${SEALED}${sealSetting(opened.plaintext, current, SEAL_OWNER, sealPath(id))}`;
+  return sealed(opened.plaintext);
 }
 
 /**
@@ -840,11 +870,7 @@ export async function resealQueuedMessages(
     for (const row of rows) {
       const next = resealedForm(row.message, row.id, secrets);
       if (next !== undefined) {
-        await db
-          .update(table)
-          .set({ message: next })
-          .where(and(eq(table.id, row.id), eq(table.message, row.message)));
-        result.resealed += 1;
+        if (await resealOne(adapter, row, next)) result.resealed += 1;
       } else if (
         openQueuedMessage(row.message, row.id, secrets) === undefined
       ) {
@@ -853,6 +879,47 @@ export async function resealQueuedMessages(
     }
     after = rows[rows.length - 1].id;
   }
+}
+
+/**
+ * Seal one held message again, and key its recipients' digests again with
+ * it, in one transaction: digests made under a retired secret would no
+ * longer find the email once that secret is dropped, though its message
+ * still opens. Fenced on the message as read, so one an attempt or an
+ * erasure changed meanwhile is left as that left it, and its digests with
+ * it. The digests are made as `storeQueuedEmail` makes them, under the
+ * install's current secret, which is the first of the secrets it seals with.
+ *
+ * @returns Whether it was sealed again
+ */
+async function resealOne(
+  adapter: DrizzleAdapter,
+  row: { id: string; message: string },
+  next: { stored: string; text: string }
+): Promise<boolean> {
+  const dialect = adapter.getCapabilities().dialect;
+  const table = emailQueueTableFor(dialect);
+  return runAdapterTransaction<boolean, TransactionContext>(
+    run => adapter.transaction(ctx => run(ctx)),
+    async ctx => {
+      const db = ctx.getDrizzle<QueueDb>();
+      await db
+        .update(table)
+        .set({ message: next.stored })
+        .where(and(eq(table.id, row.id), eq(table.message, row.message)));
+      const [now] = (await db
+        .select({ message: table.message })
+        .from(table)
+        .where(eq(table.id, row.id))
+        .limit(1)) as Array<{ message: string | null }>;
+      if (now?.message !== next.stored) return false;
+      const recipients = emailQueueRecipientsTableFor(dialect);
+      await db.delete(recipients).where(eq(recipients.queuedId, row.id));
+      const message = messageFromText(next.text);
+      if (message) await insertRecipientDigests(db, dialect, row.id, message);
+      return true;
+    }
+  );
 }
 
 /**

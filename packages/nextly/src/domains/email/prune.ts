@@ -30,6 +30,7 @@
 import type { WhereCondition } from "@nextlyhq/adapter-drizzle/types";
 
 import { EMAIL_QUEUE_TABLE } from "../../schemas/email-queue/table-name";
+import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "../../schemas/email-queue-recipients/table-name";
 import type { Logger } from "../../shared/types";
 import { warnQuietly } from "../retention/safe-log";
 
@@ -47,6 +48,7 @@ const DELIVERIES_TABLE = "email_deliveries";
 const CLAIMS_TABLE = "email_send_claims";
 /** As `CLAIMS_TABLE`: the queue's raw name, so a pass reads it as it reads the claims. */
 const QUEUE_TABLE = EMAIL_QUEUE_TABLE;
+const QUEUE_RECIPIENTS_TABLE = EMAIL_QUEUE_RECIPIENTS_TABLE;
 
 /**
  * Rows removed per statement.
@@ -289,6 +291,11 @@ export async function pruneQueuedEmails(
     columns: ["id"],
   });
   if (rows.length === 0) return 0;
+  // Their recipients' digests first, which nothing else removes once the
+  // email has settled.
+  await adapter.delete(QUEUE_RECIPIENTS_TABLE, {
+    and: [{ column: "queuedId", op: "IN", value: rows.map(row => row.id) }],
+  });
   return adapter.delete(QUEUE_TABLE, {
     and: [
       { column: "id", op: "IN", value: rows.map(row => row.id) },

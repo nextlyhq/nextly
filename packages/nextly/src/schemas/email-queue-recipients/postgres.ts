@@ -19,6 +19,11 @@ export const emailQueueRecipientsPg = pgTable(
     queuedId: varchar("queued_id", { length: 36 }).notNull(),
     /** Keyed digest of the address, as `recipientDigest` makes it. */
     recipientHash: varchar("recipient_hash", { length: 64 }).notNull(),
+    /**
+     * `to`, `cc` or `bcc`, as the delivery records spell it. The person a
+     * queued email names is its `to`; a copy is someone else.
+     */
+    recipientKind: varchar("recipient_kind", { length: 8 }).notNull(),
   },
   t => [
     primaryKey({ columns: [t.queuedId, t.recipientHash] }),
