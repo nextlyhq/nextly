@@ -23,6 +23,7 @@ import {
   appliedKey,
   useWidgetQueries,
   type CellSlots,
+  type CellsApplied,
   type UseWidgetQueriesResult,
   type WidgetQueryRequest,
 } from "@admin/hooks/queries/useWidgetQueries";
@@ -39,6 +40,8 @@ interface SettledRetry {
   tier?: SizeTier;
   /** What the answer was asked with (`appliedKey`), which a change of settings is judged against. */
   applied?: string;
+  /** What each of a cells card's answers was asked with, by cell key. */
+  cellsApplied?: CellsApplied;
 }
 
 interface RetryState {
@@ -76,6 +79,10 @@ type RetryAction =
       batchFetchedAt: SizeTier | undefined;
       /** What the batch's answer for the card was asked with. */
       batchApplied: string | undefined;
+      /** For a cells card: what each cell its tier draws asks with now, by cell key. */
+      cellsApplied?: CellsApplied;
+      /** For a cells card: what each cell the batch answered was asked with. */
+      batchCellsApplied?: CellsApplied;
     }
   | {
       type: "arrived";
@@ -196,8 +203,30 @@ function settingsChanged(
   settled: SettledRetry | undefined,
   action: Extract<RetryAction, { type: "grow" }>
 ): boolean {
+  if (action.cellsApplied !== undefined) {
+    return cellsAskOther(
+      settled ? settled.cellsApplied : action.batchCellsApplied,
+      action.cellsApplied
+    );
+  }
   const fetchedWith = settled ? settled.applied : action.batchApplied;
   return fetchedWith !== undefined && fetchedWith !== action.applied;
+}
+
+/**
+ * Whether a cells card now asks other than its answers were asked with, cell by cell, over the
+ * cells its tier draws now: a cell asked otherwise, or one with no answer at all, which the card
+ * widened to draw. A cell its answers hold and its tier no longer draws asks nothing, as a list
+ * that shrinks draws a prefix of what it holds.
+ */
+function cellsAskOther(
+  fetchedWith: CellsApplied | undefined,
+  asking: CellsApplied
+): boolean {
+  if (fetchedWith === undefined) return false;
+  return Object.keys(asking).some(
+    key => !Object.hasOwn(fetchedWith, key) || fetchedWith[key] !== asking[key]
+  );
 }
 
 /**
@@ -256,6 +285,7 @@ function arrivals(
       at: seenAt,
       tier: retried.fetchedTierFor(placementId),
       applied: retried.fetchedAppliedFor(placementId),
+      cellsApplied: retried.fetchedCellsAppliedFor(placementId),
     });
   }
   return { answers, refused };
@@ -268,8 +298,11 @@ export interface CardRetries {
   retry: (placementId: string) => void;
   /** When the answer this card shows arrived: its retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
-  /** Ask one card again if it now asks more, or other, than its answer was fetched for; see `grown`. */
-  grow: (request: WidgetQueryRequest) => void;
+  /**
+   * Ask one card again if it now asks more, or other, than its answer was fetched for; see
+   * `grown`. Handed the card's requests: its one, or one per cell.
+   */
+  grow: (requests: readonly WidgetQueryRequest[]) => void;
   /**
    * The cards being asked again, by Retry or because they grew. A quiet re-ask keeps the answer
    * on screen, so without this a card refreshing for its new tier would not say it is reading.
@@ -287,6 +320,8 @@ export function useCardRetries(
     updatedAt: Date | null;
     fetchedTierFor: (placementId: string) => SizeTier | undefined;
     fetchedAppliedFor: (placementId: string) => string | undefined;
+    fetchedCellsAppliedFor: (placementId: string) => CellsApplied | undefined;
+    fetchingPlacementIds: ReadonlySet<string>;
   }
 ): CardRetries {
   const [state, dispatch] = useReducer(reduce, EMPTY);
@@ -332,21 +367,41 @@ export function useCardRetries(
   );
   const batchTierFor = batch.fetchedTierFor;
   const batchAppliedFor = batch.fetchedAppliedFor;
+  const batchCellsAppliedFor = batch.fetchedCellsAppliedFor;
+  const batchFetching = batch.fetchingPlacementIds;
   const grow = useCallback(
-    (request: WidgetQueryRequest) => {
-      // A `stats` card's cells ask as declared whatever its settings, and a cell is not a card.
-      if (request.cellKey !== undefined) return;
+    (requests: readonly WidgetQueryRequest[]) => {
+      const [request] = requests;
+      if (request === undefined) return;
+      const { placementId } = request;
+      if (request.cellKey === undefined) {
+        dispatch({
+          type: "grow",
+          placementId,
+          query: request.applied ?? request.query,
+          ...(request.sized ? { tier: request.sized.tier } : {}),
+          applied: appliedKey(request),
+          batchFetchedAt: batchTierFor(placementId),
+          batchApplied: batchAppliedFor(placementId),
+        });
+        return;
+      }
+      // A cells card the batch is still answering is not judged: the cells answered so far are
+      // not all it asked, and a cell not yet in would read as one the card widened to draw.
+      if (batchFetching.has(placementId)) return;
+      const cellsApplied = cellsAsking(requests);
       dispatch({
         type: "grow",
-        placementId: request.placementId,
-        query: request.applied ?? request.query,
-        ...(request.sized ? { tier: request.sized.tier } : {}),
-        applied: appliedKey(request),
-        batchFetchedAt: batchTierFor(request.placementId),
-        batchApplied: batchAppliedFor(request.placementId),
+        placementId,
+        query: undefined,
+        applied: JSON.stringify(cellsApplied),
+        batchFetchedAt: undefined,
+        batchApplied: undefined,
+        cellsApplied,
+        batchCellsApplied: batchCellsAppliedFor(placementId),
       });
     },
-    [batchTierFor, batchAppliedFor]
+    [batchTierFor, batchAppliedFor, batchCellsAppliedFor, batchFetching]
   );
 
   const { slots, cellSlots } = useMemo(
@@ -388,6 +443,17 @@ export function useCardRetries(
     fetchingPlacementIds,
     fetchedTierFor,
   };
+}
+
+/** What each cell a cells card's tier draws asks with now, by cell key; see `appliedKey`. */
+function cellsAsking(requests: readonly WidgetQueryRequest[]): CellsApplied {
+  const asking: Record<string, string> = Object.create(null);
+  for (const request of requests) {
+    if (request.cellKey !== undefined && request.undrawn !== true) {
+      asking[request.cellKey] = appliedKey(request);
+    }
+  }
+  return asking;
 }
 
 /**

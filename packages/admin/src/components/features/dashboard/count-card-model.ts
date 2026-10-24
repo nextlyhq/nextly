@@ -13,6 +13,8 @@ import type { WidgetSlot } from "nextly/widget-result";
 
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 
+import { collectionLabel } from "../widgets/widget-as-asked";
+
 /** One part of the split, and the list that holds exactly it. */
 export interface CountPart {
   count: number;
@@ -155,6 +157,19 @@ function trendOf(
     prior: prior.result.total,
     change: recent - prior.result.total,
   };
+}
+
+/**
+ * The name of the collection a Count card is set to: its label as the server
+ * published it to this reader, or its slug where none is known.
+ */
+export function collectionLabelOf(
+  settings: { collection?: unknown },
+  sources: readonly { collection: string; label: string }[] | undefined
+): string | undefined {
+  return typeof settings.collection === "string"
+    ? collectionLabel(settings.collection, sources)
+    : undefined;
 }
 
 /** The card's view of its cells, for the collection and Filter it is set to. */

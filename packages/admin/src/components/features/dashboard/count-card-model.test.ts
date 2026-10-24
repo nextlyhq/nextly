@@ -5,7 +5,7 @@
 import type { WidgetSlot } from "nextly/widget-result";
 import { describe, expect, it } from "vitest";
 
-import { countView } from "./count-card-model";
+import { collectionLabelOf, countView } from "./count-card-model";
 
 const split: WidgetSlot = {
   ok: true,
@@ -127,5 +127,16 @@ describe("the Count card's view of its cells", () => {
       )
     ).toEqual({ state: "unavailable" });
     expect(countView({ split }, {})).toEqual({ state: "unavailable" });
+  });
+});
+
+describe("the name a Count card shows for its collection", () => {
+  it("is the label the server published, or the slug where none is known", () => {
+    const sources = [{ collection: "posts", label: "Blog posts" }];
+    expect(collectionLabelOf({ collection: "posts" }, sources)).toBe(
+      "Blog posts"
+    );
+    expect(collectionLabelOf({ collection: "pages" }, sources)).toBe("pages");
+    expect(collectionLabelOf({}, sources)).toBeUndefined();
   });
 });

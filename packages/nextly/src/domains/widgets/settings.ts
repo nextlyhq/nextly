@@ -377,10 +377,8 @@ function fail(message: string): never {
 export function widgetSettingsProblem(
   settings: unknown,
   queryBuiltByCore = false,
-  // The widget's declared source; `undefined` for a query with none, which a
-  // Collection setting supplies; `null` for a widget that asks nothing a knob
-  // could drive (no query and no cells), where no content setting drives.
-  source?: KnobSource | null
+  // What the widget asks, as `settingsSourceOf` reads it.
+  source?: SettingsSource
 ): string | undefined {
   const [problem] = widgetSettingsProblems(settings);
   if (problem !== undefined) return problem;
@@ -401,7 +399,7 @@ export function widgetSettingsProblem(
   // card asks is never offered.
   const content = (settings as readonly AnyWidgetSetting[] | undefined)?.find(
     (setting): setting is ContentSetting =>
-      isContentSetting(setting) && knobFor(setting, source) === undefined
+      isContentSetting(setting) && !drivenOn(setting, source)
   );
   return content === undefined ? undefined : contentSettingRefusal(content);
 }
@@ -667,7 +665,7 @@ export function validateWidgetSettings(
   settings: unknown,
   widgetId: string,
   queryBuiltByCore = false,
-  source?: KnobSource | null
+  source?: SettingsSource
 ): asserts settings is AnyWidgetSetting[] | undefined {
   const problem = widgetSettingsProblem(settings, queryBuiltByCore, source);
   if (problem !== undefined) fail(`${widgetId}: ${problem}`);
@@ -779,6 +777,61 @@ export interface KnobSource {
 export function knobSourceFor(id: string): KnobSource {
   const filters = getSource(id)?.filters;
   return filters === undefined ? { id } : { id, filters: [...filters] };
+}
+
+/**
+ * What a widget's settings are judged against: its query's source, `undefined`
+ * for a query a Collection setting supplies one to, `null` for a widget that
+ * asks nothing a knob could drive, or each of its cells' sources, `undefined`
+ * for a cell a Collection setting supplies one to.
+ */
+export type SettingsSource =
+  | KnobSource
+  | null
+  | undefined
+  | { cells: readonly (KnobSource | undefined)[] };
+
+/**
+ * What a widget declaration asks, as its settings are judged against it. Read
+ * defensively: a malformed query or cell is another rule's to refuse by name,
+ * so here it simply names no source.
+ */
+export function settingsSourceOf(widget: {
+  query?: unknown;
+  cells?: unknown;
+}): SettingsSource {
+  if (typeof widget.query === "object" && widget.query !== null) {
+    return declaredKnobSource(widget.query);
+  }
+  if (!Array.isArray(widget.cells) || widget.cells.length === 0) return null;
+  return {
+    cells: widget.cells.map((cell: unknown) =>
+      typeof cell === "object" && cell !== null
+        ? declaredKnobSource((cell as { query?: unknown }).query)
+        : undefined
+    ),
+  };
+}
+
+/** The knob source a query declares, or `undefined` when it names none. */
+function declaredKnobSource(query: unknown): KnobSource | undefined {
+  const source =
+    typeof query === "object" && query !== null
+      ? (query as { source?: unknown }).source
+      : undefined;
+  return typeof source === "string" ? knobSourceFor(source) : undefined;
+}
+
+/**
+ * Whether a knob drives `setting` on what the widget asks: on its one source,
+ * or, for a card that asks through cells, on at least one cell's, so a setting
+ * no cell can apply is never drawn.
+ */
+function drivenOn(setting: AnyWidgetSetting, source: SettingsSource): boolean {
+  if (source !== null && source !== undefined && "cells" in source) {
+    return source.cells.some(cell => knobFor(setting, cell) !== undefined);
+  }
+  return knobFor(setting, source) !== undefined;
 }
 
 /** Whether `source` declares that it narrows by `filter`. */
@@ -1026,6 +1079,36 @@ function fittingValue(
 }
 
 /**
+ * A card's settings as its query is asked with them: each resolved value, with
+ * a setting that drives a knob on `ctx.source` held to what fits this reader
+ * ({@link fittingValue}), and left out when nothing does. What a card is drawn
+ * from, so a link it builds from its Filter names the filter its number was
+ * counted under, not a stored one the query set aside.
+ *
+ * @experimental The shape may grow while the content widgets are built.
+ */
+export function effectiveWidgetSettings(
+  settings: readonly AnyWidgetSetting[] | undefined,
+  stored: Record<string, unknown> | undefined,
+  ctx: KnobContext = {}
+): Record<string, unknown> {
+  const resolved = resolveWidgetSettings(settings, stored);
+  // Prototype-free, as the resolved settings are: the keys are setting names.
+  const effective: Record<string, unknown> = Object.assign(
+    Object.create(null),
+    resolved
+  );
+  for (const setting of settings ?? []) {
+    const knob = knobFor(setting, ctx.source);
+    if (knob === undefined) continue;
+    const value = fittingValue(setting, knob, resolved, ctx);
+    if (value === undefined) delete effective[setting.name];
+    else effective[setting.name] = value;
+  }
+  return effective;
+}
+
+/**
  * The fields the collection a dependent setting reads offers this reader, or
  * `undefined` when the setting depends on none or they are not known.
  */
@@ -1067,13 +1150,16 @@ export function applyWidgetSettings<T extends KnobQuery>(
   // Judged on the DECLARED source, read once before any knob may replace it.
   const source = ctx.source ?? knobSourceOf(query);
 
-  const resolved = resolveWidgetSettings(settings, stored);
+  const effective = effectiveWidgetSettings(settings, stored, {
+    ...ctx,
+    ...(source === undefined ? {} : { source }),
+  });
   let next = query;
 
   for (const setting of settings) {
     const knob = knobFor(setting, source);
     if (knob === undefined) continue;
-    const value = fittingValue(setting, knob, resolved, ctx);
+    const value = effective[setting.name];
     if (value === undefined) continue;
     // Each knob hands back a copy, so a card whose settings drive no knob
     // keeps the query it was given, which is what lets a caller apply this to

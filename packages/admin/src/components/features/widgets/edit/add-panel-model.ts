@@ -41,11 +41,11 @@ export const ADD_PANEL_SECTIONS: ReadonlyArray<{
 ];
 
 /**
- * Whether the Content group is shown. Off until the per-collection content widgets exist: the
- * cards core generates per collection today are retired, and listing them would offer what is
- * about to go.
+ * Whether the Content group is shown. On: core groups only widgets offered per collection there,
+ * so the group lists Count for each collection the reader may read, and each further content
+ * widget joins it as core offers it.
  */
-export const SHOW_CONTENT_GROUP = false;
+export const SHOW_CONTENT_GROUP = true;
 
 /** What a row's control does, or that there is nothing to do. */
 export type AddPanelAction =
@@ -154,7 +154,7 @@ export function addPanelRows(input: {
    * collection gets one row for each.
    */
   collections?: readonly { collection: string; label: string }[];
-  /** Whether the Content group is shown; absent, as this release ships it. */
+  /** Whether the Content group is shown; absent, `SHOW_CONTENT_GROUP` decides. */
   showContent?: boolean;
 }): AddPanelRow[] {
   const { placements, widgets, byId } = input;
@@ -268,6 +268,8 @@ function perCollectionRows(
       ...(facts.description === undefined
         ? {}
         : { description: facts.description }),
+      // Shown and searched as on any widget's row.
+      ...(facts.category === undefined ? {} : { category: facts.category }),
       ...(facts.sketch === undefined ? {} : { sketch: facts.sketch }),
       ...(widthsLabel(facts) === undefined
         ? {}

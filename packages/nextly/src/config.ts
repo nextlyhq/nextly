@@ -327,6 +327,7 @@ export { legacySizeToWidgetSize } from "./domains/widgets/definition";
  */
 export {
   applyWidgetSettings,
+  effectiveWidgetSettings,
   resolveWidgetSettings,
 } from "./domains/widgets/settings";
 // Whether a link a plugin wrote stays inside the admin: asked at startup and
@@ -339,6 +340,7 @@ export type {
   AnyWidgetSetting,
   ContentSetting,
   KnobContext,
+  KnobField,
   KnobSource,
 } from "./domains/widgets/settings";
 // Which field NAMES an entry. The admin draws a column with it, the activity

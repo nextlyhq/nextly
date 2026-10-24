@@ -23,10 +23,9 @@ import type {
   WidgetQuerySpec,
 } from "./query";
 import {
-  knobSourceFor,
+  settingsSourceOf,
   validateWidgetSettings,
   type AnyWidgetSetting,
-  type KnobSource,
 } from "./settings";
 import type { WidgetOp, WidgetSourceFilter } from "./sources";
 import { WIDGET_WIDTHS, type WidgetWidth } from "./widths";
@@ -233,7 +232,21 @@ export interface WidgetQueryCell {
    * once either way. Absent, the cell is always asked.
    */
   when?: WidgetCellCondition;
+  /**
+   * The narrowest tier of the card that draws this cell: `"medium"` for a
+   * cell a small card leaves out, `"large"` for one only a large card draws.
+   * The admin asks only the cells the card's tier draws, and the rest once the
+   * card widens to draw them. Absent, the cell is drawn, and asked, at every
+   * tier.
+   */
+  drawnFrom?: WidgetCellTier;
 }
+
+/** The tiers a card is drawn at, narrowest first. @experimental */
+export const WIDGET_CELL_TIERS = ["small", "medium", "large"] as const;
+
+/** @experimental */
+export type WidgetCellTier = (typeof WIDGET_CELL_TIERS)[number];
 
 /** When a cell is asked: the closed set of conditions. @experimental */
 export const WIDGET_CELL_CONDITIONS = ["lifecycle", "no-lifecycle"] as const;
@@ -1490,17 +1503,27 @@ function queryCellsProblem(cells: unknown): string | undefined {
 }
 
 /** Why one cell cannot be asked: no key, a condition it may not name, or no query. */
+/** Why an optional value is outside its closed set, or nothing when it is absent or inside. */
+function closedValueProblem(
+  name: string,
+  value: unknown,
+  allowed: readonly string[]
+): string | undefined {
+  if (value === undefined || allowed.includes(value as string))
+    return undefined;
+  return `has ${name} ${JSON.stringify(value)}, which is not one of ${allowed.join(", ")}`;
+}
+
 function queryCellProblem(cell: unknown, index: number): string | undefined {
-  const { key, query, when } = (cell ?? {}) as Partial<WidgetQueryCell>;
+  const { key, query, when, drawnFrom } = (cell ??
+    {}) as Partial<WidgetQueryCell>;
   if (typeof key !== "string" || key.trim() === "") {
     return `cells[${index}] needs a non-empty key`;
   }
-  if (
-    when !== undefined &&
-    !(WIDGET_CELL_CONDITIONS as readonly string[]).includes(when)
-  ) {
-    return `cells[${index}] ("${key}") has when "${String(when)}", which is not one of ${WIDGET_CELL_CONDITIONS.join(", ")}`;
-  }
+  const outside =
+    closedValueProblem("when", when, WIDGET_CELL_CONDITIONS) ??
+    closedValueProblem("drawnFrom", drawnFrom, WIDGET_CELL_TIERS);
+  if (outside !== undefined) return `cells[${index}] ("${key}") ${outside}`;
   if (typeof query !== "object" || query === null) {
     return `cells[${index}] ("${key}") needs a query`;
   }
@@ -1517,6 +1540,13 @@ function queryCellProblem(cell: unknown, index: number): string | undefined {
  */
 function validateCells(d: Partial<WidgetDefinition>): void {
   if (d.archetype === "custom" && d.cells !== undefined) {
+    // One way to ask: a custom card answered through its cells has no top-level
+    // query, since nothing would hand the component that query's answer.
+    if (d.query !== undefined) {
+      fail(
+        `${d.id}: a custom card asks through its query or its cells, not both`
+      );
+    }
     const problem = queryCellsProblem(d.cells);
     if (problem !== undefined) fail(`${d.id}: ${problem}`);
     return;
@@ -1696,17 +1726,7 @@ function validateQuery(d: Partial<WidgetDefinition>): void {
  * replaces once it is set, and reads while it is not.
  */
 function sourceProblem(d: Partial<WidgetDefinition>): string | undefined {
-  // Read defensively: malformed settings are the settings rule's to refuse by
-  // name, so here they simply supply no source.
-  const settings: unknown = d.settings;
-  const fromSetting =
-    Array.isArray(settings) &&
-    settings.some(
-      (setting: unknown) =>
-        typeof setting === "object" &&
-        setting !== null &&
-        (setting as { type?: unknown }).type === "collection"
-    );
+  const fromSetting = declaresCollectionSetting(d.settings);
   // The card's own query and each of a custom card's cells, judged alike: the
   // Collection setting supplies every one of their sources, or none.
   const asked: Array<[string, { source?: string } | undefined]> = [
@@ -1734,18 +1754,39 @@ function sourceProblem(d: Partial<WidgetDefinition>): string | undefined {
 }
 
 /**
- * The source a definition's settings knobs see: its query's own, with the
- * filters that source declares; none yet
- * (`undefined`) for a query or cells a Collection setting supplies; and `null`
- * for a widget that asks nothing a knob could drive, whose content settings
- * would be drawn and saved and change nothing.
+ * Whether a definition declares a Collection setting. Read defensively:
+ * malformed settings are the settings rule's to refuse by name, so here they
+ * simply declare none.
  */
-function knobSourceOfDefinition(
-  d: Partial<WidgetDefinition>
-): KnobSource | null | undefined {
-  if (typeof d.query?.source === "string") return knobSourceFor(d.query.source);
-  if (d.query !== undefined) return undefined;
-  return Array.isArray(d.cells) && d.cells.length > 0 ? undefined : null;
+function declaresCollectionSetting(settings: unknown): boolean {
+  return (
+    Array.isArray(settings) &&
+    settings.some(
+      (setting: unknown) =>
+        typeof setting === "object" &&
+        setting !== null &&
+        (setting as { type?: unknown }).type === "collection"
+    )
+  );
+}
+
+/**
+ * Refuses a widget offered per collection that declares no Collection setting:
+ * its add-panel rows each start a card set to a collection, so without one the
+ * widget could be added nowhere.
+ */
+function validateOffered(d: Partial<WidgetDefinition>): void {
+  if (d.offered === undefined) return;
+  // An untyped registration with a misspelt mode would otherwise be read as an
+  // ordinary widget: placed by default, with no collection to read.
+  if (d.offered !== "per-collection") {
+    fail(`${d.id}: offered must be "per-collection" when set`);
+  }
+  if (!declaresCollectionSetting(d.settings)) {
+    fail(
+      `${d.id}: a widget offered per collection needs a Collection setting, which each card starts set to`
+    );
+  }
 }
 
 /** Throws with a named reason if `def` is not a usable definition. */
@@ -1771,15 +1812,16 @@ export function validateWidgetDefinition(
   validateWidths(d);
   validateEmpty(d);
   validateCells(d);
+  validateOffered(d);
   validateDefaultOrder(d);
   validateChrome(d);
-  // Judged on the widget's own source, with the filters that source declares:
-  // a content setting is admitted where core builds the query, or where a knob
-  // drives it on that source.
+  // Judged on what the widget asks, with the filters each source declares: a
+  // content setting is admitted where core builds the query, or where a knob
+  // drives it on the query's source or on at least one cell's.
   validateWidgetSettings(
     d.settings,
     d.id ?? "widget",
     d.serverData === true,
-    knobSourceOfDefinition(d)
+    settingsSourceOf(d)
   );
 }

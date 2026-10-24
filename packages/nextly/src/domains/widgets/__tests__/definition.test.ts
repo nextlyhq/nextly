@@ -907,6 +907,87 @@ describe("a custom card's cells", () => {
     ).toThrow(/declare the key "split" more than once/);
   });
 
+  it("refuses a custom card asking through both a query and cells", () => {
+    expect(() =>
+      validateWidgetDefinition({
+        ...card,
+        settings: [collection],
+        query: { op: "count" as const },
+        cells: [split],
+      })
+    ).toThrow(/asks through its query or its cells, not both/);
+  });
+
+  it("refuses a widget offered per collection that declares no Collection setting", () => {
+    // Its add-panel rows each start a card set to a collection; with no such
+    // setting it could be added nowhere.
+    expect(() =>
+      validateWidgetDefinition({
+        ...card,
+        offered: "per-collection",
+        cells: [
+          { ...split, query: { ...split.query, source: "collection:posts" } },
+        ],
+      })
+    ).toThrow(/offered per collection needs a Collection setting/);
+  });
+
+  it("refuses a content setting no cell's source lets a knob drive", () => {
+    // 🔴 Judged as a query a Collection setting supplies, these would be drawn
+    // and saved while every cell reads releases, which no content knob drives.
+    const filter = {
+      name: "filter",
+      type: "filter" as const,
+      of: "collection",
+    };
+    const releases = {
+      key: "releases",
+      query: { source: "system:releases", op: "count" as const },
+    };
+    expect(() =>
+      validateWidgetDefinition({
+        ...card,
+        settings: [collection, filter],
+        cells: [releases, { ...releases, key: "more" }],
+      })
+    ).toThrow(/WIDGET_CONTENT_SETTING_NOT_DRAWN/);
+  });
+
+  it("admits a content setting one cell's source lets a knob drive", () => {
+    const filter = {
+      name: "filter",
+      type: "filter" as const,
+      of: "collection",
+    };
+    expect(() =>
+      validateWidgetDefinition({
+        ...card,
+        settings: [collection, filter],
+        cells: [
+          split,
+          {
+            key: "releases",
+            query: { source: "system:releases", op: "count" as const },
+          },
+        ],
+      })
+    ).not.toThrow();
+  });
+
+  it("refuses an offered mode it does not know", () => {
+    // 🔴 Read as an ordinary widget, a misspelt mode is placed by default with
+    // no collection to read.
+    expect(() =>
+      validateWidgetDefinition({
+        ...card,
+        offered: "per-colletion" as "per-collection",
+        cells: [
+          { ...split, query: { ...split.query, source: "collection:posts" } },
+        ],
+      })
+    ).toThrow(/offered must be "per-collection" when set/);
+  });
+
   it("refuses a cell with no source and nothing to supply one", () => {
     expect(() => validateWidgetDefinition({ ...card, cells: [split] })).toThrow(
       /its cell "split" names no source, and no Collection setting supplies one/

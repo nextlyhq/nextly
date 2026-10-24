@@ -17,9 +17,9 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
-import { resolveWidgetSettings } from "nextly/config";
 import { useMemo } from "react";
 
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import {
   useWidgetQueries,
   type WidgetQueryRequest,
@@ -32,7 +32,14 @@ import type {
 
 import type { CellSlotLookup } from "../archetypes/types";
 import { queryForTier } from "../tier-query";
-import { questionOf, sourcedQuery, widgetAsAsked } from "../widget-as-asked";
+import { UNSOURCED_SLOT } from "../useWidgetBatch";
+import {
+  questionOf,
+  settingsAsAsked,
+  sourcedQuery,
+  titleAsAsked,
+  widgetAsAsked,
+} from "../widget-as-asked";
 
 /** How long the values must stay still before a changed question is asked. */
 const PREVIEW_ASK_DELAY_MS = 300;
@@ -68,6 +75,48 @@ export interface SettingsPreview {
   answerTier?: SizeTier;
 }
 
+/**
+ * The preview's own questions for the values the sheet holds: the card as its own card, for one
+ * core answers on the server; each cell that applies, for a custom card asking through cells; or
+ * its one query. Asked as declared for a custom card, whose own component draws the raw answer
+ * with no tier, and sized as the batch sizes a card it draws otherwise.
+ */
+function previewRequests(
+  widget: DashboardWidget,
+  definition: DashboardWidget,
+  previewId: string,
+  draft: Record<string, unknown>
+): WidgetQueryRequest[] {
+  // A card core answers on the server is asked with the draft settings, as its own card: never
+  // the stored card's ask, so its answer is never filed as the stored card's.
+  if (widget.serverData === true) {
+    return [
+      { placementId: previewId, card: { widget: widget.id, settings: draft } },
+    ];
+  }
+  // Every cell that applies, as the widest card draws them: a cell its draft has not given a
+  // source asks nothing, as on the dashboard.
+  if (definition.cells?.length) {
+    return definition.cells.flatMap(cell =>
+      sourcedQuery(cell.query)
+        ? [{ placementId: previewId, cellKey: cell.key, query: cell.query }]
+        : []
+    );
+  }
+  const query = definition.query;
+  if (!sourcedQuery(query)) return [];
+  if (definition.archetype === "custom") {
+    return [{ placementId: previewId, query }];
+  }
+  return [
+    {
+      placementId: previewId,
+      query,
+      sized: { query: queryForTier(query, PREVIEW_TIER), tier: PREVIEW_TIER },
+    },
+  ];
+}
+
 export function useSettingsPreview(args: {
   /** The widget as declared, before any settings apply. */
   widget: DashboardWidget;
@@ -80,57 +129,53 @@ export function useSettingsPreview(args: {
 }): SettingsPreview {
   const { widget, placementId, stored, draft, shown } = args;
   const previewId = `${placementId}:preview`;
+  // The reader's collections, as the dashboard asks with them: which fields a setting may name,
+  // and which cells a collection's lifecycle answers.
+  const sources = useBranding().widgetSources;
 
-  const definition = useMemo(
-    () => widgetAsAsked(widget, draft),
-    [widget, draft]
-  );
-  const asking = questionOf(widget, draft);
-  const sameQuestion = asking === questionOf(widget, stored);
+  const definition = useMemo(() => {
+    const asked = widgetAsAsked(widget, draft, sources);
+    const title = titleAsAsked(widget, draft, sources);
+    return title === asked.title ? asked : { ...asked, title };
+  }, [widget, draft, sources]);
+  const asking = questionOf(widget, draft, sources);
+  const sameQuestion = asking === questionOf(widget, stored, sources);
   // The question settles before it is asked, so a run of changes asks once.
   const settled = useDebouncedValue(asking, PREVIEW_ASK_DELAY_MS);
 
-  const requests = useMemo<WidgetQueryRequest[]>(() => {
-    if (sameQuestion || settled !== asking) return [];
-    // A card core answers on the server is asked with the draft settings, as its own card: never
-    // the stored card's ask, so its answer is never filed as the stored card's.
-    if (widget.serverData === true) {
-      return [
-        {
-          placementId: previewId,
-          card: { widget: widget.id, settings: draft },
-        },
-      ];
-    }
-    // A query its draft has not given a source asks nothing, as on the dashboard.
-    const query = definition.query;
-    if (!sourcedQuery(query)) return [];
-    // The settled question itself is the request's query, so each new question is a new one.
-    // Sized as the batch sizes a card it draws, and asked as declared for a custom card, whose
-    // own component draws the raw answer with no tier.
-    if (definition.archetype === "custom") {
-      return [{ placementId: previewId, query }];
-    }
-    return [
-      {
-        placementId: previewId,
-        query,
-        sized: {
-          query: queryForTier(query, PREVIEW_TIER),
-          tier: PREVIEW_TIER,
-        },
-      },
-    ];
-  }, [sameQuestion, settled, asking, definition, previewId, widget, draft]);
+  // The settled question itself is each request's query, so each new question is a new one.
+  const requests = useMemo<WidgetQueryRequest[]>(
+    () =>
+      sameQuestion || settled !== asking
+        ? []
+        : previewRequests(widget, definition, previewId, draft),
+    [sameQuestion, settled, asking, definition, previewId, widget, draft]
+  );
   const asked = useWidgetQueries(requests);
 
   const placement = useMemo(
     () => ({
       id: previewId,
-      settings: resolveWidgetSettings(widget.settings, draft),
+      settings: settingsAsAsked(widget, draft, sources),
     }),
-    [previewId, widget.settings, draft]
+    [previewId, widget, draft, sources]
   );
+
+  // The changed question's cell answers, once asked: a cell that asks nothing is not available,
+  // as on the dashboard, and the rest are on their way until the preview's own answer lands.
+  const previewCells = asked.cellSlots[previewId];
+  const slotFor = useMemo<CellSlotLookup | undefined>(() => {
+    if (!definition.cells?.length) return undefined;
+    const unsourced = new Set(
+      definition.cells
+        .filter(cell => !sourcedQuery(cell.query))
+        .map(cell => cell.key)
+    );
+    return key => {
+      if (unsourced.has(key)) return UNSOURCED_SLOT;
+      return settled === asking ? previewCells?.[key] : undefined;
+    };
+  }, [definition.cells, previewCells, settled, asking]);
 
   if (sameQuestion) {
     return {
@@ -151,6 +196,7 @@ export function useSettingsPreview(args: {
     // Nothing until the changed question is answered: the card's own answer was asked another
     // way, and drawing it here would preview what the change does not show.
     slot: settled === asking ? asked.slots[previewId] : undefined,
+    ...(slotFor === undefined ? {} : { slotFor }),
     updatedAt: settled === asking ? asked.updatedAt : null,
     isFetching: settled !== asking || asked.fetchingPlacementIds.has(previewId),
     // Only an answer asked sized has a tier: a custom card's and a server card's were not.
