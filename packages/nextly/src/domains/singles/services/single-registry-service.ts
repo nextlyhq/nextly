@@ -308,6 +308,17 @@ export class SingleRegistryService extends BaseRegistryService<
     return this.getRecordOrThrow(slug);
   }
 
+  /**
+   * Every Single's slug and label, read without the rest of its record: what
+   * a screen naming every Single needs.
+   */
+  async getAllLabels(): Promise<
+    Array<Pick<DynamicSingleRecord, "slug" | "label">>
+  > {
+    const records = await this.getAllRecordsWithColumns(["label"]);
+    return records.map(({ slug, label }) => ({ slug, label }));
+  }
+
   async getAllSingles(
     options?: ListSinglesOptions
   ): Promise<DynamicSingleRecord[]> {
@@ -490,8 +501,11 @@ export class SingleRegistryService extends BaseRegistryService<
     });
 
     if (existing.locked && options?.source !== "code") {
-      // Generic FORBIDDEN — slug + source go to logContext only.
-      throw NextlyError.forbidden({
+      // Defined in code: the caller is told so, which is a fact about the
+      // thing and not about their permissions; slug and source go to the log.
+      throw NextlyError.definedInCode({
+        thing: "Single",
+        change: "change",
         logContext: {
           reason: "single-locked",
           slug,

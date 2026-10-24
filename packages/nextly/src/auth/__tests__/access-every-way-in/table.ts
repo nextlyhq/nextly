@@ -87,7 +87,10 @@ const PRINCIPALS: readonly Caller[] = ["principal", "principal-other"];
  * `true` and `false` are the plain booleans the rule types and the
  * documentation allow. `throws` fails as it is called and `async-throws`
  * returns a promise that rejects, so a door that guards the call but awaits
- * its result outside the guard answers the two differently. `other-operation`
+ * its result outside the guard answers the two differently. `returns-string`
+ * answers a truthy value that is not `true`, which a door judging a rule's
+ * answer truthy admits and one judging it exactly `true` refuses.
+ * `other-operation`
  * declares only `update: false`, so a
  * read, a create or a delete meets an access object with no rule for it.
  * `role-name` admits a caller whose roles include one named `editor`, the
@@ -115,6 +118,7 @@ export const RULES = [
   "returns-false",
   "returns-null",
   "returns-undefined",
+  "returns-string",
   "throws",
   "async-true",
   "async-false",
@@ -527,6 +531,7 @@ const RULE_SAYS: Record<Rule, RuleAnswer> = {
   "returns-false": SAYS_NOT_TRUE,
   "returns-null": SAYS_NOT_TRUE,
   "returns-undefined": SAYS_NOT_TRUE,
+  "returns-string": SAYS_NOT_TRUE,
   throws: SAYS_NOT_TRUE,
   "async-true": SAYS_TRUE,
   "async-false": SAYS_NOT_TRUE,

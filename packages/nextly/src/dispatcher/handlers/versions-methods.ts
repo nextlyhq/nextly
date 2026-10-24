@@ -947,7 +947,8 @@ export async function autosaveForDocument(
   if (args.scopeKind === "collection" || args.scopeKind === "single") {
     const policy = await resolveVersionsPolicy(args.scopeKind, args.slug);
     if (!policy?.drafts?.autosave?.enabled) {
-      throw NextlyError.forbidden({
+      throw NextlyError.autosaveOff({
+        scopeKind: args.scopeKind,
         logContext: {
           reason: "autosave-not-enabled",
           scopeKind: args.scopeKind,

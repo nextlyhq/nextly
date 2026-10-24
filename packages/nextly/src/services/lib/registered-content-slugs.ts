@@ -154,6 +154,22 @@ export interface ContentRegistrySnapshot {
 }
 
 /**
+ * The kind each slug is registered as, from the slugs each registry holds: a
+ * collection wins a slug both hold. The one place that precedence is decided,
+ * for {@link registeredContentSnapshot} and for a caller that has read the
+ * registries' records itself and must not enumerate them a second time.
+ */
+export function contentKinds(
+  collections: Iterable<string>,
+  singles: Iterable<string>
+): Map<string, "collection" | "single"> {
+  const kinds = new Map<string, "collection" | "single">();
+  for (const slug of singles) kinds.set(slug, "single");
+  for (const slug of collections) kinds.set(slug, "collection");
+  return kinds;
+}
+
+/**
  * One enumeration of both registries, with the kinds and the confidence.
  *
  * Resolved ONCE by a caller that makes several decisions from it. Asking again
@@ -166,11 +182,8 @@ export async function registeredContentSnapshot(): Promise<ContentRegistrySnapsh
     collectionSlugs(),
     singleSlugs(),
   ]);
-  const kinds = new Map<string, "collection" | "single">();
-  for (const slug of singles.slugs) kinds.set(slug, "single");
-  for (const slug of collections.slugs) kinds.set(slug, "collection");
   return {
-    kinds,
+    kinds: contentKinds(collections.slugs, singles.slugs),
     degraded: !collections.reachable || !singles.reachable,
   };
 }
