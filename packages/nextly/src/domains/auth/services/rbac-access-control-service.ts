@@ -44,7 +44,10 @@ import {
   clearDeclaredTargets,
   declareTarget,
 } from "../../../auth/access/declared-rules";
-import { noticeRuleNoLongerAllows } from "../../../auth/access/rule-answer-log";
+import {
+  noticePermissionNowComesFirst,
+  noticeRuleNoLongerAllows,
+} from "../../../auth/access/rule-answer-log";
 import { buildRuleContext } from "../../../auth/access/rule-context";
 import type { Principal } from "../../../plugins/principals/types";
 import type { AccessOperation } from "../../../services/access/types";
@@ -204,6 +207,12 @@ export class RBACAccessControlService {
       ];
 
     if (operationAccess !== undefined) {
+      // The permission first: a declared rule only narrows it, so a user who
+      // lacks it is refused before the rule is asked.
+      if (!(await hasPermission(userId, operation, resource, executor))) {
+        noticePermissionNowComesFirst(resource, operation, "signed-in user");
+        return false;
+      }
       if (typeof operationAccess === "boolean") {
         return operationAccess;
       }

@@ -57,6 +57,31 @@ export function noticeRuleNoLongerAllows(
   );
 }
 
+/**
+ * Names, once, a refusal for want of the permission where the target declares
+ * a rule for the action. That rule used to decide alone for a signed-in user,
+ * so a role without the permission may have been let in by it before; a rule
+ * now only narrows the permission, so the permission is what to grant.
+ *
+ * Once per collection or Single, action and kind of caller, for the reason
+ * {@link noticeRuleNoLongerAllows} gives.
+ */
+export function noticePermissionNowComesFirst(
+  slug: string,
+  action: string,
+  caller: string
+): void {
+  const key = `permission:${slug}:${action}:${caller}`;
+  if (named.has(key)) return;
+  named.add(key);
+  consoleLogger.warn(
+    `[rbac] "${slug}" declares a ${action} rule, and a ${caller} without ` +
+      `the ${action}-${slug} permission is now refused even where the rule ` +
+      `would allow. A code access rule only narrows the permission; grant ` +
+      `${action}-${slug} to the roles that should ${action}.`
+  );
+}
+
 /** Forgets what has been named, so a test can watch the first notice again. */
 export function clearRuleAnswerNotices(): void {
   named.clear();

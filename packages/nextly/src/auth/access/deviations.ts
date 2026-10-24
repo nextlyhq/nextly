@@ -16,8 +16,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 export const DEVIATIONS = [
-  // A signed-in user's declared rule decides alone, without the permission.
-  "rule-alone-for-people",
   // A visitor with no rule is allowed every action but a publish or an
   // unpublish, where the decision reads the Public role's permissions.
   "visitor-public-default",
