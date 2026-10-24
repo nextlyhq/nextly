@@ -332,18 +332,24 @@ function lifecycleFallback(
  */
 /**
  * The fields read from a declaration's settings, by the admin's own rule for
- * settings: the registration's wherever it states any, else the
+ * settings: the registration's whole list wherever it states any, else the
  * contribution's. Dropped by the spread in `mergeCanonical`, a merged widget's
  * sheet would bound a note its layout write let through, and a card would be
  * judged by a Collection setting the admin does not draw.
+ *
+ * 🔴 Both fields from the ONE declaration whose list wins, never field by
+ * field: a registration stating settings without a Collection setting would
+ * otherwise keep the contribution's, and its cards be withheld and their
+ * writes refused by a setting the drawn widget does not have. A declaration
+ * states settings exactly when its `textBounds` is present (empty when none
+ * is a bounded textarea), so that is what decides.
  */
 function settingsFallback(
   contribution: CanonicalWidget,
   registration: CanonicalWidget
 ): Pick<CanonicalWidget, "textBounds" | "collectionSetting"> {
-  const textBounds = registration.textBounds ?? contribution.textBounds;
-  const collectionSetting =
-    registration.collectionSetting ?? contribution.collectionSetting;
+  const { textBounds, collectionSetting } =
+    registration.textBounds === undefined ? contribution : registration;
   return {
     ...(textBounds === undefined ? {} : { textBounds }),
     ...(collectionSetting === undefined ? {} : { collectionSetting }),

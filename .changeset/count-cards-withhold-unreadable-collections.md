@@ -29,11 +29,11 @@
 "nextly": patch
 ---
 
-A dashboard card set to a collection the reader may not read is no longer handed to them. Their layout read leaves it out, exactly as it leaves out a card of a widget they may not see, and their saves keep it in place, so it returns once they may read the collection. A collection that does not exist is treated the same way, so a reader cannot learn which collections exist from what comes back. A save that adds such a card is refused, with one answer whether the collection exists or not. The card's collection is read as its settings resolve it, its declared default included.
+A dashboard card set to a collection the reader may not read is no longer handed to them. Their layout read leaves it out, exactly as it leaves out a card of a widget they may not see, and their saves keep it in place, so it returns once they may read the collection. A collection that does not exist is treated the same way, so a reader cannot learn which collections exist from what comes back. A save that adds such a card is refused, with one answer whether the collection exists or not. The card's collection is read as its settings resolve it, its declared default included, and only a value shaped like a collection name names one: a special value such as `*` withholds nothing.
 
 Saved count and health cards converting to Count cards also change in four ways:
 
-- A card whose id two collections in the install could spell is set to no collection, even when the reader may read only one of them.
+- A card whose id two collections the reader may read could spell is set to no collection. A collection the reader may not read changes nothing: the card is set to the one readable collection that spells its id, so the result never tells the reader that the other exists.
 - The merged card's width comes from the Count widget as registered, including a plugin's changes to it.
 - A layout saved from a snapshot taken before a collection was renamed between such spellings (`a_b` to `a-b`) is refused, so it cannot write the old name back.
 - The collections the conversion reads come from the same refresh as the reader's cards.

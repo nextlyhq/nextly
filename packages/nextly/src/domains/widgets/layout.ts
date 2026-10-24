@@ -1170,9 +1170,9 @@ export function visibilityToken(
   // one. Renaming `a_b` to `a-b` leaves every widget id as it was and changes
   // these, so a snapshot taken before is refused rather than written back.
   readableCollections: Iterable<string> = [],
-  // Each Collection setting's default, as `id=value`: a plugin changing one
-  // moves a card that stores no value between withheld and shown.
-  collectionDefaults: Iterable<string> = []
+  // Each Collection setting, as `id=declaration`: a plugin changing one, its
+  // name or its default, moves a stored card between withheld and shown.
+  collectionSettings: Iterable<string> = []
 ): string {
   return (
     createHash("sha256")
@@ -1183,7 +1183,7 @@ export function visibilityToken(
           ...[...widgetIds].sort(),
           ...[...heldActionGates].sort().map(slug => `holds:${slug}`),
           ...[...readableCollections].sort().map(slug => `reads:${slug}`),
-          ...[...collectionDefaults].sort().map(entry => `defaults:${entry}`),
+          ...[...collectionSettings].sort().map(entry => `settings:${entry}`),
         ].join("\n")
       )
       .digest("base64url")

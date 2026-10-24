@@ -44,6 +44,7 @@ import {
   type WidgetWidthFacts,
 } from "../domains/widgets/canonical";
 import {
+  collectionSettingsToken,
   collectionWidgets,
   unreadableCollectionCard,
 } from "../domains/widgets/collection-cards";
@@ -297,22 +298,6 @@ async function getLayoutService(): Promise<WidgetLayoutService> {
  * The probe the conditions read through is returned, so the Get started steps
  * share its reads rather than resolving the same collections again.
  */
-/**
- * Each visible widget's Collection-setting default, as a token input: a plugin
- * changing one moves a card from withheld to shown with no widget id, gate or
- * readable collection changing, and a snapshot taken before must be refused.
- */
-function collectionDefaults(widgets: readonly CanonicalWidget[]): string[] {
-  return widgets.flatMap(widget => {
-    const setting = widget.collectionSetting as
-      | { defaultValue?: unknown }
-      | undefined;
-    return setting === undefined
-      ? []
-      : [`${widget.id}=${JSON.stringify(setting.defaultValue ?? null)}`];
-  });
-}
-
 async function visibleWidgets(auth: AuthContext) {
   const reader = await readCaller(auth);
   const caller = readAccessCaller(reader);
@@ -353,7 +338,7 @@ async function visibleWidgets(auth: AuthContext) {
       widgets.map(widget => widget.id),
       audience.heldActionGates,
       readable,
-      collectionDefaults(widgets)
+      collectionSettingsToken(widgets)
     ),
   };
 }

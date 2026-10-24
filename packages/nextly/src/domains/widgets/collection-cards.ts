@@ -19,15 +19,22 @@
  *
  * The collection a card reads is its EFFECTIVE Collection setting, read through
  * `resolveWidgetSettings`: a card with no stored value reads the setting's
- * declared default, and is judged by it. The setting comes from the canonical
- * summary (`collectionSetting`), merged from both channels as the admin merges
- * them, so a widget a plugin contributes is judged like a registered one.
+ * declared default, and is judged by it. Only a value shaped like a slug names
+ * a collection (`namedCollection`, the rule the card's query reads it by), so
+ * a special default such as "*" names none and withholds nothing. The setting
+ * comes from the canonical summary (`collectionSetting`), merged from both
+ * channels as the admin merges them, so a widget a plugin contributes is
+ * judged like a registered one.
  *
  * @module domains/widgets/collection-cards
  */
 
 import type { WidgetPlacement } from "./layout";
-import { resolveWidgetSettings, type AnyWidgetSetting } from "./settings";
+import {
+  namedCollection,
+  resolveWidgetSettings,
+  type AnyWidgetSetting,
+} from "./settings";
 
 /**
  * Each widget's Collection setting, by widget id: a widget declares at most
@@ -61,6 +68,25 @@ export function unreadableCollectionCard(
     const collection = resolveWidgetSettings([setting], placement.config)[
       setting.name
     ];
-    return typeof collection === "string" && !readable.has(collection);
+    const named = namedCollection(collection);
+    return named !== undefined && !readable.has(named);
   };
+}
+
+/**
+ * Each widget's Collection setting, whole, as scope-token inputs.
+ *
+ * Whole because every property of it can decide which collection a stored
+ * card resolves to -- its name says which stored key it reads, its default
+ * what an absent key reads -- so a plugin changing any of them can move a card
+ * between withheld and shown with no widget id, gate or readable collection
+ * changing, and a snapshot taken before must be refused. Hashing the whole
+ * declaration needs no list of the properties that matter to stay current.
+ */
+export function collectionSettingsToken(
+  widgets: readonly { id: string; collectionSetting?: AnyWidgetSetting }[]
+): string[] {
+  return [...collectionWidgets(widgets)].map(
+    ([id, setting]) => `${id}=${JSON.stringify(setting)}`
+  );
 }

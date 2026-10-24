@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  collectionSettingsToken,
   collectionWidgets,
   unreadableCollectionCard,
 } from "../collection-cards";
@@ -70,8 +71,59 @@ describe("a card set to a collection, for one reader", () => {
     expect(withheld(card("acme/pinned", { source: "posts" }))).toBe(false);
   });
 
+  it('is shown when its value names no collection, as a special default such as "*" does', () => {
+    // 🔴 The card's query reads "*" as naming no collection and reads its
+    // widget's own source, so withholding it would hide a card that reads
+    // nothing the reader may not.
+    const everything = unreadableCollectionCard(
+      collectionWidgets([
+        {
+          id: "acme/all",
+          collectionSetting: { ...pinnedSetting, defaultValue: "*" },
+        },
+      ]),
+      new Set(["posts"])
+    );
+    expect(everything(card("acme/all"))).toBe(false);
+    expect(everything(card("acme/all", { source: "*" }))).toBe(false);
+    // The must-differ half: a slug the reader may not read is still withheld.
+    expect(everything(card("acme/all", { source: "secret" }))).toBe(true);
+  });
+
   it("is shown when set to no collection, and for a widget with no Collection setting", () => {
     expect(withheld(card("core/count"))).toBe(false);
     expect(withheld(card("core/team", { collection: "secret" }))).toBe(false);
+  });
+});
+
+describe("the Collection settings as scope-token inputs", () => {
+  const token = (setting: AnyWidgetSetting) =>
+    collectionSettingsToken([
+      { id: "acme/pinned", collectionSetting: setting },
+      { id: "core/team" },
+    ]);
+
+  it("has one entry per widget with a Collection setting", () => {
+    expect(token(pinnedSetting)).toHaveLength(1);
+  });
+
+  it("changes when the setting is renamed, its default unchanged", () => {
+    // 🔴 A card storing `{ collection: "secret" }` is withheld while the
+    // setting is called `collection`, and shown once it is called `source`
+    // with a readable default: a snapshot taken before must be refused, or its
+    // save drops the card it never held.
+    expect(token({ ...pinnedSetting, name: "collection" })).not.toEqual(
+      token(pinnedSetting)
+    );
+  });
+
+  it("changes when the default changes", () => {
+    expect(token({ ...pinnedSetting, defaultValue: "posts" })).not.toEqual(
+      token(pinnedSetting)
+    );
+  });
+
+  it("is the same for the same declaration", () => {
+    expect(token({ ...pinnedSetting })).toEqual(token(pinnedSetting));
   });
 });

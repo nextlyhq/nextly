@@ -880,9 +880,10 @@ describe("the visibility token", () => {
     expect(visibilityToken(["a"], [])).toBe(visibilityToken(["a"], [], []));
   });
 
-  it("moves when a Collection setting's default changes, with nothing else changing", () => {
-    // A card that stores no value is judged by the default, so a plugin
-    // changing it moves that card between withheld and shown.
+  it("moves when a Collection setting changes, with nothing else changing", () => {
+    // A stored card is judged by the setting -- its default when it stores no
+    // value -- so a plugin changing it moves that card between withheld and
+    // shown.
     expect(visibilityToken(["a"], [], [], ['a="posts"'])).not.toBe(
       visibilityToken(["a"], [], [], ['a="secret"'])
     );

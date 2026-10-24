@@ -63,6 +63,7 @@ import {
   registerWidget,
 } from "../domains/widgets/registry";
 import { setContributedWidgets } from "../domains/widgets/canonical";
+import { collectionSettingsToken } from "../domains/widgets/collection-cards";
 import type { PluginDefinition } from "../plugins/plugin-context";
 import { contributedWidgetSummaries } from "../plugins/validate-admin-widgets";
 
@@ -2333,7 +2334,7 @@ describe("a card's note", () => {
           [...listWidgets().map(w => w.id), "acme/pinned"],
           [],
           [],
-          ["acme/pinned=null"]
+          collectionSettingsToken(summaries)
         ),
       })
     );
