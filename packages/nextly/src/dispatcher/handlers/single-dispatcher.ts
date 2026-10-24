@@ -95,6 +95,7 @@ import {
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -975,13 +976,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (!existing) {
         throw new Error(`Single "${slug}" not found`);
       }
-      if (existing.locked) {
-        throw NextlyError.definedInCode({
-          thing: "Single",
-          change: "change",
-          logContext: { reason: "single-locked", slug },
-        });
-      }
+      refuseChangeDefinedInCode(existing, "Single", slug);
 
       const updateData: Record<string, unknown> = {};
       if (b.label !== undefined) updateData.label = b.label;
@@ -1092,13 +1087,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const slug = requireParam(p, "slug", "Single slug");
       const single = await svc.registry.getSingleBySlug(slug);
       if (!single) throw new Error("Single not found");
-      if (single.locked) {
-        throw NextlyError.definedInCode({
-          thing: "Single",
-          change: "change",
-          logContext: { reason: "single-locked", slug },
-        });
-      }
+      refuseChangeDefinedInCode(single, "Single", slug);
 
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
@@ -1162,13 +1151,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const slug = requireParam(p, "slug", "Single slug");
       const single = await svc.registry.getSingleBySlug(slug);
       if (!single) throw new Error("Single not found");
-      if (single.locked) {
-        throw NextlyError.definedInCode({
-          thing: "Single",
-          change: "change",
-          logContext: { reason: "single-locked", slug },
-        });
-      }
+      refuseChangeDefinedInCode(single, "Single", slug);
 
       const {
         fields,
