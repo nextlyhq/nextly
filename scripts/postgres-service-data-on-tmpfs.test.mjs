@@ -38,18 +38,26 @@ const WORKFLOW = path.join(
  */
 const DATA_DIRECTORY = new Map([[17, "/var/lib/postgresql/data"]]);
 
+/**
+ * A postgres image however it is named: bare, tagged, pinned by digest, or from
+ * a registry (`postgres`, `postgres:17`, `postgres@sha256:…`,
+ * `docker.io/library/postgres:17`). One the check cannot place a version for is
+ * still a postgres service, and is refused below rather than passed by.
+ */
+const POSTGRES_IMAGE = /(^|\/)postgres([:@]|$)/;
+
 /** The postgres services in a parsed workflow, each with the job it belongs to. */
 function postgresServices(workflow) {
   return Object.entries(workflow.jobs ?? {}).flatMap(([id, job]) =>
     Object.values(job.services ?? {})
-      .filter(service => /^postgres:/.test(String(service.image)))
+      .filter(service => POSTGRES_IMAGE.test(String(service.image)))
       .map(service => ({ id, service }))
   );
 }
 
 /** Where a postgres service keeps its data: PGDATA if it sets one, else its image's. */
 function dataDirectory(service) {
-  const major = Number(/^postgres:(\d+)/.exec(service.image)?.[1]);
+  const major = Number(/postgres:(\d+)/.exec(service.image)?.[1]);
   return service.env?.PGDATA ?? DATA_DIRECTORY.get(major);
 }
 
@@ -120,6 +128,29 @@ describe("CI's postgres test service", () => {
         )
       )
     ).toEqual([expect.stringMatching(/is not on tmpfs/)]);
+  });
+
+  it("counts an untagged or registry-named postgres image, and refuses one it cannot place", () => {
+    for (const image of [
+      "postgres",
+      "postgres@sha256:0123abcd",
+      "docker.io/library/postgres",
+    ]) {
+      expect(
+        problems(without(text, "image: postgres:17", `image: ${image}`)),
+        image
+      ).toEqual([expect.stringMatching(/keeps its data is not known here/)]);
+    }
+    // A registry-named image with a known version is placed and checked as usual.
+    expect(
+      problems(
+        without(
+          text,
+          "image: postgres:17",
+          "image: docker.io/library/postgres:17"
+        )
+      )
+    ).toEqual([]);
   });
 
   it("refuses an image whose data directory it does not know", () => {
