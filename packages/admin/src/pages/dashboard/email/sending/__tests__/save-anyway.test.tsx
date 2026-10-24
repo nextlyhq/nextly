@@ -50,6 +50,16 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   }),
 }));
 
+// The pages ask through the router-free hook, which reads the same answer.
+vi.mock("@admin/hooks/useHasPermission", async () => {
+  const { useCurrentUserPermissions } = await import(
+    "@admin/hooks/useCurrentUserPermissions"
+  );
+  return {
+    useHasPermission: () => useCurrentUserPermissions().hasPermission,
+  };
+});
+
 vi.mock("@admin/hooks/useRouter", () => ({
   useRouter: () => ({
     route: { params: { id: PROVIDER_ID } },
