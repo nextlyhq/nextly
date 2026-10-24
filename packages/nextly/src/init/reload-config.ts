@@ -158,6 +158,8 @@ interface AdapterLike {
   // columns to it are both DDL, and the status backfill that accompanies a new `_status`
   // column is a write.
   executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
+  // Whether the server can key the per-language unique index a translated unique field needs.
+  getCapabilities(): ReturnType<DrizzleAdapter["getCapabilities"]>;
 }
 
 type CollectionDef = {
@@ -1254,6 +1256,25 @@ async function ensureLocalizedCompanionsForReload(
           consoleLogger.warn(
             `[nextly] Could not update the translations table for "${entity.slug}". ` +
               `Newly translatable fields may fail to save until it is in step: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      );
+      // Its per-language unique indexes, once its columns are in step. Best-effort, as above.
+      const { reconcileCompanionUniqueIndexes } = await import(
+        "../domains/i18n/runtime/companion-unique-reconcile"
+      );
+      await reconcileCompanionUniqueIndexes(
+        adapter,
+        {
+          builtBy: "codeFirst" as const,
+          tableName: resolveTableName(entity),
+          fields: entity.fields ?? [],
+        },
+        error => {
+          consoleLogger.warn(
+            `[nextly] Could not index the translations table for "${entity.slug}". ` +
+              `Unique translated fields are not enforced in each language until it is: ` +
               `${error instanceof Error ? error.message : String(error)}`
           );
         }
