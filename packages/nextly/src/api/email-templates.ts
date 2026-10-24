@@ -24,6 +24,7 @@ import { z } from "zod";
 
 import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di";
+import type { WrittenDocument } from "../domains/email/written/document";
 import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
@@ -44,31 +45,46 @@ const variableSchema = z.object({
   required: z.boolean().optional(),
 });
 
-const createTemplateSchema = z.object({
-  name: z.string().min(1, "Name is required").max(255),
-  slug: z
-    .string()
-    .min(1, "Slug is required")
-    .max(255)
-    .regex(
-      /^[a-z0-9]+(?:-[a-z0-9]+)*$/,
-      "Slug must be lowercase alphanumeric with hyphens"
-    ),
-  subject: z.string().min(1, "Subject is required").max(500),
-  htmlContent: z.string().min(1, "HTML content is required"),
-  plainTextContent: z.string().optional().nullable(),
-  variables: z.array(variableSchema).optional().nullable(),
-  useLayout: z.boolean().optional(),
-  isActive: z.boolean().optional(),
-  providerId: z.string().uuid().optional().nullable(),
-  // When the template is sent, in the site's words; stored as given and
-  // returned on every read, as the dispatcher routes and Direct API do.
-  description: z.string().optional().nullable(),
-  // Fixed addresses copied on every send; the service checks each is one
-  // address and refuses them on a template that carries a secret.
-  cc: z.array(z.string()).optional().nullable(),
-  bcc: z.array(z.string()).optional().nullable(),
-});
+const createTemplateSchema = z
+  .object({
+    name: z.string().min(1, "Name is required").max(255),
+    slug: z
+      .string()
+      .min(1, "Slug is required")
+      .max(255)
+      .regex(
+        /^[a-z0-9]+(?:-[a-z0-9]+)*$/,
+        "Slug must be lowercase alphanumeric with hyphens"
+      ),
+    subject: z.string().min(1, "Subject is required").max(500),
+    // Required for a coded template; a written one's is written from its blocks.
+    htmlContent: z.string(),
+    plainTextContent: z.string().optional().nullable(),
+    variables: z.array(variableSchema).optional().nullable(),
+    useLayout: z.boolean().optional(),
+    isActive: z.boolean().optional(),
+    providerId: z.string().uuid().optional().nullable(),
+    // When the template is sent, in the site's words; stored as given and
+    // returned on every read, as the dispatcher routes and Direct API do.
+    description: z.string().optional().nullable(),
+    // Fixed addresses copied on every send; the service checks each is one
+    // address and refuses them on a template that carries a secret.
+    cc: z.array(z.string()).optional().nullable(),
+    bcc: z.array(z.string()).optional().nullable(),
+    // A written template: its blocks, checked by the service with the same
+    // rules every transport applies.
+    format: z.enum(["code", "written"]).optional(),
+    blocks: z.custom<WrittenDocument>().optional().nullable(),
+  })
+  .superRefine((template, ctx) => {
+    if (template.format !== "written" && template.htmlContent.length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["htmlContent"],
+        message: "HTML content is required",
+      });
+    }
+  });
 
 /**
  * GET handler for listing all email templates.

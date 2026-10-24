@@ -281,8 +281,11 @@ describe("a draft", () => {
 });
 
 describe("a written template a plugin later claims", () => {
-  it("is coded again once reset to the plugin's version", async () => {
-    const created = await service.createTemplate({
+  const PAID = "<p>We received {{amount}}.</p>";
+
+  /** The site's written `orders-paid`, before any plugin has the slug. */
+  const writtenPaid = () =>
+    service.createTemplate({
       name: "Paid",
       slug: "orders-paid",
       subject: "Paid",
@@ -290,8 +293,11 @@ describe("a written template a plugin later claims", () => {
       format: "written",
       blocks: BLOCKS,
     });
-    const claimed = new EmailTemplateService(adapter, silentLogger);
-    claimed.configureOwnership({
+
+  /** A boot with a plugin whose `orders-paid` has this HTML. */
+  const bootWithPlugin = async (htmlContent: string) => {
+    const booted = new EmailTemplateService(adapter, silentLogger);
+    booted.configureOwnership({
       plugins: [
         {
           name: "@acme/plugin-orders",
@@ -300,13 +306,19 @@ describe("a written template a plugin later claims", () => {
               slug: "orders-paid",
               name: "Order paid",
               subject: "Thanks for your payment",
-              htmlContent: "<p>We received {{amount}}.</p>",
+              htmlContent,
             },
           ],
         },
       ],
     });
-    await claimed.ensureBuiltInTemplates();
+    await booted.ensureBuiltInTemplates();
+    return booted;
+  };
+
+  it("is coded again once reset to the plugin's version", async () => {
+    const created = await writtenPaid();
+    const claimed = await bootWithPlugin(PAID);
     expect(await claimed.getTemplate(created.id)).toMatchObject({
       overridden: true,
       format: "written",
@@ -319,10 +331,106 @@ describe("a written template a plugin later claims", () => {
       overridden: false,
       format: "code",
       blocks: null,
-      htmlContent: "<p>We received {{amount}}.</p>",
+      htmlContent: PAID,
     });
     const sent = await claimed.renderStored(reset, { amount: "$5" });
     expect(sent.html).toContain("We received $5.");
     expect(sent.html).not.toContain("Thanks, ");
+  });
+
+  it("becomes coded when it takes the plugin's update, and written again on undo", async () => {
+    const created = await writtenPaid();
+    await bootWithPlugin(PAID);
+    const updated = await bootWithPlugin(
+      "<p>We received {{amount}}. Thank you!</p>"
+    );
+    const data = { name: "Priya", amount: "$5" };
+    const before = await updated.renderStored(
+      await updated.getTemplate(created.id),
+      data
+    );
+    const comparison = await updated.compareTemplate(created.id);
+    expect(comparison.changes.length).toBeGreaterThan(0);
+
+    const { template, undo } = await updated.applyOwnerUpdate(
+      created.id,
+      Object.fromEntries(
+        comparison.changes.map(change => [change.id, { use: "theirs" }])
+      ),
+      comparison.review
+    );
+
+    expect(template).toMatchObject({ format: "code", blocks: null });
+    expect((await updated.renderStored(template, data)).html).toContain(
+      "We received $5. Thank you!"
+    );
+
+    await updated.undoOwnerUpdate(created.id, undo);
+
+    const undone = await updated.getTemplate(created.id);
+    expect(undone).toMatchObject({ format: "written", blocks: BLOCKS });
+    expect(await updated.renderStored(undone, data)).toEqual(before);
+  });
+
+  it("stays written when it keeps its own lines", async () => {
+    const created = await writtenPaid();
+    await bootWithPlugin(PAID);
+    const updated = await bootWithPlugin(
+      "<p>We received {{amount}}. Thank you!</p>"
+    );
+    const comparison = await updated.compareTemplate(created.id);
+
+    const { template } = await updated.applyOwnerUpdate(
+      created.id,
+      Object.fromEntries(
+        comparison.changes.map(change => [change.id, { use: "mine" }])
+      ),
+      comparison.review
+    );
+
+    expect(template).toMatchObject({ format: "written", blocks: BLOCKS });
+  });
+});
+
+describe("a written draft's preview", () => {
+  it("reads the site's brand settings, as its send does", async () => {
+    await service.updateBrand({ accentColor: "#ff0066" });
+    const blocks: WrittenDocument = {
+      version: 1,
+      blocks: [
+        {
+          type: "button",
+          label: [{ type: "text", text: "Go" }],
+          link: { url: "https://shop.example" },
+        },
+      ],
+    };
+    const saved = await service.createTemplate({
+      name: "Go",
+      slug: "go",
+      subject: "Go",
+      htmlContent: "",
+      useLayout: false,
+      format: "written",
+      blocks,
+    });
+
+    const preview = await service.previewDraft(
+      {
+        subject: "Go",
+        htmlContent: "",
+        plainTextContent: null,
+        preheader: null,
+        useLayout: false,
+        kind: "template",
+        layoutId: null,
+        format: "written",
+        blocks,
+      },
+      {}
+    );
+
+    expect(preview.html).toContain("#ff0066");
+    expect(preview).toEqual(await service.renderStored(saved, {}));
   });
 });
