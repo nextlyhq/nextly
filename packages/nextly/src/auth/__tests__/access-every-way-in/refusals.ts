@@ -211,7 +211,9 @@ export function noteMissingError(missing: unknown): void {
 /**
  * Whether a refusal's message names something internal: a permission spelled
  * as stored (`update-posts`), or the target's own slug, where the caller's
- * words would be its label.
+ * words would be its label. A slug that is one plain word (`users`) reads the
+ * same as the word that names it, so only a slug that is not a word, joined
+ * by `-` or `_`, can be told apart in a message.
  */
 export function namesInternals(message: string, slug: string): boolean {
   if (
@@ -219,7 +221,7 @@ export function namesInternals(message: string, slug: string): boolean {
   ) {
     return true;
   }
-  return slug !== "" && new RegExp(`\\b${slug}\\b`).test(message);
+  return /[-_]/.test(slug) && new RegExp(`\\b${slug}\\b`).test(message);
 }
 
 /**

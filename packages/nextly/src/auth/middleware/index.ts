@@ -1,5 +1,8 @@
 import { container } from "@nextly/di/container";
-import type { ApiKeyService } from "@nextly/domains/auth/services/api-key-service";
+import type {
+  ApiKeyRefusalCause,
+  ApiKeyService,
+} from "@nextly/domains/auth/services/api-key-service";
 import type { RBACAccessControlService } from "@nextly/domains/auth/services/rbac-access-control-service";
 import { env } from "@nextly/lib/env";
 
@@ -11,6 +14,10 @@ import { presentedApiKey } from "../../middleware/rest-callers";
 import { currentRestLimitGate } from "../../middleware/rest-limit-gate";
 // getSession from ../session is a backward-compat wrapper that delegates
 // to the new jose-based session/get-session.ts module internally.
+import {
+  refusalMessageFor,
+  type RefusalScope,
+} from "../access/refusal-message";
 import {
   anyPermissionVerdict,
   routeGateVerdict,
@@ -126,6 +133,14 @@ export interface AuthContext {
   claims?: Record<string, unknown>;
 }
 
+/** Why a presented key was refused, as the server's log says it. */
+const KEY_REFUSED_BECAUSE: Readonly<Record<ApiKeyRefusalCause, string>> = {
+  unknown: "the API key is not one this site issued",
+  revoked: "the API key is revoked",
+  expired: "the API key has expired",
+  "creator-inactive": "the API key's creator is not active",
+};
+
 /**
  * API key authentication middleware.
  *
@@ -190,16 +205,25 @@ export async function requireApiKeyAuth(req: Request): Promise<
   }
 
   // 3. Hash and look up the key — returns null for not-found, revoked, or expired
+  let cause: ApiKeyRefusalCause | undefined = known?.cause;
   const keyAuth = known
     ? known.resolved
-    : await apiKeyService.authenticateApiKey(rawKey);
+    : await apiKeyService.authenticateApiKey(rawKey, refused => {
+        cause = refused;
+      });
   if (!keyAuth) {
     // Key was present but invalid/expired/revoked — explicit 401, do NOT fall through
-    return createErrorResponse(
-      401,
-      "Invalid API key",
-      "The provided API key is invalid, expired, or revoked"
-    );
+    // Which way the key fails is for the server's log, not the caller.
+    return {
+      ...createErrorResponse(
+        401,
+        "Invalid API key",
+        "Authentication required."
+      ),
+      reason: cause
+        ? KEY_REFUSED_BECAUSE[cause]
+        : "the API key did not resolve",
+    };
   }
 
   // 4. Rate limit check — enforced after auth, before permission resolution.
@@ -301,10 +325,12 @@ export async function requireAuthentication(
   // silently instead of bouncing the user to login.
   if (apiKeyResult === null) {
     if (sessionResult.reason === "expired") {
+      // The code tells the admin to refresh; the message says no more than
+      // any other request needing sign-in is told.
       return createErrorResponse(
         401,
         "Session expired",
-        "Your session has expired, please refresh",
+        "Authentication required.",
         undefined,
         "TOKEN_EXPIRED"
       );
@@ -312,7 +338,7 @@ export async function requireAuthentication(
     return createErrorResponse(
       401,
       "Authentication required",
-      "You must be logged in to access this resource",
+      "Authentication required.",
       undefined,
       "AUTH_REQUIRED"
     );
@@ -371,7 +397,9 @@ export async function requirePermission(
 export async function authorizeCaller(
   authResult: AuthContext,
   action: string,
-  resource: string
+  resource: string,
+  // Whether the request names one entry, so the refusal says "this post".
+  scope: RefusalScope = "all"
 ): Promise<AuthContext | ErrorResponse> {
   // The route gate's answer, asked of the one decision: a key on its own
   // grants and the entity's rule, a session through the access-control
@@ -387,11 +415,16 @@ export async function authorizeCaller(
   // always has, rather than being answered as a refusal.
   if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
   if (!verdict.allowed) {
-    return createErrorResponse(
-      403,
-      "Forbidden",
-      `You do not have permission to ${action} ${resource}`
-    );
+    return {
+      ...createErrorResponse(
+        403,
+        "Forbidden",
+        await refusalMessageFor(action, resource, scope)
+      ),
+      // The one decision does not say whether the entity's own rule or a
+      // missing grant refused, so the reason names both rather than guess.
+      reason: `the access decision refused ${action} on ${resource}: its access rule, or no ${action}-${resource} grant`,
+    };
   }
   return authResult;
 }
@@ -404,7 +437,8 @@ export async function authorizeCaller(
  */
 export async function requireAnyPermission(
   req: Request,
-  permissions: Array<{ action: string; resource: string }>
+  permissions: Array<{ action: string; resource: string }>,
+  target?: RefusalTarget
 ): Promise<AuthContext | ErrorResponse> {
   const authResult = await requireAuthentication(req);
 
@@ -412,7 +446,32 @@ export async function requireAnyPermission(
     return authResult;
   }
 
-  return authorizeCallerForAny(authResult, permissions);
+  return authorizeCallerForAny(authResult, permissions, target);
+}
+
+/**
+ * What a refusal names as refused, where it is not what the permissions
+ * asked for say: reading a permission may be granted by `read-roles`, and is
+ * still the reading of a permission.
+ */
+export interface RefusalTarget {
+  action: string;
+  resource: string;
+}
+
+/**
+ * What an any-of refusal names: the target given, else the one thing every
+ * alternative is about. Alternatives about different things name nothing.
+ */
+function anyOfTarget(
+  permissions: ReadonlyArray<{ action: string; resource: string }>,
+  target: RefusalTarget | undefined
+): RefusalTarget | undefined {
+  if (target) return target;
+  const [first] = permissions;
+  return first && permissions.every(p => p.resource === first.resource)
+    ? first
+    : undefined;
 }
 
 /**
@@ -421,7 +480,8 @@ export async function requireAnyPermission(
  */
 export async function authorizeCallerForAny(
   authResult: AuthContext,
-  permissions: Array<{ action: string; resource: string }>
+  permissions: Array<{ action: string; resource: string }>,
+  target?: RefusalTarget
 ): Promise<AuthContext | ErrorResponse> {
   // Any one of the permissions will do, judged on the key's own grants or the
   // session's permissions, asked of the one decision.
@@ -431,11 +491,19 @@ export async function authorizeCallerForAny(
     getRBACService()
   );
   if (!verdict.allowed) {
-    return createErrorResponse(
-      403,
-      "Forbidden",
-      `You do not have the required permissions to access this resource`
-    );
+    const named = anyOfTarget(permissions, target);
+    return {
+      ...createErrorResponse(
+        403,
+        "Forbidden",
+        named
+          ? await refusalMessageFor(named.action, named.resource)
+          : "You can't do that."
+      ),
+      reason: `the caller holds none of ${permissions
+        .map(p => `${p.action}-${p.resource}`)
+        .join(", ")}`,
+    };
   }
   return authResult;
 }
@@ -645,7 +713,13 @@ export async function requireCollectionAccess(
   // question `requirePermission` asks, about the collection or Single the
   // URL names.
   return withRuleLanguage(requestLanguage(operation), () =>
-    authorizeCaller(authResult, action, collectionSlug)
+    authorizeCaller(
+      authResult,
+      action,
+      collectionSlug,
+      // A route naming one entry is refused about that entry.
+      operation?.params.entryId ? "one" : "all"
+    )
   );
 }
 
