@@ -95,6 +95,7 @@ import {
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -850,9 +851,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         throw new Error(`Single "${slug}" not found`);
       }
       if (single.locked) {
-        throw new Error(
-          `Single "${slug}" is locked and cannot be deleted. Code-first Singles must be removed from code.`
-        );
+        throw NextlyError.definedInCode({
+          thing: "Single",
+          change: "delete",
+          logContext: { reason: "single-locked-delete", slug },
+        });
       }
 
       // The storage drop and the registry delete are one operation, so they are issued as one. Held
@@ -973,11 +976,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (!existing) {
         throw new Error(`Single "${slug}" not found`);
       }
-      if (existing.locked) {
-        throw new Error(
-          `Single "${slug}" is locked and cannot be modified via UI. Code-first Singles must be updated in code.`
-        );
-      }
+      refuseChangeDefinedInCode(existing, "Single", slug);
 
       const updateData: Record<string, unknown> = {};
       if (b.label !== undefined) updateData.label = b.label;
@@ -1088,11 +1087,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const slug = requireParam(p, "slug", "Single slug");
       const single = await svc.registry.getSingleBySlug(slug);
       if (!single) throw new Error("Single not found");
-      if (single.locked) {
-        throw new Error(
-          "This single is managed via code and cannot be modified in the UI"
-        );
-      }
+      refuseChangeDefinedInCode(single, "Single", slug);
 
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
@@ -1156,11 +1151,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const slug = requireParam(p, "slug", "Single slug");
       const single = await svc.registry.getSingleBySlug(slug);
       if (!single) throw new Error("Single not found");
-      if (single.locked) {
-        throw new Error(
-          "This single is managed via code and cannot be modified in the UI"
-        );
-      }
+      refuseChangeDefinedInCode(single, "Single", slug);
 
       const {
         fields,

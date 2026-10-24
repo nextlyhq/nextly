@@ -330,6 +330,45 @@ export class NextlyError extends Error {
   }
 
   /**
+   * A collection, Single or component defined in code, which is changed by
+   * changing its code and not from here. Forbidden, and the message says so:
+   * it is a fact about the thing, not about the caller's permissions, so it
+   * names no permission and no policy. The lock's detail goes to the log
+   * through `logContext`.
+   */
+  static definedInCode(opts: {
+    thing: "collection" | "Single" | "component";
+    change: "change" | "delete";
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "FORBIDDEN",
+      publicMessage: `This ${opts.thing} is defined in code, so it can't be ${
+        opts.change === "change" ? "changed" : "deleted"
+      } here.`,
+      logContext: opts.logContext,
+    });
+  }
+
+  /**
+   * An autosave where the collection or Single does not autosave: its owner
+   * switched autosave off, or it keeps no drafts to autosave into. Forbidden,
+   * and the message says so, since it is a setting and not a permission.
+   */
+  static autosaveOff(opts: {
+    scopeKind: string;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "FORBIDDEN",
+      publicMessage: `Autosave is turned off for this ${
+        opts.scopeKind === "single" ? "Single" : "collection"
+      }.`,
+      logContext: opts.logContext,
+    });
+  }
+
+  /**
    * An API key refused because its role allows more than the person creating
    * it may do. The sentence is FORBIDDEN's and names no permission; which one
    * exceeded goes to the log through `logContext`. The code is its own, so a
