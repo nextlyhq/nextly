@@ -444,7 +444,8 @@ function kidsOf(node: RichTextNode): readonly RichTextNode[] {
  *
  * A hundred is far above any authored nesting and far below the call stack.
  */
-const MAX_PARTITION_DEPTH = 100;
+// Exported for its test only: the package entries export `RichText` alone.
+export const MAX_PARTITION_DEPTH = 100;
 
 /**
  * Where ONE child of a phrasing-only container belongs.
