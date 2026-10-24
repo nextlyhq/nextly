@@ -1,3 +1,7 @@
 
 # Nextly local uploads (auto-added)
 public/uploads/
+
+# Per-file declarations tsc writes for tsdown.dts.config.ts to bundle; `build`
+# deletes and rewrites them.
+.dts-tmp/

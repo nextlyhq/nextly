@@ -248,10 +248,10 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsdown && node scripts/postbuild.cjs",
-    "dev": "tsdown --watch",
+    "build": "rimraf dist .dts-tmp && tsc -p tsconfig.dts.json && tsdown && tsdown -c tsdown.dts.config.ts && node scripts/postbuild.cjs",
+    "dev": "node scripts/dev.mjs",
     "check-types": "tsc --noEmit -p tsconfig.tests.json",
-    "clean": "rimraf dist",
+    "clean": "rimraf dist .dts-tmp",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest",
