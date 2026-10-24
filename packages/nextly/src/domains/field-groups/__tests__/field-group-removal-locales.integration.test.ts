@@ -15,6 +15,10 @@ process.env.NEXTLY_SECRET =
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { buildClaims } from "../../../auth/jwt/claims";
+import { signAccessToken } from "../../../auth/jwt/sign";
+import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
+
 import {
   defineCollection,
   defineFieldGroup,
@@ -23,6 +27,7 @@ import {
   text,
 } from "../../../config";
 import { Nextly } from "../../../direct-api/nextly";
+import { createDynamicHandlers } from "../../../routeHandler";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -32,6 +37,11 @@ import {
 
 type Doc = Record<string, unknown>;
 
+const ALLOWED = "allowed@example.com";
+/** Writable only by the allowed person, so the denial has a control. */
+const onlyAllowed = ({ user }: { user: unknown }) =>
+  (user as { email?: string } | null)?.email === ALLOWED;
+
 describe.each(getConfiguredTestDialects())(
   "a removed field-group instance, in every language (%s)",
   (dialect: TestDialect) => {
@@ -39,6 +49,8 @@ describe.each(getConfiguredTestDialects())(
     let trusted: Nextly;
     /** A caller whose field rules are judged; the collection lets anyone write. */
     let checked: Nextly;
+    /** A signed-in writer's session, for the REST door, which needs one. */
+    let writerCookie = "";
 
     beforeAll(async () => {
       t = await createTestNextly({
@@ -69,6 +81,15 @@ describe.each(getConfiguredTestDialects())(
               }),
             ],
           }),
+          // As `lnote`, with a `secret` the allowed person may change.
+          defineFieldGroup({
+            slug: "lnote2",
+            localized: true,
+            fields: [
+              text({ name: "heading" }),
+              text({ name: "secret", access: { update: onlyAllowed } }),
+            ],
+          }),
         ],
         collections: [
           defineCollection({
@@ -81,6 +102,25 @@ describe.each(getConfiguredTestDialects())(
             fields: [
               text({ name: "title" }),
               fieldGroup({ name: "one", component: "lnote" }),
+            ],
+          }),
+          // A localized collection with no field rule of its own, whose
+          // translated group holds a field group inline.
+          defineCollection({
+            slug: "lwrap",
+            localized: true,
+            access: {
+              create: () => true,
+              read: () => true,
+              update: () => true,
+            },
+            fields: [
+              text({ name: "title" }),
+              group({
+                name: "wrap",
+                localized: true,
+                fields: [fieldGroup({ name: "held", component: "lnote2" })],
+              }),
             ],
           }),
           // A localized collection whose own translated group carries a field
@@ -128,9 +168,29 @@ describe.each(getConfiguredTestDialects())(
       } as never);
       trusted = new Nextly();
       checked = new Nextly({ overrideAccess: false });
+      const writer = (
+        await trusted.users.create({
+          email: "writer@example.com",
+          password: "Password123!",
+          data: { name: "Writer", isActive: true },
+        } as never)
+      ).item as { id: string };
+      const token = await signAccessToken(
+        buildClaims({
+          userId: String(writer.id),
+          email: "writer@example.com",
+          name: "Writer",
+          image: null,
+          roleIds: [],
+          sessionEpoch: 0,
+        }),
+        process.env.NEXTLY_SECRET!
+      );
+      writerCookie = `nextly_session=${token}`;
     }, 180_000);
 
     afterAll(async () => {
+      resetSessionStandingForTests();
       await t?.destroy();
     });
 
@@ -280,6 +340,81 @@ describe.each(getConfiguredTestDialects())(
         id,
       } as never)) as Doc;
       expect(after.meta).toEqual({ open: "o2", kept: "K" });
+    });
+
+    describe("an inline field group in a localized collection's translated group", () => {
+      /** An `lwrap` entry whose inline instance holds `secret`. */
+      async function wrapped(tag: string): Promise<string> {
+        const { item } = await trusted.create({
+          collection: "lwrap",
+          data: {
+            title: tag,
+            wrap: { held: { heading: "h", secret: `S-${tag}` } },
+          },
+        } as never);
+        return String(item.id);
+      }
+      const innerOf = async (id: string) =>
+        (
+          (
+            (await trusted.findByID({
+              collection: "lwrap",
+              id,
+            } as never)) as Doc
+          ).wrap as Doc
+        ).held as Doc;
+      const change = (tag: string) => ({
+        wrap: { held: { heading: `h-${tag}`, secret: "forged" } },
+      });
+
+      it.each(["direct", "rest"] as const)(
+        "keeps the child its update rule denies, through %s",
+        async door => {
+          const id = await wrapped(`w-${door}`);
+          if (door === "rest") {
+            const path = ["collections", "lwrap", "entries", id];
+            const handlers = createDynamicHandlers() as unknown as Record<
+              string,
+              (request: Request, context: unknown) => Promise<Response>
+            >;
+            const res = await handlers.PATCH!(
+              new Request(`http://localhost/api/${path.join("/")}`, {
+                method: "PATCH",
+                headers: {
+                  cookie: writerCookie,
+                  "content-type": "application/json",
+                },
+                body: JSON.stringify(change(door)),
+              }),
+              { params: Promise.resolve({ params: path }) }
+            );
+            expect(res.status).toBe(200);
+          } else {
+            await checked.update({
+              collection: "lwrap",
+              id,
+              data: change(door),
+            } as never);
+          }
+
+          const inner = await innerOf(id);
+          expect([inner.heading, inner.secret]).toEqual([
+            `h-${door}`,
+            `S-w-${door}`,
+          ]);
+        }
+      );
+
+      it("lets the allowed person change it", async () => {
+        // The control: the rule allows this caller, so the value changes.
+        const id = await wrapped("w-ok");
+        await new Nextly({
+          overrideAccess: false,
+          user: { id: "allowed-user", email: ALLOWED },
+        }).update({ collection: "lwrap", id, data: change("ok") } as never);
+
+        expect((await innerOf(id)).secret).toBe("forged");
+      });
     });
 
     it("removes one that holds no protected value in any language", async () => {
