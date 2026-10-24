@@ -1,61 +1,60 @@
 ---
-title: Nextly Documentation
-description: Nextly is an open-source CMS and visual page builder for Next.js. Model content, build pages, localize, version and release from your own stack.
+title: Nextly documentation
+description: Nextly is an open-source content platform for Next.js. MIT licensed, self-hosted. Runs inside your own Next.js app, on your own PostgreSQL or MySQL database, or SQLite for local work.
 ---
 
-Nextly is an open-source content platform for Next.js. Developers define the content model in TypeScript, or build it in the admin with the Visual Schema Builder; either way it is the same data model, the same type-safe API and the same admin interface. Your team then composes pages in the Visual Page Builder, translates them, keeps a version history, and schedules what goes live. It all runs inside your own Next.js app, on your own database.
+## Start here
 
-## Why Nextly?
-
-- **Next.js Native** -- Runs as part of your Next.js app. No separate server, no external API to manage.
-- **Code-First + Visual** -- Define collections in TypeScript for version control, or build them visually in the admin panel. Mix both approaches freely.
-- **Type-Safe** -- Full TypeScript support with auto-generated types for your content schema.
-- **Direct API** -- Query content directly in Server Components with `nextly.find()` and `nextly.findByID()`. No HTTP overhead.
-- **Flexible Database** -- PostgreSQL, MySQL, or SQLite via swappable Drizzle adapters.
-- **Admin Panel** -- A full-featured admin UI at `/admin` with RBAC, media library, and rich text editing out of the box.
-
-## Quick Links
-
-- [Getting Started](/docs/getting-started) -- What Nextly is and core concepts
-- [Installation](/docs/getting-started/installation) -- Install Nextly in a new or existing Next.js project
-- [Quick Start](/docs/getting-started/quick-start) -- Build a blog, step by step
-- [Configuration](/docs/configuration) -- Configure collections, singles, fields, and plugins
-- [REST API](/docs/api-reference/rest-api) -- HTTP endpoints, auth, response shapes
-- [Direct API](/docs/api-reference/direct-api) -- Server-side query layer for Server Components
-
-## Get Started
-
-The fastest way to start is with the scaffolding CLI:
-
-<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
-<Tab value="pnpm">
-```bash
-pnpm create nextly-app@alpha my-app
-```
-</Tab>
+<Tabs items={["npm", "pnpm", "yarn", "bun"]}>
 <Tab value="npm">
 ```bash
-npx create-nextly-app@alpha my-app
+npx create-nextly-app@alpha my-app -y
+cd my-app
+npm run dev
+```
+</Tab>
+<Tab value="pnpm">
+```bash
+pnpm create nextly-app@alpha my-app -y
+cd my-app
+pnpm dev
 ```
 </Tab>
 <Tab value="yarn">
 ```bash
-yarn create nextly-app@alpha my-app
+yarn create nextly-app@alpha my-app -y
+cd my-app
+yarn dev
 ```
 </Tab>
 <Tab value="bun">
 ```bash
-bun create nextly-app@alpha my-app
+bun create nextly-app@alpha my-app -y
+cd my-app
+bun run dev
 ```
 </Tab>
 </Tabs>
 
-Or follow [Installation](/docs/getting-started/installation) to add Nextly to an existing Next.js project, then the [Quick Start guide](/docs/getting-started/quick-start) to build a blog, step by step.
+1. **Create.** A project with the admin and a database.
+2. **Start.** The first run creates the system tables.
+3. **Sign in.** Open [http://localhost:3000/admin/setup](http://localhost:3000/admin/setup) and create the first admin.
 
-## Next Steps
+`-y` takes the defaults: the blank template, SQLite, local storage and the Nextly agent skills. Leave it off to choose a template and a database. The [Quick start](/docs/getting-started/quick-start) goes through each step and what you should see.
 
-- [Getting Started](/docs/getting-started) -- Core concepts and prerequisites
-- [Installation](/docs/getting-started/installation) -- Install Nextly in your project
-- [Configuration](/docs/configuration) -- Configure collections, singles, fields, and plugins
-- [Database](/docs/database) -- Choose and configure PostgreSQL, MySQL, or SQLite
-- [Deployment](/docs/guides/deployment) -- Deploy to Vercel or self-host on Node.js
+Needs Node.js 22.12+ or 24+ (Node 24 LTS recommended), Next.js 16 with the App Router, React 19.
+
+## Other ways in
+
+- **An existing Next.js app.** Run `create-nextly-app` inside an existing Next.js app to add Nextly; it writes only the files the app does not have and extends the Next config. See [Add to an existing Next.js project](/docs/getting-started/installation#option-b-add-to-an-existing-nextjs-project).
+- **With a coding agent.** Every new Nextly project ships with an AGENTS.md and CLAUDE.md written for coding agents. New Nextly projects come with agent skills for building with Nextly (installing it, collections, authentication, deploying), written to `.agents/skills/` and `.claude/skills/`. `create-nextly-app` asks first, `-y` adds them, and `--no-skills` leaves them out. See [Coding agents](/docs/guides/coding-agents).
+- **Learn the model first.** Model content in TypeScript or in the Visual Schema Builder. Both feed the same Nextly runtime, admin and APIs, with [the differences between them](/docs/schema-builder#builder-vs-code-first). See [Getting Started](/docs/getting-started) for collections, singles, fields and field groups.
+
+## The docs
+
+- **Model:** [Configuration](/docs/configuration) · [Visual Schema Builder](/docs/schema-builder) · [Database](/docs/database) · [Direct API](/docs/api-reference/direct-api) · [REST API](/docs/api-reference/rest-api)
+- **Operate:** [Localization](/docs/localization) · [Version history](/docs/versions) · [Content Releases](/docs/releases) · [Roles and permissions](/docs/permissions) · [Preview](/docs/preview)
+- **Extend:** [Plugins](/docs/plugins) · [Visual Page Builder](/docs/page-builder) · [Webhooks](/docs/webhooks) · [Background jobs](/docs/jobs) · [Dashboard widgets](/docs/widgets)
+- **Ship:** [Deployment](/docs/guides/deployment) · [Production migrations](/docs/guides/production-migrations) · [Media storage](/docs/guides/media-storage) · [Plugin stability](/docs/plugins/stability)
+
+Nextly is in alpha. APIs may change before 1.0. Pin exact versions in production.

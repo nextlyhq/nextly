@@ -34,6 +34,8 @@ import {
   EARLIER_BUILT_IN_VERSIONS,
 } from "../services/templates";
 
+import { withReadableMutedText } from "./readable-muted-text";
+
 const body = (htmlContent: string): TemplateFields => ({
   subject: "Hi",
   htmlContent,
@@ -79,21 +81,6 @@ function earlierOf(slug: string) {
   const earlier = EARLIER_BUILT_IN_VERSIONS[slug]?.[0];
   if (!earlier) throw new Error(`no earlier version of ${slug}`);
   return earlier;
-}
-
-/**
- * A built-in's pre-brand source with the one visible change core made since:
- * muted text darkened to meet WCAG AA, the footer's grey on the page
- * (#71717a to #52525b) and the small print's on the card (#a1a1aa to
- * #71717a). Brand settings themselves still change nothing a reader sees.
- */
-function withReadableMutedText(html: string): string {
-  return html
-    .replace(
-      /(class="email-muted" style="[^"]*?)color: #71717a;/g,
-      "$1color: #52525b;"
-    )
-    .replaceAll("color: #a1a1aa;", "color: #71717a;");
 }
 
 describe("core's built-ins before and after brand settings", () => {
