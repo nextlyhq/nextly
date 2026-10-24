@@ -8,7 +8,7 @@
  * whose code also narrows who may act on it.
  *
  * The entity list and the labels come from one read of each registry, a
- * projection of only the slug, labels and admin columns, so the two cannot
+ * projection of only the slug and label columns, so the two cannot
  * describe different moments: a slug added or removed between two separate
  * reads would otherwise be left out, or listed under no label. Each slug's kind
  * is decided by `contentKinds`, the precedence `registeredContentSnapshot()`
@@ -26,11 +26,11 @@ import { getRBACService } from "../auth/code-access";
 import { getService } from "../di";
 import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
 import { getCachedNextly } from "../init";
-import { getHandlerConfig } from "../route-handler/auth-handler";
+import { bootedPlugins } from "../route-handler/auth-handler";
 import { contentKinds } from "../services/lib/registered-content-slugs";
 
 import { PRIVATE_NO_STORE_HEADERS } from "./authenticated-read";
-import { respondList } from "./response-shapes";
+import { respondList, SKIP_DATE_FORMATTING_HEADER } from "./response-shapes";
 import { requireRoutePermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 
@@ -57,7 +57,9 @@ export interface RolesScreenEntity {
  */
 function pluginsBySlug(kind: "collections" | "singles"): Map<string, string> {
   const owners = new Map<string, string>();
-  for (const plugin of getHandlerConfig()?.plugins ?? []) {
+  // The plugins the runtime booted with, which an app whose route was created
+  // without a config still has.
+  for (const plugin of bootedPlugins()) {
     for (const slug of collectPluginContributedSlugs([plugin], kind)) {
       if (!owners.has(slug)) owners.set(slug, plugin.name);
     }
@@ -73,8 +75,8 @@ export const getRolesScreen = withErrorHandler(async (req: Request) => {
   // A registry that cannot be read refuses the request rather than leaving
   // its entities unlisted, read as having no access to set.
   const [collections, singles] = await Promise.all([
-    getService("collectionRegistryService").getAllPresentations(),
-    getService("singleRegistryService").getAllPresentations(),
+    getService("collectionRegistryService").getAllLabels(),
+    getService("singleRegistryService").getAllLabels(),
   ]);
   const kinds = contentKinds(
     collections.map(collection => collection.slug),
@@ -129,6 +131,13 @@ export const getRolesScreen = withErrorHandler(async (req: Request) => {
       hasNext: false,
       hasPrev: false,
     },
-    { headers: PRIVATE_NO_STORE_HEADERS }
+    {
+      // Labels are configuration, not stored dates: one that happens to read
+      // as a timestamp is shown as registered, not rewritten into a timezone.
+      headers: {
+        ...PRIVATE_NO_STORE_HEADERS,
+        [SKIP_DATE_FORMATTING_HEADER]: "1",
+      },
+    }
   );
 });

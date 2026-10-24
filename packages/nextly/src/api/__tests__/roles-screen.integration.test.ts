@@ -27,6 +27,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../plugins/test-nextly";
+import { getHandlerConfig } from "../../route-handler/auth-handler";
 import { createDynamicHandlers } from "../../routeHandler";
 import { sanitizeConfig } from "../../shared/types/config";
 import { registeredContentSnapshot } from "../../services/lib/registered-content-slugs";
@@ -85,6 +86,16 @@ const collections = [
     labels: { singular: "Note", plural: "Notes" },
     fields: [text({ name: "body" })],
   }),
+  // A label that reads as a timestamp, which a date-formatting pass would
+  // rewrite into the installation's timezone.
+  defineCollection({
+    slug: "dated",
+    labels: {
+      singular: "2026-01-02T03:04:05.000Z",
+      plural: "2026-01-02T03:04:05.000Z",
+    },
+    fields: [text({ name: "body" })],
+  }),
 ];
 
 const singles = [
@@ -95,6 +106,69 @@ const singles = [
     fields: [text({ name: "tagline" })],
   }),
 ];
+
+/**
+ * An app whose instrumentation hook boots the runtime may create its route
+ * without a config. First in this file, because a route created with one keeps
+ * it for the process: after that, no request here would be made without one.
+ */
+describe("a route created without a config", () => {
+  let t: TestNextly;
+
+  beforeAll(async () => {
+    t = await createTestNextly({ collections, singles, plugins: [forms] });
+  });
+
+  afterAll(async () => {
+    resetSessionStandingForTests();
+    await t?.destroy();
+  });
+
+  it("still names the plugin, from the plugins the runtime booted with", async () => {
+    // POPULATION CONTROL: no route has been handed a config.
+    expect(getHandlerConfig()).toBeNull();
+    // The install's first account holds super-admin, which passes the gate.
+    const owner = await (
+      t.nextly as unknown as {
+        users: {
+          create(a: { data: Record<string, unknown> }): Promise<{
+            item: { id: string };
+          }>;
+        };
+      }
+    ).users.create({
+      data: {
+        email: "owner@example.com",
+        password: "Password123!",
+        name: "owner",
+        isActive: true,
+      },
+    });
+    const token = await signAccessToken(
+      buildClaims({
+        userId: owner.item.id,
+        email: "owner@example.com",
+        name: "owner",
+        image: null,
+        roleIds: [],
+        sessionEpoch: 0,
+      }),
+      process.env.NEXTLY_SECRET!
+    );
+    const path = ["roles", "screen"];
+    const res = await createDynamicHandlers().GET(
+      new Request(`http://localhost/api/${path.join("/")}`, {
+        headers: { cookie: `nextly_session=${token}` },
+      }),
+      { params: Promise.resolve({ params: path }) }
+    );
+    expect(res.status, await res.clone().text()).toBe(200);
+    const items = ((await res.json()) as { items: ScreenEntity[] }).items;
+    expect(items.find(e => e.slug === "submissions")?.plugin).toBe(
+      "@test/forms"
+    );
+  });
+});
 
 describe.each(getConfiguredTestDialects())(
   "what the roles screen is told (%s)",
@@ -134,8 +208,7 @@ describe.each(getConfiguredTestDialects())(
 
     function screen(headers: Record<string, string>) {
       const path = ["roles", "screen"];
-      // Handed the app's config, as a mounted route is: it is what names the
-      // plugins and what they contribute.
+      // Handed the app's config, as a mounted route usually is.
       return createDynamicHandlers({
         config: sanitizeConfig({ collections, singles, plugins: [forms] }),
       }).GET(
@@ -162,6 +235,13 @@ describe.each(getConfiguredTestDialects())(
         seedSystemPermissions: () => Promise<unknown>;
       };
       await seeder.seedSystemPermissions();
+      // A timezone other than UTC, so a pass that rewrote timestamps by value
+      // would change a label that reads as one.
+      await (
+        t.getService("generalSettingsService") as unknown as {
+          updateSettings(data: { timezone: string }): Promise<unknown>;
+        }
+      ).updateSettings({ timezone: "Asia/Karachi" });
 
       // The install's first account holds super-admin, so it is made first
       // and not used: the two below are judged by their own roles.
@@ -213,6 +293,11 @@ describe.each(getConfiguredTestDialects())(
         plural: "Articles",
       });
       expect(bySlug.get("masthead")?.labels).toEqual({ singular: "Masthead" });
+      // As registered, not reformatted as a date.
+      expect(bySlug.get("dated")?.labels).toEqual({
+        singular: "2026-01-02T03:04:05.000Z",
+        plural: "2026-01-02T03:04:05.000Z",
+      });
     });
 
     it("names the operations whose code declares a rule, and only those", async () => {

@@ -295,7 +295,7 @@ export abstract class BaseRegistryService<
    * record is.
    *
    * For a caller that needs a few presentation columns of every record (its
-   * labels and admin options) and nothing else. `getAllRecords` selects and
+   * labels) and nothing else. `getAllRecords` selects and
    * deserializes every column, the fields JSON included; here only the named
    * columns are read, and every other field of the result is left at the
    * value its deserializer gives an absent column.

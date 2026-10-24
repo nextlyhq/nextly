@@ -309,14 +309,14 @@ export class SingleRegistryService extends BaseRegistryService<
   }
 
   /**
-   * Every Single's slug, label and admin options, read without the rest of
-   * its record: what a screen naming every Single needs.
+   * Every Single's slug and label, read without the rest of its record: what
+   * a screen naming every Single needs.
    */
-  async getAllPresentations(): Promise<
-    Array<Pick<DynamicSingleRecord, "slug" | "label" | "admin">>
+  async getAllLabels(): Promise<
+    Array<Pick<DynamicSingleRecord, "slug" | "label">>
   > {
-    const records = await this.getAllRecordsWithColumns(["label", "admin"]);
-    return records.map(({ slug, label, admin }) => ({ slug, label, admin }));
+    const records = await this.getAllRecordsWithColumns(["label"]);
+    return records.map(({ slug, label }) => ({ slug, label }));
   }
 
   async getAllSingles(

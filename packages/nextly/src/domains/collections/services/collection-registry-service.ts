@@ -168,14 +168,14 @@ export class CollectionRegistryService extends BaseRegistryService<
   }
 
   /**
-   * Every collection's slug, labels and admin options, read without the rest
-   * of its record: what a screen naming every collection needs.
+   * Every collection's slug and labels, read without the rest of its record:
+   * what a screen naming every collection needs.
    */
-  async getAllPresentations(): Promise<
-    Array<Pick<DynamicCollectionRecord, "slug" | "labels" | "admin">>
+  async getAllLabels(): Promise<
+    Array<Pick<DynamicCollectionRecord, "slug" | "labels">>
   > {
-    const records = await this.getAllRecordsWithColumns(["labels", "admin"]);
-    return records.map(({ slug, labels, admin }) => ({ slug, labels, admin }));
+    const records = await this.getAllRecordsWithColumns(["labels"]);
+    return records.map(({ slug, labels }) => ({ slug, labels }));
   }
 
   async getAllCollections(
