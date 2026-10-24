@@ -26,6 +26,8 @@ import {
   checkbox,
   date,
   defineCollection,
+  defineFieldGroup,
+  fieldGroup,
   group,
   json,
   number,
@@ -667,6 +669,86 @@ describe.each(getConfiguredTestDialects())(
       } as never)) as Record<string, unknown> | null;
       expect(doc?.body).toBe("edited");
       expect(doc?.ops).toEqual({ note: "published-note" });
+    });
+
+    it("keeps an edit the publisher may make when its rule reads a field group sent with it", async () => {
+      // `gated` may change only while `cfg` is open, and the publisher opens
+      // it in the same publish. The field group is written apart from the
+      // entry's own fields, so a judgment of the publisher's values without it
+      // would refuse `gated` and put the pending change's value in its place.
+      const slug = "siblingpublish";
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [
+          defineFieldGroup({ slug: "pmode", fields: [text({ name: "mode" })] }),
+        ],
+        collections: [
+          defineCollection({
+            slug,
+            status: true,
+            versions: { drafts: true },
+            access: {
+              read: () => true,
+              update: () => true,
+              publish: () => true,
+              unpublish: () => true,
+            },
+            fields: [
+              text({ name: "body" }),
+              fieldGroup({ name: "cfg", component: "pmode" }),
+              text({
+                name: "gated",
+                access: {
+                  update: ({ data }) =>
+                    (data?.cfg as { mode?: unknown } | undefined)?.mode ===
+                    "open",
+                },
+              }),
+            ],
+          }),
+        ],
+      } as never);
+      const h = handlerOf(current);
+
+      const created = await h.createEntry(
+        { collectionName: slug, overrideAccess: true },
+        {
+          body: "live",
+          cfg: { mode: "closed" },
+          gated: "live-gated",
+          status: "published",
+        }
+      );
+      const id = (created.data as { id?: string }).id as string;
+      await h.updateEntry(
+        {
+          collectionName: slug,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        { body: "edited" }
+      );
+
+      const published = await h.updateEntry(
+        {
+          collectionName: slug,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        { status: "published", cfg: { mode: "open" }, gated: "clerk-gated" }
+      );
+
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      const doc = (await current.nextly.findByID({
+        collection: slug as never,
+        id,
+        overrideAccess: true,
+        status: "all",
+      } as never)) as Record<string, unknown> | null;
+      expect(doc?.body).toBe("edited");
+      expect(doc?.gated).toBe("clerk-gated");
     });
 
     it("publishes, keeping a protected child at its stored value, when a group the caller sends carries it", async () => {
