@@ -139,20 +139,25 @@ export interface AccessRuleContext {
   /** The entry's data, where the rule is judging a known entry. */
   data?: Record<string, unknown>;
   /**
-   * The one language this answer is for, where the operation is in one: the
-   * language a read reads or a write writes (an unknown or absent one being
-   * the default it resolves to). Absent where the operation involves every
-   * language, or the site has none.
+   * The one language this answer is for: the language a read reads or a
+   * write writes (an unknown or absent one being the default it resolves
+   * to), or, where a publish puts several languages live at once, the one
+   * being asked about, since it asks once for each. Absent where the
+   * operation involves every language, or the site has none.
    */
   locale?: string;
   /**
    * Every language the operation involves: `[locale]` for a read or a write
    * in one language, a read's followed by each language a missing value
    * falls back to, in the order it tries them (a bulk or transactional
-   * create or update, and a duplicate, write the default); every configured
-   * language for a read of every translation, a write to every language, and
-   * an operation on the whole entry such as a delete or a publish of every
-   * language.
+   * create or update writes the default; a duplicate, the default and each
+   * language it falls back to); every configured language for a read of
+   * every translation, a write to every language, an operation on the whole
+   * entry such as a delete, and any operation on content stored the same in
+   * every language.
+   * A publish that puts several languages live at once is asked once for
+   * each of them, with `locales` the languages it puts live: every
+   * configured language where its content reaches a localized field group.
    * Empty only where the site has no languages. A rule that limits someone
    * to some languages checks all of these, so it refuses an operation that
    * reaches beyond them.

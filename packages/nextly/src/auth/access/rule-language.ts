@@ -280,6 +280,40 @@ export function withRuleLanguage<T>(
 }
 
 /**
+ * Asks `ask` once for each of `languages`, each time with its rules told that
+ * one language and every one of them, as an operation that takes several
+ * languages at once (publishing every language) is judged: a rule answering
+ * by language answers for each. Every language is asked, so a refusal names
+ * them all.
+ *
+ * The first refusal, with every language refused, or `undefined` where none
+ * refused. With no language named, `ask` is asked once, in the languages the
+ * operation already set.
+ */
+export async function askEachLanguage<R>(
+  languages: readonly string[],
+  ask: () => Promise<R | null | undefined>
+): Promise<{ refusal: R; refused: string[] } | undefined> {
+  if (languages.length === 0) {
+    const refusal = await ask();
+    return refusal == null ? undefined : { refusal, refused: [] };
+  }
+  let first: R | undefined;
+  const refused: string[] = [];
+  for (const locale of languages) {
+    const refusal = await withRuleLanguage(
+      { locale, locales: [...languages] },
+      ask
+    );
+    if (refusal != null) {
+      first ??= refusal;
+      refused.push(locale);
+    }
+  }
+  return first === undefined ? undefined : { refusal: first, refused };
+}
+
+/**
  * The languages the current operation involves: those it set, or every
  * configured language where it set none.
  */

@@ -25,6 +25,7 @@ import { eq, ne, and, like, ilike, inArray } from "drizzle-orm";
 import type { BeforeOperationArgs } from "@nextly/hooks/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { askEachLanguage } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { runWithCallerScope } from "../../../auth/caller-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
@@ -162,12 +163,19 @@ import {
   isBlank,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import {
+  languagesChangedConflict,
+  languagesGoingLiveFrom,
+  languagesToAsk,
+  unaskedLanguages,
+} from "../../i18n/languages-going-live";
 import { EVERY_LOCALE } from "../../i18n/locale-selector";
 import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
 import { COMPANION_DEFAULT_STATUS } from "../../i18n/migration/generate-up";
+import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
 import {
   isValidLocale,
   resolveRequestedLocale,
@@ -3175,6 +3183,179 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The languages a publish of every language puts live, each to be asked
+   * about: those its statuses name, a main row going live with no translation
+   * of its own being the default language's, the language whose pending
+   * change a write to every language promotes, and every configured language
+   * where the collection reaches a localized field group. Read on `tx` where
+   * one is given, and on the pool otherwise.
+   */
+  private async languagesToPublish(args: {
+    collectionName: string;
+    entryId: string;
+    row: Record<string, unknown>;
+    /** The collection's fields, for whether it reaches a localized field group. */
+    fields: readonly { type: string; name?: string }[];
+    /**
+     * The collection, where the write promotes the working draft kept in its
+     * own slot, as a write to every language does. Publishing every language
+     * promotes none, and passes nothing.
+     */
+    promotesDraftOf?: unknown;
+    tx?: TransactionContext;
+  }): Promise<string[]> {
+    const defaultLocale = this.localization?.defaultLocale;
+    const goingLive = (
+      await this.languagesGoingLive({
+        collectionName: args.collectionName,
+        entryId: args.entryId,
+        row: args.row,
+        writeLocale: undefined,
+        perLocaleStatus: false,
+        everyLanguage: true,
+        ...(args.tx === undefined ? {} : { tx: args.tx }),
+      })
+    )
+      .map(locale => locale ?? defaultLocale)
+      .filter((locale): locale is string => typeof locale === "string");
+    goingLive.push(...(await this.languagePromoted(args)));
+    return languagesToAsk([...new Set(goingLive)], {
+      configured: this.localization?.locales.map(locale => locale.code) ?? [],
+      reachesLocalizedFieldGroup: await this.reachesLocalizedFieldGroup(
+        args.fields,
+        args.tx
+      ),
+    });
+  }
+
+  /**
+   * The language whose pending change a write to every language promotes, as
+   * stored: the one holding a working draft in that write's own slot, where
+   * the collection is localized and keeps drafts. Already live, it is not
+   * among the languages going live, yet its pending change goes live with the
+   * write, so it is asked about too. A draft the schema has since made
+   * ineligible is not promoted, and is asked about all the same: asking about
+   * one more language can only refuse. Read on `tx` where one is given.
+   */
+  private async languagePromoted(args: {
+    collectionName: string;
+    entryId: string;
+    promotesDraftOf?: unknown;
+    tx?: TransactionContext;
+  }): Promise<string[]> {
+    const collection = args.promotesDraftOf;
+    if (collection === undefined || !this.keepsWorkingDrafts(collection)) {
+      return [];
+    }
+    const locale = this.wildcardDraftLocale(collection);
+    if (locale === null) return [];
+    const draft = await new VersionsRepository(
+      args.tx ?? this.adapter
+    ).findWorkingDraft(
+      {
+        scopeKind: "collection",
+        scopeSlug: args.collectionName,
+        entryId: args.entryId,
+      },
+      locale
+    );
+    return draft === undefined ? [] : [locale];
+  }
+
+  /**
+   * Whether a publish of every language is refused in any of `languages`:
+   * `ask` (the publish permission and rule) asked once for each, each time
+   * told that language and all of them, so a rule that answers by language
+   * answers for each. Asked before the transaction, never on its connection:
+   * a rule is the app's own code and may read the database, which on a held
+   * connection waits for one the transaction keeps. The first refusal, or
+   * `undefined`; the languages refused go to the server log only. With no
+   * language going live, `ask` is asked once, in the operation's languages.
+   */
+  private async refusedInEachLanguage(args: {
+    collectionName: string;
+    entryId: string;
+    languages: readonly string[];
+    ask: () => Promise<CollectionServiceResult | null>;
+  }): Promise<CollectionServiceResult | undefined> {
+    const denied = await askEachLanguage(args.languages, args.ask);
+    if (!denied) return undefined;
+    this.logger.warn("Publish refused in some languages", {
+      collectionName: args.collectionName,
+      entryId: args.entryId,
+      refusedLanguages: denied.refused,
+    });
+    return denied.refusal;
+  }
+
+  /**
+   * The conflict refusing a publish whose languages going live, re-read under
+   * the lock, include one the rule was not asked about before it; `undefined`
+   * where none is, and where nothing was asked per language (an unpublish).
+   * Reads only: no rule runs on the transaction.
+   */
+  private async languagesChangedUnderLock(
+    args: Parameters<CollectionMutationService["languagesToPublish"]>[0] & {
+      asked: readonly string[] | undefined;
+      tx: TransactionContext;
+    }
+  ): Promise<NextlyError | undefined> {
+    if (args.asked === undefined) return undefined;
+    const unasked = unaskedLanguages(
+      args.asked,
+      await this.languagesToPublish(args)
+    );
+    return unasked.length > 0 ? languagesChangedConflict(unasked) : undefined;
+  }
+
+  /**
+   * The lifecycle permission and rule for publishing or unpublishing every
+   * language, asked before the transaction: a publish once for each language
+   * it puts live, those languages kept for the lock to compare with; an
+   * unpublish once, in every language.
+   */
+  private async askBeforeLifecycle(
+    args: Omit<
+      Parameters<CollectionMutationService["languagesToPublish"]>[0],
+      "tx"
+    > & {
+      publishes: boolean;
+      ask: () => Promise<CollectionServiceResult | null>;
+    }
+  ): Promise<{
+    denied: CollectionServiceResult | null | undefined;
+    askedLanguages?: string[];
+  }> {
+    if (!args.publishes) return { denied: await args.ask() };
+    const askedLanguages = await this.languagesToPublish(args);
+    return {
+      denied: await this.refusedInEachLanguage({
+        collectionName: args.collectionName,
+        entryId: args.entryId,
+        languages: askedLanguages,
+        ask: args.ask,
+      }),
+      askedLanguages,
+    };
+  }
+
+  /**
+   * Whether `fields` reach a field group whose definition is localized, read
+   * on `tx` where one is given. None without the field-group service, which
+   * a boot without field groups does not register.
+   */
+  private reachesLocalizedFieldGroup(
+    fields: readonly { type: string; name?: string }[],
+    tx?: TransactionContext
+  ): Promise<boolean> {
+    const service = this.fieldGroupDataService;
+    if (!service) return Promise.resolve(false);
+    return reachesLocalizedFieldGroup(fields, slug =>
+      service.isComponentLocalized(slug, tx?.getDrizzle())
+    );
+  }
+
+  /**
    * Which languages a publish moves from not live to live, as the stored
    * statuses say. A language keeping its own status answers from its companion
    * row, where a language with no row starts as a draft; otherwise the
@@ -3201,32 +3382,12 @@ export class CollectionMutationService extends BaseService {
             )
         : null;
     if (args.everyLanguage && statuses !== null && statuses.size > 0) {
-      // Only the languages the app still configures. A removed language's
-      // row can outlive it, and judged it would be read as the default
-      // language, refusing every publish over content no request can reach
-      // to repair.
-      const configured = new Set(
-        this.localization?.locales.map(locale => locale.code) ?? []
-      );
-      const going: (string | undefined)[] = [...statuses]
-        .filter(
-          ([locale, status]) =>
-            status !== "published" &&
-            (configured.size === 0 || configured.has(locale))
-        )
-        .map(([locale]) => locale);
-      // The main row goes live with the default language whether or not that
-      // language stores a translation row: one holding only shared values has
-      // none, and its document is still published.
-      const defaultLocale = this.localization?.defaultLocale;
-      if (
-        defaultLocale !== undefined &&
-        !statuses.has(defaultLocale) &&
-        args.row.status !== "published"
-      ) {
-        going.push(defaultLocale);
-      }
-      return going;
+      return languagesGoingLiveFrom({
+        statuses,
+        configured: this.localization?.locales.map(locale => locale.code) ?? [],
+        defaultLocale: this.localization?.defaultLocale,
+        mainPublished: args.row.status === "published",
+      });
     }
     const live =
       args.perLocaleStatus && args.writeLocale !== undefined
@@ -5968,10 +6129,11 @@ export class CollectionMutationService extends BaseService {
     direction: LifecycleDirection,
     params: AllLocalesLifecycleParams
   ): Promise<CollectionServiceResult> {
-    // Set when the in-transaction document-rule re-check refuses the publish
-    // against the row-locked document. Declared out here so the catch can read
-    // it: the adapter re-wraps the thrown sentinel in a DatabaseError as the
-    // transaction rolls back, so `instanceof` no longer identifies it.
+    // Set when the publish rule, asked inside the transaction once for each
+    // language going live, refuses one of them. Declared out here so the
+    // catch can read it: the adapter re-wraps the thrown sentinel in a
+    // DatabaseError as the transaction rolls back, so `instanceof` no longer
+    // identifies it.
     let publishDocDenied: CollectionServiceResult | undefined;
     // Set when judging the languages going live refuses the publish inside the
     // transaction, read by the catch for the same reason as the one above.
@@ -6071,18 +6233,34 @@ export class CollectionMutationService extends BaseService {
         locale: undefined,
       });
 
-      const publishDenied = await this.accessService.checkCollectionAccess({
-        collectionName: params.collectionName,
-        operation: direction.accessAction,
-        user: accessUser,
-        overrideAccess: params.overrideAccess,
-        // Not route-authorized as publish: the POST was authorized as `update`,
-        // so the publish permission is checked here.
-        routeAuthorized: false,
-        // Judge a scoped API key on its own `publish-<slug>` grant.
-        authenticatedScope: params.authenticatedScope,
-      });
-      if (publishDenied) return publishDenied;
+      // The lifecycle permission and rule for this direction. Not
+      // route-authorized: the POST was authorized as `update`, so the publish
+      // or unpublish permission is checked here. A scoped API key is judged on
+      // its own `<action>-<slug>` grant.
+      const lifecycleDenied = () =>
+        this.accessService.checkCollectionAccess({
+          collectionName: params.collectionName,
+          operation: direction.accessAction,
+          user: accessUser,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: false,
+          authenticatedScope: params.authenticatedScope,
+        });
+      const fields = ((publishCollection as { fields?: unknown }).fields ??
+        []) as FieldDefinition[];
+      // Asked here, before the transaction and off its connection: a rule is
+      // the app's own code and may read the database. The lock re-reads what
+      // goes live, and asks nothing.
+      const { denied: deniedBeforePublish, askedLanguages } =
+        await this.askBeforeLifecycle({
+          publishes: direction.nextStatus === "published",
+          collectionName: params.collectionName,
+          entryId: params.entryId,
+          row: existingEntry as Record<string, unknown>,
+          fields,
+          ask: lifecycleDenied,
+        });
+      if (deniedBeforePublish) return deniedBeforePublish;
 
       // `publishCollection` (loaded above for the lifecycle flag) also resolves a
       // custom tableName/dbName override, matching every other mutation;
@@ -6096,8 +6274,6 @@ export class CollectionMutationService extends BaseService {
       // Resolved versioning config + field set for the in-transaction capture.
       const versionsConfig = (publishCollection as Record<string, unknown>)
         .versions as ResolvedVersionsConfig | null | undefined;
-      const fields = ((publishCollection as { fields?: unknown }).fields ??
-        []) as FieldDefinition[];
       const manyToManyFields = fields.filter(
         f =>
           f.type === "relationship" && f.options?.relationType === "manyToMany"
@@ -6206,6 +6382,21 @@ export class CollectionMutationService extends BaseService {
           // through the same step as the single-entry publish, so the two
           // cannot judge one document differently. The refusal is kept: the
           // adapter re-wraps whatever leaves the transaction.
+          // What goes live, re-read on the row this transaction locked and
+          // before anything is written. A language the rule was not asked
+          // about refuses the publish as a conflict, so nothing goes live.
+          const languagesChanged = await this.languagesChangedUnderLock({
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            row: preImageRow,
+            fields,
+            tx,
+            asked: askedLanguages,
+          });
+          if (languagesChanged) {
+            publishRefused = languagesChanged;
+            throw languagesChanged;
+          }
           if (direction.nextStatus === "published") {
             try {
               await this.assertLanguagesGoLiveValid({
@@ -8514,10 +8705,13 @@ export class CollectionMutationService extends BaseService {
       const collectionHasStatus =
         (collection as { status?: boolean }).status === true;
       // The guard carries the pre-resolved PERMISSION denial, judged off this
-      // transaction's connection so the under-lock step needs no DB read.
+      // transaction's connection so the under-lock step runs no rule. A write
+      // to every language that publishes carries the languages it asked about
+      // too, which the lock compares with the languages going live.
       let transitionGuard: {
         op: "publish" | "unpublish";
         permissionDenied: CollectionServiceResult | null;
+        askedLanguages?: readonly string[];
       } | null = null;
       if (
         collectionHasStatus &&
@@ -8526,8 +8720,8 @@ export class CollectionMutationService extends BaseService {
       ) {
         const transitionOp =
           transitionNextStatus === "published" ? "publish" : "unpublish";
-        const permissionDenied = await this.accessService.checkCollectionAccess(
-          {
+        const transitionDenied = () =>
+          this.accessService.checkCollectionAccess({
             collectionName: params.collectionName,
             operation: transitionOp,
             user: accessUser,
@@ -8539,13 +8733,41 @@ export class CollectionMutationService extends BaseService {
             // not the key owner's — the route only checked `update` against the
             // key's scope.
             authenticatedScope: params.authenticatedScope,
-          }
-        );
-        if (permissionDenied) {
+          });
+        if (sweepAllLocales && transitionOp === "publish") {
+          // A write to every language that publishes asks the publish rule
+          // once for each language it puts live, each time told that language
+          // and all of them, as publishing every language does: a rule that
+          // answers by language answers for each, and any refusal refuses the
+          // write. Asked here, off the transaction's connection; the row lock
+          // (below) re-reads what goes live, so a translation drafted after
+          // this read cannot go live unasked.
+          const askedLanguages = await this.languagesToPublish({
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            row: existingEntry as Record<string, unknown>,
+            fields,
+            promotesDraftOf: collection,
+          });
           transitionGuard = {
             op: transitionOp,
-            permissionDenied,
+            permissionDenied:
+              (await this.refusedInEachLanguage({
+                collectionName: params.collectionName,
+                entryId: params.entryId,
+                languages: askedLanguages,
+                ask: transitionDenied,
+              })) ?? null,
+            askedLanguages,
           };
+        } else {
+          const permissionDenied = await transitionDenied();
+          if (permissionDenied) {
+            transitionGuard = {
+              op: transitionOp,
+              permissionDenied,
+            };
+          }
         }
       }
 
@@ -8787,41 +9009,6 @@ export class CollectionMutationService extends BaseService {
           // does not exist.
           await tx.lockRow(tableName, params.entryId);
 
-          // A wildcard must not decide the fate of work somebody saved and has
-          // not released yet (`languagesHoldingWorkingDrafts` says why) — asked
-          // UNDER THE LOCK, because the answer changes: a draft save serialises
-          // on this same parent lock, so a check that ran earlier can be
-          // overtaken by a save that commits first, and the release would then
-          // proceed over work it never saw. The refusal travels out on the
-          // same out-of-band result the transition gate uses, since the adapter
-          // re-wraps a thrown sentinel before the catch can identify it.
-          if (sweepAllLocales && this.keepsWorkingDrafts(collection)) {
-            const heldBy = this.heldLanguages(
-              collection,
-              (
-                await new VersionsRepository(tx).findAllWorkingDrafts({
-                  scopeKind: "collection",
-                  scopeSlug: params.collectionName,
-                  entryId: params.entryId,
-                })
-              ).map(draft => draft.locale)
-            );
-            if (heldBy.length > 0) {
-              transitionDeniedResult = {
-                success: false,
-                statusCode: 409,
-                message:
-                  `This document has unpublished changes in ${heldBy.join(", ")}. ` +
-                  `Publish or discard them first, or publish each language on ` +
-                  `its own — locale '${EVERY_LOCALE}' moves every language's ` +
-                  `status and will not decide what happens to work that has ` +
-                  `not been released.`,
-                data: null,
-              };
-              throw new StatusTransitionDeniedError();
-            }
-          }
-
           // Read the committed state before this attempt's UPDATE. Nothing read
           // after the write can serve as prior state: the UPDATE below, the
           // companion upsert, and the many-to-many rewrite have all run by then.
@@ -9050,8 +9237,78 @@ export class CollectionMutationService extends BaseService {
                 transitionDeniedResult = transitionGuard.permissionDenied;
                 throw new StatusTransitionDeniedError();
               }
+              // What goes live, re-read on the locked row: a language the
+              // rule was not asked about refuses the write as a conflict.
+              // Only where the lock found a row: one deleted since the write
+              // was authorized puts no language live, and the write that
+              // follows matches nothing and is answered as a missing
+              // document. The row that is gone is never read for this, and
+              // the pre-transaction copy is never stood in for it: judging a
+              // document that no longer exists would answer a refusal where
+              // the caller should be told it is not there.
+              const { askedLanguages } = transitionGuard;
+              if (askedLanguages !== undefined && preUpdateRow) {
+                const changed = await this.languagesChangedUnderLock({
+                  collectionName: params.collectionName,
+                  entryId: params.entryId,
+                  row: preUpdateRow as Record<string, unknown>,
+                  fields,
+                  promotesDraftOf: collection,
+                  tx,
+                  asked: askedLanguages,
+                });
+                if (changed) {
+                  transitionDeniedResult = {
+                    success: false,
+                    statusCode: 500,
+                    message: changed.message,
+                    data: null,
+                    ...errorEnvelopeFields(changed),
+                  };
+                  throw new StatusTransitionDeniedError();
+                }
+              }
               // The permission above is the whole decision: no rule judges the
               // row, so the row-locked document cannot change the answer.
+            }
+          }
+
+          // After the lifecycle permission and rule above, so a caller who may
+          // not publish or unpublish is refused before it learns which
+          // languages hold unreleased work.
+          //
+          // A wildcard must not decide the fate of work somebody saved and has
+          // not released yet (`languagesHoldingWorkingDrafts` says why) — asked
+          // UNDER THE LOCK, because the answer changes: a draft save serialises
+          // on this same parent lock, so a check that ran earlier can be
+          // overtaken by a save that commits first, and the release would then
+          // proceed over work it never saw. The refusal travels out on the
+          // same out-of-band result the transition gate uses, since the adapter
+          // re-wraps a thrown sentinel before the catch can identify it.
+          if (sweepAllLocales && this.keepsWorkingDrafts(collection)) {
+            const heldBy = this.heldLanguages(
+              collection,
+              (
+                await new VersionsRepository(tx).findAllWorkingDrafts({
+                  scopeKind: "collection",
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                })
+              ).map(draft => draft.locale)
+            );
+            if (heldBy.length > 0) {
+              transitionDeniedResult = {
+                success: false,
+                statusCode: 409,
+                message:
+                  `This document has unpublished changes in ${heldBy.join(", ")}. ` +
+                  `Publish or discard them first, or publish each language on ` +
+                  `its own — locale '${EVERY_LOCALE}' moves every language's ` +
+                  `status and will not decide what happens to work that has ` +
+                  `not been released.`,
+                data: null,
+              };
+              throw new StatusTransitionDeniedError();
             }
           }
 
