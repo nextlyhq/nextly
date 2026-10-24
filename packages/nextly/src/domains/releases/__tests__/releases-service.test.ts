@@ -1144,18 +1144,33 @@ describe("ReleasesService.anyReadable", () => {
   it("asks through the filters an unfiltered list reads, and answers what the repository finds", async () => {
     const { svc, repo } = service({ holds: ["read"] });
     repo.anyRelease.mockResolvedValueOnce(true);
-    expect(await svc.anyReadable(ADMIN)).toBe(true);
-    await svc.find({}, ADMIN);
-    // The list's own filters for an unfiltered list, the order and the page aside.
+    // Each request takes its own clock reading (`now`), so the two calls are
+    // made at different instants on purpose: the comparison must not depend
+    // on both landing in the same millisecond.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-06-15T10:00:00.000Z"));
+      expect(await svc.anyReadable(ADMIN)).toBe(true);
+      vi.setSystemTime(new Date("2026-06-15T10:00:00.005Z"));
+      await svc.find({}, ADMIN);
+    } finally {
+      vi.useRealTimers();
+    }
+    // The list's own filters for an unfiltered list: the order, the page and
+    // the request's own instant aside.
     const {
       order: _order,
       offset: _offset,
       limit: _limit,
+      now: _now,
       ...listed
     } = (
       repo.findReleasePage.mock.calls[0] as unknown[] | undefined
     )?.[0] as Record<string, unknown>;
-    expect(repo.anyRelease).toHaveBeenCalledWith(listed);
+    expect(repo.anyRelease).toHaveBeenCalledWith({
+      ...listed,
+      now: expect.any(Date),
+    });
   });
 });
 

@@ -278,6 +278,38 @@ const USABLE_AS: Record<
     typeof value === "object" && value !== null && !Array.isArray(value),
 };
 
+/** A textarea setting's declared bound, with the label a reader knows it by. */
+export interface TextBound {
+  name: string;
+  label: string;
+  maxLength: number;
+}
+
+/**
+ * The bounds a widget's textarea settings declare, which the layout write holds
+ * a placement's text to.
+ *
+ * `undefined` when the declaration states no settings at all, and an empty
+ * list when it states settings none of which is a bounded textarea: a merge of
+ * two declarations takes the registration's settings wherever it states any,
+ * so it has to tell the two apart.
+ */
+export function textBoundsOf(
+  settings: readonly AnyWidgetSetting[] | undefined
+): readonly TextBound[] | undefined {
+  return settings?.flatMap(setting =>
+    setting.type === "textarea" && setting.maxLength !== undefined
+      ? [
+          {
+            name: setting.name,
+            label: setting.label ?? setting.name,
+            maxLength: setting.maxLength,
+          },
+        ]
+      : []
+  );
+}
+
 /** Whether a value names something: a string with more than blanks in it. */
 function isName(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";

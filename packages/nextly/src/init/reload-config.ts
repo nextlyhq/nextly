@@ -23,10 +23,10 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { type SQL } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 
 import type { CollectionHooks } from "../collections/config/define-collection";
-import { type ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
+import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { CollectionDbOptions } from "../domains/collections/services/collection-db-options";
 import {
   publishCollectionDbOptions,

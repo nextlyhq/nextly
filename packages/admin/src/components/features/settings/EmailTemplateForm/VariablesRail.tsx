@@ -15,7 +15,7 @@ import {
 } from "@admin/components/ui/form";
 
 import { BUILT_IN_VARIABLES } from "./sample-data";
-import { type TemplateFormValues, type TemplateFormVariable } from "./schema";
+import type { TemplateFormValues, TemplateFormVariable } from "./schema";
 
 // ============================================================
 // Rail: Variables tab

@@ -163,6 +163,8 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  typescript: 7.0.2
+  '@arethetypeswrong/core>typescript': 5.6.1-rc
   esbuild: '>=0.25.0'
   undici: ^7.29.0
   ws: ^8.21.0
@@ -340,7 +342,7 @@ importers:
         specifier: 2.9.18
         version: 2.9.18
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vitest:
         specifier: ^5.0.5
@@ -458,7 +460,7 @@ importers:
         specifier: ^4.3.2
         version: 4.3.2
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vitest:
         specifier: ^5.0.5
@@ -500,7 +502,7 @@ importers:
         specifier: workspace:*
         version: link:../packages/nextly
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
 
   packages/adapter-drizzle:
@@ -525,7 +527,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
@@ -559,7 +561,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
@@ -596,7 +598,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
@@ -633,7 +635,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
@@ -925,7 +927,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
@@ -975,7 +977,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vitest:
         specifier: ^5.0.5
@@ -1024,7 +1026,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vitest:
         specifier: ^5.0.5
@@ -1091,7 +1093,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vitest:
         specifier: ^5.0.5
@@ -1182,7 +1184,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
@@ -1218,7 +1220,7 @@ importers:
         specifier: ^22.20.5
         version: 22.20.5
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vitest:
         specifier: ^5.0.5
@@ -1369,7 +1371,7 @@ importers:
         specifier: ^4.20.5
         version: 4.21.0
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
@@ -1431,7 +1433,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vitest:
         specifier: ^5.0.5
@@ -1462,7 +1464,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vitest:
         specifier: ^5.0.5
@@ -1535,7 +1537,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vitest:
         specifier: ^5.0.5
@@ -1566,7 +1568,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vitest:
         specifier: ^5.0.5
@@ -1654,7 +1656,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vitest:
         specifier: ^5.0.5
@@ -1691,7 +1693,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vitest:
         specifier: ^5.0.5
@@ -1715,7 +1717,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vitest:
         specifier: ^5.0.5
@@ -1758,7 +1760,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
@@ -1792,7 +1794,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
@@ -1826,7 +1828,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
@@ -1866,7 +1868,7 @@ importers:
         specifier: ^0.23.1
         version: 0.23.1(@arethetypeswrong/core@0.18.5)(publint@0.3.18)(tsx@4.21.0)(typescript@7.0.2)
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vitest:
         specifier: ^5.0.5
@@ -2025,7 +2027,7 @@ importers:
         specifier: ^4.20.5
         version: 4.21.0
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vite-tsconfig-paths:
         specifier: ^5.1.4
@@ -3184,7 +3186,7 @@ packages:
   '@lexical/a11y@0.47.0':
     resolution: {integrity: sha512-MlAL25PxThTYQuFn2aOwyfY9+/wKloAd8fbf4a1GeFATVgvirC8xACBmERpqpf4A06OdLIoIZ5J/qtgJXsdn1g==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3192,7 +3194,7 @@ packages:
   '@lexical/clipboard@0.47.0':
     resolution: {integrity: sha512-OIB+NxHjfpRJJoTtU/mqeb7vPVMks5l97QgwoZthQLR/GIc5zrOtvoLftxl5hKAG5lwOe9BzhashKgVcsSPB3g==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3200,7 +3202,7 @@ packages:
   '@lexical/code-core@0.47.0':
     resolution: {integrity: sha512-L0hg+57yzQDhYRV5NFyTwSz2+N3O/iLBgRuMNccE3ieltPPSq7lCBTKOuXF3G0ot3NVudu8//ewHjw7OCMqI5g==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3208,7 +3210,7 @@ packages:
   '@lexical/code-prism@0.47.0':
     resolution: {integrity: sha512-/mDs/rpVhyoeAdNqZoMt5hHrA6nDtuEDSk7lZmzUSk5vLIKMlxFMm3Rv1VsBDO9akl/b1F1aTLvrP8feGAOsiA==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3218,7 +3220,7 @@ packages:
     peerDependencies:
       react: '>=18.x'
       react-dom: '>=18.x'
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3226,7 +3228,7 @@ packages:
   '@lexical/dragon@0.47.0':
     resolution: {integrity: sha512-qqkro6sTLddOh2aYSqoXtm1QOQ/DY71AtWj3XmHPIPtxN/PkVKbvJBVZiP/a9kgFoPs+2a2Tlq9cCIDf6xSHuw==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3234,7 +3236,7 @@ packages:
   '@lexical/extension@0.47.0':
     resolution: {integrity: sha512-F9WyXB0eDsCbeSuShzgjBS3ugxNnTvHQa+P+VZiVSWilbDNGjJyysco2JCwn5ruLmEP4MXCQn5IKeW7A9FG8KQ==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3242,7 +3244,7 @@ packages:
   '@lexical/hashtag@0.47.0':
     resolution: {integrity: sha512-i5ML0v5d52h8hen4cdS/tnqfiteWbvpwihJgZR9hLIk9w6vQJISXUWzg4jRPQIezWwU1xikbBLkT5rD+Qth7tw==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3250,7 +3252,7 @@ packages:
   '@lexical/history@0.47.0':
     resolution: {integrity: sha512-CqAR6G4x6WewKS2uDgf2N1/rszIlXiDCW4dwu0IiQV9oVbhOklvAmPBJX6319myJxB+ArtjuuMgDU3gi/iTqXA==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3258,7 +3260,7 @@ packages:
   '@lexical/html@0.47.0':
     resolution: {integrity: sha512-VrJ9tSRuoUP5tTQb7TB+6PTW0Gh5aC3Hnne4GuXDwKUIzoWFXWkxlB0oIlfL5HVljrzO/Ra65v5M3RnR4TX1PA==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3266,7 +3268,7 @@ packages:
   '@lexical/internal@0.47.0':
     resolution: {integrity: sha512-VKDTHajXvjCkjYHwWra4Qjz8AI6PWeNPW7l6Q9AIlAwUiolAXrlkyfrBAFzdAP360IyDbC2gO9fwTb9ZvZM85Q==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3274,7 +3276,7 @@ packages:
   '@lexical/link@0.47.0':
     resolution: {integrity: sha512-lDAbTyJwufKs3yUn1D4AY0IoBU9O4JXzTDqSRa8qVCK7LC3+cF0u+rR5o9RJfxtHUzmALk+s2I0IqlxGCyIocg==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3282,7 +3284,7 @@ packages:
   '@lexical/list@0.47.0':
     resolution: {integrity: sha512-g8AApVZNqqcCDXfJtgxEfAv7ylK0HmblRaJYMxB0OI7nlLipUjutIUy8cRX5GKI0woa+oGPYi68cZcMQnBysGw==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3290,7 +3292,7 @@ packages:
   '@lexical/mark@0.47.0':
     resolution: {integrity: sha512-/9ZS9NSjrqJ/sTZ7l2KFiBxZbbXEmPp/JxtN5sTlM+F4a/hTRreROWlcXgTLyf9g8GTnRyZScvBqFYKWd6HR1g==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3298,7 +3300,7 @@ packages:
   '@lexical/markdown@0.47.0':
     resolution: {integrity: sha512-mtfcomzk/ZT2wtImEzYeFB6VLsOYM6RqBmwnvEMp5alvJISXFhIHDKAT4BkUMMtWGM6AnrlytZyMNPb4QwnZIA==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3306,7 +3308,7 @@ packages:
   '@lexical/overflow@0.47.0':
     resolution: {integrity: sha512-XR+F2mni27TgjmE2/PsFYXkAq0AIMV8JJh5VSeHiSg0mccKSfEqsfTxYlwV+um2eGT+6XggtpwFMDy6ZjC+uMw==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3314,7 +3316,7 @@ packages:
   '@lexical/plain-text@0.47.0':
     resolution: {integrity: sha512-MyRjCpEnDJuEeoT/ndYI/i2605QM2bAgFEi6sX/NObYDJSuupC2iY6tOEbCFZ1s0Y1SX6arNrrAPhwygcemz7g==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3324,7 +3326,7 @@ packages:
     peerDependencies:
       react: '>=18.x'
       react-dom: '>=18.x'
-      typescript: '>=5.2'
+      typescript: 7.0.2
       yjs: '>=13.5.22'
     peerDependenciesMeta:
       typescript:
@@ -3335,7 +3337,7 @@ packages:
   '@lexical/rich-text@0.47.0':
     resolution: {integrity: sha512-GtRH7KNW7fVJzd3Xftdr/EPXaMqHt2xCIO/eJtf17Yrs7vlVOljM0xMcDoj4QOY2Gp4p3CheLlwBbcO96YYV0A==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3343,7 +3345,7 @@ packages:
   '@lexical/selection@0.47.0':
     resolution: {integrity: sha512-/q+eXnryZxCeqeWAODhTRlJL+jGa6/vIhE/bh+KvHmLbZJM8qfwa0qzt4rb3g+L1/CbjcowS/Xwv2ha1OmjBFQ==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3351,7 +3353,7 @@ packages:
   '@lexical/table@0.47.0':
     resolution: {integrity: sha512-T0sOB1i0I05f2U+tTVXDitYq4ACtFob42gULwwqqKfQ/SEPq26Kfd5CljI1rSS4+N+vQz/VTDYF/BN7ZMgHpjA==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3359,7 +3361,7 @@ packages:
   '@lexical/text@0.47.0':
     resolution: {integrity: sha512-Rj1xa/MMhgOckjOJ+ifDUO8BUyi7o+a/vpYcsftMTCpiKmeteO+qSAKoyhvZke496nLh/WFCWKw/iD43bst/Ig==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3367,7 +3369,7 @@ packages:
   '@lexical/utils@0.47.0':
     resolution: {integrity: sha512-uVAqNr5qiE4t9GSj+L4rv06WaIGADzblxEKCn134sPzvsVouDv0VTT0pBKjQYUgshT4z9iW5cFtO11+iPacBYg==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -3375,7 +3377,7 @@ packages:
   '@lexical/yjs@0.47.0':
     resolution: {integrity: sha512-EKw1df2cmUTQrfSp1EnXqsHtNjwgxS973CRor0W4GWmIQJyKdmf6cmA7cct3flkyH5tE/xDnpr8sy38U4R2hlQ==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
       yjs: '>=13.5.22'
     peerDependenciesMeta:
       typescript:
@@ -5351,7 +5353,7 @@ packages:
     resolution: {integrity: sha512-Lw5ITrR5s5TbC19YSvlr63ZfLaJoU6vtKTHyB0GQOpX0W7d5/Ir6vUahWi/8Sps/nOukZQ0IB3SmlxZnjaKVnw==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
-      typescript: '>=4.8.4 <6.1.0'
+      typescript: 7.0.2
 
   '@typescript-eslint/scope-manager@8.59.0':
     resolution: {integrity: sha512-UzR16Ut8IpA3Mc4DbgAShlPPkVm8xXMWafXxB0BocaVRHs8ZGakAxGRskF7FId3sdk9lgGD73GSFaWmWFDE4dg==}
@@ -5361,7 +5363,7 @@ packages:
     resolution: {integrity: sha512-91Sbl3s4Kb3SybliIY6muFBmHVv+pYXfybC4Oolp3dvk8BvIE3wOPc+403CWIT7mJNkfQRGtdqghzs2+Z91Tqg==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
-      typescript: '>=4.8.4 <6.1.0'
+      typescript: 7.0.2
 
   '@typescript-eslint/types@8.59.0':
     resolution: {integrity: sha512-nLzdsT1gdOgFxxxwrlNVUBzSNBEEHJ86bblmk4QAS6stfig7rcJzWKqCyxFy3YRRHXDWEkb2NralA1nOYkkm/A==}
@@ -5371,14 +5373,14 @@ packages:
     resolution: {integrity: sha512-O9Re9P1BmBLFJyikRbQpLku/QA3/AueZNO9WePLBwQrvkixTmDe8u76B6CYUAITRl/rHawggEqUGn5QIkVRLMw==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
-      typescript: '>=4.8.4 <6.1.0'
+      typescript: 7.0.2
 
   '@typescript-eslint/utils@8.59.0':
     resolution: {integrity: sha512-I1R/K7V07XsMJ12Oaxg/O9GfrysGTmCRhvZJBv0RE0NcULMzjqVpR5kRRQjHsz3J/bElU7HwCO7zkqL+MSUz+g==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
-      typescript: '>=4.8.4 <6.1.0'
+      typescript: 7.0.2
 
   '@typescript-eslint/visitor-keys@8.59.0':
     resolution: {integrity: sha512-/uejZt4dSere1bx12WLlPfv8GktzcaDtuJ7s42/HEZ5zGj9oxRaD4bj7qwSunXkf+pbAhFt2zjpHYUiT5lHf0Q==}
@@ -6106,13 +6108,13 @@ packages:
     peerDependencies:
       '@types/node': '*'
       cosmiconfig: '>=9'
-      typescript: '>=5'
+      typescript: 7.0.2
 
   cosmiconfig@9.0.0:
     resolution: {integrity: sha512-itvL5h8RETACmOTFc4UfIyB2RfEHi71Ax6E/PivVxq9NseKbOWpeyHEOIbmAw1rs8Ak0VursQNww7lf7YtUwzg==}
     engines: {node: '>=14'}
     peerDependencies:
-      typescript: '>=4.9.5'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -7097,7 +7099,7 @@ packages:
   lexical@0.47.0:
     resolution: {integrity: sha512-ZKsxsk3jUpXsRtG20EBq42z2bq8A20UHtjqvVT/kIxfsaiXwaRFBBcLSFxPa77j+hXkBF5w96C3/imwtmLoRdg==}
     peerDependencies:
-      typescript: '>=5.2'
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -8053,7 +8055,7 @@ packages:
       '@volar/typescript': ~2.4.0
       '@vue/language-core': ~3.2.0 || ~3.3.0
       rolldown: ^1.2.0
-      typescript: ^5.0.0 || ^6.0.0 || ~7.0.0
+      typescript: 7.0.2
       vue-tsc: ~3.2.0 || ~3.3.0
     peerDependenciesMeta:
       '@typescript/native-preview':
@@ -8478,7 +8480,7 @@ packages:
     resolution: {integrity: sha512-OJ/ibxhPlqrMM0UiNHJ/0CKQkoKF243/AEmplt3qpRgkW8VG7IfOS41h7V8TjITqdByHzrjcS/2si+y4lIh8NA==}
     engines: {node: '>=18.12'}
     peerDependencies:
-      typescript: '>=4.8.4'
+      typescript: 7.0.2
 
   tsconfck@3.1.6:
     resolution: {integrity: sha512-ks6Vjr/jEw0P1gmOVwutM3B7fWxoWBL2KRDb1JfqGVawBmO5UsvmWOQFGHBPl5yxYz4eERr19E6L7NMv+Fej4w==}
@@ -8486,7 +8488,7 @@ packages:
     deprecated: unmaintained
     hasBin: true
     peerDependencies:
-      typescript: ^5.0.0
+      typescript: 7.0.2
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -8502,7 +8504,7 @@ packages:
       '@vitejs/devtools': '*'
       publint: ^0.3.8
       tsx: '*'
-      typescript: ^5.0.0 || ^6.0.0 || ^7.0.0
+      typescript: 7.0.2
       unplugin-unused: '>=0.5.0'
       unrun: '*'
     peerDependenciesMeta:

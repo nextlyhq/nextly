@@ -7,7 +7,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@nextlyhq/ui";
-import { type ReactNode, type JSX } from "react";
+import type { ReactNode, JSX } from "react";
 
 export interface AuthStatusCardProps {
   /** What happened, as a heading: "Email Verified", "Invalid Link". */
