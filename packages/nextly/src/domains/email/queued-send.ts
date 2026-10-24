@@ -543,7 +543,10 @@ export async function queuedEmailState(
 const ATTEMPTABLE: QueuedEmailState[] = ["waiting", "sending"];
 
 /** The send service an attempt sends through. */
-export type QueuedEmailSender = Pick<EmailService, "send" | "sendWithTemplate">;
+export type QueuedEmailSender = Pick<
+  EmailService,
+  "send" | "sendWithTemplate" | "withTemplateCopies"
+>;
 
 /** What an attempt needs. */
 export interface QueuedAttemptDeps {
@@ -603,16 +606,18 @@ async function sendOnce(
   try {
     const outcome =
       message.kind === "template"
-        ? await sender.sendWithTemplate(
-            message.slug,
-            message.to,
-            message.variables,
-            {
-              ...message.options,
-              idempotencyKey:
-                message.options.idempotencyKey ?? queuedEmailKey(id),
-            }
-          )
+        ? // With the copies it was queued with, which are what its erasure
+          // finds; one sealed before they were kept sends as the template has
+          // them now.
+          await (
+            message.templateCopies
+              ? sender.withTemplateCopies(message.templateCopies)
+              : sender
+          ).sendWithTemplate(message.slug, message.to, message.variables, {
+            ...message.options,
+            idempotencyKey:
+              message.options.idempotencyKey ?? queuedEmailKey(id),
+          })
         : await sender.send({
             ...message.send,
             idempotencyKey: message.send.idempotencyKey ?? queuedEmailKey(id),

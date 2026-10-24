@@ -328,6 +328,12 @@ export class EmailService extends BaseService {
   /** Who sends through this instance: a keyed send is scoped to them. */
   private keyScope: string = CORE_KEY_SCOPE;
 
+  /**
+   * The copies a template send adds in place of the template's own, when
+   * set (`withTemplateCopies`).
+   */
+  private frozenCopies?: { cc: string[]; bcc: string[] };
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -396,6 +402,17 @@ export class EmailService extends BaseService {
   scopedTo(scope: string): EmailService {
     const view = Object.create(this) as EmailService;
     view.keyScope = scope;
+    return view;
+  }
+
+  /**
+   * @internal This service, sending a template with `copies` in place of the
+   * copies the template has now: a queued template email is sent with the
+   * copies it was queued with, which are the ones its erasure can find.
+   */
+  withTemplateCopies(copies: { cc: string[]; bcc: string[] }): EmailService {
+    const view = Object.create(this) as EmailService;
+    view.frozenCopies = copies;
     return view;
   }
 
@@ -1690,7 +1707,10 @@ export class EmailService extends BaseService {
     return {
       from,
       replyTo,
-      ...withTemplateCopies(given, this.templateCopies(template, slug)),
+      ...withTemplateCopies(
+        given,
+        this.frozenCopies ?? this.templateCopies(template, slug)
+      ),
     };
   }
 

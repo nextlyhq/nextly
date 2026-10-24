@@ -386,6 +386,39 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("sends the copies its template had when it was queued, not ones edited in since", async () => {
+      // What is indexed for erasure is what is sent: a copy added to the
+      // template after the email was queued never reaches it.
+      const t = await boot(dialect);
+      const created = (await t.nextly.emailTemplates.create({
+        data: {
+          name: "Copies edited",
+          slug: "copies-edited",
+          subject: "Hello",
+          htmlContent: "<p>hi</p>",
+          isActive: true,
+          cc: ["first-copy@example.com"],
+        },
+      } as never)) as { item: { id: string } };
+      behaviour.failures = 1;
+      const result = await t.nextly.email.queueWithTemplate({
+        template: "copies-edited",
+        to: SHARED,
+        variables: {},
+      });
+      expect(result.state).toBe("waiting");
+      await t.nextly.emailTemplates.update({
+        id: created.item.id,
+        data: { cc: ["added-later@example.com"] },
+      } as never);
+
+      await trigger(t);
+
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.cc).toEqual(["first-copy@example.com"]);
+      expect((await queued(t, result.id)).state).toBe("sent");
+    });
+
     it("has its recipients' digests removed with it when it is pruned", async () => {
       const t = await boot(dialect);
       const result = await t.nextly.email.queue({ ...message, to: SHARED });
