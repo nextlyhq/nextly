@@ -2104,8 +2104,9 @@ export class CollectionMutationService extends BaseService {
    * translated group or repeater is written there whole, so without its
    * stored value a denied child of it would be erased rather than kept.
    *
-   * The companion is read only where a field rule of the collection can ask,
-   * so an update with no such rule pays nothing more.
+   * The companion is read only where a field rule can ask: the collection's
+   * own, or a field group's, which judges an instance held inline in a
+   * translated container. An update with no such rule pays nothing more.
    */
   private async storedForCarryForward(args: {
     row: Record<string, unknown>;
@@ -2119,7 +2120,8 @@ export class CollectionMutationService extends BaseService {
   }): Promise<Record<string, unknown>> {
     const translated =
       this.localization &&
-      hasFieldAccessRule("collection", args.collectionName, "update")
+      (hasFieldAccessRule("collection", args.collectionName, "update") ||
+        anyFieldGroupHasAccessRule("update"))
         ? await this.readCompanionLocalizedValues(
             args.tx ?? { getDrizzle: <T = unknown>() => this.db as T },
             args.collectionName,
