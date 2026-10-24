@@ -117,11 +117,12 @@ const SOURCE_MODULES: ReadonlyArray<{
   {
     name: "rich-text",
     module: richTextModule,
-    // Everything this module holds is public: the component and its props. The
-    // node-walking helpers are deliberately NOT exported — a caller wanting
-    // words out of rich text uses `richTextToPlainText` from the engine, which
-    // is the same walk the CMS uses, rather than a second one here.
-    internal: [],
+    // The component and its props are public. The node-walking helpers are
+    // not: a caller wanting words out of rich text uses `richTextToPlainText`
+    // from the engine, which is the same walk the CMS uses, rather than a
+    // second one here. These three are exported only so their own test can
+    // drive them at a depth React's renderer could not reach.
+    internal: ["holdsBlockContent", "holdsInteractive", "partitionPhrasing"],
   },
   { name: "page-style-trace", module: pageStyleTraceModule, internal: [] },
   { name: "resolver", module: resolverModule, internal: [] },
