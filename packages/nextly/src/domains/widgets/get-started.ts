@@ -18,6 +18,7 @@
 import { callerMayPerform } from "../../auth/access/route-gate-adapters";
 import { authorizationGroups } from "../../auth/entity-read-access";
 import { getService } from "../../di";
+import { isBuilderEnabled } from "../../shared/builder-access";
 
 import type { ConditionProbe, RegistryAnswer } from "./condition-probe";
 import {
@@ -47,7 +48,8 @@ function step(
 
 /**
  * "Create a collection": done once the reader can read one, offered otherwise
- * only to a reader who could create one and read it afterwards.
+ * only where the schema builder is on, to a reader who could create one and
+ * read it afterwards.
  */
 async function collectionStep(
   probe: ConditionProbe,
@@ -58,6 +60,10 @@ async function collectionStep(
     return step("collection", "done");
   }
   signal.throwIfAborted();
+  // 🔴 The step's action is the builder. Where it is off (production, unless
+  // the host turns it on) creating a collection is refused whoever asks, so
+  // the step is not offered: collections come from code there.
+  if (!isBuilderEnabled()) return undefined;
   if (!(await probe.mayCreateCollection())) return undefined;
   // Unlisted, the step is not known: never "waiting" on the strength of a
   // registry that could not answer.

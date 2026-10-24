@@ -23,6 +23,12 @@ vi.mock("../../../auth/access/route-gate-adapters", () => ({
 vi.mock("../../../di", () => ({
   getService: (name: keyof typeof services) => services[name],
 }));
+// Whether the schema builder is on: production turns it off unless the host
+// says otherwise.
+const builder = vi.hoisted(() => ({ enabled: true }));
+vi.mock("../../../shared/builder-access", () => ({
+  isBuilderEnabled: () => builder.enabled,
+}));
 // Which Singles have a published source: the fallback reads only those tables.
 const { published } = vi.hoisted(() => ({ published: new Set<string>() }));
 vi.mock("../reader-content", async importOriginal => {
@@ -77,6 +83,7 @@ const at = (iso: string) => new Date(iso);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  builder.enabled = true;
   published.clear();
   mayPerform.mockResolvedValue(false);
   services.activityLogService.singlesWithRecordedSaves.mockResolvedValue(
@@ -112,6 +119,15 @@ describe("creating a collection", () => {
     expect(
       (await statusesFor({ createCollection: false })).byKey
     ).not.toHaveProperty("collection");
+  });
+
+  it("is not offered where the schema builder is off, to any reader", async () => {
+    // 🔴 Its action is the builder, which production keeps off: a reader who
+    // may create collections would get a step every route refuses.
+    builder.enabled = false;
+    const { answer, byKey } = await statusesFor({ createCollection: true });
+    expect(byKey).not.toHaveProperty("collection");
+    expect(answer.unknown).toBe(false);
   });
 
   it("is not known, never waiting, when the collections could not be listed", async () => {
