@@ -116,6 +116,8 @@ export interface B { both?: string; b?: 1 }
 export declare function plugin(p: Plugin): void;
 export declare function arm(p: Legacy | Current): void;
 export declare function either(p: A | B): void;
+/** @deprecated Use plugin */
+export declare function legacyPlugin(): void;
 `;
 
 describe("deprecatedPropertiesIn, asked of the compiler's language server", () => {
@@ -236,6 +238,37 @@ describe("deprecatedPropertiesIn, asked of the compiler's language server", () =
       deprecatedPropertiesOf(dir, [join(dir, "no-such-sample.ts")])
     ).toThrow(/the audit failed \(1\): .*no-such-sample\.ts/s);
   }, 60_000);
+
+  it("is asked because the compiler reports none of these itself", async () => {
+    // The control, and the whole reason this audit exists. The compiler's own
+    // deprecation diagnostics name a deprecated FUNCTION, and nothing for a
+    // deprecated property written in an object literal, which is what a
+    // documented example most often gets wrong.
+    count += 1;
+    const file = join(dir, `sample-${String(count)}.ts`);
+    const source =
+      'import { plugin, legacyPlugin } from "./api";\nplugin({ collections: [] });\nlegacyPlugin();\n';
+    writeFileSync(file, source);
+    const uri = pathToFileURL(file).href;
+    server.notify("textDocument/didOpen", {
+      textDocument: { uri, languageId: "typescript", version: 1, text: source },
+    });
+    const { items } = await server.request("textDocument/diagnostic", {
+      textDocument: { uri },
+    });
+    server.notify("textDocument/didClose", { textDocument: { uri } });
+    const deprecatedOnLine = line =>
+      items.some(
+        d => d.range.start.line === line - 1 && /deprecated/.test(d.message)
+      );
+    // The call on line 3 is reported, so the server does report deprecations.
+    expect(deprecatedOnLine(3)).toBe(true);
+    // The property on line 2 is not, so only the audit can find it.
+    expect(deprecatedOnLine(2)).toBe(false);
+    expect(
+      (await deprecatedPropertiesIn(server, file, source)).map(d => d.name)
+    ).toEqual(["collections"]);
+  });
 
   it("carries a note across lines, and ends it at the next tag", async () => {
     expect(await reported("plugin({ multi: 1, tagged: 2 });")).toEqual([

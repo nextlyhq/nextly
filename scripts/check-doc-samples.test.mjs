@@ -2,7 +2,6 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -10,7 +9,7 @@ import {
   compareToBaseline,
   compile,
   contextOnlyWorthRecording,
-  deprecatedPropertiesIn,
+  deprecationsIn,
   declaredNamesIn,
   declaredValuesIn,
   extensionFor,
@@ -35,6 +34,7 @@ import {
   withEarlierContext,
 } from "./check-doc-samples.mjs";
 import { topLevelOnly } from "./top-level-text.mjs";
+import { compile as compileWithTsc } from "./tsc-cli.mjs";
 
 /**
  * Each guard is asserted against a CONTROL that reproduces what the checker did
@@ -43,20 +43,6 @@ import { topLevelOnly } from "./top-level-text.mjs";
  * so "the count stayed the same" is not evidence that a fix works — showing the
  * old scoring accept what the new scoring rejects is.
  */
-
-/** A compiler host serving one in-memory `/probe.d.ts`, for the control below. */
-const declarationHost = text => {
-  const host = ts.createCompilerHost({});
-  const original = host.getSourceFile.bind(host);
-  host.getSourceFile = (name, langVersion, ...rest) =>
-    name === "/probe.d.ts"
-      ? ts.createSourceFile(name, text, langVersion, true, ts.ScriptKind.TS)
-      : original(name, langVersion, ...rest);
-  host.fileExists = name => name === "/probe.d.ts" || ts.sys.fileExists(name);
-  host.readFile = name =>
-    name === "/probe.d.ts" ? text : ts.sys.readFile(name);
-  return host;
-};
 
 /** What the baseline held before fences were part of an identity. */
 const messageOnly = line => line.slice(line.indexOf("  ") + 2);
@@ -984,20 +970,29 @@ describe("a fence whose only module syntax is a namespace export", () => {
     expect(asScript.join("\n")).toContain("TS2304");
     // The control: the same body under the options a declaration file would get
     // is silent, so "compiled" would not mean "checked".
-    const program = ts.createProgram(
-      ["/probe.d.ts"],
-      {
-        noEmit: true,
-        strict: true,
-        skipLibCheck: true,
-        target: ts.ScriptTarget.ES2022,
-        lib: ["lib.es2022.d.ts"],
-      },
-      declarationHost(`${broken}\nexport {};\n`)
-    );
-    expect(
-      program.getSemanticDiagnostics(program.getSourceFile("/probe.d.ts"))
-    ).toEqual([]);
+    const dir = mkdtempSync(join(tmpdir(), "declaration-probe-"));
+    try {
+      writeFileSync(join(dir, "probe.d.ts"), `${broken}\nexport {};\n`);
+      writeFileSync(
+        join(dir, "tsconfig.json"),
+        JSON.stringify({
+          compilerOptions: {
+            noEmit: true,
+            strict: true,
+            skipLibCheck: true,
+            target: "es2022",
+            lib: ["es2022"],
+            types: [],
+          },
+          files: ["probe.d.ts"],
+        })
+      );
+      expect(compileWithTsc(["-p", join(dir, "tsconfig.json")], dir)).toEqual(
+        []
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1168,253 +1163,52 @@ describe("contextOnlyWorthRecording deduplicates on identity", () => {
   });
 });
 
+// Which properties the audit reports, and on what the compiler's language
+// server answers, is `deprecated-properties.test.mjs`'s question: the cases
+// once asked of the checker here are asked of the server there, with the
+// control that the compiler reports none of them itself.
 describe("a sample that writes a property the API has deprecated", () => {
-  /** A two-file program: one declaring the API, one writing against it. */
-  const program = source => {
-    const dir = mkdtempSync(join(tmpdir(), "deprecated-"));
-    writeFileSync(
-      join(dir, "api.ts"),
-      [
-        "export interface Plugin {",
-        "  /** @deprecated Prefer contributes.collections */",
-        "  collections?: string[];",
-        "  contributes?: { collections?: string[] };",
-        "  admin?: { order?: number };",
-        "}",
-        "export interface Legacy {",
-        '  kind: "legacy";',
-        "  /** @deprecated Prefer nu */",
-        "  old?: string;",
-        "}",
-        "export interface Current {",
-        '  kind: "current";',
-        "  nu?: string;",
-        "}",
-        "export interface StillOffered {",
-        '  kind: "kept";',
-        "  old?: string;",
-        "}",
-        "export interface Current2 {",
-        '  kind: "current";',
-        "  old?: string;",
-        "}",
-        "",
-      ].join("\n")
+  it("refuses an audit that did not report its probe, or left a file unanswered", () => {
+    const answered = { name: "old", start: 0, line: 1, note: "probe" };
+    // Silence about the probe is an audit that could not answer, not a clean
+    // corpus.
+    expect(() =>
+      deprecationsIn("/d", ["/d/a.ts"], "/d/probe.ts", () => ({
+        "/d/a.ts": [],
+        "/d/probe.ts": [],
+      }))
+    ).toThrow(/did not answer/);
+    expect(() =>
+      deprecationsIn("/d", ["/d/a.ts"], "/d/probe.ts", () => ({
+        "/d/probe.ts": [answered],
+      }))
+    ).toThrow(/did not answer/);
+    // The control: the same audit with the probe answered is read.
+    expect(
+      deprecationsIn("/d", ["/d/a.ts"], "/d/probe.ts", () => ({
+        "/d/a.ts": [],
+        "/d/probe.ts": [answered],
+      }))
+    ).toEqual([{ file: "/d/a.ts", found: [] }]);
+  });
+
+  it("is charged to its page with the deprecation's own note", () => {
+    const code = [
+      "interface Plugin {",
+      "  /** @deprecated Prefer contributes.collections */",
+      "  collections?: string[];",
+      "  admin?: { order?: number };",
+      "}",
+      'export const p: Plugin = { collections: ["a"], admin: { order: 1 } };',
+    ].join("\n");
+    const lines = compile(
+      [{ file: "docs/a.mdx", index: 0, lang: "ts", meta: "", code }],
+      "test-deprecated"
     );
-    writeFileSync(join(dir, "use.ts"), source);
-    const files = [join(dir, "api.ts"), join(dir, "use.ts")];
-    const built = ts.createProgram(files, {
-      noEmit: true,
-      strict: true,
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.ESNext,
-      skipLibCheck: true,
-    });
-    return {
-      dir,
-      sourceFile: built.getSourceFile(join(dir, "use.ts")),
-      checker: built.getTypeChecker(),
-      program: built,
-      files,
-    };
-  };
-
-  const namesFlaggedIn = source => {
-    const { sourceFile, checker, dir } = program(source);
-    try {
-      return deprecatedPropertiesIn(sourceFile, checker).map(d => d.name);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  };
-
-  it("names the deprecated property and leaves its siblings alone", () => {
-    expect(
-      namesFlaggedIn(
-        'import type { Plugin } from "./api";\n' +
-          'export const p: Plugin = { collections: ["a"], admin: { order: 1 } };\n'
-      )
-    ).toEqual(["collections"]);
-  });
-
-  it("judges a nested literal against its own property's type", () => {
-    // `contributes.collections` is a different property from the one beside
-    // it, and only one of the two is deprecated. A check that matched on the
-    // name would fail this.
-    expect(
-      namesFlaggedIn(
-        'import type { Plugin } from "./api";\n' +
-          'export const p: Plugin = { contributes: { collections: ["a"] } };\n'
-      )
-    ).toEqual([]);
-  });
-
-  it("skips a literal with no declared shape to be judged against", () => {
-    // Nothing contextual, so nothing can be deprecated against it. This is
-    // what keeps the check narrow rather than matching every property named
-    // `collections` in the corpus.
-    expect(
-      namesFlaggedIn('export const p = { collections: ["a"] };\n')
-    ).toEqual([]);
-  });
-
-  it("carries the deprecation's own note, which is where the fix is written", () => {
-    const { sourceFile, checker, dir } = program(
-      'import type { Plugin } from "./api";\n' +
-        'export const p: Plugin = { collections: ["a"] };\n'
-    );
-    try {
-      expect(deprecatedPropertiesIn(sourceFile, checker)[0].note).toBe(
-        "Prefer contributes.collections"
-      );
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("reads a quoted key, which names the same member", () => {
-    // `{ "collections": [] }` and `{ collections: [] }` are the same property.
-    // Reading only identifiers let the quoted spelling walk past.
-    expect(
-      namesFlaggedIn(
-        'import type { Plugin } from "./api";\n' +
-          'export const p: Plugin = { "collections": ["a"] };\n'
-      )
-    ).toEqual(["collections"]);
-  });
-
-  it("looks inside a union rather than at the union", () => {
-    // `getProperty` on a union answers for the union: a property present on one
-    // constituent comes back undefined, so a deprecated option in a
-    // union-shaped API passed unread.
-    expect(
-      namesFlaggedIn(
-        'import type { Legacy, Current } from "./api";\n' +
-          'export const u: Legacy | Current = { kind: "legacy", old: "x" };\n'
-      )
-    ).toEqual(["old"]);
-  });
-
-  it("answers from the arm the literal says it is", () => {
-    // `{ kind: "legacy", old: "x" }` is not ambiguous: the discriminant names
-    // the arm. Asking every arm and requiring agreement gave that up, so a key
-    // deprecated on the arm actually being written passed whenever another arm
-    // still offered it.
-    expect(
-      namesFlaggedIn(
-        'import type { Legacy, Current2 } from "./api";\n' +
-          'export const u: Legacy | Current2 = { kind: "legacy", old: "x" };\n'
-      )
-    ).toEqual(["old"]);
-    // The other arm of the same union, which does not deprecate it.
-    expect(
-      namesFlaggedIn(
-        'import type { Legacy, Current2 } from "./api";\n' +
-          'export const u: Legacy | Current2 = { kind: "current", old: "x" };\n'
-      )
-    ).toEqual([]);
-  });
-
-  it("reads a computed key whose expression is a literal", () => {
-    // `{ ["collections"]: [] }` names the same member and TypeScript resolves
-    // it the same way. Only an expression that has to be evaluated is skipped.
-    expect(
-      namesFlaggedIn(
-        'import type { Plugin } from "./api";\n' +
-          'export const p: Plugin = { ["collections"]: ["a"] };\n'
-      )
-    ).toEqual(["collections"]);
-  });
-
-  it("stays quiet when one arm of a union still offers the name", () => {
-    // Which arm this literal is depends on a discriminant, and nothing here
-    // reads discriminants. Charging the page would be claiming the writer meant
-    // the obsolete arm.
-    expect(
-      namesFlaggedIn(
-        'import type { Legacy, StillOffered } from "./api";\n' +
-          'export const u: Legacy | StillOffered = { kind: "kept", old: "x" };\n'
-      )
-    ).toEqual([]);
-  });
-
-  it("says nothing about a computed key it cannot resolve", () => {
-    expect(
-      namesFlaggedIn(
-        'import type { Plugin } from "./api";\n' +
-          'const k = "collections" as const;\n' +
-          "export const p: Plugin = { [k]: ['a'] };\n"
-      )
-    ).toEqual([]);
-  });
-
-  it("is not something TypeScript already reports", () => {
-    // The control, and the whole reason this function exists. Adding
-    // suggestion diagnostics was the obvious answer and does not work: a
-    // deprecated FUNCTION is reported, a deprecated property written in an
-    // object literal is not, and the corpus's suggestions are otherwise
-    // "declared but never read" on samples that show a shape rather than run.
-    const {
-      files,
-      program: built,
-      dir,
-    } = program(
-      'import type { Plugin } from "./api";\n' +
-        'export const p: Plugin = { collections: ["a"] };\n'
-    );
-    try {
-      const service = ts.createLanguageService({
-        getScriptFileNames: () => files,
-        getScriptVersion: () => "1",
-        getScriptSnapshot: f =>
-          ts.ScriptSnapshot.fromString(readFileSync(f, "utf-8")),
-        getCurrentDirectory: () => dir,
-        getCompilationSettings: () => built.getCompilerOptions(),
-        getDefaultLibFileName: o => ts.getDefaultLibFilePath(o),
-        fileExists: ts.sys.fileExists,
-        readFile: ts.sys.readFile,
-        readDirectory: ts.sys.readDirectory,
-        directoryExists: ts.sys.directoryExists,
-        getDirectories: ts.sys.getDirectories,
-      });
-      const reported = files.flatMap(f =>
-        service.getSuggestionDiagnostics(f).filter(d => d.reportsDeprecated)
-      );
-      expect(reported).toEqual([]);
-      // And the control on the control: the same service DOES report a
-      // deprecated call, so the empty result above is a limit of what
-      // TypeScript reports rather than a service that answers nothing.
-      const fnDir = mkdtempSync(join(tmpdir(), "deprecated-fn-"));
-      const fnFile = join(fnDir, "fn.ts");
-      writeFileSync(
-        fnFile,
-        "/** @deprecated */\nfunction old(): void {}\nold();\nexport {};\n"
-      );
-      const fnProgram = ts.createProgram([fnFile], { noEmit: true });
-      const fnService = ts.createLanguageService({
-        getScriptFileNames: () => [fnFile],
-        getScriptVersion: () => "1",
-        getScriptSnapshot: f =>
-          ts.ScriptSnapshot.fromString(readFileSync(f, "utf-8")),
-        getCurrentDirectory: () => fnDir,
-        getCompilationSettings: () => fnProgram.getCompilerOptions(),
-        getDefaultLibFileName: o => ts.getDefaultLibFilePath(o),
-        fileExists: ts.sys.fileExists,
-        readFile: ts.sys.readFile,
-        readDirectory: ts.sys.readDirectory,
-        directoryExists: ts.sys.directoryExists,
-        getDirectories: ts.sys.getDirectories,
-      });
-      expect(
-        fnService
-          .getSuggestionDiagnostics(fnFile)
-          .filter(d => d.reportsDeprecated).length
-      ).toBeGreaterThan(0);
-      rmSync(fnDir, { recursive: true, force: true });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+    expect(lines).toEqual([
+      "docs/a.mdx#0:6  error TS6385: 'collections' is deprecated. Prefer contributes.collections",
+    ]);
+  }, 60_000);
 });
 
 describe("a missing name the reader owns", () => {
@@ -1654,6 +1448,64 @@ describe("a missing name in object shorthand", () => {
     // and stays a finding, so this is a rule about ownership rather than a
     // blanket exemption for the syntax.
     expect(named(real)).toEqual(["baseUrl"]);
+  });
+});
+
+describe("TypeScript 7's spellings of the same diagnostics", () => {
+  const samples = [
+    {
+      file: "docs/x.mdx",
+      index: 0,
+      code: 'import "./generated/admin-imports";\nimport { Posts } from "./collections/Posts";\nexport const components = [MyCollection, baseUrl, Posts];',
+      lang: "ts",
+    },
+  ];
+  const at = rest => `docs/x.mdx#0  #0:1  error ${rest}`;
+
+  it("reads a missing name with a spelling suggestion as the missing name", async () => {
+    // TypeScript 7 adds "Did you mean" far more often, which turns TS2304 into
+    // TS2552. Read as anything else, a reader's own name was charged or set
+    // aside according to whether the compiler found a lookalike.
+    const suggested = name =>
+      at(`TS2552: Cannot find name '${name}'. Did you mean 'HTMLCollection'?`);
+    expect(nameIn(suggested("MyCollection"))).toBe("MyCollection");
+    const { readerNames, real } = await classifyDocDiagnostics({
+      diagnostics: [suggested("MyCollection"), suggested("baseUrl")],
+      samples,
+      exported: NOTHING_EXPORTED,
+    });
+    const named = lines => lines.map(l => /name '([^']+)'/.exec(l)[1]);
+    expect(named(readerNames)).toEqual(["MyCollection"]);
+    // The control: a lowercase name is still an unfinished example.
+    expect(named(real)).toEqual(["baseUrl"]);
+  });
+
+  it("reads an unresolved side-effect import of the reader's file as one, and as binding nothing", async () => {
+    // TypeScript 7 checks side-effect imports by default and reports TS2882,
+    // where TypeScript 5 said nothing.
+    const sideEffect = at(
+      "TS2882: Cannot find module or type declarations for side-effect import of './generated/admin-imports'."
+    );
+    const binding = at(
+      "TS2307: Cannot find module './collections/Posts' or its corresponding type declarations."
+    );
+    const sideEffectOnly = await classifyDocDiagnostics({
+      diagnostics: [sideEffect],
+      samples,
+      exported: NOTHING_EXPORTED,
+    });
+    expect(sideEffectOnly.readerFiles).toEqual([sideEffect]);
+    // It binds nothing, so nothing in the sample was typed as `any` and the
+    // sample was still read.
+    expect([...sideEffectOnly.uncheckedSamples]).toEqual([]);
+    // The control: an import that binds a name leaves the sample unread.
+    const withBinding = await classifyDocDiagnostics({
+      diagnostics: [binding],
+      samples,
+      exported: NOTHING_EXPORTED,
+    });
+    expect(withBinding.readerFiles).toEqual([binding]);
+    expect([...withBinding.uncheckedSamples]).toEqual(["docs/x.mdx#0"]);
   });
 });
 
