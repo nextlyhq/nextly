@@ -8,6 +8,13 @@ export interface SessionUser {
   [key: string]: unknown;
 }
 
+/**
+ * The caller the deprecated `nextly/auth` guards were handed.
+ *
+ * @deprecated Only `checkPermission`, `checkCollectionAccess` and
+ * `authenticateApiKey` use it, and they are deprecated with it. Removed in the
+ * next release.
+ */
 export interface AuthContext {
   userId: string;
   userName: string;
