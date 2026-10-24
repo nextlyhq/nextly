@@ -39,17 +39,8 @@ import type { WidgetComponentProps } from "nextly/widget-result";
 import type React from "react";
 
 import { MoreExist } from "@admin/components/features/widgets/archetypes/more-exist";
-import {
-  CardEmpty,
-  CardError,
-  CardSkeleton,
-  CardSlotFailure,
-} from "@admin/components/features/widgets/frame/states";
-import {
-  rowsDrawn,
-  useCardTier,
-  useRowsTier,
-} from "@admin/components/features/widgets/frame/tier";
+import { useListCard } from "@admin/components/features/widgets/frame/list-slot";
+import { CardEmpty } from "@admin/components/features/widgets/frame/states";
 import { AlertCircle } from "@admin/components/icons";
 import {
   activityFromRow,
@@ -223,38 +214,13 @@ const ActivityRows: React.FC<{
  * A custom card owns its states, so each is drawn here with the frame's own:
  * the loading rows, "not available", an error, and the empty state.
  */
-export const RecentActivityCard: React.FC<WidgetComponentProps> = ({
-  slot,
-  isFetching,
-  query,
-  onRetry,
-}) => {
-  // Medium until the card has measured itself, which it does before its first paint.
-  const tier = useCardTier() ?? "medium";
-  const drawn = rowsDrawn(useRowsTier(tier), query?.limit);
+export const RecentActivityCard: React.FC<WidgetComponentProps> = props => {
   // See `RecentActivity` below: a relative time is read again as time passes.
-  const now = useNowTick();
-
-  if (!slot) {
-    return isFetching ? (
-      <CardSkeleton shape="rows" rows={drawn} layout={{ kind: "list" }} />
-    ) : null;
-  }
-  if (!slot.ok) {
-    return (
-      <CardSlotFailure slot={slot} title="Recent activity" onRetry={onRetry} />
-    );
-  }
-  if (slot.result.op !== "list") {
-    return (
-      <CardError
-        message="This card was answered with something other than a list."
-        title="Recent activity"
-      />
-    );
-  }
+  const { drawn, now, read } = useListCard(props, "Recent activity");
+  const { query } = props;
+  if ("node" in read) return read.node;
   // A row this build cannot read is left out rather than drawn from guesses.
-  const activities = slot.result.items.flatMap(row => {
+  const activities = read.list.items.flatMap(row => {
     const activity = activityFromRow(row);
     return activity ? [activity] : [];
   });
@@ -262,7 +228,7 @@ export const RecentActivityCard: React.FC<WidgetComponentProps> = ({
   return (
     <div className="space-y-2">
       <ActivityRows activities={activities.slice(0, drawn)} now={now} />
-      {slot.result.items.length > drawn && <MoreExist query={query} />}
+      {read.list.items.length > drawn && <MoreExist query={query} />}
     </div>
   );
 };

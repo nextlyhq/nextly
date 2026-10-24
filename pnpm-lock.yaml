@@ -2003,6 +2003,9 @@ importers:
       oxc-parser:
         specifier: ^0.155.0
         version: 0.155.0
+      oxlint:
+        specifier: 1.89.0
+        version: 1.89.0(oxlint-tsgolint@7.0.2004)
       postcss:
         specifier: ^8.5.23
         version: 8.5.28

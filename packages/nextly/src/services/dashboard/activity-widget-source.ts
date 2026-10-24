@@ -81,6 +81,8 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   groupBy: "refused",
   dateField: "refused",
   interval: "refused",
+  since: "refused",
+  until: "refused",
 };
 
 /**

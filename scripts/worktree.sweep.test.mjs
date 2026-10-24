@@ -18,11 +18,18 @@
  * test. The scratch checkouts hold no slot claim, so a removal treats them as
  * slot 0, whose databases are never dropped.
  *
+ * Which processes run where is a fixed fact in these tests too: each run
+ * reads it from a script named by `NEXTLY_SWEEP_CWD_READER` that prints
+ * `lsof -F n` output, so a test asks about the gates and never about how fast
+ * this machine's `lsof` answers under load. One test reads the platform's own
+ * reader, to show the real thing finds a real process.
+ *
  * @module worktree.sweep.test
  */
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   lstatSync,
@@ -51,7 +58,10 @@ import {
   ignoredWorkReason,
   inUseReasons,
   outputClassifier,
+  lsofPath,
   parseLsofCwds,
+  processCwds,
+  readerCwds,
   removeIfStillFree,
   writtenSince,
 } from "./worktree-sweep.mjs";
@@ -97,6 +107,7 @@ function scratch() {
     GIT_CONFIG_SYSTEM: "/dev/null",
     TMPDIR: join(dir, "tmp"),
     NEXTLY_HEAVY_SLOT_DIR: join(dir, "slots"),
+    NEXTLY_SWEEP_CWD_READER: reader(dir, "quiet", "printf 'p1\\nfcwd\\nn/\\n'"),
   };
   mkdirSync(join(world.repo, "scripts"), { recursive: true });
   for (const name of SCRIPTS) copyFileSync(join(HERE, name), join(world.repo, "scripts", name));
@@ -116,6 +127,19 @@ function scratch() {
   git(world, world.repo, "remote", "add", "origin", world.origin);
   git(world, world.repo, "push", "-q", "origin", "main");
   return world;
+}
+
+/** A process reader printing what `body` prints: the fixed fact a test sets for which process runs where. */
+function reader(dir, name, body) {
+  const path = join(dir, `${name}-reader.sh`);
+  writeFileSync(path, `#!/bin/sh\n${body}\n`);
+  chmodSync(path, 0o755);
+  return path;
+}
+
+/** A reader saying one process runs in `cwd`. */
+function busyIn(world, cwd) {
+  return reader(world.dir, "busy", `printf 'p42\\nfcwd\\nn%s\\n' '${cwd}'`);
 }
 
 function git(world, cwd, ...args) {
@@ -383,6 +407,34 @@ describe("when build output was last written", () => {
   });
 });
 
+describe("reading which process runs where", () => {
+  const timedOut = () => ({ error: Object.assign(new Error("spawnSync lsof ETIMEDOUT"), { code: "ETIMEDOUT" }), status: null, stdout: "" });
+  const answered = () => ({ status: 0, stdout: "p1\nfcwd\nn/w/one\n" });
+
+  it("tries once more when the first read times out, and takes the second answer", () => {
+    const answers = [timedOut(), answered()];
+    const run = vi.fn(() => answers.shift());
+    expect(readerCwds("/usr/sbin/lsof", ["-F", "n"], run)).toEqual(["/w/one"]);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[0][2].timeout).toBe(30_000);
+  });
+
+  it("answers null, so every checkout reads as in use, when both reads time out", () => {
+    const run = vi.fn(timedOut);
+    expect(readerCwds("/usr/sbin/lsof", ["-F", "n"], run)).toBeNull();
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("answers null for a read that prints nothing, rather than reading it as no process anywhere", () => {
+    expect(readerCwds("lsof", [], () => ({ status: 0, stdout: "" }))).toBeNull();
+  });
+
+  it("asks lsof by the path macOS installs it at, whatever PATH holds", () => {
+    expect(lsofPath(path => path === "/usr/sbin/lsof")).toBe("/usr/sbin/lsof");
+    expect(lsofPath(() => false)).toBe("lsof");
+  });
+});
+
 describe("asking again just before a removal", () => {
   it("does not remove a candidate that is in use by now, whatever the first look said", async () => {
     const remove = vi.fn(() => ({ removed: true }));
@@ -525,21 +577,42 @@ describe.runIf(process.platform !== "win32")("worktree sweep on real checkouts",
     expect(stdout).toContain(`skipped ${ahead.path}: 1 commit(s) on no remote and not in origin/main`);
   }, 60_000);
 
-  it("leaves a checkout a process is running in, beside one it does remove", async () => {
+  it("leaves a checkout a process is running in, beside one it does remove", () => {
     const world = scratch();
     const busy = checkout(world, "busy");
     busy.age();
     const merged = checkout(world, "merged");
     merged.age();
-    const child = spawn("sleep", ["60"], { cwd: busy.path, stdio: "ignore" });
-    children.push(child);
-    await new Promise(done => child.once("spawn", done));
+    world.env.NEXTLY_SWEEP_CWD_READER = busyIn(world, busy.path);
 
     const { stdout } = worktreeCommand(world, "sweep", "--stale", "--apply");
 
     expect(existsSync(merged.path), stdout).toBe(false);
     expect(existsSync(busy.path)).toBe(true);
     expect(stdout).toContain(`skipped ${busy.path}: a process runs inside it`);
+  }, 60_000);
+
+  it("removes nothing when the process reader does not answer, and says it cannot tell", () => {
+    const world = scratch();
+    const merged = checkout(world, "merged");
+    mkdirSync(join(merged.path, "dist"));
+    writeFileSync(join(merged.path, "dist", "index.js"), "built\n");
+    merged.age();
+    const idle = checkout(world, "idle");
+    mkdirSync(join(idle.path, "dist"));
+    writeFileSync(join(idle.path, "dist", "index.js"), "built\n");
+    idle.age();
+    // A reader that fails as lsof does when it cannot run, with nothing printed.
+    world.env.NEXTLY_SWEEP_CWD_READER = reader(world.dir, "broken", "exit 2");
+    const before = treeHash(world.dir);
+
+    const { code, stdout } = worktreeCommand(world, "sweep", "--stale", "--builds", "--apply");
+
+    expect(code, stdout).toBe(0);
+    expect(stdout).toContain(`skipped ${merged.path}: cannot tell which processes run inside it`);
+    expect(stdout).toContain(`skipped ${idle.path} (1 build output path(s)): cannot tell which processes run inside it`);
+    expect(stdout).not.toContain("  removed ");
+    expect(treeHash(world.dir)).toBe(before);
   }, 60_000);
 
   it("removes an idle checkout's build output with --builds, and leaves its other ignored files and its work", () => {
@@ -688,3 +761,27 @@ describe.runIf(process.platform !== "win32")("worktree sweep on real checkouts",
     expect(stdout).not.toContain("cannot tell when its build output was last written");
   }, 60_000);
 });
+
+/**
+ * The platform's own reader, against a real process: `lsof` by its absolute
+ * path on macOS, `/proc` on Linux. It is skipped only where there is no reader
+ * to run at all, never because it is slow: it is given its full bound.
+ */
+const ownReader =
+  process.platform === "darwin" ? spawnSync(lsofPath(), ["-v"]).error?.code !== "ENOENT" : existsSync("/proc");
+
+describe.runIf(process.platform !== "win32" && ownReader)("the platform's own process reader", () => {
+  it("finds a process whose directory is inside a checkout", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "worktree-sweep-reader-")));
+    scratchDirs.push(dir);
+    const child = spawn("sleep", ["60"], { cwd: dir, stdio: "ignore" });
+    children.push(child);
+    await new Promise(done => child.once("spawn", done));
+
+    const cwds = processCwds(process.platform, {});
+
+    expect(cwds, "the reader did not answer").not.toBeNull();
+    expect(cwds.map(cwd => (existsSync(cwd) ? realpathSync(cwd) : cwd))).toContain(dir);
+  }, 120_000);
+});
+

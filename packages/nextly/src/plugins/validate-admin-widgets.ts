@@ -395,14 +395,22 @@ const FIELD_RULES: ReadonlyArray<
   },
 ];
 
-/** The source a contributed widget's query names, as its setting knobs see it. */
+/**
+ * The source a contributed widget's settings knobs see, as registration reads
+ * a definition's: its query's own; none yet (`undefined`) for a query or cells
+ * a Collection setting supplies; `null` for a widget that asks nothing a knob
+ * could drive.
+ */
 function declaredSourceOf(
   widget: Record<string, unknown>
-): { id: string } | undefined {
+): { id: string } | null | undefined {
   const query = widget.query;
-  if (typeof query !== "object" || query === null) return undefined;
-  const source = (query as { source?: unknown }).source;
-  return typeof source === "string" ? { id: source } : undefined;
+  if (typeof query === "object" && query !== null) {
+    const source = (query as { source?: unknown }).source;
+    return typeof source === "string" ? { id: source } : undefined;
+  }
+  const cells = widget.cells;
+  return Array.isArray(cells) && cells.length > 0 ? undefined : null;
 }
 
 function undrawableReason(widget: Record<string, unknown>): string | undefined {
