@@ -7150,7 +7150,9 @@ export class CollectionMutationService extends BaseService {
    * What a publisher's own values contribute to the promotion of a pending
    * change, in the logical shape: every value they may write as they sent it,
    * and every denied child of a container they sent at the pending change's
-   * value (`kept`), and the values they may write alone (`permitted`).
+   * value (`kept`), and the values they may write alone (`permitted`). Both
+   * hold `keys` only, the entry's own fields the publisher sent; the rest of
+   * `callerDocument` is there for the rules to read.
    *
    * The update's field gate kept those denied children at the LIVE row's
    * values, the only stored document it had. A container the publisher sends
@@ -7162,7 +7164,8 @@ export class CollectionMutationService extends BaseService {
    * change's.
    */
   private async callerOverPendingChange(
-    callerScalars: Record<string, unknown>,
+    callerDocument: Record<string, unknown>,
+    keys: readonly string[],
     pendingChange: Record<string, unknown>,
     fields: FieldDefinition[],
     applyRules: (document: Record<string, unknown>) => Promise<void>
@@ -7170,7 +7173,7 @@ export class CollectionMutationService extends BaseService {
     kept: Record<string, unknown>;
     permitted: Record<string, unknown>;
   }> {
-    const sent = this.deserializeJsonFieldsForSnapshot(callerScalars, fields);
+    const sent = this.deserializeJsonFieldsForSnapshot(callerDocument, fields);
     const permitted = detachData(sent);
     await applyRules(permitted);
     const kept = await keepDeniedAtStored({
@@ -7178,7 +7181,13 @@ export class CollectionMutationService extends BaseService {
       stored: this.deserializeJsonFieldsForSnapshot(pendingChange, fields),
       applyRules,
     });
-    return { kept, permitted };
+    const only = (document: Record<string, unknown>) =>
+      Object.fromEntries(
+        keys
+          .filter(key => Object.prototype.hasOwnProperty.call(document, key))
+          .map(key => [key, document[key]])
+      );
+    return { kept: only(kept), permitted: only(permitted) };
   }
 
   /**
@@ -9238,8 +9247,21 @@ export class CollectionMutationService extends BaseService {
               // The publisher's own values over the pending change, not the
               // live row: a denied child of a container they send takes the
               // pending change's value, so an edit to it is refused, not lost.
+              // Judged on everything the publisher sent, field groups and
+              // many-to-many included: a rule on one of their values can read
+              // a sibling written apart from the entry's own fields, as the
+              // update's gate read it.
               const callerOwn = await this.callerOverPendingChange(
-                finalData,
+                this.assemblePromotedDocument(
+                  {},
+                  finalData,
+                  componentFieldData,
+                  manyToManyData,
+                  fields,
+                  manyToManyFields,
+                  splitComponentSchemas
+                ),
+                Object.keys(finalData),
                 draftInput,
                 fields,
                 this.promotionRules(promoteAccess)
