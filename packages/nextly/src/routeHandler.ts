@@ -87,6 +87,7 @@ import {
   respondData,
   respondMutation,
 } from "./api/response-shapes";
+import { getRolesScreen } from "./api/roles-screen";
 import { getSchemaJournal } from "./api/schema-journal";
 import { getTranslationWorklist } from "./api/translations";
 import {
@@ -381,6 +382,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "translations",
   "schema",
   "contentEvents",
+  "rolesScreen",
 ]);
 
 /**
@@ -1563,6 +1565,13 @@ async function serveServiceRequest(
   // super-admin gate). Read-only GET — no body to consume.
   if (service === "schema") {
     return handleSchemaRequest(req, method);
+  }
+
+  // ==================== ROLES SCREEN DIRECT DISPATCH ====================
+  // Owns its auth (the `read-roles` permission the roles list asks). Read-only
+  // GET, so there is no body to consume.
+  if (service === "rolesScreen") {
+    return getRolesScreen(req);
   }
 
   // ==================== AUTHENTICATION & AUTHORIZATION ====================
