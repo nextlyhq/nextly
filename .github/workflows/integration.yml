@@ -12,11 +12,11 @@ name: Integration
 # same thing and the legs skip by `if:`, which reports `skipped`, a result the
 # merge gate and the merge queue both accept.
 #
-# On a pull request the legs run only while it carries the `run-integration`
-# label (the `changes` job's `requested`, read from the API when that job
-# runs); the merge queue and `main` always run them, so nothing merges
-# untested. Adding the label is handled by `integration-request.yml`, not by a
-# `labeled` trigger here: see `scripts/integration-request.mjs` for why.
+# Every pull-request push that changes more than documentation runs the legs,
+# as the merge queue and `main` do. No label or path rule gates them: gating on
+# a label was measured to save little, since most pull requests that touch code
+# needed the legs anyway, and the narrower path rules that would have saved
+# more skipped the changes that went on to break `main`.
 on:
   push:
     branches: [main]
@@ -98,15 +98,9 @@ jobs:
     permissions:
       contents: read
       actions: read
-      # A pull request's labels, read when this job runs.
-      pull-requests: read
     outputs:
       superseded: ${{ steps.newer.outputs.superseded }}
       inert: ${{ steps.decide.outputs.inert }}
-      # Always true in the merge queue and on `main`; on a pull request, true
-      # only while it carries the `run-integration` label. Empty when the step
-      # failed, which the legs read as asked for.
-      requested: ${{ steps.requested.outputs.requested }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -148,16 +142,6 @@ jobs:
           SCOPE_TITLE: Integration scope
           INERT_PATHS: '(^docs/|\.md$)'
         run: node scripts/change-scope.mjs
-      # Unconditional, so the step runs alike in every event; it says so in the
-      # summary when a pull request's legs skip for want of the label, and
-      # stays quiet when they would skip anyway (`inert`), since the label
-      # would change nothing there.
-      - name: Ask whether the legs were requested
-        id: requested
-        env:
-          GH_TOKEN: ${{ github.token }}
-          INERT: ${{ steps.decide.outputs.inert }}
-        run: node scripts/integration-request.mjs requested
 
   # One job per dialect, each with a literal name and only its own database.
   #
@@ -187,7 +171,7 @@ jobs:
     # gate, and three required checks would read as acceptable with nothing
     # run. A failed question has no outputs, so it falls open to running the
     # suite; only a cancelled workflow stays cancelled.
-    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
+    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' }}
     runs-on: ubuntu-latest
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
@@ -321,7 +305,7 @@ jobs:
     # a pass. It runs on the shards' conditions otherwise, and fails unless
     # every shard succeeded; a run cancelled on purpose reads as failed here
     # rather than cancelled, on a head nothing merges.
-    if: ${{ always() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
+    if: ${{ always() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -347,7 +331,7 @@ jobs:
     # gate, and three required checks would read as acceptable with nothing
     # run. A failed question has no outputs, so it falls open to running the
     # suite; only a cancelled workflow stays cancelled.
-    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
+    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' }}
     runs-on: ubuntu-latest
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
@@ -479,7 +463,7 @@ jobs:
     # a pass. It runs on the shards' conditions otherwise, and fails unless
     # every shard succeeded; a run cancelled on purpose reads as failed here
     # rather than cancelled, on a head nothing merges.
-    if: ${{ always() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
+    if: ${{ always() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -508,7 +492,7 @@ jobs:
     # gate, and three required checks would read as acceptable with nothing
     # run. A failed question has no outputs, so it falls open to running the
     # suite; only a cancelled workflow stays cancelled.
-    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
+    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' }}
     runs-on: ubuntu-latest
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
@@ -598,7 +582,7 @@ jobs:
     # a pass. It runs on the shards' conditions otherwise, and fails unless
     # every shard succeeded; a run cancelled on purpose reads as failed here
     # rather than cancelled, on a head nothing merges.
-    if: ${{ always() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
+    if: ${{ always() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
