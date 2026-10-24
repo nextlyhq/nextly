@@ -168,6 +168,53 @@ function deliveryRecipients(payload: {
 /** What a send, or one message of it, reports to the caller. */
 type SendOutcome = EmailSendOutcome;
 
+/**
+ * A template's fields as the editor holds them, saved or not: what a test of
+ * the on-screen version sends instead of the stored ones. An absent field is
+ * the stored one.
+ */
+export type TemplateTestDraft = Partial<
+  Pick<
+    EmailTemplateRecord,
+    | "subject"
+    | "preheader"
+    | "htmlContent"
+    | "plainTextContent"
+    | "useLayout"
+    | "layoutId"
+    | "fromOverride"
+    | "replyTo"
+    | "providerId"
+  >
+>;
+
+/** Who would deliver a send: the provider, named as the admin names it. */
+export interface TestDelivery {
+  /** The provider's own name, or its kind's label for one set in code. */
+  provider: string;
+  /** The provider kind, such as `smtp` or `log`. */
+  type: string;
+  /** False for the log provider, which writes the email to the server log and delivers nothing. */
+  delivers: boolean;
+}
+
+/** A provider kind as the admin names it, or the kind itself when unknown. */
+function providerLabel(type: string): string {
+  const registry = getEmailProviderRegistry();
+  return registry.has(type) ? registry.get(type).label : type;
+}
+
+/** The stored template with the draft's fields over it. */
+function withDraft(
+  stored: EmailTemplateRecord,
+  draft: TemplateTestDraft
+): EmailTemplateRecord {
+  const fields = Object.fromEntries(
+    Object.entries(draft).filter(([, value]) => value !== undefined)
+  );
+  return { ...stored, ...fields };
+}
+
 /** A template send's own provider, addresses, attachments and identity. */
 interface TemplateSendOptions {
   providerId?: string;
@@ -421,18 +468,45 @@ export class EmailService extends BaseService {
    * template's own copies left out: a test carries sample data, so it is not
    * the email anyone the template copies (a team inbox, a manager) expects.
    *
+   * With a draft, the test is of what is on screen: the stored template with
+   * the editor's unsaved fields over it, rendered and delivered through the
+   * same path. A draft always tests the stored template, active or not and
+   * whatever code version the site has, since that is what the editor shows.
+   *
    * @param templateSlug - Template slug
    * @param to - The address the test goes to, and the only one
    * @param variables - The sample data it renders with
+   * @param draft - The editor's fields, saved or not
    */
   async sendTemplateTest(
     templateSlug: string,
     to: string,
-    variables: Record<string, unknown>
+    variables: Record<string, unknown>,
+    draft?: TemplateTestDraft
   ): Promise<EmailSendOutcome> {
     return this.sendTemplate(templateSlug, to, variables, undefined, {
       templateCopies: false,
+      draft,
     });
+  }
+
+  /**
+   * Who would deliver a send through this provider, or the default one: the
+   * provider by name, and whether it delivers at all. The log provider, which
+   * a site with no provider falls back to, writes the email to the server log
+   * and reaches nobody.
+   *
+   * @throws NextlyError when `providerId` names a provider that can't be used
+   */
+  async testDelivery(providerId?: string | null): Promise<TestDelivery> {
+    const { providerType, providerName } = await this.resolveProviderForSend(
+      providerId ?? undefined
+    );
+    return {
+      provider: providerName,
+      type: providerType,
+      delivers: providerType !== LOG_PROVIDER_TYPE,
+    };
   }
 
   private async sendTemplate(
@@ -440,7 +514,10 @@ export class EmailService extends BaseService {
     to: string | string[],
     variables: Record<string, unknown>,
     options: TemplateSendOptions | undefined,
-    { templateCopies }: { templateCopies: boolean }
+    {
+      templateCopies,
+      draft,
+    }: { templateCopies: boolean; draft?: TemplateTestDraft }
   ): Promise<EmailSendOutcome> {
     // Whitespace-only overrides must not shadow the template/provider
     // defaults or reach a provider as malformed headers.
@@ -465,10 +542,15 @@ export class EmailService extends BaseService {
       );
     }
 
+    // A test of the editor's draft sends the stored template it was edited
+    // from, with the unsaved fields over it.
+    if (dbTemplate && draft) dbTemplate = withDraft(dbTemplate, draft);
+
     if (
       dbTemplate &&
-      sendSource({ stored: dbTemplate, preferCode, hasCode: !!codeFn }) ===
-        "stored"
+      (draft !== undefined ||
+        sendSource({ stored: dbTemplate, preferCode, hasCode: !!codeFn }) ===
+          "stored")
     ) {
       // Surface missing required variables without blocking the send — the
       // authoring UI validates at edit time, and existing sends must not
@@ -1576,6 +1658,7 @@ export class EmailService extends BaseService {
     adapter: EmailProviderAdapter;
     from: string;
     providerType: string;
+    providerName: string;
     resolvedProviderId?: string;
   }> {
     try {
@@ -1594,6 +1677,7 @@ export class EmailService extends BaseService {
         // obviously local. A caller-supplied `from` still wins downstream.
         from: this.emailConfig?.from ?? "nextly@localhost",
         providerType: LOG_PROVIDER_TYPE,
+        providerName: definition.label,
       };
     }
   }
@@ -1602,6 +1686,8 @@ export class EmailService extends BaseService {
     adapter: EmailProviderAdapter;
     from: string;
     providerType: string;
+    /** The stored provider's name, or the kind's label for one set in code. */
+    providerName: string;
     /**
      * The stored provider this resolved to, when a stored one was used.
      *
@@ -1623,6 +1709,7 @@ export class EmailService extends BaseService {
           provider.fromEmail
         ),
         providerType: provider.type,
+        providerName: provider.name,
         resolvedProviderId: provider.id,
       };
     }
@@ -1662,6 +1749,7 @@ export class EmailService extends BaseService {
           defaultProvider.fromEmail
         ),
         providerType: defaultProvider.type,
+        providerName: defaultProvider.name,
         resolvedProviderId: defaultProvider.id,
       };
     }
@@ -1672,6 +1760,7 @@ export class EmailService extends BaseService {
         adapter: this.createAdapterFromConfig(this.emailConfig.providerConfig),
         from: this.emailConfig.from,
         providerType: this.emailConfig.providerConfig.provider,
+        providerName: providerLabel(this.emailConfig.providerConfig.provider),
       };
     }
 
