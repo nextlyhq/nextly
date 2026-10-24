@@ -5,47 +5,47 @@ service none user-with
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service none user-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service none user-partial
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service none super-admin
   create-posts:A
   read-posts:A
@@ -85,47 +85,47 @@ service none key-with
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service none key-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service none key-partial
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service none key-slugs-only
   create-posts:A
   read-posts:A
@@ -133,63 +133,63 @@ service none key-slugs-only
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service none key-made-by-super-admin
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service none key-custom-slugs
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service none key-manage
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service true user-with
   create-posts:A
   read-posts:A
@@ -197,12 +197,12 @@ service true user-with
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
@@ -213,15 +213,15 @@ service true user-without
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service true user-partial
   create-posts:A
   read-posts:A
@@ -229,15 +229,15 @@ service true user-partial
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service true super-admin
   create-posts:A
   read-posts:A
@@ -277,47 +277,47 @@ service true key-with
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service true key-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service true key-partial
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service true key-slugs-only
   create-posts:A
   read-posts:A
@@ -325,111 +325,111 @@ service true key-slugs-only
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service true key-made-by-super-admin
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service true key-custom-slugs
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service true key-manage
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service false user-with
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service false user-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service false user-partial
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service false super-admin
   create-posts:A
   read-posts:A
@@ -463,117 +463,117 @@ service false super-admin-inherited
   any(read-posts|update-posts):A
   any(delete-posts):A
 service false key-with
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service false key-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service false key-partial
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service false key-slugs-only
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service false key-made-by-super-admin
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service false key-custom-slugs
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service false key-manage
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service returns-true user-with
   create-posts:A
   read-posts:A
@@ -581,12 +581,12 @@ service returns-true user-with
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
@@ -597,15 +597,15 @@ service returns-true user-without
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service returns-true user-partial
   create-posts:A
   read-posts:A
@@ -613,15 +613,15 @@ service returns-true user-partial
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service returns-true super-admin
   create-posts:A
   read-posts:A
@@ -661,47 +661,47 @@ service returns-true key-with
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service returns-true key-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service returns-true key-partial
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service returns-true key-slugs-only
   create-posts:A
   read-posts:A
@@ -709,111 +709,111 @@ service returns-true key-slugs-only
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service returns-true key-made-by-super-admin
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service returns-true key-custom-slugs
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service returns-true key-manage
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service returns-false user-with
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service returns-false user-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service returns-false user-partial
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service returns-false super-admin
   create-posts:A
   read-posts:A
@@ -847,165 +847,165 @@ service returns-false super-admin-inherited
   any(read-posts|update-posts):A
   any(delete-posts):A
 service returns-false key-with
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service returns-false key-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service returns-false key-partial
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service returns-false key-slugs-only
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service returns-false key-made-by-super-admin
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service returns-false key-custom-slugs
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service returns-false key-manage
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service returns-null user-with
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service returns-null user-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service returns-null user-partial
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service returns-null super-admin
   create-posts:A
   read-posts:A
@@ -1039,117 +1039,117 @@ service returns-null super-admin-inherited
   any(read-posts|update-posts):A
   any(delete-posts):A
 service returns-null key-with
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service returns-null key-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service returns-null key-partial
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service returns-null key-slugs-only
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service returns-null key-made-by-super-admin
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service returns-null key-custom-slugs
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service returns-null key-manage
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service returns-truthy user-with
   create-posts:A
   read-posts:A
@@ -1157,12 +1157,12 @@ service returns-truthy user-with
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
@@ -1173,15 +1173,15 @@ service returns-truthy user-without
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service returns-truthy user-partial
   create-posts:A
   read-posts:A
@@ -1189,15 +1189,15 @@ service returns-truthy user-partial
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service returns-truthy super-admin
   create-posts:A
   read-posts:A
@@ -1231,165 +1231,165 @@ service returns-truthy super-admin-inherited
   any(read-posts|update-posts):A
   any(delete-posts):A
 service returns-truthy key-with
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service returns-truthy key-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service returns-truthy key-partial
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service returns-truthy key-slugs-only
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service returns-truthy key-made-by-super-admin
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service returns-truthy key-custom-slugs
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service returns-truthy key-manage
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service throws user-with
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service throws user-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service throws user-partial
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service throws super-admin
   create-posts:A
   read-posts:A
@@ -1423,117 +1423,117 @@ service throws super-admin-inherited
   any(read-posts|update-posts):A
   any(delete-posts):A
 service throws key-with
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service throws key-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service throws key-partial
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service throws key-slugs-only
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service throws key-made-by-super-admin
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service throws key-custom-slugs
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service throws key-manage
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service role-name user-with
   create-posts:A
   read-posts:A
@@ -1541,47 +1541,47 @@ service role-name user-with
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service role-name user-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service role-name user-partial
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service role-name super-admin
   create-posts:A
   read-posts:A
@@ -1621,47 +1621,47 @@ service role-name key-with
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service role-name key-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service role-name key-partial
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service role-name key-slugs-only
   create-posts:A
   read-posts:A
@@ -1669,63 +1669,63 @@ service role-name key-slugs-only
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service role-name key-made-by-super-admin
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service role-name key-custom-slugs
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service role-name key-manage
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service permission-spelling user-with
   create-posts:A
   read-posts:A
@@ -1733,47 +1733,47 @@ service permission-spelling user-with
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service permission-spelling user-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service permission-spelling user-partial
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service permission-spelling super-admin
   create-posts:A
   read-posts:A
@@ -1813,111 +1813,111 @@ service permission-spelling key-with
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service permission-spelling key-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 service permission-spelling key-partial
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service permission-spelling key-slugs-only
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 service permission-spelling key-made-by-super-admin
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service permission-spelling key-custom-slugs
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 service permission-spelling key-manage
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 no-service none user-with
   create-posts:A
   read-posts:A
@@ -1925,47 +1925,47 @@ no-service none user-with
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 no-service none user-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 no-service none user-partial
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 no-service none super-admin
   create-posts:A
   read-posts:A
@@ -1977,7 +1977,7 @@ no-service none super-admin
   read-settings:A
   manage-settings:A
   update-email-providers:A
-  manage-:403 You do not have permission to manage 
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
@@ -1993,7 +1993,7 @@ no-service none super-admin-inherited
   read-settings:A
   manage-settings:A
   update-email-providers:A
-  manage-:403 You do not have permission to manage 
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
@@ -2005,47 +2005,47 @@ no-service none key-with
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 no-service none key-without
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.
 no-service none key-partial
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 no-service none key-slugs-only
   create-posts:A
   read-posts:A
@@ -2053,60 +2053,60 @@ no-service none key-slugs-only
   delete-posts:A
   publish-posts:A
   unpublish-posts:A
-  export-posts:403 You do not have permission to export posts
+  export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
   any(read-settings|manage-settings):A
   any(read-posts|update-posts):A
   any(delete-posts):A
 no-service none key-made-by-super-admin
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
-  any(update-email-providers|manage-email-providers):403 You do not have the required permissions to access this resource
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
+  any(update-email-providers|manage-email-providers):403 You can't edit email providers.
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 no-service none key-custom-slugs
-  create-posts:403 You do not have permission to create posts
+  create-posts:403 You can't create posts.
   read-posts:A
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
   any(read-posts|update-posts):A
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(delete-posts):403 You can't delete posts.
 no-service none key-manage
-  create-posts:403 You do not have permission to create posts
-  read-posts:403 You do not have permission to read posts
-  update-posts:403 You do not have permission to update posts
-  delete-posts:403 You do not have permission to delete posts
-  publish-posts:403 You do not have permission to publish posts
-  unpublish-posts:403 You do not have permission to unpublish posts
-  export-posts:403 You do not have permission to export posts
-  read-settings:403 You do not have permission to read settings
-  manage-settings:403 You do not have permission to manage settings
-  update-email-providers:403 You do not have permission to update email-providers
-  manage-:403 You do not have permission to manage 
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
+  export-posts:403 You can't export posts.
+  read-settings:403 You can't see settings.
+  manage-settings:403 You can't manage settings.
+  update-email-providers:403 You can't edit email providers.
+  manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
-  any(read-settings|manage-settings):403 You do not have the required permissions to access this resource
-  any(read-posts|update-posts):403 You do not have the required permissions to access this resource
-  any(delete-posts):403 You do not have the required permissions to access this resource
+  any(read-settings|manage-settings):403 You can't see settings.
+  any(read-posts|update-posts):403 You can't see posts.
+  any(delete-posts):403 You can't delete posts.

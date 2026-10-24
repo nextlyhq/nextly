@@ -5964,6 +5964,53 @@ export class CollectionMutationService extends BaseService {
    * collection it is a plain publish of the single row. Only touches status columns (no field
    * values), so it needs none of the localized-write machinery.
    */
+  /**
+   * The one entry an update acts on, and the caller's update gate for it: the
+   * entry with its schema, or the answer to return instead, when the entry is
+   * not found or the caller may not update it. Shared by the update and the
+   * publish of every language, which ask both the same way.
+   */
+  private async entryToUpdate(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    overrideAccess?: boolean;
+    routeAuthorized?: boolean;
+    authenticatedScope?: AuthenticatedScope;
+  }) {
+    const accessUser = params.overrideAccess ? undefined : params.user;
+    const schema = await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    );
+    const [existingEntry] = await this.db
+      .select()
+      .from(schema)
+      .where(eq(schema.id, params.entryId))
+      .limit(1);
+    if (!existingEntry) {
+      const answer: CollectionServiceResult = {
+        success: false,
+        statusCode: 404,
+        message: "Entry not found",
+        data: null,
+      };
+      return { answer };
+    }
+    const accessDenied = await this.accessService.checkCollectionAccess({
+      collectionName: params.collectionName,
+      operation: "update",
+      entryId: params.entryId,
+      user: accessUser,
+      overrideAccess: params.overrideAccess,
+      routeAuthorized: params.routeAuthorized,
+      // A scoped API key is judged on its own grants here too, so the session
+      // super-admin bypass does not apply to it on the update gate.
+      authenticatedScope: params.authenticatedScope,
+    });
+    if (accessDenied) return { answer: accessDenied };
+    return { accessUser, schema, existingEntry };
+  }
+
   private async setLifecycleAllLocales(
     direction: LifecycleDirection,
     params: AllLocalesLifecycleParams
@@ -5985,37 +6032,12 @@ export class CollectionMutationService extends BaseService {
     // saved rather than one the caller should send again.
     let committedWrite = false;
     try {
-      const accessUser = params.overrideAccess ? undefined : params.user;
-      const schema = await this.fileManager.loadDynamicSchema(
-        params.collectionName
-      );
-
-      const [existingEntry] = await this.db
-        .select()
-        .from(schema)
-        .where(eq(schema.id, params.entryId))
-        .limit(1);
-      if (!existingEntry) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "Entry not found",
-          data: null,
-        };
-      }
-
-      const accessDenied = await this.accessService.checkCollectionAccess({
-        collectionName: params.collectionName,
-        operation: "update",
-        user: accessUser,
-        overrideAccess: params.overrideAccess,
-        // The route already ran the `update` gate (against the API key's scope,
-        // when applicable), so skip the redundant RBAC re-check here; the publish
-        // gate below still runs.
-        routeAuthorized: params.routeAuthorized,
-        authenticatedScope: params.authenticatedScope,
-      });
-      if (accessDenied) return accessDenied;
+      // The route already ran the `update` gate (against the API key's scope,
+      // when applicable), so the update gate here skips the redundant RBAC
+      // re-check; the publish gate below still runs.
+      const toUpdate = await this.entryToUpdate(params);
+      if (toUpdate.answer) return toUpdate.answer;
+      const { accessUser, schema, existingEntry } = toUpdate;
 
       // The draft/published lifecycle flag on the collection config, NOT the
       // mere presence of a `status` column: a collection that defines an
@@ -6074,6 +6096,7 @@ export class CollectionMutationService extends BaseService {
       const publishDenied = await this.accessService.checkCollectionAccess({
         collectionName: params.collectionName,
         operation: direction.accessAction,
+        entryId: params.entryId,
         user: accessUser,
         overrideAccess: params.overrideAccess,
         // Not route-authorized as publish: the POST was authorized as `update`,
@@ -6966,6 +6989,7 @@ export class CollectionMutationService extends BaseService {
     const denied = await this.accessService.checkCollectionAccess({
       collectionName: params.collectionName,
       operation: "update",
+      entryId: params.entryId,
       user: params.user,
       // Never overridden: this exists to APPLY the document's rules, so a
       // caller that could opt out of them would defeat the point.
@@ -8082,29 +8106,9 @@ export class CollectionMutationService extends BaseService {
       const badLocale = this.rejectInvalidWriteLocale(params.locale);
       if (badLocale) return badLocale;
 
-      const accessUser = params.overrideAccess ? undefined : params.user;
-
-      const schema = await this.fileManager.loadDynamicSchema(
-        params.collectionName
-      );
-
-      // Fetch the existing entry first (needed for access control and hooks)
-
-      const [existingEntry] = await this.db
-        .select()
-        .from(schema)
-        .where(eq(schema.id, params.entryId))
-        .limit(1);
-
-      if (!existingEntry) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "Entry not found",
-          data: null,
-        };
-      }
-
+      // Fetch the existing entry first (needed for access control and hooks),
+      // then:
+      //
       // 1. Check collection-level access FIRST (with document for owner checks)
       //
       // This verdict is NOT atomic with the write it guards, and that is a known
@@ -8159,19 +8163,9 @@ export class CollectionMutationService extends BaseService {
       //
       // A rule that must be judged against the row as locked belongs in the
       // under-lock re-check the publish path already uses, not here.
-      const accessDenied = await this.accessService.checkCollectionAccess({
-        collectionName: params.collectionName,
-        operation: "update",
-        user: accessUser,
-        overrideAccess: params.overrideAccess,
-        routeAuthorized: params.routeAuthorized,
-        // A scoped API key is judged on its own grants here too, so the session
-        // super-admin bypass does not apply to it on the update gate.
-        authenticatedScope: params.authenticatedScope,
-      });
-      if (accessDenied) {
-        return accessDenied;
-      }
+      const toUpdate = await this.entryToUpdate(params);
+      if (toUpdate.answer) return toUpdate.answer;
+      const { accessUser, schema, existingEntry } = toUpdate;
 
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(
@@ -8530,6 +8524,7 @@ export class CollectionMutationService extends BaseService {
           {
             collectionName: params.collectionName,
             operation: transitionOp,
+            entryId: params.entryId,
             user: accessUser,
             overrideAccess: params.overrideAccess,
             // Never route-authorized: the route authorizes the write as `update`,
@@ -10643,6 +10638,7 @@ export class CollectionMutationService extends BaseService {
       const accessDenied = await this.accessService.checkCollectionAccess({
         collectionName: params.collectionName,
         operation: "delete",
+        entryId: params.entryId,
         user: accessUser,
         overrideAccess: params.overrideAccess,
         routeAuthorized: params.routeAuthorized,
@@ -11688,6 +11684,7 @@ export class CollectionMutationService extends BaseService {
         const accessDenied = await this.accessService.checkCollectionAccess({
           collectionName: params.collectionName,
           operation: "update",
+          entryId: entryId,
           user: params.user,
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,

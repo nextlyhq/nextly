@@ -13,10 +13,12 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { collectionGateVerdict } from "../../../auth/access/gate-adapters";
+import { refusalMessageFor } from "../../../auth/access/refusal-message";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { effectiveCallerScope } from "../../../auth/caller-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import { NEXTLY_ERROR_STATUS } from "../../../errors/error-codes";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import type { AccessOperation } from "../../../services/access";
 import { isSuperAdminContext } from "../../../services/access";
@@ -85,6 +87,12 @@ export class CollectionAccessService extends BaseService {
      * pool. Defaults to the pooled connection.
      */
     executor?: unknown;
+    /**
+     * The one entry the operation acts on, where it acts on one, so a
+     * refusal names "this post" rather than the collection. It decides
+     * nothing.
+     */
+    entryId?: string;
   }): Promise<CollectionServiceResult<T> | null> {
     const {
       collectionName,
@@ -153,13 +161,25 @@ export class CollectionAccessService extends BaseService {
         ...errorEnvelopeFields(error),
       };
     }
+    // The caller is told what was refused in the site's words. Which check
+    // refused rides along for the server's log, written where the refusal
+    // reaches its caller: a caller asking only whether it may is not refused.
     return {
       success: false,
-      statusCode: 403,
-      message:
+      statusCode: NEXTLY_ERROR_STATUS.FORBIDDEN,
+      code: "FORBIDDEN",
+      refusalReason:
         verdict.refusal === "unauthenticated"
-          ? `Access denied: ${operation} on ${collectionName} requires an authenticated user`
-          : `Access denied: insufficient permissions for ${operation} on ${collectionName}`,
+          ? `${operation} on ${collectionName} requires an authenticated user`
+          : `the caller may not ${operation} ${collectionName}`,
+      // Named by the service's caller, so its slug is the site's own. Read
+      // on the gate's own transaction, where it runs in one.
+      message: await refusalMessageFor(
+        operation,
+        collectionName,
+        params.entryId === undefined ? "all" : "one",
+        { named: true, executor }
+      ),
       data: null as unknown as T,
     };
   }
