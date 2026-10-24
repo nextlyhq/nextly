@@ -778,6 +778,56 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("a held draft that removes an instance holding nothing protected", () => {
+      /** The draft a published entry holds, as a by-id read with drafts. */
+      const heldDraft = async (collection: string, id: string) =>
+        (await trusted.findByID({
+          collection,
+          id,
+          depth: 1,
+          draft: true,
+        } as never)) as Doc;
+
+      it("records a cleared single field group", async () => {
+        const { item } = await trusted.create({
+          collection: "groupdrafted",
+          data: { title: "c6", status: "published", one: { heading: "h" } },
+        } as never);
+        const id = String(item.id);
+        await checkedAs("editor").update({
+          collection: "groupdrafted",
+          id,
+          data: { one: null },
+        } as never);
+
+        const draft = await heldDraft("groupdrafted", id);
+        expect(draft._isWorkingDraft).toBe(true);
+        expect(list(draft.one)).toEqual([]);
+      });
+
+      it("records an instance left out of a list", async () => {
+        const { item } = await trusted.create({
+          collection: "drafted",
+          data: {
+            title: "c6l",
+            status: "published",
+            many: [{ heading: "a" }, { heading: "b" }],
+          },
+        } as never);
+        const id = String(item.id);
+        const [first] = list((await stored("drafted", id)).many);
+        await checkedAs("editor").update({
+          collection: "drafted",
+          id,
+          data: { many: [{ id: first.id, heading: "a" }] },
+        } as never);
+
+        const draft = await heldDraft("drafted", id);
+        expect(draft._isWorkingDraft).toBe(true);
+        expect(list(draft.many).map(note => note.heading)).toEqual(["a"]);
+      });
+    });
+
     describe("a held draft and its publish", () => {
       /** A `drafted` page, published, with every guarded value set. */
       async function publishedPage(tag: string): Promise<string> {
