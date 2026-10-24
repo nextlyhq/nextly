@@ -1159,11 +1159,12 @@ describeEachDialect("a translated field that is renamed", dialect => {
     expect(await columnsOf("dc_posts")).not.toContain("title2");
   }
 
-  // A field renamed and made shared in one change leaves translation under its new name, so it is
-  // judged as one before anything runs: its settings, and the archive its other languages go to.
-  it.each([
+  /** Every path that can rename a translated field and make it shared in one change. */
+  const RENAMED_SHARED_PATHS = [
     {
       path: "the builder saves the collection",
+      table: "dc_posts",
+      seed: seedCollection,
       change: async (fields: unknown[]) => {
         const saved = await handler().updateCollection(
           { collectionName: "posts" },
@@ -1174,6 +1175,8 @@ describeEachDialect("a translated field that is renamed", dialect => {
     },
     {
       path: "the collection's schema dialog applies it as a rename",
+      table: "dc_posts",
+      seed: seedCollection,
       change: async (fields: unknown[]) => {
         await dispatchCollections(
           {} as ServiceContainer,
@@ -1192,20 +1195,110 @@ describeEachDialect("a translated field that is renamed", dialect => {
         );
       },
     },
-  ])(
-    "refuses a field renamed, made shared and Required in one change, and changes nothing, when $path",
-    async ({ change }) => {
-      const id = await seedCollection();
+    {
+      path: "a Single's schema is saved",
+      table: "single_hero",
+      seed: seedSingle,
+      change: async (fields: unknown[]) => {
+        await dispatchSingles(
+          "updateSingleSchema",
+          { slug: "hero" },
+          { fields }
+        );
+      },
+    },
+    {
+      path: "a Single's schema dialog applies it as a rename",
+      table: "single_hero",
+      seed: seedSingle,
+      change: async (fields: unknown[]) => {
+        await dispatchSingles(
+          "applySingleSchemaChanges",
+          { slug: "hero" },
+          {
+            fields,
+            confirmed: true,
+            localized: true,
+            renameResolutions: renamedOnCompanion("single_hero"),
+            schemaVersion: await schemaVersionOf("dynamic_singles", "hero"),
+          }
+        );
+      },
+    },
+    {
+      path: "a field group's schema dialog applies it as a rename",
+      table: "comp_banner",
+      seed: seedFieldGroup,
+      change: async (fields: unknown[]) => {
+        await dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "banner" },
+          {
+            fields,
+            confirmed: true,
+            localized: true,
+            renameResolutions: renamedOnCompanion("comp_banner"),
+            schemaVersion: await schemaVersionOf(
+              "dynamic_components",
+              "banner"
+            ),
+          }
+        );
+      },
+    },
+  ];
+
+  // A field renamed and made shared in one change leaves translation under its new name, so it is
+  // judged as one before anything runs: its settings, and the archive its other languages go to.
+  it.each(RENAMED_SHARED_PATHS)(
+    "keeps English's value under the new name and makes it Required, for a field renamed, made shared and Required in one change, when $path",
+    async ({ table, seed, change }) => {
+      const id = await seed();
+
+      await change(renamedShared({ required: true }));
+
+      expect(await mainValue(table, "title2", id)).toBe("Hello");
+      expect(await isNotNull(table, "title2")).toBe(true);
+    }
+  );
+
+  // Asked of the values in the column the field had, since the rename has not moved them yet.
+  it.each(RENAMED_SHARED_PATHS)(
+    "refuses a field renamed, made shared and Required while an entry has no English value, and changes nothing, when $path",
+    async ({ table, seed, change }) => {
+      const id = await seed();
+      await query(
+        `DELETE FROM ${quote(dialect, `${table}_locales`)} WHERE ${quote(dialect, "_locale")} = 'en'`
+      );
 
       const refusal = await change(renamedShared({ required: true })).then(
         () => undefined,
         (error: unknown) => error
       );
 
-      expect(reported(refusal)).toMatch(/CONSTRAINED_FIELD_LEAVES_TRANSLATION/);
-      await expectUnchanged(id);
+      expect(reported(refusal)).toMatch(/1 entry has no English title2/);
+      expect(await companionValues(table, "heading", id)).toEqual({
+        es: "Hola",
+      });
+      expect(await columnsOf(table)).not.toContain("title2");
     }
   );
+
+  /** Whether `column` on `table` refuses NULL, as the database reports it. */
+  async function isNotNull(table: string, column: string): Promise<boolean> {
+    if (dialect === "sqlite") {
+      const rows = await query<{ name: string; refusesNull: number }>(
+        `SELECT name, "notnull" AS refusesNull FROM pragma_table_info('${table}')`
+      );
+      return Number(rows.find(row => row.name === column)?.refusesNull) === 1;
+    }
+    const [row] = await query<{ nullable: string }>(
+      dialect === "mysql"
+        ? `SELECT IS_NULLABLE AS nullable FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}' AND COLUMN_NAME = '${column}'`
+        : `SELECT is_nullable AS nullable FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}' AND column_name = '${column}'`
+    );
+    return row?.nullable === "NO";
+  }
 
   it("changes nothing when the archive cannot be written and the schema dialog renames a field to shared", async () => {
     const id = await seedCollection();

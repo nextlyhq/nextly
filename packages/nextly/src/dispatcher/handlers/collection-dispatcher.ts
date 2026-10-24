@@ -35,7 +35,10 @@ import type { UserContext } from "../../domains/collections/services/collection-
 import { clearCollectionRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { appLocalization } from "../../domains/i18n/configured-locales";
-import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import {
+  archiveFieldsLeavingTranslation,
+  fieldsWithLeavingSettingsDeferred,
+} from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
@@ -89,6 +92,7 @@ import {
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import { leavingSettingsNotApplied } from "../helpers/builder-schema-push";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -786,25 +790,6 @@ const COLLECTIONS_METHODS: Record<
       // candidates for the new collection being saved.
       const desired = await buildFullDesiredSchema();
 
-      // Splice in the user's changes for THIS collection (overwrites
-      // any registry entry for the same slug).
-      desired.collections[p.collectionName] = {
-        slug: p.collectionName,
-        tableName,
-        fields: fields as DesiredCollection["fields"],
-        // Mirror previewSchemaChanges so apply diffs against the same
-        // desired schema preview classified.
-        status: collection.status === true,
-        // i18n: carry the localized flag so the push diff omits translatable
-        // columns from the main table (they live in the companion `_locales`
-        // table, provisioned separately below). Uses the request's flag so a
-        // toggle applies immediately; without this the apply re-adds translatable
-        // columns to the main table.
-        localized: isLocalized,
-        // Authored in the Schema Builder: this is the Builder's own save path.
-        builderOwned: true,
-      };
-
       // Resolve adapter for the pipeline construction.
       const adapter = getAdapterFromDI();
       if (!adapter) {
@@ -902,6 +887,35 @@ const COLLECTIONS_METHODS: Record<
         dialect,
         builtBy: "collection",
       });
+
+      // A Required or Unique field leaving translation is pushed without its setting first, and
+      // the setting is pushed once the companion transition has copied its values in.
+      const settingsDeferred = fieldsWithLeavingSettingsDeferred({
+        oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
+        renamed: companionRename,
+      });
+
+      // Splice in the user's changes for THIS collection (overwrites
+      // any registry entry for the same slug).
+      desired.collections[p.collectionName] = {
+        slug: p.collectionName,
+        tableName,
+        fields: (settingsDeferred ?? fields) as DesiredCollection["fields"],
+        // Mirror previewSchemaChanges so apply diffs against the same
+        // desired schema preview classified.
+        status: collection.status === true,
+        // i18n: carry the localized flag so the push diff omits translatable
+        // columns from the main table (they live in the companion `_locales`
+        // table, provisioned separately below). Uses the request's flag so a
+        // toggle applies immediately; without this the apply re-adds translatable
+        // columns to the main table.
+        localized: isLocalized,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
+      };
 
       // A field leaving translation has preconditions of its own, asked before the push alters
       // anything.
@@ -1039,6 +1053,30 @@ const COLLECTIONS_METHODS: Record<
               note: "main table updated but localized companion out of sync; re-apply to retry",
             },
           });
+        }
+      }
+
+      // The settings the first push left off, now that the shared columns hold the default
+      // language's values. Whether those values can take them was asked before anything ran.
+      // A new desired schema rather than an edit of the first: the pipeline keeps the last one it
+      // applied, by reference, to skip a push that changes nothing.
+      if (settingsDeferred) {
+        const settled = await apply(
+          {
+            ...desired,
+            collections: {
+              ...desired.collections,
+              [p.collectionName]: {
+                ...desired.collections[p.collectionName],
+                fields: fields as DesiredCollection["fields"],
+              },
+            },
+          },
+          "ui",
+          { promptChannel: "auto" }
+        );
+        if (!settled.success) {
+          throw leavingSettingsNotApplied(String(p.collectionName), settled);
         }
       }
 

@@ -341,6 +341,74 @@ for (const entry of DIALECTS) {
         expect(await columnsOf(companion)).toContain("body");
       });
 
+      /** The entity with `body` carrying `flags`, translated or shared. */
+      const constrained = (
+        base: MinimalConfigEntity,
+        flags: Record<string, unknown>
+      ): MinimalConfigEntity => ({
+        ...base,
+        fields: base.fields.map(f =>
+          f.name === "body" ? { ...f, ...flags } : f
+        ),
+      });
+
+      /** Whether the database takes a row that keeps the setting, and one that breaks it. */
+      async function takes(body: string): Promise<boolean> {
+        return adapter
+          .executeQuery(
+            `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("body")}) ` +
+              `VALUES ('x${Math.random().toString(36).slice(2, 8)}', 'X', 'x${Math.random().toString(36).slice(2, 8)}', ${body})`
+          )
+          .then(
+            () => true,
+            () => false
+          );
+      }
+
+      it.each([
+        { setting: "required", flags: { required: true }, breaking: "NULL" },
+        { setting: "unique", flags: { unique: true }, breaking: "'Hello'" },
+      ])(
+        "keeps English's value as the shared one and enforces $setting, through migrate:create",
+        async ({ flags, breaking }) => {
+          // The main file creates the column without the setting; the shared file applies it once
+          // the values are in, before the companion column is dropped.
+          await migrateCreate(constrained(translated, flags));
+          await migrate();
+          await seed();
+          await migrateCreate(constrained(shared, flags));
+
+          await migrate();
+
+          await expectShared();
+          expect(await takes("'Kept'")).toBe(true);
+          expect(await takes(breaking)).toBe(false);
+        }
+      );
+
+      it("refuses Required at migrate while an entry has no English value, keeping the values", async () => {
+        // migrate:create has no database to ask, so the database refuses the setting, after the
+        // copy and before the drop: the companion keeps its column and every value.
+        await migrateCreate(constrained(translated, { required: true }));
+        await migrate();
+        await seed();
+        await adapter.executeQuery(
+          `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('e2', 'Two', 'two')`
+        );
+        await adapter.executeQuery(
+          `INSERT INTO ${q(companion)} (${q("_parent")}, ${q("_locale")}, ${q("body")}) VALUES ('e2', 'en', NULL)`
+        );
+        await migrateCreate(constrained(shared, { required: true }));
+
+        await expect(migrate()).rejects.toThrow();
+
+        expect(await columnsOf(companion)).toContain("body");
+        const [en] = await adapter.executeQuery<{ body: string | null }>(
+          `SELECT ${q("body")} AS body FROM ${q(companion)} WHERE ${q("_parent")} = 'e1' AND ${q("_locale")} = 'en'`
+        );
+        expect(en?.body).toBe("Hello");
+      });
+
       /** The shared file made to fail: its companion column renamed out from under it. */
       async function failTheSharedFile(): Promise<void> {
         await migrateCreate(translated);

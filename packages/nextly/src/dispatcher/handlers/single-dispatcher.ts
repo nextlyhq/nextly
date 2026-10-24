@@ -38,30 +38,19 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { appLocalization } from "../../domains/i18n/configured-locales";
-import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import {
+  archiveFieldsLeavingTranslation,
+  fieldsWithLeavingSettingsDeferred,
+} from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
-import { movedOnto } from "../../domains/schema/pipeline/apply";
-import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
-import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
-import {
-  BrowserPromptDispatcher,
-  type BrowserRenameResolution,
-} from "../../domains/schema/pipeline/prompt-dispatcher/browser";
-import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
-import {
-  noopMigrationJournal,
-  noopPreRenameExecutor,
-} from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
-import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
+import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
-import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
-import { reconcileSingleCompanion } from "../../domains/singles/services/reconcile-single-companion";
 import {
   resolveSingleTableName,
   singleTableFamiliesCollide,
@@ -79,7 +68,6 @@ import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
 import { withSessionCacheHeaders } from "../../routeHandler";
-import { getProductionNotifier } from "../../runtime/notifications/index";
 import { isReservedResourceSlug } from "../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
@@ -95,11 +83,15 @@ import {
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import {
+  builderSchemaPush,
+  leavingSettingsNotApplied,
+  pushAndReconcileCompanion,
+} from "../helpers/builder-schema-push";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
-  getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
   getSingleEntryServiceFromDI,
   getSingleMetadataServiceFromDI,
@@ -1255,11 +1247,21 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
           : undefined;
 
+      // A Required or Unique field leaving translation is pushed without its setting first, and
+      // the setting is pushed once the companion reconcile has copied its values in.
+      const settingsDeferred = fieldsWithLeavingSettingsDeferred({
+        oldFields: single.fields as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
+        renamed: companionRename,
+      });
+
       const desired = await buildFullDesiredSchema();
       desired.singles[slug] = {
         slug,
         tableName,
-        fields: fields as DesiredSingle["fields"],
+        fields: (settingsDeferred ?? fields) as DesiredSingle["fields"],
         // Mirror previewSingleSchemaChanges so apply diffs against the
         // same desired schema.
         status: single.status === true,
@@ -1271,76 +1273,54 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         builderOwned: true,
       };
 
-      const promptDispatcher = new BrowserPromptDispatcher(
-        renameResolutions ?? [],
-        eventResolutions ?? [],
-        legacyBundle
-      );
-
-      const migrationJournal =
-        getMigrationJournalFromDI() ?? noopMigrationJournal;
-      const pipeline = new PushSchemaPipeline({
-        executor: new DrizzleStatementExecutor(dialect, db),
-        renameDetector: new RegexRenameDetector(),
-        classifier: new RealClassifier(),
-        promptDispatcher,
-        preRenameExecutor: noopPreRenameExecutor,
-        preCleanupExecutor: new RealPreCleanupExecutor(),
-        migrationJournal,
-        notifier: getProductionNotifier(),
-      });
-
-      const result = await pipeline.apply({
-        desired,
-        db,
+      const push = builderSchemaPush({
         dialect,
-        source: "ui",
-        promptChannel: "browser",
+        db,
         databaseName,
-        uiTargetSlug: slug,
-        // Named, not defaulted: the scope defaults to a collection, and a single recorded under that
-        // kind is invisible to every history query filtered by its own.
-        uiTargetKind: "single" as const,
-        // A field becoming translated keeps its value as this language's; the apply moves it after
-        // its prompts and refusals, before it drops the main column.
-        defaultLocale: appLocalization()?.defaultLocale ?? "en",
+        slug,
+        kind: "single",
+        resolutions: [
+          renameResolutions ?? [],
+          eventResolutions ?? [],
+          legacyBundle,
+        ],
+      });
+      // The push excludes companion tables, so single_<slug>_locales is brought in step right
+      // after it: created on the first translatable field, then ADD/DROPped as the field set
+      // changes (mirrors collections).
+      await pushAndReconcileCompanion(push, desired, "single", {
+        slug,
+        tableName,
+        oldFields: single.fields as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        localized: isLocalized,
+        wasLocalized: (single as { localized?: boolean }).localized === true,
+        // Both read from the same persisted record as `wasLocalized`, so all three describe the
+        // state before this apply.
+        status: single.status === true,
+        wasStatus: single.status === true,
+        adapter,
+        renamed: companionRename ?? undefined,
       });
 
-      if (!result.success) {
-        throw new Error(
-          result.error?.message ?? "Failed to apply schema changes"
-        );
-      }
-
-      // i18n: the push pipeline excludes companion tables, so reconcile the single's companion
-      // out-of-band — create single_<slug>_locales on the first translatable field, then ADD/DROP
-      // columns as the field set changes (mirrors collections). Uses the request's `isLocalized`.
-      try {
-        await reconcileSingleCompanion({
-          slug,
-          tableName,
-          oldFields: single.fields as unknown as FieldDefinition[],
-          newFields: fields as unknown as FieldDefinition[],
-          localized: isLocalized,
-          // Detect an enable/disable transition against the persisted state so this apply
-          // seeds/restores existing rows rather than only creating an empty companion.
-          wasLocalized: (single as { localized?: boolean }).localized === true,
-          status: single.status === true,
-          // Read from the same persisted record as `wasLocalized`, so both describe the state
-          // before this apply.
-          wasStatus: single.status === true,
-          adapter,
-          // Added to the companion, with their values, by the apply before its drop.
-          joinedBefore: movedOnto(result, tableName),
-          // A translated field the admin renamed: the dialog's answer naming the companion.
-          renamed: companionRename ?? undefined,
+      // The settings the first push left off, now that the shared columns hold the default
+      // language's values. Whether those values can take them was asked before anything ran.
+      // A new desired schema rather than an edit of the first: the pipeline keeps the last one it
+      // applied, by reference, to skip a push that changes nothing.
+      if (settingsDeferred) {
+        const settled = await push({
+          ...desired,
+          singles: {
+            ...desired.singles,
+            [slug]: {
+              ...desired.singles[slug],
+              fields: fields as DesiredSingle["fields"],
+            },
+          },
         });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        throw NextlyError.internal({
-          cause: err instanceof Error ? err : undefined,
-          logContext: { op: "singleCompanionReconcile", slug, detail: msg },
-        });
+        if (!settled.success) {
+          throw leavingSettingsNotApplied(slug, settled);
+        }
       }
 
       const newSchemaVersion = currentVersion + 1;

@@ -59,6 +59,8 @@ import type { DynamicCollectionSchemaService } from "../../dynamic-collections/s
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { appLocalization } from "../../i18n/configured-locales";
 import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
+import { withoutLeavingConstraints } from "../../i18n/migration/field-leaves-translation-rules";
+import { fieldsLeavingTranslation } from "../../i18n/migration/reconcile-companion";
 import {
   applyMigrationStatements,
   applyMigrationWhole,
@@ -199,6 +201,13 @@ interface UpdateDdlPlan {
   fields: FieldDefinition[];
   /** The field list the table holds now. The companion reconcile diffs against it. */
   previousFields: FieldDefinition[];
+  /**
+   * The Required and Unique settings of fields leaving translation, run after the companion
+   * reconcile has copied their default language's values in. `migrationSQL` creates their shared
+   * columns without the settings, since every entry would otherwise hold NULL or one placeholder
+   * before the copy. Empty when no such field leaves.
+   */
+  settingsSQL: string;
   /**
    * Whether the statements describe the WHOLE table rather than a change to it.
    *
@@ -811,6 +820,7 @@ export class SingleMetadataService {
 
     if (fields === undefined) {
       return {
+        settingsSQL: "",
         migrationSQL: "",
         fields: previousFields,
         previousFields,
@@ -833,6 +843,7 @@ export class SingleMetadataService {
     // records `pending`, which is what the migration runner looks for.
     if (!adapter) {
       return {
+        settingsSQL: "",
         migrationSQL: "",
         fields,
         previousFields,
@@ -849,6 +860,7 @@ export class SingleMetadataService {
       return {
         // i18n: a fresh (re)create omits translatable columns when localized; they belong to the
         // companion.
+        settingsSQL: "",
         migrationSQL: schemaService.generateMigrationSQL(tableName, fields, {
           isSingle: true,
           hasStatus,
@@ -923,11 +935,18 @@ export class SingleMetadataService {
       fields
     );
 
+    const deferred = this.withLeavingSettingsDeferred(
+      input,
+      alterInput.newFields,
+      schemaService
+    );
+
     return {
+      settingsSQL: deferred.settingsSQL,
       migrationSQL: schemaService.generateAlterTableMigration(
         tableName,
         alterInput.oldFields,
-        alterInput.newFields,
+        deferred.newFields,
         {
           wasStatus,
           hasStatus,
@@ -1122,6 +1141,53 @@ export class SingleMetadataService {
     const from = getColumnDescriptor(rename.from, dialect, "collection")?.name;
     const to = getColumnDescriptor(rename.to, dialect, "collection")?.name;
     return from && to && from !== to ? { from, to } : undefined;
+  }
+
+  /**
+   * `newFields` with the Required and Unique settings of fields leaving translation taken off, and
+   * the SQL that puts them back. Their shared columns are created without the settings, since every
+   * entry would otherwise hold NULL or one placeholder until the companion reconcile copies the
+   * default language's values in; the settings follow the copy. The settings' SQL is planned
+   * without the live table's facts, which describe the columns before the migration creates them,
+   * and whether the values can take the settings was asked before anything ran.
+   */
+  private withLeavingSettingsDeferred(
+    input: UpdateSingleSchemaInput,
+    newFields: FieldDefinition[],
+    schemaService: Pick<
+      DynamicCollectionSchemaService,
+      "generateAlterTableMigration" | "plannedColumnTypes"
+    >
+  ): { newFields: FieldDefinition[]; settingsSQL: string } {
+    const { wasLocalized, isLocalized, hasStatus } = input;
+    const previousFields = (input.existing.fields ??
+      []) as unknown as FieldDefinition[];
+    const leaving = new Set(
+      wasLocalized && isLocalized
+        ? fieldsLeavingTranslation(previousFields, input.fields ?? [])
+        : []
+    );
+    const unconstrained = withoutLeavingConstraints(newFields, leaving);
+    const deferred = unconstrained.some((f, i) => f !== newFields[i]);
+    return {
+      newFields: unconstrained,
+      settingsSQL: deferred
+        ? schemaService.generateAlterTableMigration(
+            input.existing.tableName,
+            unconstrained,
+            newFields,
+            {
+              wasStatus: hasStatus,
+              hasStatus,
+              // The type the diff BEFORE this one writes, not the live table's: MySQL restates a
+              // whole column definition on every MODIFY, and with none to restate it falls back
+              // to the legacy renderer, narrowing a float that diff had just created `double`
+              // down to `decimal(10,2)`.
+              liveColumnTypes: schemaService.plannedColumnTypes(unconstrained),
+            }
+          )
+        : "",
+    };
   }
 
   /**
@@ -1625,6 +1691,10 @@ export class SingleMetadataService {
         );
         return "failed";
       }
+
+      // The Required and Unique settings of fields leaving translation, now that their shared
+      // columns hold the default language's values. Nothing when no such field leaves.
+      await applyMigrationStatements(adapter, plan.settingsSQL);
 
       // 🔴 Registered only once the companion has been reconciled, never before it.
       //
