@@ -36,4 +36,6 @@ Refusals that aren't about permission now say why, and stay 403 `FORBIDDEN`:
 - A trigger request from a site the installation doesn't allow: "This request came from a site that isn't allowed to make it."
 - A Single deleted without `force`: "A Single can't be deleted from here."
 
-Each used to read "You don't have permission to perform this action.", which sent people looking for a permission that wouldn't help. Refusals for want of permission are unchanged: they never say which check refused.
+Each used to read "You don't have permission to perform this action.", which sent people looking for a permission that wouldn't help. One delete that was allowed is now refused. A built-in permission deleted by action and resource, rather than by id, was deleted when it was unassigned. It is now refused as the delete by id always refused it. A hidden internal permission is refused in the generic words, so a delete doesn't confirm it exists.
+
+Refusals for want of permission are unchanged: they never say which check refused.
