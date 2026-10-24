@@ -8,6 +8,7 @@ import {
   allWidgets,
   canonicalWidgets,
   declaredWidgets,
+  placedByDefault,
   widthFacts,
   type CanonicalWidget,
 } from "../canonical";
@@ -493,5 +494,25 @@ describe("a widget's widths", () => {
       allowedWidths: ["half"],
       allowsSeveral: true,
     });
+  });
+});
+
+describe("a widget offered per collection", () => {
+  const perCollection = {
+    id: "core/count",
+    offered: "per-collection" as const,
+  };
+
+  it("stays off the default dashboard, where every other widget is placed", () => {
+    expect(placedByDefault(perCollection)).toBe(false);
+    expect(placedByDefault({ id: "core/team" })).toBe(true);
+  });
+
+  it("allows several cards, one per collection, unless it says otherwise", () => {
+    expect(widthFacts(perCollection).allowsSeveral).toBe(true);
+    expect(widthFacts({ id: "core/team" }).allowsSeveral).toBe(false);
+    expect(
+      widthFacts({ ...perCollection, allowsSeveral: false }).allowsSeveral
+    ).toBe(false);
   });
 });

@@ -117,8 +117,9 @@ export interface ResolverOptions {
    */
   scope?: WidgetScope;
   /**
-   * The batch's one instant: every read in it measures "since" and "until"
-   * from it, so two cards asking for the last 30 days ask for the same days.
+   * The batch's one instant: what every read in it measures `since` and
+   * `until` from, so two cards, or two cells of one card, cannot straddle
+   * different moments. Absent, a read takes its own.
    *
    * @experimental
    */

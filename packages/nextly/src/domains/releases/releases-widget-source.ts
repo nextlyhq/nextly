@@ -189,6 +189,10 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   // has no date column to place them on.
   dateField: "refused",
   interval: "refused",
+  // A window bounds rows by when they were created; this source answers a
+  // fixed question that has none.
+  since: "refused",
+  until: "refused",
 };
 
 /** Refuse a query carrying anything this source cannot honour. */

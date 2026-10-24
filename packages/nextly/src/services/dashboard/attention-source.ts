@@ -398,6 +398,8 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   status: "refused",
   dateField: "refused",
   interval: "refused",
+  since: "refused",
+  until: "refused",
 };
 
 async function resolveAttention(

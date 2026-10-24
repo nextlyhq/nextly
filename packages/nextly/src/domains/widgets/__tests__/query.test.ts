@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
-import { MAX_WIDGET_LIMIT, validateWidgetQuery } from "../query";
+import { intervalWindow } from "../../collections/query/timeseries-interval";
+import {
+  MAX_WIDGET_LIMIT,
+  relativeSpanStart,
+  validateWidgetQuery,
+} from "../query";
 import { clearSources, registerSource } from "../sources";
 
 /** The one message every source/op refusal answers with. */
@@ -1216,6 +1221,156 @@ describe("validateWidgetQuery, a localized date key", () => {
       interval: "day",
       limit: 5,
     });
+  });
+});
+
+describe("a read's window", () => {
+  beforeEach(() => {
+    registerSource({
+      id: "collection:dated",
+      label: "Dated",
+      kind: "collection",
+      supports: ["count", "list", "timeseries"],
+      fields: [
+        { name: "title", type: "string" },
+        { name: "createdAt", type: "date" },
+      ],
+    });
+  });
+
+  it("carries since and until on a count, from the closed list", () => {
+    expect(
+      validateWidgetQuery({
+        source: "collection:dated",
+        op: "count",
+        since: "60d",
+        until: "30d",
+      })
+    ).toMatchObject({ since: "60d", until: "30d" });
+  });
+
+  it.each([
+    [
+      { op: "count", since: "45d" },
+      /since must be one of 7d, 30d, 60d, 90d, 12m/,
+    ],
+    [{ op: "count", until: "30d" }, /since must be one of/],
+    [
+      { op: "count", since: "30d", until: "60d" },
+      /must end the window after since/,
+    ],
+    [
+      { op: "count", since: "30d", until: "30d" },
+      /must end the window after since/,
+    ],
+    [{ op: "list", since: "30d" }, /bound a count or a timeseries, not a list/],
+  ])("refuses %j", (query, reason) => {
+    expect(() =>
+      validateWidgetQuery({ source: "collection:dated", ...query })
+    ).toThrow(reason);
+  });
+
+  it("refuses a window on a count whose source declares no createdAt", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:posts",
+        op: "count",
+        since: "7d",
+      })
+    ).toThrow(/does not declare/);
+  });
+});
+
+describe("relativeSpanStart", () => {
+  const now = new Date("2026-03-31T10:20:30.400Z");
+
+  it("starts at the first of the whole UTC days the span names, today included", () => {
+    // Thirty days ending with today, the 31st: from the 2nd at midnight.
+    expect(relativeSpanStart("30d", now).toISOString()).toBe(
+      "2026-03-02T00:00:00.000Z"
+    );
+    expect(relativeSpanStart("7d", now).toISOString()).toBe(
+      "2026-03-25T00:00:00.000Z"
+    );
+    expect(relativeSpanStart("60d", now).toISOString()).toBe(
+      "2026-01-31T00:00:00.000Z"
+    );
+  });
+
+  it("starts at the first of the whole UTC months the span names, this one included", () => {
+    expect(relativeSpanStart("12m", now).toISOString()).toBe(
+      "2025-04-01T00:00:00.000Z"
+    );
+    // From a leap day: the month boundary, so no day needs clamping.
+    expect(
+      relativeSpanStart(
+        "12m",
+        new Date("2028-02-29T23:59:59.999Z")
+      ).toISOString()
+    ).toBe("2027-03-01T00:00:00.000Z");
+  });
+
+  it("is the first bucket of a timeseries over the same span, so a window and its chart agree", () => {
+    expect(relativeSpanStart("30d", now)).toEqual(
+      intervalWindow(now, "day", 30)[0]
+    );
+    expect(relativeSpanStart("12m", now)).toEqual(
+      intervalWindow(now, "month", 12)[0]
+    );
+  });
+});
+
+describe("a collection's workflow conditions", () => {
+  it("admits the entry list's workflow conditions at the top level, in the forms the list reads", () => {
+    for (const where of [
+      { _inRelease: true },
+      { _inRelease: { scheduledBefore: "2026-10-28T09:00:00Z" } },
+      { _pendingChange: true, title: { contains: "news" } },
+    ]) {
+      expect(
+        validateWidgetQuery({ source: "collection:posts", op: "count", where })
+          .where
+      ).toEqual(where);
+    }
+  });
+
+  it("refuses one below the top level, where the list would not read it", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:posts",
+        op: "count",
+        where: { and: [{ _inRelease: true }] },
+      })
+    ).toThrow(
+      /"_inRelease" keeps entries a scheduled release will publish, and is read only at the top level/
+    );
+  });
+
+  it("refuses a form the list does not read", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:posts",
+        op: "count",
+        where: { _inRelease: false },
+      })
+    ).toThrow(/"_inRelease" needs true/);
+  });
+
+  it("is a collection's alone: on another source it is a field like any other", () => {
+    registerSource({
+      id: "plugin:shop",
+      label: "Shop",
+      kind: "plugin",
+      supports: ["count"],
+      fields: [{ name: "total", type: "number" }],
+    });
+    expect(() =>
+      validateWidgetQuery({
+        source: "plugin:shop",
+        op: "count",
+        where: { _inRelease: true },
+      })
+    ).toThrow(/undeclared field "_inRelease"/);
   });
 });
 
