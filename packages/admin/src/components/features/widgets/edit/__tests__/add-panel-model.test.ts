@@ -160,7 +160,7 @@ describe("the add panel's rows", () => {
     ]);
   });
 
-  it("leaves out a widget this admin cannot draw, and the Content group", () => {
+  it("leaves out a widget this admin cannot draw, and the Content group while it is hidden", () => {
     const rows = addPanelRows({
       placements: [],
       offered: ["ghost/widget", "content/posts"],
@@ -173,6 +173,7 @@ describe("the add panel's rows", () => {
         }),
       },
       byId: new Map([["content/posts", declared("content/posts", "Posts")]]),
+      showContent: false,
     });
     expect(rows).toEqual([]);
   });
@@ -290,11 +291,11 @@ describe("a widget offered per collection", () => {
         }),
       },
       byId: new Map([["core/count", count]]),
+      // No showContent: these rows are what the panel lists as it ships.
       collections: [
         { collection: "posts", label: "Posts" },
         { collection: "pages", label: "Pages" },
       ],
-      showContent: true,
     });
 
   it("is one row per collection the reader may read, each adding a card set to it", () => {
@@ -328,6 +329,26 @@ describe("a widget offered per collection", () => {
     expect(rows.map(row => [row.key, row.placed, row.action.kind])).toEqual([
       ["core/count:posts", 1, "add-another"],
       ["core/count:pages", 0, "add"],
+    ]);
+  });
+
+  it("carries the widget's category, so a search by it finds each collection's row", () => {
+    const rows = addPanelRows({
+      placements: [],
+      offered: ["core/count"],
+      widgets: {
+        "core/count": facts({
+          group: "content",
+          perCollection: true,
+          category: "Totals",
+        }),
+      },
+      byId: new Map([["core/count", count]]),
+      collections: [{ collection: "posts", label: "Posts" }],
+    });
+    expect(rows[0]?.category).toBe("Totals");
+    expect(searchAddPanel(rows, "totals").map(row => row.key)).toEqual([
+      "core/count:posts",
     ]);
   });
 

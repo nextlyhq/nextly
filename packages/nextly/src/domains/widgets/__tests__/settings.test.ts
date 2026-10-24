@@ -15,6 +15,7 @@ import {
   type AnyWidgetSetting,
   applyWidgetSettings,
   CONTENT_SETTING_NOT_DRAWN,
+  effectiveWidgetSettings,
   MAX_WIDGET_SETTINGS,
   resolveWidgetSettings,
   validateWidgetSettings,
@@ -760,6 +761,24 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
         ...base,
         source: "collection:posts",
         sort: "-updatedAt",
+      });
+    });
+
+    it("hands the card the same values its query was asked with, not the stored ones it set aside", () => {
+      // 🔴 Drawn from the stored values, a card links its number to a filter
+      // the query never counted under.
+      const stored = {
+        collection: "posts",
+        where: { salary: { gt: 1 } },
+        order: "salary",
+        by: "status",
+      };
+      expect({
+        ...effectiveWidgetSettings(content, stored, ctx),
+      }).toEqual({ collection: "posts", order: "-updatedAt", by: "status" });
+      // Without the reader's fields, nothing is known to be withheld.
+      expect(effectiveWidgetSettings(content, stored).where).toEqual({
+        salary: { gt: 1 },
       });
     });
 

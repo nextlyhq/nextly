@@ -198,7 +198,8 @@ describeEachDialect("the site's languages in Settings", dialect => {
   );
 
   // With nothing stored, a change's locked read locks no row, so two first changes both plan
-  // from the implicit English list and both insert it. The second is run again once the first has
+  // from the implicit English list and both insert it. The second fails, as a duplicate on
+  // PostgreSQL and SQLite and as a deadlock on MySQL, and is run again once the first has
   // committed, in a transaction of its own, and plans from what the first stored.
   it("applies two first changes made at the same moment on a site with nothing stored", async () => {
     const { registry } = await boot();

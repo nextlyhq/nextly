@@ -17,14 +17,14 @@
     }
   },
   "scripts": {
-    "check-types": "tsc --noEmit",
+    "check-types": "node ../../scripts/tsc.mjs --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {
     "@nextlyhq/tsconfig": "workspace:*",
     "@types/node": "^22.20.5",
-    "typescript": "^7.0.2",
+    "typescript": "7.0.2",
     "vitest": "^5.0.5"
   },
   "engines": {

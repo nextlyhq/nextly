@@ -50,6 +50,12 @@ We don't yet have a formal RFC process; significant proposals are discussed in G
   to the pinned version. pnpm 10+ also self-corrects to it. Settings live in
   `pnpm-workspace.yaml`, since pnpm reads only auth and registry settings from
   `.npmrc`.
+- In VS Code, the "TypeScript (Native Preview)" extension
+  (`TypeScriptTeam.native-preview`), which `.vscode/extensions.json`
+  recommends. The repository compiles with TypeScript 7, and this extension is
+  its language server; VS Code's built-in TypeScript is an older compiler that
+  reports differently. Once installed it is the default, and the commands
+  "Disable/Enable TypeScript 7 Language Server" switch between the two.
 - Docker Desktop, optional. Only needed if you want to test against PostgreSQL or MySQL via `pnpm dev:postgres` / `pnpm dev:mysql`, or run the full integration test matrix. SQLite (the default) needs none.
 - On Windows, `.gitattributes` checks text files out with LF line endings, whatever `core.autocrlf` says, so the tests read files as they read them on Linux and macOS. A clone made before `.gitattributes` said so keeps its CRLF files until they are checked out again. With nothing uncommitted, run this once in the clone: `git rm -r -q --cached . && git reset -q --hard`.
 

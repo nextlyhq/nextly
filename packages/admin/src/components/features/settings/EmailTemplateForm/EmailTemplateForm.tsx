@@ -1,6 +1,6 @@
 "use client";
 
-import { type EditorView } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { JSX } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -12,7 +12,7 @@ import { useEmailProviders } from "@admin/hooks/queries/useEmailProviders";
 import { useEmailTemplates } from "@admin/hooks/queries/useEmailTemplates";
 import { generateSlug } from "@admin/lib/fields";
 import { navigateTo } from "@admin/lib/navigation";
-import { type EmailTemplateRecord } from "@admin/services/emailTemplateApi";
+import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
 import { BodyEditor } from "./BodyEditor";
 import { DataRail } from "./DataRail";

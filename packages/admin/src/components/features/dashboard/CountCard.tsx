@@ -4,6 +4,7 @@ import type { WidgetComponentProps } from "nextly/widget-result";
 import type React from "react";
 
 import { Link } from "@admin/components/ui/link";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 
 import { CountValue, countLabel } from "../widgets/archetypes/count-value";
 import { OverTimeChart } from "../widgets/charts/over-time-chart";
@@ -15,7 +16,11 @@ import {
 } from "../widgets/frame/states";
 import { useCardTier } from "../widgets/frame/tier";
 
-import { countView, type CountPart } from "./count-card-model";
+import {
+  collectionLabelOf,
+  countView,
+  type CountPart,
+} from "./count-card-model";
 
 /**
  * Count: how many entries a collection holds, by the card's own width.
@@ -29,14 +34,25 @@ import { countView, type CountPart } from "./count-card-model";
 export const CountCard: React.FC<WidgetComponentProps> = ({
   cells,
   settings,
+  onRetry,
 }) => {
   const tier = useCardTier() ?? "medium";
   const view = countView(cells, settings);
+  // Named in the number's accessible name, as the frame's title names it, so
+  // two Count cards for different collections can be told apart aloud.
+  const collection = collectionLabelOf(settings, useBranding().widgetSources);
 
   if (view.state === "loading") return <CardSkeleton shape="figure" />;
   if (view.state === "unavailable") return <CardUnavailable />;
   if (view.state === "error") {
-    return <CardError title="Count" message={view.message} />;
+    // The Retry the frame offers every card: a failed Count is asked again.
+    return (
+      <CardError
+        title="Count"
+        message={view.message}
+        {...(onRetry ? { onRetry } : {})}
+      />
+    );
   }
 
   return (
@@ -44,7 +60,7 @@ export const CountCard: React.FC<WidgetComponentProps> = ({
       <Link
         href={view.href}
         className="w-fit text-2xl font-semibold tabular-nums tracking-tight text-foreground leading-none hover:underline"
-        aria-label={`Entries: ${countLabel(view.total)}`}
+        aria-label={`Entries in ${collection}: ${countLabel(view.total)}`}
       >
         <CardFigure value={view.total} tier={tier} />
       </Link>

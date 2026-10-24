@@ -80,9 +80,9 @@ import {
   componentsToStop,
   planReleaseMaterialisation,
 } from "../plan-release-materialisation";
-import {
-  type ReleaseCheckReads,
-  type ReleaseCheckSource,
+import type {
+  ReleaseCheckReads,
+  ReleaseCheckSource,
 } from "../readiness/check-sources";
 import {
   CORE_AUTHOR_SOURCE,

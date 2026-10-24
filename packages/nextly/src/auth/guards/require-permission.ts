@@ -1,4 +1,8 @@
 import { permissionSlug } from "../../schemas/_zod/rbac";
+import {
+  INSTEAD_OF_AN_ACCESS_CHECK,
+  warnDeprecatedExport,
+} from "../deprecated-exports";
 import { createJsonErrorResponse as answerRefusal } from "../middleware/error-response";
 import type { AuthContext } from "../session/session-types";
 
@@ -57,8 +61,34 @@ export function isErrorResponse(value: unknown): value is ErrorResponse {
  * Check a single permission against an AuthContext.
  * For session auth: delegates to RBAC service.
  * For API key auth: checks pre-resolved permissions map.
+ *
+ * @deprecated For a signed-in user, use
+ * `nextly.access.check({ userId, resource, operation })`, which asks the one
+ * access decision. For an API key, check the key's own permissions, which
+ * `nextly.access.checkApiKey({ rawKey })` returns: `nextly.access.check`
+ * judges the key's maker, not the key. Removed in the next release.
  */
 export async function checkPermission(
+  context: AuthContext,
+  action: string,
+  resource: string,
+  deps: {
+    checkUserPermission?: (
+      userId: string,
+      action: string,
+      resource: string
+    ) => Promise<boolean>;
+  }
+): Promise<boolean> {
+  warnDeprecatedExport("checkPermission", INSTEAD_OF_AN_ACCESS_CHECK);
+  return permissionHeld(context, action, resource, deps);
+}
+
+/**
+ * The permission check itself, without the deprecation warning, for the
+ * deprecated `checkCollectionAccess`, which warns under its own name.
+ */
+export async function permissionHeld(
   context: AuthContext,
   action: string,
   resource: string,

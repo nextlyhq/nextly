@@ -136,6 +136,11 @@ const TIER_ORDER: Readonly<Record<SizeTier, number>> = {
   large: 2,
 };
 
+/** Whether a card drawn at `tier` draws what is drawn from `from` up. */
+export function drawsFrom(tier: SizeTier, from: SizeTier): boolean {
+  return TIER_ORDER[tier] >= TIER_ORDER[from];
+}
+
 /**
  * The tier a card's rows are counted at: the card's own, or the tier its answer was fetched at
  * when that is smaller. Counted at the card's tier, a smaller answer would draw its extra row as

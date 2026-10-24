@@ -156,4 +156,38 @@ describe("the settings sheet's preview", () => {
     ]);
     expect(result.current.answerTier).toBeUndefined();
   });
+
+  it("asks a cells card's cells under the changed values, and hands their answers back by key", async () => {
+    // 🔴 With no query of its own, a cells card asked nothing, and its preview
+    // stayed on its skeleton.
+    vi.mocked(protectedApi.post).mockImplementation((_url, body) =>
+      Promise.resolve({
+        results: (body as { queries: unknown[] }).queries.map(() => ({
+          ok: true,
+          result: { op: "count", total: 4 },
+        })),
+      })
+    );
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const count = {
+      id: "core/count",
+      title: "Count",
+      archetype: "custom",
+      size: "sm",
+      settings: [
+        { name: "collection", type: "collection", label: "Collection" },
+      ],
+      cells: [{ key: "total", query: { op: "count" } }],
+    } as DashboardWidget;
+    const { result, rerender } = preview({}, { widget: count });
+    rerender({ draft: { collection: "pages" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    await waitFor(() =>
+      expect(result.current.slotFor?.("total")).toMatchObject({ ok: true })
+    );
+    expect(sent()).toEqual([[{ op: "count", source: "collection:pages" }]]);
+    expect(result.current.definition.title).toBe("Count: pages");
+  });
 });
