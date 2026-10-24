@@ -86,6 +86,7 @@ const viewing: ViewedVersion = {
   versionNo: 4,
   snapshot: { title: "after", excerpt: "same", body: "after", slug: "same" },
   locale: null,
+  withheld: [],
   isLoading: false,
   error: null,
   scope,
