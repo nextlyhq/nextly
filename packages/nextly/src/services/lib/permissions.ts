@@ -1017,6 +1017,13 @@ export async function writingPermissions<TTable, T>(
  */
 async function publishRetirement(): Promise<void> {
   await duringRetirement(async () => {
+    // Where the stored answers were turned off, no instance on a release that
+    // reads them reads any, so there is nothing to empty and nothing to
+    // withhold the version for.
+    if (!storedAnswersReadElsewhere()) {
+      await bumpEpoch();
+      return;
+    }
     try {
       await emptyRetiredPermissionAnswers(getAdapter());
     } catch (error) {
