@@ -2,13 +2,16 @@ import { useQuery } from "@tanstack/react-query";
 
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
 import { SYSTEM_RESOURCE_SET } from "../constants/permissions";
-import { protectedApi } from "../lib/api/protectedApi";
 import type {
   AdminCapabilities,
   CollectionCapabilities,
   UserPermissionsResponse,
 } from "../types/permissions";
 
+import {
+  CURRENT_USER_PERMISSIONS_KEY,
+  fetchCurrentUserPermissions,
+} from "./current-user-permissions-query";
 import { useRouter } from "./useRouter";
 
 /**
@@ -264,9 +267,8 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // permissions payload.
   const { data, isLoading, isPending, error, refetch } =
     useQuery<UserPermissionsResponse>({
-      queryKey: ["currentUserPermissions"],
-      queryFn: () =>
-        protectedApi.get<UserPermissionsResponse>("/me/permissions"),
+      queryKey: CURRENT_USER_PERMISSIONS_KEY,
+      queryFn: fetchCurrentUserPermissions,
       enabled: isPrivateRoute,
       staleTime: 0,
       refetchOnMount: "always",

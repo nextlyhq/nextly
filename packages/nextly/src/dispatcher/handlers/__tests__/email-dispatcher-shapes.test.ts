@@ -40,6 +40,9 @@ type ProviderService = {
   deleteProvider: ReturnType<typeof vi.fn>;
   setDefault: ReturnType<typeof vi.fn>;
   testProvider: ReturnType<typeof vi.fn>;
+  domainStatus: ReturnType<typeof vi.fn>;
+  getProviderWithDomainStatus: ReturnType<typeof vi.fn>;
+  checkConfiguration: ReturnType<typeof vi.fn>;
 };
 
 type TemplateService = {
@@ -64,6 +67,9 @@ function makeProviderService(
     deleteProvider: vi.fn(),
     setDefault: vi.fn(),
     testProvider: vi.fn(),
+    domainStatus: vi.fn().mockResolvedValue(null),
+    getProviderWithDomainStatus: vi.fn(),
+    checkConfiguration: vi.fn(),
     ...overrides,
   };
 }
@@ -133,9 +139,18 @@ describe("dispatchEmailProviders, non-paginated reads (respondData)", () => {
 describe("dispatchEmailProviders, single-doc reads (respondDoc)", () => {
   it("getProvider returns bare doc body", async () => {
     const fakeProvider = { id: "p1", name: "Resend" };
+    const domainStatus = {
+      domain: "example.com",
+      status: "verified",
+      records: [],
+    };
     wireProviders(
       makeProviderService({
-        getProvider: vi.fn().mockResolvedValue(fakeProvider),
+        // One read for both, so a change between two reads can't pair one
+        // configuration's record with another's status.
+        getProviderWithDomainStatus: vi
+          .fn()
+          .mockResolvedValue({ ...fakeProvider, domainStatus }),
       })
     );
 
@@ -148,7 +163,9 @@ describe("dispatchEmailProviders, single-doc reads (respondDoc)", () => {
     const response = result as Response;
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body).toEqual(fakeProvider);
+    // The provider, with its sending domain's status beside it where the
+    // provider reports one.
+    expect(body).toEqual({ ...fakeProvider, domainStatus });
     expect(body).not.toHaveProperty("data");
   });
 });
@@ -244,29 +261,6 @@ describe("dispatchEmailProviders, actions (respondAction)", () => {
     expect(body).toEqual({
       message: "Default email provider updated.",
       provider: fakeProvider,
-    });
-  });
-
-  it("testProvider returns { message, result } body and 200 status", async () => {
-    const fakeResult = { success: true };
-    wireProviders(
-      makeProviderService({
-        testProvider: vi.fn().mockResolvedValue(fakeResult),
-      })
-    );
-
-    const result = await dispatchEmailProviders(
-      "testProvider",
-      { providerId: "p1" },
-      { email: "ops@example.com" }
-    );
-
-    const response = result as Response;
-    expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body).toEqual({
-      message: "Test email dispatched.",
-      result: fakeResult,
     });
   });
 });
@@ -486,5 +480,126 @@ describe("dispatchEmailTemplates, actions (respondAction)", () => {
       message: "Email template deleted.",
       templateId: "t1",
     });
+  });
+});
+
+describe("dispatchEmailProviders, the setup's check and settings", () => {
+  it("checkProvider answers with the check's result", async () => {
+    const checkConfiguration = vi.fn().mockResolvedValue({
+      checked: true,
+      success: false,
+      setup: "credentials",
+    });
+    wireProviders(makeProviderService({ checkConfiguration }));
+
+    const result = await dispatchEmailProviders(
+      "checkProvider",
+      {},
+      {
+        type: "smtp",
+        configuration: { host: "smtp.example.com" },
+      }
+    );
+
+    const response = result as Response;
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.result).toEqual({
+      checked: true,
+      success: false,
+      setup: "credentials",
+    });
+    expect(checkConfiguration).toHaveBeenCalledWith({
+      type: "smtp",
+      configuration: { host: "smtp.example.com" },
+    });
+  });
+
+  it("checkProvider refuses a body without a type, naming the field", async () => {
+    wireProviders(makeProviderService());
+    await expect(
+      dispatchEmailProviders("checkProvider", {}, { configuration: {} })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("checkProvider refuses any provider id, so new settings never reach a saved provider's secrets", async () => {
+    const checkConfiguration = vi.fn();
+    wireProviders(makeProviderService({ checkConfiguration }));
+    await expect(
+      dispatchEmailProviders(
+        "checkProvider",
+        {},
+        {
+          type: "smtp",
+          configuration: {},
+          providerId: "3f2b8c1e-6d4a-4f7b-9a0e-1c2d3e4f5a6b",
+        }
+      )
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(checkConfiguration).not.toHaveBeenCalled();
+  });
+
+  it("checkSavedProvider refuses a provider id that is not one, before any read", async () => {
+    const checkConfiguration = vi.fn();
+    wireProviders(makeProviderService({ checkConfiguration }));
+    await expect(
+      dispatchEmailProviders(
+        "checkSavedProvider",
+        { providerId: "not-an-id" },
+        { type: "smtp", configuration: {} }
+      )
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(checkConfiguration).not.toHaveBeenCalled();
+  });
+
+  it("checkSavedProvider checks the route's provider with the fields its edit clears", async () => {
+    const checkConfiguration = vi
+      .fn()
+      .mockResolvedValue({ checked: true, success: true });
+    wireProviders(makeProviderService({ checkConfiguration }));
+    const providerId = "3f2b8c1e-6d4a-4f7b-9a0e-1c2d3e4f5a6b";
+    await dispatchEmailProviders(
+      "checkSavedProvider",
+      { providerId },
+      { type: "smtp", configuration: {}, unsetConfiguration: ["replyTo"] }
+    );
+    expect(checkConfiguration).toHaveBeenCalledWith({
+      type: "smtp",
+      configuration: {},
+      unsetConfiguration: ["replyTo"],
+      providerId,
+    });
+  });
+
+  it("checkSavedProvider takes the provider from the route, never the body", async () => {
+    wireProviders(makeProviderService());
+    await expect(
+      dispatchEmailProviders(
+        "checkSavedProvider",
+        { providerId: "3f2b8c1e-6d4a-4f7b-9a0e-1c2d3e4f5a6b" },
+        {
+          type: "smtp",
+          configuration: {},
+          providerId: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+        }
+      )
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("getSendingSettings answers with the settings, never configuration", async () => {
+    wireProviders(makeProviderService());
+    const result = await dispatchEmailProviders(
+      "getSendingSettings",
+      {},
+      undefined
+    );
+    const response = result as Response;
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(Object.keys(body.settings).sort()).toEqual([
+      "codeProvider",
+      "development",
+      "from",
+    ]);
   });
 });

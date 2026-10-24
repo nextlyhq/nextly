@@ -1662,6 +1662,9 @@ function parseComponentRoutes(
  * - DELETE /api/email-providers/[id] → delete provider
  * - PATCH /api/email-providers/[id]/default → set as default
  * - GET /api/email-providers/types → registered provider catalog
+ * - GET /api/email-providers/settings → default sender, code provider
+ * - POST /api/email-providers/check → check unsaved settings, sending nothing
+ * - POST /api/email-providers/[id]/check → check a saved provider's changed settings
  * - POST /api/email-providers/[id]/test → send test email
  */
 function parseEmailProviderRoutes(
@@ -1678,6 +1681,31 @@ function parseEmailProviderRoutes(
       service: "emailProviders",
       operation: "list",
       method: "listProviderTypes",
+      routeParams,
+    };
+  }
+
+  // GET /api/email-providers/settings → how email goes out when no provider
+  // is chosen: the default sender and the provider set in code, without its
+  // configuration. A read, gated as one. Matched before the by-id branch for
+  // the reason "types" is.
+  if (id === "settings" && !subresource && httpMethod === "GET") {
+    return {
+      service: "emailProviders",
+      operation: "list",
+      method: "getSendingSettings",
+      routeParams,
+    };
+  }
+
+  // POST /api/email-providers/check → check a configuration with its provider
+  // before it is saved, sending nothing. Gated as a create, since it is the
+  // first step of adding one and hands the provider credentials to try.
+  if (id === "check" && !subresource && httpMethod === "POST") {
+    return {
+      service: "emailProviders",
+      operation: "create",
+      method: "checkProvider",
       routeParams,
     };
   }
@@ -1709,6 +1737,21 @@ function parseEmailProviderRoutes(
       service: "emailProviders",
       operation: "update",
       method: "setDefault",
+      routeParams,
+    };
+  }
+
+  // POST /api/email-providers/[id]/check → check a saved provider's changed
+  // settings before they are saved, with its stored secrets standing in for
+  // the masked ones. An edit's first step, gated as one: the stored secrets it
+  // uses are the provider's, and only someone who may change the provider may
+  // try them against another server.
+  if (id && subresource === "check" && httpMethod === "POST") {
+    routeParams.providerId = id;
+    return {
+      service: "emailProviders",
+      operation: "update",
+      method: "checkSavedProvider",
       routeParams,
     };
   }

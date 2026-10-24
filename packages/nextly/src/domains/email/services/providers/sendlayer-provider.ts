@@ -10,6 +10,11 @@
  */
 
 import { httpFailure, providerFailure, withEmailFailure } from "../../failure";
+import {
+  setupFromStatus,
+  withSetupCategory,
+  type EmailSetupCategory,
+} from "../../setup-category";
 import type { EmailProviderAdapter } from "../../types";
 import { displayNameAndMailbox, messageToAddresses } from "../recipients";
 
@@ -47,6 +52,114 @@ function parseFromAddress(from: string): { name: string; email: string } {
 }
 
 /**
+ * SendLayer's own error codes that say what to check: a sending domain not
+ * yet activated, a recipient it suppresses, and a quota reached.
+ */
+const SENDLAYER_SETUP_BY_CODE: Readonly<Record<number, EmailSetupCategory>> = {
+  32: "sender",
+  14: "recipient",
+  17: "rate-limited",
+};
+
+/**
+ * What a person setting SendLayer up should check: by SendLayer's own error
+ * code where it names one we know, otherwise by status. SendLayer refuses a
+ * key it does not accept with 401 or 403, and limits with 429.
+ */
+export function sendLayerSetupCategory(
+  status: number,
+  code?: number
+): EmailSetupCategory {
+  const byCode = code === undefined ? undefined : SENDLAYER_SETUP_BY_CODE[code];
+  if (byCode) return byCode;
+  if (status === 403) return "credentials";
+  return setupFromStatus(status);
+}
+
+/**
+ * The first error code in SendLayer's answer (`Errors[].Code`), if it is
+ * JSON and names one.
+ */
+export function sendLayerErrorCode(text: string): number | undefined {
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  const errors = (body as { Errors?: unknown } | null)?.Errors;
+  const first: unknown = Array.isArray(errors) ? errors[0] : undefined;
+  const code = Number((first as { Code?: unknown } | undefined)?.Code);
+  return Number.isInteger(code) ? code : undefined;
+}
+
+/** A non-empty list, or nothing. */
+function nonEmpty<T>(list: T[] | undefined): list is T[] {
+  return list !== undefined && list.length > 0;
+}
+
+/** The message as SendLayer's API takes it. */
+function sendLayerBody(
+  options: Parameters<EmailProviderAdapter["send"]>[0]
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    From: parseFromAddress(options.from),
+    // Every `to` address when there is more than one, else the one. Each
+    // address is split into SendLayer's name and email fields, so a
+    // display-name form (`Name <user@example.com>`) is sent to the mailbox
+    // it names rather than refused as an invalid email.
+    To: messageToAddresses(options).map(address => parseFromAddress(address)),
+    Subject: options.subject,
+    ContentType: "HTML",
+    HTMLContent: options.html,
+  };
+
+  // Plain-text alternative (SendLayer's documented PlainContent field).
+  if (options.text) {
+    body.PlainContent = options.text;
+  }
+
+  // Reply-To (SendLayer's documented ReplyTo array-of-address field).
+  if (options.replyTo) {
+    const replyTo = parseFromAddress(options.replyTo);
+    body.ReplyTo = [{ name: replyTo.name, email: replyTo.email }];
+  }
+
+  if (nonEmpty(options.cc)) {
+    body.CC = options.cc.map(address => parseFromAddress(address));
+  }
+
+  if (nonEmpty(options.bcc)) {
+    body.BCC = options.bcc.map(address => parseFromAddress(address));
+  }
+
+  if (nonEmpty(options.attachments)) {
+    body.Attachments = options.attachments.map(a => ({
+      Name: a.filename,
+      Content: a.content.toString("base64"),
+      Type: a.mimeType,
+    }));
+  }
+
+  return body;
+}
+
+/**
+ * SendLayer's refusal, classified for the send by status, and for the person
+ * at the setup by its own error code where it names one.
+ */
+async function sendLayerRefusal(response: Response): Promise<Error> {
+  const errorBody = await response.text();
+  return withSetupCategory(
+    withEmailFailure(
+      new Error(`HTTP ${response.status}: ${errorBody || response.statusText}`),
+      httpFailure(response.status)
+    ),
+    sendLayerSetupCategory(response.status, sendLayerErrorCode(errorBody))
+  );
+}
+
+/**
  * Create a SendLayer email provider adapter.
  *
  * @param config - Decrypted SendLayer configuration from the email provider record
@@ -72,49 +185,6 @@ export function createSendLayerProvider(
   return {
     maxToPerMessage: SENDLAYER_MAX_TO,
     async send(options) {
-      const from = parseFromAddress(options.from);
-
-      const body: Record<string, unknown> = {
-        From: from,
-        // Every `to` address when there is more than one, else the one. Each
-        // address is split into SendLayer's name and email fields, so a
-        // display-name form (`Name <user@example.com>`) is sent to the mailbox
-        // it names rather than refused as an invalid email.
-        To: messageToAddresses(options).map(address =>
-          parseFromAddress(address)
-        ),
-        Subject: options.subject,
-        ContentType: "HTML",
-        HTMLContent: options.html,
-      };
-
-      // Plain-text alternative (SendLayer's documented PlainContent field).
-      if (options.text) {
-        body.PlainContent = options.text;
-      }
-
-      // Reply-To (SendLayer's documented ReplyTo array-of-address field).
-      if (options.replyTo) {
-        const replyTo = parseFromAddress(options.replyTo);
-        body.ReplyTo = [{ name: replyTo.name, email: replyTo.email }];
-      }
-
-      if (options.cc && options.cc.length > 0) {
-        body.CC = options.cc.map(address => parseFromAddress(address));
-      }
-
-      if (options.bcc && options.bcc.length > 0) {
-        body.BCC = options.bcc.map(address => parseFromAddress(address));
-      }
-
-      if (options.attachments && options.attachments.length > 0) {
-        body.Attachments = options.attachments.map(a => ({
-          Name: a.filename,
-          Content: a.content.toString("base64"),
-          Type: a.mimeType,
-        }));
-      }
-
       // Whether SendLayer answered at all: a throw before it did is a network
       // failure, and a throw after it a classified or unreadable answer.
       let answered = false;
@@ -125,21 +195,13 @@ export function createSendLayerProvider(
             "Content-Type": "application/json",
             Authorization: `Bearer ${config.apiKey}`,
           },
-          body: JSON.stringify(body),
+          body: JSON.stringify(sendLayerBody(options)),
         });
         answered = true;
 
-        if (!response.ok) {
-          const errorBody = await response.text();
-          // Classified by status alone: SendLayer's error body names a code,
-          // not whether the request can succeed later.
-          throw withEmailFailure(
-            new Error(
-              `HTTP ${response.status}: ${errorBody || response.statusText}`
-            ),
-            httpFailure(response.status)
-          );
-        }
+        // Classified by status for the send: SendLayer's error code names a
+        // cause, not whether the request can succeed later.
+        if (!response.ok) throw await sendLayerRefusal(response);
 
         const data = (await response.json()) as { MessageID?: string };
 

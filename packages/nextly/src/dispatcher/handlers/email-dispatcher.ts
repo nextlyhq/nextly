@@ -94,6 +94,34 @@ async function ownAddressOfCaller(): Promise<string> {
   return user.email;
 }
 
+/**
+ * The body of a check: a provider type and the settings to try with it, and
+ * for a saved provider its id and the fields the edit clears. The id is
+ * refused here when it is not one, rather than reaching a Postgres `uuid`
+ * column as a server error where the other dialects answer not found.
+ */
+const checkProviderSchema = z
+  .object({
+    type: z.string().min(1),
+    configuration: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+
+/**
+ * The body of a saved provider's check: the changed settings and the fields
+ * the edit clears. The provider is the route's; its id is checked to be one
+ * before anything is read, so Postgres's `uuid` column answers as the other
+ * dialects do.
+ */
+const checkSavedProviderSchema = z
+  .object({
+    type: z.string().min(1),
+    configuration: z.record(z.string(), z.unknown()),
+    unsetConfiguration: z.array(z.string()).optional(),
+  })
+  .strict();
+const providerIdSchema = z.string().uuid();
+
 // ============================================================
 // Email provider methods
 // ============================================================
@@ -146,10 +174,61 @@ const EMAIL_PROVIDER_METHODS: Record<
   },
   getProvider: {
     // Service throws NextlyError NOT_FOUND when the provider doesn't
-    // exist.
-    execute: async (svc, p) => {
-      const provider = await svc.providerService.getProvider(p.providerId);
-      return respondDoc(provider);
+    // exist. Carries the sending domain's status where the provider reports
+    // one, so the provider's page can show it; null otherwise.
+    execute: async (svc, p) =>
+      respondDoc(
+        await svc.providerService.getProviderWithDomainStatus(p.providerId)
+      ),
+  },
+  getSendingSettings: {
+    // How email goes out when no provider is chosen: the default sender, the
+    // provider set in the site's code (type and label, never configuration),
+    // and whether the server runs in development.
+    // Not async: the settings are in memory, and the dispatcher awaits the
+    // returned promise either way.
+    execute: () => {
+      const emailService = fromContainer<EmailService>("emailService");
+      return Promise.resolve(
+        respondData({
+          settings: emailService?.sendingSettings() ?? {
+            from: null,
+            codeProvider: null,
+            development: process.env.NODE_ENV === "development",
+          },
+        })
+      );
+    },
+  },
+  checkProvider: {
+    // Checks settings with the provider before they are saved, sending
+    // nothing. Validation failures are thrown with the fields to fix.
+    execute: async (svc, _p, body) => {
+      const parsed = checkProviderSchema.safeParse(body);
+      if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+      const result = await svc.providerService.checkConfiguration(parsed.data);
+      return respondAction(
+        result.checked ? "Settings checked." : "Nothing to check.",
+        { result }
+      );
+    },
+  },
+  checkSavedProvider: {
+    // A saved provider's changed settings, checked with its stored secrets
+    // standing in for the masked ones, sending nothing.
+    execute: async (svc, p, body) => {
+      const id = providerIdSchema.safeParse(p.providerId);
+      if (!id.success) throw nextlyValidationFromZod(id.error);
+      const parsed = checkSavedProviderSchema.safeParse(body);
+      if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+      const result = await svc.providerService.checkConfiguration({
+        ...parsed.data,
+        providerId: id.data,
+      });
+      return respondAction(
+        result.checked ? "Settings checked." : "Nothing to check.",
+        { result }
+      );
     },
   },
   updateProvider: {
@@ -194,15 +273,15 @@ const EMAIL_PROVIDER_METHODS: Record<
     },
   },
   testProvider: {
-    // testProvider is a side-effecting action (sends an email); the
-    // result carries `success`/`error` flags from the underlying
+    // Sends a real test email through the provider, to the signed-in user's
+    // own address and never to one the caller names. Testing is open to
+    // whoever may add providers, so they can test the one they just made; a
+    // recipient they chose would let them send through any saved provider's
+    // credentials to anyone. The result carries `success`/`error` from the
     // transport.
-    execute: async (svc, p, body) => {
-      const { email } = body as { email: string };
-      const result = await svc.providerService.testProvider(
-        p.providerId,
-        email
-      );
+    execute: async (svc, p) => {
+      const to = await ownAddressOfCaller();
+      const result = await svc.providerService.testProvider(p.providerId, to);
       return respondAction("Test email dispatched.", { result });
     },
   },

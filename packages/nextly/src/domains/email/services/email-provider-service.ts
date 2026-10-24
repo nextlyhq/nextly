@@ -46,12 +46,21 @@ import {
   refusedMailboxes,
   type EmailDeliveryInput,
 } from "../delivery-record";
+import { failureOf } from "../failure";
 import {
   changedProviderFields,
   recordProviderActivity,
   type EmailProviderActivityInput,
 } from "../provider-activity";
-import { describeProviderFailure } from "../provider-definition";
+import {
+  describeProviderFailure,
+  type EmailDomainStatus,
+} from "../provider-definition";
+import {
+  isEmailSetupCategory,
+  setupCategoryOf,
+  type EmailSetupCategory,
+} from "../setup-category";
 import type { EmailProviderAdapter } from "../types";
 
 import type { EmailDeliveryService } from "./email-delivery-service";
@@ -76,6 +85,30 @@ const SEND_RETURNED_UNSUCCESSFUL = "Send returned unsuccessful";
  * address typed into the test dialog.
  */
 const TEST_RECIPIENT_REFUSED = "The provider refused the test recipient";
+
+/**
+ * What a test of a provider found: whether it worked, a sentence safe to show
+ * when it did not, what a person setting it up should check, and whether
+ * trying again later can help.
+ */
+export interface ProviderTestResult {
+  success: boolean;
+  error?: string;
+  setup?: EmailSetupCategory;
+  retryable?: boolean;
+}
+
+/**
+ * What checking a configuration before it is saved found. `checked` is false
+ * when the provider cannot be asked without sending, in which case nothing
+ * was checked and the test send is the check.
+ */
+export interface ProviderCheckResult {
+  checked: boolean;
+  success: boolean;
+  error?: string;
+  setup?: EmailSetupCategory;
+}
 
 // ============================================================
 // Input Types
@@ -925,6 +958,12 @@ export class EmailProviderService extends BaseService {
     const id = randomUUID();
     const now = new Date();
 
+    // A new provider made the default must also be on, for the reason
+    // `assertPromotable` gives.
+    if (data.isDefault === true && data.isActive === false) {
+      this.assertPromotable(id, data.type, false);
+    }
+
     const values = {
       id,
       name: data.name,
@@ -1002,15 +1041,28 @@ export class EmailProviderService extends BaseService {
    * Refused BEFORE anything is written, so a refusal leaves the stored default
    * exactly as it was and there is nothing to attribute in the trail.
    */
-  private assertPromotable(id: string, type: string): void {
-    if (getEmailProviderRegistry().has(type)) return;
-
-    throw new NextlyError({
-      code: "BUSINESS_RULE_VIOLATION",
-      publicMessage:
-        "This provider's type is not registered on this server, so it cannot be made the default. Install the package that provides it first.",
-      logContext: { id, type },
-    });
+  private assertPromotable(id: string, type: string, isActive: boolean): void {
+    if (!getEmailProviderRegistry().has(type)) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage:
+          "This provider's type is not registered on this server, so it cannot be made the default. Install the package that provides it first.",
+        logContext: { id, type },
+      });
+    }
+    // A provider that is off sends nothing, and a default that sends nothing
+    // leaves every email without its own provider unsent. So a provider is
+    // made the default only once it is on: after a test it accepted, or when
+    // someone turns it on. Asked only of a new promotion; a default an
+    // install already has is left as it is.
+    if (!isActive) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage:
+          "This provider is off, so it cannot be the default. Turn it on first, or send a test it accepts.",
+        logContext: { id, type },
+      });
+    }
   }
 
   /**
@@ -1293,7 +1345,14 @@ export class EmailProviderService extends BaseService {
     // Before the write, and before the demotion inside it: a refused promotion
     // must leave the existing default alone.
     if (data.isDefault === true) {
-      this.assertPromotable(id, effectiveType);
+      // A provider already the default is not being promoted, so an edit to
+      // an install's existing default saves as it always did.
+      this.assertPromotable(
+        id,
+        effectiveType,
+        Boolean(currentRow.isDefault) ||
+          (data.isActive ?? Boolean(currentRow.isActive))
+      );
     }
 
     let updatedRows = 0;
@@ -1494,7 +1553,11 @@ export class EmailProviderService extends BaseService {
     // Enforced here rather than only in the admin: the REST route and the
     // Direct API reach this method without passing the list page, and a rule
     // that lives in one caller is a rule the others do not have.
-    this.assertPromotable(row.id, row.type);
+    this.assertPromotable(
+      row.id,
+      row.type,
+      Boolean(row.isDefault) || Boolean(row.isActive)
+    );
 
     const now = new Date();
 
@@ -1570,9 +1633,11 @@ export class EmailProviderService extends BaseService {
   /**
    * Test an email provider by sending a test email.
    *
-   * Validates that the provider exists and is active, then creates a
-   * temporary adapter from the provider's decrypted configuration and
-   * sends a test email directly (avoids circular dependency with EmailService).
+   * Validates that the provider exists, then creates a temporary adapter
+   * from the provider's decrypted configuration and sends a test email
+   * directly (avoids circular dependency with EmailService). A provider that
+   * is off can be tested: a new provider stays off until a test is accepted,
+   * so the test is how it is turned on.
    */
   async testProvider(
     id: string,
@@ -1585,15 +1650,8 @@ export class EmailProviderService extends BaseService {
      * keeps the contract it was written against.
      */
     mode: "send" | "connection" | undefined = "send"
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<ProviderTestResult> {
     const provider = await this.getProviderDecrypted(id);
-
-    if (!provider.isActive) {
-      return {
-        success: false,
-        error: "Provider is inactive. Activate it before testing.",
-      };
-    }
 
     // An unrecognised mode is refused rather than treated as the default.
     // This argument decides whether a real message leaves the building, and a
@@ -1641,6 +1699,9 @@ export class EmailProviderService extends BaseService {
         }
         const result = await probe(provider.configuration);
         if (result.ok) return { success: true };
+        const setup = isEmailSetupCategory(result.setup)
+          ? result.setup
+          : "other";
 
         // The probe's own `detail` is NOT returned. It is written by the
         // provider, which received decrypted configuration, so a message like
@@ -1657,6 +1718,7 @@ export class EmailProviderService extends BaseService {
           success: false,
           error:
             "Connection test failed. The provider's reason is in the server log.",
+          setup,
         };
       }
 
@@ -1715,14 +1777,15 @@ export class EmailProviderService extends BaseService {
             : TEST_RECIPIENT_REFUSED,
       });
 
-      return {
-        success: delivered,
-        error: delivered
-          ? undefined
-          : accepted
-            ? SEND_RETURNED_UNSUCCESSFUL
-            : TEST_RECIPIENT_REFUSED,
-      };
+      if (delivered) return { success: true };
+      return accepted
+        ? { success: false, error: SEND_RETURNED_UNSUCCESSFUL, setup: "other" }
+        : {
+            success: false,
+            error: TEST_RECIPIENT_REFUSED,
+            setup: "recipient",
+            retryable: false,
+          };
     } catch (error) {
       // Only a send that actually reached the provider. `mode === "send"` is
       // not enough on its own: the adapter is built inside this try, so a
@@ -1766,12 +1829,173 @@ export class EmailProviderService extends BaseService {
         // Nowhere left to report to: the reporting mechanism is what failed.
       }
 
+      const failure = failureOf(error);
       return {
         success: false,
         error: NextlyError.is(error)
           ? error.publicMessage
           : "The test failed. The reason is in the server log.",
+        setup: setupCategoryOf(error),
+        ...(failure ? { retryable: failure.retryable } : {}),
       };
+    }
+  }
+
+  /**
+   * Check a configuration with its provider before it is saved, where the
+   * provider can be asked without sending: an SMTP server's login, a key read.
+   *
+   * For an existing provider, the masked secrets the form sends back stand
+   * for the stored ones, as they do when the provider is saved, so a changed
+   * sign-in is checked together with what it did not change, and the fields
+   * an edit clears are cleared first: what is checked is what saving would
+   * store. The provider's own words go to the log; the caller gets the setup
+   * category and a sentence safe to show.
+   *
+   * @throws NextlyError VALIDATION_ERROR when the configuration is not one
+   *   the provider accepts, with the paths of the fields to fix
+   */
+  async checkConfiguration(input: {
+    type: string;
+    configuration: Record<string, unknown>;
+    unsetConfiguration?: unknown;
+    providerId?: string;
+  }): Promise<ProviderCheckResult> {
+    const registry = getEmailProviderRegistry();
+    if (!registry.has(input.type)) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage:
+          "This provider's type is not registered on this server. Install the package that provides it first.",
+        logContext: { type: input.type },
+      });
+    }
+    const provider = registry.get(input.type);
+
+    const incoming = this.stripMaskedConfigValues(
+      input.configuration,
+      this.declaredSecretPaths(input.type),
+      this.declaredConfigPaths(input.type)
+    );
+    // Merged and cleared as `updateProvider` does, so the check cannot pass a
+    // value the save that follows removes. Across a type change the stored
+    // configuration belongs to the previous provider and is not merged.
+    let configuration = incoming;
+    if (input.providerId) {
+      const row = await this.getRawProvider(input.providerId);
+      configuration = this.applyConfigUnsets(
+        row.type === input.type
+          ? this.deepMergeConfig(
+              this.readConfiguration(row.configuration).config,
+              incoming
+            )
+          : incoming,
+        this.readUnsetPaths(input.unsetConfiguration),
+        input.type
+      );
+    }
+    // Refused with the fields to fix, as saving would refuse it.
+    provider.parseConfiguration(configuration);
+
+    if (!provider.testConnectionFrom) return { checked: false, success: true };
+    // A provider whose transport package is not installed cannot be asked
+    // yet, and its settings are saved before the package arrives: whoever
+    // sets up email is often not whoever runs the server. The form shows the
+    // command to install it.
+    if (!this.transportInstalled(provider)) {
+      return { checked: false, success: true };
+    }
+
+    try {
+      const result = await provider.testConnectionFrom(configuration);
+      if (result.ok) return { checked: true, success: true };
+      this.logger.warn("Email provider check failed", {
+        providerType: input.type,
+        detail: result.detail,
+      });
+      return {
+        checked: true,
+        success: false,
+        error: "The provider refused these settings.",
+        setup: isEmailSetupCategory(result.setup) ? result.setup : "other",
+      };
+    } catch (error) {
+      try {
+        this.logger.error("Email provider check failed", {
+          providerType: input.type,
+          ...describeProviderFailure(error),
+        });
+      } catch {
+        // Nowhere left to report to.
+      }
+      return {
+        checked: true,
+        success: false,
+        error: NextlyError.is(error)
+          ? error.publicMessage
+          : "The check failed. The reason is in the server log.",
+        setup: setupCategoryOf(error),
+      };
+    }
+  }
+
+  /** Whether the provider's transport package is installed here. */
+  private transportInstalled(provider: {
+    checkAvailability?: () => { status: string };
+  }): boolean {
+    try {
+      return (provider.checkAvailability?.().status ?? "ready") === "ready";
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Whether the provider has verified the domain this provider sends from,
+   * and the records it expects; null where the provider reports no status,
+   * does not know the domain, or could not be asked. Reads only.
+   */
+  async domainStatus(id: string): Promise<EmailDomainStatus | null> {
+    return this.domainStatusOf(await this.getProviderDecrypted(id));
+  }
+
+  /**
+   * A provider as its page shows it, and its sending domain's status, both
+   * from one read: a change saved between two reads would otherwise pair
+   * one configuration's record with another's status.
+   */
+  async getProviderWithDomainStatus(
+    id: string
+  ): Promise<EmailProviderRecord & { domainStatus: EmailDomainStatus | null }> {
+    const row = await this.getRawProvider(id);
+    return {
+      ...this.toMaskedRecord(row),
+      domainStatus: await this.domainStatusOf(this.toDecryptedRecord(row)),
+    };
+  }
+
+  private async domainStatusOf(
+    provider: EmailProviderRecord
+  ): Promise<EmailDomainStatus | null> {
+    const id = provider.id;
+    const registry = getEmailProviderRegistry();
+    if (!registry.has(provider.type)) return null;
+    const read = registry.get(provider.type).domainStatusFrom;
+    const domain = mailboxOf(provider.fromEmail).split("@")[1];
+    if (!read || !domain) return null;
+    try {
+      return await read(provider.configuration, domain);
+    } catch (error) {
+      try {
+        this.logger.warn("Email provider domain status unavailable", {
+          providerId: id,
+          providerType: provider.type,
+          ...describeProviderFailure(error),
+        });
+      } catch {
+        // Nowhere left to report to.
+      }
+      return null;
     }
   }
 
