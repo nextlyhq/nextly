@@ -1544,22 +1544,24 @@ export class UserMutationService extends BaseService {
       const requestedRoleIds = userData.roles?.length
         ? Array.from(new Set(userData.roles.map(String)))
         : [];
+      // Asked again in the account's transaction, so the roles are judged as
+      // they stand when they are written. It takes the `super-admin` row's
+      // lock, so it runs first in that transaction, before the account's row
+      // and the roles' rows are written or locked: the order every change to
+      // who is a super-admin takes them in. A role deletion, say, takes that
+      // lock first and then reads the accounts holding roles; taken after the
+      // account's own row here, the two could deadlock.
+      const judgeRequestedRoles = async (txDb: DrizzleTransactionLike) => {
+        if (requestedRoleIds.length === 0 || caller !== "app") return;
+        await refuseGrantingSuperAdmin(
+          txDb as unknown as LastSuperAdminTx,
+          this.dialect,
+          requestedRoleIds,
+          { email }
+        );
+      };
       const insertRequestedRoles = async (txDb: DrizzleTransactionLike) => {
         if (requestedRoleIds.length === 0) return;
-        // Asked again here, in the account's transaction, so the roles are
-        // judged as they stand when they are written. It takes the
-        // `super-admin` row's lock, which comes before the roles' own rows
-        // below, the order every change to who is a super-admin takes them
-        // in: deleting a role takes that lock first and the role's row last,
-        // so taken the other way round here the two would deadlock.
-        if (caller === "app") {
-          await refuseGrantingSuperAdmin(
-            txDb as unknown as LastSuperAdminTx,
-            this.dialect,
-            requestedRoleIds,
-            { email }
-          );
-        }
         // RE-READ here, holding what exists: a role deleted since the early
         // lookup would otherwise be assigned as a dangling row on MySQL,
         // whose `user_roles` carries no foreign key, and the account would
@@ -1589,6 +1591,7 @@ export class UserMutationService extends BaseService {
 
       const insertAccount = async (txDb: DrizzleTransactionLike) => {
         const superAdminRoleId = await lockForBootstrap(txDb);
+        await judgeRequestedRoles(txDb);
         await requireExistingAccount(txDb);
         await txDb.insert(users).values(values);
         // Before the first-administrator grant, which then finds an account
