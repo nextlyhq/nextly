@@ -53,7 +53,7 @@
   "scripts": {
     "build": "rimraf dist && tsdown && tsdown --config tsdown.server-safe.config.ts && pnpm run build:css",
     "dev": "node scripts/dev.mjs",
-    "check-types": "tsc --noEmit",
+    "check-types": "node ../../scripts/tsc.mjs --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "rimraf dist",
@@ -92,7 +92,7 @@
     "rimraf": "^6.1.3",
     "tailwindcss": "^4.3.2",
     "tsdown": "^0.23.1",
-    "typescript": "^7.0.2",
+    "typescript": "7.0.2",
     "vitest": "^5.0.5"
   },
   "publishConfig": {

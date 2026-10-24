@@ -9,7 +9,7 @@
     "start": "next start",
     "nextly": "nextly",
     "ci": "nextly migrate && next build",
-    "check-types": "next typegen && tsc --noEmit --incremental false",
+    "check-types": "next typegen && node ../../scripts/tsc.mjs --noEmit --incremental false",
     "env:copy": "cp .env.example .env",
     "db:seed": "tsx --env-file=.env scripts/seed.ts",
     "plugins:install": "nextly plugins install --all",
@@ -56,7 +56,7 @@
     "playwright": "^1.61.1",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.3.2",
-    "typescript": "^7.0.2",
+    "typescript": "7.0.2",
     "vitest": "^5.0.5"
   }
 }
