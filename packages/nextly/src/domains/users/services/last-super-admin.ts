@@ -65,18 +65,6 @@ export type SuperAdminChange =
   /** The role `roleId` is deleted, with its assignments and inheritance. */
   | { kind: "deleteRole"; roleId: string };
 
-/**
- * The changes to roles, as opposed to accounts, that can take super-admin
- * authority from someone. Each is a super-admin person's to make.
- */
-const ROLE_CHANGES: ReadonlySet<SuperAdminChange["kind"]> = new Set([
-  "replaceRoles",
-  "unassignRole",
-  "removeInheritance",
-  "replaceChildren",
-  "deleteRole",
-]);
-
 type Rows = Array<Record<string, unknown>>;
 
 /** A read that can be awaited as it is, or taken with a row lock. */
@@ -141,13 +129,14 @@ export interface FirstAdministratorTables extends LastSuperAdminTables {
  * stands and as the change would leave it, and the change is refused when it
  * would take the set from some to none. A failed read refuses, by throwing.
  *
- * Before that, a role change that would take super-admin authority from
- * anyone, the last or not, is refused unless a super-admin person or trusted
- * server code makes it, as giving that authority is. Here everyone holding it
+ * Before that, a change that would take super-admin authority from anyone,
+ * the last or not, is refused unless a super-admin person or trusted server
+ * code makes it, as giving that authority is: a role change, and deleting or
+ * deactivating the account alike. Here everyone holding it
  * now counts, an expiring assignment or a deactivated account included, since
  * it is theirs until it lapses or they are reactivated.
  *
- * @throws NextlyError(FORBIDDEN) when a role change would take super-admin
+ * @throws NextlyError(FORBIDDEN) when the change would take super-admin
  *   authority from someone and its caller may not.
  * @throws NextlyError(CONFLICT) when the change would leave no active
  *   super-admin.
@@ -185,22 +174,22 @@ export async function refuseRemovingLastSuperAdmin(
   const roleIds = new Set([...before, ...after]);
 
   // Who may make the change comes first: a caller who may not is refused
-  // whether or not the last super-admin would go.
-  if (ROLE_CHANGES.has(change.kind)) {
-    const held = holdersAround(
-      await assignments(tx, tables, dialect, roleIds, "in-force"),
-      before,
-      after,
-      change
-    );
-    const losing = [...held.before].filter(userId => !held.after.has(userId));
-    if (losing.length > 0) {
-      await refuseUnlessSuperAdminCaller(tx, {
-        reason: "super-admin-removal-refused",
-        change: change.kind,
-        userIds: losing,
-      });
-    }
+  // whether or not the last super-admin would go. Every kind of change asks
+  // it, an account's deletion or deactivation as much as a role change,
+  // since each takes the authority from whoever it removes.
+  const held = holdersAround(
+    await assignments(tx, tables, dialect, roleIds, "in-force"),
+    before,
+    after,
+    change
+  );
+  const losing = [...held.before].filter(userId => !held.after.has(userId));
+  if (losing.length > 0) {
+    await refuseUnlessSuperAdminCaller(tx, {
+      reason: "super-admin-removal-refused",
+      change: change.kind,
+      userIds: losing,
+    });
   }
 
   const kept = holdersAround(
