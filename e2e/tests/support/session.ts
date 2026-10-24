@@ -32,6 +32,13 @@ const E2E_ROOT = path.resolve(
 /** Where the session every test opens with is stored. */
 export const STORAGE_STATE = path.join(E2E_ROOT, ".playwright", "session.json");
 
+/**
+ * The user the playground's seed creates (`apps/playground/scripts/seed.ts`).
+ * A production server has no dev auto-login, so the suite signs in as it,
+ * through the form, as the production suite does.
+ */
+const SEEDED_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
+
 /** How old the stored session may be before a test is handed a new one. */
 export const SESSION_MAX_AGE_MS = 10 * 60_000;
 
@@ -58,10 +65,24 @@ export async function signIn(
     // not enough on a slow CI runner, where `webServer` already allows 240s for
     // boot for the same reason.
     await page.goto("/admin", { timeout: 180_000 });
+    if (process.env.E2E_SERVER === "production") {
+      await page
+        .getByRole("textbox", { name: /email/i })
+        .fill(SEEDED_USER.email);
+      // By role, since a label match also finds the "Show password" toggle.
+      await page
+        .getByRole("textbox", { name: /password/i })
+        .fill(SEEDED_USER.password);
+      await page.getByRole("button", { name: /sign in|log in/i }).click();
+    }
 
     // The admin is client-rendered: the shell is served empty and filled after
     // hydration, so the session is only real once a screen has drawn.
     await page.locator("main").waitFor({ state: "visible", timeout: 60_000 });
+    // The dashboard behind `main` starts its card queries as it draws. Closing
+    // the browser while they upload cuts them off mid-body, and the server logs
+    // each one as a request whose JSON it could not read.
+    await page.waitForLoadState("networkidle");
 
     const cookies = await page.context().cookies();
     if (!cookies.some(cookie => cookie.name === "nextly_session")) {
