@@ -34,19 +34,19 @@ import { dispatchEmailTemplates } from "../email-dispatcher";
 const TEMPLATE = { id: "t1", slug: "welcome" };
 const PARAMS = { templateId: "t1" };
 
-let sendWithTemplate: ReturnType<typeof vi.fn>;
+let sendTemplateTest: ReturnType<typeof vi.fn>;
 let findById: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   services.clear();
-  sendWithTemplate = vi
+  sendTemplateTest = vi
     .fn()
     .mockResolvedValue({ success: true, messageId: "m-1" });
   findById = vi.fn(async (id: string) => ({
     id,
     email: `${id}@example.com`,
   }));
-  services.set("emailService", { sendWithTemplate });
+  services.set("emailService", { sendTemplateTest });
   services.set("userService", { findById });
   vi.mocked(getEmailTemplateServiceFromDI).mockReturnValue({
     getTemplate: vi.fn().mockResolvedValue(TEMPLATE),
@@ -62,7 +62,7 @@ describe("a template's test send", () => {
     );
 
     expect(findById).toHaveBeenCalledWith("ana", {});
-    expect(sendWithTemplate).toHaveBeenCalledWith(
+    expect(sendTemplateTest).toHaveBeenCalledWith(
       "welcome",
       "ana@example.com",
       { name: "Ana" }
@@ -83,8 +83,8 @@ describe("a template's test send", () => {
       })
     );
 
-    expect(sendWithTemplate).toHaveBeenCalledTimes(1);
-    expect(sendWithTemplate.mock.calls[0]?.[1]).toBe("ana@example.com");
+    expect(sendTemplateTest).toHaveBeenCalledTimes(1);
+    expect(sendTemplateTest.mock.calls[0]?.[1]).toBe("ana@example.com");
   });
 
   it.each([
@@ -97,7 +97,7 @@ describe("a template's test send", () => {
       )
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(findById).not.toHaveBeenCalled();
-    expect(sendWithTemplate).not.toHaveBeenCalled();
+    expect(sendTemplateTest).not.toHaveBeenCalled();
   });
 
   it("refuses a user with no address, and sends nothing", async () => {
@@ -108,6 +108,6 @@ describe("a template's test send", () => {
         dispatchEmailTemplates("sendTestTemplate", PARAMS, {})
       )
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expect(sendWithTemplate).not.toHaveBeenCalled();
+    expect(sendTemplateTest).not.toHaveBeenCalled();
   });
 });

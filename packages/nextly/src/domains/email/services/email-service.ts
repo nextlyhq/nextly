@@ -185,6 +185,23 @@ function deliveryRecipients(payload: {
 /** What a send, or one message of it, reports to the caller. */
 type SendOutcome = EmailSendOutcome;
 
+/** A template send's own provider, addresses, attachments and identity. */
+interface TemplateSendOptions {
+  providerId?: string;
+  from?: string;
+  replyTo?: string;
+  cc?: string[];
+  bcc?: string[];
+  attachments?: EmailAttachmentInput[];
+  /**
+   * @experimental The plugin-defined person `to` is, by kind and id, so
+   * the delivery record names them and their deletion report erases it.
+   */
+  person?: PrincipalRef;
+  /** @experimental Send this message once for the key (see `send`). */
+  idempotencyKey?: string;
+}
+
 /** What one message's dispatch needs beyond the message itself. */
 interface DispatchContext {
   adapter: EmailProviderAdapter;
@@ -420,21 +437,40 @@ export class EmailService extends BaseService {
     templateSlug: string,
     to: string | string[],
     variables: Record<string, unknown>,
-    options?: {
-      providerId?: string;
-      from?: string;
-      replyTo?: string;
-      cc?: string[];
-      bcc?: string[];
-      attachments?: EmailAttachmentInput[];
-      /**
-       * @experimental The plugin-defined person `to` is, by kind and id, so
-       * the delivery record names them and their deletion report erases it.
-       */
-      person?: PrincipalRef;
-      /** @experimental Send this message once for the key (see `send`). */
-      idempotencyKey?: string;
-    }
+    options?: TemplateSendOptions
+  ): Promise<EmailSendOutcome> {
+    return this.sendTemplate(templateSlug, to, variables, options, {
+      templateCopies: true,
+    });
+  }
+
+  /**
+   * Send a template's test to one person: the one who asked for it.
+   *
+   * Rendered and delivered as a real send of the template is, with the
+   * template's own copies left out: a test carries sample data, so it is not
+   * the email anyone the template copies (a team inbox, a manager) expects.
+   *
+   * @param templateSlug - Template slug
+   * @param to - The address the test goes to, and the only one
+   * @param variables - The sample data it renders with
+   */
+  async sendTemplateTest(
+    templateSlug: string,
+    to: string,
+    variables: Record<string, unknown>
+  ): Promise<EmailSendOutcome> {
+    return this.sendTemplate(templateSlug, to, variables, undefined, {
+      templateCopies: false,
+    });
+  }
+
+  private async sendTemplate(
+    templateSlug: string,
+    to: string | string[],
+    variables: Record<string, unknown>,
+    options: TemplateSendOptions | undefined,
+    { templateCopies }: { templateCopies: boolean }
   ): Promise<EmailSendOutcome> {
     // Whitespace-only overrides must not shadow the template/provider
     // defaults or reach a provider as malformed headers.
@@ -508,6 +544,7 @@ export class EmailService extends BaseService {
           replyTo: replyToOverride,
           cc: options?.cc,
           bcc: options?.bcc,
+          templateCopies,
         }),
         providerId: options?.providerId ?? dbTemplate.providerId ?? undefined,
         // Which template this was, for the delivery log. Without it every
@@ -567,6 +604,7 @@ export class EmailService extends BaseService {
           replyTo: replyToOverride,
           cc: options?.cc,
           bcc: options?.bcc,
+          templateCopies,
         }),
         attachments:
           mergedAttachments.length > 0 ? mergedAttachments : undefined,
@@ -1654,6 +1692,8 @@ export class EmailService extends BaseService {
       replyTo?: string;
       cc?: string[];
       bcc?: string[];
+      /** False for a test, which reaches only the person who asked for it. */
+      templateCopies: boolean;
     }
   ): { from?: string; replyTo?: string; cc?: string[]; bcc?: string[] } {
     const from =
@@ -1666,7 +1706,9 @@ export class EmailService extends BaseService {
       (template?.replyTo != null
         ? renderTemplateReplyTo(template.replyTo, variables, slug)
         : undefined);
-    let copies = { cc: template?.cc ?? null, bcc: template?.bcc ?? null };
+    let copies = given.templateCopies
+      ? { cc: template?.cc ?? null, bcc: template?.bcc ?? null }
+      : { cc: null, bcc: null };
     if (template?.carriesSecret && (copies.cc?.length || copies.bcc?.length)) {
       this.logger.warn(
         "Left out an email template's copies: the template carries a secret",
@@ -1674,7 +1716,14 @@ export class EmailService extends BaseService {
       );
       copies = { cc: null, bcc: null };
     }
-    return { from, replyTo, ...withTemplateCopies(given, copies) };
+    return {
+      from,
+      replyTo,
+      ...withTemplateCopies(
+        { to: given.to, cc: given.cc, bcc: given.bcc },
+        copies
+      ),
+    };
   }
 
   /** The site's code version of a template, from `email.templates`, if it sets one. */
