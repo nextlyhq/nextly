@@ -34,6 +34,7 @@ import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
 import type { Nextly as NextlyDirectAPI } from "../../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import { NEXTLY_ERROR_STATUS } from "../../../errors/error-codes";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
@@ -343,7 +344,7 @@ export async function checkSingleAccess(params: {
   // The caller is told what was refused in the site's words; which check
   // refused is logged here, on the server.
   logRefusal(logger, {
-    status: 403,
+    status: NEXTLY_ERROR_STATUS.FORBIDDEN,
     code: "FORBIDDEN",
     reason:
       verdict.refusal === "unauthenticated"

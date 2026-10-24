@@ -10,6 +10,7 @@
  *
  * @module auth/access/refusal-message
  */
+import { servingRequestId } from "../../api/serving-request";
 import { container } from "../../di/container";
 import { SYSTEM_RESOURCES, type SystemResource } from "../../schemas/_zod/rbac";
 import type { Logger } from "../../shared/types";
@@ -200,7 +201,10 @@ export interface RefusalLog {
   code?: string;
   /** Which check refused, and on what grant. */
   reason: string;
-  /** The id the refused caller was answered with, where it has one. */
+  /**
+   * The id the refused caller was answered with. Without one, the id of the
+   * request being served, where the refusal is made while serving one.
+   */
   requestId?: string;
 }
 
@@ -210,7 +214,11 @@ export interface RefusalLog {
  */
 export function logRefusal(logger: Logger, refusal: RefusalLog): void {
   try {
-    logger.info("[nextly] Refused a request", { ...refusal });
+    const requestId = refusal.requestId ?? servingRequestId();
+    logger.info("[nextly] Refused a request", {
+      ...refusal,
+      ...(requestId === undefined ? {} : { requestId }),
+    });
   } catch {
     // Logging is never why a refusal goes unanswered.
   }

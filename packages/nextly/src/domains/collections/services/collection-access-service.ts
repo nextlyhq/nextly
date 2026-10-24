@@ -21,6 +21,7 @@ import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { effectiveCallerScope } from "../../../auth/caller-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import { NEXTLY_ERROR_STATUS } from "../../../errors/error-codes";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import type { AccessOperation } from "../../../services/access";
 import { isSuperAdminContext } from "../../../services/access";
@@ -166,7 +167,7 @@ export class CollectionAccessService extends BaseService {
     // The caller is told what was refused in the site's words; which check
     // refused is logged here, on the server.
     logRefusal(this.logger, {
-      status: 403,
+      status: NEXTLY_ERROR_STATUS.FORBIDDEN,
       code: "FORBIDDEN",
       reason:
         verdict.refusal === "unauthenticated"

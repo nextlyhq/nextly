@@ -269,6 +269,25 @@ describe("document lock route", () => {
     expect(service.release).not.toHaveBeenCalled();
   });
 
+  it("refuses a claim in the update gate's own words", async () => {
+    // The gate names what was refused; the lock route passes it on rather
+    // than answering a sentence of its own.
+    authorizeCaller.mockResolvedValue({
+      success: false,
+      statusCode: 403,
+      message: "Forbidden",
+      error: "You can't edit posts.",
+      data: null,
+    });
+
+    const res = await acquireLock(post(ref));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({
+      error: { code: "FORBIDDEN", message: "You can't edit posts." },
+    });
+    expect(service.acquire).not.toHaveBeenCalled();
+  });
+
   it("lets a holder release on the grant alone, whatever the update rule now says", async () => {
     // The claim token fences a release, and a rule that changed while the
     // claim was held must not strand it until its lease lapses.

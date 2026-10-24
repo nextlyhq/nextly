@@ -7,7 +7,9 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { readOrGenerateRequestId } from "../../../api/request-id";
 import { container } from "../../../di/container";
+import { runWithRequestScope } from "../../../hooks/request-scope";
 import { logRefusal, refusalMessageFor } from "../refusal-message";
 
 const CONFIG = {
@@ -163,6 +165,24 @@ describe("a refusal's message", () => {
 });
 
 describe("a refusal's log line", () => {
+  it("carries the id of the request being served, where none is passed", () => {
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const request = new Request("https://example.com/api/posts");
+    // As a service gate refuses: deep in the request, with no request in hand.
+    runWithRequestScope(request, () =>
+      logRefusal(logger, { status: 403, reason: "a reason" })
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("Refused"),
+      expect.objectContaining({ requestId: readOrGenerateRequestId(request) })
+    );
+  });
+
   it("is never why a refusal goes unanswered", () => {
     const failing = {
       debug: vi.fn(),
