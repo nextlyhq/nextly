@@ -125,13 +125,16 @@ function createIsAvailable(probe: ConditionProbe): Promise<boolean> {
 
 /**
  * Whether this reader may read any kind Needs attention can count: content
- * with a published source (its unpublished changes), or releases (due and
- * overdue). Content first, so a reader with some needs no release decision.
+ * (its unpublished changes), or releases (due and overdue). Content first, so
+ * a reader with some needs no release decision.
  *
- * Content with a published source, not every readable entry in the registry:
- * the card counts only what a widget may query, and a collection whose
- * migration is pending or failed has no source, so offered on it alone the
- * card would answer "not available".
+ * Each kind of content as the card reads it:
+ * - a collection only with a published source: the card counts collections
+ *   through their sources, and one whose migration is pending or failed has
+ *   none, so offered on it alone the card would answer "not available";
+ * - any readable Single: the card reads Singles from their registry and their
+ *   version rows, never through a source, so a Single without one still has
+ *   changes to count.
  */
 async function attentionIsReadable(probe: ConditionProbe): Promise<boolean> {
   const [collections, singles] = await Promise.all([
@@ -139,8 +142,7 @@ async function attentionIsReadable(probe: ConditionProbe): Promise<boolean> {
     probe.readableSingles(),
   ]);
   const countable =
-    queryableSlugs("collection", collections).length > 0 ||
-    queryableSlugs("single", singles).length > 0;
+    queryableSlugs("collection", collections).length > 0 || singles.length > 0;
   return countable || probe.mayReadReleases();
 }
 
