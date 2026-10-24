@@ -78,6 +78,7 @@ import {
 } from "../../../shared/lib/case-conversion";
 import {
   declaredFieldNames,
+  keepDeniedAtStored,
   refusalIssues,
   resolvePromotedDocument,
 } from "../../../shared/lib/denied-change";
@@ -7118,37 +7119,105 @@ export class CollectionMutationService extends BaseService {
       before: args.before,
       live: args.live,
       callerSupplied: args.callerSupplied,
-      // The entry's own rules, then every field group's on the instances the
-      // document holds: a pending change can carry a field-group edit too, and
-      // a denied one is refused or kept at its live value like any other.
-      applyRules: async document => {
-        await applyFieldWriteAccess({
-          kind: "collection",
-          slug: args.collectionName,
-          data: document,
-          operation: "update",
-          user: args.user,
-          authenticatedScope: args.authenticatedScope,
-          overrideAccess: args.overrideAccess,
-          grants: args.grants,
-          id: args.entryId,
-        });
-        await applyFieldGroupWriteAccessToDocument({
-          document,
-          fields: args.fields as unknown as FieldConfig[],
-          fieldGroupFields: {
-            get: slug => args.componentSchemas?.get(slug)?.fields,
-          },
-          access: { ...fieldGroupWriteAccessOf(args), grants: args.grants },
-          live: args.live,
-        });
-      },
+      applyRules: this.promotionRules(args),
       // What the schema declares, so a field named like one of the store's
       // own columns is still judged as the content it is.
       authoredFieldNames: declaredFieldNames(args.fields),
       slug: args.collectionName,
       locale: args.locale,
     });
+  }
+
+  /**
+   * The field rules a promotion is judged by, applied to the document given,
+   * in place: the entry's own rules, then every field group's on the
+   * instances the document holds. A pending change can carry a field-group
+   * edit too, and a denied one is refused or kept at its live value like any
+   * other.
+   */
+  private promotionRules(args: {
+    live: Record<string, unknown>;
+    collectionName: string;
+    entryId: string;
+    user: UserContext | undefined;
+    authenticatedScope?: AuthenticatedScope;
+    overrideAccess?: boolean;
+    grants?: () => Promise<CallerGrants>;
+    fields: FieldDefinition[];
+    componentSchemas: ComponentSchemas | null | undefined;
+  }): (document: Record<string, unknown>) => Promise<void> {
+    return async document => {
+      await applyFieldWriteAccess({
+        kind: "collection",
+        slug: args.collectionName,
+        data: document,
+        operation: "update",
+        user: args.user,
+        authenticatedScope: args.authenticatedScope,
+        overrideAccess: args.overrideAccess,
+        grants: args.grants,
+        id: args.entryId,
+      });
+      await applyFieldGroupWriteAccessToDocument({
+        document,
+        fields: args.fields as unknown as FieldConfig[],
+        fieldGroupFields: {
+          get: slug => args.componentSchemas?.get(slug)?.fields,
+        },
+        access: { ...fieldGroupWriteAccessOf(args), grants: args.grants },
+        live: args.live,
+      });
+    };
+  }
+
+  /**
+   * What a publisher's own values contribute to the promotion of a pending
+   * change, in the logical shape: every value they may write as they sent it,
+   * and every denied child of a container they sent at the pending change's
+   * value (`scalars` and `components`, the entry's own fields and the field
+   * groups the publisher sent, as `parts` names them), and their whole
+   * document as the rules let them write it, with nothing put back
+   * (`permitted`).
+   *
+   * The update's field gate kept those denied children at the LIVE row's
+   * values, the only stored document it had. A container the publisher sends
+   * replaces the pending change's whole, so that would put the live value in
+   * place of a pending edit to a child the publisher may not write, and the
+   * edit would be lost rather than refused. Kept at the pending change's
+   * value, the edit stays in the promoted document, and a child restored for
+   * the publisher is not one they supplied, so it is refused as the pending
+   * change's.
+   */
+  private async callerOverPendingChange(
+    callerDocument: Record<string, unknown>,
+    parts: { scalars: readonly string[]; components: readonly string[] },
+    pendingChange: Record<string, unknown>,
+    fields: FieldDefinition[],
+    applyRules: (document: Record<string, unknown>) => Promise<void>
+  ): Promise<{
+    scalars: Record<string, unknown>;
+    components: Record<string, unknown>;
+    permitted: Record<string, unknown>;
+  }> {
+    const sent = this.deserializeJsonFieldsForSnapshot(callerDocument, fields);
+    const permitted = detachData(sent);
+    await applyRules(permitted);
+    const kept = await keepDeniedAtStored({
+      update: sent,
+      stored: this.deserializeJsonFieldsForSnapshot(pendingChange, fields),
+      applyRules,
+    });
+    const only = (keys: readonly string[]) =>
+      Object.fromEntries(
+        keys
+          .filter(key => Object.prototype.hasOwnProperty.call(kept, key))
+          .map(key => [key, kept[key]])
+      );
+    return {
+      scalars: only(parts.scalars),
+      components: only(parts.components),
+      permitted,
+    };
   }
 
   /**
@@ -9165,29 +9234,25 @@ export class CollectionMutationService extends BaseService {
               // left as its string is one leaf to the resolver, so a denied field
               // inside it is never found and an untouched group compares unequal
               // to the parsed live row. The write below encodes it again, once.
-              const mergedPromoteData = this.deserializeJsonFieldsForSnapshot(
-                this.assemblePromotedDocument(
-                  draftInput,
-                  finalData,
-                  componentFieldData,
-                  manyToManyData,
-                  fields,
-                  manyToManyFields,
-                  splitComponentSchemas
-                ),
-                fields
-              );
-              // The caller's own contribution, from the payload the field gate
-              // has ALREADY filtered, so it holds only what this publisher was
-              // allowed to send. Read from the raw request, it would credit the
-              // publisher with the pending change's edit whenever they echo the
-              // same path: the gate strips their value, the merged document still
-              // holds the draft's, the resolver treats that edit as theirs and
-              // restores live, and the publish consumes the draft. Filtered, an
-              // echoed protected value is simply absent, so the draft's edit is
-              // refused rather than lost. Logical, through the same conversion as
-              // the document it is compared against.
-              const callerContribution = this.deserializeJsonFieldsForSnapshot(
+              const promoteAccess = {
+                live: previousDocument ?? {},
+                collectionName: params.collectionName,
+                entryId: params.entryId,
+                user: params.user,
+                authenticatedScope: params.authenticatedScope,
+                overrideAccess: params.overrideAccess,
+                grants: promoteGrants,
+                fields,
+                componentSchemas: splitComponentSchemas,
+              };
+              // The publisher's own values over the pending change, not the
+              // live row: a denied child of a container they send takes the
+              // pending change's value, so an edit to it is refused, not lost.
+              // Judged on everything the publisher sent, field groups and
+              // many-to-many included: a rule on one of their values can read
+              // a sibling written apart from the entry's own fields, as the
+              // update's gate read it.
+              const callerOwn = await this.callerOverPendingChange(
                 this.assemblePromotedDocument(
                   {},
                   finalData,
@@ -9197,26 +9262,49 @@ export class CollectionMutationService extends BaseService {
                   manyToManyFields,
                   splitComponentSchemas
                 ),
+                {
+                  scalars: Object.keys(finalData),
+                  components: Object.keys(componentFieldData),
+                },
+                draftInput,
+                fields,
+                this.promotionRules(promoteAccess)
+              );
+              const mergedPromoteData = this.deserializeJsonFieldsForSnapshot(
+                this.assemblePromotedDocument(
+                  draftInput,
+                  callerOwn.scalars,
+                  callerOwn.components,
+                  manyToManyData,
+                  fields,
+                  manyToManyFields,
+                  splitComponentSchemas
+                ),
                 fields
               );
+              // The caller's own contribution: only what the rules let this
+              // publisher write, field groups included, with no denied value
+              // put back from a stored document. Read from the raw request, it would credit the
+              // publisher with the pending change's edit whenever they echo the
+              // same path: the gate strips their value, the merged document still
+              // holds the draft's, the resolver treats that edit as theirs and
+              // restores live, and the publish consumes the draft. A denied
+              // child put back in a container they sent would be credited the
+              // same way. Filtered, an echoed protected value is simply absent,
+              // so the draft's edit is refused rather than lost. Logical,
+              // through the same conversion as the document it is compared
+              // against.
+              const callerContribution = callerOwn.permitted;
               // One call decides the refusal AND returns what to write, so the
               // document that was judged is the document that lands. A denied
               // field comes back at its LIVE value rather than removed: taking
               // the rules' own output would serialize a partial group over the
               // whole JSON column and clear a protected value nobody touched.
               const promotedDocument = await this.judgePromotionAccess({
+                ...promoteAccess,
                 before: mergedPromoteData,
-                live: previousDocument ?? {},
                 callerSupplied: callerContribution,
-                collectionName: params.collectionName,
-                entryId: params.entryId,
-                user: params.user,
-                authenticatedScope: params.authenticatedScope,
-                overrideAccess: params.overrideAccess,
-                grants: promoteGrants,
-                fields,
                 locale: draftLocaleKey ?? params.locale ?? null,
-                componentSchemas: splitComponentSchemas,
               });
               const draftParts = this.shapeWriteParts(
                 promotedDocument,
