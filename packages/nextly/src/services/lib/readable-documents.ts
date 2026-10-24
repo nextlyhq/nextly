@@ -198,6 +198,10 @@ export async function readableSingleStatus(
   const document = (await requireNextly().findSingle({
     slug,
     select: { status: true },
+    // Every state, as the collections' status read asks: the default reads the
+    // published document alone, so a draft Single would read as missing and
+    // its row lose its label. Access is still the caller's.
+    status: "all",
     ...identityOptions(locale, { overrideAccess: false, caller }),
   })) as { status?: unknown } | null;
   return typeof document?.status === "string" ? document.status : undefined;

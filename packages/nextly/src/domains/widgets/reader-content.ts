@@ -33,6 +33,7 @@ import {
   authorizationGroups,
   readAccessCaller,
 } from "../../auth/entity-read-access";
+import { getService } from "../../di";
 import { requireNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
@@ -183,6 +184,34 @@ export function queryableSlugs(
       .map(source => sourceTarget(source.id))
   );
   return readable.filter(slug => published.has(slug));
+}
+
+/**
+ * The collections whose definition turns creating entries off in the admin
+ * (`admin.disableCreate`, as a form's submissions do). The Create card offers
+ * none of them, so neither may the condition that offers the card.
+ *
+ * One registry read. When it fails, none: a card is never withheld on the
+ * strength of a read that did not answer, and the card itself draws what it
+ * finds.
+ */
+export async function createDisabledSlugs(): Promise<ReadonlySet<string>> {
+  try {
+    const collections = await getService(
+      "collectionRegistryService"
+    ).getAllCollections();
+    return new Set(
+      collections
+        .filter(
+          collection =>
+            (collection.admin as { disableCreate?: unknown } | undefined)
+              ?.disableCreate === true
+        )
+        .map(collection => collection.slug)
+    );
+  } catch {
+    return new Set();
+  }
 }
 
 /**

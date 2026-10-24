@@ -166,7 +166,11 @@ describe("REST limit: classified as authentication does", () => {
         10
       )
     ).toBe(KEY_BUDGET);
-    expect(readers.debitKey).toHaveBeenCalledWith("valid-k1");
+    // Handed the request too, so the key's refusal carries its request id.
+    expect(readers.debitKey).toHaveBeenCalledWith(
+      "valid-k1",
+      expect.any(Request)
+    );
     // The address's own budget is untouched by a resolving key.
     expect(await admitted(check, { address: "203.0.113.7" }, 5)).toBe(2);
   });

@@ -14,9 +14,13 @@
  * @module components/features/widgets/edit/useCardQuickSetting
  */
 
-import { resolveWidgetSettings } from "nextly/config";
+import {
+  resolveWidgetSettings,
+  type PublishedContentSource,
+} from "nextly/config";
 import { useEffect, useState, type ReactNode } from "react";
 
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { questionOf } from "../widget-as-asked";
@@ -62,9 +66,12 @@ interface PendingAnnouncement {
 function changesQuery(
   widget: DashboardWidget,
   current: Record<string, unknown> | undefined,
-  config: Record<string, unknown>
+  config: Record<string, unknown>,
+  sources: readonly PublishedContentSource[] | undefined
 ): boolean {
-  return questionOf(widget, current) !== questionOf(widget, config);
+  return (
+    questionOf(widget, current, sources) !== questionOf(widget, config, sources)
+  );
 }
 
 /** A card's quick setting, for the controls that change it: the header's and the menu's. */
@@ -92,6 +99,9 @@ export function useCardQuickSetting(args: {
   settingsWrite: CellSettingsWrite | undefined;
 }): Partial<CardQuickSettingState> {
   const { widget, config, isEditing, isFetching, settingsWrite } = args;
+  // The same collections the grid asked the card with, so a change is judged
+  // against the query the card actually sent.
+  const sources = useBranding().widgetSources;
   const shownAt = args.updatedAt?.getTime() ?? null;
   const [pending, setPending] = useState<PendingAnnouncement | null>(null);
 
@@ -126,7 +136,7 @@ export function useCardQuickSetting(args: {
   const change = (next: string | boolean, reverted: () => void = () => {}) => {
     const values = { ...initialValues(settings, config), [quick.name]: next };
     const stored = toStoredConfig(settings, values, config);
-    const asksAgain = changesQuery(widget, config, stored);
+    const asksAgain = changesQuery(widget, config, stored, sources);
     settingsWrite.write(stored, {
       onLanded: () =>
         setPending({

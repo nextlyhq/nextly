@@ -64,8 +64,14 @@ export interface AddWidgetPanelProps {
   rows: readonly AddPanelRow[];
   /** Whether the dashboard already holds as many cards as it can, removed ones counted. */
   atCapacity: boolean;
-  /** Add a new card of this widget; what was added, or `null` when nothing was. */
-  onAdd: (widgetId: string) => AddedCard | null;
+  /**
+   * Add a new card of this widget, starting with `settings` when the row names them; what was
+   * added, or `null` when nothing was.
+   */
+  onAdd: (
+    widgetId: string,
+    settings?: Record<string, unknown>
+  ) => AddedCard | null;
   /** Put a removed card back where it was; what came back, or `null`. */
   onAddBack: (placementId: string) => AddedCard | null;
   /** The panel has closed: move focus on, to the last card added or to Add widget. */
@@ -109,7 +115,7 @@ function RowAction({
 }: {
   row: AddPanelRow;
   atCapacity: boolean;
-  onAdd: (widgetId: string) => void;
+  onAdd: (widgetId: string, settings?: Record<string, unknown>) => void;
   onAddBack: (placementId: string) => void;
 }) {
   const { action } = row;
@@ -148,7 +154,7 @@ function RowAction({
       size="sm"
       className="shrink-0"
       disabled={atCapacity}
-      onClick={() => onAdd(action.widgetId)}
+      onClick={() => onAdd(action.widgetId, action.settings)}
       aria-label={`${again ? "Add another" : "Add"} ${row.name}`}
       data-testid={`add-panel-add-${row.key}`}
     >
@@ -172,7 +178,7 @@ function rowMeta(row: AddPanelRow): string | undefined {
 function Row(props: {
   row: AddPanelRow;
   atCapacity: boolean;
-  onAdd: (widgetId: string) => void;
+  onAdd: (widgetId: string, settings?: Record<string, unknown>) => void;
   onAddBack: (placementId: string) => void;
 }) {
   const { row } = props;
@@ -377,7 +383,7 @@ export function AddWidgetPanel({
       key={row.key}
       row={row}
       atCapacity={atCapacity}
-      onAdd={widgetId => said(onAdd(widgetId), "Added")}
+      onAdd={(widgetId, settings) => said(onAdd(widgetId, settings), "Added")}
       onAddBack={placementId => said(onAddBack(placementId), "Added back")}
     />
   );

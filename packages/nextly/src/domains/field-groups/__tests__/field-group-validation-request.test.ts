@@ -127,11 +127,18 @@ type TxParam = Parameters<
   FieldGroupDataService["saveComponentDataInTransaction"]
 >[0];
 
+/**
+ * These cases are about what an instance's validators are handed, not about
+ * field rules, so each write says it is trusted.
+ */
+const TRUSTED = { overrideAccess: true } as const;
+
 describe("request context reaching a field group's validators", () => {
   it("forwards the request to a single component's validator", async () => {
     await ctx.service.saveComponentData({
       parentId: "entry-1",
       parentTable: "dc_pages",
+      access: TRUSTED,
       fields: [badgeField],
       data: { badge: { badge: "gold" } },
       req: { user: USER },
@@ -148,6 +155,7 @@ describe("request context reaching a field group's validators", () => {
       ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [badgeField],
         data: { badge: { badge: "gold" } },
       })
@@ -164,6 +172,7 @@ describe("request context reaching a field group's validators", () => {
       .saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [badgeField],
         data: { badge: { badge: "gold" } },
       })
@@ -189,6 +198,7 @@ describe("request context reaching a field group's validators", () => {
     await ctx.service.saveComponentDataInTransaction(tx as unknown as TxParam, {
       parentId: "entry-1",
       parentTable: "dc_pages",
+      access: TRUSTED,
       fields: [badgeField],
       data: { badge: { badge: "gold" } },
       req: { user: USER },
@@ -202,6 +212,7 @@ describe("request context reaching a field group's validators", () => {
     await ctx.service.saveComponentData({
       parentId: "entry-1",
       parentTable: "dc_pages",
+      access: TRUSTED,
       fields: [badgeListField],
       data: { badges: [{ badge: "gold" }, { badge: "silver" }] },
       req: { user: USER },
@@ -217,6 +228,7 @@ describe("request context reaching a field group's validators", () => {
     await ctx.service.saveComponentDataInTransaction(tx as unknown as TxParam, {
       parentId: "entry-1",
       parentTable: "dc_pages",
+      access: TRUSTED,
       fields: [badgeListField],
       data: { badges: [{ badge: "gold" }, { badge: "silver" }] },
       req: { user: USER },
@@ -230,6 +242,7 @@ describe("request context reaching a field group's validators", () => {
     await ctx.service.saveComponentData({
       parentId: "entry-1",
       parentTable: "dc_pages",
+      access: TRUSTED,
       fields: [badgeZoneField],
       data: {
         zone: [
@@ -250,6 +263,7 @@ describe("request context reaching a field group's validators", () => {
     await ctx.service.saveComponentDataInTransaction(tx as unknown as TxParam, {
       parentId: "entry-1",
       parentTable: "dc_pages",
+      access: TRUSTED,
       fields: [badgeZoneField],
       data: {
         zone: [

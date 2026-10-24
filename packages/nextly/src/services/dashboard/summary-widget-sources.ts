@@ -21,8 +21,11 @@
  *
  * One row per collection this reader may see on the dashboard: its total, and
  * how many entries are published and how many are drafts, each counted as the
- * reader (`getContentByCollection`). It adds no access rule of its own: the
- * scope and every count are the service's, read the way `/stats` reads them.
+ * reader (`getContentByCollection`). Then one row per Single they may see
+ * (`getContentSingles`), which has no entries to count. Each row says which
+ * `kind` it is, since a collection and a Single may share a slug. It adds no
+ * access rule of its own: the scope and every count are the service's, read
+ * the way `/stats` reads them.
  *
  * @module services/dashboard/summary-widget-sources
  */
@@ -60,9 +63,13 @@ const TEAM_FIELDS = [
   { name: "count", type: "number" as const, label: "Count" },
 ];
 
-/** Each collection: what it is called, where it is grouped, and its entries. */
+/**
+ * Each collection: what it is called, where it is grouped, and its entries. Each
+ * Single: what it is called; its entry fields are absent.
+ */
 const CONTENT_FIELDS = [
-  { name: "slug", type: "string" as const, label: "Collection" },
+  { name: "kind", type: "string" as const, label: "Kind" },
+  { name: "slug", type: "string" as const, label: "Collection or Single" },
   { name: "label", type: "string" as const, label: "Name" },
   { name: "group", type: "string" as const, label: "Group" },
   { name: "count", type: "number" as const, label: "Entries" },
@@ -87,6 +94,8 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   groupBy: "refused",
   dateField: "refused",
   interval: "refused",
+  since: "refused",
+  until: "refused",
 };
 
 /** The service, resolved at call time, as the other system sources resolve theirs. */
@@ -129,19 +138,43 @@ async function resolveTeam(
   return listOf(rows, TEAM_FIELDS, query);
 }
 
-/** Answer the Content card: each collection this reader may see, with its entries and drafts. */
+/**
+ * Answer the Content card: each collection this reader may see, with its entries and drafts,
+ * then each Single they may see.
+ */
 async function resolveContent(
   query: WidgetQuery,
   caller: ReadCaller
 ): Promise<WidgetResult> {
   refuseUnconsumedQueryFields(query, QUERY_FIELD_USE, CONTENT_SOURCE_ID);
-  // The limit goes to the service, which picks the page before counting it.
-  const rows = await dashboard().getContentByCollection({
-    scope: await resolveReadableResources(caller),
+  const scope = await resolveReadableResources(caller);
+  // The limit goes to the service, which picks the page before counting it; the Singles take
+  // whatever room the collections leave, so the card's one row more still says more exist.
+  const collections = await dashboard().getContentByCollection({
+    scope,
     caller,
     limit: query.limit,
   });
-  return listOf(rows, CONTENT_FIELDS, query);
+  const room =
+    query.limit === undefined ? undefined : query.limit - collections.length;
+  const singles =
+    room === undefined || room > 0
+      ? await dashboard().getContentSingles({ scope, limit: room })
+      : [];
+  const rows = [
+    ...collections.map(row => ({ kind: "collection", ...row })),
+    ...singles.map(single => ({ kind: "single", ...single, group: null })),
+  ];
+  // `kind` stays in every row whatever was selected: a collection and a Single
+  // may share a slug, and without it their rows could not be told apart.
+  const select = query.select;
+  return listOf(
+    rows,
+    CONTENT_FIELDS,
+    select?.length && !select.includes("kind")
+      ? { ...query, select: [...select, "kind"] }
+      : query
+  );
 }
 
 /**

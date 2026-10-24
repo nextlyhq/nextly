@@ -32,7 +32,7 @@ import type {
 
 import type { CellSlotLookup } from "../archetypes/types";
 import { queryForTier } from "../tier-query";
-import { questionOf, widgetAsAsked } from "../widget-as-asked";
+import { questionOf, sourcedQuery, widgetAsAsked } from "../widget-as-asked";
 
 /** How long the values must stay still before a changed question is asked. */
 const PREVIEW_ASK_DELAY_MS = 300;
@@ -102,19 +102,21 @@ export function useSettingsPreview(args: {
         },
       ];
     }
-    if (!definition.query) return [];
+    // A query its draft has not given a source asks nothing, as on the dashboard.
+    const query = definition.query;
+    if (!sourcedQuery(query)) return [];
     // The settled question itself is the request's query, so each new question is a new one.
     // Sized as the batch sizes a card it draws, and asked as declared for a custom card, whose
     // own component draws the raw answer with no tier.
     if (definition.archetype === "custom") {
-      return [{ placementId: previewId, query: definition.query }];
+      return [{ placementId: previewId, query }];
     }
     return [
       {
         placementId: previewId,
-        query: definition.query,
+        query,
         sized: {
-          query: queryForTier(definition.query, PREVIEW_TIER),
+          query: queryForTier(query, PREVIEW_TIER),
           tier: PREVIEW_TIER,
         },
       },

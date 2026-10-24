@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import type { SourcelessWidgetQuery } from "../query";
 import {
   type AnyWidgetSetting,
   applyWidgetSettings,
@@ -505,6 +506,23 @@ describe("applyWidgetSettings drives only the knobs it declares", () => {
     expect(applyWidgetSettings(base, [without], {})).toBe(base);
   });
 
+  it("reads only a value shaped like a collection slug as a collection", () => {
+    // A special default such as "*" names no collection, so the declared query
+    // is asked as it is rather than for a source that cannot exist.
+    const wildcard: AnyWidgetSetting = {
+      name: "collection",
+      type: "collection",
+      defaultValue: "*",
+    };
+    expect(applyWidgetSettings(base, [wildcard], {})).toBe(base);
+    expect(
+      applyWidgetSettings(base, [wildcard], { collection: "Not A Slug" })
+    ).toBe(base);
+    expect(
+      applyWidgetSettings(base, [wildcard], { collection: "pages" }).source
+    ).toBe("collection:pages");
+  });
+
   it("drives the collection only over a collection source, or none", () => {
     const collection: AnyWidgetSetting = {
       name: "collection",
@@ -630,12 +648,18 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
     expect(() => validateWidgetSettings([content[0]], "core/x")).not.toThrow();
   });
 
-  it("refuses a Collection setting at registration over a source no knob drives it on", () => {
-    // On a system source the knob does not apply, so the setting would be
-    // drawn and saved and change nothing: refused with the mark.
-    expect(
-      widgetSettingsProblem([content[0]], false, { id: "system:releases" })
-    ).toContain(CONTENT_SETTING_NOT_DRAWN);
+  it("refuses a content setting at registration over a source no knob drives it on", () => {
+    // Every content knob reads a collection: on a system source the setting
+    // would be drawn and saved and change nothing, so it is refused with the
+    // mark, the core-built widget aside.
+    for (const setting of content) {
+      const set =
+        setting.type === "collection" ? [setting] : [content[0], setting];
+      expect(
+        widgetSettingsProblem(set, false, { id: "system:releases" }),
+        setting.type
+      ).toContain(CONTENT_SETTING_NOT_DRAWN);
+    }
     expect(() =>
       validateWidgetSettings([content[0]], "core/x", false, {
         id: "system:releases",
@@ -643,23 +667,188 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
     ).toThrow(CONTENT_SETTING_NOT_DRAWN);
   });
 
-  it("refuses at registration a content setting no knob drives, naming its mark and what to use instead", () => {
-    // A registered widget's settings reach its query only through its knobs,
-    // so a filter, sort or grouping there would change nothing the card
-    // shows; a declared widget, whose card query is built from them, may hold
-    // these.
-    for (const setting of content.filter(s => s.type !== "collection")) {
-      const problem = widgetSettingsProblem([content[0], setting]);
-      expect(problem, setting.type).toContain(CONTENT_SETTING_NOT_DRAWN);
-      expect(problem).toContain(
-        "use a text, number, checkbox or select setting until those settings reach a registered widget's query"
+  it("refuses a content setting on a widget that asks nothing a knob could drive", () => {
+    // No query and no cells: the setting would be drawn and saved and change
+    // nothing the card shows.
+    for (const setting of content) {
+      const set =
+        setting.type === "collection" ? [setting] : [content[0], setting];
+      expect(widgetSettingsProblem(set, false, null), setting.type).toContain(
+        CONTENT_SETTING_NOT_DRAWN
       );
     }
-    expect(() => validateWidgetSettings(content, "core/x")).toThrow(
-      CONTENT_SETTING_NOT_DRAWN
+    // The widget whose data core builds holds them, as before.
+    expect(widgetSettingsProblem([content[0]], true, null)).toBeUndefined();
+  });
+
+  it("refuses a second Collection setting, which would always lose to the first", () => {
+    const two = [
+      { name: "collection", type: "collection" as const },
+      { name: "other", type: "collection" as const },
+    ];
+    expect(widgetSettingsProblem(two)).toContain(
+      'declares 2 Collection settings ("collection", "other")'
     );
-    // The control: the field settings beside it register as before.
-    expect(widgetSettingsProblem([limit, compact])).toBeUndefined();
+    expect(widgetSettingsProblem(two, true)).toBeUndefined();
+  });
+
+  it("is admitted at registration, since a knob drives each one into the card's query", () => {
+    // A registered widget's settings reach its query only through the knobs of
+    // `applyWidgetSettings`; each content type has one, so none of them is a
+    // control that would change nothing.
+    for (const setting of content) {
+      const set =
+        setting.type === "collection" ? [setting] : [content[0], setting];
+      expect(widgetSettingsProblem(set), setting.type).toBeUndefined();
+    }
+    expect(() => validateWidgetSettings(content, "core/x")).not.toThrow();
+  });
+
+  describe("driving the card's query", () => {
+    // Sourceless, as a per-collection widget declares it: the Collection
+    // setting supplies the source.
+    const base: SourcelessWidgetQuery = { op: "list", limit: 5 };
+    const fields = [
+      { name: "title", offered: true, groupable: true },
+      { name: "status", offered: true, groupable: true },
+      { name: "updatedAt", offered: true, groupable: false },
+      { name: "salary", offered: false, groupable: true },
+    ];
+    const ctx = {
+      fieldsOf: (collection: string) =>
+        collection === "posts" ? fields : undefined,
+    };
+
+    it("reads the chosen collection, and its filter, sort and grouping over it", () => {
+      expect(
+        applyWidgetSettings(
+          base,
+          content,
+          {
+            collection: "posts",
+            where: { status: { equals: "draft" } },
+            order: "-title",
+            by: "status",
+          },
+          ctx
+        )
+      ).toEqual({
+        ...base,
+        source: "collection:posts",
+        where: { status: { equals: "draft" } },
+        sort: "-title",
+        groupBy: "status",
+      });
+    });
+
+    it("asks with a setting's default, before the query is built, where the stored one names a field the reader may not use", () => {
+      const out = applyWidgetSettings(
+        base,
+        content,
+        {
+          collection: "posts",
+          // Through an `or`, so a field named only inside a branch counts.
+          where: { or: [{ title: { equals: "a" } }, { salary: { gt: 1 } }] },
+          order: "salary",
+          by: "salary",
+        },
+        ctx
+      );
+      // The filter and the grouping have no default, so they are left off;
+      // the sort takes its declared one.
+      expect(out).toEqual({
+        ...base,
+        source: "collection:posts",
+        sort: "-updatedAt",
+      });
+    });
+
+    it("narrows a declared condition with the reader's Filter, keeping the declared keys at the top level", () => {
+      // A workflow condition is read only at the top level, so the Filter
+      // joins it under `and` rather than wrapping it.
+      const scheduled = { ...base, where: { _inRelease: true } };
+      const filter = { title: { contains: "news" } };
+      expect(
+        applyWidgetSettings(
+          scheduled,
+          content,
+          { collection: "posts", where: filter },
+          ctx
+        ).where
+      ).toEqual({ _inRelease: true, and: [filter] });
+      // A declared `and` keeps its branches, and the Filter is one more.
+      const both = {
+        ...base,
+        where: { and: [{ status: { equals: "draft" } }] },
+      };
+      expect(
+        applyWidgetSettings(
+          both,
+          content,
+          { collection: "posts", where: filter },
+          ctx
+        ).where
+      ).toEqual({ and: [{ status: { equals: "draft" } }, filter] });
+    });
+
+    it("leaves a grouping off when its field can be read but not grouped by", () => {
+      const out = applyWidgetSettings(
+        base,
+        content,
+        { collection: "posts", by: "updatedAt" },
+        ctx
+      );
+      expect(out.groupBy).toBeUndefined();
+    });
+
+    it("reaches back as far as the card's Date range, as its query's since", () => {
+      const dateRange = {
+        name: "dateRange",
+        type: "select" as const,
+        defaultValue: "30d",
+        options: [
+          { label: "7 days", value: "7d" },
+          { label: "30 days", value: "30d" },
+        ],
+      };
+      // On a count, which a window bounds.
+      const counted = { ...base, op: "count" as const };
+      expect(applyWidgetSettings(counted, [dateRange], {}).since).toBe("30d");
+      expect(
+        applyWidgetSettings(counted, [dateRange], { dateRange: "7d" }).since
+      ).toBe("7d");
+      // A list takes no window, so the same setting leaves it as declared.
+      expect(applyWidgetSettings(base, [dateRange], { dateRange: "7d" })).toBe(
+        base
+      );
+    });
+
+    it("leaves a widget's own select named dateRange alone when it offers anything but the query's spans", () => {
+      // A plugin card that reads its own "week" or "month" in its component,
+      // as it did before the knob existed: never sent to the query as since.
+      const ownRange = {
+        name: "dateRange",
+        type: "select" as const,
+        defaultValue: "week",
+        options: [
+          { label: "This week", value: "week" },
+          { label: "Last 30 days", value: "30d" },
+        ],
+      };
+      const counted = { ...base, op: "count" as const };
+      expect(applyWidgetSettings(counted, [ownRange], {})).toBe(counted);
+      expect(
+        applyWidgetSettings(counted, [ownRange], { dateRange: "30d" })
+      ).toBe(counted);
+    });
+
+    it("applies a stored value as it is where the collection's fields are not known, for the server to judge", () => {
+      const out = applyWidgetSettings(base, content, {
+        collection: "posts",
+        order: "salary",
+      });
+      expect(out.sort).toBe("salary");
+    });
   });
 
   it("is admitted where core builds the card's query from it, and still judged by every other rule", () => {

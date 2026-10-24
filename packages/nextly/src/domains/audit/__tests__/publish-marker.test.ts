@@ -133,6 +133,23 @@ describe("an entry's row", () => {
     });
   });
 
+  it("marks a promotion whose request also carried content as a save as well", async () => {
+    await recordMutationActivity(() => tx, {
+      ...update,
+      publication: {
+        statusBefore: "published",
+        statusAfter: "published",
+        promotedPendingEdits: true,
+        requestEdits: true,
+      },
+    });
+    expect(logged[0]?.metadata).toEqual({
+      changedFields: ["title"],
+      published: true,
+      publishedWithEdits: true,
+    });
+  });
+
   it("marks nothing on a save that publishes nothing", async () => {
     await recordMutationActivity(() => tx, {
       ...update,

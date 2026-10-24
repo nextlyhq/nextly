@@ -53,6 +53,8 @@
     "packages/ui/src/styles/index.css",
     // Passed as an argv path to the admin-css bin by its integration test.
     "packages/admin-css/__fixtures__/**",
+    // Handed to oxlint by the templates pass in scripts/lint.mjs.
+    "oxlint.templates.config.mjs",
   ],
 
   // Specifiers tsc and Node both resolve, and fallow does not.

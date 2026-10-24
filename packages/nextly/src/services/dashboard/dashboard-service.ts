@@ -490,10 +490,12 @@ export class DashboardService extends BaseService {
     scope: ReadableResources,
     /** Collects the slugs left out as kept off the dashboard, for the figures read elsewhere. */
     keptOff?: KeptOffRead
-  ): Promise<Array<{ slug: string }>> {
+  ): Promise<Array<{ slug: string; label?: string }>> {
     try {
       const singleRegistryService = container.get<{
-        getAllSingles: () => Promise<Array<{ slug: string; admin?: unknown }>>;
+        getAllSingles: () => Promise<
+          Array<{ slug: string; label?: string; admin?: unknown }>
+        >;
       }>("singleRegistryService");
 
       // Kept off the dashboard, for the reason the collections above are.
@@ -825,6 +827,25 @@ export class DashboardService extends BaseService {
       contentPage(collections, options.limit),
       options.caller
     );
+  }
+
+  /**
+   * The Singles this caller may see on the dashboard, in slug order, at most
+   * `limit` of them: the Singles half of what `system:content` answers.
+   *
+   * The same registry read `/stats` makes, so a Single kept off the dashboard
+   * is absent here as it is there. Nothing is counted: a Single has one
+   * document, not entries.
+   */
+  async getContentSingles(options: {
+    scope: ReadableResources;
+    limit?: number;
+  }): Promise<Array<{ slug: string; label: string }>> {
+    const singles = await this.getRegisteredSingles(options.scope);
+    return contentPage(singles, options.limit).map(single => ({
+      slug: single.slug,
+      label: single.label ?? single.slug,
+    }));
   }
 
   /**

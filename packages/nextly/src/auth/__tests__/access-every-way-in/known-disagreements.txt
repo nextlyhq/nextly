@@ -376,6 +376,7 @@ no-service user-with read collection returns-true at entity  # no-service
 no-service visitor read collection returns-false at direct  # visitor-public-default
 no-service user-with read collection returns-false at rest
 no-service user-with read collection returns-false at direct  # no-service
+no-service user-with read collection returns-false at capabilities  # no-service
 no-service key-role-based read collection returns-false at rest
 no-service key-role-based read collection returns-false at direct  # no-service
 no-service key-role-based read collection returns-false at can  # no-service
@@ -383,6 +384,7 @@ no-service key-role-based read collection returns-false at entity  # no-service
 no-service visitor read collection returns-null at direct  # visitor-public-default
 no-service user-with read collection returns-null at rest
 no-service user-with read collection returns-null at direct  # no-service
+no-service user-with read collection returns-null at capabilities  # no-service
 no-service key-role-based read collection returns-null at rest
 no-service key-role-based read collection returns-null at direct  # no-service
 no-service key-role-based read collection returns-null at can  # no-service
@@ -398,6 +400,7 @@ no-service user-without read single returns-true at direct  # no-service
 no-service visitor read single returns-false at direct  # visitor-public-default
 no-service user-with read single returns-false at rest
 no-service user-with read single returns-false at direct  # no-service
+no-service user-with read single returns-false at capabilities  # no-service
 no-service user-without read single returns-false at direct  # no-service
 no-service key-role-based read single returns-false at rest
 no-service key-role-based read single returns-false at direct  # no-service
@@ -406,6 +409,7 @@ no-service key-role-based read single returns-false at entity  # no-service
 no-service visitor read single returns-null at direct  # visitor-public-default
 no-service user-with read single returns-null at rest
 no-service user-with read single returns-null at direct  # no-service
+no-service user-with read single returns-null at capabilities  # no-service
 no-service user-without read single returns-null at direct  # no-service
 no-service key-role-based read single returns-null at rest
 no-service key-role-based read single returns-null at direct  # no-service
@@ -647,15 +651,24 @@ service key-super-admin update providers none at route  # manage-not-counted
 service key-super-admin update providers none at can  # manage-not-counted
 service key-super-admin update providers none at widget  # manage-not-counted
 service user-without read collection true at widget  # rule-alone-for-people
+service user-without read collection true at capabilities  # rule-alone-for-people
 service user-without create collection true at widget  # rule-alone-for-people
+service user-without create collection true at capabilities  # rule-alone-for-people
 service user-partial create collection true at widget  # rule-alone-for-people
+service user-partial create collection true at capabilities  # rule-alone-for-people
 service user-without update collection true at widget  # rule-alone-for-people
 service user-without update collection true at lock  # rule-alone-for-people
+service user-without update collection true at capabilities  # rule-alone-for-people
 service user-without delete collection true at widget  # rule-alone-for-people
+service user-without delete collection true at capabilities  # rule-alone-for-people
 service user-partial delete collection true at widget  # rule-alone-for-people
+service user-partial delete collection true at capabilities  # rule-alone-for-people
 service user-without publish collection true at widget  # rule-alone-for-people
+service user-without publish collection true at capabilities  # rule-alone-for-people
 service user-without unpublish collection true at widget  # rule-alone-for-people
+service user-without unpublish collection true at capabilities  # rule-alone-for-people
 service user-partial unpublish collection true at widget  # rule-alone-for-people
+service user-partial unpublish collection true at capabilities  # rule-alone-for-people
 service key-read-only read collection false at widget  # holds-permission-key-skips-rules
 service key-full-access read collection false at widget  # holds-permission-key-skips-rules
 service key-role-based read collection false at widget  # holds-permission-key-skips-rules
@@ -679,15 +692,24 @@ service key-full-access unpublish collection false at widget  # holds-permission
 service key-role-based unpublish collection false at widget  # holds-permission-key-skips-rules
 service key-super-admin unpublish collection false at widget  # holds-permission-key-skips-rules
 service user-without read collection returns-true at widget  # rule-alone-for-people
+service user-without read collection returns-true at capabilities  # rule-alone-for-people
 service user-without create collection returns-true at widget  # rule-alone-for-people
+service user-without create collection returns-true at capabilities  # rule-alone-for-people
 service user-partial create collection returns-true at widget  # rule-alone-for-people
+service user-partial create collection returns-true at capabilities  # rule-alone-for-people
 service user-without update collection returns-true at widget  # rule-alone-for-people
 service user-without update collection returns-true at lock  # rule-alone-for-people
+service user-without update collection returns-true at capabilities  # rule-alone-for-people
 service user-without delete collection returns-true at widget  # rule-alone-for-people
+service user-without delete collection returns-true at capabilities  # rule-alone-for-people
 service user-partial delete collection returns-true at widget  # rule-alone-for-people
+service user-partial delete collection returns-true at capabilities  # rule-alone-for-people
 service user-without publish collection returns-true at widget  # rule-alone-for-people
+service user-without publish collection returns-true at capabilities  # rule-alone-for-people
 service user-without unpublish collection returns-true at widget  # rule-alone-for-people
+service user-without unpublish collection returns-true at capabilities  # rule-alone-for-people
 service user-partial unpublish collection returns-true at widget  # rule-alone-for-people
+service user-partial unpublish collection returns-true at capabilities  # rule-alone-for-people
 service key-read-only read collection returns-false at widget  # holds-permission-key-skips-rules
 service key-full-access read collection returns-false at widget  # holds-permission-key-skips-rules
 service key-role-based read collection returns-false at widget  # holds-permission-key-skips-rules
@@ -777,15 +799,24 @@ service key-full-access unpublish collection throws at widget  # holds-permissio
 service key-role-based unpublish collection throws at widget  # holds-permission-key-skips-rules
 service key-super-admin unpublish collection throws at widget  # holds-permission-key-skips-rules
 service user-without read collection async-true at widget  # rule-alone-for-people
+service user-without read collection async-true at capabilities  # rule-alone-for-people
 service user-without create collection async-true at widget  # rule-alone-for-people
+service user-without create collection async-true at capabilities  # rule-alone-for-people
 service user-partial create collection async-true at widget  # rule-alone-for-people
+service user-partial create collection async-true at capabilities  # rule-alone-for-people
 service user-without update collection async-true at widget  # rule-alone-for-people
 service user-without update collection async-true at lock  # rule-alone-for-people
+service user-without update collection async-true at capabilities  # rule-alone-for-people
 service user-without delete collection async-true at widget  # rule-alone-for-people
+service user-without delete collection async-true at capabilities  # rule-alone-for-people
 service user-partial delete collection async-true at widget  # rule-alone-for-people
+service user-partial delete collection async-true at capabilities  # rule-alone-for-people
 service user-without publish collection async-true at widget  # rule-alone-for-people
+service user-without publish collection async-true at capabilities  # rule-alone-for-people
 service user-without unpublish collection async-true at widget  # rule-alone-for-people
+service user-without unpublish collection async-true at capabilities  # rule-alone-for-people
 service user-partial unpublish collection async-true at widget  # rule-alone-for-people
+service user-partial unpublish collection async-true at capabilities  # rule-alone-for-people
 service key-read-only read collection async-false at widget  # holds-permission-key-skips-rules
 service key-full-access read collection async-false at widget  # holds-permission-key-skips-rules
 service key-role-based read collection async-false at widget  # holds-permission-key-skips-rules
@@ -897,8 +928,10 @@ service key-full-access unpublish collection publish-false at widget  # holds-pe
 service key-role-based unpublish collection publish-false at widget  # holds-permission-key-skips-rules
 service key-super-admin unpublish collection publish-false at widget  # holds-permission-key-skips-rules
 service user-without read single true at widget  # rule-alone-for-people
+service user-without read single true at capabilities  # rule-alone-for-people
 service user-without update single true at widget  # rule-alone-for-people
 service user-without update single true at lock  # rule-alone-for-people
+service user-without update single true at capabilities  # rule-alone-for-people
 service key-read-only read single false at widget  # holds-permission-key-skips-rules
 service key-full-access read single false at widget  # holds-permission-key-skips-rules
 service key-role-based read single false at widget  # holds-permission-key-skips-rules
@@ -909,8 +942,10 @@ service key-role-based update single false at widget  # holds-permission-key-ski
 service key-super-admin update single false at widget  # holds-permission-key-skips-rules
 service key-partial update single false at widget  # holds-permission-key-skips-rules
 service user-without read single returns-true at widget  # rule-alone-for-people
+service user-without read single returns-true at capabilities  # rule-alone-for-people
 service user-without update single returns-true at widget  # rule-alone-for-people
 service user-without update single returns-true at lock  # rule-alone-for-people
+service user-without update single returns-true at capabilities  # rule-alone-for-people
 service key-read-only read single returns-false at widget  # holds-permission-key-skips-rules
 service key-full-access read single returns-false at widget  # holds-permission-key-skips-rules
 service key-role-based read single returns-false at widget  # holds-permission-key-skips-rules
@@ -948,8 +983,10 @@ service key-role-based update single throws at widget  # holds-permission-key-sk
 service key-super-admin update single throws at widget  # holds-permission-key-skips-rules
 service key-partial update single throws at widget  # holds-permission-key-skips-rules
 service user-without read single async-true at widget  # rule-alone-for-people
+service user-without read single async-true at capabilities  # rule-alone-for-people
 service user-without update single async-true at widget  # rule-alone-for-people
 service user-without update single async-true at lock  # rule-alone-for-people
+service user-without update single async-true at capabilities  # rule-alone-for-people
 service key-read-only read single async-false at widget  # holds-permission-key-skips-rules
 service key-full-access read single async-false at widget  # holds-permission-key-skips-rules
 service key-role-based read single async-false at widget  # holds-permission-key-skips-rules
@@ -990,8 +1027,11 @@ service key-partial update single principal-kind at widget  # holds-permission-k
 service key-super-admin read single user-is-key-maker at widget  # holds-permission-key-skips-rules
 service key-super-admin update single user-is-key-maker at widget  # holds-permission-key-skips-rules
 service user-without publish single-pub true at widget  # rule-alone-for-people
+service user-without publish single-pub true at capabilities  # rule-alone-for-people
 service user-without unpublish single-pub true at widget  # rule-alone-for-people
+service user-without unpublish single-pub true at capabilities  # rule-alone-for-people
 service user-partial unpublish single-pub true at widget  # rule-alone-for-people
+service user-partial unpublish single-pub true at capabilities  # rule-alone-for-people
 service key-full-access publish single-pub false at widget  # holds-permission-key-skips-rules
 service key-role-based publish single-pub false at widget  # holds-permission-key-skips-rules
 service key-super-admin publish single-pub false at widget  # holds-permission-key-skips-rules
@@ -1000,8 +1040,11 @@ service key-full-access unpublish single-pub false at widget  # holds-permission
 service key-role-based unpublish single-pub false at widget  # holds-permission-key-skips-rules
 service key-super-admin unpublish single-pub false at widget  # holds-permission-key-skips-rules
 service user-without publish single-pub returns-true at widget  # rule-alone-for-people
+service user-without publish single-pub returns-true at capabilities  # rule-alone-for-people
 service user-without unpublish single-pub returns-true at widget  # rule-alone-for-people
+service user-without unpublish single-pub returns-true at capabilities  # rule-alone-for-people
 service user-partial unpublish single-pub returns-true at widget  # rule-alone-for-people
+service user-partial unpublish single-pub returns-true at capabilities  # rule-alone-for-people
 service key-full-access publish single-pub returns-false at widget  # holds-permission-key-skips-rules
 service key-role-based publish single-pub returns-false at widget  # holds-permission-key-skips-rules
 service key-super-admin publish single-pub returns-false at widget  # holds-permission-key-skips-rules
@@ -1031,8 +1074,11 @@ service key-full-access unpublish single-pub throws at widget  # holds-permissio
 service key-role-based unpublish single-pub throws at widget  # holds-permission-key-skips-rules
 service key-super-admin unpublish single-pub throws at widget  # holds-permission-key-skips-rules
 service user-without publish single-pub async-true at widget  # rule-alone-for-people
+service user-without publish single-pub async-true at capabilities  # rule-alone-for-people
 service user-without unpublish single-pub async-true at widget  # rule-alone-for-people
+service user-without unpublish single-pub async-true at capabilities  # rule-alone-for-people
 service user-partial unpublish single-pub async-true at widget  # rule-alone-for-people
+service user-partial unpublish single-pub async-true at capabilities  # rule-alone-for-people
 service key-full-access publish single-pub async-false at widget  # holds-permission-key-skips-rules
 service key-role-based publish single-pub async-false at widget  # holds-permission-key-skips-rules
 service key-super-admin publish single-pub async-false at widget  # holds-permission-key-skips-rules
@@ -1083,8 +1129,12 @@ service key-super-admin unpublish single-pub publish-false at widget  # holds-pe
 no-service user-with read collection none at widget  # can-no-service-refuses-people
 no-service user-with read collection returns-true at widget  # can-no-service-refuses-people
 no-service key-role-based read collection returns-false at widget  # holds-permission-key-skips-rules
+no-service key-role-based read collection returns-false at capabilities  # no-service
 no-service key-role-based read collection returns-null at widget  # holds-permission-key-skips-rules
+no-service key-role-based read collection returns-null at capabilities  # no-service
 no-service user-with read single none at widget  # can-no-service-refuses-people
 no-service user-with read single returns-true at widget  # can-no-service-refuses-people
 no-service key-role-based read single returns-false at widget  # holds-permission-key-skips-rules
+no-service key-role-based read single returns-false at capabilities  # no-service
 no-service key-role-based read single returns-null at widget  # holds-permission-key-skips-rules
+no-service key-role-based read single returns-null at capabilities  # no-service
