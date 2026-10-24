@@ -24,11 +24,13 @@ type TextSetting = Extract<WidgetSetting, { type: "text" }>;
 type NumberSetting = Extract<WidgetSetting, { type: "number" }>;
 type CheckboxSetting = Extract<WidgetSetting, { type: "checkbox" }>;
 type SelectSetting = Extract<WidgetSetting, { type: "select" }>;
+type TextareaSetting = Extract<WidgetSetting, { type: "textarea" }>;
 
 expectTypeOf<TextSetting>().toMatchTypeOf<FieldConfig>();
 expectTypeOf<NumberSetting>().toMatchTypeOf<FieldConfig>();
 expectTypeOf<CheckboxSetting>().toMatchTypeOf<FieldConfig>();
 expectTypeOf<SelectSetting>().toMatchTypeOf<FieldConfig>();
+expectTypeOf<TextareaSetting>().toMatchTypeOf<FieldConfig>();
 
 /*
  * The positive control. `Extract` returning `never` would satisfy every
@@ -39,6 +41,7 @@ expectTypeOf<TextSetting>().not.toBeNever();
 expectTypeOf<NumberSetting>().not.toBeNever();
 expectTypeOf<CheckboxSetting>().not.toBeNever();
 expectTypeOf<SelectSetting>().not.toBeNever();
+expectTypeOf<TextareaSetting>().not.toBeNever();
 
 /*
  * 🔴 Assignability is not enough, and the gap is not academic: `toMatchTypeOf`
@@ -56,6 +59,7 @@ type TextField = Extract<FieldConfig, { type: "text" }>;
 type NumberField = Extract<FieldConfig, { type: "number" }>;
 type CheckboxField = Extract<FieldConfig, { type: "checkbox" }>;
 type SelectField = Extract<FieldConfig, { type: "select" }>;
+type TextareaField = Extract<FieldConfig, { type: "textarea" }>;
 
 // `quick` is the one key allowed beyond the field's: the card's header reads
 // it, never `FieldRenderer`, so a renderer that ignores it loses nothing.
@@ -72,9 +76,12 @@ expectTypeOf<
 expectTypeOf<
   Exclude<keyof SelectSetting, keyof SelectField | CardOnly>
 >().toBeNever();
+expectTypeOf<
+  Exclude<keyof TextareaSetting, keyof TextareaField | CardOnly>
+>().toBeNever();
 
 /*
- * The control for the four above, and it is a different one from the control
+ * The control for the five above, and it is a different one from the control
  * for assignability. `Extract` resolving to `never` makes `keyof` the set of
  * ALL property names, so `Exclude` would be enormous rather than empty and the
  * assertions would fail loudly — but `keyof never` is `string | number | symbol`
@@ -85,6 +92,7 @@ expectTypeOf<TextField>().not.toBeNever();
 expectTypeOf<NumberField>().not.toBeNever();
 expectTypeOf<CheckboxField>().not.toBeNever();
 expectTypeOf<SelectField>().not.toBeNever();
+expectTypeOf<TextareaField>().not.toBeNever();
 
 /*
  * The other side of the same promise. The content settings (`collection`,

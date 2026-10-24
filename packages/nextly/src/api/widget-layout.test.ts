@@ -1989,3 +1989,63 @@ describe("a widget that allows one card", () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe("a card's note", () => {
+  const noteWidget = () =>
+    widget({
+      id: "core/notes",
+      settings: [
+        { name: "text", label: "Note", type: "textarea", maxLength: 5 },
+      ],
+    });
+  const placed = (text: string) => [
+    {
+      id: "n",
+      widgetId: "core/notes",
+      width: "full",
+      removed: false,
+      config: { text },
+    },
+  ];
+
+  it("is refused over the length its widget declares, and nothing is saved", async () => {
+    registerWidget(noteWidget());
+    const res = await putWidgetLayout(
+      putReq({ placements: placed("hello!"), version: 0, scope: scopeFor() })
+    );
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain(
+      '\\"Note\\" is at most 5 characters'
+    );
+    expect(saved).toBeUndefined();
+  });
+
+  it("is counted in characters, so five that take ten UTF-16 units fit", async () => {
+    // 🔴 The must-differ case: a bound counted by `length` refuses this.
+    registerWidget(noteWidget());
+    const res = await putWidgetLayout(
+      putReq({
+        placements: placed("😀😀😀😀😀"),
+        version: 0,
+        scope: scopeFor(),
+      })
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("still saves a note it already held, written before the bound was lowered", async () => {
+    registerWidget(noteWidget());
+    stored = {
+      version: 1,
+      layout: serializeLayout(placed("longer than five") as WidgetPlacement[]),
+    };
+    const res = await putWidgetLayout(
+      putReq({
+        placements: placed("longer than five"),
+        version: 1,
+        scope: scopeFor(),
+      })
+    );
+    expect(res.status).toBe(200);
+  });
+});

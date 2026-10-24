@@ -41,7 +41,11 @@ const POSTS = "posts";
 const INTERNAL = "nx_usage_index";
 const HIDDEN = "patterns";
 
-/** The one built-in with a permission: a reader without it may not see it. */
+/**
+ * A built-in gated on reading releases: a reader without the grant may not see
+ * it. It is also offered only once a release exists (`releases:present`), so
+ * each test starts with one.
+ */
 const GATED = "core/upcoming-releases";
 
 interface LayoutRead {
@@ -119,6 +123,12 @@ describeEachDialect("what the add panel is offered", dialect => {
     });
     admin = await account("admin@example.com");
     reader = await account("reader@example.com");
+    // A release, so Upcoming releases' condition holds and its gate alone
+    // decides who is offered it.
+    const nextly = handle!.nextly as unknown as {
+      releases: { create: (a: { title: string }) => Promise<unknown> };
+    };
+    await nextly.releases.create({ title: "Launch" });
     // A cold process: the derived cards below are the refresh's own work.
     clearSources();
     await refreshCollectionWidgets();
