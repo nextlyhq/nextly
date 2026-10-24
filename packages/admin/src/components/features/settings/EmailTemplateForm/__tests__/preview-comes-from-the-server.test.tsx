@@ -88,6 +88,54 @@ describe("the editor previews what the server renders", () => {
     expect(template.preheader).toBe("The line under the subject");
   });
 
+  it("previews a saved template's draft with that template's engine, and its From", async () => {
+    // The id lets the server render a template kept on the previous engine
+    // as it sends; without it, the preview would read it as Liquid.
+    previewDraft.mockResolvedValue({
+      subject: "",
+      html: "",
+      text: "",
+      preheader: "",
+      from: null,
+    });
+
+    renderHook(
+      () =>
+        useDerivedTemplateState({
+          ...INPUT,
+          templateId: "t1",
+          fromOverride: "{{ appName }} <shop@example.com>",
+        }),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(previewDraft).toHaveBeenCalled());
+    const [template] = previewDraft.mock.calls[0] as [
+      { id?: string; fromOverride?: string | null },
+    ];
+    expect(template.id).toBe("t1");
+    expect(template.fromOverride).toBe("{{ appName }} <shop@example.com>");
+  });
+
+  it("shows the preview text and From as the server rendered them", async () => {
+    previewDraft.mockResolvedValue({
+      subject: "Hi Priya",
+      html: "",
+      text: "",
+      preheader: "Your order from Northwind",
+      from: '"Northwind" <shop@example.com>',
+    });
+
+    const { result } = renderHook(() => useDerivedTemplateState(INPUT), {
+      wrapper,
+    });
+
+    await waitFor(() =>
+      expect(result.current.previewPreheader).toBe("Your order from Northwind")
+    );
+    expect(result.current.previewFrom).toBe('"Northwind" <shop@example.com>');
+  });
+
   it("reports a refused render instead of showing a stale one as current", async () => {
     previewDraft.mockRejectedValue(new Error("Preview endpoint unreachable"));
 

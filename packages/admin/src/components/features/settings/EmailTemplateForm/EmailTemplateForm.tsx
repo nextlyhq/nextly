@@ -97,6 +97,7 @@ function ContentColumn({
         record={template}
         ownsContent={owns}
         keptOnOldEngine={keptOnOldEngine}
+        isDirty={form.formState.isDirty}
         undo={acts.undoNote}
         onOverride={() => acts.startAct("override")}
         onReview={() => acts.startAct("review")}
