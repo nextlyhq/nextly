@@ -558,9 +558,11 @@ describe("a Version Packages pull request that went stale", () => {
 
 describe("Turborepo's shared remote cache", () => {
   /*
-   * Only `main`'s pushes and the merge queue write to it: every later run
-   * starts from what they built, and a pull request's own build must not
-   * become an entry another pull request replays. TURBO_CACHE asks for that,
+   * Only `main`'s pushes write to it: every later run starts from what they
+   * built, and a pull request's own build must not become an entry another
+   * pull request replays. The merge queue runs the queued pull requests' code
+   * (its branch is the base plus their changes), so it reads like a pull
+   * request: with the signing key that code could sign an entry it never built. TURBO_CACHE asks for that,
    * but the code under test could ask otherwise, so the credentials are
    * secrets of an environment GitHub admits only those refs to. Each
    * expression is evaluated for the events it meets, not read by spelling.
@@ -580,9 +582,9 @@ describe("Turborepo's shared remote cache", () => {
     const workflow = read(path);
     const holders = Object.entries(workflow.jobs).filter(([, job]) => CREDENTIAL.test(JSON.stringify(job.env ?? {})));
 
-    it(`${path}: main and the queue write, every other run only reads`, () => {
+    it(`${path}: main's pushes write, every other run only reads, the queue's included`, () => {
       expect(valueOf(workflow.env.TURBO_CACHE, MAIN)).toBe("local:rw,remote:rw");
-      expect(valueOf(workflow.env.TURBO_CACHE, QUEUE)).toBe("local:rw,remote:rw");
+      expect(valueOf(workflow.env.TURBO_CACHE, QUEUE)).toBe("local:rw,remote:r");
       expect(valueOf(workflow.env.TURBO_CACHE, PULL)).toBe("local:rw,remote:r");
       expect(valueOf(workflow.env.TURBO_CACHE, DISPATCH)).toBe("local:rw,remote:r");
     });
@@ -592,11 +594,11 @@ describe("Turborepo's shared remote cache", () => {
       expect(holders.length, "jobs that hold the cache credentials").toBeGreaterThan(0);
     });
 
-    it(`${path}: every job holding them names the write environment only on main and in the queue`, () => {
+    it(`${path}: every job holding them names the write environment only for a push to main`, () => {
       for (const [name, job] of holders) {
         expect(job.environment, name).toMatchObject({ deployment: false });
         expect(valueOf(job.environment.name, MAIN), name).toBe("turbo-cache");
-        expect(valueOf(job.environment.name, QUEUE), name).toBe("turbo-cache");
+        expect(valueOf(job.environment.name, QUEUE), name).toBe("turbo-cache-read");
         expect(valueOf(job.environment.name, PULL), name).toBe("turbo-cache-read");
         expect(valueOf(job.environment.name, DISPATCH), name).toBe("turbo-cache-read");
       }

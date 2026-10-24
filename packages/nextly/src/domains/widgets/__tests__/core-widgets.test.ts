@@ -112,28 +112,30 @@ describe("core widget definitions", () => {
    * of these hides a card every authenticated admin can see today, which is the
    * behaviour change that docblock exists to prevent.
    */
-  it("offers the get-started card only while there is nothing to look at", () => {
-    // The card used to hide ITSELF: it was placed, given an order, and then
-    // rendered nothing once seeding was done -- so the arrangement reserved a
-    // slot for a card drawing nothing. The host now answers the part it can,
-    // and the declaration is where that is stated.
-    const seed = CORE_WIDGETS.find(w => w.id === "core/seed-demo-content");
-    expect(seed?.lifecycle).toBe("conditional");
-    // BOTH, and the pair is the point: `content:empty` alone left a reader who
-    // declined the offer still holding the slot, because declining does not
-    // create content.
-    expect(seed?.visibleWhen).toEqual(["content:empty", "seed:unanswered"]);
+  it("declares Get started visible by permission alone: first, full width, dismissible", () => {
+    // 🔴 No condition. Visibility is part of the token a layout write is
+    // checked against, so a card whose visibility followed its steps would
+    // turn a skip or a dismissal into a stale-scope refusal whenever a step
+    // changed between the read and the write. The layout read draws it or
+    // leaves it dormant instead.
+    const card = CORE_WIDGETS.find(w => w.id === "core/get-started");
+    expect(card).toBeDefined();
+    expect(card?.lifecycle ?? "always").toBe("always");
+    expect(card).not.toHaveProperty("visibleWhen");
+    expect(card?.dismissible).toBe(true);
+    expect([card?.minSize, card?.defaultSize, card?.maxSize]).toEqual([
+      "full",
+      "full",
+      "full",
+    ]);
+    const orders = CORE_WIDGETS.map(w => w.defaultOrder ?? Infinity);
+    expect(card?.defaultOrder).toBe(Math.min(...orders));
   });
 
-  it("offers the checklist only while setup is outstanding", () => {
-    // Same move as the card above, for the same reason: this one decided from
-    // `localStorage`, which answered a per-reader question per browser -- the
-    // same person on a second machine met a checklist they had finished.
-    const checklist = CORE_WIDGETS.find(
-      w => w.id === "core/onboarding-checklist"
-    );
-    expect(checklist?.lifecycle).toBe("conditional");
-    expect(checklist?.visibleWhen).toBe("onboarding:incomplete");
+  it("no longer declares the two cards Get started replaced", () => {
+    const ids = CORE_WIDGETS.map(w => w.id);
+    expect(ids).not.toContain("core/seed-demo-content");
+    expect(ids).not.toContain("core/onboarding-checklist");
   });
 
   it("offers the Content card only while there is a collection or a Single to list", () => {
@@ -175,8 +177,6 @@ describe("core widget definitions", () => {
       w => w.lifecycle === "conditional"
     ).map(w => w.id);
     expect(conditional).toEqual([
-      "core/seed-demo-content",
-      "core/onboarding-checklist",
       "core/content",
       "core/quick-create",
       "core/needs-attention",
