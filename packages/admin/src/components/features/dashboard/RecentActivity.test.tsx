@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { act, render, screen, waitFor } from "@admin/__tests__/utils";
 import { useRecentActivity } from "@admin/hooks/queries/useRecentActivity";
-import { Activity } from "@admin/types/dashboard/activity";
+import type { Activity } from "@admin/types/dashboard/activity";
 
 import { RecentActivity } from "./RecentActivity";
 

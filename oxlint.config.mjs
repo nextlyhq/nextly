@@ -291,6 +291,11 @@ export default defineConfig({
     "typescript/no-floating-promises": "error",
     "typescript/no-for-in-array": "error",
     "typescript/no-implied-eval": "error",
+    // Under `verbatimModuleSyntax` an import whose names are all marked `type`
+    // inline (`import { type A } from "./x"`) is kept as `import "./x"`, so the
+    // bundler keeps a module the code never uses. `import type { A }` is
+    // dropped whole.
+    "typescript/no-import-type-side-effects": "error",
     "typescript/no-misused-new": "error",
     "typescript/no-misused-promises": "error",
     "typescript/no-namespace": "error",
