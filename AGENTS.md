@@ -141,7 +141,8 @@ slot left RESERVED: the `working-in-worktrees` skill.
   self-skip when the dialect's URL is unset. Their databases are the
   containers in `docker-compose.test.yml`, which neither `pnpm docker:test`
   nor `pnpm docker:up` starts. NEVER point a TEST\_\* URL at a database you did
-  not create for the run, and never re-enable integration parallelism.
+  not create for the run; parallel integration files need a database per
+  worker.
 - E2E: the root `e2e/` package (Playwright) boots its own playground on :3100
   with a fresh SQLite database per run.
 - Some unit suites have a known pre-existing failing baseline. NEVER add to

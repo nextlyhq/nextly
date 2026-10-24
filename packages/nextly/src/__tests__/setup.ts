@@ -9,6 +9,22 @@ import {
   recordTransactionEscapes,
   takeTransactionEscapes,
 } from "./transaction-escapes";
+import {
+  CLAIMS_ENV,
+  claimWorker,
+  releaseWorker,
+} from "./worker-database-guard";
+
+// This worker's claim on its pool id, and so on its database: a second live
+// worker with the same id fails here, before any file shares a database. Only
+// integration runs set the claims directory (its global setup); a unit run,
+// which loads this file too, has none.
+const claims = process.env[CLAIMS_ENV];
+if (claims) {
+  const poolId = process.env.VITEST_POOL_ID ?? "unknown";
+  claimWorker(claims, poolId);
+  process.once("exit", () => releaseWorker(claims, poolId));
+}
 
 beforeAll(() => {
   // Setup test environment
