@@ -3,9 +3,8 @@
  * screen to it.
  *
  * The violations are enumerated by rule and element rather than counted, so
- * a failure names what to fix. The rule set and the one known shared-chrome
- * defect set aside are stated here once, so every spec scanning an admin
- * screen scans it the same way.
+ * a failure names what to fix. The rule set is stated here once, so every spec
+ * scanning an admin screen scans it the same way.
  *
  * @module e2e/tests/support/axe
  */
@@ -20,19 +19,6 @@ const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
  * declare. The reason is given in full in `builder-a11y.spec.ts`.
  */
 const HOST_OWNED_RULES = ["document-title"];
-
-/**
- * One known defect in the shared chrome, set aside by rule AND place.
- *
- * The sidebar's icon rail shows an icon only on each link, with the name in a
- * tooltip, so axe reports `link-name` on every one of them, on every admin
- * screen. It is a real defect in the admin's shared chrome, filed to be fixed
- * there; when that lands, this goes. Until then the scan drops exactly those
- * results: `link-name` nodes inside the rail. Every other rule still runs on
- * the rail, and `link-name` still fails anywhere else, so a new problem in
- * either place is not hidden the way excluding the element would hide it.
- */
-const KNOWN_DEFECT = { rule: "link-name", within: "aside nav" } as const;
 
 type AxeResults = Awaited<ReturnType<AxeBuilder["analyze"]>>;
 
@@ -59,21 +45,6 @@ function expectScannedSomething(
     measured,
     `axe measured no contrast inside ${scope.include}, so it scanned nothing`
   ).toBeGreaterThan(0);
-}
-
-/** Whether one flagged element is the known shared-chrome defect. */
-async function isKnownDefect(
-  page: Page,
-  rule: string,
-  selector: string
-): Promise<boolean> {
-  if (rule !== KNOWN_DEFECT.rule) return false;
-  // Asked of the page itself: a selector alone cannot say where its element
-  // sits.
-  return page.evaluate(
-    ([sel, within]) => document.querySelector(sel)?.closest(within) != null,
-    [selector, KNOWN_DEFECT.within] as const
-  );
 }
 
 /**
@@ -111,17 +82,14 @@ export async function expectNoAxeViolations(
   );
   const results = await builder.analyze();
   expectScannedSomething(results, scope);
-  const findings = [];
-  for (const v of results.violations) {
-    const targets: string[] = [];
-    for (const node of v.nodes) {
-      const selector = node.target.map(String).join(" ");
-      if (!(await isKnownDefect(page, v.id, selector))) targets.push(selector);
-    }
-    if (targets.length > 0) {
-      findings.push({ id: v.id, impact: v.impact ?? "unknown", targets });
-    }
-  }
+  // Every violation and every target is kept: nothing is set aside by rule
+  // or place, so the scan judges the sidebar rail like any other region of
+  // the page.
+  const findings = results.violations.map(v => ({
+    id: v.id,
+    impact: v.impact ?? "unknown",
+    targets: v.nodes.map(node => node.target.map(String).join(" ")),
+  }));
   expect(
     findings,
     `axe reported ${findings.length} violation(s):\n${JSON.stringify(findings, null, 2)}`
