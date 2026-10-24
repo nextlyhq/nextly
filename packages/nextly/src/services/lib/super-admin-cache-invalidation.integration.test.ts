@@ -26,6 +26,10 @@ import { getDialectTables } from "../../database/index";
 import { container } from "../../di/container";
 import { ApiKeyService } from "../../domains/auth/services/api-key-service";
 import { PermissionService } from "../../domains/auth/services/permission-service";
+import {
+  createStoredPermissionAnswersTable,
+  insertRow,
+} from "../../init/__tests__/retired-auth-tables-fixture";
 
 import {
   inPermissionSweep,
@@ -43,6 +47,40 @@ import {
 } from "./rbac-epoch";
 
 let harness: TestNextly | undefined;
+
+/**
+ * An upgraded database's retired `user_permission_cache`, holding one stored
+ * "yes" for `userId`, as an instance on an earlier release would have filed it.
+ */
+async function leftoverStoredAnswers(userId: string): Promise<void> {
+  await createStoredPermissionAnswersTable(harness!.adapter, "sqlite");
+  await insertRow(harness!.adapter, "sqlite", "user_permission_cache", [
+    `${userId}|read|notes`,
+    userId,
+    "read",
+    "notes",
+    1,
+    "[]",
+    Date.now() + 300_000,
+    Date.now(),
+  ]);
+}
+
+/** The stored answers an earlier release would still read. */
+async function storedAnswerCount(): Promise<number> {
+  const rows = (await harness!.adapter.executeQuery(
+    "SELECT COUNT(*) AS n FROM user_permission_cache"
+  )) as Array<{ n: number | string }> | { rows: Array<{ n: number | string }> };
+  const list = Array.isArray(rows) ? rows : rows.rows;
+  return Number(list[0]?.n);
+}
+
+/** Make every delete from the stored answers fail, as an unwritable table would. */
+async function refuseEmptyingStoredAnswers(): Promise<void> {
+  await harness!.adapter.executeQuery(
+    "CREATE TRIGGER upc_refuse BEFORE DELETE ON user_permission_cache BEGIN SELECT RAISE(ABORT, 'refused'); END"
+  );
+}
 
 function rawDb() {
   return harness!.adapter.getDrizzle() as unknown as {
@@ -396,6 +434,25 @@ describe("an API key's grants are retired when the roles behind them change", ()
     expect(await grants()).not.toContain(ONLY_IN_THE_CATALOGUE);
   });
 
+  it("loses it here when the stored answers could not be emptied, though nothing is announced", async () => {
+    // A failed emptying withholds the epoch from every other instance, so the
+    // epoch alone would let this process's own copy of the key's grants stand
+    // for the rest of their life. This process knows the roles changed
+    // whatever the stored answers did.
+    await seedDeputy();
+    expect(await grants()).toContain(ONLY_IN_THE_CATALOGUE);
+    await revokeInheritance();
+    await leftoverStoredAnswers(OWNER);
+    await refuseEmptyingStoredAnswers();
+    const before = rbacRevision();
+
+    await invalidateAllPermissionCaches();
+
+    // POPULATION CONTROL: the failure path ran, so nothing was announced.
+    expect(rbacRevision()).toBe(before);
+    expect(await grants()).not.toContain(ONLY_IN_THE_CATALOGUE);
+  });
+
   it("loses it when a PERMISSION row changes, which names neither", async () => {
     // A permission belongs to no user and no role, so neither hint above can
     // express it, and `PermissionService`'s own update and delete called
@@ -546,6 +603,44 @@ describe("an API key's grants are retired when the roles behind them change", ()
  * permission, each publish after the first retiring access the previous one
  * had already retired.
  */
+/**
+ * An upgraded database keeps the retired `user_permission_cache` until the
+ * operator drops it, and an instance still on an earlier release reads it,
+ * even one upgrading past the release in between. The epoch tells that
+ * instance only to drop what it holds in memory, so the stored answers are
+ * emptied first, and a failure to empty them publishes nothing.
+ */
+describe("the retired stored answers, while an upgraded database has them", () => {
+  it("empties them on an access change, and then announces it", async () => {
+    const userId = `stored-${randomUUID()}`;
+    await leftoverStoredAnswers(userId);
+    expect(await storedAnswerCount()).toBe(1);
+    const before = rbacRevision();
+
+    await invalidatePermissionCache({ userId });
+
+    // What an earlier release reads after the revocation: nothing to serve.
+    expect(await storedAnswerCount()).toBe(0);
+    expect(rbacRevision()).not.toBe(before);
+  });
+
+  it("announces nothing when they could not be emptied", async () => {
+    // Announcing anyway is worse than silence: an instance on an earlier
+    // release rejects its in-memory answer BECAUSE the epoch moved, reads the
+    // stored row the failure left live, and files it under the new epoch.
+    const userId = `stored-${randomUUID()}`;
+    await leftoverStoredAnswers(userId);
+    await refuseEmptyingStoredAnswers();
+    const before = rbacRevision();
+
+    await invalidatePermissionCache({ userId });
+
+    // POPULATION CONTROL: the row is still there, so the emptying did fail.
+    expect(await storedAnswerCount()).toBe(1);
+    expect(rbacRevision()).toBe(before);
+  });
+});
+
 describe("a sweep of permission writes", () => {
   it("files nothing as current while the batch is open", async () => {
     // A resolution running alongside the batch has to be refused. What refuses
