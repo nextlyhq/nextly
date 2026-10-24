@@ -45,6 +45,13 @@ import {
 
 // ── Module mocks ──────────────────────────────────────────────────────────
 
+// Where a refusal's reason is recorded, watched rather than written.
+const recordedRefusals = vi.hoisted(() => vi.fn());
+vi.mock("../../../auth/access/refusal-message", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  recordRefusalReason: recordedRefusals,
+}));
+
 // The caller the collection gate decides for: a signed-in user's actions are
 // set per test (`callerMay`), and every test starts from one holding all.
 vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
@@ -345,6 +352,29 @@ describe("CollectionEntryService — Access Control Contracts", () => {
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(403);
       expect(result.message).toBe("You can't edit this entry.");
+    });
+  });
+
+  describe("a batch refused as a whole", () => {
+    it("records the refusal it folds into every item", async () => {
+      recordedRefusals.mockClear();
+      const rbac = createMockRbacAccessControlService();
+      callerMay();
+      const { service } = buildService({ rbacAccessControlService: rbac });
+
+      const result = await service.createEntries(
+        { collectionName: "posts", user: { id: "user-1" } },
+        [{ title: "a" }, { title: "b" }]
+      );
+
+      expect(result).toMatchObject({ successful: 0, failed: 2 });
+      expect(recordedRefusals).toHaveBeenCalledTimes(1);
+      expect(recordedRefusals).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 403,
+          reason: "the caller may not create posts",
+        })
+      );
     });
   });
 

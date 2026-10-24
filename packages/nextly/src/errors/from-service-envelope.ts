@@ -117,6 +117,22 @@ function validationFromEnvelope(
 }
 
 /**
+ * Record an access gate's refusal, from the reason its envelope carries, where
+ * the refusal reaches its caller: here when it is converted to the caller's
+ * error, or where a boundary answers with it some other way, such as a batch
+ * reporting every item refused. A failure that is not a gate's refusal
+ * carries no reason and records nothing.
+ */
+export function recordServiceRefusal(envelope: ServiceErrorEnvelope): void {
+  if (envelope.refusalReason === undefined) return;
+  recordRefusalReason({
+    status: envelope.statusCode ?? NEXTLY_ERROR_STATUS.FORBIDDEN,
+    code: envelope.code ?? "FORBIDDEN",
+    reason: envelope.refusalReason,
+  });
+}
+
+/**
  * Turn a failed service envelope back into the error that produced it.
  *
  * This is the ONLY place that knows how. Every boundary that hands a service
@@ -154,13 +170,7 @@ export function errorFromServiceEnvelope(
     cause
   );
   // The refusal reaches its caller here, so it is recorded here, once.
-  if (refusalReason !== undefined) {
-    recordRefusalReason({
-      status: rebuilt.statusCode,
-      code: String(rebuilt.code),
-      reason: refusalReason,
-    });
-  }
+  recordServiceRefusal(envelope);
   // Decided here, on the rebuilt error, because every boundary rebuilds
   // through this function: a busy read in a post-commit step reaches it from a
   // collection write and a Single write alike, already flattened to a code.
