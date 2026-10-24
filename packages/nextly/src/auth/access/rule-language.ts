@@ -28,6 +28,7 @@ import {
   isFieldGroupFieldType,
 } from "../../domains/field-groups/storage/field-group-field-type";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
+import { appLocalization } from "../../domains/i18n/configured-locales";
 import {
   EVERY_LOCALE,
   EVERY_TRANSLATION,
@@ -162,11 +163,19 @@ function registeredContent(): RegisteredContent | undefined {
 }
 
 /**
- * The site's languages, from the configuration the services were registered
- * with, or none before any are registered.
+ * The site's languages as they are now (`appLocalization`): the language
+ * registry's list once services are registered, so a site whose languages are
+ * stored in Settings rather than declared in its configuration tells its rules
+ * every one of them, and the configuration's block before then. None before
+ * anything is registered.
  */
 function registeredLocalization(): SanitizedLocalizationConfig | undefined {
-  return registeredContent()?.localization;
+  try {
+    return appLocalization();
+  } catch {
+    // The container is not initialized; the site has no languages yet.
+    return undefined;
+  }
 }
 
 /**
