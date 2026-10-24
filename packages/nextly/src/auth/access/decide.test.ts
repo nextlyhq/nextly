@@ -344,16 +344,16 @@ describe("a publish or an unpublish", () => {
     access: { update: () => false },
   };
 
-  it("must also satisfy the update rule", async () => {
+  it("is judged by its own rule, not the update rule", async () => {
     for (const action of ["publish", "unpublish"] as const) {
       expect(await decide(callers["user-with"], action, updateRefuses)).toEqual(
-        { allowed: false, reason: "update-rule-refused" }
+        { allowed: true }
       );
     }
-    // The control: the same target lets the caller read and create.
+    // The control: the update rule still refuses an update.
     expect(
-      (await decide(callers["user-with"], "read", updateRefuses)).allowed
-    ).toBe(true);
+      (await decide(callers["user-with"], "update", updateRefuses)).allowed
+    ).toBe(false);
   });
 
   it("needs its own permission, not update's", async () => {
@@ -388,7 +388,7 @@ describe("a publish or an unpublish", () => {
     }
   });
 
-  it("names an update rule that failed apart from one that refused", async () => {
+  it("is not refused by an update rule that fails", async () => {
     for (const rule of ["throws", "async-rejects"] as const) {
       const updateFails: AccessTarget = {
         kind: "collection",
@@ -397,11 +397,11 @@ describe("a publish or an unpublish", () => {
       };
       expect(
         await decide(callers["user-with"], "publish", updateFails)
-      ).toEqual({ allowed: false, reason: "update-rule-threw" });
+      ).toEqual({ allowed: true });
     }
   });
 
-  it("needs the update permission as well, since it changes the entry", async () => {
+  it("needs its own permission alone, not the update permission as well", async () => {
     const publisher = userActor({
       userId: "u5",
       roles: ["publisher"],
@@ -409,11 +409,10 @@ describe("a publish or an unpublish", () => {
     });
     const posts = postsWith("absent");
     for (const action of ["publish", "unpublish"] as const) {
-      expect(await decide(publisher, action, posts)).toEqual({
-        allowed: false,
-        reason: "no-permission",
-      });
+      expect(await decide(publisher, action, posts)).toEqual({ allowed: true });
     }
+    // The control: the same caller may not update.
+    expect((await decide(publisher, "update", posts)).allowed).toBe(false);
   });
 });
 
@@ -589,39 +588,25 @@ describe("the judge seam", () => {
     expect(rule).not.toHaveBeenCalled();
   });
 
-  it("asks each rule once, and the update rule only after the action's own allows", async () => {
-    const publish = vi.fn(() => false);
-    const update = vi.fn(() => true);
+  it("asks a publish's own rule once, and never the update rule", async () => {
+    const publish = vi.fn(() => true);
+    const update = vi.fn(() => false);
     const target: AccessTarget = {
       kind: "collection",
       slug: "posts",
       access: { publish, update },
     };
-    const refused = await askRules(callers["user-with"], "publish", target);
-    expect(refused).toEqual({ action: { declared: true, value: false } });
-    expect(update).not.toHaveBeenCalled();
-    publish.mockReturnValue(true);
     expect(await askRules(callers["user-with"], "publish", target)).toEqual({
       action: { declared: true, value: true },
-      update: { declared: true, value: true },
     });
-    expect(publish).toHaveBeenCalledTimes(2);
-    expect(update).toHaveBeenCalledTimes(1);
-  });
-
-  it("refuses to judge a publish whose update rule was not asked", () => {
-    // The update rule may refuse the change; judging without it would allow
-    // a publish it never saw.
-    const target: AccessTarget = {
-      kind: "collection",
-      slug: "posts",
-      access: { publish: () => true, update: () => false },
-    };
-    expect(() =>
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(update).not.toHaveBeenCalled();
+    // And the judgement allows on that one answer.
+    expect(
       judge(callers["user-with"], "publish", target, {
         action: { declared: true, value: true },
-      })
-    ).toThrow();
+      }).allowed
+    ).toBe(true);
   });
 
   it("refuses to judge a question whose rules were not asked", () => {

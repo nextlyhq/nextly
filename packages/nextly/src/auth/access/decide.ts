@@ -11,9 +11,8 @@
  * - a super-admin passes every collection and Single rule;
  * - everyone else needs the permission for the action, AND, where the target
  *   declares a rule for the action, a rule that answers exactly `true`. A
- *   publish or an unpublish is judged on top of update: it needs the update
- *   permission as well as its own, and where the target declares an update
- *   rule, that rule must answer `true` too.
+ *   publish or an unpublish is judged by its own permission and its own rule,
+ *   as any other action is.
  *
  * The decision makes no queries: the actor already carries everything it
  * reads. It never knows which way in asked, and each way in presents the
@@ -63,9 +62,7 @@ export type RefusalReason =
   | "principal-without-rule"
   | "no-permission"
   | "rule-refused"
-  | "rule-threw"
-  | "update-rule-refused"
-  | "update-rule-threw";
+  | "rule-threw";
 
 /**
  * Allowed, or refused with the reason. `filter` is where a rule's row filter
@@ -153,13 +150,11 @@ const isLifecycle = (action: AccessAction) =>
   action === "publish" || action === "unpublish";
 
 /**
- * What the target's rules answered for one question: the action's own rule,
- * and, for a publish or an unpublish its own rule let through, the update
- * rule as well. A rule the judgement never reaches is never asked.
+ * What the target's rules answered for one question: the action's own rule.
+ * A rule the judgement never reaches is never asked.
  */
 export interface RuleOutcomes {
   readonly action: RuleOutcome;
-  readonly update?: RuleOutcome;
 }
 
 /**
@@ -192,10 +187,6 @@ function permissionRefusal(
   if (!holdsPermission(actor, action, target.slug)) {
     return refuse("no-permission");
   }
-  // A publish or an unpublish changes the entry, so it is an update first.
-  if (isLifecycle(action) && !holdsPermission(actor, "update", target.slug)) {
-    return refuse("no-permission");
-  }
   return null;
 }
 
@@ -214,13 +205,7 @@ export async function askRules(
   if (actor.kind === "system" || beforeRules(actor, action, target)) {
     return null;
   }
-  const outcome = await askRule(actor, action, target);
-  if (actor.kind === "principal" || !isLifecycle(action)) {
-    return { action: outcome };
-  }
-  // The update rule is read only when the action's own rule lets it through.
-  if (ruleRefusal(outcome)) return { action: outcome };
-  return { action: outcome, update: await askRule(actor, "update", target) };
+  return { action: await askRule(actor, action, target) };
 }
 
 /**
@@ -250,24 +235,7 @@ export function judge(
     return refusal ? refuse(refusal) : ALLOW;
   }
   const refusal = ruleRefusal(outcomes.action);
-  if (refusal) return refuse(refusal);
-  if (isLifecycle(action)) {
-    // A change judged without its update rule could be one that rule refuses.
-    if (!outcomes.update) {
-      throw NextlyError.internal({
-        logContext: {
-          reason: "access-update-rule-not-asked",
-          action,
-          target: target.slug,
-        },
-      });
-    }
-    const update = ruleRefusal(outcomes.update);
-    // Kept apart, so the log tells a failing update rule from a refusing one.
-    if (update === "rule-threw") return refuse("update-rule-threw");
-    if (update) return refuse("update-rule-refused");
-  }
-  return ALLOW;
+  return refusal ? refuse(refusal) : ALLOW;
 }
 
 export async function decide(
