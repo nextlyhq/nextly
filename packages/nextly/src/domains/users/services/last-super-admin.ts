@@ -145,11 +145,14 @@ export async function refuseRemovingLastSuperAdmin(
   tx: LastSuperAdminTx,
   tables: FirstAdministratorTables,
   dialect: SupportedDialect,
-  change: SuperAdminChange
+  requested: SuperAdminChange
 ): Promise<void> {
   const superAdminRoleId = await lockSuperAdminRole(tx, tables, dialect);
   // No role, no super-admin to protect.
   if (superAdminRoleId === undefined) return;
+  // Judged by the ids as stored, which every read below returns, so the
+  // comparisons with them are exact.
+  const change = await storedSpelling(tx, tables, dialect, requested);
 
   const { roleInherits } = tables;
   const edges = (
@@ -219,6 +222,74 @@ export async function refuseRemovingLastSuperAdmin(
       ...("roleId" in change ? { roleId: change.roleId } : {}),
     },
   });
+}
+
+/**
+ * `change` with every id it names in the spelling the database stores.
+ *
+ * MySQL matches ids case-insensitively, so a request can name a row in a
+ * spelling other than the one its reads return, and the comparisons below are
+ * exact. So each id is read back through the database's own matching first,
+ * and the change is judged by the ids as stored. PostgreSQL and SQLite match
+ * ids exactly, as the comparisons here do, so there it is the change as
+ * given. An id that names no row is kept as given: it removes nothing.
+ */
+async function storedSpelling(
+  tx: LastSuperAdminTx,
+  tables: LastSuperAdminTables,
+  dialect: SupportedDialect,
+  change: SuperAdminChange
+): Promise<SuperAdminChange> {
+  if (dialect !== "mysql") return change;
+  const stored = async (
+    table: { id: Column },
+    id: string | number
+  ): Promise<string> => {
+    const [row] = await tx
+      .select({ id: table.id })
+      .from(table)
+      .where(eq(table.id, String(id)))
+      .limit(1);
+    return row ? String(row.id) : String(id);
+  };
+  const user = (id: string | number) => stored(tables.users, id);
+  const role = (id: string | number) => stored(tables.roles, id);
+  const roles = async (ids: readonly string[]): Promise<string[]> => {
+    const out: string[] = [];
+    for (const id of ids) out.push(await role(id));
+    return out;
+  };
+  switch (change.kind) {
+    case "delete":
+    case "deactivate":
+      return { ...change, userId: await user(change.userId) };
+    case "replaceRoles":
+      return {
+        ...change,
+        userId: await user(change.userId),
+        roleIds: await roles(change.roleIds),
+      };
+    case "unassignRole":
+      return {
+        ...change,
+        userId: await user(change.userId),
+        roleId: await role(change.roleId),
+      };
+    case "removeInheritance":
+      return {
+        ...change,
+        parentRoleId: await role(change.parentRoleId),
+        childRoleId: await role(change.childRoleId),
+      };
+    case "replaceChildren":
+      return {
+        ...change,
+        roleId: await role(change.roleId),
+        childRoleIds: await roles(change.childRoleIds),
+      };
+    case "deleteRole":
+      return { ...change, roleId: await role(change.roleId) };
+  }
 }
 
 /** One role inheriting another: `parent` holds everything `child` does. */

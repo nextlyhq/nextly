@@ -30,3 +30,5 @@
 ---
 
 Only a super-admin can delete or deactivate the account of a super-admin while another super-admin remains. An admin who may delete or change users but is not a super-admin, and every API key, is refused with `403`, as removing the role already is. Server code with no request caller is unaffected, and the last active super-admin stays protected from everyone.
+
+A change to an account or a role is judged by the ids as stored.
