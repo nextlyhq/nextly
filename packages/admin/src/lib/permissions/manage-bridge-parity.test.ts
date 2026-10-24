@@ -17,13 +17,35 @@ import { describe, expect, it } from "vitest";
 import { manageCounts } from "../../../../nextly/src/auth/access/manage-bridge";
 import { SYSTEM_RESOURCES } from "../../../../nextly/src/schemas/_zod/rbac";
 
-import { MANAGE_BRIDGE_RESOURCES } from "./levels";
+import { MANAGE_BRIDGE_RESOURCES, levelOf, standardActions } from "./levels";
+
+/** Every access operation, so an action core starts counting is seen here. */
+const OPERATIONS = [
+  "create",
+  "read",
+  "update",
+  "delete",
+  "publish",
+  "unpublish",
+] as const;
 
 describe("the resources whose manage stands for edit", () => {
-  it("are exactly the ones core counts manage on", () => {
-    const core = SYSTEM_RESOURCES.filter(resource =>
-      manageCounts("update", resource)
-    ).sort();
-    expect([...MANAGE_BRIDGE_RESOURCES].sort()).toEqual(core);
-  });
+  it.each([...SYSTEM_RESOURCES])(
+    "counts manage on %s as the same actions core does",
+    resource => {
+      // What core lets `manage-<resource>` stand for, action by action.
+      const core = OPERATIONS.filter(action => manageCounts(action, resource));
+      // What the admin reads it as: the actions of the level it shows for a
+      // row holding manage alone, read over the actions that level decides.
+      const level = levelOf("system", ["manage"], resource);
+      const admin =
+        level === "edit"
+          ? OPERATIONS.filter(action =>
+              standardActions("system", resource).has(action)
+            )
+          : [];
+      expect(admin).toEqual(core);
+      expect(MANAGE_BRIDGE_RESOURCES.has(resource)).toBe(core.length > 0);
+    }
+  );
 });
