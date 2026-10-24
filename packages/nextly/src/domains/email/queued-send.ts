@@ -112,6 +112,12 @@ export type QueuedMessage =
       to: string | string[];
       variables: Record<string, unknown>;
       options: TemplateOptions;
+      /**
+       * The copies the template added when it was queued. Sent as the
+       * template has them at each attempt; held here, sealed with the
+       * message, so erasing one finds the email, across every re-seal.
+       */
+      templateCopies?: { cc: string[]; bcc: string[] };
     };
 
 /** The queue's table for a dialect. */
@@ -455,14 +461,16 @@ function queuedRecipients(
     message.kind === "message"
       ? message.send
       : { to: message.to, ...message.options };
+  const templateCopies =
+    message.kind === "template" ? message.templateCopies : undefined;
   const of = (kind: "to" | "cc" | "bcc", list: readonly unknown[]) =>
     list
       .filter((address): address is string => typeof address === "string")
       .map(address => ({ kind, address }));
   return [
     ...of("to", toAddressList(to)),
-    ...of("cc", cc ?? []),
-    ...of("bcc", bcc ?? []),
+    ...of("cc", [...(cc ?? []), ...(templateCopies?.cc ?? [])]),
+    ...of("bcc", [...(bcc ?? []), ...(templateCopies?.bcc ?? [])]),
   ];
 }
 

@@ -1686,9 +1686,16 @@ export class EmailService extends BaseService {
     tx: TxOption["tx"],
     operation: string
   ): Promise<QueuedEmail> {
+    const sealed: QueuedMessage =
+      message.kind === "template"
+        ? {
+            ...message,
+            templateCopies: await this.queuedTemplateCopies(message.slug),
+          }
+        : message;
     const input = (person: PrincipalRef | null) => ({
       scope: this.keyScope,
-      message,
+      message: sealed,
       person,
       secrets: pluginSettingsSecrets(env),
       lockServer: rowLockServer(this.adapter, this.dialect),
@@ -2007,24 +2014,54 @@ export class EmailService extends BaseService {
       (template?.replyTo != null
         ? renderTemplateReplyTo(template.replyTo, variables, slug)
         : undefined);
-    let copies = given.templateCopies
-      ? { cc: template?.cc ?? null, bcc: template?.bcc ?? null }
-      : { cc: null, bcc: null };
-    if (template?.carriesSecret && (copies.cc?.length || copies.bcc?.length)) {
-      this.logger.warn(
-        "Left out an email template's copies: the template carries a secret",
-        { slug }
-      );
-      copies = { cc: null, bcc: null };
-    }
     return {
       from,
       replyTo,
       ...withTemplateCopies(
         { to: given.to, cc: given.cc, bcc: given.bcc },
-        copies
+        given.templateCopies
+          ? this.templateCopies(template, slug)
+          : { cc: null, bcc: null }
       ),
     };
+  }
+
+  /**
+   * The copies a template adds to every send: its stored `cc` and `bcc`,
+   * none on a template that carries a secret.
+   */
+  private templateCopies(
+    template: EmailTemplateRecord | null,
+    slug: string
+  ): { cc: string[] | null; bcc: string[] | null } {
+    const copies = { cc: template?.cc ?? null, bcc: template?.bcc ?? null };
+    if (template?.carriesSecret && (copies.cc?.length || copies.bcc?.length)) {
+      this.logger.warn(
+        "Left out an email template's copies: the template carries a secret",
+        { slug }
+      );
+      return { cc: null, bcc: null };
+    }
+    return copies;
+  }
+
+  /**
+   * The copies a queued template email will be sent with, as the template
+   * has them now, so erasing a copied address finds the email. None when the
+   * template cannot be read, as a send falls back to the site's code version
+   * then too.
+   */
+  private async queuedTemplateCopies(
+    slug: string
+  ): Promise<{ cc: string[]; bcc: string[] }> {
+    let template: EmailTemplateRecord | null = null;
+    try {
+      ({ template } = await this.templateService.resolveForSend(slug));
+    } catch {
+      return { cc: [], bcc: [] };
+    }
+    const copies = this.templateCopies(template, slug);
+    return { cc: copies.cc ?? [], bcc: copies.bcc ?? [] };
   }
 
   /** The site's code version of a template, from `email.templates`, if it sets one. */

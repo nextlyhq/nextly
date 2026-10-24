@@ -337,6 +337,55 @@ describe.each(getConfiguredTestDialects())(
       expect(await recipientsOf(t, result.id)).toEqual([]);
     });
 
+    it("is cancelled when a copy its template adds is erased", async () => {
+      // A template's own cc and bcc are added at send time; queued, the
+      // email must still be found by them.
+      const t = await boot(dialect);
+      await t.nextly.emailTemplates.create({
+        data: {
+          name: "With copies",
+          slug: "with-copies",
+          subject: "Hello",
+          htmlContent: "<p>hi</p>",
+          isActive: true,
+          cc: ["template-copy@example.com"],
+        },
+      } as never);
+      behaviour.failures = Number.MAX_SAFE_INTEGER;
+      const result = await t.nextly.email.queueWithTemplate({
+        template: "with-copies",
+        to: SHARED,
+        variables: {},
+      });
+      expect(result.state).toBe("waiting");
+      // The first attempt did copy the template's address.
+      expect(calls[0]?.cc).toEqual(["template-copy@example.com"]);
+
+      // And it is still found after the secret rotates and the message is
+      // sealed again, which re-keys every recipient's digest.
+      const original = process.env.NEXTLY_SECRET ?? "";
+      const rotated = "rotated-secret-at-least-32-characters-long!!";
+      try {
+        process.env.NEXTLY_SECRET = rotated;
+        _resetEnvCache();
+        expect(
+          await resealQueuedMessages(t.adapter, [rotated, original])
+        ).toEqual({ resealed: 1, unreadable: 0 });
+        await new EmailDeliveryService(
+          t.adapter as never,
+          logger as never
+        ).eraseRecipient("template-copy@example.com");
+      } finally {
+        process.env.NEXTLY_SECRET = original;
+        _resetEnvCache();
+      }
+
+      expect(await queued(t, result.id)).toMatchObject({
+        state: "cancelled",
+        message: null,
+      });
+    });
+
     it("has its recipients' digests removed with it when it is pruned", async () => {
       const t = await boot(dialect);
       const result = await t.nextly.email.queue({ ...message, to: SHARED });
