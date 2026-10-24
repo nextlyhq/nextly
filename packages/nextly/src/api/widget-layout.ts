@@ -78,7 +78,6 @@ import {
   type WidgetRetirements,
 } from "../domains/widgets/layout";
 import { readableCollectionsOf } from "../domains/widgets/publish";
-import { getWidget } from "../domains/widgets/registry";
 import type { TextBound } from "../domains/widgets/settings";
 import { widgetAudience } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
@@ -298,6 +297,22 @@ async function getLayoutService(): Promise<WidgetLayoutService> {
  * The probe the conditions read through is returned, so the Get started steps
  * share its reads rather than resolving the same collections again.
  */
+/**
+ * Each visible widget's Collection-setting default, as a token input: a plugin
+ * changing one moves a card from withheld to shown with no widget id, gate or
+ * readable collection changing, and a snapshot taken before must be refused.
+ */
+function collectionDefaults(widgets: readonly CanonicalWidget[]): string[] {
+  return widgets.flatMap(widget => {
+    const setting = widget.collectionSetting as
+      | { defaultValue?: unknown }
+      | undefined;
+    return setting === undefined
+      ? []
+      : [`${widget.id}=${JSON.stringify(setting.defaultValue ?? null)}`];
+  });
+}
+
 async function visibleWidgets(auth: AuthContext) {
   const reader = await readCaller(auth);
   const caller = readAccessCaller(reader);
@@ -328,16 +343,17 @@ async function visibleWidgets(auth: AuthContext) {
       count === undefined ? undefined : widthFacts(count).allowedWidths
     ),
     // A card set to a collection this reader may not read, withheld as a card
-    // of a widget they may not see is. Settings are read from the registered
-    // definitions, which the canonical summary does not carry.
-    withheld: unreadableCollectionCard(
-      collectionWidgets(widgets.map(widget => getWidget(widget.id) ?? widget)),
-      readable
-    ),
+    // of a widget they may not see is, judged by the Collection setting the
+    // canonical summary carries from either channel.
+    withheld: unreadableCollectionCard(collectionWidgets(widgets), readable),
+    // Over everything that decides what is withheld: the widgets, the gates,
+    // the collections this reader may read, and each Collection setting's
+    // default, which decides a card that stores no value.
     scope: visibilityToken(
       widgets.map(widget => widget.id),
       audience.heldActionGates,
-      readable
+      readable,
+      collectionDefaults(widgets)
     ),
   };
 }

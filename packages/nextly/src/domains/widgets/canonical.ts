@@ -149,6 +149,13 @@ export interface CanonicalWidget {
    */
   textBounds?: readonly TextBound[];
   /**
+   * The declaration's Collection setting, from either channel (a widget states
+   * at most one), so the layout read and write judge which collection a card
+   * reads by the declaration the admin draws, whichever channel stated it.
+   * Absent when the declaration states none.
+   */
+  collectionSetting?: AnyWidgetSetting;
+  /**
    * The gates INSIDE the declaration: one per action of an `actions` widget,
    * verbatim, `undefined` where the action declares none, and a declared
    * widget's empty-state action's, when it has one.
@@ -226,6 +233,7 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
     ],
     ...(Object.fromEntries(stated) as Partial<CanonicalWidget>),
     ...textBoundsField(definition.settings),
+    ...collectionSettingField(definition.settings),
   };
 }
 
@@ -239,6 +247,19 @@ export function textBoundsField(
 ): Pick<CanonicalWidget, "textBounds"> {
   const textBounds = textBoundsOf(settings);
   return textBounds === undefined ? {} : { textBounds };
+}
+
+/**
+ * A declaration's Collection setting as a summary field: absent when it states
+ * none, so a merge reads the other channel's, as `textBounds` does.
+ */
+export function collectionSettingField(
+  settings: readonly AnyWidgetSetting[] | undefined
+): Pick<CanonicalWidget, "collectionSetting"> {
+  const collectionSetting = settings?.find(
+    setting => setting.type === "collection"
+  );
+  return collectionSetting === undefined ? {} : { collectionSetting };
 }
 
 /**
@@ -309,6 +330,26 @@ function lifecycleFallback(
  * the plugin's, so a search still finds the row by them. Only the contribution channel names a
  * plugin, so an override leaves the widget under the plugin its users look for it in.
  */
+/**
+ * The fields read from a declaration's settings, by the admin's own rule for
+ * settings: the registration's wherever it states any, else the
+ * contribution's. Dropped by the spread in `mergeCanonical`, a merged widget's
+ * sheet would bound a note its layout write let through, and a card would be
+ * judged by a Collection setting the admin does not draw.
+ */
+function settingsFallback(
+  contribution: CanonicalWidget,
+  registration: CanonicalWidget
+): Pick<CanonicalWidget, "textBounds" | "collectionSetting"> {
+  const textBounds = registration.textBounds ?? contribution.textBounds;
+  const collectionSetting =
+    registration.collectionSetting ?? contribution.collectionSetting;
+  return {
+    ...(textBounds === undefined ? {} : { textBounds }),
+    ...(collectionSetting === undefined ? {} : { collectionSetting }),
+  };
+}
+
 function addPanelFallback(
   contribution: CanonicalWidget,
   registration: CanonicalWidget
@@ -338,10 +379,6 @@ function mergeCanonical(
   // declaration says nothing about it, which is exactly the two-implementations
   // divergence this function exists to prevent.
   const dismissible = registration.dismissible ?? contribution.dismissible;
-  // The admin's own rule for settings: the registration's wherever it states
-  // any, else the contribution's. Dropped by the spread below, a merged
-  // widget's sheet would bound a note its layout write let through.
-  const textBounds = registration.textBounds ?? contribution.textBounds;
   return {
     // The contribution's explicit width terms, field by field, wherever the
     // registration states none: spread first, so any the registration states
@@ -353,7 +390,7 @@ function mergeCanonical(
     ...(defaultOrder === undefined ? {} : { defaultOrder }),
     ...(defaultHeight === undefined ? {} : { defaultHeight }),
     ...(dismissible === undefined ? {} : { dismissible }),
-    ...(textBounds === undefined ? {} : { textBounds }),
+    ...settingsFallback(contribution, registration),
     ...addPanelFallback(contribution, registration),
     ...lifecycleFallback(contribution, registration),
     // Both copies' action gates, because both copies ship: the payload carries

@@ -47,12 +47,15 @@ describe("which collection a saved card's id resolves to", () => {
     ).toEqual({ kind: "none" });
   });
 
-  it("names none when the install holds two collections the id spells, though the reader may read only one", () => {
-    // 🔴 The card may have been the one they may not read, now hidden or
-    // without a source: naming the readable one would draw the wrong number.
+  it("names the one readable match even when an unreadable collection spells the same id", () => {
+    // 🔴 Counting the unreadable one would set the card to none here and to
+    // `a-b` without it, telling the reader that collection exists.
     expect(
       resolveCountCardCollection("a-b", set("a-b"), set("a_b", "a-b"))
-    ).toEqual({ kind: "none" });
+    ).toEqual(resolveCountCardCollection("a-b", set("a-b"), set("a-b")));
+    expect(
+      resolveCountCardCollection("a-b", set("a-b"), set("a_b", "a-b"))
+    ).toEqual({ kind: "one", collection: "a-b" });
   });
 
   it("names none when no collection in the install matches: it was deleted", () => {

@@ -92,10 +92,11 @@ export function resolveCountCardCollection(
   const anywhere =
     existing === undefined ? undefined : [...existing].filter(spells);
   if (mine.length > 0) {
-    // Ambiguous when the INSTALL holds two collections the id spells, whichever
-    // of them this reader may read: the card may have been the other's. The
-    // generator drops both collections' cards for the same reason.
-    const ambiguous = mine.length > 1 || (anywhere?.length ?? 0) > 1;
+    // 🔴 Ambiguous only among the collections this reader may read. Counting
+    // an unreadable one that spells the same id would set the card to none
+    // where it would otherwise be set to the readable one, telling the reader
+    // that a collection they may not read exists.
+    const ambiguous = mine.length > 1;
     return ambiguous ? { kind: "none" } : { kind: "one", collection: mine[0] };
   }
   // Nothing this reader may read. A collection still in the install that

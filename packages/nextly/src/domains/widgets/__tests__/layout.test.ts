@@ -880,6 +880,14 @@ describe("the visibility token", () => {
     expect(visibilityToken(["a"], [])).toBe(visibilityToken(["a"], [], []));
   });
 
+  it("moves when a Collection setting's default changes, with nothing else changing", () => {
+    // A card that stores no value is judged by the default, so a plugin
+    // changing it moves that card between withheld and shown.
+    expect(visibilityToken(["a"], [], [], ['a="posts"'])).not.toBe(
+      visibilityToken(["a"], [], [], ['a="secret"'])
+    );
+  });
+
   it("cannot mistake a held gate for a widget id", () => {
     expect(visibilityToken(["x"], [])).not.toBe(visibilityToken([], ["x"]));
   });

@@ -24,30 +24,28 @@ const card = (
   ...(config === undefined ? {} : { config }),
 });
 
-const countSettings: AnyWidgetSetting[] = [
-  { name: "collection", type: "collection", label: "Collection" },
-];
-const pinnedSettings: AnyWidgetSetting[] = [
-  {
-    name: "source",
-    type: "collection",
-    label: "Collection",
-    defaultValue: "secret",
-  },
-];
+const countSetting: AnyWidgetSetting = {
+  name: "collection",
+  type: "collection",
+  label: "Collection",
+};
+const pinnedSetting: AnyWidgetSetting = {
+  name: "source",
+  type: "collection",
+  label: "Collection",
+  defaultValue: "secret",
+};
 
+// As the canonical summary carries them: the Collection setting, from either
+// channel, and nothing for a widget without one.
 const widgets = collectionWidgets([
-  { id: "core/count", settings: countSettings },
-  { id: "acme/pinned", settings: pinnedSettings },
-  {
-    id: "core/notes",
-    settings: [{ name: "text", type: "textarea", label: "Note" }],
-  },
+  { id: "core/count", collectionSetting: countSetting },
+  { id: "acme/pinned", collectionSetting: pinnedSetting },
   { id: "core/team" },
 ]);
 
 describe("the widgets with a Collection setting", () => {
-  it("holds each such widget with its setting's name, and no other widget", () => {
+  it("holds each such widget with its setting, and no other widget", () => {
     expect([...widgets.keys()]).toEqual(["core/count", "acme/pinned"]);
     expect(widgets.get("acme/pinned")?.name).toBe("source");
   });
