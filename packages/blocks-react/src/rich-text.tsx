@@ -327,7 +327,11 @@ const INTERACTIVE_NODES: ReadonlySet<string> = new Set([
 ]);
 
 /** Whether anything drawn inside a container is itself interactive. */
-function holdsInteractive(nodes: readonly RichTextNode[] | undefined): boolean {
+// Exported for its depth test only: the package entries export `RichText`
+// alone, so this is not published.
+export function holdsInteractive(
+  nodes: readonly RichTextNode[] | undefined
+): boolean {
   return anyDescendant(nodes, node => INTERACTIVE_NODES.has(node.type));
 }
 
@@ -394,7 +398,9 @@ const BLOCK_LEVEL: ReadonlySet<string> = new Set(BLOCK_LEVEL_NODES);
  * A block node ends the walk instead of being descended into, because it has
  * already answered the question.
  */
-function holdsBlockContent(
+// Exported for its depth test only: the package entries export `RichText`
+// alone, so this is not published.
+export function holdsBlockContent(
   nodes: readonly RichTextNode[] | undefined
 ): boolean {
   return anyDescendant(nodes, node => BLOCK_LEVEL.has(node.type));
@@ -528,7 +534,9 @@ function rewrapMoved(
  *
  * See {@link PhrasingOnly} for why each branch answers the way it does.
  */
-function partitionPhrasing(
+// Exported for its depth test only: the package entries export `RichText`
+// alone, so this is not published.
+export function partitionPhrasing(
   nodes: readonly RichTextNode[],
   permits: ReadonlySet<string>,
   depth = 0
