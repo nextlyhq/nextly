@@ -812,15 +812,16 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
-   * The language whose pending change a write to every language promotes, as
-   * stored on `db`: the one holding a working draft in that write's own slot,
-   * where the Single is localized and keeps drafts. Already live, it is not
-   * among the languages going live, yet its pending change goes live with the
-   * write, so it is asked about too. A draft the schema has since made
-   * ineligible is not promoted, and is asked about all the same: asking about
-   * one more language can only refuse.
+   * The languages a pending change a write to every language promotes goes
+   * live in, as stored on `db`: where the Single is localized, keeps drafts
+   * and holds a working draft in that write's own slot, every configured
+   * language. The change can carry shared values, which every language's
+   * document shows, so a language already live is changed by it as surely as
+   * the draft's own. A draft the schema has since made ineligible is not
+   * promoted, and is asked about all the same: asking about more languages can
+   * only refuse.
    */
-  private async languagePromoted(
+  private async languagesPromoted(
     db: TransactionContext | DrizzleAdapter,
     singleMeta: DynamicSingleRecord,
     slug: string,
@@ -837,7 +838,13 @@ export class SingleMutationService extends BaseService {
       { scopeKind: "single", scopeSlug: slug, entryId },
       locale
     );
-    return draft === undefined ? [] : [locale];
+    if (draft === undefined) return [];
+    return [
+      ...new Set([
+        locale,
+        ...(this.localization?.locales.map(language => language.code) ?? []),
+      ]),
+    ];
   }
 
   /**
@@ -1680,8 +1687,8 @@ export class SingleMutationService extends BaseService {
       const companionPhysicallyExists = companionReadiness === "ready";
 
       // A write to every language that publishes asks the publish permission
-      // and rule once for each language it puts live, the language whose
-      // pending change it promotes among them, each time told that language
+      // and rule once for each language it puts live, those a pending change
+      // it promotes goes live in among them, each time told that language
       // and all of them, as publishing every language does: a rule that
       // answers by language answers for each, and any refusal refuses the
       // write. Asked here, before the transaction and off its connection: a
@@ -1718,7 +1725,7 @@ export class SingleMutationService extends BaseService {
                   existingDoc.status,
                   reachesLocalizedGroup
                 ),
-                ...(await this.languagePromoted(
+                ...(await this.languagesPromoted(
                   this.adapter,
                   singleMeta,
                   slug,
@@ -2121,7 +2128,7 @@ export class SingleMutationService extends BaseService {
                   preRowMainStatus,
                   reachesLocalizedGroup
                 ),
-                ...(await this.languagePromoted(
+                ...(await this.languagesPromoted(
                   tx,
                   singleMeta,
                   slug,

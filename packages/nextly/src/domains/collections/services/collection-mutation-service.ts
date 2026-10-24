@@ -3195,8 +3195,8 @@ export class CollectionMutationService extends BaseService {
   /**
    * The languages a publish of every language puts live, each to be asked
    * about: those its statuses name, a main row going live with no translation
-   * of its own being the default language's, the language whose pending
-   * change a write to every language promotes, and every configured language
+   * of its own being the default language's, those a pending change a write
+   * to every language promotes goes live in, and every configured language
    * where the collection reaches a localized field group. Read on `tx` where
    * one is given, and on the pool otherwise.
    */
@@ -3228,7 +3228,7 @@ export class CollectionMutationService extends BaseService {
     )
       .map(locale => locale ?? defaultLocale)
       .filter((locale): locale is string => typeof locale === "string");
-    goingLive.push(...(await this.languagePromoted(args)));
+    goingLive.push(...(await this.languagesPromoted(args)));
     return languagesToAsk([...new Set(goingLive)], {
       configured: this.localization?.locales.map(locale => locale.code) ?? [],
       reachesLocalizedFieldGroup: await this.reachesLocalizedFieldGroup(
@@ -3239,15 +3239,16 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * The language whose pending change a write to every language promotes, as
-   * stored: the one holding a working draft in that write's own slot, where
-   * the collection is localized and keeps drafts. Already live, it is not
-   * among the languages going live, yet its pending change goes live with the
-   * write, so it is asked about too. A draft the schema has since made
-   * ineligible is not promoted, and is asked about all the same: asking about
-   * one more language can only refuse. Read on `tx` where one is given.
+   * The languages a pending change a write to every language promotes goes
+   * live in, as stored: where the collection is localized, keeps drafts and
+   * holds a working draft in that write's own slot, every configured
+   * language. The change can carry shared values, which every language's
+   * document shows, so a language already live is changed by it as surely as
+   * the draft's own. A draft the schema has since made ineligible is not
+   * promoted, and is asked about all the same: asking about more languages can
+   * only refuse. Read on `tx` where one is given.
    */
-  private async languagePromoted(args: {
+  private async languagesPromoted(args: {
     collectionName: string;
     entryId: string;
     promotesDraftOf?: unknown;
@@ -3269,7 +3270,13 @@ export class CollectionMutationService extends BaseService {
       },
       locale
     );
-    return draft === undefined ? [] : [locale];
+    if (draft === undefined) return [];
+    return [
+      ...new Set([
+        locale,
+        ...(this.localization?.locales.map(language => language.code) ?? []),
+      ]),
+    ];
   }
 
   /**

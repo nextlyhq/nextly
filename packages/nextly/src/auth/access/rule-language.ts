@@ -194,24 +194,32 @@ function storedByLanguage(target: AccessRuleTarget): boolean | undefined {
 }
 
 /**
- * Whether `declared` has a field group that is localized, at its top level
- * only, as the read populates them. A localized one missed here is judged as
- * content the same in every language, which is told every language.
+ * Whether `declared` reaches a field group that is localized: one it
+ * references, or one inside a group it references, at any depth. A localized
+ * one missed here is judged as content the same in every language, which is
+ * told every language. Each group is looked at once, so a group that holds
+ * itself ends the walk.
  */
 function hasLocalizedFieldGroup(
   declared: DeclaredContent,
   fieldGroups: readonly DeclaredContent[]
 ): boolean {
-  const localizedGroups = new Set(
-    fieldGroups.filter(group => group.localized === true).map(g => g.slug)
-  );
-  return (declared.fields ?? []).some(field => {
-    if (!isFieldGroupFieldType(field.type)) return false;
-    const { single, many } = extractFieldGroupReferences(field);
-    return [single, ...(many ?? [])].some(
-      group => group !== undefined && localizedGroups.has(group)
-    );
-  });
+  const bySlug = new Map(fieldGroups.map(group => [group.slug, group]));
+  const looked = new Set<string>();
+  const reaches = (content: DeclaredContent): boolean =>
+    (content.fields ?? []).some(field => {
+      if (!isFieldGroupFieldType(field.type)) return false;
+      const { single, many } = extractFieldGroupReferences(field);
+      return [single, ...(many ?? [])].some(slug => {
+        if (slug === undefined || looked.has(slug)) return false;
+        looked.add(slug);
+        const group = bySlug.get(slug);
+        return (
+          group !== undefined && (group.localized === true || reaches(group))
+        );
+      });
+    });
+  return reaches(declared);
 }
 
 /**

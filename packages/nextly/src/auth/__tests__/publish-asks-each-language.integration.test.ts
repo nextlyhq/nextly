@@ -48,6 +48,10 @@ const SHARED_BANNER = "sharedbanner";
 const PENDING_PAGES = "pendingpages";
 const NESTED_ARTICLES = "nestedarticles";
 const NESTED_BANNER = "nestedbanner";
+const SHARED_PENDING_PAGES = "sharedpendingpages";
+const SHARED_PENDING_BANNER = "sharedpendingbanner";
+const SHARED_NESTED = "sharednested";
+const SHARED_NESTED_BANNER = "sharednestedbanner";
 const PENDING_BANNER = "pendingbanner";
 const USER = { id: "user-1", isActive: true };
 
@@ -152,6 +156,38 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           publish: englishRefused,
         },
         fields: [text({ name: "heading" })],
+      }),
+      defineCollection({
+        slug: SHARED_PENDING_PAGES,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: {
+          create: () => true,
+          read: () => true,
+          update: () => true,
+          publish: frenchRefused,
+        },
+        fields: [
+          text({ name: "title" }),
+          // Shared: one value, shown in every language.
+          text({ name: "code", localized: false }),
+        ],
+      }),
+      defineCollection({
+        slug: SHARED_NESTED,
+        // Not localized, but it holds a group that holds a localized one.
+        status: true,
+        access: {
+          create: () => true,
+          read: () => true,
+          update: () => true,
+          publish: frenchRefused,
+        },
+        fields: [
+          text({ name: "heading" }),
+          fieldGroup({ name: "wrap", component: "articlewrap" }),
+        ],
       }),
       defineCollection({
         slug: NESTED_ARTICLES,
@@ -269,6 +305,34 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           publish: englishRefused,
         },
         fields: [text({ name: "headline" })],
+      }),
+      defineSingle({
+        slug: SHARED_PENDING_BANNER,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: frenchRefused,
+        },
+        fields: [
+          text({ name: "headline" }),
+          text({ name: "code", localized: false }),
+        ],
+      }),
+      defineSingle({
+        slug: SHARED_NESTED_BANNER,
+        status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: frenchRefused,
+        },
+        fields: [
+          text({ name: "headline" }),
+          fieldGroup({ name: "wrap", component: "articlewrap" }),
+        ],
       }),
       defineSingle({
         slug: NESTED_BANNER,
@@ -622,6 +686,102 @@ describe.each(getConfiguredTestDialects())(
         { overrideAccess: false, user: USER, locale: "*" }
       );
       expect(everyLanguage.statusCode).toBe(403);
+    });
+
+    it("asks every language a promoted change to shared values goes live in", async () => {
+      const t = await boot(dialect);
+      // Live in every language, then an English edit to a shared value held
+      // as a draft: promoting it changes what French shows too.
+      for (const locale of ["en", "fr", "de"]) {
+        await singlesOf(t).update(
+          SHARED_PENDING_BANNER,
+          { headline: locale, code: "live", status: "published" },
+          { overrideAccess: true, locale }
+        );
+      }
+      await singlesOf(t).update(
+        SHARED_PENDING_BANNER,
+        { code: "pending" },
+        { overrideAccess: true, locale: "en" }
+      );
+      const single = await singlesOf(t).update(
+        SHARED_PENDING_BANNER,
+        { status: "published" },
+        { overrideAccess: false, user: USER, locale: "*" }
+      );
+      expect(single.statusCode).toBe(403);
+      const liveFrench = await singlesOf(t).get(SHARED_PENDING_BANNER, {
+        locale: "fr",
+        overrideAccess: true,
+      });
+      expect((liveFrench.data as { code?: unknown } | undefined)?.code).toBe(
+        "live"
+      );
+
+      const created = await handlerOf(t).createEntry(
+        {
+          collectionName: SHARED_PENDING_PAGES,
+          overrideAccess: true,
+          locale: "en",
+        },
+        { title: "en", code: "live", status: "published" }
+      );
+      const id = (created.data as { id?: string } | undefined)?.id;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      const write = (locale: string, data: Record<string, unknown>) =>
+        handlerOf(t).updateEntry(
+          {
+            collectionName: SHARED_PENDING_PAGES,
+            entryId: id,
+            overrideAccess: true,
+            locale,
+          },
+          data
+        );
+      await write("fr", { title: "fr", status: "published" });
+      await write("de", { title: "de", status: "published" });
+      await write("en", { code: "pending" });
+      const entry = await handlerOf(t).updateEntry(
+        {
+          collectionName: SHARED_PENDING_PAGES,
+          entryId: id,
+          overrideAccess: false,
+          user: USER,
+          locale: "*",
+        },
+        { status: "published" }
+      );
+      expect(entry.statusCode).toBe(403);
+    });
+
+    it("tells content that is not localized each language when it holds a localized group inside another", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: SHARED_NESTED,
+        data: { heading: "shared", status: "draft" },
+      });
+      const { id } = created.item;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      const entry = await handlerOf(t).publishAllLocales({
+        collectionName: SHARED_NESTED,
+        entryId: id,
+        overrideAccess: false,
+        user: USER,
+      });
+      expect(entry.statusCode).toBe(403);
+
+      await singlesOf(t).update(
+        SHARED_NESTED_BANNER,
+        { headline: "shared" },
+        { overrideAccess: true }
+      );
+      const single = await singlesOf(t).publishAllLocales(
+        SHARED_NESTED_BANNER,
+        { overrideAccess: false, user: USER }
+      );
+      expect(single.statusCode).toBe(403);
     });
 
     it("refuses a caller who may not publish an entry before saying which languages hold unreleased work", async () => {
