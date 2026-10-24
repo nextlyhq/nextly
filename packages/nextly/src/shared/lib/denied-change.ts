@@ -87,6 +87,20 @@ export interface PromotionAccessInput {
    */
   callerSupplied?: Record<string, unknown>;
   /**
+   * The pending change on its own, in the same shape as `before`, where the
+   * promotion overlays a caller's payload on it.
+   *
+   * A group is written whole, so a group the caller sends replaces the pending
+   * change's, and the field gate puts each protected child of it back at the
+   * value the LIVE row holds. Judged on `before` alone, a protected edit the
+   * pending change made there reads as no change at all, and the publish would
+   * consume the draft and lose it while reporting success. A denied value the
+   * caller was not allowed to send is the pending change's, so it is judged
+   * here. Omitted, `before` is the pending change, which is right for a caller
+   * that overlays nothing.
+   */
+  pending?: Record<string, unknown>;
+  /**
    * Applies the field rules to the document it is given, in place, removing
    * what this caller may not write.
    *
@@ -132,8 +146,31 @@ export async function resolvePromotedDocument(
   const permittedLive = detachData(input.live);
   await input.applyRules(permittedLive);
 
-  const denied = collectDenied(input, permittedBefore, permittedLive);
-  const refusals = [...denied].flatMap(path => refusedLeaves(input, path));
+  // And of the pending change on its own, where a caller's payload was laid
+  // over it: a protected value it adds, inside a group the caller replaced,
+  // is in neither document above.
+  const permittedPending =
+    input.pending === undefined ? undefined : detachData(input.pending);
+  if (permittedPending) await input.applyRules(permittedPending);
+
+  // What the caller was ALLOWED to send, judged on its own as the field gate
+  // judged it: the gate keeps a protected child of a group they sent at its
+  // stored value, so the payload's paths alone would credit them with a value
+  // they were never permitted to write.
+  const credited =
+    input.callerSupplied === undefined
+      ? undefined
+      : detachData(input.callerSupplied);
+  if (credited) await input.applyRules(credited);
+
+  const denied = collectDenied(input, [
+    [input.before, permittedBefore],
+    [input.live, permittedLive],
+    [input.pending, permittedPending],
+  ]);
+  const refusals = [...denied].flatMap(path =>
+    refusedLeaves(input, path, credited)
+  );
   if (refusals.length > 0) refuse(input, refusals);
 
   return restoreDenied(
@@ -215,13 +252,20 @@ export async function keepDeniedAtStored(input: {
  */
 function collectDenied(
   input: PromotionAccessInput,
-  permittedBefore: Record<string, unknown>,
-  permittedLive: Record<string, unknown>
+  judged: ReadonlyArray<
+    readonly [
+      Record<string, unknown> | undefined,
+      Record<string, unknown> | undefined,
+    ]
+  >
 ): Set<string> {
-  return new Set([
-    ...deniedPaths(input.before, permittedBefore, ""),
-    ...deniedPaths(input.live, permittedLive, ""),
-  ]);
+  // Each document beside what the rules left of it; the pending change is
+  // judged too where the caller passed it.
+  return new Set(
+    judged.flatMap(([document, permitted]) =>
+      document === undefined ? [] : deniedPaths(document, permitted, "")
+    )
+  );
 }
 
 /**
@@ -232,22 +276,37 @@ function collectDenied(
  * have two authors, and a property present only on the live side is one this
  * document deletes.
  */
-function refusedLeaves(input: PromotionAccessInput, path: string): string[] {
+function refusedLeaves(
+  input: PromotionAccessInput,
+  path: string,
+  credited: Record<string, unknown> | undefined
+): string[] {
   const leaves = new Set([
     ...leafPaths(valueAt(input.before, path), path),
     ...leafPaths(valueAt(input.live, path), path),
+    ...(input.pending ? leafPaths(valueAt(input.pending, path), path) : []),
   ]);
-  return [...leaves].filter(leaf => isRefusal(input, leaf));
+  return [...leaves].filter(leaf => isRefusal(input, leaf, credited));
 }
 
-/** Whether one denied leaf is a change the pending change makes. */
-function isRefusal(input: PromotionAccessInput, leaf: string): boolean {
+/**
+ * Whether one denied leaf is a change the pending change makes.
+ *
+ * The caller's own edit, a value the rules let them send, is dropped back to
+ * live, not refused. Any other denied leaf is the pending change's, so it is
+ * judged as the pending change has it: where the caller's group replaced the
+ * pending change's, the promoted document holds the live value the field gate
+ * kept there, and comparing that with live would hide the pending edit.
+ */
+function isRefusal(
+  input: PromotionAccessInput,
+  leaf: string,
+  credited: Record<string, unknown> | undefined
+): boolean {
   if (isStoreBookkeeping(leaf, input.authoredFieldNames)) return false;
-  if (sameStoredValue(valueAt(input.before, leaf), valueAt(input.live, leaf))) {
-    return false;
-  }
-  // The caller's own edit is dropped back to live, not refused.
-  return !pathExists(input.callerSupplied, leaf);
+  if (pathExists(credited, leaf)) return false;
+  const promoted = input.pending ?? input.before;
+  return !sameStoredValue(valueAt(promoted, leaf), valueAt(input.live, leaf));
 }
 
 /** Refuse the promotion, naming every field at fault, in a stable order. */
