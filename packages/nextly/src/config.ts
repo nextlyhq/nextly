@@ -309,6 +309,22 @@ export {
   type OnboardingStepId,
   type OnboardingStep,
 } from "./domains/widgets/onboarding-steps";
+/**
+ * The Get started steps the layout read answers, for the card that draws them:
+ * the admin names each kind of step, and restating the shapes there would be
+ * a second answer to the host's.
+ *
+ * @experimental The card is new, and these shapes may change before it settles.
+ */
+export {
+  GET_STARTED_SKIPPABLE_KINDS,
+  GET_STARTED_STEP_KINDS,
+  GET_STARTED_WIDGET_ID,
+  type GetStartedAnswer,
+  type GetStartedStep,
+  type GetStartedStepKind,
+  type GetStartedStepStatus,
+} from "./domains/widgets/get-started-steps";
 export type { WidgetQuery } from "./domains/widgets/query";
 // A VALUE, and for the same reason as the batch limit below: the admin resolves
 // a contributed widget's deprecated `size` alias into the enum, and so does the

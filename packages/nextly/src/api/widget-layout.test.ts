@@ -38,6 +38,15 @@ vi.mock("../auth/entity-read-access", async importOriginal => {
   return { ...actual, callerHoldsPermission };
 });
 
+// The Get started steps, as the case states them; the rest of that module
+// (skips) stays real, since the endpoint applies them.
+const { getStartedSteps } = vi.hoisted(() => ({ getStartedSteps: vi.fn() }));
+vi.mock("../domains/widgets/get-started", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../domains/widgets/get-started")>();
+  return { ...actual, getStartedSteps };
+});
+
 import { requireAuthentication } from "../auth/middleware";
 import type { WidgetDefinition } from "../domains/widgets/definition";
 import {
@@ -1987,5 +1996,144 @@ describe("a widget that allows one card", () => {
       })
     );
     expect(res.status).toBe(200);
+  });
+});
+
+describe("the Get started card in the layout read and write", () => {
+  const STARTED = "core/get-started";
+  const open = {
+    unknown: false,
+    steps: [{ key: "invite", kind: "invite", status: "open" }],
+    done: 0,
+    total: 1,
+  };
+  const finished = {
+    unknown: false,
+    steps: [{ key: "invite", kind: "invite", status: "done" }],
+    done: 1,
+    total: 1,
+  };
+  const startedCard = (
+    patch: Partial<WidgetPlacement> = {}
+  ): WidgetPlacement => ({
+    id: "started",
+    widgetId: STARTED,
+    width: "full",
+    removed: false,
+    ...patch,
+  });
+  const teamCard: WidgetPlacement = {
+    id: "team",
+    widgetId: "core/team",
+    width: "full",
+    removed: false,
+  };
+  const getStartedReq = () =>
+    new Request("http://localhost/api/dashboard/layout?getStarted=1");
+
+  beforeEach(() => {
+    registerWidget(widget({ id: STARTED, defaultOrder: 0, dismissible: true }));
+    registerWidget(widget({ id: "core/team", defaultOrder: 10 }));
+  });
+
+  type WithStarted = LayoutPayload & {
+    getStarted?: { drawn: boolean; answer: unknown };
+  };
+
+  it("draws the card first in the default while a step is waiting, with the steps that decided it", async () => {
+    getStartedSteps.mockResolvedValue(open);
+    const body = (await bodyOf(await getWidgetLayout(getReq()))) as WithStarted;
+    expect(body.placements?.map(p => p.widgetId)).toEqual([
+      STARTED,
+      "core/team",
+    ]);
+    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual([
+      STARTED,
+      "core/team",
+    ]);
+    expect(body.getStarted).toEqual({ drawn: true, answer: open });
+  });
+
+  it("leaves a finished card dormant for a reader who never acted on it, and never offers it in the add panel", async () => {
+    getStartedSteps.mockResolvedValue(finished);
+    const body = (await bodyOf(await getWidgetLayout(getReq()))) as WithStarted;
+    expect(body.placements?.map(p => p.widgetId)).toEqual(["core/team"]);
+    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual(["core/team"]);
+    expect(body.available).not.toContain(STARTED);
+    expect(body.getStarted?.drawn).toBe(false);
+  });
+
+  it("keeps a finished card drawn, as all set, for a reader who acted on it", async () => {
+    getStartedSteps.mockResolvedValue(finished);
+    stored = {
+      layout: serializeLayout([
+        startedCard({ config: { acted: true } }),
+        teamCard,
+      ]),
+      version: 3,
+    };
+    const body = (await bodyOf(await getWidgetLayout(getReq()))) as WithStarted;
+    expect(body.placements?.map(p => p.widgetId)).toEqual([
+      STARTED,
+      "core/team",
+    ]);
+    expect(body.getStarted?.drawn).toBe(true);
+  });
+
+  it("works out no steps for a removed card, lists it for Removed, and answers them when asked", async () => {
+    getStartedSteps.mockResolvedValue(open);
+    stored = {
+      layout: serializeLayout([startedCard({ removed: true }), teamCard]),
+      version: 3,
+    };
+    const body = (await bodyOf(await getWidgetLayout(getReq()))) as WithStarted;
+    expect(body.placements?.find(p => p.widgetId === STARTED)?.removed).toBe(
+      true
+    );
+    expect(body.getStarted).toEqual({ drawn: false, answer: null });
+    expect(getStartedSteps).not.toHaveBeenCalled();
+
+    const asked = (await bodyOf(
+      await getWidgetLayout(getStartedReq())
+    )) as WithStarted;
+    expect(asked.getStarted).toEqual({ drawn: false, answer: open });
+  });
+
+  it("keeps the visibility token whatever the steps say, so a skip or a dismissal is never refused as stale", async () => {
+    getStartedSteps.mockResolvedValue(open);
+    const before = await bodyOf(await getWidgetLayout(getReq()));
+    getStartedSteps.mockResolvedValue(finished);
+    const after = await bodyOf(await getWidgetLayout(getReq()));
+    expect(after.scope).toBe(before.scope);
+  });
+
+  it("carries a dormant card, with its settings, in place through a save that never held it", async () => {
+    getStartedSteps.mockResolvedValue(finished);
+    // Dormant: finished, never acted on, nothing skipped; its settings still
+    // belong to the reader.
+    const kept = startedCard({ config: { note: "kept" } });
+    stored = { layout: serializeLayout([kept, teamCard]), version: 3 };
+    const read = await bodyOf(await getWidgetLayout(getReq()));
+    await putWidgetLayout(
+      putReq({
+        placements: read.placements,
+        version: 3,
+        scope: read.scope,
+      })
+    );
+    // 🔴 Replaced as a visible card, it was deleted with its skips, because
+    // the reader's snapshot could not hold a card they were never handed.
+    expect(saved?.placements).toEqual([kept, teamCard]);
+  });
+
+  it("replaces the card as usual when the save holds it", async () => {
+    getStartedSteps.mockResolvedValue(open);
+    stored = { layout: serializeLayout([startedCard(), teamCard]), version: 3 };
+    const read = await bodyOf(await getWidgetLayout(getReq()));
+    const acted = startedCard({ config: { acted: true } });
+    await putWidgetLayout(
+      putReq({ placements: [acted, teamCard], version: 3, scope: read.scope })
+    );
+    expect(saved?.placements).toEqual([acted, teamCard]);
   });
 });

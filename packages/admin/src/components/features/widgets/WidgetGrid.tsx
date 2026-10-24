@@ -42,6 +42,7 @@ import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermission
 
 import { registerCoreWidgetComponents } from "./core-components";
 import { ArrangedGrid } from "./edit/ArrangedGrid";
+import { AtRestSettingsWriteProvider } from "./edit/at-rest-settings-write";
 import { DashboardAddPanel, useAddPanelState } from "./edit/DashboardAddPanel";
 import { DashboardEditChrome } from "./edit/DashboardEditChrome";
 import { CardDragContext } from "./edit/drag/CardDragContext";
@@ -505,32 +506,34 @@ export function WidgetGrid(): JSX.Element {
           />
 
           <CardDragContext drag={drag}>
-            <ArrangedGrid
-              rows={visible}
-              placements={editor.placements}
-              isDrawn={arrangement.isDrawn}
-              isEditing={editor.isEditing}
-              writes={{
-                isWriting: editor.isWriting,
-                singleCardWriteBlocked: singleCardWriteBlocked(
-                  layout.isUnreadable
-                ),
-                settings: settingsWrite,
-              }}
-              slots={slots}
-              cellSlots={cellSlots}
-              requested={requested}
-              updatedAtFor={updatedAtFor}
-              fetchedTierFor={fetchedTierFor}
-              fetchingPlacementIds={fetchingPlacementIds}
-              retry={retry}
-              announcement={announcement}
-              focus={focus}
-              gridRef={focus.gridRef}
-              highlightedId={ring.highlightedId}
-              drag={drag}
-              on={cardActions(arrangement, removal, editor)}
-            />
+            <AtRestSettingsWriteProvider value={settingsWrite}>
+              <ArrangedGrid
+                rows={visible}
+                placements={editor.placements}
+                isDrawn={arrangement.isDrawn}
+                isEditing={editor.isEditing}
+                writes={{
+                  isWriting: editor.isWriting,
+                  singleCardWriteBlocked: singleCardWriteBlocked(
+                    layout.isUnreadable
+                  ),
+                  settings: settingsWrite,
+                }}
+                slots={slots}
+                cellSlots={cellSlots}
+                requested={requested}
+                updatedAtFor={updatedAtFor}
+                fetchedTierFor={fetchedTierFor}
+                fetchingPlacementIds={fetchingPlacementIds}
+                retry={retry}
+                announcement={announcement}
+                focus={focus}
+                gridRef={focus.gridRef}
+                highlightedId={ring.highlightedId}
+                drag={drag}
+                on={cardActions(arrangement, removal, editor)}
+              />
+            </AtRestSettingsWriteProvider>
           </CardDragContext>
 
           <DashboardAddPanel

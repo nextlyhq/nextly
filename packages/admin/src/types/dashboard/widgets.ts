@@ -23,6 +23,7 @@
 
 import type {
   AnyWidgetSetting,
+  GetStartedAnswer,
   WidgetAction,
   WidgetArchetype,
   WidgetHeight,
@@ -284,4 +285,24 @@ export interface DashboardLayoutResponse {
    * than this layout, and is read again.
    */
   audience: string;
+  /**
+   * The Get started card's steps, from the computation that decided whether
+   * the card is drawn, so the card and its steps cannot disagree. Absent from a
+   * server that predates the card.
+   *
+   * @experimental
+   */
+  getStarted?: GetStartedLayoutView;
+}
+
+/** What the layout read says of the Get started card. */
+export interface GetStartedLayoutView {
+  /** Whether the reader's card is drawn. */
+  drawn: boolean;
+  /**
+   * The steps with the reader's skips applied, or `null` when the server
+   * worked none out: the card is removed (and its answer not asked for), or
+   * not in this reader's dashboard.
+   */
+  answer: GetStartedAnswer | null;
 }

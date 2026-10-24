@@ -43,7 +43,15 @@ import {
   type CanonicalWidget,
   type WidgetWidthFacts,
 } from "../domains/widgets/canonical";
+import { conditionProbe } from "../domains/widgets/condition-probe";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
+import {
+  getStartedDrawn,
+  getStartedPlacement,
+  getStartedView,
+  withoutDormantCard,
+} from "../domains/widgets/get-started-card";
+import { GET_STARTED_WIDGET_ID } from "../domains/widgets/get-started-steps";
 import {
   MAX_LAYOUT_BYTES,
   MAX_PLACEMENTS,
@@ -254,15 +262,24 @@ async function getLayoutService(): Promise<WidgetLayoutService> {
  * different set could never match. The first pass, the permission gate,
  * decides what this reader may be told exists; the second decides which
  * transient cards are worth showing now, and a lapsed card is not a refusal.
+ *
+ * The probe the conditions read through is returned, so the Get started steps
+ * share its reads rather than resolving the same collections again.
  */
 async function visibleWidgets(auth: AuthContext) {
   const reader = await readCaller(auth);
   const caller = readAccessCaller(reader);
   const audience = await widgetAudience(caller);
-  const widgets = await widgetsWhoseConditionHolds(audience.visible, reader);
+  const probe = conditionProbe(reader);
+  const widgets = await widgetsWhoseConditionHolds(
+    audience.visible,
+    reader,
+    probe
+  );
   return {
     caller,
     audience,
+    probe,
     widgets,
     visibleIds: new Set(widgets.map(widget => widget.id)),
     scope: visibilityToken(
@@ -335,7 +352,26 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
     : stored.layout
       ? "own"
       : "default";
-  const placements = visibleArrangement(stored.layout, view.visibleIds);
+  const arrangement = visibleArrangement(stored.layout, view.visibleIds);
+  // The Get started card is drawn or left dormant from its step answer and its
+  // own settings, which is why this is decided here, after the row is read,
+  // and not by a condition before it. `?getStarted=1` asks for the answer of a
+  // removed card, which the admin needs as it restores one.
+  const getStarted = await getStartedView(
+    view.probe,
+    getStartedPlacement(arrangement),
+    new URL(req.url).searchParams.get("getStarted") === "1"
+  );
+  const placements = withoutDormantCard(arrangement, () => getStarted.drawn);
+  // The default as a reader following it would be handed it: their card has
+  // no settings yet, so it is drawn from the answer alone. With no answer
+  // worked out, the card is left out; a reset reads it afresh.
+  const steps =
+    getStarted.answer === null ? null : await view.probe.getStarted();
+  const defaults = withoutDormantCard(
+    visibleArrangement(undefined, view.visibleIds),
+    card => steps !== null && getStartedDrawn(steps, card.config)
+  );
   const widths = widthsOf(view.widgets);
 
   // Widgets this caller may see and may still add. A saved arrangement is a
@@ -348,10 +384,15 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   // metadata it renders from; what only this endpoint can answer is WHICH of
   // them this caller is allowed to know about. In the add panel's order, so
   // the panel lists them as sent.
+  //
+  // Never Get started: it is offered back only from Removed, as the card the
+  // reader removed, with its progress and skips.
   const placed = new Set(placements.map(placement => placement.widgetId));
   const available = inAddPanelOrder(
     view.widgets.filter(
-      widget => !placed.has(widget.id) || widths[widget.id].allowsSeveral
+      widget =>
+        widget.id !== GET_STARTED_WIDGET_ID &&
+        (!placed.has(widget.id) || widths[widget.id].allowsSeveral)
     )
   ).map(widget => widget.id);
 
@@ -361,7 +402,7 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       // The default as this reader would see it, from the same computation a
       // reader following it is shown: a staged reset draws it, and the admin
       // never works the default out for itself.
-      defaultPlacements: visibleArrangement(undefined, view.visibleIds),
+      defaultPlacements: defaults,
       widgets: widgetFactsOf(view.widgets),
       available,
       version: stored.version,
@@ -370,6 +411,9 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       // The audience the workspace payload is built for, so the admin can tell
       // the payload it holds apart from the one this reader would be sent now.
       audience: view.audience.token,
+      // The Get started steps, from the computation that decided whether the
+      // card is drawn, so the card and its steps cannot disagree.
+      getStarted,
     },
     { headers: OPAQUE_CONFIG_HEADERS }
   );
@@ -637,6 +681,23 @@ function refuseUnconfirmedReplacement(
   });
 }
 
+/**
+ * The widget ids a save replaces, as opposed to carries.
+ *
+ * Every visible widget, except a Get started card the submission does not
+ * hold: a dormant card is never handed to the reader, so their save cannot
+ * hold it, and replacing it would delete it with its skips. Carried instead,
+ * in place, as a card the reader could not see is. A submission that holds
+ * the card replaces it as usual.
+ */
+function carriedUnlessSubmitted(
+  submitted: readonly WidgetPlacement[],
+  visibleIds: ReadonlySet<string>
+): ReadonlySet<string> {
+  if (getStartedPlacement(submitted) !== undefined) return visibleIds;
+  return new Set([...visibleIds].filter(id => id !== GET_STARTED_WIDGET_ID));
+}
+
 export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const auth = await authenticateLayoutWrite(req, "write");
 
@@ -710,7 +771,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     mergePreservingHidden(
       submitted,
       wholeArrangement(stored.layout),
-      view.visibleIds
+      carriedUnlessSubmitted(submitted, view.visibleIds)
     ),
     expectedVersion,
     arranged

@@ -69,6 +69,7 @@ import {
 } from "./core-widget-widths";
 import { settings } from "./declaration/setting-builders";
 import type { WidgetDefinition, WidgetSetting } from "./definition";
+import { GET_STARTED_WIDGET_ID } from "./get-started-steps";
 import { MAX_WIDGET_LIMIT } from "./query-limits";
 import type { AnyWidgetSetting } from "./settings";
 import {
@@ -141,69 +142,31 @@ export const CORE_WIDGET_COMPONENT_PREFIX = "core#";
  */
 const CORE_WIDGET_LITERALS = [
   {
-    id: "core/seed-demo-content",
+    id: GET_STARTED_WIDGET_ID,
     title: "Get started",
     description:
-      "Offers to seed demo content while there is nothing to look at yet.",
+      "The setup steps this reader could still take, detected from the install rather than ticked by hand.",
     archetype: "custom",
-    chrome: "none",
     defaultSize: "full",
-    // The narrowest width it still draws at: its offer is laid out across the row.
+    // Full width only: its steps are laid out across the row.
     minSize: "full",
+    maxSize: "full",
+    // First: it addresses a reader who has just arrived.
     defaultOrder: 0,
-    component: "core#SeedDemoContentCard",
+    component: "core#GetStartedCard",
     /*
-     * Transient, and declared as such. The card used to hide ITSELF once
-     * seeding was done or declined -- it was placed in the grid, given an
-     * order, and then rendered nothing -- so the arrangement reserved a slot
-     * for a card drawing nothing and the reason lived in a component.
+     * 🔴 No condition. Whether a widget is visible is part of the token a
+     * layout write is checked against, so a card whose visibility followed its
+     * steps would turn a reader's skip or dismissal into a stale-scope refusal
+     * whenever a step changed between their read and their write, and a card
+     * in their row would vanish from view and from Removed. Visible by
+     * permission alone, it is drawn or left dormant by the layout read, from
+     * the step answer and the card's own settings, after the stored row is
+     * read (see `api/widget-layout.ts`).
      *
-     * 🔴 TWO conditions, and the pair is the point. This card asks something
-     * neither one answers alone: is there nothing to look at, AND is the offer
-     * of demo content still open. `content:empty` alone left a reader who
-     * DECLINED still holding the slot, because declining does not create
-     * content. Folding the decline into `content:empty` was refused instead:
-     * conditions are evaluated once per NAME and shared by every widget asking,
-     * so a plugin's card declaring `content:empty` would have vanished because
-     * someone dismissed a core offer.
-     *
-     * The two are scoped differently on purpose. `content:empty` is about this
-     * READER; `seed:unanswered` is about the INSTALL, since whether a project
-     * took the demo data is recorded once and a second admin should not be
-     * offered it again after the first declined.
+     * It replaces "Set up your project" and the sample-content offer, whose
+     * saved cards convert into it (`RETIRED_WIDGETS`).
      */
-    lifecycle: "conditional",
-    visibleWhen: ["content:empty", "seed:unanswered"],
-  },
-  {
-    id: "core/onboarding-checklist",
-    title: "Set up your project",
-    description:
-      "The setup steps still outstanding, detected from the install rather than ticked by hand.",
-    archetype: "custom",
-    chrome: "none",
-    defaultSize: "full",
-    // The narrowest width it still draws at: its steps are laid out across the row.
-    minSize: "full",
-    // Between the seed offer and the first content card. Both are transient and
-    // both address a reader who has just arrived, so they sit together rather
-    // than with the cards that stay.
-    defaultOrder: 5,
-    component: "core#OnboardingChecklist",
-    /*
-     * Offered only while there is something left to do, and dropped by the host
-     * the moment there is not. The card used to decide that for itself from
-     * `localStorage`, which made it a per-BROWSER answer to a per-reader
-     * question: the same person on a second machine met a checklist they had
-     * already finished, and a colleague met one reporting someone else's
-     * progress.
-     */
-    lifecycle: "conditional",
-    visibleWhen: "onboarding:incomplete",
-    // 🔴 Both, and they answer different questions. The condition takes the card
-    // away when the INSTALL says the work is done; this takes it away when the
-    // READER says they do not want it. Without the second, somebody who has no
-    // intention of finishing the checklist has to finish it to be rid of it.
     dismissible: true,
   },
   {

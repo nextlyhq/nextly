@@ -96,6 +96,19 @@ export async function expectNoAxeViolations(
     ).toBeVisible();
     builder = builder.include(scope.include);
   }
+  // Settled before measuring. The dark palette is applied by an effect after
+  // mount, so an element drawn before it eases its colours across (Tailwind's
+  // `transition-colors`), and a scan in that window measures a light-mode
+  // colour on the dark background: a contrast failure no reader ever sees.
+  // Transitions only: they end, while a skeleton's pulse repeats for good.
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter(animation => animation instanceof CSSTransition)
+        .map(animation => animation.finished.catch(() => undefined))
+    )
+  );
   const results = await builder.analyze();
   expectScannedSomething(results, scope);
   const findings = [];

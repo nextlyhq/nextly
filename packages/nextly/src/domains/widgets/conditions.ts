@@ -185,7 +185,10 @@ const EVALUATORS: Record<
  */
 export async function evaluateConditions(
   needed: ReadonlySet<WidgetCondition>,
-  caller: ReadCaller
+  caller: ReadCaller,
+  // The request's probe, when the caller has one to share: the layout read
+  // asks the same reads again for the Get started steps.
+  probe: ConditionProbe = conditionProbe(caller)
 ): Promise<ReadonlyMap<WidgetCondition, boolean>> {
   const wanted = [...needed];
   // SETTLED, not all-or-nothing. `Promise.all` rejects on the first evaluator
@@ -198,7 +201,6 @@ export async function evaluateConditions(
   // each. Built here rather than per evaluator, which is what made the sharing
   // accidental before: a helper calling another helper re-resolved what its
   // caller had just resolved.
-  const probe = conditionProbe(caller);
   const settled = await Promise.allSettled(
     wanted.map(condition => EVALUATORS[condition](probe))
   );
@@ -301,11 +303,15 @@ export function widgetsHeldByVerdict<T extends ConditionalDeclaration>(
  */
 export async function widgetsWhoseConditionHolds<
   T extends ConditionalDeclaration,
->(widgets: readonly T[], caller: ReadCaller): Promise<T[]> {
+>(
+  widgets: readonly T[],
+  caller: ReadCaller,
+  probe?: ConditionProbe
+): Promise<T[]> {
   const needed = conditionsNeeded(widgets);
   if (needed.size === 0) return [...widgets];
   return widgetsHeldByVerdict(
     widgets,
-    await evaluateConditions(needed, caller)
+    await evaluateConditions(needed, caller, probe)
   );
 }
