@@ -44,7 +44,7 @@ import {
   type WidgetWidthFacts,
 } from "../domains/widgets/canonical";
 import {
-  collectionSettingNames,
+  collectionWidgets,
   unreadableCollectionCard,
 } from "../domains/widgets/collection-cards";
 import { conditionProbe } from "../domains/widgets/condition-probe";
@@ -331,11 +331,8 @@ async function visibleWidgets(auth: AuthContext) {
     // of a widget they may not see is. Settings are read from the registered
     // definitions, which the canonical summary does not carry.
     withheld: unreadableCollectionCard(
-      collectionSettingNames(
-        widgets.map(widget => getWidget(widget.id) ?? widget)
-      ),
-      readable,
-      registered
+      collectionWidgets(widgets.map(widget => getWidget(widget.id) ?? widget)),
+      readable
     ),
     scope: visibilityToken(
       widgets.map(widget => widget.id),
@@ -594,6 +591,31 @@ async function authenticateLayoutWrite(
 }
 
 /** Refuses a submission naming a widget this caller may not see, or an id twice. */
+/**
+ * Refuses a submitted card set to a collection this reader may not read.
+ *
+ * 🔴 One answer whether the collection exists or not: a write that failed for
+ * one and was stored for the other would tell a reader which names exist. And
+ * none is stored, so no card the reader was never allowed to see enters their
+ * row. A card they already held is not in their submission once withheld: it
+ * is carried, not resubmitted.
+ */
+function refuseUnreadableCollections(
+  submitted: readonly WidgetPlacement[],
+  withheld: (placement: WidgetPlacement) => boolean
+): void {
+  if (!submitted.some(withheld)) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "placements",
+        code: "INVALID_VALUE",
+        message: "A card is set to a collection that is not available.",
+      },
+    ],
+  });
+}
+
 function refuseUnknownOrRepeated(
   submitted: readonly WidgetPlacement[],
   visibleIds: ReadonlySet<string>
@@ -878,6 +900,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const view = await visibleWidgets(auth);
   refuseStaleScope(submittedScope, view.scope);
   refuseUnknownOrRepeated(submitted, view.visibleIds);
+  refuseUnreadableCollections(submitted, view.withheld);
 
   const stored = await service.getLayout(SCOPE_KIND, view.caller.userId);
   refuseUnconfirmedReplacement(

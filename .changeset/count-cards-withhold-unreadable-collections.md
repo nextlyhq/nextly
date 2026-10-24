@@ -29,7 +29,7 @@
 "nextly": patch
 ---
 
-A dashboard card set to a collection the reader may not read is no longer handed to them. Their layout read leaves it out, exactly as it leaves out a card of a widget they may not see, and their saves keep it in place, so it returns once they may read the collection. A card set to a collection that no longer exists is still shown, as not available.
+A dashboard card set to a collection the reader may not read is no longer handed to them. Their layout read leaves it out, exactly as it leaves out a card of a widget they may not see, and their saves keep it in place, so it returns once they may read the collection. A collection that does not exist is treated the same way, so a reader cannot learn which collections exist from what comes back. A save that adds such a card is refused, with one answer whether the collection exists or not. The card's collection is read as its settings resolve it, its declared default included.
 
 Saved count and health cards converting to Count cards also change in four ways:
 

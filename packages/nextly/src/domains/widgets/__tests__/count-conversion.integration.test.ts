@@ -209,11 +209,10 @@ describe.each(getConfiguredTestDialects())(
       await service().saveLayout("user", reader, own, 0);
 
       const seen = await read(reader);
-      // 🔴 Handed over, the card's settings would name the collection.
-      expect(seen.placements.map(placement => placement.id)).toEqual([
-        "mine",
-        "old",
-      ]);
+      // 🔴 Handed over, the card's settings would name the collection. And
+      // the one set to a collection that does not exist is withheld the same
+      // way: drawn instead, it would tell the reader which names exist.
+      expect(seen.placements.map(placement => placement.id)).toEqual(["mine"]);
       expect(JSON.stringify(seen)).not.toMatch(/cv[-_]secret/);
 
       const res = await call(reader, "PUT", {
@@ -224,6 +223,44 @@ describe.each(getConfiguredTestDialects())(
       expect(res.status).toBe(200);
       const stored = await service().getLayout("user", reader);
       expect(stored.layout?.placements).toEqual(own);
+    });
+
+    it("refuses a card set to a collection the reader may not read, whether it exists or not, with one answer", async () => {
+      const reader = await account("cv-guesser@example.com");
+      const seen = await read(reader);
+      const attempt = async (collection: string) => {
+        const res = await call(reader, "PUT", {
+          placements: [
+            ...seen.placements,
+            card("guess", "core/count", { config: { collection } }),
+          ],
+          version: seen.version,
+          scope: seen.scope,
+        });
+        const body = (await res.json()) as {
+          error?: { code?: string; message?: string; data?: unknown };
+        };
+        return {
+          status: res.status,
+          code: body.error?.code,
+          message: body.error?.message,
+          data: body.error?.data,
+        };
+      };
+      const existing = await attempt(SECRET);
+      const missing = await attempt("cv_nowhere");
+      // 🔴 Refused, and refused identically: a write that answered the two
+      // differently would tell the reader which names exist.
+      expect(existing.status).toBe(400);
+      expect(missing).toEqual(existing);
+      expect(JSON.stringify(existing)).not.toMatch(/cv[-_]secret/);
+      // Nothing was stored for either.
+      const stored = await service().getLayout("user", reader);
+      expect(
+        (stored.layout?.placements ?? []).some(
+          placement => placement.id === "guess"
+        )
+      ).toBe(false);
     });
 
     it("converts the same card for a reader who may read its collection", async () => {
