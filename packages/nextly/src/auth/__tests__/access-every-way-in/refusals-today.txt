@@ -4020,6 +4020,10 @@ service user-partial create collection async-throws at direct  403 FORBIDDEN thr
 service user-partial create collection async-throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_async_throws
 service user-partial create collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial create collection async-throws at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-partial create collection async-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-partial create collection async-true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_async_true
+service user-partial create collection async-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial create collection async-true at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-partial create collection false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-partial create collection false at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_false
 service user-partial create collection false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -4056,6 +4060,10 @@ service user-partial create collection returns-string at direct  403 FORBIDDEN t
 service user-partial create collection returns-string at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_returns_string
 service user-partial create collection returns-string at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial create collection returns-string at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-partial create collection returns-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-partial create collection returns-true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_returns_true
+service user-partial create collection returns-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial create collection returns-true at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-partial create collection returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-partial create collection returns-undefined at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_returns_undefined
 service user-partial create collection returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -4072,6 +4080,10 @@ service user-partial create collection throws at direct  403 FORBIDDEN thrown  |
 service user-partial create collection throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_throws
 service user-partial create collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial create collection throws at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-partial create collection true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-partial create collection true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_true
+service user-partial create collection true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial create collection true at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-partial create collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-partial create collection user-is-key-maker at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_user_is_key_maker
 service user-partial create collection user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -4090,6 +4102,10 @@ service user-partial delete collection async-throws at direct  403 FORBIDDEN thr
 service user-partial delete collection async-throws at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_async_throws
 service user-partial delete collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial delete collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-partial delete collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-partial delete collection async-true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_async_true
+service user-partial delete collection async-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial delete collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial delete collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial delete collection false at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_false
 service user-partial delete collection false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -4126,6 +4142,10 @@ service user-partial delete collection returns-string at direct  403 FORBIDDEN t
 service user-partial delete collection returns-string at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_returns_string
 service user-partial delete collection returns-string at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial delete collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-partial delete collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-partial delete collection returns-true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_returns_true
+service user-partial delete collection returns-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial delete collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial delete collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial delete collection returns-undefined at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_returns_undefined
 service user-partial delete collection returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -4142,6 +4162,10 @@ service user-partial delete collection throws at direct  403 FORBIDDEN thrown  m
 service user-partial delete collection throws at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_throws
 service user-partial delete collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial delete collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-partial delete collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-partial delete collection true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_true
+service user-partial delete collection true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial delete collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial delete collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial delete collection user-is-key-maker at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_user_is_key_maker
 service user-partial delete collection user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -4361,6 +4385,10 @@ service user-partial unpublish collection async-throws at direct  403 FORBIDDEN 
 service user-partial unpublish collection async-throws at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_throws
 service user-partial unpublish collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial unpublish collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-partial unpublish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-partial unpublish collection async-true at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-partial unpublish collection async-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial unpublish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial unpublish collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial unpublish collection false at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_false
 service user-partial unpublish collection false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -4397,6 +4425,10 @@ service user-partial unpublish collection returns-string at direct  403 FORBIDDE
 service user-partial unpublish collection returns-string at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_string
 service user-partial unpublish collection returns-string at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial unpublish collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-partial unpublish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-partial unpublish collection returns-true at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-partial unpublish collection returns-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial unpublish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial unpublish collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial unpublish collection returns-undefined at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_undefined
 service user-partial unpublish collection returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -4413,6 +4445,10 @@ service user-partial unpublish collection throws at direct  403 FORBIDDEN thrown
 service user-partial unpublish collection throws at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_throws
 service user-partial unpublish collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial unpublish collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-partial unpublish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-partial unpublish collection true at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-partial unpublish collection true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial unpublish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial unpublish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-partial unpublish collection user-is-key-maker at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_user_is_key_maker
 service user-partial unpublish collection user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -4423,6 +4459,9 @@ service user-partial unpublish single-pub async-false at route  403 FORBIDDEN er
 service user-partial unpublish single-pub async-throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-partial unpublish single-pub async-throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_async_throws
 service user-partial unpublish single-pub async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial unpublish single-pub async-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-partial unpublish single-pub async-true at rest  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial unpublish single-pub async-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial unpublish single-pub false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-partial unpublish single-pub false at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_false
 service user-partial unpublish single-pub false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -4450,6 +4489,9 @@ service user-partial unpublish single-pub returns-null at route  403 FORBIDDEN e
 service user-partial unpublish single-pub returns-string at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-partial unpublish single-pub returns-string at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_returns_string
 service user-partial unpublish single-pub returns-string at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial unpublish single-pub returns-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-partial unpublish single-pub returns-true at rest  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial unpublish single-pub returns-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial unpublish single-pub returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-partial unpublish single-pub returns-undefined at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_returns_undefined
 service user-partial unpublish single-pub returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -4462,6 +4504,9 @@ service user-partial unpublish single-pub role-screen-spelling at route  403 FOR
 service user-partial unpublish single-pub throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-partial unpublish single-pub throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_throws
 service user-partial unpublish single-pub throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial unpublish single-pub true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-partial unpublish single-pub true at rest  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-partial unpublish single-pub true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial unpublish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-partial unpublish single-pub user-is-key-maker at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_user_is_key_maker
 service user-partial unpublish single-pub user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5022,6 +5067,9 @@ service user-without count collection async-false at service  403 FORBIDDEN thro
 service user-without count collection async-throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without count collection async-throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_async_throws
 service user-without count collection async-throws at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without count collection async-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without count collection async-true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_async_true
+service user-without count collection async-true at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without count collection false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without count collection false at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_false
 service user-without count collection false at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
@@ -5049,6 +5097,9 @@ service user-without count collection returns-null at service  403 FORBIDDEN thr
 service user-without count collection returns-string at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without count collection returns-string at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_returns_string
 service user-without count collection returns-string at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without count collection returns-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without count collection returns-true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_returns_true
+service user-without count collection returns-true at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without count collection returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without count collection returns-undefined at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_returns_undefined
 service user-without count collection returns-undefined at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
@@ -5061,6 +5112,9 @@ service user-without count collection role-screen-spelling at service  403 FORBI
 service user-without count collection throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without count collection throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_throws
 service user-without count collection throws at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without count collection true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without count collection true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_true
+service user-without count collection true at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without count collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without count collection user-is-key-maker at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_user_is_key_maker
 service user-without count collection user-is-key-maker at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
@@ -5072,6 +5126,10 @@ service user-without create collection async-throws at direct  403 FORBIDDEN thr
 service user-without create collection async-throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_async_throws
 service user-without create collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without create collection async-throws at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without create collection async-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without create collection async-true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_async_true
+service user-without create collection async-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without create collection async-true at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without create collection false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without create collection false at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_false
 service user-without create collection false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5108,6 +5166,10 @@ service user-without create collection returns-string at direct  403 FORBIDDEN t
 service user-without create collection returns-string at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_returns_string
 service user-without create collection returns-string at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without create collection returns-string at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without create collection returns-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without create collection returns-true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_returns_true
+service user-without create collection returns-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without create collection returns-true at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without create collection returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without create collection returns-undefined at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_returns_undefined
 service user-without create collection returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5124,6 +5186,10 @@ service user-without create collection throws at direct  403 FORBIDDEN thrown  |
 service user-without create collection throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_throws
 service user-without create collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without create collection throws at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without create collection true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without create collection true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_true
+service user-without create collection true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without create collection true at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without create collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without create collection user-is-key-maker at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to create c_user_is_key_maker
 service user-without create collection user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5142,6 +5208,10 @@ service user-without delete collection async-throws at direct  403 FORBIDDEN thr
 service user-without delete collection async-throws at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_async_throws
 service user-without delete collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without delete collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without delete collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without delete collection async-true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_async_true
+service user-without delete collection async-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without delete collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without delete collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without delete collection false at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_false
 service user-without delete collection false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5178,6 +5248,10 @@ service user-without delete collection returns-string at direct  403 FORBIDDEN t
 service user-without delete collection returns-string at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_returns_string
 service user-without delete collection returns-string at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without delete collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without delete collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without delete collection returns-true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_returns_true
+service user-without delete collection returns-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without delete collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without delete collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without delete collection returns-undefined at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_returns_undefined
 service user-without delete collection returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5194,6 +5268,10 @@ service user-without delete collection throws at direct  403 FORBIDDEN thrown  m
 service user-without delete collection throws at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_throws
 service user-without delete collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without delete collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without delete collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without delete collection true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_true
+service user-without delete collection true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without delete collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without delete collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without delete collection user-is-key-maker at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to delete c_user_is_key_maker
 service user-without delete collection user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5210,6 +5288,9 @@ service user-without list collection async-false at service  403 FORBIDDEN throw
 service user-without list collection async-throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without list collection async-throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_async_throws
 service user-without list collection async-throws at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without list collection async-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without list collection async-true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_async_true
+service user-without list collection async-true at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without list collection false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without list collection false at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_false
 service user-without list collection false at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
@@ -5237,6 +5318,9 @@ service user-without list collection returns-null at service  403 FORBIDDEN thro
 service user-without list collection returns-string at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without list collection returns-string at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_returns_string
 service user-without list collection returns-string at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without list collection returns-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without list collection returns-true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_returns_true
+service user-without list collection returns-true at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without list collection returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without list collection returns-undefined at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_returns_undefined
 service user-without list collection returns-undefined at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
@@ -5249,6 +5333,9 @@ service user-without list collection role-screen-spelling at service  403 FORBID
 service user-without list collection throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without list collection throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_throws
 service user-without list collection throws at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without list collection true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without list collection true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_true
+service user-without list collection true at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without list collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without list collection user-is-key-maker at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read c_user_is_key_maker
 service user-without list collection user-is-key-maker at service  403 FORBIDDEN thrown  | You don't have permission to perform this action.
@@ -5260,6 +5347,10 @@ service user-without publish collection async-throws at direct  403 FORBIDDEN th
 service user-without publish collection async-throws at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_throws
 service user-without publish collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without publish collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without publish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without publish collection async-true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_true
+service user-without publish collection async-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without publish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without publish collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without publish collection false at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_false
 service user-without publish collection false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5296,6 +5387,10 @@ service user-without publish collection returns-string at direct  403 FORBIDDEN 
 service user-without publish collection returns-string at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_string
 service user-without publish collection returns-string at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without publish collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without publish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without publish collection returns-true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_true
+service user-without publish collection returns-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without publish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without publish collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without publish collection returns-undefined at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_undefined
 service user-without publish collection returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5312,6 +5407,10 @@ service user-without publish collection throws at direct  403 FORBIDDEN thrown  
 service user-without publish collection throws at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_throws
 service user-without publish collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without publish collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without publish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without publish collection true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_true
+service user-without publish collection true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without publish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without publish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without publish collection user-is-key-maker at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_user_is_key_maker
 service user-without publish collection user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5322,6 +5421,9 @@ service user-without publish single-pub async-false at route  403 FORBIDDEN erro
 service user-without publish single-pub async-throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without publish single-pub async-throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_async_throws
 service user-without publish single-pub async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without publish single-pub async-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without publish single-pub async-true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_async_true
+service user-without publish single-pub async-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without publish single-pub false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without publish single-pub false at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_false
 service user-without publish single-pub false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5349,6 +5451,9 @@ service user-without publish single-pub returns-null at route  403 FORBIDDEN err
 service user-without publish single-pub returns-string at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without publish single-pub returns-string at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_returns_string
 service user-without publish single-pub returns-string at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without publish single-pub returns-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without publish single-pub returns-true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_returns_true
+service user-without publish single-pub returns-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without publish single-pub returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without publish single-pub returns-undefined at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_returns_undefined
 service user-without publish single-pub returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5361,6 +5466,9 @@ service user-without publish single-pub role-screen-spelling at route  403 FORBI
 service user-without publish single-pub throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without publish single-pub throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_throws
 service user-without publish single-pub throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without publish single-pub true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without publish single-pub true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_true
+service user-without publish single-pub true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without publish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without publish single-pub user-is-key-maker at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_user_is_key_maker
 service user-without publish single-pub user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5372,6 +5480,10 @@ service user-without read collection async-throws at direct  403 FORBIDDEN throw
 service user-without read collection async-throws at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to read c_async_throws
 service user-without read collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without read collection async-throws at service  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
+service user-without read collection async-true at direct  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
+service user-without read collection async-true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to read c_async_true
+service user-without read collection async-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without read collection async-true at service  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
 service user-without read collection false at direct  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
 service user-without read collection false at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to read c_false
 service user-without read collection false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5408,6 +5520,10 @@ service user-without read collection returns-string at direct  403 FORBIDDEN thr
 service user-without read collection returns-string at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to read c_returns_string
 service user-without read collection returns-string at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without read collection returns-string at service  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
+service user-without read collection returns-true at direct  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
+service user-without read collection returns-true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to read c_returns_true
+service user-without read collection returns-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without read collection returns-true at service  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
 service user-without read collection returns-undefined at direct  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
 service user-without read collection returns-undefined at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to read c_returns_undefined
 service user-without read collection returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5424,6 +5540,10 @@ service user-without read collection throws at direct  403 FORBIDDEN thrown  mis
 service user-without read collection throws at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to read c_throws
 service user-without read collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without read collection throws at service  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
+service user-without read collection true at direct  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
+service user-without read collection true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to read c_true
+service user-without read collection true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without read collection true at service  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
 service user-without read collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=same  | You don't have permission to perform this action.
 service user-without read collection user-is-key-maker at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to read c_user_is_key_maker
 service user-without read collection user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5441,6 +5561,9 @@ service user-without read single async-false at route  403 FORBIDDEN error  | Yo
 service user-without read single async-throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without read single async-throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read s_async_throws
 service user-without read single async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without read single async-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without read single async-true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read s_async_true
+service user-without read single async-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without read single false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without read single false at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read s_false
 service user-without read single false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5468,6 +5591,9 @@ service user-without read single returns-null at route  403 FORBIDDEN error  | Y
 service user-without read single returns-string at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without read single returns-string at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read s_returns_string
 service user-without read single returns-string at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without read single returns-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without read single returns-true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read s_returns_true
+service user-without read single returns-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without read single returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without read single returns-undefined at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read s_returns_undefined
 service user-without read single returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5480,6 +5606,9 @@ service user-without read single role-screen-spelling at route  403 FORBIDDEN er
 service user-without read single throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without read single throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read s_throws
 service user-without read single throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without read single true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without read single true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read s_true
+service user-without read single true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without read single user-is-key-maker at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without read single user-is-key-maker at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to read s_user_is_key_maker
 service user-without read single user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5493,6 +5622,10 @@ service user-without unpublish collection async-throws at direct  403 FORBIDDEN 
 service user-without unpublish collection async-throws at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_throws
 service user-without unpublish collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without unpublish collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without unpublish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without unpublish collection async-true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_true
+service user-without unpublish collection async-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without unpublish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without unpublish collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without unpublish collection false at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_false
 service user-without unpublish collection false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5529,6 +5662,10 @@ service user-without unpublish collection returns-string at direct  403 FORBIDDE
 service user-without unpublish collection returns-string at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_string
 service user-without unpublish collection returns-string at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without unpublish collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without unpublish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without unpublish collection returns-true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_true
+service user-without unpublish collection returns-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without unpublish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without unpublish collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without unpublish collection returns-undefined at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_undefined
 service user-without unpublish collection returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5545,6 +5682,10 @@ service user-without unpublish collection throws at direct  403 FORBIDDEN thrown
 service user-without unpublish collection throws at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_throws
 service user-without unpublish collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without unpublish collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without unpublish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without unpublish collection true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_true
+service user-without unpublish collection true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without unpublish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without unpublish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without unpublish collection user-is-key-maker at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_user_is_key_maker
 service user-without unpublish collection user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5555,6 +5696,9 @@ service user-without unpublish single-pub async-false at route  403 FORBIDDEN er
 service user-without unpublish single-pub async-throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without unpublish single-pub async-throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_async_throws
 service user-without unpublish single-pub async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without unpublish single-pub async-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without unpublish single-pub async-true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_async_true
+service user-without unpublish single-pub async-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without unpublish single-pub false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without unpublish single-pub false at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_false
 service user-without unpublish single-pub false at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5582,6 +5726,9 @@ service user-without unpublish single-pub returns-null at route  403 FORBIDDEN e
 service user-without unpublish single-pub returns-string at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without unpublish single-pub returns-string at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_returns_string
 service user-without unpublish single-pub returns-string at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without unpublish single-pub returns-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without unpublish single-pub returns-true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_returns_true
+service user-without unpublish single-pub returns-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without unpublish single-pub returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without unpublish single-pub returns-undefined at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_returns_undefined
 service user-without unpublish single-pub returns-undefined at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5594,6 +5741,9 @@ service user-without unpublish single-pub role-screen-spelling at route  403 FOR
 service user-without unpublish single-pub throws at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without unpublish single-pub throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_throws
 service user-without unpublish single-pub throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without unpublish single-pub true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without unpublish single-pub true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_true
+service user-without unpublish single-pub true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without unpublish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without unpublish single-pub user-is-key-maker at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_pub_user_is_key_maker
 service user-without unpublish single-pub user-is-key-maker at route  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -5607,6 +5757,11 @@ service user-without update collection async-throws at lock  403 FORBIDDEN error
 service user-without update collection async-throws at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_throws
 service user-without update collection async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without update collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without update collection async-true at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
+service user-without update collection async-true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_async_true
+service user-without update collection async-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection false at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_false
@@ -5652,6 +5807,11 @@ service user-without update collection returns-string at lock  403 FORBIDDEN err
 service user-without update collection returns-string at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_string
 service user-without update collection returns-string at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without update collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without update collection returns-true at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
+service user-without update collection returns-true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_true
+service user-without update collection returns-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection returns-undefined at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_returns_undefined
@@ -5672,6 +5832,11 @@ service user-without update collection throws at lock  403 FORBIDDEN error  miss
 service user-without update collection throws at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_throws
 service user-without update collection throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without update collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
+service user-without update collection true at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
+service user-without update collection true at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_true
+service user-without update collection true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You don't have permission to perform this action.
 service user-without update collection user-is-key-maker at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update collection user-is-key-maker at rest  403 FORBIDDEN error NAMES-INTERNALS  missing=same  | You do not have permission to update c_user_is_key_maker
@@ -5689,6 +5854,10 @@ service user-without update single async-throws at direct  403 FORBIDDEN thrown 
 service user-without update single async-throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single async-throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_async_throws
 service user-without update single async-throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single async-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without update single async-true at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
+service user-without update single async-true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_async_true
+service user-without update single async-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single false at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without update single false at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single false at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_false
@@ -5725,6 +5894,10 @@ service user-without update single returns-string at direct  403 FORBIDDEN throw
 service user-without update single returns-string at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single returns-string at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_returns_string
 service user-without update single returns-string at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single returns-true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without update single returns-true at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
+service user-without update single returns-true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_returns_true
+service user-without update single returns-true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single returns-undefined at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without update single returns-undefined at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single returns-undefined at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_returns_undefined
@@ -5741,6 +5914,10 @@ service user-without update single throws at direct  403 FORBIDDEN thrown  | You
 service user-without update single throws at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single throws at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_throws
 service user-without update single throws at route  403 FORBIDDEN error  | You don't have permission to perform this action.
+service user-without update single true at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
+service user-without update single true at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
+service user-without update single true at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_true
+service user-without update single true at route  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-without update single user-is-key-maker at direct  403 FORBIDDEN thrown  | You don't have permission to perform this action.
 service user-without update single user-is-key-maker at lock  403 FORBIDDEN error  missing=same  | You don't have permission to perform this action.
 service user-without update single user-is-key-maker at rest  403 FORBIDDEN error NAMES-INTERNALS  | You do not have permission to update s_user_is_key_maker

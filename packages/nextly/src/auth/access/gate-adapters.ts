@@ -51,7 +51,10 @@ import {
   userHoldsPermission,
   userIsSuperAdmin,
 } from "./resolve-actor";
-import { noticeRuleNoLongerAllows } from "./rule-answer-log";
+import {
+  noticePermissionNowComesFirst,
+  noticeRuleNoLongerAllows,
+} from "./rule-answer-log";
 
 /** Allowed, or refused with the kind of refusal the gate words. */
 export type GateVerdict =
@@ -473,18 +476,29 @@ async function ruleLessVerdict({
  * A user named by no id holds nothing.
  */
 async function plainRuleVerdict(
-  { q, target, userId, looked }: UserAsk,
+  { q, userId }: UserAsk,
   plain: boolean
 ): Promise<GateVerdict> {
   if (!userId) return INSUFFICIENT;
   if (await userIsSuperAdmin(userId, { executor: q.executor })) {
     return ALLOWED;
   }
-  return verdictOf(
-    await deviate("rule-alone-for-people", plain, () =>
-      decided(looked(), q.action, target)
-    )
-  );
+  // The permission first; a rule only narrows it.
+  const holds = await userHoldsPermission(userId, q.action, q.slug, {
+    executor: q.executor,
+  });
+  if (!holds) return refusedWithoutPermission(q);
+  return verdictOf(plain);
+}
+
+/**
+ * A signed-in user refused for want of the permission, where the target
+ * declares a rule for the action: named once, since that rule used to decide
+ * alone.
+ */
+function refusedWithoutPermission(q: GateQuestion): GateVerdict {
+  noticePermissionNowComesFirst(q.slug, q.action, "signed-in user");
+  return INSUFFICIENT;
 }
 
 /** A rule function, handed the caller's roles and permissions. */
@@ -501,11 +515,15 @@ async function ruleVerdict({
     return ALLOWED;
   }
   const actor = await looked();
+  // The permission first: a user without it is refused before the rule is
+  // asked, as the decision refuses.
+  if (!holdsPermission(actor, q.action, q.slug)) {
+    return refusedWithoutPermission(q);
+  }
   const outcome = await askRule(actor, q.action, target);
-  // The rule lets a signed-in user through only by answering `true`, as it
-  // has always done for a key.
-  const today = outcomeAllows(outcome);
-  if (!today) {
+  // The rule then lets the user through only by answering `true`.
+  const allowed = outcomeAllows(outcome);
+  if (!allowed) {
     noticeWhereRuleAllowedBefore(
       outcome,
       allowedUserBefore,
@@ -513,9 +531,5 @@ async function ruleVerdict({
       "signed-in user"
     );
   }
-  return verdictOf(
-    await deviate("rule-alone-for-people", today, () =>
-      decidedFrom(actor, q.action, target, outcome)
-    )
-  );
+  return verdictOf(allowed);
 }
