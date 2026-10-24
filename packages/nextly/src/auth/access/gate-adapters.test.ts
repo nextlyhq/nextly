@@ -63,16 +63,12 @@ function asked(
 
 describe("a rule function", () => {
   it("is asked once for a signed-in user, even while deviations are recorded", async () => {
-    // The rule admits a user who lacks the permission: today admits on it,
-    // the decision does not, so a deviation is recorded, and the comparison
-    // must not ask the rule again.
-    callerMayNot("read");
     const rule = vi.fn(() => true);
     const { result, deviations } = await recordingDeviations(() =>
       collectionGateVerdict(asked({ read: rule }, { user: { id: "u1" } }))
     );
     expect(result.allowed).toBe(true);
-    expect(deviations).toEqual(["rule-alone-for-people"]);
+    expect(deviations).toEqual([]);
     expect(rule).toHaveBeenCalledTimes(1);
   });
 
@@ -192,6 +188,32 @@ describe("a visitor's write", () => {
     // all still admits a visitor's read, so only writes changed.
     const verdict = await collectionGateVerdict(asked({}, { action: "read" }));
     expect(verdict.allowed).toBe(true);
+  });
+});
+
+describe("a signed-in user without the permission", () => {
+  it("is refused whatever the rule says, and a rule function is not asked", async () => {
+    callerMayNot("read");
+    const rule = vi.fn(() => true);
+    const user = { user: { id: "u1" } };
+    expect(
+      (await collectionGateVerdict(asked({ read: rule }, user))).allowed
+    ).toBe(false);
+    expect(rule).not.toHaveBeenCalled();
+    expect(
+      (await collectionGateVerdict(asked({ read: true }, user))).allowed
+    ).toBe(false);
+  });
+
+  it("is let through by the rule once they hold the permission", async () => {
+    // The control: the refusal above is the permission's.
+    const user = { user: { id: "u1" } };
+    expect(
+      (await collectionGateVerdict(asked({ read: () => true }, user))).allowed
+    ).toBe(true);
+    expect(
+      (await collectionGateVerdict(asked({ read: true }, user))).allowed
+    ).toBe(true);
   });
 });
 

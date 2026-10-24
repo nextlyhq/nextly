@@ -389,12 +389,12 @@ service true user-with
   holds(manage):false
   holds():false
 service true user-without
-  can(create,posts):true
-  can(read,posts):true
-  can(update,posts):true
-  can(delete,posts):true
-  can(publish,posts):true
-  can(unpublish,posts):true
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):false
   can(manage,settings):false
@@ -403,12 +403,12 @@ service true user-without
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):true
-  holds(read-posts):true
-  holds(update-posts):true
-  holds(delete-posts):true
-  holds(publish-posts):true
-  holds(unpublish-posts):true
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):false
@@ -419,10 +419,10 @@ service true user-without
   holds(manage):false
   holds():false
 service true user-partial
-  can(create,posts):true
+  can(create,posts):false
   can(read,posts):true
-  can(update,posts):true
-  can(delete,posts):true
+  can(update,posts):false
+  can(delete,posts):false
   can(publish,posts):true
   can(unpublish,posts):true
   can(export,posts):false
@@ -433,10 +433,10 @@ service true user-partial
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):true
+  holds(create-posts):false
   holds(read-posts):true
-  holds(update-posts):true
-  holds(delete-posts):true
+  holds(update-posts):false
+  holds(delete-posts):false
   holds(publish-posts):true
   holds(unpublish-posts):true
   holds(export-posts):false
@@ -1109,12 +1109,12 @@ service returns-true user-with
   holds(manage):false
   holds():false
 service returns-true user-without
-  can(create,posts):true
-  can(read,posts):true
-  can(update,posts):true
-  can(delete,posts):true
-  can(publish,posts):true
-  can(unpublish,posts):true
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):false
   can(manage,settings):false
@@ -1123,12 +1123,12 @@ service returns-true user-without
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):true
-  holds(read-posts):true
-  holds(update-posts):true
-  holds(delete-posts):true
-  holds(publish-posts):true
-  holds(unpublish-posts):true
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):false
@@ -1139,10 +1139,10 @@ service returns-true user-without
   holds(manage):false
   holds():false
 service returns-true user-partial
-  can(create,posts):true
+  can(create,posts):false
   can(read,posts):true
-  can(update,posts):true
-  can(delete,posts):true
+  can(update,posts):false
+  can(delete,posts):false
   can(publish,posts):true
   can(unpublish,posts):true
   can(export,posts):false
@@ -1153,10 +1153,10 @@ service returns-true user-partial
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):true
+  holds(create-posts):false
   holds(read-posts):true
-  holds(update-posts):true
-  holds(delete-posts):true
+  holds(update-posts):false
+  holds(delete-posts):false
   holds(publish-posts):true
   holds(unpublish-posts):true
   holds(export-posts):false
