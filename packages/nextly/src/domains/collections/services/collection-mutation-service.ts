@@ -7150,9 +7150,10 @@ export class CollectionMutationService extends BaseService {
    * What a publisher's own values contribute to the promotion of a pending
    * change, in the logical shape: every value they may write as they sent it,
    * and every denied child of a container they sent at the pending change's
-   * value (`kept`), and the values they may write alone (`permitted`). Both
-   * hold `keys` only, the entry's own fields the publisher sent; the rest of
-   * `callerDocument` is there for the rules to read.
+   * value (`scalars` and `components`, the entry's own fields and the field
+   * groups the publisher sent, as `parts` names them), and their whole
+   * document as the rules let them write it, with nothing put back
+   * (`permitted`).
    *
    * The update's field gate kept those denied children at the LIVE row's
    * values, the only stored document it had. A container the publisher sends
@@ -7165,12 +7166,13 @@ export class CollectionMutationService extends BaseService {
    */
   private async callerOverPendingChange(
     callerDocument: Record<string, unknown>,
-    keys: readonly string[],
+    parts: { scalars: readonly string[]; components: readonly string[] },
     pendingChange: Record<string, unknown>,
     fields: FieldDefinition[],
     applyRules: (document: Record<string, unknown>) => Promise<void>
   ): Promise<{
-    kept: Record<string, unknown>;
+    scalars: Record<string, unknown>;
+    components: Record<string, unknown>;
     permitted: Record<string, unknown>;
   }> {
     const sent = this.deserializeJsonFieldsForSnapshot(callerDocument, fields);
@@ -7181,13 +7183,17 @@ export class CollectionMutationService extends BaseService {
       stored: this.deserializeJsonFieldsForSnapshot(pendingChange, fields),
       applyRules,
     });
-    const only = (document: Record<string, unknown>) =>
+    const only = (keys: readonly string[]) =>
       Object.fromEntries(
         keys
-          .filter(key => Object.prototype.hasOwnProperty.call(document, key))
-          .map(key => [key, document[key]])
+          .filter(key => Object.prototype.hasOwnProperty.call(kept, key))
+          .map(key => [key, kept[key]])
       );
-    return { kept: only(kept), permitted: only(permitted) };
+    return {
+      scalars: only(parts.scalars),
+      components: only(parts.components),
+      permitted,
+    };
   }
 
   /**
@@ -9261,7 +9267,10 @@ export class CollectionMutationService extends BaseService {
                   manyToManyFields,
                   splitComponentSchemas
                 ),
-                Object.keys(finalData),
+                {
+                  scalars: Object.keys(finalData),
+                  components: Object.keys(componentFieldData),
+                },
                 draftInput,
                 fields,
                 this.promotionRules(promoteAccess)
@@ -9269,8 +9278,8 @@ export class CollectionMutationService extends BaseService {
               const mergedPromoteData = this.deserializeJsonFieldsForSnapshot(
                 this.assemblePromotedDocument(
                   draftInput,
-                  callerOwn.kept,
-                  componentFieldData,
+                  callerOwn.scalars,
+                  callerOwn.components,
                   manyToManyData,
                   fields,
                   manyToManyFields,
@@ -9279,8 +9288,8 @@ export class CollectionMutationService extends BaseService {
                 fields
               );
               // The caller's own contribution: only what the rules let this
-              // publisher write, with no denied value put back from a stored
-              // document. Read from the raw request, it would credit the
+              // publisher write, field groups included, with no denied value
+              // put back from a stored document. Read from the raw request, it would credit the
               // publisher with the pending change's edit whenever they echo the
               // same path: the gate strips their value, the merged document still
               // holds the draft's, the resolver treats that edit as theirs and
@@ -9290,18 +9299,7 @@ export class CollectionMutationService extends BaseService {
               // so the draft's edit is refused rather than lost. Logical,
               // through the same conversion as the document it is compared
               // against.
-              const callerContribution = this.deserializeJsonFieldsForSnapshot(
-                this.assemblePromotedDocument(
-                  {},
-                  callerOwn.permitted,
-                  componentFieldData,
-                  manyToManyData,
-                  fields,
-                  manyToManyFields,
-                  splitComponentSchemas
-                ),
-                fields
-              );
+              const callerContribution = callerOwn.permitted;
               // One call decides the refusal AND returns what to write, so the
               // document that was judged is the document that lands. A denied
               // field comes back at its LIVE value rather than removed: taking
