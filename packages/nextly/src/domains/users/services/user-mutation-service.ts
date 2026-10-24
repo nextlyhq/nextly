@@ -2134,7 +2134,11 @@ export class UserMutationService extends BaseService {
                 }
               );
             }
-            if (changes.isActive === false) {
+            // Only when this update writes the deactivation: an account that
+            // is already inactive, sent `isActive: false` again as the edit
+            // form resends it, loses nothing, so nothing is asked of the
+            // caller for it.
+            if (updateData.isActive === false) {
               await refuseRemovingLastSuperAdmin(
                 tx as LastSuperAdminTx,
                 this.tables,
