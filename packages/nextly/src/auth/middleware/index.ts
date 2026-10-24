@@ -12,6 +12,10 @@ import { currentRestLimitGate } from "../../middleware/rest-limit-gate";
 // getSession from ../session is a backward-compat wrapper that delegates
 // to the new jose-based session/get-session.ts module internally.
 import {
+  refusalMessageFor,
+  type RefusalScope,
+} from "../access/refusal-message";
+import {
   anyPermissionVerdict,
   routeGateVerdict,
 } from "../access/route-gate-adapters";
@@ -195,11 +199,16 @@ export async function requireApiKeyAuth(req: Request): Promise<
     : await apiKeyService.authenticateApiKey(rawKey);
   if (!keyAuth) {
     // Key was present but invalid/expired/revoked — explicit 401, do NOT fall through
-    return createErrorResponse(
-      401,
-      "Invalid API key",
-      "The provided API key is invalid, expired, or revoked"
-    );
+    // Which way the key fails is for the server's log, not the caller.
+    return {
+      ...createErrorResponse(
+        401,
+        "Invalid API key",
+        "Authentication required."
+      ),
+      reason:
+        "the API key is unknown, revoked, expired, or its creator is not active",
+    };
   }
 
   // 4. Rate limit check — enforced after auth, before permission resolution.
@@ -301,10 +310,12 @@ export async function requireAuthentication(
   // silently instead of bouncing the user to login.
   if (apiKeyResult === null) {
     if (sessionResult.reason === "expired") {
+      // The code tells the admin to refresh; the message says no more than
+      // any other request needing sign-in is told.
       return createErrorResponse(
         401,
         "Session expired",
-        "Your session has expired, please refresh",
+        "Authentication required.",
         undefined,
         "TOKEN_EXPIRED"
       );
@@ -312,7 +323,7 @@ export async function requireAuthentication(
     return createErrorResponse(
       401,
       "Authentication required",
-      "You must be logged in to access this resource",
+      "Authentication required.",
       undefined,
       "AUTH_REQUIRED"
     );
@@ -371,7 +382,9 @@ export async function requirePermission(
 export async function authorizeCaller(
   authResult: AuthContext,
   action: string,
-  resource: string
+  resource: string,
+  // Whether the request names one entry, so the refusal says "this post".
+  scope: RefusalScope = "all"
 ): Promise<AuthContext | ErrorResponse> {
   // The route gate's answer, asked of the one decision: a key on its own
   // grants and the entity's rule, a session through the access-control
@@ -387,11 +400,14 @@ export async function authorizeCaller(
   // always has, rather than being answered as a refusal.
   if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
   if (!verdict.allowed) {
-    return createErrorResponse(
-      403,
-      "Forbidden",
-      `You do not have permission to ${action} ${resource}`
-    );
+    return {
+      ...createErrorResponse(
+        403,
+        "Forbidden",
+        await refusalMessageFor(action, resource, scope)
+      ),
+      reason: `the caller does not hold ${action}-${resource}`,
+    };
   }
   return authResult;
 }
@@ -431,11 +447,21 @@ export async function authorizeCallerForAny(
     getRBACService()
   );
   if (!verdict.allowed) {
-    return createErrorResponse(
-      403,
-      "Forbidden",
-      `You do not have the required permissions to access this resource`
-    );
+    // Named by the first permission it asks: the alternatives are kinds of
+    // one action on one thing (its own action, or managing it).
+    const [named] = permissions;
+    return {
+      ...createErrorResponse(
+        403,
+        "Forbidden",
+        named
+          ? await refusalMessageFor(named.action, named.resource)
+          : "You can't do that."
+      ),
+      reason: `the caller holds none of ${permissions
+        .map(p => `${p.action}-${p.resource}`)
+        .join(", ")}`,
+    };
   }
   return authResult;
 }
@@ -645,7 +671,13 @@ export async function requireCollectionAccess(
   // question `requirePermission` asks, about the collection or Single the
   // URL names.
   return withRuleLanguage(requestLanguage(operation), () =>
-    authorizeCaller(authResult, action, collectionSlug)
+    authorizeCaller(
+      authResult,
+      action,
+      collectionSlug,
+      // A route naming one entry is refused about that entry.
+      operation?.params.entryId ? "one" : "all"
+    )
   );
 }
 

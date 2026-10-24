@@ -58,6 +58,15 @@ const OPERATIONS: readonly AccessOperation[] = [
   "unpublish",
 ];
 
+/** The gate's logger, recording the reason each refusal logs. */
+const logger = { ...silentLogger, info: vi.fn() };
+
+/** Every reason a refusal logged, so each kind is seen to have been reached. */
+const loggedReasons = () =>
+  logger.info.mock.calls.map(
+    ([, fields]) => (fields as { reason?: string } | undefined)?.reason ?? ""
+  );
+
 const CALLERS = gateCallers(SLUG, OPERATIONS);
 const RULES = gateRules(SLUG);
 
@@ -65,7 +74,7 @@ function gateFor(setup: GateSetup, rule: GateRule | undefined) {
   if (setup === "no-service") {
     return new CollectionAccessService(
       createMockAdapter(createMockDb({ rows: [] })) as never,
-      silentLogger as never
+      logger as never
     );
   }
   const rbac = new RBACAccessControlService();
@@ -78,7 +87,7 @@ function gateFor(setup: GateSetup, rule: GateRule | undefined) {
   }
   return new CollectionAccessService(
     createMockAdapter(createMockDb({ rows: [] })) as never,
-    silentLogger as never,
+    logger as never,
     rbac
   );
 }
@@ -132,8 +141,16 @@ describe("the collection gate's answers", () => {
     // POPULATION CONTROL: every kind of answer was reached.
     const text = lines.join("\n");
     expect(text).toContain(":A");
-    expect(text).toContain(":403 Access denied: insufficient permissions");
-    expect(text).toContain(":403 Access denied: publish on posts requires");
+    // Both kinds of refusal were reached: a caller lacking the grant, and a
+    // publish with no user. They read alike to the caller; their reasons are
+    // the server's, in its log.
+    expect(text).toContain(":403 You can't");
+    expect(loggedReasons()).toContainEqual(
+      expect.stringContaining("the caller may not")
+    );
+    expect(loggedReasons()).toContainEqual(
+      expect.stringContaining("publish on posts requires an authenticated user")
+    );
     await expect(`${text}\n`).toMatchFileSnapshot(
       join(__dirname, "collection-gate-answers.txt")
     );

@@ -199,7 +199,8 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(403);
-      expect(result.message).toContain("denied");
+      // What was refused, in words; never the permission or the check.
+      expect(result.message).toBe("You can't see posts.");
     });
 
     it("should allow listEntries when access is granted", async () => {

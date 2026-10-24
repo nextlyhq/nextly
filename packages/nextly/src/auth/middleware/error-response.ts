@@ -12,11 +12,13 @@ import {
   generateRequestId,
   readOrGenerateRequestId,
 } from "../../api/request-id";
+import { container } from "../../di/container";
 import {
   NEXTLY_ERROR_STATUS,
   statusToErrorCode,
 } from "../../errors/error-codes";
 import { NextlyError } from "../../errors/nextly-error";
+import { consoleLogger, type Logger } from "../../shared/types";
 
 /**
  * Standardized error response structure.
@@ -40,6 +42,11 @@ export interface ErrorResponse {
   code?: string;
   /** Optional HTTP response headers (e.g. Retry-After, X-RateLimit-*). Excluded from JSON body. */
   headers?: Record<string, string>;
+  /**
+   * Which check refused, and why: logged on the server when the refusal is
+   * answered, and never part of the answer.
+   */
+  reason?: string;
 }
 
 /**
@@ -84,7 +91,26 @@ export function refusalError(refusal: ErrorResponse): NextlyError {
     ...(Number.isFinite(retryAfter)
       ? { publicData: { retryAfterSeconds: retryAfter } }
       : {}),
-    logContext: { refusal: refusal.message },
+    logContext: { refusal: refusal.message, reason: refusal.reason },
+  });
+}
+
+/** The installation's logger, or the console where none is registered. */
+function logger(): Logger {
+  try {
+    if (container.has("logger")) return container.get<Logger>("logger");
+  } catch {
+    // The container is not initialized.
+  }
+  return consoleLogger;
+}
+
+/** Records which check refused, and why, on the server alone. */
+function logRefusal(refusal: ErrorResponse): void {
+  logger().info("[nextly] Refused a request", {
+    status: refusal.statusCode,
+    code: refusal.code,
+    reason: refusal.reason ?? refusal.message,
   });
 }
 
@@ -98,6 +124,7 @@ export function createJsonErrorResponse(
   error: ErrorResponse,
   request?: Request
 ): Response {
+  logRefusal(error);
   return buildErrorResponse(refusalError(error), {
     requestId: request ? readOrGenerateRequestId(request) : generateRequestId(),
     headers: error.headers,

@@ -109,8 +109,19 @@ describe("the Single gate's answers", () => {
     // POPULATION CONTROL: every kind of answer was reached.
     const text = lines.join("\n");
     expect(text).toContain(":A");
-    expect(text).toContain(":403 Access denied: insufficient permissions");
-    expect(text).toContain(':403 Access denied: publish on single "home"');
+    // Both kinds of refusal were reached: a caller lacking the grant, and a
+    // publish with no user. They read alike to the caller; their reasons are
+    // the server's, in its log.
+    expect(text).toContain(":403 You can't");
+    const reasons = logger.info.mock.calls.map(
+      ([, fields]) => (fields as { reason?: string } | undefined)?.reason ?? ""
+    );
+    expect(reasons).toContainEqual(
+      expect.stringContaining("the caller may not")
+    );
+    expect(reasons).toContainEqual(
+      expect.stringContaining('publish on single "home" requires')
+    );
     await expect(`${text}\n`).toMatchFileSnapshot(
       join(__dirname, "single-gate-answers.txt")
     );

@@ -23,7 +23,8 @@ import type { ErrorResponse } from "./index";
  *   silently (per spec §13.6 the public message is the generic
  *   "Authentication required." regardless).
  * - 401 (other) -> `AUTH_REQUIRED`.
- * - 403 -> `FORBIDDEN`.
+ * - 403 -> `FORBIDDEN`, with the middleware's own message, which names what
+ *   was refused in the site's words and never a permission or a check.
  * - 429 -> `RATE_LIMITED`. The numeric `Retry-After` header (in seconds)
  *   is forwarded as `retryAfterSeconds` so `withErrorHandler` re-emits it.
  *   The header lookup is case-insensitive (per RFC 9110 section 5.1) so
@@ -57,7 +58,15 @@ export function toNextlyAuthError(legacy: ErrorResponse): NextlyError {
   }
 
   if (legacy.statusCode === 403) {
-    return NextlyError.forbidden({ logContext });
+    // The middleware words every refusal for the caller (what was refused,
+    // in the site's own words), so it is passed on; its reason stays in the
+    // log context.
+    if (legacy.reason) logContext.reason = legacy.reason;
+    return new NextlyError({
+      code: "FORBIDDEN",
+      publicMessage: legacy.error || legacy.message,
+      logContext,
+    });
   }
 
   if (legacy.statusCode === 429) {

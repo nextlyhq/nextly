@@ -13,6 +13,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { collectionGateVerdict } from "../../../auth/access/gate-adapters";
+import { refusalMessage } from "../../../auth/access/refusal-message";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { effectiveCallerScope } from "../../../auth/caller-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
@@ -153,13 +154,23 @@ export class CollectionAccessService extends BaseService {
         ...errorEnvelopeFields(error),
       };
     }
+    // The caller is told what was refused in the site's words; which check
+    // refused is logged here, on the server.
+    this.logger.info("[nextly] Refused a request", {
+      status: 403,
+      reason:
+        verdict.refusal === "unauthenticated"
+          ? `${operation} on ${collectionName} requires an authenticated user`
+          : `the caller may not ${operation} ${collectionName}`,
+    });
     return {
       success: false,
       statusCode: 403,
-      message:
-        verdict.refusal === "unauthenticated"
-          ? `Access denied: ${operation} on ${collectionName} requires an authenticated user`
-          : `Access denied: insufficient permissions for ${operation} on ${collectionName}`,
+      code: "FORBIDDEN",
+      // Named by the service's caller, so its slug is the site's own.
+      message: refusalMessage(operation, collectionName, "all", {
+        named: true,
+      }),
       data: null as unknown as T,
     };
   }

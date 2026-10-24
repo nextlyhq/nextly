@@ -126,11 +126,19 @@ const registered: { rbac: RBACAccessControlService | undefined } = {
   rbac: undefined,
 };
 
+/** The site's collections as a booted instance registers them. */
+const config = {
+  collections: [
+    { slug: "posts", labels: { singular: "Post", plural: "Posts" } },
+  ],
+};
+
 vi.mock("../../di/container", () => ({
   container: {
     has: (key: string) =>
-      key === "rbacAccessControlService" && registered.rbac !== undefined,
-    get: () => registered.rbac,
+      key === "config" ||
+      (key === "rbacAccessControlService" && registered.rbac !== undefined),
+    get: (key: string) => (key === "config" ? config : registered.rbac),
   },
 }));
 

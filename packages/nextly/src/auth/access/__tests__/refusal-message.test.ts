@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { container } from "../../../di/container";
-import { refusalMessage } from "../refusal-message";
+import { refusalMessage, refusalMessageFor } from "../refusal-message";
 
 const CONFIG = {
   collections: [
@@ -29,6 +29,17 @@ describe("a refusal's message", () => {
   // taken away again after.
   beforeAll(() => {
     container.register("config", () => CONFIG);
+    // The registries, which also hold what the Schema Builder made.
+    container.register("collectionRegistryService", () => ({
+      getCollectionBySlug: async (slug: string) =>
+        slug === "guides"
+          ? { slug, labels: { singular: "Guide", plural: "Guides" } }
+          : null,
+    }));
+    container.register("singleRegistryService", () => ({
+      getSingleBySlug: async (slug: string) =>
+        slug === "footer" ? { slug, label: "Footer" } : null,
+    }));
   });
   afterAll(() => {
     container.clear();
@@ -85,5 +96,28 @@ describe("a refusal's message", () => {
       "You can't do that."
     );
     expect(refusalMessage("manage", "")).toBe("You can't do that.");
+  });
+
+  it("names what only the registries hold, where the request names it", async () => {
+    await expect(refusalMessageFor("update", "guides", "one")).resolves.toBe(
+      "You can't edit this guide."
+    );
+    await expect(refusalMessageFor("read", "guides")).resolves.toBe(
+      "You can't see guides."
+    );
+    await expect(refusalMessageFor("update", "footer")).resolves.toBe(
+      "You can't edit Footer."
+    );
+    // Still no slug the site does not know, however it is asked.
+    await expect(refusalMessageFor("read", "not-a-thing")).resolves.toBe(
+      "You can't do that."
+    );
+  });
+
+  it("names a thing the code itself named by its words, where no label is held", () => {
+    // Server code names a collection or Single it knows; no URL reaches here.
+    expect(
+      refusalMessage("read", "builder-notes", "all", { named: true })
+    ).toBe("You can't see builder notes.");
   });
 });
