@@ -63,6 +63,7 @@ export { emailProvidersSqlite as emailProviders } from "../email-providers/sqlit
 export { emailDeliveriesSqlite as emailDeliveries } from "../email-deliveries/sqlite";
 export { emailSendClaimsSqlite as emailSendClaims } from "../email-send-claims/sqlite";
 export { emailQueueSqlite as emailQueue } from "../email-queue/sqlite";
+export { emailQueueRecipientsSqlite as emailQueueRecipients } from "../email-queue-recipients/sqlite";
 export { emailTemplatesSqlite as emailTemplates } from "../email-templates/sqlite";
 
 export { nextlySchemaEventsSqlite as nextlySchemaEvents } from "../schema-events/sqlite";

@@ -30,13 +30,26 @@ import { randomUUID } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull } from "drizzle-orm";
 
+import { getDialectTables } from "../../database/index";
 import { NextlyError } from "../../errors";
+import { getNextlyLogger } from "../../observability/logger";
+import type { PrincipalRef } from "../../plugins/principals/types";
 import { emailQueueMysql } from "../../schemas/email-queue/mysql";
 import { emailQueuePg } from "../../schemas/email-queue/postgres";
 import { emailQueueSqlite } from "../../schemas/email-queue/sqlite";
 import { EMAIL_QUEUE_TABLE } from "../../schemas/email-queue/table-name";
+import { emailQueueRecipientsMysql } from "../../schemas/email-queue-recipients/mysql";
+import { emailQueueRecipientsPg } from "../../schemas/email-queue-recipients/postgres";
+import { emailQueueRecipientsSqlite } from "../../schemas/email-queue-recipients/sqlite";
+import type { RowLockServer } from "../../shared/lib/row-lock";
+import { runAdapterTransaction } from "../../shared/lib/run-adapter-transaction";
+import {
+  type PrincipalDigestDb,
+  principalDigestTablesOf,
+  readPrincipalDigests,
+} from "../audit/principal-digest";
 import {
   defineJob,
   type JobContext,
@@ -45,7 +58,7 @@ import {
 import { enqueueInTransaction } from "../jobs/jobs-repository";
 import { openSetting, sealSetting } from "../plugins/settings-crypto";
 
-import { storableError } from "./delivery-record";
+import { recipientDigest, storableError } from "./delivery-record";
 import { type EmailFailure, httpFailure } from "./failure";
 import { pruneQueuedEmails } from "./prune";
 import {
@@ -55,6 +68,7 @@ import {
 } from "./queued-email-job";
 import type { EmailService } from "./services/email-service";
 import { markHtml, TrustedHtml } from "./services/liquid-engine";
+import { toAddressList } from "./services/recipients";
 import { notAcceptedFailure } from "./services/send-failures";
 
 /**
@@ -98,6 +112,12 @@ export type QueuedMessage =
       to: string | string[];
       variables: Record<string, unknown>;
       options: TemplateOptions;
+      /**
+       * The copies the template added when it was queued. Sent as the
+       * template has them at each attempt; held here, sealed with the
+       * message, so erasing one finds the email, across every re-seal.
+       */
+      templateCopies?: { cc: string[]; bcc: string[] };
     };
 
 /** The queue's table for a dialect. */
@@ -124,6 +144,19 @@ export function emailQueueTableFor(dialect: string): EmailQueueTable {
   }
 }
 
+/** The recipients' digests table for a dialect. */
+function emailQueueRecipientsTableFor(
+  dialect: string
+):
+  | typeof emailQueueRecipientsPg
+  | typeof emailQueueRecipientsMysql
+  | typeof emailQueueRecipientsSqlite {
+  if (dialect === "postgresql") return emailQueueRecipientsPg;
+  if (dialect === "mysql") return emailQueueRecipientsMysql;
+  // `emailQueueTableFor` has refused any other dialect by now.
+  return emailQueueRecipientsSqlite;
+}
+
 /** The Drizzle surface the queue needs. */
 interface QueueDb {
   select(fields?: Record<string, unknown>): {
@@ -137,6 +170,7 @@ interface QueueDb {
   update(table: unknown): {
     set(values: unknown): { where(condition: unknown): PromiseLike<unknown> };
   };
+  delete(table: unknown): { where(condition: unknown): PromiseLike<unknown> };
 }
 
 // ============================================================
@@ -268,6 +302,15 @@ function messageText(message: QueuedMessage): string {
   });
 }
 
+/** `messageFromText`, undefined rather than a throw for text that does not parse. */
+function parsedMessage(text: string): QueuedMessage | undefined {
+  try {
+    return messageFromText(text);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The text that was sealed, as the message it was made from. */
 function messageFromText(text: string): QueuedMessage | undefined {
   const parsed = JSON.parse(text) as QueuedMessage | undefined;
@@ -336,21 +379,58 @@ export interface QueuedEmailInput {
   /** Who queued it, the scope its key is claimed in. */
   scope: string;
   message: QueuedMessage;
+  /** The person `to` is, as the send records them, when it names one. */
+  person: PrincipalRef | null;
   /** The install's secrets, current first. */
   secrets: readonly string[];
+  /** How the database takes the deleted-people lock. */
+  lockServer: RowLockServer;
   dialect: string;
   now: Date;
 }
 
+/** A stored queued email: its job, unless it was cancelled as it was stored. */
+export type StoredQueuedEmail =
+  | { id: string; state: "waiting"; jobId: string }
+  | { id: string; state: "cancelled" };
+
 /**
  * Store a queued email and the job that attempts it, in `tx`. Nothing is
  * attempted here; the caller starts the job once `tx` has committed.
+ *
+ * One naming a person reads whether they were deleted under the
+ * deleted-people lock, shared, which a deletion takes exclusive: either this
+ * commits first and the deletion then cancels the email, or the deletion
+ * commits first and the email is stored cancelled, with no job, no message
+ * and the person named by their digest.
  */
 export async function storeQueuedEmail(
   tx: TransactionContext,
   input: QueuedEmailInput
-): Promise<{ id: string; jobId: string }> {
+): Promise<StoredQueuedEmail> {
   const id = randomUUID();
+  const now = input.now.getTime();
+  const db = tx.getDrizzle<QueueDb>();
+  const table = emailQueueTableFor(input.dialect);
+  const erasedAs = input.person
+    ? await deletedDigestOf(tx, input, input.person)
+    : undefined;
+  if (input.person && erasedAs !== undefined) {
+    await db.insert(table).values({
+      id,
+      scope: input.scope,
+      state: "cancelled",
+      jobId: null,
+      message: null,
+      principalKind: input.person.kind,
+      principalId: erasedAs,
+      failure: null,
+      createdAt: now,
+      updatedAt: now,
+      settledAt: now,
+    });
+    return { id, state: "cancelled" };
+  }
   // Sealed before anything is written, so a message that cannot be stored
   // (variables that refer to themselves) refuses the queue with nothing left.
   const message = sealQueuedMessage(input.message, id, input.secrets);
@@ -361,22 +441,92 @@ export async function storeQueuedEmail(
     runAsUserId: null,
     now: input.now,
   });
-  const now = input.now.getTime();
-  await tx
-    .getDrizzle<QueueDb>()
-    .insert(emailQueueTableFor(input.dialect))
-    .values({
-      id,
-      scope: input.scope,
-      state: "waiting",
-      jobId,
-      message,
-      failure: null,
-      createdAt: now,
-      updatedAt: now,
-      settledAt: null,
-    });
-  return { id, jobId };
+  await db.insert(table).values({
+    id,
+    scope: input.scope,
+    state: "waiting",
+    jobId,
+    message,
+    principalKind: input.person?.kind ?? null,
+    principalId: input.person?.id ?? null,
+    failure: null,
+    createdAt: now,
+    updatedAt: now,
+    settledAt: null,
+  });
+  await insertRecipientDigests(db, input.dialect, id, input.message);
+  return { id, state: "waiting", jobId };
+}
+
+/**
+ * Every address a queued email goes to, with its kind, `to` first, as the
+ * caller gave them. A template's own copies are fixed addresses of the
+ * site's, not the recipient's, and are not among them.
+ */
+function queuedRecipients(
+  message: QueuedMessage
+): Array<{ kind: "to" | "cc" | "bcc"; address: string }> {
+  const { to, cc, bcc } =
+    message.kind === "message"
+      ? message.send
+      : { to: message.to, ...message.options };
+  const templateCopies =
+    message.kind === "template" ? message.templateCopies : undefined;
+  const of = (kind: "to" | "cc" | "bcc", list: readonly unknown[]) =>
+    list
+      .filter((address): address is string => typeof address === "string")
+      .map(address => ({ kind, address }));
+  return [
+    ...of("to", toAddressList(to)),
+    ...of("cc", [...(cc ?? []), ...(templateCopies?.cc ?? [])]),
+    ...of("bcc", [...(bcc ?? []), ...(templateCopies?.bcc ?? [])]),
+  ];
+}
+
+/**
+ * Write a queued email's recipients by keyed digest, once each, as the
+ * delivery records keep them, under the current secret: what erasing an
+ * address finds the email by. An address that is both `to` and a copy is
+ * kept as `to`.
+ */
+async function insertRecipientDigests(
+  db: QueueDb,
+  dialect: string,
+  id: string,
+  message: QueuedMessage
+): Promise<void> {
+  const byDigest = new Map<string, "to" | "cc" | "bcc">();
+  for (const { kind, address } of queuedRecipients(message)) {
+    const digest = recipientDigest(address);
+    if (!byDigest.has(digest)) byDigest.set(digest, kind);
+  }
+  if (byDigest.size === 0) return;
+  await db.insert(emailQueueRecipientsTableFor(dialect)).values(
+    [...byDigest].map(([recipientHash, recipientKind]) => ({
+      queuedId: id,
+      recipientHash,
+      recipientKind,
+    }))
+  );
+}
+
+/**
+ * The person's digest when they were reported deleted, read under the
+ * deleted-people lock, shared, held until `tx` ends; undefined otherwise.
+ */
+async function deletedDigestOf(
+  tx: TransactionContext,
+  input: QueuedEmailInput,
+  person: PrincipalRef
+): Promise<string | undefined> {
+  const digests = await readPrincipalDigests(
+    tx.getDrizzle<PrincipalDigestDb>(),
+    input.lockServer,
+    principalDigestTablesOf(getDialectTables(input.dialect)),
+    "shared",
+    input.secrets
+  );
+  return (await digests.isDeleted(person)) ? digests.digest(person) : undefined;
 }
 
 /** A queued email's state, or undefined when there is no such email. */
@@ -402,7 +552,10 @@ export async function queuedEmailState(
 const ATTEMPTABLE: QueuedEmailState[] = ["waiting", "sending"];
 
 /** The send service an attempt sends through. */
-export type QueuedEmailSender = Pick<EmailService, "send" | "sendWithTemplate">;
+export type QueuedEmailSender = Pick<
+  EmailService,
+  "send" | "sendWithTemplate" | "withTemplateCopies"
+>;
 
 /** What an attempt needs. */
 export interface QueuedAttemptDeps {
@@ -462,16 +615,18 @@ async function sendOnce(
   try {
     const outcome =
       message.kind === "template"
-        ? await sender.sendWithTemplate(
-            message.slug,
-            message.to,
-            message.variables,
-            {
-              ...message.options,
-              idempotencyKey:
-                message.options.idempotencyKey ?? queuedEmailKey(id),
-            }
-          )
+        ? // With the copies it was queued with, which are what its erasure
+          // finds; one sealed before they were kept sends as the template has
+          // them now.
+          await (
+            message.templateCopies
+              ? sender.withTemplateCopies(message.templateCopies)
+              : sender
+          ).sendWithTemplate(message.slug, message.to, message.variables, {
+            ...message.options,
+            idempotencyKey:
+              message.options.idempotencyKey ?? queuedEmailKey(id),
+          })
         : await sender.send({
             ...message.send,
             idempotencyKey: message.send.idempotencyKey ?? queuedEmailKey(id),
@@ -508,20 +663,10 @@ export async function attemptQueuedEmail(
   const db = deps.adapter.getDrizzle<QueueDb>();
   const table = emailQueueTableFor(deps.adapter.getCapabilities().dialect);
   const [row] = (await db
-    .select({
-      id: table.id,
-      scope: table.scope,
-      state: table.state,
-      message: table.message,
-    })
+    .select({ id: table.id, scope: table.scope, state: table.state })
     .from(table)
     .where(eq(table.id, input.queuedId))
-    .limit(1)) as Array<{
-    id: string;
-    scope: string;
-    state: QueuedEmailState;
-    message: string | null;
-  }>;
+    .limit(1)) as Array<{ id: string; scope: string; state: QueuedEmailState }>;
   if (!row || !ATTEMPTABLE.includes(row.state)) return;
 
   const now = context.now.getTime();
@@ -542,10 +687,22 @@ export async function attemptQueuedEmail(
     });
 
   await record({ state: "sending" });
-  const message =
-    row.message === null
-      ? undefined
-      : openQueuedMessage(row.message, row.id, deps.secrets);
+  // Read again: an erasure that committed since the first read cancelled the
+  // email, and the fenced write above then changed nothing. Once this reads
+  // `sending`, an erasure leaves the state alone and clears the message, and
+  // this attempt is the one already with the provider.
+  const [held] = (await db
+    .select({ state: table.state, message: table.message })
+    .from(table)
+    .where(eq(table.id, row.id))
+    .limit(1)) as Array<{ state: QueuedEmailState; message: string | null }>;
+  if (held?.state !== "sending") return;
+  // Cleared by an erasure: nothing is sent.
+  if (held.message === null) {
+    await settle("cancelled");
+    return;
+  }
+  const message = openQueuedMessage(held.message, row.id, deps.secrets);
   if (!message) {
     await settle("failed", {
       retryable: false,
@@ -649,4 +806,173 @@ export function createQueuedEmailPruneJob(
       await pruneQueuedEmails(adapter(), context.now);
     },
   });
+}
+
+// ============================================================
+// Re-sealing at rotation
+// ============================================================
+
+/** Held messages read per statement when re-sealing. */
+const RESEAL_BATCH = 200;
+
+/** The Drizzle surface re-sealing reads held messages through, in id order. */
+interface ResealDb {
+  select(fields: Record<string, unknown>): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        orderBy(column: unknown): {
+          limit(rows: number): PromiseLike<unknown[]>;
+        };
+      };
+    };
+  };
+  update(table: unknown): {
+    set(values: unknown): { where(condition: unknown): PromiseLike<unknown> };
+  };
+}
+
+/**
+ * A held message as it should be stored now, or undefined when it already
+ * is: one sealed under a retired secret, or stored unsealed while the install
+ * now has a secret, is sealed again under the current one. Undefined too for
+ * one no configured secret opens, which re-sealing cannot help.
+ */
+function resealedForm(
+  stored: string,
+  id: string,
+  secrets: readonly string[]
+): { stored: string; text: string } | undefined {
+  const [current] = secrets;
+  if (current === undefined) return undefined;
+  const sealed = (text: string) => ({
+    stored: `${SEALED}${sealSetting(text, current, SEAL_OWNER, sealPath(id))}`,
+    text,
+  });
+  if (stored.startsWith(UNSEALED)) return sealed(stored.slice(UNSEALED.length));
+  if (!stored.startsWith(SEALED)) return undefined;
+  const opened = openSetting(
+    stored.slice(SEALED.length),
+    secrets,
+    SEAL_OWNER,
+    sealPath(id)
+  );
+  if (!opened.readable || !opened.stale) return undefined;
+  return sealed(opened.plaintext);
+}
+
+/**
+ * Seal every held message again under the current secret, the first of
+ * `secrets`, where a retired one sealed it, so a message stays deliverable
+ * across any number of rotations: each rotation's first boot moves every
+ * held message to the new secret while the previous one can still open it.
+ *
+ * Each write is fenced on the message as read, so one an attempt or an
+ * erasure changed meanwhile is left as that left it.
+ *
+ * @returns How many were sealed again, and how many no configured secret
+ *   opens
+ */
+export async function resealQueuedMessages(
+  adapter: DrizzleAdapter,
+  secrets: readonly string[]
+): Promise<{ resealed: number; unreadable: number }> {
+  const result = { resealed: 0, unreadable: 0 };
+  if (secrets.length === 0) return result;
+  const db = adapter.getDrizzle<ResealDb>();
+  const table = emailQueueTableFor(adapter.getCapabilities().dialect);
+  let after = "";
+  for (;;) {
+    const rows = (await db
+      .select({ id: table.id, message: table.message })
+      .from(table)
+      .where(and(isNotNull(table.message), gt(table.id, after)))
+      .orderBy(table.id)
+      .limit(RESEAL_BATCH)) as Array<{ id: string; message: string }>;
+    if (rows.length === 0) return result;
+    for (const row of rows) {
+      const next = resealedForm(row.message, row.id, secrets);
+      // Parsed before anything is written: a message that opens but does not
+      // parse is damaged, counted as unreadable, and the scan goes on to the
+      // rest, which would otherwise stay sealed under the retired secret.
+      const parsed = next === undefined ? undefined : parsedMessage(next.text);
+      if (next !== undefined && parsed === undefined) {
+        result.unreadable += 1;
+      } else if (next !== undefined && parsed !== undefined) {
+        if (await resealOne(adapter, row, next, parsed)) result.resealed += 1;
+      } else if (
+        openQueuedMessage(row.message, row.id, secrets) === undefined
+      ) {
+        result.unreadable += 1;
+      }
+    }
+    after = rows[rows.length - 1].id;
+  }
+}
+
+/**
+ * Seal one held message again, and key its recipients' digests again with
+ * it, in one transaction: digests made under a retired secret would no
+ * longer find the email once that secret is dropped, though its message
+ * still opens. Fenced on the message as read, so one an attempt or an
+ * erasure changed meanwhile is left as that left it, and its digests with
+ * it. The digests are made as `storeQueuedEmail` makes them, under the
+ * install's current secret, which is the first of the secrets it seals with.
+ *
+ * @returns Whether it was sealed again
+ */
+async function resealOne(
+  adapter: DrizzleAdapter,
+  row: { id: string; message: string },
+  next: { stored: string; text: string },
+  message: QueuedMessage
+): Promise<boolean> {
+  const dialect = adapter.getCapabilities().dialect;
+  const table = emailQueueTableFor(dialect);
+  return runAdapterTransaction<boolean, TransactionContext>(
+    run => adapter.transaction(ctx => run(ctx)),
+    async ctx => {
+      const db = ctx.getDrizzle<QueueDb>();
+      await db
+        .update(table)
+        .set({ message: next.stored })
+        .where(and(eq(table.id, row.id), eq(table.message, row.message)));
+      const [now] = (await db
+        .select({ message: table.message })
+        .from(table)
+        .where(eq(table.id, row.id))
+        .limit(1)) as Array<{ message: string | null }>;
+      if (now?.message !== next.stored) return false;
+      const recipients = emailQueueRecipientsTableFor(dialect);
+      await db.delete(recipients).where(eq(recipients.queuedId, row.id));
+      await insertRecipientDigests(db, dialect, row.id, message);
+      return true;
+    }
+  );
+}
+
+/**
+ * {@link resealQueuedMessages} at boot, before plugins start. Never throws:
+ * a message that cannot be re-sealed is still opened by the previous secret
+ * until the next rotation, and the app starts either way. Says so when some
+ * held message no configured secret opens, naming what to configure, and
+ * nothing of the messages.
+ */
+export async function resealQueuedMessagesAtBoot(
+  adapter: DrizzleAdapter,
+  secrets: readonly string[]
+): Promise<void> {
+  try {
+    const { unreadable } = await resealQueuedMessages(adapter, secrets);
+    if (unreadable > 0) {
+      getNextlyLogger().warn({
+        kind: "queued-email-unreadable",
+        message: `${unreadable} queued email${unreadable === 1 ? "" : "s"} cannot be read with the configured secrets and will not be sent. Configure the secret they were sealed under in NEXTLY_SECRET_PREVIOUS.`,
+      });
+    }
+  } catch (error) {
+    getNextlyLogger().error({
+      kind: "queued-email-reseal-failed",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 }

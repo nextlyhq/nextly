@@ -1,5 +1,6 @@
 import { EMAIL_BRAND_TABLE } from "../schemas/email-brand/table-name";
 import { EMAIL_QUEUE_TABLE } from "../schemas/email-queue/table-name";
+import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "../schemas/email-queue-recipients/table-name";
 import { EMAIL_SEND_CLAIMS_TABLE } from "../schemas/email-send-claims/table-name";
 import { LANGUAGES_TABLE } from "../schemas/languages/table-name";
 import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
@@ -831,8 +832,10 @@ export function generateSqliteCoreTableStatements(): string[] {
       "id" TEXT PRIMARY KEY,
       "scope" TEXT NOT NULL,
       "state" TEXT NOT NULL,
-      "job_id" TEXT NOT NULL,
+      "job_id" TEXT,
       "message" TEXT,
+      "principal_kind" TEXT,
+      "principal_id" TEXT,
       "failure" TEXT,
       "created_at" INTEGER NOT NULL,
       "updated_at" INTEGER NOT NULL,
@@ -840,6 +843,16 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "email_queue_state_idx"
       ON "${EMAIL_QUEUE_TABLE}" ("state", "settled_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_principal_idx"
+      ON "${EMAIL_QUEUE_TABLE}" ("principal_kind", "principal_id")`,
+    `CREATE TABLE IF NOT EXISTS "${EMAIL_QUEUE_RECIPIENTS_TABLE}" (
+      "queued_id" TEXT NOT NULL,
+      "recipient_hash" TEXT NOT NULL,
+      "recipient_kind" TEXT NOT NULL,
+      PRIMARY KEY ("queued_id", "recipient_hash")
+    )`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_recipients_hash_idx"
+      ON "${EMAIL_QUEUE_RECIPIENTS_TABLE}" ("recipient_hash")`,
   ];
 }
 
