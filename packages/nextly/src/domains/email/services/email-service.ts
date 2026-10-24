@@ -12,8 +12,10 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { toDbError } from "../../../database/errors";
+import { getStaticRelations } from "../../../database/static-relations";
 import { NextlyError } from "../../../errors";
 import {
   getFilterRegistry,
@@ -22,8 +24,10 @@ import {
   type EmailFilterContext,
   type EmailAfterSendValue,
 } from "../../../filters";
+import { env } from "../../../lib/env";
 import { getBaseUrl } from "../../../lib/get-base-url";
 import { maskingServiceLogger } from "../../../observability/mask-emails";
+import { linkedTransaction } from "../../../plugins/database/plugin-transaction-link";
 import {
   isStaffPersonId,
   principalRefOf,
@@ -32,10 +36,15 @@ import {
 } from "../../../plugins/principals/ref";
 import { getPrincipalKind } from "../../../plugins/principals/registry";
 import type { PrincipalRef } from "../../../plugins/principals/types";
+import type { TxOption } from "../../../plugins/security/one-time-secrets";
 import type { EmailTemplateRecord } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
+import { runAdapterTransaction } from "../../../shared/lib/run-adapter-transaction";
+import { pluginSettingsSecrets } from "../../plugins/settings-service";
+import { warnQuietly } from "../../retention/safe-log";
 import {
   isRecognisedMessageId,
   mailboxOf,
@@ -46,6 +55,14 @@ import {
 import { EmailErrorCode } from "../errors";
 import type { EmailFailure } from "../failure";
 import { describeProviderFailure } from "../provider-definition";
+import { warnAboutLateQueuedEmail } from "../queued-email-warning";
+import {
+  type QueuedEmail,
+  type QueuedEmailState,
+  type QueuedMessage,
+  queuedEmailState,
+  storeQueuedEmail,
+} from "../queued-send";
 import {
   assertIdempotencyKey,
   CORE_KEY_SCOPE,
@@ -298,6 +315,13 @@ function acceptedRow(
   };
 }
 
+/** What a queued email is checked for before it is stored. */
+interface QueueChecks {
+  to: string | string[];
+  person: unknown;
+  idempotencyKey: string | undefined;
+}
+
 export class EmailService extends BaseService {
   /** Who sends through this instance: a keyed send is scoped to them. */
   private keyScope: string = CORE_KEY_SCOPE;
@@ -317,7 +341,13 @@ export class EmailService extends BaseService {
      * never a failed send: the log exists to observe delivery, and it must not
      * become a thing that can prevent it.
      */
-    private readonly deliveries?: EmailDeliveryService
+    private readonly deliveries?: EmailDeliveryService,
+    /**
+     * Run a queued email's job now: its first attempt, once the email is
+     * stored. Optional so a service built without the job queue -- a test's
+     * -- still queues; the email then waits for the jobs trigger.
+     */
+    private readonly runQueuedJob?: (jobId: string) => Promise<unknown>
   ) {
     // Masked here whatever logger an app supplied: what this service logs,
     // a provider error quoting a recipient included, never carries a full
@@ -1241,6 +1271,159 @@ export class EmailService extends BaseService {
     }
   }
 
+  /**
+   * @experimental Queue an email: stored, sent right after, and retried
+   * through the job queue until it is sent or fails for good.
+   *
+   * Takes every option `send` takes. With `tx`, the handle a plugin's
+   * `ctx.db.transaction` passes its callback, the email is stored in that
+   * transaction and exists only if it commits; its first attempt is made once
+   * it has, before `ctx.db.transaction` resolves. Without `tx` the email is
+   * stored and attempted before this returns; a call made while the flow has
+   * a transaction open is then refused, since the email would commit on its
+   * own.
+   *
+   * A failure the provider marks temporary is retried with backoff, up to a
+   * limit; any other failure fails the email without another attempt. Every
+   * attempt sends with `idempotencyKey`, or with one derived from the queued
+   * email when none is given, so a retry after a lost response is not
+   * delivered twice where the provider takes a key. The message is held
+   * sealed under the install's secret, never in the job queue. A retry needs
+   * the jobs trigger (`/api/jobs/run`) to run.
+   *
+   * @returns The queued email's id, and where it stands
+   */
+  async queue(
+    options: Omit<Parameters<EmailService["send"]>[0], "templateSlug"> &
+      TxOption
+  ): Promise<QueuedEmail> {
+    const { tx, ...send } = options;
+    return this.enqueue(
+      { kind: "message", send },
+      { to: send.to, person: send.person, idempotencyKey: send.idempotencyKey },
+      tx,
+      "email.queue"
+    );
+  }
+
+  /**
+   * @experimental Queue an email made from a template, as `queue` queues a
+   * message (see it for `tx`, retries and keys). The template is rendered at
+   * each attempt, from the template as saved then, with `variables` as given.
+   *
+   * @returns The queued email's id, and where it stands
+   */
+  async queueWithTemplate(
+    templateSlug: string,
+    to: string | string[],
+    variables: Record<string, unknown>,
+    options?: NonNullable<Parameters<EmailService["sendWithTemplate"]>[3]> &
+      TxOption
+  ): Promise<QueuedEmail> {
+    const { tx, ...rest } = options ?? {};
+    return this.enqueue(
+      { kind: "template", slug: templateSlug, to, variables, options: rest },
+      { to, person: rest.person, idempotencyKey: rest.idempotencyKey },
+      tx,
+      "email.queueWithTemplate"
+    );
+  }
+
+  /**
+   * What a send would refuse before anything is resolved, refused when the
+   * email is queued rather than at its first attempt: the key, the person,
+   * and the recipients as the caller gave them. A staff person is read in
+   * `tx` when the email is queued in a transaction, so a user that
+   * transaction wrote is seen, as the queued email will be.
+   */
+  private async assertQueueable(
+    checks: QueueChecks,
+    tx?: TransactionContext
+  ): Promise<void> {
+    if (checks.idempotencyKey !== undefined) {
+      assertIdempotencyKey(checks.idempotencyKey);
+    }
+    const recorded = await this.personToRecord(checks.person, tx);
+    assertSendable(toAddressList(checks.to), {
+      namesPerson: recorded !== null,
+    });
+  }
+
+  /** Store a queued email, and start its first attempt once it is durable. */
+  private async enqueue(
+    message: QueuedMessage,
+    checks: QueueChecks,
+    tx: TxOption["tx"],
+    operation: string
+  ): Promise<QueuedEmail> {
+    const input = {
+      scope: this.keyScope,
+      message,
+      secrets: pluginSettingsSecrets(env),
+      dialect: this.dialect,
+      now: new Date(),
+    };
+    if (tx !== undefined) {
+      const link = linkedTransaction(tx, operation);
+      const { id, jobId } = await link.run(async adapterTx => {
+        await this.assertQueueable(checks, adapterTx);
+        return storeQueuedEmail(adapterTx, input);
+      });
+      link.afterCommit(() => this.firstAttempt(jobId));
+      return { id, state: "waiting" };
+    }
+    assertNoOpenTransaction(this.adapter, operation);
+    await this.assertQueueable(checks);
+    const { id, jobId } = await runAdapterTransaction<
+      { id: string; jobId: string },
+      TransactionContext
+    >(
+      run => this.adapter.transaction(ctx => run(ctx)),
+      ctx => storeQueuedEmail(ctx, input)
+    );
+    await this.firstAttempt(jobId);
+    return { id, state: await this.stateAfterFirstAttempt(id) };
+  }
+
+  /**
+   * Where a stored email stands after its first attempt, or `waiting` when
+   * that cannot be read. Never throws: the email is stored and may already be
+   * sent, and a caller told the queue failed would queue it again, under a
+   * new id and so a new key.
+   */
+  private async stateAfterFirstAttempt(id: string): Promise<QueuedEmailState> {
+    try {
+      return (await queuedEmailState(this.adapter, id)) ?? "waiting";
+    } catch (error) {
+      warnQuietly(
+        this.logger,
+        "A queued email's state could not be read after its first attempt.",
+        { error: error instanceof Error ? error.message : String(error) }
+      );
+      return "waiting";
+    }
+  }
+
+  /**
+   * A stored email's first attempt, through its job, then the warning when
+   * queued email is overdue. Never throws: the email is stored, and an
+   * attempt that could not start is made by the next jobs trigger.
+   */
+  private async firstAttempt(jobId: string): Promise<void> {
+    try {
+      await this.runQueuedJob?.(jobId);
+    } catch (error) {
+      // Contained: the email is stored, and a logger that throws must not
+      // turn that into a failed queue the caller would repeat.
+      warnQuietly(
+        this.logger,
+        "A queued email's first attempt did not start; the jobs trigger will make it.",
+        { error: error instanceof Error ? error.message : String(error) }
+      );
+    }
+    await warnAboutLateQueuedEmail(this.adapter, this.logger);
+  }
+
   // ============================================================
   // Convenience Methods for Auth Flows
   // ============================================================
@@ -1709,13 +1892,23 @@ export class EmailService extends BaseService {
    * be matched by the deletion that erases the person's records; and refused
    * when it names a staff user who does not exist, for the same reason.
    */
-  private async personToRecord(value: unknown): Promise<PrincipalRef | null> {
+  private async personToRecord(
+    value: unknown,
+    tx?: TransactionContext
+  ): Promise<PrincipalRef | null> {
     if (value === undefined || value === null) return null;
     const staff = staffPersonOf(value);
     if (!staff) return pluginPersonToRecord(value);
+    // In `tx` when there is one: on PostgreSQL and MySQL the pool is another
+    // connection, which cannot see a user that transaction has written.
+    const db = tx
+      ? tx.drizzleWithRelations<typeof this.db>(
+          getStaticRelations(this.dialect)
+        )
+      : this.db;
     let user: { id: string } | undefined;
     try {
-      user = await this.db.query.users.findFirst({
+      user = await db.query.users.findFirst({
         where: { id: requireFilterValue(staff.id, "person.id") },
         columns: { id: true },
       });

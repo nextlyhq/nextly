@@ -92,6 +92,9 @@ import type {
   SendEmailArgs,
   SendEmailResult,
   SendTemplateEmailArgs,
+  QueueEmailArgs,
+  QueueTemplateEmailArgs,
+  QueuedEmail,
   SetDefaultProviderArgs,
   SetRolePermissionsArgs,
   SingleListResult,
@@ -886,6 +889,10 @@ export interface Nextly {
   email: {
     send: (args: SendEmailArgs) => Promise<SendEmailResult>;
     sendWithTemplate: (args: SendTemplateEmailArgs) => Promise<SendEmailResult>;
+    /** @experimental Queue an email: stored, sent right after, retried on a temporary failure. */
+    queue: (args: QueueEmailArgs) => Promise<QueuedEmail>;
+    /** @experimental Queue an email made from a template, rendered at each attempt. */
+    queueWithTemplate: (args: QueueTemplateEmailArgs) => Promise<QueuedEmail>;
   };
 
   // ==========================================================================

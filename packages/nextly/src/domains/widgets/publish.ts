@@ -94,6 +94,26 @@ export interface PublishedContentSource {
 }
 
 /**
+ * The collections this reader may read, as the cards they may see show them:
+ * each collection whose own generated card is visible to them.
+ *
+ * ONE derivation for what a card's content settings may name and for which
+ * collection a saved count card resolves to (`countCardConversion`), so the
+ * two never disagree about what this reader may read.
+ */
+export function readableCollectionsOf(
+  visible: readonly { generated?: boolean; collection?: string }[]
+): Set<string> {
+  const slugs = new Set<string>();
+  for (const card of visible) {
+    if (card.generated === true && card.collection !== undefined) {
+      slugs.add(card.collection);
+    }
+  }
+  return slugs;
+}
+
+/**
  * The collections, and their fields, a card's content settings may offer this
  * reader.
  *
@@ -112,14 +132,8 @@ export interface PublishedContentSource {
 export function publishableContentSources(
   visible: readonly { generated?: boolean; collection?: string }[]
 ): PublishedContentSource[] {
-  const slugs = new Set<string>();
-  for (const card of visible) {
-    if (card.generated === true && card.collection !== undefined) {
-      slugs.add(card.collection);
-    }
-  }
   const published: PublishedContentSource[] = [];
-  for (const slug of slugs) {
+  for (const slug of readableCollectionsOf(visible)) {
     const source = getSource(`collection:${slug}`);
     if (source === undefined) continue;
     published.push({

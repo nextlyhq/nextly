@@ -124,6 +124,15 @@ describe("the dashboard's conditions, asked together", () => {
     expect((await ask(["content:present"])).get("content:present")).toBe(true);
   });
 
+  it("offers Needs attention on a readable Single that has no published source", async () => {
+    // 🔴 The card reads Singles from their registry and version rows, never
+    // through a source, so a Single mid-migration still has changes to count.
+    given({ singles: ["home"], unpublished: ["home"], mayReadReleases: false });
+    expect((await ask(["attention:readable"])).get("attention:readable")).toBe(
+      true
+    );
+  });
+
   it("offers Create only where the card would offer something, leaving out collections that turn creating off", async () => {
     // 🔴 Asked over every readable collection, a site whose only writable
     // collection was form submissions got a Create card with nothing in it.
@@ -134,6 +143,10 @@ describe("the dashboard's conditions, asked together", () => {
     expect((await ask(["create:available"])).get("create:available")).toBe(
       false
     );
-    expect(reads.readerMayCreateEntry).toHaveBeenCalledWith(caller, []);
+    expect(reads.readerMayCreateEntry).toHaveBeenCalledWith(
+      caller,
+      [],
+      expect.any(Function)
+    );
   });
 });
