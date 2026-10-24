@@ -218,7 +218,15 @@ class PermissionChecker {
     }
     // On the pool, the roles of the user's resolved actor: walked once and
     // kept as long as the role version stands (see `actorThisRequest`).
-    const actor = await actorThisRequest(userId);
+    let actor: ResolvedActor;
+    try {
+      actor = await actorThisRequest(userId);
+    } catch {
+      // Walked on their own when the actor cannot be read whole: a reader
+      // that needs only the roles, such as a key deciding whether its owner
+      // is a super-admin, does not fail on a grants read it never needed.
+      return this.walkRoles(userId);
+    }
     // A set of its own for each caller, as a walk gave before.
     return { roleIds: new Set(actor.roleIds), validUntil: actor.validUntil };
   }
@@ -1040,6 +1048,13 @@ async function retireSharedThenPublish(
       await bumpEpoch();
       return;
     }
+    // A later release drops the table once nothing reads it, possibly while
+    // this one still serves. Gone, it holds nothing to empty, and failing on
+    // it would withhold the version from every other instance.
+    if (!(await getAdapter().tableExists(STORED_ANSWERS_TABLE))) {
+      await bumpEpoch();
+      return;
+    }
     try {
       await retireShared();
     } catch (error) {
@@ -1058,6 +1073,9 @@ async function retireSharedThenPublish(
     await bumpEpoch();
   });
 }
+
+/** The table the earlier release stored permission answers in. */
+const STORED_ANSWERS_TABLE = "user_permission_cache";
 
 /**
  * Whether an instance on the release that reads the stored answers may be

@@ -832,6 +832,18 @@ describe("the order the two tiers are retired in", () => {
     expect(rbacRevision()).toBe(before);
   });
 
+  it("announces when the stored answers' table is gone", async () => {
+    // A later release drops the table once nothing reads it, possibly while
+    // this one still serves. Gone, it holds nothing a reader could serve, so
+    // failing on it would only withhold the version from every instance.
+    await harness!.adapter.executeQuery("DROP TABLE user_permission_cache");
+    const before = rbacRevision();
+
+    await invalidateAllPermissionCaches();
+
+    expect(rbacRevision()).not.toBe(before);
+  });
+
   it("announces regardless where the stored answers were turned off", async () => {
     // An instance on the release that reads them, running with them turned
     // off, reads none, so silence would protect nobody while every other

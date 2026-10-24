@@ -496,6 +496,22 @@ describe.each(getConfiguredTestDialects())(
       expect(result[0]).toEqual({ status: "fulfilled", value: ["reader"] });
     });
 
+    it("resolves a caller's roles when reading the grants fails", async () => {
+      // A reader that needs only the roles, such as a key deciding whether
+      // its owner is a super-admin, must not fail on a grants read it never
+      // needed.
+      const holder = await newHolder("roles-only", readerId);
+      await invalidateAllPermissionCaches();
+      const { result, failed } = await failingFirstRead(
+        t,
+        "role_permissions",
+        () => runWithAccessMemo(() => resolveUserRoles(holder))
+      );
+      // POPULATION CONTROL: the grants read failed.
+      expect(failed).toBe(true);
+      expect([...result.roleIds]).toEqual([readerId]);
+    });
+
     it("keeps a super-admin's authority when reading the grants fails", async () => {
       // Super-admin authority rests on the roles alone, and is decided before
       // any grant is consulted, so a failed grants read must not refuse it.
