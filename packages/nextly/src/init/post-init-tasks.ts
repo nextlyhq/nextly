@@ -14,6 +14,7 @@ import {
 } from "../database/repair-sqlite-timestamps";
 import { getService } from "../di/register";
 import { warnAboutUnusableProviders } from "../domains/email/boot-check";
+import { warnAboutLateQueuedEmail } from "../domains/email/queued-email-warning";
 import { getEmailProviderRegistry } from "../domains/email/services/email-provider-registry";
 import { ownershipFromConfig } from "../domains/email/template-ownership";
 import { provisionUserFieldStorage } from "../domains/users/services/provision-user-field-storage";
@@ -122,5 +123,14 @@ export async function runPostInitTasks(): Promise<void> {
     // Silently skip — the email services may not be registered, or the
     // providers table may not exist yet. A diagnostic must never be the
     // reason a server fails to start.
+  }
+
+  // Say so when queued email is more than 15 minutes past due: the jobs
+  // trigger isn't running, and no retry will be made until it does. The check
+  // itself never throws.
+  try {
+    await warnAboutLateQueuedEmail(getService("adapter"), getService("logger"));
+  } catch {
+    // The adapter or the logger is not registered; there is nothing to check.
   }
 }

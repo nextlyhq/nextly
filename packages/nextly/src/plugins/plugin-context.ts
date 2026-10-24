@@ -399,6 +399,8 @@ const PLUGIN_USER_METHODS = [
 const PLUGIN_EMAIL_METHODS = [
   "send",
   "sendWithTemplate",
+  "queue",
+  "queueWithTemplate",
   "sendPasswordResetEmail",
   "sendEmailVerificationEmail",
   "sendWelcomeEmail",
