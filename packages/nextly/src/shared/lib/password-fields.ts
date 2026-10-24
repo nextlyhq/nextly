@@ -161,53 +161,6 @@ export function stripPasswordFieldValues(
 }
 
 /**
- * Put `standIn` at every password field of `entry`, in place, through the
- * same containers {@link stripPasswordFieldValues} empties: a stored value
- * read back has had its hashes stripped, so whether it holds one is not
- * known, and a judgment of what removing it would delete must assume it
- * does. A container the entry does not hold has no password in it.
- */
-export function standInForPasswordFieldValues(
-  entry: Record<string, unknown>,
-  fields: readonly NamedField[],
-  standIn: string
-): void {
-  for (const field of fields) {
-    if (!field.name) continue;
-    if (isContainer(field)) standInThroughContainer(entry, field, standIn);
-    else if (field.type === "password") entry[field.name] = standIn;
-  }
-}
-
-/** A `group` or `repeater` with fields of its own to descend into. */
-function isContainer(
-  field: NamedField
-): field is NamedField & { name: string; fields: NamedField[] } {
-  return (
-    field.fields !== undefined &&
-    (field.type === "group" || field.type === "repeater")
-  );
-}
-
-/**
- * {@link standInForPasswordFieldValues} for the rows of one container: none
- * when the entry does not hold it.
- */
-function standInThroughContainer(
-  entry: Record<string, unknown>,
-  field: NamedField & { name: string; fields: NamedField[] },
-  standIn: string
-): void {
-  if (!(field.name in entry)) return;
-  const opened = openContainer(entry[field.name], field.type);
-  if (!opened) return;
-  for (const row of opened.rows) {
-    standInForPasswordFieldValues(row, field.fields, standIn);
-  }
-  entry[field.name] = opened.serialize();
-}
-
-/**
  * Whether any field in the set (at any depth) is a password field — lets
  * read paths skip the per-entry strip loop entirely for the common
  * no-password case without missing a nested password.

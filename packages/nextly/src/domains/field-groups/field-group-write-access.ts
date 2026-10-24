@@ -10,8 +10,6 @@
  * @module domains/field-groups/field-group-write-access
  */
 
-import { randomUUID } from "node:crypto";
-
 import { isFieldGroupField } from "../../collections/fields/guards";
 import type { FieldConfig } from "../../collections/fields/types";
 import { keepDeniedAtStored } from "../../shared/lib/denied-change";
@@ -20,8 +18,9 @@ import {
   anyFieldGroupHasAccessRule,
   applyFieldWriteAccess,
   callerAccessGrants,
+  getFieldFunctions,
+  type FieldFunctions,
 } from "../../shared/lib/field-level-registry";
-import { standInForPasswordFieldValues } from "../../shared/lib/password-fields";
 import { resolveComponentFieldMap } from "../versions/tag-component-types";
 
 import {
@@ -602,14 +601,27 @@ async function holdsProtectedValue(
 }
 
 /**
- * What a stored password is judged as holding while its hash is not read: a
- * value made for this one judgment, which no rule can name. A rule that lets
- * any value change lets the stored hash change too; one that lets only some
- * values change refuses this one, and the instance is kept, as it must be
- * when the value the rule would be asked about is unknown.
+ * Whether `fields` declare a password whose update a rule judges, at any
+ * depth, by `fns`, the functions registered for those fields. A stored value
+ * is read with its password hashes stripped, so such a rule could only be
+ * asked about a value it was not given; the instance is protected instead.
  */
-function unreadPassword(): string {
-  return `unread-${randomUUID()}`;
+function judgesAnUnreadPassword(
+  fields: readonly FieldConfig[],
+  fns: Record<string, FieldFunctions> | undefined
+): boolean {
+  return fields.some(field => {
+    const name = nameOf(field);
+    const sub = subFieldsOf(field);
+    // A layout container keeps its fields on the level it sits on.
+    if (name === undefined) return judgesAnUnreadPassword(sub ?? [], fns);
+    if ((field as { type?: unknown }).type === "password") {
+      return fns?.[name]?.access?.update !== undefined;
+    }
+    return (
+      sub !== undefined && judgesAnUnreadPassword(sub, fns?.[name]?.fields)
+    );
+  });
 }
 
 /** {@link holdsProtectedValue} for one language's view of the instance. */
@@ -619,7 +631,7 @@ async function holdsProtectedValueHere(
   params: ProtectedInstanceParams
 ): Promise<boolean> {
   // Only what it holds: an empty field has no value to change. A copy all
-  // the way down, since the stand-ins below go into its containers, and the
+  // the way down, since the rules below remove from its containers, and the
   // row itself may be kept and written back.
   const held = detachData(
     Object.fromEntries(
@@ -628,11 +640,12 @@ async function holdsProtectedValueHere(
       )
     )
   );
-  // A stored instance is read without its password hashes, so each password
-  // field is judged as holding one: removing the instance would delete it.
   const inner = params.fieldGroupFields.get(slug);
-  if (inner) {
-    standInForPasswordFieldValues(held, inner, unreadPassword());
+  if (
+    inner &&
+    judgesAnUnreadPassword(inner, getFieldFunctions("fieldGroup", slug))
+  ) {
+    return true;
   }
   const probe = detachData(held);
   const { access } = params;
