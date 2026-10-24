@@ -94,3 +94,44 @@ describe("every written block renders as pinned", () => {
     expect([...kinds].sort()).toEqual([...WRITTEN_BLOCK_TYPES].sort());
   });
 });
+
+describe("a written email's links in dark mode", () => {
+  const LINK_RULE = ".email-card .nextly-link { color: #fafafa !important; }";
+  const linked: WrittenBlock = {
+    type: "text",
+    text: [
+      {
+        type: "text",
+        text: "Track it",
+        link: { url: "https://shop.example/t" },
+      },
+    ],
+  };
+  const render = (template: TemplateFields, accentColor: string) =>
+    renderTemplate(template, defaultLayoutTemplate, DATASETS.typical, {
+      appName: "Nextly",
+      brand: { ...STARTING_BRAND, accentColor, footerLinks: [] },
+    });
+
+  it("stay readable on the dark card at the starting colours", () => {
+    const { html } = render(fields([linked]), STARTING_BRAND.accentColor);
+    expect(html).toContain('class="nextly-link"');
+    expect(html).toContain(LINK_RULE);
+  });
+
+  it("keep an accent the site chose", () => {
+    expect(render(fields([linked]), "#0055ff").html).not.toContain(LINK_RULE);
+  });
+
+  it("add nothing to a coded email", () => {
+    const coded: TemplateFields = {
+      ...fields([]),
+      format: "code",
+      blocks: null,
+      htmlContent: '<p><a href="https://shop.example/t">Track it</a></p>',
+    };
+    expect(render(coded, STARTING_BRAND.accentColor).html).not.toContain(
+      "nextly-link"
+    );
+  });
+});

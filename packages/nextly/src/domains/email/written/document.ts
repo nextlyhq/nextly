@@ -14,6 +14,8 @@
 
 import { z } from "zod";
 
+import { allowedUrl } from "./urls";
+
 /** The format a template is stored in. Rows stored before written emails read as `code`. */
 export type TemplateFormat = "code" | "written";
 
@@ -45,23 +47,23 @@ const variablePath = z
   );
 
 /** Where a link or an image may point: the web, and for a link a mail client. */
-const WEB = /^https?:\/\//i;
-const MAIL = /^mailto:/i;
-
 const linkUrl = z
   .string()
   .trim()
   .max(2048)
   .refine(
-    url => WEB.test(url) || MAIL.test(url),
-    "Use an http, https or mailto link."
+    url => allowedUrl(url, "link"),
+    "Use a complete http, https or mailto link."
   );
 
 const imageUrl = z
   .string()
   .trim()
   .max(2048)
-  .refine(url => WEB.test(url), "Use an http or https image address.");
+  .refine(
+    url => allowedUrl(url, "image"),
+    "Use a complete http or https image address."
+  );
 
 /**
  * A variable shown in an email. Its fallback is used when the value is absent,
@@ -214,6 +216,9 @@ export const writtenDocumentSchema = z
   .strict();
 
 export type WrittenDocument = z.infer<typeof writtenDocumentSchema>;
+
+/** The class on a written email's text links, which the dark-mode rules name. */
+export const WRITTEN_LINK_CLASS = "nextly-link";
 
 /** The name a list's blocks read their current item under. */
 export const LIST_ITEM = "item";
