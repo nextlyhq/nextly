@@ -19,6 +19,7 @@ import {
   applyFieldWriteAccess,
   callerAccessGrants,
 } from "../../shared/lib/field-level-registry";
+import { standInForPasswordFieldValues } from "../../shared/lib/password-fields";
 import { resolveComponentFieldMap } from "../versions/tag-component-types";
 
 import {
@@ -598,6 +599,12 @@ async function holdsProtectedValue(
   return false;
 }
 
+/**
+ * What a stored password is judged as holding while its hash is not read:
+ * any value, since a rule asked whether it may change one is not told which.
+ */
+const STORED_PASSWORD = "stored-password";
+
 /** {@link holdsProtectedValue} for one language's view of the instance. */
 async function holdsProtectedValueHere(
   row: Record<string, unknown>,
@@ -610,6 +617,12 @@ async function holdsProtectedValueHere(
       ([, value]) => value !== null && value !== undefined
     )
   );
+  // A stored instance is read without its password hashes, so each password
+  // field is judged as holding one: removing the instance would delete it.
+  const inner = params.fieldGroupFields.get(slug);
+  if (inner) {
+    standInForPasswordFieldValues(held, inner, STORED_PASSWORD);
+  }
   const probe = detachData(held);
   const { access } = params;
   await applyFieldWriteAccess({
@@ -623,7 +636,6 @@ async function holdsProtectedValueHere(
     id: typeof row.id === "string" ? row.id : undefined,
     grants: access.grants,
   });
-  const inner = params.fieldGroupFields.get(slug);
   if (inner) {
     await judgeFieldGroupInstances({
       data: probe,
