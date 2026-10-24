@@ -15,13 +15,15 @@ import { STORAGE_STATE } from "../global-setup";
 import { gotoAdmin } from "./support/admin";
 import { expectOk } from "./support/runtime-collection";
 import { test } from "./support/test";
+import { LOCK } from "./support/locks";
 
 const COUNT = 200;
 const RUN = Date.now().toString(36);
 const nameOf = (i: number) => `Bulk ${RUN} ${String(i).padStart(3, "0")}`;
 
 // One seeding for the whole file.
-test.describe.configure({ mode: "serial" });
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ mode: "serial", lock: [LOCK.email, LOCK.heavy] });
 
 let context: BrowserContext;
 let page: Page;

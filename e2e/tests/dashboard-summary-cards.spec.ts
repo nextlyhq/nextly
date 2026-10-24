@@ -21,7 +21,11 @@ import { expect, type Page } from "@playwright/test";
 import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
+import { LOCK } from "./support/locks";
 import { ok } from "./support/releases-api";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.dashboard] });
 
 const CARDS = [
   "core/team",
@@ -105,6 +109,12 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
       releases.getByRole("link", { name: "All releases" })
     ).toHaveAttribute("href", /\/admin\/releases$/);
 
+    // A card refreshing its data dims its body and marks it aria-busy until the
+    // answer lands, and a scan in that window measures dimmed text no reader is
+    // left with: wait for every card to settle first.
+    await expect(
+      page.locator('[data-testid="widget-card-body"][aria-busy="true"]')
+    ).toHaveCount(0, { timeout: 30_000 });
     await expectNoAxeViolations(page);
   });
 }
