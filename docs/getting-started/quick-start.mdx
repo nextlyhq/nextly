@@ -30,7 +30,7 @@ bun create nextly-app@alpha my-app -y && cd my-app && bun run dev
 </Tab>
 </Tabs>
 
-`-y` takes the defaults: the blank template, SQLite and local storage, and it adds the Nextly skills for coding agents. To choose instead, see [Choose instead of the defaults](#choose-instead-of-the-defaults). Each step below says what you should see before you move on.
+`-y` takes the defaults: the blank template, SQLite, local storage and the Nextly agent skills. To choose instead, see [Choose instead of the defaults](#choose-instead-of-the-defaults). Each step below says what you should see before you move on.
 
 ## Create the project
 
@@ -94,7 +94,7 @@ Leave off `-y` and the CLI asks. Each question also has a flag, and a flag answe
 | Pick a starting template | Blank project (an empty config), Blog (posts, authors, categories and public pages) or Plugin (a reusable Nextly plugin with a `/dev` playground) | `-t blank`, `-t blog`, `-t plugin` |
 | How would you like to define your content schema? | Code-first or the Visual Schema Builder, for templates that offer both | `-a code-first`, `-a visual` |
 | Which database will you use? | SQLite, PostgreSQL or MySQL. PostgreSQL and MySQL need a running server and its connection string, which the CLI asks for next; with `-y` it writes a placeholder to `.env` for you to replace. | `-d sqlite`, `-d postgresql`, `-d mysql` |
-| Add Nextly skills for coding agents (Claude Code, Codex, Cursor)? | Yes by default. A plugin project is not asked. | `--no-skills` leaves them out |
+| Add Nextly skills for coding agents (Claude Code, Codex, Cursor)? | Yes by default. A plugin project is not asked and gets none. | `--no-skills` leaves them out |
 
 For example, `npx create-nextly-app@alpha my-blog -t blog -y` creates a blog on SQLite. See [Templates](/docs/templates) for what each template ships with.
 

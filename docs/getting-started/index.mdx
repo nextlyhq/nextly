@@ -1,13 +1,13 @@
 ---
 title: Getting Started
-description: Learn what Nextly is, understand its core concepts, and get up and running quickly.
+description: Learn what Nextly is and understand its core concepts.
 ---
 
 Nextly is an open-source content platform that embeds directly into your Next.js application. Instead of running a separate server, Nextly lives alongside your frontend code -- same repo, same deployment, same database.
 
 ## Two Ways to Build
 
-Nextly supports two approaches to defining your content model. You can use either one, or mix them in the same project.
+Model content in TypeScript or in the Visual Schema Builder. Both feed the same Nextly runtime, admin and APIs. See [Builder vs code-first](/docs/schema-builder#builder-vs-code-first) for where they differ.
 
 ### Code-First
 
@@ -37,9 +37,9 @@ export default defineConfig({
 
 Create and modify collections visually through the admin panel at `/admin`. The Visual Schema Builder lets you add fields with drag-and-drop, configure validation, and set up relationships -- all without writing config code. Collections created this way generate database tables dynamically and are immediately available through the same API. See [Schema Builder](/docs/schema-builder) for the full walkthrough.
 
-### Same API, Either Way
+### Reading content
 
-Regardless of how you create a collection, you query it the same way:
+Model content in TypeScript or in the Visual Schema Builder. Both feed the same Nextly runtime, admin and APIs. A page reads a collection with the Direct API:
 
 ```typescript title="src/app/blog/page.tsx"
 import nextlyConfig from "../../../nextly.config";

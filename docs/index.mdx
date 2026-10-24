@@ -40,14 +40,14 @@ bun run dev
 2. **Start.** The first run creates the system tables.
 3. **Sign in.** Open [http://localhost:3000/admin/setup](http://localhost:3000/admin/setup) and create the first admin.
 
-`-y` takes the defaults: the blank template, SQLite and local storage. Leave it off to choose a template and a database. The [Quick start](/docs/getting-started/quick-start) goes through each step and what you should see.
+`-y` takes the defaults: the blank template, SQLite, local storage and the Nextly agent skills. Leave it off to choose a template and a database. The [Quick start](/docs/getting-started/quick-start) goes through each step and what you should see.
 
 Needs Node.js 22.12+ or 24+ (Node 24 LTS recommended), Next.js 16 with the App Router, React 19.
 
 ## Other ways in
 
 - **An existing Next.js app.** Run `create-nextly-app` inside an existing Next.js app to add Nextly; it writes only the files the app does not have and extends the Next config. See [Add to an existing Next.js project](/docs/getting-started/installation#option-b-add-to-an-existing-nextjs-project).
-- **With a coding agent.** Every new Nextly project ships with an AGENTS.md and CLAUDE.md written for coding agents. Agent skills for building with Nextly (installing it, collections, authentication, deploying) are published with each release: `npx skills add nextlyhq/nextly`. See [Coding agents](/docs/guides/coding-agents).
+- **With a coding agent.** Every new Nextly project ships with an AGENTS.md and CLAUDE.md written for coding agents. New Nextly projects come with agent skills for building with Nextly (installing it, collections, authentication, deploying), written to `.agents/skills/` and `.claude/skills/`. `create-nextly-app` asks first, `-y` adds them, and `--no-skills` leaves them out. See [Coding agents](/docs/guides/coding-agents).
 - **Learn the model first.** Model content in TypeScript or in the Visual Schema Builder. Both feed the same Nextly runtime, admin and APIs, with [the differences between them](/docs/schema-builder#builder-vs-code-first). See [Getting Started](/docs/getting-started) for collections, singles, fields and field groups.
 
 ## The docs
