@@ -19,6 +19,7 @@ import type {
 import {
   CURRENT_USER_PERMISSIONS_KEY,
   currentUserCapabilitiesKey,
+  invalidateCurrentUserAccess,
 } from "./current-user-access";
 import { useLocaleParam } from "./useLocaleParam";
 import { useRouter } from "./useRouter";
@@ -278,7 +279,7 @@ const deadlineAsks = new WeakMap<QueryClient, number>();
 type DeadlineStep =
   | { kind: "ask-both"; since: number }
   | { kind: "ask-stale"; list: boolean; answer: boolean }
-  | { kind: "wait"; at: number; since: number }
+  | { kind: "wait"; at: number; since: number; atEnd: boolean }
   | { kind: "none" };
 
 /**
@@ -329,10 +330,12 @@ function waitingStep({ ends, validUntil, now }: DeadlineState): DeadlineStep {
   const next = Math.min(...ends.filter(end => end > now));
   const recheck =
     validUntil !== null && validUntil <= now ? now + MIN_RECHECK_MS : Infinity;
-  if (recheck < next) return { kind: "wait", at: recheck, since: now };
+  if (recheck < next) {
+    return { kind: "wait", at: recheck, since: now, atEnd: false };
+  }
   return next === Infinity
     ? { kind: "none" }
-    : { kind: "wait", at: next, since: next };
+    : { kind: "wait", at: next, since: next, atEnd: true };
 }
 
 /** An end an answer named, and when that answer was given. */
@@ -340,6 +343,22 @@ interface NamedEnd {
   end: number;
   namedAt: number;
 }
+
+/**
+ * A request's answer, stamped with when it was asked. That moment, not when
+ * the answer arrived, says whether the answer could have seen an end: one
+ * asked before an end and delivered after it still describes the role before.
+ */
+async function askedNow<T>(
+  request: () => Promise<T>
+): Promise<T & { askedAt: number }> {
+  const askedAt = Date.now();
+  return { ...(await request()), askedAt };
+}
+
+/** When an answer was asked; one with no stamp counts as asked long ago. */
+const askedAtOf = (data: { askedAt?: number } | undefined): number =>
+  data?.askedAt ?? 0;
 
 /** The latest of `ends` that has passed by `now`, or null. */
 function latestPassed(ends: readonly number[], now: number): number | null {
@@ -355,14 +374,14 @@ function latestPassed(ends: readonly number[], now: number): number | null {
  */
 function answerState(
   query: Pick<
-    UseQueryResult<unknown>,
-    "data" | "dataUpdatedAt" | "error" | "isFetching" | "isPending"
+    UseQueryResult<{ askedAt?: number }>,
+    "data" | "error" | "isFetching" | "isPending"
   >,
   endedAt: number | null,
   invalidated: boolean
 ): AnswerState {
   const unusable =
-    invalidated || (endedAt !== null && query.dataUpdatedAt < endedAt);
+    invalidated || (endedAt !== null && askedAtOf(query.data) < endedAt);
   return {
     // An answer that no longer holds is waited on until a current one or an
     // error arrives, before as well as during its refresh: neither the old
@@ -422,9 +441,14 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // The `/me/permissions` endpoint returns the canonical
   // UserPermissionsResponse shape directly, so `data` here IS the
   // permissions payload.
-  const permissionsQuery = useQuery<UserPermissionsResponse>({
+  const permissionsQuery = useQuery<
+    UserPermissionsResponse & { askedAt: number }
+  >({
     queryKey: CURRENT_USER_PERMISSIONS_KEY,
-    queryFn: () => protectedApi.get<UserPermissionsResponse>("/me/permissions"),
+    queryFn: () =>
+      askedNow(() =>
+        protectedApi.get<UserPermissionsResponse>("/me/permissions")
+      ),
     enabled: isPrivateRoute,
     staleTime: 0,
     refetchOnMount: "always",
@@ -442,13 +466,15 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // only on focus, when a role assignment ends, and when the admin changes
   // roles, permissions, role assignments or the schema, not each time
   // another component mounts.
-  const answer = useQuery<CapabilitiesResponse>({
+  const answer = useQuery<CapabilitiesResponse & { askedAt: number }>({
     queryKey: capabilitiesKey,
     queryFn: () =>
-      protectedApi.get<CapabilitiesResponse>(
-        locale === undefined
-          ? "/me/capabilities"
-          : `/me/capabilities?locale=${encodeURIComponent(locale)}`
+      askedNow(() =>
+        protectedApi.get<CapabilitiesResponse>(
+          locale === undefined
+            ? "/me/capabilities"
+            : `/me/capabilities?locale=${encodeURIComponent(locale)}`
+        )
       ),
     enabled: isPrivateRoute,
     staleTime: Infinity,
@@ -465,22 +491,24 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // a fresh answer arrives neither counts: a failed refresh must not leave
   // the admin offering what an ended role allowed.
   const validUntil = answer.data?.validUntil ?? null;
-  const answeredAt = answer.dataUpdatedAt;
+  const answeredAt = askedAtOf(answer.data);
   // Every end an answer has named, kept apart from the answer that named it:
   // an answer given after an end can drop it (with null, once the ending
   // assignment is gone) before that end's timer has run, and the other
-  // request's answer from before it must still not count. An end still to
-  // come is retired only by an answer newer than the one that named it, and
-  // that no longer names it: such an answer says no such end remains, the
-  // assignment having been removed or extended. An older answer, such as
-  // another language's restored from the cache, retires nothing. Kept in the
-  // render that first sees it, so no ordering of responses and timers can
-  // lose one.
+  // request's answer from before it must still not count. An end is retired
+  // only by an answer that no longer names it, newer than the one that did,
+  // and arriving while the end is still to come: such an answer says no such
+  // end remains, the assignment having been removed or extended. One arriving
+  // after the end may have been processed after it too, so the end stands
+  // and is acted on. An older answer, such as another language's restored
+  // from the cache, retires nothing. Kept in the render that first sees it,
+  // so no ordering of responses and timers can lose one.
   const [ends, setEnds] = useState<readonly NamedEnd[]>([]);
   const namedEnds = useMemo(() => {
+    const now = Date.now();
     const kept = ends.filter(
       ({ end, namedAt }) =>
-        end === validUntil || end <= answeredAt || answeredAt <= namedAt
+        end === validUntil || end <= now || answeredAt <= namedAt
     );
     return validUntil === null || kept.some(({ end }) => end === validUntil)
       ? kept
@@ -496,19 +524,25 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // The latest end that has passed, read at render, so an answer already past
   // its end when this mounts never counts, not even until a timer fires.
   const endedAt = latestPassed(knownEnds, Date.now());
-  const permissionsAnsweredAt = permissionsQuery.dataUpdatedAt;
+  const permissionsAnsweredAt = askedAtOf(data);
   const [, setEndsReached] = useState(0);
   useEffect(() => {
     // `since`: the moment the step was due. Another caller that asked after it
-    // has asked for this one too.
-    const askAgain = (since: number): void => {
+    // has asked for this one too. `atEnd`: an end has come, rather than a
+    // recheck of an answer the server gave after its own end.
+    const askAgain = (since: number, atEnd: boolean): void => {
       setEndsReached(reached => reached + 1);
       const last = deadlineAsks.get(queryClient);
       if (last !== undefined && last >= since) return;
       deadlineAsks.set(queryClient, Date.now());
-      // A refresh already under way may have been asked before the end, and
-      // its answer would arrive after it looking current, so it is replaced
-      // rather than joined: only an answer asked after the end counts.
+      if (atEnd) {
+        // Both answers are invalidated in the shared cache, so every caller,
+        // one mounted after the end included, refuses them until a newer
+        // answer arrives. The refresh replaces any already under way, which
+        // may have been asked before the end.
+        invalidateCurrentUserAccess(queryClient);
+        return;
+      }
       void refetch();
       void refetchAnswer();
     };
@@ -521,7 +555,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
       now: Date.now(),
     });
     if (step.kind === "ask-both") {
-      askAgain(step.since);
+      askAgain(step.since, true);
       return undefined;
     }
     if (step.kind === "ask-stale") {
@@ -534,7 +568,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
       return undefined;
     }
     if (step.kind === "none") return undefined;
-    const { at, since } = step;
+    const { at, since, atEnd } = step;
     let timer: ReturnType<typeof setTimeout>;
     const arm = (): void => {
       const remaining = at - Date.now();
@@ -544,7 +578,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
         timer = setTimeout(arm, MAX_TIMER_MS);
         return;
       }
-      timer = setTimeout(() => askAgain(since), Math.max(remaining, 0));
+      timer = setTimeout(() => askAgain(since, atEnd), Math.max(remaining, 0));
     };
     arm();
     return () => clearTimeout(timer);

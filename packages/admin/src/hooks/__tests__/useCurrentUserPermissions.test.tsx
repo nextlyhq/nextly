@@ -29,6 +29,8 @@ const server = vi.hoisted(() => ({
   capabilitiesDelayMs: 0,
   /** Held until released, for the next capabilities request. */
   capabilitiesGate: null as Promise<void> | null,
+  /** The same, for the next permissions request. */
+  permissionsGate: null as Promise<void> | null,
 }));
 
 /** The content language the screen's `?locale=` names, if any. */
@@ -44,8 +46,11 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
         // Answered as the server stood when asked, however late it arrives.
         const asAsked = server.permissions;
         const delay = server.permissionsDelayMs;
+        const gate = server.permissionsGate;
         server.permissionsDelayMs = 0;
+        server.permissionsGate = null;
         if (delay > 0) await new Promise(done => setTimeout(done, delay));
+        if (gate) await gate;
         if (asAsked instanceof Error) throw asAsked;
         return asAsked;
       }
@@ -135,6 +140,7 @@ beforeEach(() => {
   server.permissionsDelayMs = 0;
   server.capabilitiesDelayMs = 0;
   server.capabilitiesGate = null;
+  server.permissionsGate = null;
   onScreen.locale = undefined;
 });
 
@@ -461,6 +467,72 @@ describe("useCurrentUserPermissions", () => {
 
     // The permission list from before the end no longer counts.
     expect(result.current.hasAnswer).toBe(false);
+  });
+
+  it("judges an answer by when it was asked, not when it arrived", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const end = Date.now() + 60_000;
+    server.capabilities = answering({ read: true }, end);
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(newClient()),
+    });
+    await waitFor(() => expect(result.current.hasAnswer).toBe(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(59_000);
+    });
+
+    // A refresh asked a second before the end, both of whose answers arrive
+    // after it, together, before the end's own timer has run, as in a
+    // throttled tab. The content answer names no end any more.
+    let release = (): void => {};
+    const held = new Promise<void>(done => {
+      release = done;
+    });
+    server.capabilitiesGate = held;
+    server.permissionsGate = held;
+    server.capabilities = answering({ read: true }, null);
+    await act(async () => {
+      result.current.retry();
+    });
+    vi.setSystemTime(end + 500);
+    server.permissions = new Error("permissions unavailable");
+    await act(async () => {
+      release();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+
+    // The permission list was asked before the end, so it is asked again,
+    // and that fails.
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    expect(result.current.hasAnswer).toBe(false);
+  });
+
+  it("keeps an ended permission list out for a caller mounted after the end", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    server.capabilities = answering({ read: true }, Date.now() + 60_000);
+    const client = newClient();
+    const first = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(first.result.current.hasAnswer).toBe(true));
+
+    // At the end the content answer comes back with no end, and the
+    // permission list cannot be had again.
+    server.capabilities = answering({ read: true }, null);
+    server.permissions = new Error("permissions unavailable");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await waitFor(() => expect(first.result.current.error).not.toBeNull());
+
+    // A guard mounted after the end, as a page opened then mounts one.
+    const later = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    expect(later.result.current.hasAnswer).toBe(false);
+    expect(later.result.current.hasPermission("read-posts")).toBe(false);
   });
 
   it("asks once at an end, however many callers are mounted", async () => {
