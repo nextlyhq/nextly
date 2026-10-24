@@ -762,6 +762,94 @@ describe.each(getConfiguredTestDialects())(
       expect(await pendingDrafts(current, id)).toHaveLength(0);
     });
 
+    it("refuses, and keeps the draft, when a group the caller sends echoes a protected child the pending change edited", async () => {
+      // The nested form of the case below. The pending change, by someone who
+      // may write the protected child, edits it; the publisher sends the whole
+      // group with the child at its live value. Kept at the stored value, the
+      // child would read as the publisher's own input, and a successful
+      // publish would consume the draft and lose the author's edit.
+      const slug = "provenance_nested";
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug,
+            status: true,
+            versions: { drafts: true },
+            access: {
+              read: () => true,
+              update: () => true,
+              publish: () => true,
+              unpublish: () => true,
+            },
+            fields: [
+              text({ name: "body" }),
+              group({
+                name: "ops",
+                fields: [
+                  text({ name: "note" }),
+                  text({
+                    name: "runbook",
+                    access: {
+                      update: ({ req }) => req.user?.email === BOSS.email,
+                    },
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      });
+      const h = handlerOf(current);
+
+      const created = await h.createEntry(
+        { collectionName: slug, overrideAccess: true },
+        {
+          body: "live",
+          ops: { note: "live-note", runbook: "live-runbook" },
+          status: "published",
+        }
+      );
+      const id = (created.data as { id?: string }).id as string;
+
+      // BOSS's pending change edits the protected child.
+      await h.updateEntry(
+        {
+          collectionName: slug,
+          entryId: id,
+          routeAuthorized: true,
+          user: BOSS,
+        },
+        { ops: { note: "live-note", runbook: "boss-runbook" } }
+      );
+      expect(await pendingDrafts(current, id)).toHaveLength(1);
+
+      // CLERK publishes the whole group, the child at its live value.
+      const published = await h.updateEntry(
+        {
+          collectionName: slug,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        {
+          status: "published",
+          ops: { note: "clerk-note", runbook: "live-runbook" },
+        }
+      );
+
+      expect(published.success, JSON.stringify(published)).toBe(false);
+      // Nothing published, and BOSS's pending change is still there.
+      const doc = (await current.nextly.findByID({
+        collection: slug as never,
+        id,
+        overrideAccess: true,
+        status: "all",
+      } as never)) as Record<string, unknown> | null;
+      expect(doc?.ops).toEqual({ note: "live-note", runbook: "live-runbook" });
+      expect(await pendingDrafts(current, id)).toHaveLength(1);
+    });
+
     it("refuses, and keeps the draft, when the publisher echoes a protected path the pending change edited", async () => {
       // A full form resubmits every field, so a publisher routinely sends a
       // protected value back unchanged. The field gate strips it, which leaves the
