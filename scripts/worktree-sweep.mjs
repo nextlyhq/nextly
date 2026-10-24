@@ -223,21 +223,52 @@ function formatAge(ms) {
  * the rest. Anywhere else, null: the platform has no answer here, and no
  * answer means every checkout is treated as in use.
  */
-export function processCwds(platform = process.platform) {
+export function processCwds(platform = process.platform, env = process.env) {
+  if (env.NEXTLY_SWEEP_CWD_READER) return readerCwds(env.NEXTLY_SWEEP_CWD_READER, []);
   const read = CWD_READERS[platform] ?? (() => null);
   return read();
 }
 
-const CWD_READERS = { linux: procCwds, darwin: lsofCwds };
+const CWD_READERS = { linux: procCwds, darwin: () => readerCwds(lsofPath(), LSOF_ARGS) };
 
-function lsofCwds() {
-  const run = spawnSync("lsof", ["-a", "-d", "cwd", "-F", "n"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-  return lsofAnswered(run) ? parseLsofCwds(run.stdout) : null;
+const LSOF_ARGS = ["-a", "-d", "cwd", "-F", "n"];
+
+/**
+ * lsof by its absolute path where macOS installs it. A git hook or a package
+ * script can run with a PATH that lacks `/usr/sbin`, and a reader that cannot
+ * be found is a reader that cannot answer: every checkout then reads as in
+ * use. That is safe, but it also turns the sweep off without saying why.
+ */
+export function lsofPath(exists = existsSync) {
+  return exists("/usr/sbin/lsof") ? "/usr/sbin/lsof" : "lsof";
+}
+
+/**
+ * How long one read may take. On a machine running a dozen heavy jobs `lsof`
+ * walks thousands of processes slowly; a generous bound and one retry keep a
+ * busy machine from reading as an unreadable one, and a read that still does
+ * not answer is null, so the gate still fails closed.
+ */
+const READ_TIMEOUT_MS = 30_000;
+
+/**
+ * Each process's directory from a command printing `lsof -F n` output, or
+ * null when it does not answer twice in a row. `NEXTLY_SWEEP_CWD_READER`
+ * names such a command in place of the platform's own reader, so the sweep's
+ * tests can hold the facts fixed instead of depending on how fast the machine
+ * is; a reader that fails reads as unknown, never as "no process".
+ */
+export function readerCwds(command, args, run = spawnSync) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = run(command, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: READ_TIMEOUT_MS });
+    if (lsofAnswered(result)) return parseLsofCwds(result.stdout);
+  }
+  return null;
 }
 
 /** Exit 0, or 1 with output: lsof's way of saying some processes were not readable. */
-function lsofAnswered(run) {
-  return !run.error && [0, 1].includes(run.status) && Boolean(run.stdout);
+function lsofAnswered(result) {
+  return !result.error && [0, 1].includes(result.status) && Boolean(result.stdout);
 }
 
 /** The `n` lines of `lsof -F n` output, which name each process's directory. */
