@@ -220,7 +220,10 @@ export const extensionFor = sample => {
  * The start of the diagnostic for a module that does not resolve. TS2307 is an
  * import that binds something; TS2882 is a side-effect import, `import "./x"`,
  * which TypeScript 7 checks by default (`noUncheckedSideEffectImports`) and
- * TypeScript 5 let through. One unresolved module either way.
+ * TypeScript 5 let through silently. One unresolved module either way, and
+ * either leaves the sample unchecked: a side-effect import binds no names but
+ * can load global or module augmentations, so the rest of the sample was
+ * checked against types it never received.
  */
 const CANNOT_FIND_MODULE =
   "error TS(?:2307: Cannot find module|2882: Cannot find module or type declarations for side-effect import of) ";
@@ -864,12 +867,6 @@ export const suppressedByTheReaderRule = [];
 
 /** An import this compilation could not resolve. */
 export const UNRESOLVED_IMPORT = new RegExp(`${CANNOT_FIND_MODULE}'([^']+)'`);
-
-/**
- * An unresolved side-effect import, `import "./x"`. It binds nothing, so it
- * leaves nothing in the sample typed as `any`, and the sample is still read.
- */
-const SIDE_EFFECT_IMPORT = /error TS2882: /;
 
 /**
  * An undefined name, which may or may not be a defect. TS2552 is the same
@@ -2050,17 +2047,13 @@ export async function classifyDocDiagnostics({
   const uncheckedSamples = new Set();
   for (const line of diagnostics) {
     const missing = line.match(UNRESOLVED_IMPORT);
-    // Only an import that binds something leaves the sample unread.
-    const leavesUnread = origin => {
-      if (!SIDE_EFFECT_IMPORT.test(line)) uncheckedSamples.add(origin);
-    };
     if (missing) {
       // A file the reader writes. Neither the compiler nor the registry can see
       // it, so it is not a finding, but the rest of that sample was read
       // through bindings TypeScript had to type as `any`.
       if (READER_OWNED_FILE.test(line)) {
         readerFiles.push(line);
-        leavesUnread(line.split("  ")[0].split(":")[0]);
+        uncheckedSamples.add(line.split("  ")[0].split(":")[0]);
         continue;
       }
       // Decided from this checkout alone. This used to ask the npm registry
@@ -2087,13 +2080,13 @@ export async function classifyDocDiagnostics({
           // Declared here and still unresolved: the tree is not built the way
           // this expects, which is about the checkout and not about the page.
           unchecked.push(line);
-          leavesUnread(origin);
+          uncheckedSamples.add(origin);
         } else {
           real.push(line);
         }
       } else {
         uninstalled.push(line);
-        leavesUnread(origin);
+        uncheckedSamples.add(origin);
       }
       continue;
     }

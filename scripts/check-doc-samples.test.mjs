@@ -1480,32 +1480,36 @@ describe("TypeScript 7's spellings of the same diagnostics", () => {
     expect(named(real)).toEqual(["baseUrl"]);
   });
 
-  it("reads an unresolved side-effect import of the reader's file as one, and as binding nothing", async () => {
+  it("reads an unresolved side-effect import of the reader's file as one, leaving the sample unchecked", async () => {
     // TypeScript 7 checks side-effect imports by default and reports TS2882,
-    // where TypeScript 5 said nothing.
-    const sideEffect = at(
-      "TS2882: Cannot find module or type declarations for side-effect import of './generated/admin-imports'."
+    // where TypeScript 5 said nothing. It binds no names, but it can load
+    // global or module augmentations, so the sample is unchecked exactly as
+    // one with an unresolved import that binds is.
+    const readAs = async line =>
+      classifyDocDiagnostics({
+        diagnostics: [line],
+        samples,
+        exported: NOTHING_EXPORTED,
+      });
+    for (const line of [
+      at(
+        "TS2882: Cannot find module or type declarations for side-effect import of './generated/admin-imports'."
+      ),
+      at(
+        "TS2307: Cannot find module './collections/Posts' or its corresponding type declarations."
+      ),
+    ]) {
+      const read = await readAs(line);
+      expect(read.readerFiles).toEqual([line]);
+      expect([...read.uncheckedSamples]).toEqual(["docs/x.mdx#0"]);
+    }
+    // The control: a diagnostic about something other than a module is no
+    // reader file and leaves the sample checked.
+    const other = await readAs(
+      at("TS2322: Type 'string' is not assignable to type 'number'.")
     );
-    const binding = at(
-      "TS2307: Cannot find module './collections/Posts' or its corresponding type declarations."
-    );
-    const sideEffectOnly = await classifyDocDiagnostics({
-      diagnostics: [sideEffect],
-      samples,
-      exported: NOTHING_EXPORTED,
-    });
-    expect(sideEffectOnly.readerFiles).toEqual([sideEffect]);
-    // It binds nothing, so nothing in the sample was typed as `any` and the
-    // sample was still read.
-    expect([...sideEffectOnly.uncheckedSamples]).toEqual([]);
-    // The control: an import that binds a name leaves the sample unread.
-    const withBinding = await classifyDocDiagnostics({
-      diagnostics: [binding],
-      samples,
-      exported: NOTHING_EXPORTED,
-    });
-    expect(withBinding.readerFiles).toEqual([binding]);
-    expect([...withBinding.uncheckedSamples]).toEqual(["docs/x.mdx#0"]);
+    expect(other.readerFiles).toEqual([]);
+    expect([...other.uncheckedSamples]).toEqual([]);
   });
 });
 
