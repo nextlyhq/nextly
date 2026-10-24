@@ -90,3 +90,25 @@ export const WRITTEN_SAMPLE_DATA: Record<string, unknown> = {
   ],
   coupon: "SPRING",
 };
+
+/**
+ * The data written renders are checked under: typical, hostile (markup, a
+ * script, Liquid and a `javascript:` link in the values) and none at all.
+ */
+export const WRITTEN_SAMPLE_DATASETS: Record<
+  "typical" | "hostile" | "empty",
+  Record<string, unknown>
+> = {
+  typical: WRITTEN_SAMPLE_DATA,
+  hostile: {
+    appName: "Shop <b>&</b>",
+    year: "2026",
+    name: `<script>alert("x")</script>`,
+    order: { number: "<1042>" },
+    trackUrl: "javascript:alert(1)",
+    orderUrl: `https://x.example/"><img src=x>`,
+    lines: [{ name: "{{ name }}", quantity: "<b>2</b>", total: "{% if %}" }],
+    coupon: "",
+  },
+  empty: { appName: "Shop", year: "2026" },
+};
