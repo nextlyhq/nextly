@@ -163,7 +163,16 @@ async function resolveContent(
     ...collections.map(row => ({ kind: "collection", ...row })),
     ...singles.map(single => ({ kind: "single", ...single, group: null })),
   ];
-  return listOf(rows, CONTENT_FIELDS, query);
+  // `kind` stays in every row whatever was selected: a collection and a Single
+  // may share a slug, and without it their rows could not be told apart.
+  const select = query.select;
+  return listOf(
+    rows,
+    CONTENT_FIELDS,
+    select?.length && !select.includes("kind")
+      ? { ...query, select: [...select, "kind"] }
+      : query
+  );
 }
 
 /**
