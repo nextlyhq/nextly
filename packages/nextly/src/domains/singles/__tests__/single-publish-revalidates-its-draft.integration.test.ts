@@ -18,7 +18,13 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { defineSingle, group, text } from "../../../config";
+import {
+  defineFieldGroup,
+  defineSingle,
+  fieldGroup,
+  group,
+  text,
+} from "../../../config";
 import type { HookContext } from "../../../hooks/types";
 import { createAdapter } from "../../../database/factory";
 import {
@@ -68,6 +74,19 @@ async function boot(
   } as Parameters<typeof createAdapter>[0]);
   current = await createTestNextly({
     adapter,
+    // A field group stored in its own table, with a child only BOSS may write.
+    fieldGroups: [
+      defineFieldGroup({
+        slug: "scard",
+        fields: [
+          text({ name: "note" }),
+          text({
+            name: "runbook",
+            access: { update: ({ req }) => req.user?.email === BOSS.email },
+          }),
+        ],
+      }),
+    ],
     singles: [
       defineSingle({
         slug: SLUG,
@@ -110,6 +129,7 @@ async function boot(
             name: "guarded",
             access: { update: ({ req }) => req.user?.email === BOSS.email },
           }),
+          fieldGroup({ name: "card", component: "scard" }),
           text({
             name: "checked",
             ...(strict
@@ -383,6 +403,39 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     ).publicData?.errors;
     // Named at its own depth, so the author can see which child is at fault.
     expect(issues?.map(i => i.path)).toEqual(["ops.runbook"]);
+  });
+
+  it("refuses, and keeps the draft, when the publisher's field group echoes a protected child the draft edited", async () => {
+    const singles = await boot(false);
+    await singles.update(
+      SLUG,
+      {
+        siteName: "Live",
+        card: { note: "live-note", runbook: "live-runbook" },
+        status: "published",
+      },
+      { overrideAccess: true }
+    );
+    await singles.update(
+      SLUG,
+      { card: { note: "live-note", runbook: "boss-runbook" } },
+      { routeAuthorized: true, user: BOSS }
+    );
+
+    const published = await singles.update(
+      SLUG,
+      {
+        status: "published",
+        card: { note: "clerk-note", runbook: "live-runbook" },
+      },
+      { routeAuthorized: true, user: CLERK }
+    );
+
+    expect(published.success, JSON.stringify(published)).toBe(false);
+    const issues = (
+      published as { publicData?: { errors?: Array<{ path: string }> } }
+    ).publicData?.errors;
+    expect(issues?.map(i => i.path)).toEqual(["card.runbook"]);
   });
 
   it("refuses, and keeps the draft, when the publisher's group echoes a protected child the draft edited", async () => {
