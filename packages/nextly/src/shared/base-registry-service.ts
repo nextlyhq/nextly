@@ -291,6 +291,31 @@ export abstract class BaseRegistryService<
   }
 
   /**
+   * Every record with only its slug and `columns` read, deserialized as a
+   * record is.
+   *
+   * For a caller that needs a few presentation columns of every record (its
+   * labels and admin options) and nothing else. `getAllRecords` selects and
+   * deserializes every column, the fields JSON included; here only the named
+   * columns are read, and every other field of the result is left at the
+   * value its deserializer gives an absent column.
+   */
+  protected async getAllRecordsWithColumns(
+    columns: readonly string[]
+  ): Promise<TRecord[]> {
+    try {
+      const rows = await this.adapter.select<Record<string, unknown>>(
+        await this.resolveRegistryTableName(),
+        { columns: ["slug", ...columns] }
+      );
+      return rows.map(row => this.deserializeRecord(row));
+    } catch (error) {
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+  }
+
+  /**
    * List records with pagination, search, and total count.
    */
   protected async listRecords(
