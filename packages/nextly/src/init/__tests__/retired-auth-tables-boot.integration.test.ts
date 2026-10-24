@@ -1,6 +1,7 @@
 /**
- * A boot on a database that still holds the retired `accounts` or `sessions`
- * table names the table in a startup warning, with its row count. A database
+ * A boot on a database that still holds a retired `accounts`, `sessions` or
+ * `user_permission_cache` table names the table in a startup warning, with its
+ * row count. A database
  * without them stays quiet about auth tables.
  *
  * Runs the real check — live introspection, the shape test and the count
@@ -18,7 +19,10 @@ import {
   withFreshDatabase,
 } from "../../__tests__/helpers/fresh-database";
 import { ensureFirstRunSetup } from "../first-run";
-import { createRetiredAuthTables } from "./retired-auth-tables-fixture";
+import {
+  createRetiredAuthTables,
+  createStoredPermissionAnswersTable,
+} from "./retired-auth-tables-fixture";
 
 const WARNING_OPENING = "still has auth tables";
 
@@ -75,6 +79,25 @@ describe.each(availableDialects())(
         expect(rest).toEqual([]);
         expect(warning).toContain("accounts: 0 rows");
         expect(warning).toContain("sessions: 1 row");
+      });
+    });
+
+    it("names the stored permission answers an upgraded database still has", async () => {
+      await fresh(async db => {
+        await createStoredPermissionAnswersTable(
+          { executeQuery: sql => db.exec(sql) },
+          dialect
+        );
+        await db.exec(
+          "INSERT INTO user_permission_cache (id, user_id, action, resource, has_permission, role_ids, expires_at, created_at) VALUES ('u|read|posts', 'u', 'read', 'posts', 1, '[]', 1, 1)"
+        );
+
+        const logger = await boot(db);
+
+        const [warning, ...rest] = authTableWarnings(logger);
+        expect(rest).toEqual([]);
+        expect(warning).toContain("user_permission_cache: 1 row");
+        expect(warning).toContain("whether or not it holds rows");
       });
     });
 

@@ -42,7 +42,6 @@ export {
   rolePermissions,
   userRoles,
   roleInherits,
-  userPermissionCache,
 } from "../rbac/mysql";
 
 export { apiKeys } from "../api-keys/mysql";

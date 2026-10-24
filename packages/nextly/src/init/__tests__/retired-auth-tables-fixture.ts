@@ -1,6 +1,6 @@
 /**
- * The retired `accounts` and `sessions` tables, created by hand for
- * integration tests on every dialect.
+ * The retired `accounts`, `sessions` and `user_permission_cache` tables,
+ * created by hand for integration tests on every dialect.
  *
  * Hand-written DDL on purpose: the production definitions of these tables
  * were removed so nothing creates them again, and these stand in for an
@@ -41,6 +41,25 @@ export async function createRetiredAuthTables(
   );
 }
 
+/**
+ * `user_permission_cache` in the shape Nextly created it. Without the foreign
+ * key to `users` it had on PostgreSQL and SQLite, so a case can fill it
+ * without making users; nothing here depends on the key.
+ */
+export async function createStoredPermissionAnswersTable(
+  db: RawExecutor,
+  dialect: TestDialect
+): Promise<void> {
+  const key = keyType(dialect);
+  await db.executeQuery(
+    `CREATE TABLE user_permission_cache (id ${key} PRIMARY KEY,
+       user_id ${key} NOT NULL, action VARCHAR(50) NOT NULL,
+       resource VARCHAR(100) NOT NULL, has_permission INTEGER NOT NULL,
+       role_ids TEXT NOT NULL, expires_at BIGINT NOT NULL,
+       created_at BIGINT NOT NULL)`
+  );
+}
+
 /** A host app's own `accounts` table, which only shares the name. */
 export async function createHostAccountsTable(
   db: RawExecutor,
@@ -55,15 +74,16 @@ export async function createHostAccountsTable(
 export async function insertRow(
   db: RawExecutor,
   dialect: TestDialect,
-  table: "accounts" | "sessions",
+  table: "accounts" | "sessions" | "user_permission_cache",
   values: unknown[]
 ): Promise<void> {
   const params = values.map((_, i) => bindParam(dialect, i + 1)).join(", ");
   await db.executeQuery(`INSERT INTO ${table} VALUES (${params})`, values);
 }
 
-/** Drop whichever of the two tables a case left behind. */
+/** Drop whichever of the retired tables a case left behind. */
 export async function dropRetiredAuthTables(db: RawExecutor): Promise<void> {
   await db.executeQuery("DROP TABLE IF EXISTS accounts");
   await db.executeQuery("DROP TABLE IF EXISTS sessions");
+  await db.executeQuery("DROP TABLE IF EXISTS user_permission_cache");
 }

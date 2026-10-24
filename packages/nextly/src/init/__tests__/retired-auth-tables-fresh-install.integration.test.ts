@@ -33,5 +33,12 @@ describe.each(getConfiguredTestDialects())(
       expect(await handle.adapter.tableExists("accounts")).toBe(false);
       expect(await handle.adapter.tableExists("sessions")).toBe(false);
     });
+
+    it("creates no `user_permission_cache`", async () => {
+      expect(await handle.adapter.tableExists("users")).toBe(true);
+      expect(await handle.adapter.tableExists("user_permission_cache")).toBe(
+        false
+      );
+    });
   }
 );

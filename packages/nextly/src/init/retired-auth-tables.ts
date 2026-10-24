@@ -1,11 +1,12 @@
 /**
- * Telling an operator that two auth tables still in their database no longer
- * do anything.
+ * Telling an operator that auth tables still in their database no longer do
+ * anything.
  *
  * `accounts` and `sessions` came from an authentication model Nextly no longer
  * uses: sessions are stateless JWTs with an opaque refresh token of their own.
  * Nothing has written either table since that change, and nothing reads them
- * now.
+ * now. `user_permission_cache` held permission answers between requests; a
+ * user's access is now kept in memory, and nothing reads or writes it either.
  *
  * A fresh install no longer creates them. An existing database keeps them,
  * because dropping a table that may still hold rows is the operator's decision
@@ -13,18 +14,21 @@
  * tables sit there looking exactly as they did when they were live. No query
  * fails and no feature errors; they simply never change again.
  *
- * So the operator is told at startup, once, which of the two are still present
+ * So the operator is told at startup, once, which of them are still present
  * and how many rows each holds. Reporting only: nothing here changes the
  * database. `nextly migrate` drops them when the operator asks it to.
  *
- * Nextly keeps no record that it created either table: older versions created
- * them with `CREATE TABLE IF NOT EXISTS` and a schema push, and the schema
+ * Nextly keeps no record that it created the sign-in tables: older versions
+ * created them with `CREATE TABLE IF NOT EXISTS` and a schema push, and the schema
  * ledger's `core_apply` rows name no tables. Their shape is not proof either,
  * because it is the shape of the Auth.js (NextAuth) SQL adapters' tables of
  * the same names, which a host app sharing the database may own. So nothing
  * here acts on a table by its shape alone: the startup report and the drop
  * the operator asks for name the table first, and a user deletion erases from
  * one only when the operator has named it in `NEXTLY_ERASE_RETIRED_AUTH_TABLES`.
+ * A deleted user's rows in `user_permission_cache` are removed with the user
+ * where the table has a foreign key to `users` (PostgreSQL, SQLite), and stay
+ * until the drop on MySQL, where it has none.
  *
  * @module init/retired-auth-tables
  */
@@ -42,16 +46,39 @@ export { RETIRED_AUTH_TABLES };
  * The columns that make a table one of OURS rather than a table that merely
  * has the name.
  *
- * A fresh install no longer creates either table, so from this release the
- * names can belong to someone else: a host app sharing the database, or a
- * session store whose default table is `sessions`. Every column listed here
- * was in every dialect's definition of the retired table, and together they
- * are specific enough that an unrelated table does not carry all of them.
+ * A fresh install no longer creates these tables, so the names can belong to
+ * someone else: a host app sharing the database, or a session store whose
+ * default table is `sessions`. Every column listed here was in every dialect's
+ * definition of the retired table, and together they are specific enough that
+ * an unrelated table does not carry all of them.
  */
 const RETIRED_AUTH_TABLE_SHAPES: Readonly<Record<string, readonly string[]>> = {
   accounts: ["user_id", "provider", "provider_account_id"],
   sessions: ["session_token", "user_id", "expires"],
+  user_permission_cache: [
+    "user_id",
+    "action",
+    "resource",
+    "has_permission",
+    "role_ids",
+    "expires_at",
+  ],
 };
+
+/**
+ * The retired sign-in tables: the ones a host app may own a namesake of, and
+ * the ones a deleted user's rows can be erased from once the operator names
+ * them.
+ */
+const SIGN_IN_TABLES: readonly string[] = ["accounts", "sessions"];
+
+/**
+ * Retired tables whose rows are only copies of answers recomputed from other
+ * rows. `user_permission_cache` held a user's permission answers between
+ * requests; every one is recomputed from their roles. Dropping one with rows
+ * loses nothing, so the drop asked for is enough on its own.
+ */
+const DERIVED_ROW_TABLES: readonly string[] = ["user_permission_cache"];
 
 /**
  * Whether a table with a retired name has the shape Nextly created it with.
@@ -117,14 +144,14 @@ const TABLE_LIST = z
  * host app's: no record says Nextly created it, and the shape is the Auth.js
  * adapters' too. Erasing from a host's table deletes that app's sign-in links
  * for a person who may still use it, so without a name the rows stay, and the
- * startup report says so. Only the retired names count; anything else in the
- * list is ignored, since this never erases from another table.
+ * startup report says so. Only the retired sign-in tables count; anything else
+ * in the list is ignored, since this never erases from another table.
  */
 export function retiredTablesNamedForErasure(
   value: string | undefined
 ): ReadonlySet<string> {
   return new Set(
-    TABLE_LIST.parse(value).filter(name => RETIRED_AUTH_TABLES.includes(name))
+    TABLE_LIST.parse(value).filter(name => SIGN_IN_TABLES.includes(name))
   );
 }
 
@@ -179,7 +206,11 @@ export function formatRetiredAuthTablesWarning(
   found: readonly RetiredAuthTable[],
   namedForErasure: ReadonlySet<string> = new Set()
 ): string {
-  const notErased = found
+  const signIn = found.filter(entry => SIGN_IN_TABLES.includes(entry.table));
+  const derived = found.filter(entry =>
+    DERIVED_ROW_TABLES.includes(entry.table)
+  );
+  const notErased = signIn
     .filter(entry => !namedForErasure.has(entry.table))
     .map(entry => entry.table);
   return [
@@ -189,18 +220,31 @@ export function formatRetiredAuthTablesWarning(
       entry =>
         `  ${entry.table}: ${entry.rows} ${entry.rows === 1 ? "row" : "rows"}`
     ),
-    "",
-    "  Sessions are stateless JWTs with their own refresh-token table. Nothing writes or reads",
-    "  these two tables, and a new install no longer creates them. Nextly has no record that it",
-    "  created them, and the Auth.js (NextAuth) SQL adapters use tables of the same names and",
-    "  shape, so check they are not another app's before acting. They are left in place because",
-    "  dropping a table is your decision: `nextly migrate` with NEXTLY_DROP_RETIRED_AUTH_TABLES=1",
-    "  drops them, and adding NEXTLY_DROP_NONEMPTY_RETIRED=1 is required for one that still holds",
-    "  rows.",
+    ...(signIn.length > 0
+      ? [
+          "",
+          "  Sessions are stateless JWTs with their own refresh-token table. Nothing writes or reads",
+          "  these two tables, and a new install no longer creates them. Nextly has no record that it",
+          "  created them, and the Auth.js (NextAuth) SQL adapters use tables of the same names and",
+          "  shape, so check they are not another app's before acting. They are left in place because",
+          "  dropping a table is your decision: `nextly migrate` with NEXTLY_DROP_RETIRED_AUTH_TABLES=1",
+          "  drops them, and adding NEXTLY_DROP_NONEMPTY_RETIRED=1 is required for one that still holds",
+          "  rows.",
+        ]
+      : []),
     ...(notErased.length > 0
       ? [
           `  Until then, deleting a user does not erase their rows from ${notErased.join(" or ")}.`,
           `  Set ${ERASE_RETIRED_AUTH_TABLES_ENV}=${notErased.join(",")} if ${notErased.length === 1 ? "it is" : "they are"} Nextly's, so it does.`,
+        ]
+      : []),
+    ...(derived.length > 0
+      ? [
+          "",
+          "  user_permission_cache held permission answers between requests. A user's access is now",
+          "  kept in memory, nothing reads or writes this table, and a new install no longer creates",
+          "  it. Its rows are copies recomputed from roles, so `nextly migrate` with",
+          "  NEXTLY_DROP_RETIRED_AUTH_TABLES=1 drops it whether or not it holds rows.",
         ]
       : []),
   ].join("\n");
@@ -230,7 +274,9 @@ export interface RetiredAuthDropOptions {
  * have asked for. Dropping one with rows destroys data that nothing can
  * recreate, so asking for the drop is not enough on its own — an operator who
  * has not looked at what is in there has not decided anything. A table with
- * rows does not hold back an empty one: each is decided on what it holds.
+ * rows does not hold back an empty one: each is decided on what it holds. A
+ * table whose rows are only derived copies (`user_permission_cache`) loses
+ * nothing that cannot be recomputed, so the drop asked for is enough for it.
  *
  * Kept as a pure decision so the policy can be tested without a database, and
  * so the caller is the only thing that touches one.
@@ -240,7 +286,11 @@ export function planRetiredAuthTableDrop(
   opts: RetiredAuthDropOptions
 ): RetiredAuthTablePlan {
   if (!opts.dropRequested) return { drop: [], kept: [] };
-  const kept = opts.allowNonEmpty ? [] : found.filter(entry => entry.rows > 0);
+  const kept = opts.allowNonEmpty
+    ? []
+    : found.filter(
+        entry => entry.rows > 0 && !DERIVED_ROW_TABLES.includes(entry.table)
+      );
   return {
     drop: found
       .filter(entry => !kept.includes(entry))
