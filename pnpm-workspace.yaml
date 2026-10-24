@@ -92,3 +92,19 @@ allowBuilds:
   msgpackr-extract: false
   sharp: true
   unrs-resolver: true
+
+# Peers declared for an older TypeScript, by packages that never load it on
+# any path this repository runs, measured on TypeScript 7.0.2 by recording
+# every request for `typescript` during the run:
+# - `@typescript-eslint/*` come only through `eslint-plugin-import-x`, whose
+#   `order` rule is lint's import-order rule. Linting with it, and running it
+#   alone on a file it reports, requested `typescript` zero times.
+# - `tsconfck` comes through `vite-tsconfig-paths`, which loads the compiler
+#   only for its `parseNative` option. No configuration here sets it.
+peerDependencyRules:
+  allowedVersions:
+    "@typescript-eslint/utils>typescript": "7.0.2"
+    "@typescript-eslint/typescript-estree>typescript": "7.0.2"
+    "@typescript-eslint/tsconfig-utils>typescript": "7.0.2"
+    "@typescript-eslint/project-service>typescript": "7.0.2"
+    "tsconfck>typescript": "7.0.2"
