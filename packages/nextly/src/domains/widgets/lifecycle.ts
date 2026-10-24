@@ -96,6 +96,28 @@ export type WidgetLifecycle = (typeof WIDGET_LIFECYCLES)[number];
  * — a card offered on the strength of a collection the reader may not read is
  * a card that opens onto a refusal.
  *
+ * `content:present` — this READER may read at least one collection OR one
+ * single, either of them. It gates the card that lists both together, which a
+ * reader with Singles and no collections still has something to draw on;
+ * `collections:present` and `singles:present` each answer one kind, for a card
+ * that lists only that kind. Like them, it leaves out what the dashboard keeps
+ * off (internal content, and content hidden from the navigation), so a card is
+ * never offered for content it would not list.
+ *
+ * Three more gate the cards that act on content, each by what that card needs:
+ *
+ * - `create:available` — this READER may create an entry in at least one
+ *   collection they can read. Permissions only: nothing is read. It gates
+ *   Create, whose every button would otherwise open onto a refusal.
+ * - `attention:readable` — this READER may read at least one kind Needs
+ *   attention counts: a collection or Single (unpublished changes), or
+ *   releases (due and overdue). Permissions only: it never counts, since the
+ *   card does the counting.
+ * - `releases:present` — a release exists that this READER may read. One
+ *   bounded read (one id, a limit of one) through the releases domain's own
+ *   list rules, and none at all for a reader who may not read releases. It
+ *   gates Upcoming releases, beside that card's permission gate.
+ *
  * Namespaced `subject:state` so a later condition about a different subject
  * cannot be mistaken for a variant of this one, and so the set stays readable
  * as it grows.
@@ -106,6 +128,10 @@ export const WIDGET_CONDITIONS = [
   "seed:unanswered",
   "collections:present",
   "singles:present",
+  "content:present",
+  "create:available",
+  "attention:readable",
+  "releases:present",
 ] as const;
 export type WidgetCondition = (typeof WIDGET_CONDITIONS)[number];
 

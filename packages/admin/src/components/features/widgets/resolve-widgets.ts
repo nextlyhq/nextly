@@ -15,7 +15,9 @@ import type {
   WidgetAction,
   WidgetArchetype,
   WidgetHeight,
+  SourcelessWidgetQuery,
   WidgetQuery,
+  WidgetQueryCell,
   WidgetSize,
   WidgetStatCell,
   WidgetChrome,
@@ -98,13 +100,21 @@ export interface ReadableWidgetDeclaration {
   defaultHeight?: WidgetHeight;
   minSize?: WidgetSize;
   maxSize?: WidgetSize;
-  query?: WidgetQuery;
+  /**
+   * Sourceless for a widget offered per collection. Such a query is never
+   * asked as it stands: a card is asked only once its Collection setting has
+   * given the query a source, and is answered "not available" until then.
+   */
+  query?: WidgetQuery | SourcelessWidgetQuery;
   component?: string;
   actions?: WidgetAction[];
   /** Present for `text`: the markdown the host draws. */
   content?: string;
-  /** Present for `stats`: the numbers the card draws, each with its own query. */
-  cells?: WidgetStatCell[];
+  /**
+   * Present for `stats`: the numbers the card draws, each with its own query.
+   * For `custom`: the keyed reads its component is handed.
+   */
+  cells?: WidgetStatCell[] | WidgetQueryCell[];
   link?: { label: string; href: string };
   defaultOrder?: number;
   chrome?: WidgetChrome;
@@ -393,8 +403,11 @@ function mergeCollision(
     // its cells to a widget drawn from one query -- and the batch prefers cells
     // over that query, so no answer is ever filed under the widget's own id and
     // the card loads forever. Cells travel only with the archetype that draws
-    // them.
-    cells: registration.archetype === "stats" ? registration.cells : undefined,
+    // them: a stats card's numbers, or a custom card's keyed reads.
+    cells:
+      registration.archetype === "stats" || registration.archetype === "custom"
+        ? registration.cells
+        : undefined,
     // The same rule for prose: it travels only with the archetype that draws
     // it, and both channels passed the non-blank check at boot, so a text
     // registration colliding with a text contribution keeps its prose rather

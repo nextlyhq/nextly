@@ -89,6 +89,17 @@ export type WidgetResult =
        * widget chose and nothing honest to head them with.
        */
       fields?: WidgetResultField[];
+      /**
+       * The span of time the source looked at, in whole days back from now.
+       *
+       * A source that keeps rows only for a period answers from that period
+       * alone, so an empty answer means "none in that span" rather than
+       * "none ever", and a card can say which. Absent when the source looked
+       * without a bound, and from a source that does not say.
+       *
+       * @experimental
+       */
+      window?: { days: number };
     }
   | {
       op: "groupBy";
@@ -280,6 +291,14 @@ export type WidgetComponentProps = {
    * data gets it here as `{ op: "data", data }`.
    */
   slot: WidgetSlot | undefined;
+  /**
+   * The answer to each of this card's cells, by key, for a card that declares
+   * several reads (`cells`); absent for one that declares none. A key with no
+   * answer yet is absent from it, as `slot` is.
+   *
+   * @experimental While the content widgets are being built.
+   */
+  cells?: Readonly<Record<string, WidgetSlot>>;
   /**
    * Whether this card's question is in flight, the FIRST request included: its
    * query, or the data core builds for a widget that declares its own.

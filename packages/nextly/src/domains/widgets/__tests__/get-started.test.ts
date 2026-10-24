@@ -23,6 +23,12 @@ vi.mock("../../../auth/access/route-gate-adapters", () => ({
 vi.mock("../../../di", () => ({
   getService: (name: keyof typeof services) => services[name],
 }));
+// Whether the schema builder is on: production turns it off unless the host
+// says otherwise.
+const builder = vi.hoisted(() => ({ enabled: true }));
+vi.mock("../../../shared/builder-access", () => ({
+  isBuilderEnabled: () => builder.enabled,
+}));
 // Which Singles have a published source: the fallback reads only those tables.
 const { published } = vi.hoisted(() => ({ published: new Set<string>() }));
 vi.mock("../reader-content", async importOriginal => {
@@ -64,6 +70,9 @@ function probeOf(world: World): ConditionProbe {
     hasContent: async () => world.content ?? false,
     mayCreateEntry: async () => world.createEntry ?? false,
     mayCreateCollection: async () => world.createCollection ?? false,
+    mayCreateOnDashboard: async () => false,
+    mayReadReleases: async () => false,
+    releasesExist: async () => false,
     getStarted: () => {
       throw new Error("not under test");
     },
@@ -74,6 +83,7 @@ const at = (iso: string) => new Date(iso);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  builder.enabled = true;
   published.clear();
   mayPerform.mockResolvedValue(false);
   services.activityLogService.singlesWithRecordedSaves.mockResolvedValue(
@@ -111,6 +121,15 @@ describe("creating a collection", () => {
     ).not.toHaveProperty("collection");
   });
 
+  it("is not offered where the schema builder is off, to any reader", async () => {
+    // 🔴 Its action is the builder, which production keeps off: a reader who
+    // may create collections would get a step every route refuses.
+    builder.enabled = false;
+    const { answer, byKey } = await statusesFor({ createCollection: true });
+    expect(byKey).not.toHaveProperty("collection");
+    expect(answer.unknown).toBe(false);
+  });
+
   it("is not known, never waiting, when the collections could not be listed", async () => {
     const { answer, byKey } = await statusesFor({
       collections: { slugs: [], reachable: false },
@@ -136,6 +155,18 @@ describe("adding a first entry", () => {
     expect(
       (await statusesFor({ content: "unknown", createEntry: true })).byKey.entry
     ).toBe("unknown");
+  });
+
+  it("offers nothing, and says the answer is not known, when whether the reader could add one is not known", async () => {
+    // 🔴 The step was offered as "unknown" without knowing the reader could add
+    // an entry, so a read-only reader was handed the add-an-entry row and link.
+    const probe: ConditionProbe = {
+      ...probeOf({ content: "unknown" }),
+      mayCreateEntry: () => Promise.reject(new Error("permission read failed")),
+    };
+    const answer = await getStartedSteps(probe);
+    expect(answer.unknown).toBe(true);
+    expect(answer.steps.map(step => step.kind)).not.toContain("entry");
   });
 
   it("is not offered as not known to a reader who could not add an entry", async () => {
@@ -239,6 +270,16 @@ describe("filling in each Single", () => {
       createEntry: true,
     });
     expect(byKey.entry).toBe("open");
+  });
+
+  it("offers no Single, and says the answer is not known, when whether the reader may update one is not known", async () => {
+    mayPerform.mockImplementation(async (action: string, resource: string) => {
+      if (resource === "about") throw new Error("permission read failed");
+      return action === "update";
+    });
+    const { answer } = await statusesFor({ singles });
+    expect(answer.unknown).toBe(true);
+    expect(answer.steps.filter(step => step.kind === "single")).toEqual([]);
   });
 
   it("makes the whole answer not known when the Singles could not be listed", async () => {
@@ -393,7 +434,7 @@ describe("answering each Single within a bound and a budget", () => {
 });
 
 describe("the whole answer's deadline", () => {
-  it("reads every branch not answered by the deadline as not known, never complete", async () => {
+  it("offers no step whose check the deadline cut short, and says the answer is not known", async () => {
     vi.useFakeTimers();
     try {
       const never = <T>() => new Promise<T>(() => {});
@@ -411,10 +452,48 @@ describe("the whole answer's deadline", () => {
       const answer = await pending;
 
       expect(answer.unknown).toBe(true);
-      expect(
-        Object.fromEntries(answer.steps.map(step => [step.key, step.status]))
-      ).toEqual({ collection: "unknown", entry: "unknown", invite: "unknown" });
+      // 🔴 Each was offered as "unknown": an offer made without knowing the
+      // reader could take it, with the step's action and link.
+      expect(answer.steps).toEqual([]);
       expect(answer.done).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts no read once the deadline has fired", async () => {
+    vi.useFakeTimers();
+    try {
+      // Two Singles are two authorization groups: the first is one Single on
+      // its own, so the caches it fills serve the rest. The first stalls past
+      // the deadline and then answers.
+      let release: (allowed: boolean) => void = () => {};
+      mayPerform.mockImplementation((action: string, resource: string) =>
+        action === "update" && resource === "home"
+          ? new Promise<boolean>(resolve => {
+              release = resolve;
+            })
+          : Promise.resolve(true)
+      );
+      published.add("home").add("about");
+      const pending = getStartedSteps(
+        probeOf({ singles: { slugs: ["home", "about"], reachable: true } }),
+        100
+      );
+      await vi.advanceTimersByTimeAsync(100);
+      expect((await pending).unknown).toBe(true);
+
+      release(true);
+      await vi.advanceTimersByTimeAsync(0);
+      // 🔴 The race stopped only the wait: the second group, the trail query
+      // and the stored-document reads all went on, their answers thrown away.
+      expect(mayPerform).not.toHaveBeenCalledWith("update", "about");
+      expect(
+        services.activityLogService.singlesWithRecordedSaves
+      ).not.toHaveBeenCalled();
+      expect(
+        services.singleRegistryService.getSingleBySlug
+      ).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

@@ -17,6 +17,8 @@
  */
 
 import { container } from "../../di/container";
+import type { NextlyServiceConfig } from "../../di/register";
+import { activeAuditRetention } from "../../domains/audit/retention-config";
 import type { VersionsService } from "../../domains/versions/versions-service";
 import type { WidgetQuery } from "../../domains/widgets/query";
 import type { WidgetResult } from "../../domains/widgets/result";
@@ -84,6 +86,8 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   groupBy: "refused",
   dateField: "refused",
   interval: "refused",
+  since: "refused",
+  until: "refused",
 };
 
 /** The card's filters, as the query's `where` carries them. */
@@ -135,6 +139,36 @@ function onlyMineFilter(value: unknown): boolean {
     );
   }
   return value === true;
+}
+
+/** A day, in the milliseconds the retention windows are stated in. */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How many whole days back the trail holds rows, or `undefined` when nothing
+ * prunes it: retention switched off (`false`), or an install initialised
+ * without an audit policy, which registers no pass at all. Read through
+ * `activeAuditRetention`, so a reloaded policy is the one reported, as it is
+ * the one the passes run with.
+ *
+ * Whole days, rounded DOWN, so the span is never overstated: a 36-hour window
+ * is "the last day", and one under a day states no span at all, since "the
+ * last day" would claim edits the trail no longer holds.
+ */
+function retentionDays(): number | undefined {
+  const built = container.has("config")
+    ? container.get<NextlyServiceConfig>("config").auditRetention
+    : undefined;
+  const maxAge = activeAuditRetention(built)?.activityMaxAgeMs;
+  if (typeof maxAge !== "number") return undefined;
+  const days = Math.floor(maxAge / DAY_MS);
+  return days >= 1 ? days : undefined;
+}
+
+/** The answer's span, as the list result states it: present only when bounded. */
+function windowOf(): { window?: { days: number } } {
+  const days = retentionDays();
+  return days === undefined ? {} : { window: { days } };
 }
 
 /** The services, resolved at CALL time, as `system:activity` resolves its own. */
@@ -242,11 +276,13 @@ async function documentStates(
           pending
             .pendingChangeLocales(group.kind, group.slug, ids)
             .then(locales => {
+              // An answered read settles every row it covers: a document it
+              // names none for has no pending changes in any language.
               for (const edit of group.edits) {
                 const held = locales.get(edit.entryId as string);
-                if (held !== undefined) {
-                  record(edit, { pendingChanges: held.has(group.locale) });
-                }
+                record(edit, {
+                  pendingChanges: held?.has(group.locale) === true,
+                });
               }
             })
         );
@@ -274,7 +310,7 @@ async function resolveRecentEdits(
   const filters = filtersOf(query.where);
   const reader = caller.user?.id;
   if (filters.onlyMine && typeof reader !== "string") {
-    return { op: "list", items: [] };
+    return { op: "list", items: [], ...windowOf() };
   }
   const { collectionsWithStatus, ...subjects } = await readRecentEditSubjects();
   const { edits } = await activityLog().getRecentEdits({
@@ -295,13 +331,19 @@ async function resolveRecentEdits(
     items: edits.map(edit => {
       const row: Record<string, unknown> = {
         ...edit,
+        // Unknown until a read answers: a status or pending-changes read that
+        // failed leaves its rows saying nothing, rather than "no changes".
         status: null,
-        pendingChanges: false,
+        pendingChanges: null,
         ...states.get(stateKey(edit)),
       };
       return Object.fromEntries(names.map(name => [name, row[name]]));
     }),
     ...(fields ? { fields } : {}),
+    // The trail holds rows for its retention period alone, so the answer says
+    // how far back it looked: an empty card then says "none in that span"
+    // rather than "none ever".
+    ...windowOf(),
   };
 }
 

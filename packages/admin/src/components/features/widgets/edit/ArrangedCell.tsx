@@ -20,6 +20,7 @@ import {
   type JSX,
 } from "react";
 
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { cn } from "@admin/lib/utils";
 import type {
   DashboardWidget,
@@ -506,9 +507,10 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const hasSettings = (row.widget.settings?.length ?? 0) > 0;
   // Drawn as it was asked: the query the batch sent, with the reader's settings applied.
+  const sources = useBranding().widgetSources;
   const widget = useMemo(
-    () => widgetAsAsked(row.widget, row.config),
-    [row.widget, row.config]
+    () => widgetAsAsked(row.widget, row.config, sources),
+    [row.widget, row.config, sources]
   );
   /*
    * Resolved HERE, the one place a card's declaration and its reader's stored

@@ -32,6 +32,7 @@ const sources: PublishedContentSource[] = [
   {
     collection: "posts",
     label: "Posts",
+    lifecycle: false,
     fields: [
       { name: "title", type: "string", label: "Title" },
       { name: "updatedAt", type: "date", label: "Updated" },
@@ -51,6 +52,7 @@ const sources: PublishedContentSource[] = [
   {
     collection: "pages",
     label: "Pages",
+    lifecycle: false,
     fields: [{ name: "title", type: "string", label: "Title" }],
   },
 ];
@@ -309,5 +311,27 @@ describe("the settings sheet with content settings", () => {
     await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave.mock.calls[0]?.[0]).toEqual({ collection: "posts" });
+  });
+});
+
+describe("the settings sheet with a note", () => {
+  const note: AnyWidgetSetting[] = [
+    { name: "text", type: "textarea", label: "Note", maxLength: 5 },
+  ];
+
+  it("refuses a note over its bound on Done, saying how long it may be", async () => {
+    const onSave = open({ text: "hello!" }, note);
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(await screen.findByText("At most 5 characters.")).toBeTruthy();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("keeps a note of five characters that take ten UTF-16 units", async () => {
+    // 🔴 The must-differ case: a bound counted by `length`, or by the
+    // textarea's native attribute, refuses this.
+    const onSave = open({ text: "😀😀😀😀😀" }, note);
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(saved(onSave)).toMatchObject({ text: "😀😀😀😀😀" });
   });
 });

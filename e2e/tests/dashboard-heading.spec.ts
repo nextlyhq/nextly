@@ -21,11 +21,11 @@
  * unanswered. Everything after the answer -- the probe, the offer, the card and
  * the page -- is the real admin.
  *
- * The card is in a dashboard only while the reader's site holds no entries and
- * nobody has answered the offer, and other specs in this run create entries.
- * So the layout read is passed through and the card's placement added when the
- * server has left it out: these tests are about what the admin draws for a
- * given answer, not about when the server offers the card.
+ * The offer is made inside the Get started card's first-entry step, which is
+ * open only while the reader's site holds no entries, and other specs in this
+ * run create entries. So the layout read is passed through with the card
+ * placed first and that step open: these tests are about what the admin draws
+ * for a given answer, not about when the server offers the card.
  *
  * @module tests/dashboard-heading.spec
  */
@@ -35,11 +35,11 @@ import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
 
-/** The sample-content card's widget id, as core registers it. */
-const SEED_WIDGET_ID = "core/seed-demo-content";
+/** The Get started card's widget id, as core registers it. */
+const GET_STARTED_WIDGET_ID = "core/get-started";
 
 /** The offer's own action: present only when sample content is offered. */
-const OFFER_ACTION = { name: "Seed demo content" } as const;
+const OFFER_ACTION = { name: "Load sample content" } as const;
 
 /**
  * Answer the sample-content probe with `status`, as the route would for this
@@ -92,8 +92,11 @@ function trackStatusReads(page: Page): string[] {
   return reads;
 }
 
-/** Pass the layout read through, with the sample-content card placed first. */
-async function placeSeedCard(page: Page): Promise<void> {
+/**
+ * Pass the layout read through, with the Get started card placed first and its
+ * first-entry step open: the step the sample-content offer is made in.
+ */
+async function placeGetStartedCard(page: Page): Promise<void> {
   await page.route("**/dashboard/layout", async (route: Route) => {
     if (route.request().method() !== "GET") return route.fallback();
     const response = await route.fetch();
@@ -102,17 +105,28 @@ async function placeSeedCard(page: Page): Promise<void> {
     // whichever holds the placements.
     const layout = (Array.isArray(body.placements) ? body : body.data) as {
       placements: Array<Record<string, unknown>>;
+      getStarted?: unknown;
     };
     // The array order IS the dashboard's order, so the card goes first by
-    // being first in the list; it is drawn full width, as the seed card is.
-    if (!layout.placements.some(p => p.widgetId === SEED_WIDGET_ID)) {
-      layout.placements.unshift({
-        id: "e2e-seed-card",
-        widgetId: SEED_WIDGET_ID,
+    // being first in the list; it is drawn full width, as Get started is.
+    layout.placements = [
+      {
+        id: "e2e-get-started",
+        widgetId: GET_STARTED_WIDGET_ID,
         width: "full",
         removed: false,
-      });
-    }
+      },
+      ...layout.placements.filter(p => p.widgetId !== GET_STARTED_WIDGET_ID),
+    ];
+    layout.getStarted = {
+      drawn: true,
+      answer: {
+        unknown: false,
+        steps: [{ key: "entry", kind: "entry", status: "open" }],
+        done: 0,
+        total: 1,
+      },
+    };
     await route.fulfill({ response, json: body });
   });
 }
@@ -132,7 +146,7 @@ test.describe("the dashboard's main heading", () => {
     let release!: () => void;
     const held = new Promise<void>(resolve => (release = resolve));
     const probes = await answerProbe(page, 200, held);
-    await placeSeedCard(page);
+    await placeGetStartedCard(page);
 
     await gotoAdmin(page, "/");
     await expect.poll(() => probes.length).toBeGreaterThan(0);
@@ -148,7 +162,7 @@ test.describe("the dashboard's main heading", () => {
   for (const theme of ["light", "dark"] as Theme[]) {
     test(`passes axe with the offer standing (${theme})`, async ({ page }) => {
       await answerProbe(page, 200);
-      await placeSeedCard(page);
+      await placeGetStartedCard(page);
       await gotoAdmin(page, "/", theme);
       await expect(page.getByRole("button", OFFER_ACTION)).toBeVisible();
       await expectOneMainHeading(page);
@@ -157,7 +171,7 @@ test.describe("the dashboard's main heading", () => {
 
     test(`passes axe with no offer (${theme})`, async ({ page }) => {
       const probes = await answerProbe(page, 403);
-      await placeSeedCard(page);
+      await placeGetStartedCard(page);
       await gotoAdmin(page, "/", theme);
       await expect.poll(() => probes.length).toBeGreaterThan(0);
       await expectOneMainHeading(page);
@@ -172,7 +186,7 @@ test.describe("the sample-content offer", () => {
   }) => {
     await answerProbe(page, 200);
     const statusReads = trackStatusReads(page);
-    await placeSeedCard(page);
+    await placeGetStartedCard(page);
     await gotoAdmin(page, "/");
     await expect(page.getByRole("button", OFFER_ACTION)).toBeVisible();
     // The trace the refusal test looks for in vain is there for a yes, so
@@ -183,7 +197,7 @@ test.describe("the sample-content offer", () => {
   test("is not made to a person the route refuses", async ({ page }) => {
     const probes = await answerProbe(page, 403);
     const statusReads = trackStatusReads(page);
-    await placeSeedCard(page);
+    await placeGetStartedCard(page);
     await gotoAdmin(page, "/");
     // The probe was asked and answered before the verdict, so "no offer" is
     // the answer's doing, not a page that never asked.

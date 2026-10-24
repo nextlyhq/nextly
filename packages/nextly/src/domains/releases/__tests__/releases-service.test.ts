@@ -51,6 +51,7 @@ function repository() {
     // The list's paged read, which `find` routes every non-document query to.
     findReleasePage: vi.fn(async () => ({ rows: [], total: 0 })),
     countReleases: vi.fn(async () => 0),
+    anyRelease: vi.fn(async () => false),
     // The calendar's read. Answers nothing; a case asserts what it was ASKED.
     findReleaseCalendar: vi.fn(async (_query: unknown) => []),
     listMembers: vi.fn(
@@ -1123,6 +1124,38 @@ describe("ReleasesService.mayRead", () => {
     const { svc, deps } = service({ holds: ["read"] });
     deps.canManageReleases.mockRejectedValueOnce(new Error("store down"));
     await expect(svc.mayRead(ADMIN)).rejects.toThrow("store down");
+  });
+});
+
+describe("ReleasesService.anyReadable", () => {
+  it("refuses whoever the list refuses, and reads nothing for them", async () => {
+    // The same decision as `find`, so it never says "yes" where the list
+    // would refuse to show a release.
+    const { svc, repo } = service({ holds: [] });
+    await expect(svc.anyReadable(ADMIN)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await expect(svc.find({}, ADMIN)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(repo.anyRelease).not.toHaveBeenCalled();
+  });
+
+  it("asks through the filters an unfiltered list reads, and answers what the repository finds", async () => {
+    const { svc, repo } = service({ holds: ["read"] });
+    repo.anyRelease.mockResolvedValueOnce(true);
+    expect(await svc.anyReadable(ADMIN)).toBe(true);
+    await svc.find({}, ADMIN);
+    // The list's own filters for an unfiltered list, the order and the page aside.
+    const {
+      order: _order,
+      offset: _offset,
+      limit: _limit,
+      ...listed
+    } = (
+      repo.findReleasePage.mock.calls[0] as unknown[] | undefined
+    )?.[0] as Record<string, unknown>;
+    expect(repo.anyRelease).toHaveBeenCalledWith(listed);
   });
 });
 

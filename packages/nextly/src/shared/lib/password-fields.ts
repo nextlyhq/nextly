@@ -91,10 +91,15 @@ function openContainer(
  *   that means "keep the stored hash", on create it means "store nothing"
  *   (matches how entry validation treats whitespace-only as empty, so an
  *   optional password of spaces can't silently replace the stored hash)
+ *
+ * `keep` names values that are already stored hashes, put back where a field
+ * rule denied changing them: hashed again, a hash would never verify the
+ * password it was made from.
  */
 export async function hashPasswordFieldValues(
   data: Record<string, unknown>,
-  fields: NamedField[]
+  fields: NamedField[],
+  keep?: ReadonlySet<string>
 ): Promise<void> {
   for (const field of fields) {
     if (!field.name || !(field.name in data)) continue;
@@ -103,7 +108,7 @@ export async function hashPasswordFieldValues(
       const opened = openContainer(data[field.name], field.type);
       if (opened) {
         for (const row of opened.rows) {
-          await hashPasswordFieldValues(row, field.fields);
+          await hashPasswordFieldValues(row, field.fields, keep);
         }
         data[field.name] = opened.serialize();
       }
@@ -120,6 +125,7 @@ export async function hashPasswordFieldValues(
       continue;
     }
 
+    if (keep?.has(value)) continue;
     data[field.name] = await hashPassword(value);
   }
 }

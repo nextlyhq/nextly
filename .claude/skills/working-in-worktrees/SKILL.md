@@ -18,11 +18,10 @@ per-checkout.
 
 ```
 pnpm worktree new <branch> [--from <ref>]   # create, claim a slot, report it
-pnpm worktree list [--sizes]                # who holds which slot, and the disk each checkout takes
+pnpm worktree list                          # who holds which slot
 pnpm worktree remove <branch|path>          # give the slot, ports, databases and fallow snapshot back
 pnpm worktree provision                     # create this slot's databases, after docker start
-pnpm worktree sweep [--stale] [--builds]    # clear what outlived its checkout; REPORT what idle ones could free
-pnpm worktree sweep --stale --builds --apply # remove what that report offered
+pnpm worktree sweep                         # clear slots and fallow snapshots that outlived their checkout
 pnpm worktree env --slot <n>                # the exports, for a plain shell
 ```
 
@@ -84,22 +83,6 @@ If a removal cannot drop its databases, the slot is RESERVED rather than
 released, and `pnpm worktree list` says so. Reissuing it would hand the next
 checkout another run's fixed-name system tables. `pnpm worktree sweep` drops
 them and releases the slot once the containers are back.
-
-**`sweep` only reports what idle checkouts hold until you pass `--apply`.** It
-offers two kinds: build output in a checkout idle three days (`--builds`) — what
-that checkout's `turbo.jsonc` declares as task `outputs`, plus turbo's logs and
-the browser suites' reports — and a whole checkout idle seven days whose work is
-all on a remote or already in `main` (`--stale`; a squash-merged branch counts,
-by comparing the paths it changed). Each is skipped, with the reason printed,
-when a process runs inside the checkout, a heavy job holds a slot there, its
-slot's port answers, its build output was written lately, or any of those
-cannot be read, and each is asked again just before its removal. A stale
-checkout goes through `worktree remove` without `--force`, so uncommitted work
-stays; git still deletes ignored files, so one holding any ignored file that is
-not regenerated (an `.env`, a local database, uploads, a settings file someone
-edited) is never offered. The fallow snapshot of a live checkout is never
-touched: fallow locks it while an audit reads it. Every removal is logged to
-`nextly-sweep.log` in the git common directory.
 
 `NEXTLY_TEST_DB` carries a database NAME, never a URL: Postgres 15 is on 5434
 and Postgres 17 on 5435, so a single `TEST_POSTGRES_URL` in the environment
