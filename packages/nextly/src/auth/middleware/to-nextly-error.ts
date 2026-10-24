@@ -41,14 +41,7 @@ import type { ErrorResponse } from "./index";
  * the original middleware decision.
  */
 export function toNextlyAuthError(legacy: ErrorResponse): NextlyError {
-  const logContext: Record<string, unknown> = {
-    legacyStatus: legacy.statusCode,
-    legacyMessage: legacy.message,
-    legacyError: legacy.error,
-  };
-  if (legacy.code) logContext.legacyCode = legacy.code;
-  // Which check refused, for the server's log whatever the status.
-  if (legacy.reason) logContext.reason = legacy.reason;
+  const logContext = legacyLogContext(legacy);
 
   if (legacy.statusCode === 401) {
     if (legacy.code === "TOKEN_EXPIRED") {
@@ -70,20 +63,8 @@ export function toNextlyAuthError(legacy: ErrorResponse): NextlyError {
   }
 
   if (legacy.statusCode === 429) {
-    // Case-fold the lookup via Headers so producers using any casing of
-    // "Retry-After" feed the bridge correctly. Header names on the wire are
-    // case-insensitive (RFC 9110 section 5.1).
-    const headerLookup = legacy.headers
-      ? new Headers(legacy.headers)
-      : undefined;
-    const retryAfterRaw = headerLookup?.get("retry-after") ?? undefined;
-    const retryAfterSeconds = retryAfterRaw ? Number(retryAfterRaw) : undefined;
     return NextlyError.rateLimited({
-      retryAfterSeconds:
-        typeof retryAfterSeconds === "number" &&
-        Number.isFinite(retryAfterSeconds)
-          ? retryAfterSeconds
-          : undefined,
+      retryAfterSeconds: retryAfterSecondsOf(legacy),
       logContext,
     });
   }
@@ -97,4 +78,32 @@ export function toNextlyAuthError(legacy: ErrorResponse): NextlyError {
   // for a domain-specific failure should throw directly rather than rely
   // on the bridge.
   return NextlyError.internal({ logContext });
+}
+
+/**
+ * What the middleware decided, for the log: its status, message, error and
+ * code as it gave them, and which check refused, whatever the status.
+ */
+function legacyLogContext(legacy: ErrorResponse): Record<string, unknown> {
+  return {
+    legacyStatus: legacy.statusCode,
+    legacyMessage: legacy.message,
+    legacyError: legacy.error,
+    ...(legacy.code ? { legacyCode: legacy.code } : {}),
+    ...(legacy.reason ? { reason: legacy.reason } : {}),
+  };
+}
+
+/**
+ * A limit's `Retry-After`, in seconds, where it gives a number. Case-folded
+ * through Headers, so producers using any casing of "Retry-After" feed the
+ * bridge correctly: header names on the wire are case-insensitive (RFC 9110
+ * section 5.1).
+ */
+function retryAfterSecondsOf(legacy: ErrorResponse): number | undefined {
+  const raw = legacy.headers
+    ? new Headers(legacy.headers).get("retry-after")
+    : null;
+  const seconds = raw ? Number(raw) : Number.NaN;
+  return Number.isFinite(seconds) ? seconds : undefined;
 }
