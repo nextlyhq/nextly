@@ -640,6 +640,23 @@ describe("the retired stored answers, while an upgraded database has them", () =
     expect(rbacRevision()).toBe(before);
   });
 
+  it("leaves a table that only shares the name alone, and announces the change", async () => {
+    // A host app's own table named `user_permission_cache` is not Nextly's:
+    // emptying it would delete that app's rows.
+    await harness!.adapter.executeQuery(
+      "CREATE TABLE user_permission_cache (id TEXT PRIMARY KEY, owner TEXT, permission TEXT)"
+    );
+    await harness!.adapter.executeQuery(
+      "INSERT INTO user_permission_cache VALUES ('h-1', 'someone', 'export')"
+    );
+    const before = rbacRevision();
+
+    await invalidatePermissionCache({ userId: "someone" });
+
+    expect(await storedAnswerCount()).toBe(1);
+    expect(rbacRevision()).not.toBe(before);
+  });
+
   it("announces regardless where the stored answers were turned off", async () => {
     // An instance on a release that reads them, running with them turned off,
     // reads none, so silence would protect nobody while every other instance
