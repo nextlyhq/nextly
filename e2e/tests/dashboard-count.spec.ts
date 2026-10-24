@@ -5,8 +5,8 @@
  *
  * Placed by the test through the layout, set to posts, since the add panel's
  * Content group is not offered yet. Other specs add posts to the shared
- * database, so the spec reads each number back from the same list the card
- * links to rather than assuming one.
+ * database, also while this one runs, so the spec reads each number back from
+ * the same list the card links to, on either side of the card's render.
  */
 import { expect, type Page } from "@playwright/test";
 
@@ -61,9 +61,34 @@ async function listed(page: Page, query: string): Promise<number> {
   return meta.total;
 }
 
+/**
+ * How far the card's `name` part is from the list under `query`, read on a
+ * fresh render between two reads of the list. Other specs add posts while this
+ * one runs, so a count is compared only when the list held still across the
+ * render; otherwise the answer is null and the caller asks again.
+ */
+async function offBy(
+  page: Page,
+  name: RegExp,
+  query: string
+): Promise<number | null> {
+  const before = await listed(page, query);
+  await page.reload();
+  const part = page
+    .getByTestId(`widget-cell-${CARD}`)
+    .getByRole("link", { name });
+  await expect(part).toBeVisible();
+  const shown = Number(
+    /\d+/.exec((await part.getAttribute("aria-label")) ?? "")?.[0]
+  );
+  const after = await listed(page, query);
+  return before === after ? shown - before : null;
+}
+
 test("the Count card states a collection's entries and links each part to its list", async ({
   page,
 }) => {
+  test.setTimeout(120_000);
   const stamp = Date.now().toString(36);
   await ok(
     await page.request.post(`${API}/collections/posts/entries`, {
@@ -80,18 +105,20 @@ test("the Count card states a collection's entries and links each part to its li
 
   const card = page.getByTestId(`widget-cell-${CARD}`);
   await expect(card).toBeVisible();
-  const total = card.getByRole("link", { name: /^Entries: \d+$/ });
-  await expect(total).toBeVisible();
-  // The number is the collection's whole list, every status.
-  expect(
-    Number(/\d+/.exec((await total.getAttribute("aria-label")) ?? "")?.[0])
-  ).toBe(await listed(page, "status=all"));
+  // The number is the collection's whole list, every status. Each try renders
+  // the dashboard again, so the tries get room beyond the default 5 s.
+  await expect
+    .poll(() => offBy(page, /^Entries: \d+$/, "status=all"), {
+      timeout: 30_000,
+    })
+    .toBe(0);
+  await expect
+    .poll(() => offBy(page, /^Published: \d+$/, "status=published"), {
+      timeout: 30_000,
+    })
+    .toBe(0);
 
   const published = card.getByRole("link", { name: /^Published: \d+$/ });
-  await expect(published).toBeVisible();
-  expect(
-    Number(/\d+/.exec((await published.getAttribute("aria-label")) ?? "")?.[0])
-  ).toBe(await listed(page, "status=published"));
 
   // The published part opens the list that holds exactly it.
   await published.click();

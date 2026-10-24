@@ -265,10 +265,16 @@ for (const [theme, size] of [
     await openWelcome(page, theme);
     await expect(liquidField(page, "From")).toBeVisible({ timeout: 30_000 });
 
+    // Legacy mode merges the frames' results in this page. The default opens a
+    // blank page to merge them, and once the preview's srcdoc frame has been
+    // scanned that merge never finishes under Playwright 1.64.1, though a page
+    // opened directly does; axe-core/playwright offers legacy mode for exactly
+    // that, and it scans the same rules, the preview's included.
     const results = await new AxeBuilder({ page })
       .include('[data-testid="workbench-header"]')
       .include("main")
       .withTags(AA_TAGS)
+      .setLegacyMode(true)
       .analyze();
     // A scan of nothing reports nothing, as a clean page does.
     expect(results.passes.length, "axe scanned nothing").toBeGreaterThan(10);
