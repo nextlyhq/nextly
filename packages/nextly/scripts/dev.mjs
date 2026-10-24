@@ -60,14 +60,16 @@ function start(label, [command, ...args], onOutput) {
       onOutput(chunk);
     });
   }
-  child.on("exit", code => {
-    if (stopping) return;
-    console.error(
-      `[nextly] the ${label} watcher exited (code ${code ?? "null"}); ` +
-        `stopping the others, because dist is no longer being rebuilt.`
-    );
-    stopAll().then(() => process.exit(code === 0 || code === null ? 1 : code));
-  });
+  child.on("exit", code =>
+    fail(`the ${label} watcher exited (code ${code ?? "null"})`, code)
+  );
+  // A watcher that could not be started at all (its command missing, too many
+  // open files) reports `error` and no `exit`. Unhandled, that event ends this
+  // process without stopping the watchers already running, which go on
+  // writing into `dist`; so it fails the same way an exit does.
+  child.on("error", error =>
+    fail(`the ${label} watcher could not run (${error.message})`, 1)
+  );
   children.push(child);
 }
 
@@ -91,6 +93,18 @@ start(
     ]);
   }
 );
+
+/**
+ * One watcher has stopped or never started: stop the others, then exit
+ * non-zero, once however many of them report.
+ */
+function fail(what, code) {
+  if (stopping) return;
+  console.error(
+    `[nextly] ${what}; stopping the others, because dist is no longer being rebuilt.`
+  );
+  stopAll().then(() => process.exit(code === 0 || code === null ? 1 : code));
+}
 
 /**
  * Stop one watcher, and everything under it. On Windows the handle is the
@@ -124,7 +138,13 @@ function stopAll() {
   stopping = true;
   return Promise.all(
     children
-      .filter(child => child.exitCode === null && child.signalCode === null)
+      // A watcher that never started has no process, and nothing to stop.
+      .filter(
+        child =>
+          child.pid !== undefined &&
+          child.exitCode === null &&
+          child.signalCode === null
+      )
       .map(stop)
   );
 }
