@@ -360,9 +360,11 @@ export class CollectionRegistryService extends BaseRegistryService<
     });
 
     if (existing.locked && !isPipelineSource(options?.source)) {
-      // Generic forbidden message per §13.8; lock policy detail and slug
-      // move to logContext only.
-      throw NextlyError.forbidden({
+      // Defined in code: the caller is told so, which is a fact about the
+      // thing and not about their permissions; slug and source go to the log.
+      throw NextlyError.definedInCode({
+        thing: "collection",
+        change: "change",
         logContext: {
           reason: "collection-locked",
           slug,
@@ -534,9 +536,11 @@ export class CollectionRegistryService extends BaseRegistryService<
     const existing = await this.getCollection(slug);
 
     if (existing.locked && !options?.force) {
-      // Generic forbidden message; lock policy detail goes to logContext.
+      // Defined in code, as the caller is told; the slug goes to the log.
       // `force` is the explicit, authorized drop path (e.g. `nextly prune`).
-      throw NextlyError.forbidden({
+      throw NextlyError.definedInCode({
+        thing: "collection",
+        change: "delete",
         logContext: { reason: "collection-locked-delete", slug },
       });
     }

@@ -77,6 +77,8 @@ describe("autosave policy is enforced server-side", () => {
 
     await expect(autosaveForDocument(ARGS)).rejects.toMatchObject({
       code: "FORBIDDEN",
+      // A setting, not a permission, and the caller is told which.
+      publicMessage: "Autosave is turned off for this collection.",
     });
     expect(autosaveSpy).not.toHaveBeenCalled();
   });
@@ -88,6 +90,8 @@ describe("autosave policy is enforced server-side", () => {
 
     await expect(autosaveForDocument(ARGS)).rejects.toMatchObject({
       code: "FORBIDDEN",
+      // A setting, not a permission, and the caller is told which.
+      publicMessage: "Autosave is turned off for this collection.",
     });
     expect(autosaveSpy).not.toHaveBeenCalled();
   });
@@ -100,6 +104,8 @@ describe("autosave policy is enforced server-side", () => {
 
     await expect(autosaveForDocument(ARGS)).rejects.toMatchObject({
       code: "FORBIDDEN",
+      // A setting, not a permission, and the caller is told which.
+      publicMessage: "Autosave is turned off for this collection.",
     });
     expect(autosaveSpy).not.toHaveBeenCalled();
   });
