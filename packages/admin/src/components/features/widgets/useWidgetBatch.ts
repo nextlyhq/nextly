@@ -18,6 +18,7 @@ import { useEffect, useMemo } from "react";
 import {
   useWidgetQueries,
   type CellSlots,
+  type DeclaredCellQuery,
   type WidgetQueryRequest,
 } from "@admin/hooks/queries/useWidgetQueries";
 import type {
@@ -25,6 +26,7 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import { drawsFrom } from "./frame/tier";
 import { coreDraws, resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
 import { queryForTier } from "./tier-query";
 import { useCardRetries } from "./useCardRetries";
@@ -55,6 +57,12 @@ export interface BatchCard {
    * nothing applies, and the card is keyed by what it asks.
    */
   declaredQuery?: DashboardWidget["query"];
+  /**
+   * The widget's cells as DECLARED, when the card's settings change them: `widget.cells` are
+   * then the cells as its settings ask them. The batch keys each cell by its declared query and
+   * sends the asked one, as it does a card's query (`declaredQuery`).
+   */
+  declaredCells?: DashboardWidget["cells"];
   /** The settings this reader stored for the card, as the arrangement holds them. */
   config?: Record<string, unknown>;
   /**
@@ -110,7 +118,7 @@ export interface WidgetBatch {
  * widget makes the read just as wasted as no renderer at all.
  */
 /** What a card that asks nothing shows: the one "not available" state. */
-const UNSOURCED_SLOT: WidgetSlot = {
+export const UNSOURCED_SLOT: WidgetSlot = {
   ok: false,
   error: "This card is not set to a collection.",
   code: "unavailable",
@@ -199,17 +207,54 @@ function cardAskFor(card: BatchCard): WidgetQueryRequest {
  * on its own, outside the partitioning that keeps the batch legal.
  */
 function questionsFor(card: BatchCard): WidgetQueryRequest[] {
-  const { placementId, widget } = card;
+  const { widget } = card;
   if (widget.serverData === true) return [cardAskFor(card)];
-  if (widget.cells?.length) {
-    // A cell its card's Collection setting has not given a source asks nothing.
-    return widget.cells.flatMap(cell =>
-      sourcedQuery(cell.query)
-        ? [{ placementId, cellKey: cell.key, query: cell.query }]
-        : []
-    );
-  }
+  if (widget.cells?.length) return cellAsks(card);
   return sourcedQuery(widget.query) ? [queryAskFor(card, widget.query)] : [];
+}
+
+/** Whether a card at `tier` draws `cell`: every cell, for a card drawn with no tier. */
+function drawnAtTier(
+  cell: NonNullable<DashboardWidget["cells"]>[number],
+  tier: SizeTier | undefined
+): boolean {
+  const from = "drawnFrom" in cell ? cell.drawnFrom : undefined;
+  return tier === undefined || from === undefined || drawsFrom(tier, from);
+}
+
+/** A declared cell's query, by its key. */
+function declaredQueryOf(
+  cells: DashboardWidget["cells"],
+  key: string
+): DeclaredCellQuery | undefined {
+  for (const cell of cells ?? []) if (cell.key === key) return cell.query;
+  return undefined;
+}
+
+/**
+ * A cells card's questions: each cell that applies, keyed by its declared query and sent as the
+ * card's settings ask it, so a change of one card's settings asks that card again alone. A cell
+ * the card's tier does not draw stays among them, so the key does not follow the tier, and is
+ * marked never to be sent; the card asks it once it widens to draw it.
+ */
+function cellAsks(card: BatchCard): WidgetQueryRequest[] {
+  const { placementId, widget, tier } = card;
+  return (widget.cells ?? []).flatMap(cell => {
+    // A cell its card's Collection setting has not given a source asks nothing.
+    if (!sourcedQuery(cell.query)) return [];
+    const declared = declaredQueryOf(card.declaredCells, cell.key);
+    return [
+      {
+        placementId,
+        cellKey: cell.key,
+        query: cell.query,
+        ...(declared === undefined || declared === cell.query
+          ? {}
+          : { declared }),
+        ...(drawnAtTier(cell, tier) ? {} : { undrawn: true as const }),
+      },
+    ];
+  });
 }
 
 /** The one question a card asks by its widget's query, at the card's tier where it is sized. */
@@ -251,13 +296,28 @@ function queryAskFor(card: BatchCard, query: WidgetQuery): WidgetQueryRequest {
 export function widgetOutcome(
   widget: DashboardWidget,
   slot: WidgetSlot | undefined,
-  answers: Record<string, WidgetSlot> | undefined
+  answers: Record<string, WidgetSlot> | undefined,
+  tier?: SizeTier
 ): WidgetOutcome {
-  const cells = widget.cells ?? [];
+  // Only the cells the card's tier draws are asked, so only they are awaited.
+  const cells = (widget.cells ?? []).filter(cell => drawnAtTier(cell, tier));
   if (cells.length > 0 && cells.some(cell => !answers?.[cell.key])) {
     return { state: "loading" };
   }
   return resolveWidgetOutcome(widget, slot, key => answers?.[key]);
+}
+
+/** The requests grouped by card, in order: one card's one request, or its cells'. */
+function byCard(
+  requests: readonly WidgetQueryRequest[]
+): WidgetQueryRequest[][] {
+  const cards = new Map<string, WidgetQueryRequest[]>();
+  for (const request of requests) {
+    const asks = cards.get(request.placementId);
+    if (asks === undefined) cards.set(request.placementId, [request]);
+    else asks.push(request);
+  }
+  return [...cards.values()];
 }
 
 export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
@@ -315,7 +375,7 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
   // at, so a card is never asked again for a tier it already has; a card whose tier shrinks
   // draws a prefix of what it holds and asks nothing.
   useEffect(() => {
-    for (const request of requests) grow(request);
+    for (const asks of byCard(requests)) grow(asks);
   }, [requests, slots, grow]);
 
   // Which cards are actually IN the batch, taken from the requests that were
@@ -355,7 +415,8 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
           widgetOutcome(
             card.widget,
             slots[card.placementId],
-            cellSlots[card.placementId]
+            cellSlots[card.placementId],
+            card.tier
           )
         )
         // An unavailable card is neither updated nor failed, so it is left out of the

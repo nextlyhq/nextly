@@ -16,6 +16,10 @@
 import { expectTypeOf } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
+import type {
+  KnobContext as ConfigKnobContext,
+  KnobField as ConfigKnobField,
+} from "../../../config";
 import type { AnyWidgetSetting, WidgetSetting } from "../settings";
 
 // Each variant, named individually: a union asserted as a whole passes when
@@ -129,3 +133,11 @@ expectTypeOf<
 expectTypeOf<Extract<AnyWidgetSetting, { type: "filter" }>>().not.toBeNever();
 expectTypeOf<Extract<AnyWidgetSetting, { type: "sort" }>>().not.toBeNever();
 expectTypeOf<Extract<AnyWidgetSetting, { type: "groupBy" }>>().not.toBeNever();
+
+/*
+ * The fields a knob reads are named by the public config surface, so code that
+ * supplies `fieldsOf` can type its answer without reaching into this module.
+ */
+expectTypeOf<
+  ReturnType<NonNullable<ConfigKnobContext["fieldsOf"]>>
+>().toEqualTypeOf<readonly ConfigKnobField[] | undefined>();

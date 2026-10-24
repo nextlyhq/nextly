@@ -63,6 +63,8 @@ import {
   registerWidget,
 } from "../domains/widgets/registry";
 import { setContributedWidgets } from "../domains/widgets/canonical";
+import type { PluginDefinition } from "../plugins/plugin-context";
+import { contributedWidgetSummaries } from "../plugins/validate-admin-widgets";
 
 import {
   deleteWidgetLayout,
@@ -2174,6 +2176,110 @@ describe("a card's note", () => {
     const res = await putWidgetLayout(
       putReq({
         placements: placed("😀😀😀😀😀"),
+        version: 0,
+        scope: scopeFor(),
+      })
+    );
+    expect(res.status).toBe(200);
+  });
+
+  /** A plugin contributing `acme/notes`, a card with a five-character note, through its manifest alone. */
+  const contributedNotes = () =>
+    contributedWidgetSummaries([
+      {
+        name: "@acme/notes",
+        contributes: {
+          admin: {
+            widgets: [
+              {
+                id: "acme/notes",
+                title: "Notes",
+                archetype: "metric",
+                defaultSize: "full",
+                query: { source: "collection:posts", op: "count" },
+                settings: [
+                  {
+                    name: "text",
+                    label: "Note",
+                    type: "textarea",
+                    maxLength: 5,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      } as unknown as PluginDefinition,
+    ]);
+  const placedOn = (widgetId: string, text: string) =>
+    placed(text).map(placement => ({ ...placement, widgetId }));
+
+  it("is refused on a widget a plugin contributes, which no registry holds", async () => {
+    const summaries = contributedNotes();
+    // The control: the summary reached the canonical set with its bound, so
+    // a refusal below is the bound's, not an unknown widget's.
+    expect(summaries.map(summary => summary.textBounds)).toEqual([
+      [{ name: "text", label: "Note", maxLength: 5 }],
+    ]);
+    setContributedWidgets(summaries);
+    // The reader sees the contributed widget beside the registry's.
+    const scope = scopeFor([...listWidgets().map(w => w.id), "acme/notes"]);
+
+    // 🔴 Bounded by the registry alone, this was saved: a contribution's
+    // settings never reach it.
+    const refused = await putWidgetLayout(
+      putReq({
+        placements: placedOn("acme/notes", "hello!"),
+        version: 0,
+        scope,
+      })
+    );
+    expect(refused.status).toBe(400);
+    expect(JSON.stringify(await refused.json())).toContain(
+      '\\"Note\\" is at most 5 characters'
+    );
+    expect(saved).toBeUndefined();
+
+    // The must-differ half: within the bound, it saves.
+    const accepted = await putWidgetLayout(
+      putReq({
+        placements: placedOn("acme/notes", "hello"),
+        version: 0,
+        scope,
+      })
+    );
+    expect(accepted.status).toBe(200);
+  });
+
+  it("keeps a contribution's bound when a registration of the same id states no settings", async () => {
+    // The admin's rule: the registration's settings wherever it states any,
+    // else the contribution's, so the sheet still bounds this note.
+    setContributedWidgets(contributedNotes());
+    registerWidget(widget({ id: "acme/notes" }));
+    const res = await putWidgetLayout(
+      putReq({
+        placements: placedOn("acme/notes", "hello!"),
+        version: 0,
+        scope: scopeFor(),
+      })
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("takes a registration's bound over a contribution's when it states settings", async () => {
+    setContributedWidgets(contributedNotes());
+    registerWidget(
+      widget({
+        id: "acme/notes",
+        settings: [
+          { name: "text", label: "Note", type: "textarea", maxLength: 10 },
+        ],
+      })
+    );
+    // Over the contribution's five, within the registration's ten.
+    const res = await putWidgetLayout(
+      putReq({
+        placements: placedOn("acme/notes", "hello!"),
         version: 0,
         scope: scopeFor(),
       })

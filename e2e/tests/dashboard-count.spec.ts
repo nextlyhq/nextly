@@ -3,8 +3,8 @@
  * the collection holds and splits them into published and draft, each part a
  * link to the list that holds exactly it.
  *
- * Placed by the test through the layout, set to posts, since the add panel's
- * Content group is not offered yet. Other specs add posts to the shared
+ * Placed by the test through the layout, set to posts, so the spec reads the
+ * card alone rather than the add panel's rows. Other specs add posts to the shared
  * database, so the spec reads each number back from the same list the card
  * links to rather than assuming one.
  */
@@ -76,7 +76,7 @@ test("the Count card states a collection's entries and links each part to its li
 
   const card = page.getByTestId(`widget-cell-${CARD}`);
   await expect(card).toBeVisible();
-  const total = card.getByRole("link", { name: /^Entries: \d+$/ });
+  const total = card.getByRole("link", { name: /^Entries in .+: \d+$/ });
   await expect(total).toBeVisible();
   // The number is the collection's whole list, every status.
   expect(

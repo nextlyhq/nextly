@@ -20,9 +20,10 @@ import { randomUUID } from "node:crypto";
 
 import { eq, sql } from "drizzle-orm";
 import { createTestNextly, type TestNextly } from "nextly/testing";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getDialectTables } from "../../database/index";
+import { container } from "../../di/container";
 import { ApiKeyService } from "../../domains/auth/services/api-key-service";
 import { PermissionCacheService } from "../../domains/auth/services/permission-cache-service";
 import { PermissionService } from "../../domains/auth/services/permission-service";
@@ -364,6 +365,64 @@ describe("an API key's grants are retired when the roles behind them change", ()
     });
 
     expect(insideBatch).not.toContain(ONLY_IN_THE_CATALOGUE);
+  });
+
+  it("loses it here when the stored rows could not be retired, though nothing is announced", async () => {
+    // A failed retirement withholds the epoch from every other instance, so
+    // the epoch alone would let this process's own copy of the key's grants
+    // stand for the rest of their life. This process knows the roles changed
+    // whatever the stored tier did.
+    await seedDeputy();
+    expect(await grants()).toContain(ONLY_IN_THE_CATALOGUE);
+    await revokeInheritance();
+
+    const proto = PermissionCacheService.prototype as unknown as Record<
+      string,
+      () => Promise<unknown>
+    >;
+    const original = proto.invalidateAll;
+    const before = rbacRevision();
+    proto.invalidateAll = () =>
+      Promise.reject(new Error("the stored tier is unreachable"));
+    try {
+      await invalidateAllPermissionCaches();
+    } finally {
+      proto.invalidateAll = original;
+    }
+
+    // POPULATION CONTROL: the failure path ran, so nothing was announced.
+    expect(rbacRevision()).toBe(before);
+    expect(await grants()).not.toContain(ONLY_IN_THE_CATALOGUE);
+  });
+
+  it("loses it here when the stored table cannot even be asked about, though nothing is announced", async () => {
+    // A probe that fails tells nothing about the stored answers, so it is
+    // handled as a failed emptying: nothing announced, and what this process
+    // kept retired all the same.
+    await seedDeputy();
+    expect(await grants()).toContain(ONLY_IN_THE_CATALOGUE);
+    await revokeInheritance();
+    // The adapter the retirement asks, which is the registered one.
+    const adapter = container.get<{
+      tableExists(table: string): Promise<boolean>;
+    }>("adapter");
+    const probe = vi
+      .spyOn(adapter, "tableExists")
+      .mockRejectedValue(new Error("the catalogue is unreadable"));
+    const before = rbacRevision();
+    let asked = 0;
+    try {
+      await invalidateAllPermissionCaches();
+    } finally {
+      // Counted before the restore, which clears the spy's calls.
+      asked = probe.mock.calls.length;
+      probe.mockRestore();
+    }
+
+    // POPULATION CONTROL: the probe was asked, and nothing was announced.
+    expect(asked).toBeGreaterThan(0);
+    expect(rbacRevision()).toBe(before);
+    expect(await grants()).not.toContain(ONLY_IN_THE_CATALOGUE);
   });
 
   it("loses it when a PERMISSION row changes, which names neither", async () => {
@@ -802,6 +861,44 @@ describe("the order the two tiers are retired in", () => {
     }
 
     expect(rbacRevision()).toBe(before);
+  });
+
+  it("announces when the stored answers' table is gone", async () => {
+    // A later release drops the table once nothing reads it, possibly while
+    // this one still serves. Gone, it holds nothing a reader could serve, so
+    // failing on it would only withhold the version from every instance.
+    await harness!.adapter.executeQuery("DROP TABLE user_permission_cache");
+    const before = rbacRevision();
+
+    await invalidateAllPermissionCaches();
+
+    expect(rbacRevision()).not.toBe(before);
+  });
+
+  it("announces regardless where the stored answers were turned off", async () => {
+    // An instance on the release that reads them, running with them turned
+    // off, reads none, so silence would protect nobody while every other
+    // instance kept serving what it holds, an API key's copied grants for five
+    // minutes among them.
+    const proto = PermissionCacheService.prototype as unknown as Record<
+      string,
+      Tombstone
+    >;
+    const original = proto.invalidateAll;
+    const setting = process.env.PERMISSION_CACHE_ENABLED;
+    const before = rbacRevision();
+    proto.invalidateAll = () =>
+      Promise.reject(new Error("the stored tier is unreachable"));
+    process.env.PERMISSION_CACHE_ENABLED = "false";
+    try {
+      await invalidateAllPermissionCaches();
+    } finally {
+      proto.invalidateAll = original;
+      if (setting === undefined) delete process.env.PERMISSION_CACHE_ENABLED;
+      else process.env.PERMISSION_CACHE_ENABLED = setting;
+    }
+
+    expect(rbacRevision()).not.toBe(before);
   });
 
   it("announces when it CAN retire them, which is what makes silence a choice", async () => {
