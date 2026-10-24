@@ -167,6 +167,17 @@ export class CollectionRegistryService extends BaseRegistryService<
     return this.getRecordOrThrow(slug);
   }
 
+  /**
+   * Every collection's slug and labels, read without the rest of its record:
+   * what a screen naming every collection needs.
+   */
+  async getAllLabels(): Promise<
+    Array<Pick<DynamicCollectionRecord, "slug" | "labels">>
+  > {
+    const records = await this.getAllRecordsWithColumns(["labels"]);
+    return records.map(({ slug, labels }) => ({ slug, labels }));
+  }
+
   async getAllCollections(
     options?: ListCollectionsOptions
   ): Promise<DynamicCollectionRecord[]> {

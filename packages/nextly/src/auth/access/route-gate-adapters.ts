@@ -162,7 +162,7 @@ export function routeGateVerdict(
  * The actions a collection's capabilities answer: every access operation, so
  * an operation the gates gain is answered here without an edit.
  */
-const COLLECTION_ACTIONS = ACCESS_OPERATIONS;
+export const COLLECTION_ACTIONS = ACCESS_OPERATIONS;
 
 /** The operations a Single does not have: it is never created or deleted. */
 const NOT_ON_A_SINGLE = ["create", "delete"] as const;
@@ -174,7 +174,7 @@ type SingleAction = Exclude<
 >;
 
 /** The actions a Single's capabilities answer: the rest of the operations. */
-const SINGLE_ACTIONS: readonly SingleAction[] = ACCESS_OPERATIONS.filter(
+export const SINGLE_ACTIONS: readonly SingleAction[] = ACCESS_OPERATIONS.filter(
   (operation): operation is SingleAction =>
     !NOT_ON_A_SINGLE.some(missing => missing === operation)
 );
