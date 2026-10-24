@@ -265,8 +265,8 @@ export function buildSingleHookContext<T>(
  *    already ran the RBAC gate, so skip that redundant re-check.
  * 4. Anonymous publish/unpublish → 403, whatever any rule says.
  * 5. No user → the Single's own code-defined rule decides, handed a real
- *    anonymous context; a rule that names nothing lets the request through
- *    to the public default.
+ *    anonymous context; a rule that names nothing lets a read through to
+ *    the public default and refuses an update.
  * 6. No access-control service → null (skip)
  * 7. The decision for the user or key (super-admin → code-defined →
  *    permissions)

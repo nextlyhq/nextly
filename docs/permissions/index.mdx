@@ -71,10 +71,29 @@ created that holds `update-posts`, and every API key whose roles carry none of t
 listed, while the Roles screen says both may act. The role's permissions are what the admin
 manages, so a rule that reads them stays in step with that screen.
 
-`true` means anyone, including unauthenticated readers.
+`true` means anyone, including callers with no session, for reads and writes alike.
 
 A collection whose `access` says nothing about an operation falls back to grants: a
 signed-in user needs `read-posts` to read `posts`.
+
+A caller with **no session** — the Direct API with `overrideAccess: false` and no `user`, or
+a plugin service call made `{ as: "public" }` — holds no grants, so only a rule can let it
+write. With no rule for the operation, it may **read** (the public default, which public
+pages rely on), but a **create, update or delete is refused**. A collection that takes
+anonymous writes on purpose, such as a contact form, says so with a rule:
+
+```ts
+defineCollection({
+  slug: "contact-messages",
+  access: {
+    // Visitors may send a message; reading and changing them needs a grant.
+    create: () => true,
+  },
+  fields: [/* ... */],
+});
+```
+
+Publishing and unpublishing always need a signed-in user, whatever the rule says.
 
 An **API key** must hold the permission in its own grants, and then satisfy the rule if there
 is one.
@@ -178,7 +197,9 @@ Forgetting the `user` is a different and much less dangerous mistake. An owner-b
 nobody to compare against, so the request is refused rather than answered loosely — you get
 an authorization error, not somebody else's rows. If a query that should return data returns
 "authentication required", a missing `user` alongside `overrideAccess: false` is the first
-thing to check.
+thing to check. A write is held to the same standard: with no `user`, a create, update or
+delete on a collection whose `access` names no rule for it is refused, and only a rule that
+answers `true` lets it through.
 
 Field-level rules behave differently: they run whenever `overrideAccess` is `false`, user or
 not, because "which fields may this writer set" has a sensible answer for nobody. Internal

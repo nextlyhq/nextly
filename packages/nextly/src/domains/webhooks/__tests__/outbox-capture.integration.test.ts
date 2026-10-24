@@ -738,7 +738,9 @@ describe("webhook outbox capture (integration)", () => {
         tx,
         "posts",
         id,
-        {},
+        // Trusted server work: the delete under test is the event it
+        // records, not whether an anonymous caller may make it.
+        { overrideAccess: true },
         {
           type: "apiKey",
           id: "key_tx",
