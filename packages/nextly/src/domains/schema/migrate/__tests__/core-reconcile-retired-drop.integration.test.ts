@@ -20,6 +20,7 @@ import {
   createHostAccountsTable,
   createRetiredAuthTables,
   createStoredPermissionAnswersTable,
+  storedAnswerRow,
   dropRetiredAuthTables,
   insertRow,
 } from "../../../../init/__tests__/retired-auth-tables-fixture";
@@ -159,16 +160,20 @@ describe.each(getConfiguredTestDialects())(
         "g-1",
         "tok",
       ]);
-      await insertRow(handle.adapter, dialect, "user_permission_cache", [
-        "someone|read|posts",
-        "someone",
-        "read",
-        "posts",
-        1,
-        "[]",
-        Date.now(),
-        Date.now(),
-      ]);
+      // A real user: the table keeps its foreign key to `users` on
+      // PostgreSQL and SQLite.
+      const made = await handle.nextly.users.create({
+        email: `stored-${Date.now()}@retired.test`,
+        password: "Password123!",
+        data: { name: "stored", isActive: true },
+      });
+      const userId = String((made.item as { id: string | number }).id);
+      await insertRow(
+        handle.adapter,
+        dialect,
+        "user_permission_cache",
+        storedAnswerRow(dialect, { id: `${userId}|read|notes`, userId })
+      );
     }
 
     it("drops the stored permission answers holding rows on the drop alone", async () => {
