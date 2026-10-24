@@ -44,6 +44,7 @@ import { getStartedSteps } from "./get-started";
 import type { GetStartedAnswer } from "./get-started-steps";
 import {
   createDisabledSlugs,
+  createVerdict,
   readableOfKind,
   readerHasContent,
   readerMayCreateEntry,
@@ -177,6 +178,21 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
     return createCollection;
   };
 
+  // Each collection's create decision, made at most once for the request and
+  // shared by the onboarding step and the Create card's condition: both ask it,
+  // often of the same collections, and asked twice a rule could answer the two
+  // differently within one response.
+  const createVerdicts = new Map<string, Promise<boolean>>();
+  const decideCreate = createVerdict(caller);
+  const mayCreateIn = (slug: string): Promise<boolean> => {
+    let verdict = createVerdicts.get(slug);
+    if (verdict === undefined) {
+      verdict = decideCreate(slug);
+      createVerdicts.set(slug, verdict);
+    }
+    return verdict;
+  };
+
   const probe: ConditionProbe = {
     caller,
     readableSlugs,
@@ -214,7 +230,7 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
       // it, and "they might be granted something on a collection that does not
       // exist yet" is not one.
       createEntry ??= readableSlugs().then(resolved =>
-        readerMayCreateEntry(caller, resolved)
+        readerMayCreateEntry(caller, resolved, mayCreateIn)
       );
       return createEntry;
     },
@@ -226,7 +242,8 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
       ]).then(([readable, disabled]) =>
         readerMayCreateEntry(
           caller,
-          readable.filter(slug => !disabled.has(slug))
+          readable.filter(slug => !disabled.has(slug)),
+          mayCreateIn
         )
       );
       return createOnDashboard;
