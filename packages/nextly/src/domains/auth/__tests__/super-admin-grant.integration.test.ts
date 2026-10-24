@@ -74,11 +74,16 @@ vi.mock("../services/super-admin-grant", () => {
   };
 });
 
+import { resolveRelations } from "../../../database/resolve-relations";
 import {
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import {
+  lockSuperAdminRole,
+  type LastSuperAdminTx,
+} from "../../users/services/last-super-admin";
 
 /** Fresh modules per install, so no cache outlives the database it read. */
 async function loadModules() {
@@ -825,6 +830,76 @@ describe.each(getConfiguredTestDialects())(
       expect(created.status, await created.text()).toBe(400);
       expect(await userNamed("dangling@example.com")).toBe(false);
     });
+
+    // SQLite runs one write transaction at a time, so there is no lock order
+    // to take; on PostgreSQL and MySQL the order is what keeps two changes
+    // from deadlocking.
+    it.skipIf(dialect === "sqlite")(
+      "writes nothing of an account asking for roles before it holds the super-admin lock",
+      async () => {
+        const install = await boot(dialect);
+        const { users } = m.getDialectTables();
+        // Another change takes the lock every change to who is a super-admin
+        // takes first, and holds it until this test lets it go. It takes it
+        // once the account's early grant check, made outside its transaction,
+        // has passed, so the account's transaction is what then meets it.
+        let release!: () => void;
+        const released = new Promise<void>(resolve => (release = resolve));
+        let holding: Promise<unknown> = Promise.resolve();
+        afterGrantCheck.run = async () => {
+          let locked!: () => void;
+          const isLocked = new Promise<void>(resolve => (locked = resolve));
+          holding = handle!.adapter.transaction(async tx => {
+            await lockSuperAdminRole(
+              tx.drizzleWithRelations<LastSuperAdminTx>(
+                resolveRelations(dialect)
+              ),
+              m.getDialectTables(),
+              dialect
+            );
+            locked();
+            await released;
+          });
+          await isLocked;
+        };
+
+        const creation = rest({ session: install.first }, "POST", ["users"], {
+          email: "ordered@example.com",
+          password: PASSWORD,
+          name: "Ordered",
+          roles: [install.staffRole],
+        });
+        expect(await untilAnotherWaitsOnALock()).toBe(true);
+
+        // An account row written before the lock would hold the address's
+        // unique key, and this insert would wait on it. Taken in order, the
+        // creation has written nothing yet, and the insert goes straight in.
+        const competing = raw()
+          .insert(users)
+          .values({
+            id: "competing-account",
+            email: "ordered@example.com",
+            name: "Competing",
+            isActive: true,
+          })
+          .then(
+            () => "inserted",
+            () => "refused"
+          );
+        const outcome = await Promise.race([
+          competing,
+          new Promise<string>(resolve =>
+            setTimeout(() => resolve("waiting"), 3000)
+          ),
+        ]);
+        release();
+        await holding;
+        await creation.catch(() => undefined);
+        await competing;
+
+        expect(outcome).toBe("inserted");
+      }
+    );
 
     it("creates an account beside a deletion of the role it asks for", async () => {
       const install = await boot(dialect);
