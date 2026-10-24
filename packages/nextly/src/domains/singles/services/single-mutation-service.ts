@@ -1273,9 +1273,12 @@ export class SingleMutationService extends BaseService {
       const reachesLocalizedGroup =
         sweepAllLocales &&
         fieldGroupService !== undefined &&
-        (await reachesLocalizedFieldGroup(fieldConfigs, slug =>
-          fieldGroupService.isComponentLocalized(slug)
-        ));
+        (await reachesLocalizedFieldGroup(fieldConfigs, {
+          isComponentLocalized: slug =>
+            fieldGroupService.isComponentLocalized(slug),
+          getComponentFields: slug =>
+            fieldGroupService.getComponentFields(slug),
+        }));
 
       // The component schemas the hold decision needs, resolved OFF the
       // transaction: this reads the component registry, and a registry read

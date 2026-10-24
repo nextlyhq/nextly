@@ -3350,9 +3350,9 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Whether `fields` reach a field group whose definition is localized, read
-   * on `tx` where one is given. None without the field-group service, which
-   * a boot without field groups does not register.
+   * Whether `fields` reach a field group whose definition is localized, at any
+   * depth, read on `tx` where one is given. None without the field-group
+   * service, which a boot without field groups does not register.
    */
   private reachesLocalizedFieldGroup(
     fields: readonly { type: string; name?: string }[],
@@ -3360,9 +3360,12 @@ export class CollectionMutationService extends BaseService {
   ): Promise<boolean> {
     const service = this.fieldGroupDataService;
     if (!service) return Promise.resolve(false);
-    return reachesLocalizedFieldGroup(fields, slug =>
-      service.isComponentLocalized(slug, tx?.getDrizzle())
-    );
+    return reachesLocalizedFieldGroup(fields, {
+      isComponentLocalized: slug =>
+        service.isComponentLocalized(slug, tx?.getDrizzle()),
+      getComponentFields: slug =>
+        service.getComponentFields(slug, tx?.getDrizzle()),
+    });
   }
 
   /**

@@ -38,21 +38,38 @@ export async function perLanguageFieldNames(
   return names;
 }
 
+/** What {@link reachesLocalizedFieldGroup} reads of a field group by slug. */
+export interface FieldGroupReader {
+  /** Whether the group's own definition is localized. */
+  isComponentLocalized: (slug: string) => Promise<boolean>;
+  /** The group's own fields, or `null` for a group that is not defined. */
+  getComponentFields: (slug: string) => Promise<readonly FieldShape[] | null>;
+}
+
 /**
- * Whether any of `fieldConfigs` is a field group whose definition is
- * localized: its values are stored per language, in the group's own table,
- * whatever languages the collection or Single itself stores. Derived from
- * {@link perLanguageFieldNames}, the one answer to which fields hold values
- * per language.
+ * Whether `fieldConfigs` reach a field group whose definition is localized:
+ * one they reference, or one inside a group they reference, at any depth. A
+ * localized group stores its values per language, in its own table, whatever
+ * languages the collection, Single or group around it stores. Each group is
+ * read once, so a group that holds itself ends the walk.
  */
 export async function reachesLocalizedFieldGroup(
   fieldConfigs: readonly FieldShape[],
-  isComponentLocalized: (slug: string) => Promise<boolean>
+  groups: FieldGroupReader
 ): Promise<boolean> {
-  const perLanguage = await perLanguageFieldNames(
-    fieldConfigs,
-    new Set(),
-    isComponentLocalized
-  );
-  return perLanguage.size > 0;
+  const read = new Set<string>();
+  const reaches = async (fields: readonly FieldShape[]): Promise<boolean> => {
+    for (const field of fields) {
+      if (!isFieldGroupField(field)) continue;
+      for (const slug of fieldGroupSlugList(field)) {
+        if (read.has(slug)) continue;
+        read.add(slug);
+        if (await groups.isComponentLocalized(slug)) return true;
+        const inner = await groups.getComponentFields(slug);
+        if (inner !== null && (await reaches(inner))) return true;
+      }
+    }
+    return false;
+  };
+  return reaches(fieldConfigs);
 }

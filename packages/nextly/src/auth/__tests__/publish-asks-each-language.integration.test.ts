@@ -46,6 +46,8 @@ const GROWING_BANNER = "growingbanner";
 const SHARED_ARTICLES = "sharedarticles";
 const SHARED_BANNER = "sharedbanner";
 const PENDING_PAGES = "pendingpages";
+const NESTED_ARTICLES = "nestedarticles";
+const NESTED_BANNER = "nestedbanner";
 const PENDING_BANNER = "pendingbanner";
 const USER = { id: "user-1", isActive: true };
 
@@ -108,6 +110,11 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         localized: true,
         fields: [text({ name: "note" })],
       }),
+      // Not localized itself, but it holds a group that is.
+      defineFieldGroup({
+        slug: "articlewrap",
+        fields: [fieldGroup({ name: "meta", component: "articlemeta" })],
+      }),
     ],
     collections: [
       defineCollection({
@@ -145,6 +152,21 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           publish: englishRefused,
         },
         fields: [text({ name: "heading" })],
+      }),
+      defineCollection({
+        slug: NESTED_ARTICLES,
+        localized: true,
+        status: true,
+        access: {
+          create: () => true,
+          read: () => true,
+          update: () => true,
+          publish: frenchRefused,
+        },
+        fields: [
+          text({ name: "heading" }),
+          fieldGroup({ name: "wrap", component: "articlewrap" }),
+        ],
       }),
       defineCollection({
         slug: GROUPED_ARTICLES,
@@ -247,6 +269,20 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           publish: englishRefused,
         },
         fields: [text({ name: "headline" })],
+      }),
+      defineSingle({
+        slug: NESTED_BANNER,
+        localized: true,
+        status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: frenchRefused,
+        },
+        fields: [
+          text({ name: "headline" }),
+          fieldGroup({ name: "wrap", component: "articlewrap" }),
+        ],
       }),
       defineSingle({
         slug: PENDING_BANNER,
@@ -545,6 +581,47 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(refused.success).toBe(false);
       expect(refused.statusCode).toBe(403);
+    });
+
+    it("asks every configured language when the content reaches a localized field group inside another group", async () => {
+      const t = await boot(dialect);
+      // The group the entry references is not localized, but the one inside
+      // it is, so its values are stored per language all the same.
+      const created = await t.nextly.create({
+        collection: NESTED_ARTICLES,
+        data: { heading: "en", status: "draft" },
+      });
+      const { id } = created.item;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      asked = [];
+      const entry = await handlerOf(t).publishAllLocales({
+        collectionName: NESTED_ARTICLES,
+        entryId: id,
+        overrideAccess: false,
+        user: USER,
+      });
+      expect(publishedLocales().map(question => question.locale)).toContain(
+        "fr"
+      );
+      expect(entry.statusCode).toBe(403);
+
+      await singlesOf(t).update(
+        NESTED_BANNER,
+        { headline: "en" },
+        { overrideAccess: true, locale: "en" }
+      );
+      const single = await singlesOf(t).publishAllLocales(NESTED_BANNER, {
+        overrideAccess: false,
+        user: USER,
+      });
+      expect(single.statusCode).toBe(403);
+      const everyLanguage = await singlesOf(t).update(
+        NESTED_BANNER,
+        { status: "published" },
+        { overrideAccess: false, user: USER, locale: "*" }
+      );
+      expect(everyLanguage.statusCode).toBe(403);
     });
 
     it("refuses a caller who may not publish an entry before saying which languages hold unreleased work", async () => {
