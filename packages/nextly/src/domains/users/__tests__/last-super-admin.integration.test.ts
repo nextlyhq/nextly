@@ -903,6 +903,42 @@ describe.each(getConfiguredTestDialects())(
           );
           expect(await activeSuperAdmin(install.first)).toBe(true);
         });
+
+        /** The second super-admin, whose assignment row spells their id in upper case. */
+        async function secondSpelledUpper(install: Install): Promise<string> {
+          const second = await makeUser("second@example.com");
+          await grant(second.toUpperCase(), install.superAdminRole);
+          expect(await activeSuperAdmin(second)).toBe(true);
+          return second;
+        }
+
+        it("refuses deleting the last super-admin whose assignment spells their id in another case", async () => {
+          const install = await boot(on);
+          const second = await secondSpelledUpper(install);
+          const { userRoles } = m.getDialectTables();
+          await raw()
+            .delete(userRoles)
+            .where(eq(userRoles.userId, install.first));
+
+          await expectDirectRefused(direct().users.delete({ id: second }));
+          expect(await activeSuperAdmin(second)).toBe(true);
+        });
+
+        it("refuses an admin who isn't a super-admin deleting a super-admin whose assignment spells their id in another case", async () => {
+          const install = await boot(on);
+          const second = await secondSpelledUpper(install);
+
+          const res = await rest(
+            install,
+            "DELETE",
+            ["users", second],
+            undefined,
+            { session: install.operator }
+          );
+
+          expect(res.status, await res.text()).toBe(403);
+          expect(await activeSuperAdmin(second)).toBe(true);
+        });
       }
     );
 
@@ -954,6 +990,30 @@ describe.each(getConfiguredTestDialects())(
         expect(await activeSuperAdmin(h.heir)).toBe(true);
         return h;
       }
+
+      it.runIf(on === "mysql")(
+        "is refused deleting the last one's role when its inheritance spells the id in another case",
+        async () => {
+          const install = await boot(on);
+          const h = await heirOnly(install);
+          const { roleInherits } = m.getDialectTables();
+          await raw()
+            .delete(roleInherits)
+            .where(eq(roleInherits.parentRoleId, h.owner));
+          await raw().insert(roleInherits).values({
+            id: "owner-inherits-super-admin-upper",
+            parentRoleId: h.owner.toUpperCase(),
+            childRoleId: install.superAdminRole,
+          });
+          // MySQL reads the edge back for the role, so the heir still is one.
+          expect(await activeSuperAdmin(h.heir)).toBe(true);
+
+          await expectRestRefused(
+            await rest(install, "DELETE", ["roles", h.owner])
+          );
+          expect(await activeSuperAdmin(h.heir)).toBe(true);
+        }
+      );
 
       it.runIf(on === "mysql")(
         "is refused deleting the last one's role by its id spelled in another case",
