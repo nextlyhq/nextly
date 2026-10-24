@@ -38,15 +38,19 @@ let stopping = false;
  * these run until the developer stops them, and a watcher that has returned
  * has stopped updating `dist` while the others carry on.
  */
-function start(label, command, onOutput) {
-  // One command string, not a command and arguments: the shell resolves
-  // `tsdown` and `tsc` through the platform's own lookup rules, including the
-  // `.cmd` shims npm writes on Windows, and Node deprecates passing arguments
-  // alongside `shell: true`.
-  const child = spawn(command, {
-    stdio: ["ignore", onOutput ? "pipe" : "inherit", "inherit"],
-    shell: true,
-  });
+function start(label, [command, ...args], onOutput) {
+  const stdio = ["ignore", onOutput ? "pipe" : "inherit", "inherit"];
+  // On POSIX the watcher is spawned directly, with no shell between: the
+  // handle is then the watcher itself (pnpm's shim for `tsc` and `tsdown`
+  // ends in `exec node`), so a signal to it stops the watcher. Behind a shell,
+  // whether the signal reached the command depended on the shell replacing
+  // itself, which not every `/bin/sh` does. Windows needs `cmd.exe` to run the
+  // `.cmd` shims, given one command string because Node deprecates arguments
+  // beside `shell: true`; there `stop` ends the whole tree.
+  const child =
+    process.platform === "win32"
+      ? spawn([command, ...args].join(" "), { stdio, shell: true })
+      : spawn(command, args, { stdio });
   if (onOutput) {
     // Decoded as a stream, so a character split between two chunks arrives
     // whole in the second rather than as two broken halves.
@@ -67,7 +71,7 @@ function start(label, command, onOutput) {
   children.push(child);
 }
 
-start("javascript", "tsdown --watch");
+start("javascript", ["tsdown", "--watch"]);
 
 // The bundler starts on the first pass tsc reports, read across chunks: the
 // line can arrive split between two of them.
@@ -75,11 +79,16 @@ const passWritten = announcementReader(PASS_WRITTEN);
 let bundling = false;
 start(
   "declarations",
-  "tsc -p tsconfig.dts.json --watch --preserveWatchOutput",
+  ["tsc", "-p", "tsconfig.dts.json", "--watch", "--preserveWatchOutput"],
   output => {
     if (bundling || !passWritten(output)) return;
     bundling = true;
-    start("declaration bundle", "tsdown -c tsdown.dts.config.ts --watch");
+    start("declaration bundle", [
+      "tsdown",
+      "-c",
+      "tsdown.dts.config.ts",
+      "--watch",
+    ]);
   }
 );
 
@@ -87,8 +96,8 @@ start(
  * Stop one watcher, and everything under it. On Windows the handle is the
  * `cmd.exe` that `shell: true` put in between, so killing it would leave the
  * watcher itself running and writing into `dist`; `treeKillCommand` supplies
- * the tree kill that reaches it, and is null on POSIX, where the signal
- * reaches the shell's command. A tree kill that cannot run falls back to the
+ * the tree kill that reaches it, and is null on POSIX, where the handle is the
+ * watcher. A tree kill that cannot run falls back to the
  * handle rather than leaving the stop unanswered.
  */
 function stop(child) {
