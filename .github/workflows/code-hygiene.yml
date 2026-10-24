@@ -82,7 +82,7 @@ jobs:
       # version are independent, and both are pinned.
       - name: Audit the changed files
         id: audit
-        uses: fallow-rs/fallow@ecf5a314fd3e10974acb4f5a7f867c433030522d # v3.17.0
+        uses: fallow-rs/fallow@1f5a08d9addde37d81aefcf10407600307da393b # v3.35.0
         with:
           command: audit
           config: .fallowrc.jsonc
