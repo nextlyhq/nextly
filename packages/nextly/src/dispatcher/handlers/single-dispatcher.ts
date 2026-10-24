@@ -850,9 +850,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         throw new Error(`Single "${slug}" not found`);
       }
       if (single.locked) {
-        throw new Error(
-          `Single "${slug}" is locked and cannot be deleted. Code-first Singles must be removed from code.`
-        );
+        throw NextlyError.definedInCode({
+          thing: "Single",
+          change: "delete",
+          logContext: { reason: "single-locked-delete", slug },
+        });
       }
 
       // The storage drop and the registry delete are one operation, so they are issued as one. Held
@@ -974,9 +976,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         throw new Error(`Single "${slug}" not found`);
       }
       if (existing.locked) {
-        throw new Error(
-          `Single "${slug}" is locked and cannot be modified via UI. Code-first Singles must be updated in code.`
-        );
+        throw NextlyError.definedInCode({
+          thing: "Single",
+          change: "change",
+          logContext: { reason: "single-locked", slug },
+        });
       }
 
       const updateData: Record<string, unknown> = {};
@@ -1089,9 +1093,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const single = await svc.registry.getSingleBySlug(slug);
       if (!single) throw new Error("Single not found");
       if (single.locked) {
-        throw new Error(
-          "This single is managed via code and cannot be modified in the UI"
-        );
+        throw NextlyError.definedInCode({
+          thing: "Single",
+          change: "change",
+          logContext: { reason: "single-locked", slug },
+        });
       }
 
       const { fields } = body as { fields: unknown[] };
@@ -1157,9 +1163,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const single = await svc.registry.getSingleBySlug(slug);
       if (!single) throw new Error("Single not found");
       if (single.locked) {
-        throw new Error(
-          "This single is managed via code and cannot be modified in the UI"
-        );
+        throw NextlyError.definedInCode({
+          thing: "Single",
+          change: "change",
+          logContext: { reason: "single-locked", slug },
+        });
       }
 
       const {

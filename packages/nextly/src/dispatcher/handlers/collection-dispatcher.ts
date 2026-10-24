@@ -588,9 +588,14 @@ const COLLECTIONS_METHODS: Record<
       const collection = await registry.getCollectionBySlug(p.collectionName);
       if (!collection) throw new Error("Collection not found");
       if (collection.locked) {
-        throw new Error(
-          "This collection is managed via code and cannot be modified in the UI"
-        );
+        throw NextlyError.definedInCode({
+          thing: "collection",
+          change: "change",
+          logContext: {
+            reason: "collection-locked",
+            slug: p.collectionName,
+          },
+        });
       }
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
@@ -680,9 +685,14 @@ const COLLECTIONS_METHODS: Record<
       const collection = await registry.getCollectionBySlug(p.collectionName);
       if (!collection) throw new Error("Collection not found");
       if (collection.locked) {
-        throw new Error(
-          "This collection is managed via code and cannot be modified in the UI"
-        );
+        throw NextlyError.definedInCode({
+          thing: "collection",
+          change: "change",
+          logContext: {
+            reason: "collection-locked",
+            slug: p.collectionName,
+          },
+        });
       }
       const {
         fields,

@@ -348,9 +348,11 @@ export const COMPONENTS_METHODS: Record<
       const component = await svc.registry.getComponent(slug);
       if (!component) throw new Error("Component not found");
       if (component.locked) {
-        throw new Error(
-          "This component is managed via code and cannot be modified in the UI"
-        );
+        throw NextlyError.definedInCode({
+          thing: "component",
+          change: "change",
+          logContext: { reason: "component-locked", slug },
+        });
       }
 
       const { fields } = body as { fields: unknown[] };
@@ -474,9 +476,11 @@ export const COMPONENTS_METHODS: Record<
           const component = await svc.registry.getComponent(slug);
           if (!component) throw new Error("Component not found");
           if (component.locked) {
-            throw new Error(
-              "This component is managed via code and cannot be modified in the UI"
-            );
+            throw NextlyError.definedInCode({
+              thing: "component",
+              change: "change",
+              logContext: { reason: "component-locked", slug },
+            });
           }
 
           // 🔴 The same refusal the metadata service makes, from the same function rather than a copy.
