@@ -62,6 +62,22 @@ held in every session.
   hypothetical: the first version of this entry claimed 19 of 21 passing and
   `lint` clean at 22 of 22, and both numbers came from cache hits.
 
+  `--force` reruns the task, not the type check. `incremental` is on in the
+  shared config, so `tsc` reads the `.tsbuildinfo` an earlier run in the same
+  checkout left (git ignores it, so a clean `git status` says nothing) and
+  checks only what changed. To TIME a type check, or to compare one checkout
+  with another, delete every `.tsbuildinfo` first, or pass
+  `--incremental false`, as a fresh checkout in CI has none. Measured on
+  nextly: 0.48 s reading an earlier run's build info, 19.6 s with none.
+
+  `check-types` runs TypeScript 7 with `--checkers 4` everywhere, pinned by
+  `scripts/check-types-checkers.test.mjs`, because the number of parallel
+  checkers can occasionally change which diagnostics appear. A result that
+  looks order-dependent, appearing or vanishing between runs or machines, is
+  ruled in or out by rerunning that package's command with `--singleThreaded`,
+  which checks in one fixed order. Do not change the pinned value to make a
+  result go away.
+
   `TS2307` naming a workspace package (`nextly/...`, `@nextlyhq/...`) is USUALLY
   a missing build, and the rebuild is what confirms it. It is not proof on its
   own: a misspelled specifier, a removed export-map subpath, or a broken

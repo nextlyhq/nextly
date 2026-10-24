@@ -26,7 +26,7 @@
   "scripts": {
     "build": "tsdown --config-loader tsx",
     "dev": "tsdown --config-loader tsx --watch",
-    "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
+    "check-types": "tsc --noEmit --checkers 4 && tsc --noEmit --checkers 4 -p tsconfig.tests.json",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "clean": "rimraf dist"
@@ -61,7 +61,7 @@
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "tsdown": "^0.23.1",
-    "typescript": "^7.0.2",
+    "typescript": "7.0.2",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^5.0.5"
   },

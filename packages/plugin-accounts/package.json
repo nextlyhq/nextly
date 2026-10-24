@@ -37,7 +37,7 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "check-types": "tsc --noEmit",
+    "check-types": "tsc --noEmit --checkers 4",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts"
@@ -77,7 +77,7 @@
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "tsdown": "^0.23.1",
-    "typescript": "^7.0.2",
+    "typescript": "7.0.2",
     "vitest": "^5.0.5"
   },
   "engines": {

@@ -250,7 +250,7 @@
   "scripts": {
     "build": "rimraf dist .dts-tmp && tsc -p tsconfig.dts.json && tsdown && tsdown -c tsdown.dts.config.ts && node scripts/postbuild.cjs",
     "dev": "node scripts/dev.mjs",
-    "check-types": "tsc --noEmit -p tsconfig.tests.json",
+    "check-types": "tsc --noEmit --checkers 4 -p tsconfig.tests.json",
     "clean": "rimraf dist .dts-tmp",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
@@ -291,7 +291,7 @@
     "sharp": "^0.35.5",
     "tsdown": "^0.23.1",
     "tsx": "^4.20.5",
-    "typescript": "^7.0.2",
+    "typescript": "7.0.2",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^5.0.5"
   },

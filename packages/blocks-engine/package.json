@@ -36,7 +36,7 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
+    "check-types": "tsc --noEmit --checkers 4 && tsc --noEmit --checkers 4 -p tsconfig.tests.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "bench": "vitest bench --run --reporter=verbose",
@@ -56,7 +56,7 @@
     "@types/picomatch": "^4.0.3",
     "rimraf": "^6.1.3",
     "tsdown": "^0.23.1",
-    "typescript": "^7.0.2",
+    "typescript": "7.0.2",
     "vitest": "^5.0.5"
   },
   "publishConfig": {

@@ -25,7 +25,9 @@
     // never replaced by a package named `@typescript/lib-*`.
     "libReplacement": false,
     "noUncheckedSideEffectImports": true,
-    "lib": ["es2022", "DOM", "DOM.Iterable"],
+    // No `DOM.Iterable`: it has been an empty file since TypeScript 6.0, with
+    // the iterable DOM declarations folded into `DOM` itself.
+    "lib": ["es2022", "DOM"],
     "module": "NodeNext",
     "moduleDetection": "force",
     "moduleResolution": "NodeNext",
