@@ -97,6 +97,20 @@ export function generateEntryId(options: CollectionDbOptions): string {
 }
 
 /**
+ * The id a create's rules are told the entry is stored under: the caller's,
+ * where the collection takes it, and none otherwise, since a fresh one is
+ * made only after the rules have run.
+ */
+export function suppliedEntryId(
+  options: CollectionDbOptions,
+  supplied: unknown
+): string | undefined {
+  return options.allowIdOnCreate === true && typeof supplied === "string"
+    ? supplied
+    : undefined;
+}
+
+/**
  * The id a create should use: the caller's when it is allowed and valid,
  * otherwise a fresh one.
  *

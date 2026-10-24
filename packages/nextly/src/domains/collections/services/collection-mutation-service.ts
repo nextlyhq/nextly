@@ -257,7 +257,11 @@ import type {
   CollectionHookService,
   QueryDatabaseParams,
 } from "./collection-hook-service";
-import { collectionDbOptions, resolveEntryId } from "./collection-id";
+import {
+  collectionDbOptions,
+  resolveEntryId,
+  suppliedEntryId,
+} from "./collection-id";
 import type { CollectionServiceResult, UserContext } from "./collection-types";
 import {
   toCamelCase,
@@ -2135,14 +2139,44 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The field rules a create applies to `data`, told the id the entry is
+   * stored under where the collection keeps the one the caller sent.
+   */
+  private applyCreateFieldRules(
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+      overrideAccess?: boolean;
+    },
+    data: Record<string, unknown>,
+    grants: () => Promise<CallerGrants>
+  ): Promise<void> {
+    return applyFieldWriteAccess({
+      kind: "collection",
+      slug: params.collectionName,
+      data,
+      operation: "create",
+      id: suppliedEntryId(collectionDbOptions(params.collectionName), data.id),
+      user: params.user,
+      authenticatedScope: params.authenticatedScope,
+      overrideAccess: params.overrideAccess,
+      grants,
+    });
+  }
+
+  /**
    * The field rules an update applies beyond the entry's own fields, with
    * every denied value inside a container kept as the row holds it, in place;
    * see `keepDeniedAtStoredOnUpdate`.
    */
   private async keepDeniedFieldsAtStored(args: {
     data: Record<string, unknown>;
-    /** The entry, so owner- and record-aware rules can evaluate. */
-    entryId: string;
+    /**
+     * The entry's id as stored, so owner- and record-aware rules can
+     * evaluate: never the one the request named.
+     */
+    storedId: string;
     collectionName: string;
     stored: Record<string, unknown>;
     /** The entry's table, to read the instances it holds in their own. */
@@ -2201,7 +2235,7 @@ export class CollectionMutationService extends BaseService {
           user: args.params.user,
           authenticatedScope: args.params.authenticatedScope,
           overrideAccess: args.params.overrideAccess,
-          id: args.entryId,
+          id: args.storedId,
           grants,
         }),
     });
@@ -3055,6 +3089,7 @@ export class CollectionMutationService extends BaseService {
     shared: ReleaseWriteContext,
     args: {
       collectionName: string;
+      /** The entry's id as stored, read from its row. */
       entryId: string;
       snapshot: unknown;
       restoreCtx: RestoreSchemaContext;
@@ -3087,7 +3122,7 @@ export class CollectionMutationService extends BaseService {
           draftInput
         ),
         collectionName: args.collectionName,
-        entryId: args.entryId,
+        storedId: args.entryId,
         user: args.user,
         overrideAccess: false,
         grants: args.grants,
@@ -3730,7 +3765,7 @@ export class CollectionMutationService extends BaseService {
               user: params.user,
               authenticatedScope: params.authenticatedScope,
               overrideAccess: params.overrideAccess,
-              id: params.entryId,
+              id: String((row as { id: unknown }).id),
               grants,
             })
         ),
@@ -4866,16 +4901,7 @@ export class CollectionMutationService extends BaseService {
         "collection",
         params.collectionName
       );
-      await applyFieldWriteAccess({
-        kind: "collection",
-        slug: params.collectionName,
-        data: readableByDefaults,
-        operation: "create",
-        user: params.user,
-        authenticatedScope: params.authenticatedScope,
-        overrideAccess: params.overrideAccess,
-        grants: writeGrants,
-      });
+      await this.applyCreateFieldRules(params, readableByDefaults, writeGrants);
       // The view is defaulted BEFORE it is judged a second time, and both
       // halves matter.
       //
@@ -4894,16 +4920,7 @@ export class CollectionMutationService extends BaseService {
       // a default the rules removed here is one the record's own pass will not
       // put back.
       applyFieldDefaults(readableByDefaults, fields, fieldFunctions);
-      await applyFieldWriteAccess({
-        kind: "collection",
-        slug: params.collectionName,
-        data: readableByDefaults,
-        operation: "create",
-        user: params.user,
-        authenticatedScope: params.authenticatedScope,
-        overrideAccess: params.overrideAccess,
-        grants: writeGrants,
-      });
+      await this.applyCreateFieldRules(params, readableByDefaults, writeGrants);
       // The stored fields carry constant defaults; a function default exists
       // only in the live config, which the registry captured at boot.
       applyFieldDefaults(
@@ -4991,16 +5008,7 @@ export class CollectionMutationService extends BaseService {
 
       // Field-level access: fields the caller may not create are stripped
       // silently (Payload parity); overrideAccess bypasses.
-      await applyFieldWriteAccess({
-        kind: "collection",
-        slug: params.collectionName,
-        data: finalData,
-        operation: "create",
-        user: params.user,
-        authenticatedScope: params.authenticatedScope,
-        overrideAccess: params.overrideAccess,
-        grants: writeGrants,
-      });
+      await this.applyCreateFieldRules(params, finalData, writeGrants);
       // The field groups this entry stores inline, inside its groups and
       // repeaters, by their own rules: no field-group save reaches them.
       await this.judgeInlineFieldGroups({
@@ -7116,7 +7124,8 @@ export class CollectionMutationService extends BaseService {
     /** The pending change alone, where `before` lays the caller's payload over it. */
     pending?: Record<string, unknown>;
     collectionName: string;
-    entryId: string;
+    /** The entry's id as stored, which the rules are told: never the request's. */
+    storedId: string;
     user: UserContext | undefined;
     authenticatedScope?: AuthenticatedScope;
     overrideAccess?: boolean;
@@ -7144,7 +7153,7 @@ export class CollectionMutationService extends BaseService {
           authenticatedScope: args.authenticatedScope,
           overrideAccess: args.overrideAccess,
           grants: args.grants,
-          id: args.entryId,
+          id: args.storedId,
         });
         await applyFieldGroupWriteAccessToDocument({
           document,
@@ -8303,7 +8312,7 @@ export class CollectionMutationService extends BaseService {
       // and every denied value inside a container kept as the row holds it.
       await this.keepDeniedFieldsAtStored({
         data: finalData,
-        entryId: params.entryId,
+        storedId: String(existingEntry.id),
         collectionName: params.collectionName,
         stored: await this.storedForCarryForward({
           row: existingEntry as Record<string, unknown>,
@@ -9240,7 +9249,7 @@ export class CollectionMutationService extends BaseService {
                 callerSupplied: callerContribution,
                 pending: pendingDocument,
                 collectionName: params.collectionName,
-                entryId: params.entryId,
+                storedId: String(existingEntry.id),
                 user: params.user,
                 authenticatedScope: params.authenticatedScope,
                 overrideAccess: params.overrideAccess,
@@ -11246,16 +11255,7 @@ export class CollectionMutationService extends BaseService {
         params.authenticatedScope,
         tx.getDrizzle()
       );
-      await applyFieldWriteAccess({
-        kind: "collection",
-        slug: params.collectionName,
-        data: finalData,
-        operation: "create",
-        user: params.user,
-        authenticatedScope: params.authenticatedScope,
-        overrideAccess: params.overrideAccess,
-        grants: writeGrants,
-      });
+      await this.applyCreateFieldRules(params, finalData, writeGrants);
       // The field groups this entry stores inline, inside its groups and
       // repeaters, by their own rules: no field-group save reaches them.
       await this.judgeInlineFieldGroups({
@@ -11828,7 +11828,7 @@ export class CollectionMutationService extends BaseService {
       // and every denied value inside a container kept as the row holds it.
       await this.keepDeniedFieldsAtStored({
         data: finalData,
-        entryId: entryId,
+        storedId: String(existingEntry.id),
         collectionName: params.collectionName,
         stored: await this.storedForCarryForward({
           row: existingEntry,
