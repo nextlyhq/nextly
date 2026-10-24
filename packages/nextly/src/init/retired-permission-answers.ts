@@ -36,6 +36,14 @@ interface RowDeleter {
   delete(table: unknown): PromiseLike<unknown>;
 }
 
+/** What emptying the stored answers asks of the database. */
+export interface StoredAnswersOps {
+  tableExists(table: string): Promise<boolean>;
+  columnsOf(table: string): Promise<string[]>;
+  /** Delete every row of the stored answers. */
+  deleteAll(): PromiseLike<unknown>;
+}
+
 /**
  * Delete every stored answer, if the table is still there in the shape Nextly
  * created it.
@@ -52,15 +60,30 @@ interface RowDeleter {
 export async function emptyRetiredPermissionAnswers(
   store: PermissionAnswersStore
 ): Promise<void> {
-  if (!(await store.tableExists(RETIRED_PERMISSION_ANSWERS_TABLE))) return;
-  const columns = await liveColumnsOf(
-    store.getDrizzle(),
-    store.dialect
-  )(RETIRED_PERMISSION_ANSWERS_TABLE);
-  if (!hasRetiredShape(RETIRED_PERMISSION_ANSWERS_TABLE, columns)) return;
   const table = retiredOwnedTable(
     RETIRED_PERMISSION_ANSWERS_TABLE,
     store.dialect
   );
-  await (store.getDrizzle() as RowDeleter).delete(table);
+  await emptyStoredAnswers({
+    tableExists: name => store.tableExists(name),
+    columnsOf: liveColumnsOf(store.getDrizzle(), store.dialect),
+    deleteAll: () => (store.getDrizzle() as RowDeleter).delete(table),
+  });
+}
+
+/** The decision itself, over the operations it asks of the database. */
+export async function emptyStoredAnswers(ops: StoredAnswersOps): Promise<void> {
+  const name = RETIRED_PERMISSION_ANSWERS_TABLE;
+  if (!(await ops.tableExists(name))) return;
+  if (!hasRetiredShape(name, await ops.columnsOf(name))) return;
+  try {
+    await ops.deleteAll();
+  } catch (error) {
+    // `nextly migrate` can drop the table between the checks above and the
+    // delete. Gone, it holds nothing a reader could serve, so this is the
+    // emptying succeeding, not failing: failing would withhold the version
+    // from every instance for a table nobody can read any more.
+    if (!(await ops.tableExists(name))) return;
+    throw error;
+  }
 }
