@@ -59,7 +59,6 @@ export {
   rolePermissions,
   userRoles,
   roleInherits,
-  userPermissionCache,
 } from "../rbac/postgres";
 
 // API keys.
