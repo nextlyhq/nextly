@@ -41,6 +41,7 @@ import {
   defineSingle,
   fieldGroup,
   group,
+  password,
   repeater,
   text,
 } from "../../../config";
@@ -489,6 +490,15 @@ describe.each(getConfiguredTestDialects())(
               }),
             ],
           }),
+          // A password only the allowed person may change: its stored hash is
+          // never read back, so an instance holding one is judged unread.
+          defineFieldGroup({
+            slug: "pinned",
+            fields: [
+              text({ name: "heading" }),
+              password({ name: "pin", access: { update: onlyAllowed } }),
+            ],
+          }),
           defineFieldGroup({
             slug: "card",
             fields: [
@@ -541,6 +551,18 @@ describe.each(getConfiguredTestDialects())(
             fields: [
               text({ name: "title" }),
               fieldGroup({ name: "log", component: "logbook" }),
+            ],
+          }),
+          defineCollection({
+            slug: "pinboard",
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "one", component: "pinned" }),
+              fieldGroup({
+                name: "many",
+                component: "pinned",
+                repeatable: true,
+              }),
             ],
           }),
           // A repeater stored whole, in its own column, whose rows carry ids.
@@ -612,9 +634,18 @@ describe.each(getConfiguredTestDialects())(
             name: "editors",
             slug: "editors",
             permissionIds: [
-              ...["pages", "drafted", "versioned", "cards", "rowed"].flatMap(
-                slug => [`create-${slug}`, `read-${slug}`, `update-${slug}`]
-              ),
+              ...[
+                "pages",
+                "drafted",
+                "versioned",
+                "cards",
+                "rowed",
+                "pinboard",
+              ].flatMap(slug => [
+                `create-${slug}`,
+                `read-${slug}`,
+                `update-${slug}`,
+              ]),
               "publish-drafted",
               "create-groupdrafted",
               "read-groupdrafted",
@@ -818,6 +849,64 @@ describe.each(getConfiguredTestDialects())(
 
         expect(stamps(after.deck)).toEqual(["stamp-a-changed"]);
         expect(stamps(after.solo)).toEqual(["stamp-a-solo-changed"]);
+      });
+    });
+
+    describe("a field-group instance holding a password its updater may not change", () => {
+      /** A `pinboard` entry, its instances each holding a pin. */
+      async function pinnedBoard(tag: string): Promise<string> {
+        const { item } = await trusted.create({
+          collection: "pinboard",
+          data: {
+            title: tag,
+            one: { heading: `h-${tag}`, pin: "pin-one-secret" },
+            many: [
+              { heading: "a", pin: "pin-a-secret" },
+              { heading: "b", pin: "pin-b-secret" },
+            ],
+          },
+        } as never);
+        return String(item.id);
+      }
+
+      describe.each(["rest", "direct"] as const)("through %s", door => {
+        it("is kept when an update clears its field", async () => {
+          const id = await pinnedBoard(`c-${door}`);
+
+          // Removing it would delete the pin's hash, which the rule protects.
+          await updateIn("pinboard", door, "editor", id, { one: null });
+
+          expect(list((await stored("pinboard", id)).one)[0]?.heading).toBe(
+            `h-c-${door}`
+          );
+        });
+
+        it("is kept when an update leaves it out of a list", async () => {
+          const id = await pinnedBoard(`l-${door}`);
+          const [first] = list((await stored("pinboard", id)).many);
+
+          await updateIn("pinboard", door, "editor", id, {
+            many: [{ id: first!.id, heading: "a2" }],
+          });
+
+          expect(
+            list((await stored("pinboard", id)).many).map(row => row.heading)
+          ).toEqual(["a2", "b"]);
+        });
+      });
+
+      it("lets the allowed person remove it", async () => {
+        const id = await pinnedBoard("ok");
+        const [first] = list((await stored("pinboard", id)).many);
+
+        await updateIn("pinboard", "direct", "allowed", id, {
+          one: null,
+          many: [{ id: first!.id, heading: "a2" }],
+        });
+        const after = await stored("pinboard", id);
+
+        expect(list(after.one)).toEqual([]);
+        expect(list(after.many).map(row => row.heading)).toEqual(["a2"]);
       });
     });
 
