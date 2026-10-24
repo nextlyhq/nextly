@@ -818,12 +818,11 @@ export function rbacRevision(): string {
  * The failing direction is a missed cache write, which costs one re-resolution.
  *
  * A retirement that is still running counts as not current, whatever the
- * numbers say. Clearing the shared tier is an awaited database write, and the
- * revision cannot be advanced once at the end to cover it: a check that starts
- * and finishes entirely inside that window reads a row the tombstone has not
- * reached yet, compares two numbers that have not moved since it captured one,
- * and promotes the retired answer into a tier that outlives the retirement.
- * Nothing is cacheable while the caches are being emptied.
+ * numbers say. A batch of permission writes holds one open for its whole
+ * length, and publishing the role version is itself an awaited write: a check
+ * that starts and finishes inside either reads rows mid-change, compares two
+ * numbers that have not moved since it captured one, and would keep an answer
+ * the change is about to retire. Nothing is cacheable while a retirement runs.
  */
 export function resolvedUnderCurrentRevision(revision: string): boolean {
   // Nothing of its own left. Whether a retirement is running was the one thing
@@ -835,9 +834,10 @@ export function resolvedUnderCurrentRevision(revision: string): boolean {
 }
 
 /**
- * Invalidate permission cache (both in-memory and database tiers).
+ * Retire what is kept about users' access: the actors this process keeps, and,
+ * by publishing the role version, what every other instance keeps.
  *
- * This function clears cached permissions when user roles or role permissions change.
+ * Called when user roles or role permissions change.
  *
  * @param hint - Invalidation hint with userId or roleId
  * @param hint.userId - Invalidate all permissions for this user
@@ -862,8 +862,9 @@ export function resolvedUnderCurrentRevision(revision: string): boolean {
  * reached no cache at all — a role-based key kept a renamed slug and a
  * super-admin's key kept a deleted grant until their entries aged out.
  *
- * Clears the process-local tiers, tombstones the shared one, and advances the
- * revision so derived caches in this process retire with them.
+ * Forgets every actor this process keeps and publishes the role version, which
+ * retires what every instance keeps and the caches derived from it, an API
+ * key's copied grants among them.
  */
 /**
  * The batch the CURRENT operation is part of, or nothing if it is not in one.
@@ -879,13 +880,13 @@ export function resolvedUnderCurrentRevision(revision: string): boolean {
 const permissionSweep = new AsyncLocalStorage<{ dirty: boolean }>();
 
 /**
- * Run a batch of permission-row writes under ONE table-wide invalidation.
+ * Run a batch of permission-row writes under ONE publish of the role version.
  *
- * The database tier is tombstoned by an unfiltered update of every cached row,
+ * Every publish sends every instance back to read its users' access again,
  * which is the right cost once and the wrong cost per row: a seeder calls
- * `ensurePermission` once per permission, so a single new collection rewrote
- * and locked the whole cache table six times over, each after the first
- * already having expired everything the next one would find.
+ * `ensurePermission` once per permission, so a single new collection would
+ * publish six times over, each after the first retiring access the previous
+ * one had already retired.
  *
  * Nested batches collapse into the outermost, and the flush happens on the way
  * out whether the batch succeeded or threw — a partial write still changed
