@@ -7,10 +7,12 @@
  * rule. The screen sets one level per entity from this, and marks an entity
  * whose code also narrows who may act on it.
  *
- * The entity list is the registered content, enumerated once by
- * `registeredContentSnapshot()`: the same list `GET /me/capabilities` answers
- * over. Labels and admin options come from a projection of the registries
- * that reads only those columns.
+ * The entity list and the labels come from one read of each registry, a
+ * projection of only the slug, labels and admin columns, so the two cannot
+ * describe different moments: a slug added or removed between two separate
+ * reads would otherwise be left out, or listed under no label. Each slug's kind
+ * is decided by `contentKinds`, the precedence `registeredContentSnapshot()`
+ * applies for `GET /me/capabilities`.
  *
  * @module api/roles-screen
  */
@@ -23,10 +25,9 @@ import {
 import { getRBACService } from "../auth/code-access";
 import { getService } from "../di";
 import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
-import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { getHandlerConfig } from "../route-handler/auth-handler";
-import { registeredContentSnapshot } from "../services/lib/registered-content-slugs";
+import { contentKinds } from "../services/lib/registered-content-slugs";
 
 import { PRIVATE_NO_STORE_HEADERS } from "./authenticated-read";
 import { respondList } from "./response-shapes";
@@ -69,57 +70,52 @@ export const getRolesScreen = withErrorHandler(async (req: Request) => {
   await requireRoutePermission(req, "read", "roles");
   await getCachedNextly();
 
-  const { kinds, degraded } = await registeredContentSnapshot();
-  // The screen sets a level for EVERY entity, so a registry that could not be
-  // enumerated would leave some unlisted, read as having no access to set.
-  if (degraded) {
-    throw NextlyError.serviceUnavailable({
-      logMessage:
-        "A content registry could not be enumerated, so the roles screen would list only some entities.",
-    });
-  }
-
+  // A registry that cannot be read refuses the request rather than leaving
+  // its entities unlisted, read as having no access to set.
   const [collections, singles] = await Promise.all([
     getService("collectionRegistryService").getAllPresentations(),
     getService("singleRegistryService").getAllPresentations(),
   ]);
-  const collectionBySlug = new Map(collections.map(c => [c.slug, c]));
-  const singleBySlug = new Map(singles.map(s => [s.slug, s]));
+  const kinds = contentKinds(
+    collections.map(collection => collection.slug),
+    singles.map(single => single.slug)
+  );
   const pluginCollections = pluginsBySlug("collections");
   const pluginSingles = pluginsBySlug("singles");
   const rules = getRBACService();
 
-  const items: RolesScreenEntity[] = [];
-  for (const [slug, kind] of kinds) {
+  /** The operations whose code declares a rule for `slug`. */
+  const declaredRulesOf = (
+    slug: string,
+    operations: readonly (typeof COLLECTION_ACTIONS)[number][]
+  ): string[] => {
     const target = rules?.getRegisteredTarget(slug);
-    const operations =
-      kind === "collection" ? COLLECTION_ACTIONS : SINGLE_ACTIONS;
-    const declaredRules = target
+    return target
       ? operations.filter(operation => declaresRule(target, operation))
       : [];
-    if (kind === "collection") {
-      // A slug registered between the two reads has no presentation yet; it
-      // is named by its slug rather than left out.
-      const labels = collectionBySlug.get(slug)?.labels ?? {
-        singular: slug,
-        plural: slug,
-      };
-      items.push({
-        slug,
-        kind,
-        labels,
-        plugin: pluginCollections.get(slug) ?? null,
-        declaredRules,
-      });
-    } else {
-      items.push({
-        slug,
-        kind,
-        labels: { singular: singleBySlug.get(slug)?.label ?? slug },
-        plugin: pluginSingles.get(slug) ?? null,
-        declaredRules,
-      });
-    }
+  };
+
+  const items: RolesScreenEntity[] = [];
+  for (const { slug, labels } of collections) {
+    if (kinds.get(slug) !== "collection") continue;
+    items.push({
+      slug,
+      kind: "collection",
+      labels,
+      plugin: pluginCollections.get(slug) ?? null,
+      declaredRules: declaredRulesOf(slug, COLLECTION_ACTIONS),
+    });
+  }
+  for (const { slug, label } of singles) {
+    // A slug a collection also holds is that collection's.
+    if (kinds.get(slug) !== "single") continue;
+    items.push({
+      slug,
+      kind: "single",
+      labels: { singular: label },
+      plugin: pluginSingles.get(slug) ?? null,
+      declaredRules: declaredRulesOf(slug, SINGLE_ACTIONS),
+    });
   }
   items.sort((a, b) => a.slug.localeCompare(b.slug));
 

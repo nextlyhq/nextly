@@ -381,6 +381,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "translations",
   "schema",
   "contentEvents",
+  "rolesScreen",
 ]);
 
 /**
