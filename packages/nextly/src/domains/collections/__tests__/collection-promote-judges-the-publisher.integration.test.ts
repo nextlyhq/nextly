@@ -932,6 +932,98 @@ describe.each(getConfiguredTestDialects())(
       expect(await pendingDrafts(current, id)).toHaveLength(1);
     });
 
+    it("refuses, and keeps the draft, when the field group the caller sends echoes a protected child the pending change edited", async () => {
+      // As the group case above, for a field group stored in its own table:
+      // its values reach the promotion apart from the entry's own fields, and
+      // an echoed protected child must not read as the publisher's input.
+      const slug = "provenance_fieldgroup";
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "pcard",
+            fields: [
+              text({ name: "note" }),
+              text({
+                name: "runbook",
+                access: {
+                  update: ({ req }) => req.user?.email === BOSS.email,
+                },
+              }),
+            ],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug,
+            status: true,
+            versions: { drafts: true },
+            access: {
+              read: () => true,
+              update: () => true,
+              publish: () => true,
+              unpublish: () => true,
+            },
+            fields: [
+              text({ name: "body" }),
+              fieldGroup({ name: "card", component: "pcard" }),
+            ],
+          }),
+        ],
+      } as never);
+      const h = handlerOf(current);
+
+      const created = await h.createEntry(
+        { collectionName: slug, overrideAccess: true },
+        {
+          body: "live",
+          card: { note: "live-note", runbook: "live-runbook" },
+          status: "published",
+        }
+      );
+      const id = (created.data as { id?: string }).id as string;
+      const read = async () =>
+        (await current!.nextly.findByID({
+          collection: slug as never,
+          id,
+          overrideAccess: true,
+          status: "all",
+        } as never)) as Record<string, unknown> | null;
+      const card = (await read())?.card as Record<string, unknown>;
+
+      // BOSS's pending change edits the protected child.
+      await h.updateEntry(
+        {
+          collectionName: slug,
+          entryId: id,
+          routeAuthorized: true,
+          user: BOSS,
+        },
+        { card: { ...card, runbook: "boss-runbook" } }
+      );
+      expect(await pendingDrafts(current, id)).toHaveLength(1);
+
+      // CLERK publishes the field group, the child at its live value.
+      const published = await h.updateEntry(
+        {
+          collectionName: slug,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        {
+          status: "published",
+          card: { ...card, note: "clerk-note", runbook: "live-runbook" },
+        }
+      );
+
+      expect(published.success, JSON.stringify(published)).toBe(false);
+      expect(((await read())?.card as Record<string, unknown>)?.runbook).toBe(
+        "live-runbook"
+      );
+      expect(await pendingDrafts(current, id)).toHaveLength(1);
+    });
+
     it("refuses, and keeps the draft, when the publisher echoes a protected path the pending change edited", async () => {
       // A full form resubmits every field, so a publisher routinely sends a
       // protected value back unchanged. The field gate strips it, which leaves the
