@@ -286,3 +286,42 @@ describe("taking super-admin from someone by a role change", () => {
     });
   });
 });
+
+describe("taking super-admin from someone by deleting or deactivating their account", () => {
+  /** The first and a second super-admin, so the last one is never at stake. */
+  const TWO = [
+    { userId: "first", roleId: "super-admin" },
+    { userId: "second", roleId: "super-admin" },
+  ];
+  const CHANGES = [
+    { kind: "delete", userId: "second" },
+    { kind: "deactivate", userId: "second" },
+  ] as const;
+
+  it.each(CHANGES)("refuses an API key to $kind one", async change => {
+    await expect(
+      runAsRoleChangeCaller({ kind: "key" }, () =>
+        refuseRemovingLastSuperAdmin(
+          txAnswering({ assignments: TWO }),
+          tables,
+          "postgresql",
+          change
+        )
+      )
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it.each(CHANGES)(
+    "lets trusted code with no caller $kind one",
+    async change => {
+      await expect(
+        refuseRemovingLastSuperAdmin(
+          txAnswering({ assignments: TWO }),
+          tables,
+          "postgresql",
+          change
+        )
+      ).resolves.toBeUndefined();
+    }
+  );
+});
