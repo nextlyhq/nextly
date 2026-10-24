@@ -2174,23 +2174,17 @@ export class CollectionMutationService extends BaseService {
     // The parent row alone carries no field-group instance, so what an update
     // removes is read here or judged against nothing: in the write's own
     // language, and in each other one, since a removal removes them all.
-    const storedFieldGroupsIn = (locale?: string) =>
-      withStoredFieldGroups({
-        stored: args.stored,
-        parentTable: args.tableName,
-        fields: args.fields as unknown as FieldConfig[],
-        source: this.fieldGroupDataService,
-        access,
-        executor: args.executor,
-        locale,
-      });
+    const storedIn = this.storedFieldGroupsInLanguages({
+      stored: args.stored,
+      tableName: args.tableName,
+      fields: args.fields,
+      access,
+      executor: args.executor,
+    });
     await keepDeniedAtStoredOnUpdate({
       data: args.data,
-      stored: await storedFieldGroupsIn(args.params.locale),
-      storedIn: {
-        locales: this.localization?.locales.map(l => l.code) ?? [],
-        read: storedFieldGroupsIn,
-      },
+      stored: await storedIn.read(args.params.locale),
+      storedIn,
       fields: args.fields as unknown as FieldConfig[],
       source: this.fieldGroupDataService,
       access,
@@ -2210,6 +2204,36 @@ export class CollectionMutationService extends BaseService {
           grants,
         }),
     });
+  }
+
+  /**
+   * Where an entry's stored field-group instances are read in each of the
+   * site's languages, on `executor`: `stored` with the instances it holds in
+   * their own tables, in the language asked (the default when none is).
+   */
+  private storedFieldGroupsInLanguages(args: {
+    stored: Record<string, unknown>;
+    tableName: string;
+    fields: FieldDefinition[];
+    access: FieldGroupWriteAccess;
+    executor?: unknown;
+  }): {
+    locales: string[];
+    read: (locale?: string) => Promise<Record<string, unknown>>;
+  } {
+    return {
+      locales: this.localization?.locales.map(l => l.code) ?? [],
+      read: locale =>
+        withStoredFieldGroups({
+          stored: args.stored,
+          parentTable: args.tableName,
+          fields: args.fields as unknown as FieldConfig[],
+          source: this.fieldGroupDataService,
+          access: args.access,
+          executor: args.executor,
+          locale,
+        }),
+    };
   }
 
   /**
@@ -7755,6 +7779,15 @@ export class CollectionMutationService extends BaseService {
     replaces: Record<string, unknown>
   ): Promise<void> {
     const { params, splitComponentSchemas } = ctx;
+    const access = {
+      ...fieldGroupWriteAccessOf(params),
+      // Still inside the write's transaction.
+      grants: callerAccessGrants(
+        params.user,
+        params.authenticatedScope,
+        tx.getDrizzle()
+      ),
+    };
     await keepDeniedFieldGroupsInDraft({
       draft: draftDocument,
       replaces,
@@ -7768,15 +7801,17 @@ export class CollectionMutationService extends BaseService {
       fieldGroupFields: {
         get: slug => splitComponentSchemas?.get(slug)?.fields,
       },
-      access: {
-        ...fieldGroupWriteAccessOf(params),
-        // Still inside the write's transaction.
-        grants: callerAccessGrants(
-          params.user,
-          params.authenticatedScope,
-          tx.getDrizzle()
-        ),
-      },
+      access,
+      // What a stored instance holds in each language, read on the write's
+      // own transaction: a held draft writes no translation, so another
+      // language's values are the live rows'.
+      storedIn: this.storedFieldGroupsInLanguages({
+        stored: { id: params.entryId },
+        tableName: collectionTableName(ctx.collection, params.collectionName),
+        fields: ctx.fields,
+        access,
+        executor: tx.getDrizzle(),
+      }),
     });
   }
 

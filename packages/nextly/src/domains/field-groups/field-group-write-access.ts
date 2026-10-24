@@ -298,6 +298,13 @@ export async function keepDeniedFieldGroupsInDraft(params: {
   fields: readonly FieldConfig[];
   fieldGroupFields: FieldGroupFieldsBySlug;
   access: FieldGroupWriteAccess;
+  /**
+   * The stored instances in each of the entity's languages, so a removal is
+   * judged in every language it removes, as an update's is: a held draft
+   * writes no translation, so what an instance holds in another language is
+   * what the live rows hold there.
+   */
+  storedIn?: StoredFieldGroupsInLanguages;
 }): Promise<void> {
   if (params.access.overrideAccess) return;
   if (
@@ -330,6 +337,9 @@ export async function keepDeniedFieldGroupsInDraft(params: {
       fields: params.fields,
       fieldGroupFields: params.fieldGroupFields,
       access: params.access,
+      translations: params.storedIn
+        ? translationsOf(params.storedIn, params.fields)
+        : undefined,
     });
   }
   const kept = await keepDeniedAtStored({
