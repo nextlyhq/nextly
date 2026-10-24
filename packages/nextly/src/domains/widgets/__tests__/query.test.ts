@@ -1281,6 +1281,66 @@ describe("a read's window", () => {
   });
 });
 
+describe("a timeseries' range", () => {
+  beforeEach(() => {
+    registerSource({
+      id: "collection:dated",
+      label: "Dated",
+      kind: "collection",
+      supports: ["count", "list", "timeseries"],
+      fields: [
+        { name: "title", type: "string" },
+        { name: "createdAt", type: "date" },
+      ],
+    });
+  });
+
+  it("carries the range alone, with no interval: the range sets it", () => {
+    const asked = validateWidgetQuery({
+      source: "collection:dated",
+      op: "timeseries",
+      dateField: "createdAt",
+      range: "90d",
+    });
+    expect(asked).toMatchObject({ dateField: "createdAt", range: "90d" });
+    expect(asked).not.toHaveProperty("interval");
+  });
+
+  it.each([
+    // 🔴 Two windows in one query: resolved by precedence, one of them would
+    // be silently ignored.
+    [
+      { range: "30d", since: "30d" },
+      /range and since or until each name a window/,
+    ],
+    [
+      { range: "30d", until: "30d" },
+      /range and since or until each name a window/,
+    ],
+    [{ range: "30d", interval: "day" }, /range sets the interval/],
+    [{ range: "60d" }, /range must be one of 7d, 30d, 90d, 12m/],
+  ])("refuses %j on a timeseries", (keys, reason) => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:dated",
+        op: "timeseries",
+        dateField: "createdAt",
+        ...keys,
+      })
+    ).toThrow(reason);
+  });
+
+  it("refuses a range on any op but a timeseries", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:dated",
+        op: "count",
+        range: "7d",
+      })
+    ).toThrow(/range draws a timeseries, not a count/);
+  });
+});
+
 describe("relativeSpanStart", () => {
   const now = new Date("2026-03-31T10:20:30.400Z");
 

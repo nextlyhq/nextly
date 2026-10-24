@@ -167,4 +167,36 @@ describe("a card asking through cells", () => {
     expect(sent()[1].map(query => query.op)).toEqual(["count", "timeseries"]);
     expect(result.current.cellSlots.a?.trend).toBeUndefined();
   });
+
+  it("asks a card's cells once it widens, though its first tier sent none of them", async () => {
+    // 🔴 With no record of a request that sent nothing, the widened card had
+    // nothing to compare against, never asked, and stayed loading.
+    const trendOnly = (tier: SizeTier): BatchCard => {
+      const card = countCard("t", { tier });
+      const cells = (card.widget.cells ?? []).filter(
+        cell => cell.key === "trend"
+      );
+      return {
+        ...card,
+        widget: { ...card.widget, cells } as DashboardWidget,
+        declaredCells: DECLARED_CELLS.filter(
+          cell => cell.key === "trend"
+        ) as NonNullable<DashboardWidget["cells"]>,
+      };
+    };
+    const { result, rerender } = renderHook(
+      ({ cards }: { cards: BatchCard[] }) => useWidgetBatch(cards),
+      { wrapper, initialProps: { cards: [trendOnly("small")] } }
+    );
+    await waitFor(() =>
+      expect(result.current.fetchingPlacementIds.size).toBe(0)
+    );
+    expect(sent()).toEqual([]);
+
+    rerender({ cards: [trendOnly("large")] });
+    await waitFor(() =>
+      expect(result.current.cellSlots.t?.trend).toBeDefined()
+    );
+    expect(sent()).toEqual([[expect.objectContaining({ op: "timeseries" })]]);
+  });
 });

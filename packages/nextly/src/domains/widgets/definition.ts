@@ -1544,15 +1544,29 @@ function queryCellProblem(cell: unknown, index: number): string | undefined {
  * answer and the card would draw the same number twice under two different
  * labels -- which is not wrong-looking in any way a reader could detect.
  */
+/**
+ * Why a custom card that asks twice is refused, or `undefined`: a card answered
+ * through its cells has no top-level query, since nothing would hand the
+ * component that query's answer. One rule for both declaration channels, the
+ * registry's and a plugin's contributed widgets, so neither accepts a shape the
+ * other refuses.
+ */
+export function customAsksTwiceProblem(widget: {
+  archetype?: unknown;
+  query?: unknown;
+  cells?: unknown;
+}): string | undefined {
+  return widget.archetype === "custom" &&
+    widget.cells !== undefined &&
+    widget.query !== undefined
+    ? "a custom card asks through its query or its cells, not both"
+    : undefined;
+}
+
 function validateCells(d: Partial<WidgetDefinition>): void {
   if (d.archetype === "custom" && d.cells !== undefined) {
-    // One way to ask: a custom card answered through its cells has no top-level
-    // query, since nothing would hand the component that query's answer.
-    if (d.query !== undefined) {
-      fail(
-        `${d.id}: a custom card asks through its query or its cells, not both`
-      );
-    }
+    const twice = customAsksTwiceProblem(d);
+    if (twice !== undefined) fail(`${d.id}: ${twice}`);
     const problem = queryCellsProblem(d.cells);
     if (problem !== undefined) fail(`${d.id}: ${problem}`);
     return;

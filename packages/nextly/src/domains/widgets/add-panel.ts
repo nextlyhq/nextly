@@ -47,6 +47,8 @@ const CORE_GROUPS = {
   "core/recent-activity": "team",
   "core/count": "content",
   "core/note": "overview",
+  "core/recent-entries": "content",
+  "core/over-time": "content",
 } as const satisfies Record<CoreWidgetId, AddPanelGroup>;
 
 /** A built-in's place in core's own order, for Overview's first rows. */

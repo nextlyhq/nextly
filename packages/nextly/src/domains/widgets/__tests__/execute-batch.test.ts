@@ -121,3 +121,33 @@ describe("a timeseries over a window in the past", () => {
     expect(args.now.toISOString()).toBe(now.toISOString());
   });
 });
+
+describe("a timeseries over a range", () => {
+  it("asks the range's interval and every interval it overlaps, counting only rows inside it", async () => {
+    // 🔴 Bounded by whole days, the first point would count the morning before
+    // the range began; anchored at now, a read at an interval's exact start
+    // would draw an empty extra point.
+    const query = validateWidgetQuery({
+      source: "collection:posts",
+      op: "timeseries",
+      dateField: "createdAt",
+      range: "30d",
+    });
+    await executeWidgetQuery(query, caller, { now });
+    const [args] = reads.timeseries.mock.calls[0] as [
+      {
+        interval: string;
+        intervals: number;
+        now: Date;
+        where: { and: Array<Record<string, Record<string, string>>> };
+      },
+    ];
+    expect(args.interval).toBe("day");
+    expect(args.intervals).toBe(31);
+    expect(args.now.toISOString()).toBe("2026-03-31T10:20:30.399Z");
+    expect(args.where.and.at(-1)?.createdAt).toEqual({
+      greater_than_equal: "2026-03-01T10:20:30.400Z",
+      less_than: now.toISOString(),
+    });
+  });
+});

@@ -59,3 +59,13 @@ export const TEAM_WIDTHS: CoreWidgetWidths = {
   defaultWidth: "third",
   allowedWidths: ["quarter", "third", "half"],
 };
+
+export const RECENT_ENTRIES_WIDTHS: CoreWidgetWidths = {
+  defaultWidth: "half",
+  allowedWidths: THIRD_TO_FULL,
+};
+
+export const OVER_TIME_WIDTHS: CoreWidgetWidths = {
+  defaultWidth: "half",
+  allowedWidths: THIRD_TO_FULL,
+};

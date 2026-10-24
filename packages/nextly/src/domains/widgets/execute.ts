@@ -32,7 +32,12 @@ import {
 
 import { answerAsAsked } from "./answer-as-asked";
 import { resolveExecutableSource } from "./executable-source";
-import { relativeSpanStart, type WidgetQuery } from "./query";
+import {
+  rangeWindow,
+  relativeSpanStart,
+  type TimeseriesRange,
+  type WidgetQuery,
+} from "./query";
 import type { ResolverOptions, WidgetScope } from "./resolved-sources";
 import type { WidgetResult, WidgetResultField } from "./result";
 import {
@@ -132,9 +137,28 @@ function windowedQuery(
   now: Date
 ): WidgetQuery {
   if (query.since === undefined) return query;
+  return boundedBy(
+    query,
+    field,
+    relativeSpanStart(query.since, now),
+    windowEnd(query, now)
+  );
+}
+
+/**
+ * `query` keeping only rows whose `field` falls in `[from, to)`, joined with
+ * its own `where` under `and`, so a declared condition keeps its top-level
+ * keys.
+ */
+function boundedBy(
+  query: WidgetQuery,
+  field: string,
+  from: Date,
+  to: Date
+): WidgetQuery {
   const window: Record<string, string> = {
-    greater_than_equal: relativeSpanStart(query.since, now).toISOString(),
-    less_than: windowEnd(query, now).toISOString(),
+    greater_than_equal: from.toISOString(),
+    less_than: to.toISOString(),
   };
   const where = query.where ?? {};
   const and = Array.isArray(where.and) ? where.and : [];
@@ -234,6 +258,9 @@ async function runTimeseries(
   // the time a query reaches execution both are present. The fallbacks keep
   // that assumption from becoming an unchecked cast.
   const dateField = query.dateField ?? "";
+  if (query.range !== undefined) {
+    return runRangedTimeseries(collection, query, query.range, caller, now);
+  }
   const interval = query.interval ?? "day";
   const result = await requireNextly().timeseries({
     collection,
@@ -249,6 +276,32 @@ async function runTimeseries(
     // rows the window keeps rather than the most recent intervals.
     now: windowEnd(query, now),
     ...sharedReadArgs(windowedQuery(query, dateField, now), caller),
+  });
+  return { op: "timeseries", points: result.points, interval: result.interval };
+}
+
+/**
+ * A timeseries over a range. The range states the whole window: its interval,
+ * how many intervals it overlaps, the instant the last one is placed by, and
+ * the rows it counts, all from one reading of the batch's instant
+ * (`rangeWindow`), so the points and the rows they count cannot disagree.
+ */
+async function runRangedTimeseries(
+  collection: string,
+  query: WidgetQuery,
+  range: TimeseriesRange,
+  caller: ReadCaller,
+  now: Date
+): Promise<WidgetResult> {
+  const dateField = query.dateField ?? "";
+  const window = rangeWindow(range, now);
+  const result = await requireNextly().timeseries({
+    collection,
+    dateField,
+    interval: window.interval,
+    intervals: window.intervals,
+    now: window.anchor,
+    ...sharedReadArgs(boundedBy(query, dateField, window.start, now), caller),
   });
   return { op: "timeseries", points: result.points, interval: result.interval };
 }
@@ -363,6 +416,7 @@ const SINGLE_QUERY_FIELD_USE: Record<
   // A Single is one document; there are no rows to bound by when they were made.
   since: "refused",
   until: "refused",
+  range: "refused",
 };
 
 /**

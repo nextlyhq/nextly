@@ -88,6 +88,7 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   interval: "refused",
   since: "refused",
   until: "refused",
+  range: "refused",
 };
 
 /** The card's filters, as the query's `where` carries them. */

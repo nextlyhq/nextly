@@ -200,6 +200,7 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   // fixed question that has none.
   since: "refused",
   until: "refused",
+  range: "refused",
 };
 
 /** Refuse a query carrying anything this source cannot honour. */
