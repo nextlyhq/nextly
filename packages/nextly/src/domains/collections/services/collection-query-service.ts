@@ -1757,7 +1757,10 @@ export class CollectionQueryService extends BaseService {
   private denyCollectionRead<T>(params: {
     collectionName: string;
     accessUser?: UserContext;
-    /** Present only on the by-id path, which names the row it is judging. */
+    /**
+     * Present only on the by-id path, which names the row it is judging, so
+     * a refusal names that one entry.
+     */
     entryId?: string;
     overrideAccess?: boolean;
     routeAuthorized?: boolean;
@@ -1767,6 +1770,7 @@ export class CollectionQueryService extends BaseService {
       collectionName: params.collectionName,
       operation: "read",
       user: params.accessUser,
+      entryId: params.entryId,
       overrideAccess: params.overrideAccess,
       routeAuthorized: params.routeAuthorized,
       // A scoped API key is judged on its own read grant, so the session

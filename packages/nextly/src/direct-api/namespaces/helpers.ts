@@ -344,7 +344,7 @@ export async function authorizeChecked(
 ): Promise<void> {
   const decision =
     "anyOf" in grant
-      ? await authorizeCallerForAny(caller, [...grant.anyOf])
+      ? await authorizeCallerForAny(caller, [...grant.anyOf], grant.names)
       : await authorizeCaller(caller, grant.action, grant.resource);
   if (isErrorResponse(decision)) throw toNextlyAuthError(decision);
 }

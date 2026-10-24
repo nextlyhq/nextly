@@ -13,7 +13,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { collectionGateVerdict } from "../../../auth/access/gate-adapters";
-import { refusalMessage } from "../../../auth/access/refusal-message";
+import {
+  logRefusal,
+  refusalMessageFor,
+} from "../../../auth/access/refusal-message";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { effectiveCallerScope } from "../../../auth/caller-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
@@ -86,6 +89,12 @@ export class CollectionAccessService extends BaseService {
      * pool. Defaults to the pooled connection.
      */
     executor?: unknown;
+    /**
+     * The one entry the operation acts on, where it acts on one, so a
+     * refusal names "this post" rather than the collection. It decides
+     * nothing.
+     */
+    entryId?: string;
   }): Promise<CollectionServiceResult<T> | null> {
     const {
       collectionName,
@@ -156,8 +165,9 @@ export class CollectionAccessService extends BaseService {
     }
     // The caller is told what was refused in the site's words; which check
     // refused is logged here, on the server.
-    this.logger.info("[nextly] Refused a request", {
+    logRefusal(this.logger, {
       status: 403,
+      code: "FORBIDDEN",
       reason:
         verdict.refusal === "unauthenticated"
           ? `${operation} on ${collectionName} requires an authenticated user`
@@ -167,10 +177,14 @@ export class CollectionAccessService extends BaseService {
       success: false,
       statusCode: 403,
       code: "FORBIDDEN",
-      // Named by the service's caller, so its slug is the site's own.
-      message: refusalMessage(operation, collectionName, "all", {
-        named: true,
-      }),
+      // Named by the service's caller, so its slug is the site's own. Read
+      // on the gate's own transaction, where it runs in one.
+      message: await refusalMessageFor(
+        operation,
+        collectionName,
+        params.entryId === undefined ? "all" : "one",
+        { named: true, executor }
+      ),
       data: null as unknown as T,
     };
   }

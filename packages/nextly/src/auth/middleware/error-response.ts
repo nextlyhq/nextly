@@ -19,6 +19,7 @@ import {
 } from "../../errors/error-codes";
 import { NextlyError } from "../../errors/nextly-error";
 import { consoleLogger, type Logger } from "../../shared/types";
+import { logRefusal } from "../access/refusal-message";
 
 /**
  * Standardized error response structure.
@@ -105,15 +106,6 @@ function logger(): Logger {
   return consoleLogger;
 }
 
-/** Records which check refused, and why, on the server alone. */
-function logRefusal(refusal: ErrorResponse): void {
-  logger().info("[nextly] Refused a request", {
-    status: refusal.statusCode,
-    code: refusal.code,
-    reason: refusal.reason ?? refusal.message,
-  });
-}
-
 /**
  * The Response a refusal is answered with: `{ error: { code, message,
  * requestId } }` as `application/problem+json`, as every other error is.
@@ -124,9 +116,19 @@ export function createJsonErrorResponse(
   error: ErrorResponse,
   request?: Request
 ): Response {
-  logRefusal(error);
+  // One id for the answer and the log line, so a caller's report of the
+  // answer finds the reason it was refused for.
+  const requestId = request
+    ? readOrGenerateRequestId(request)
+    : generateRequestId();
+  logRefusal(logger(), {
+    status: error.statusCode,
+    code: error.code,
+    reason: error.reason ?? error.message,
+    requestId,
+  });
   return buildErrorResponse(refusalError(error), {
-    requestId: request ? readOrGenerateRequestId(request) : generateRequestId(),
+    requestId,
     headers: error.headers,
   });
 }

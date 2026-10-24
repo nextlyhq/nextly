@@ -1,5 +1,8 @@
 import { container } from "@nextly/di/container";
-import type { ApiKeyService } from "@nextly/domains/auth/services/api-key-service";
+import type {
+  ApiKeyRefusalCause,
+  ApiKeyService,
+} from "@nextly/domains/auth/services/api-key-service";
 import type { RBACAccessControlService } from "@nextly/domains/auth/services/rbac-access-control-service";
 import { env } from "@nextly/lib/env";
 
@@ -130,6 +133,14 @@ export interface AuthContext {
   claims?: Record<string, unknown>;
 }
 
+/** Why a presented key was refused, as the server's log says it. */
+const KEY_REFUSED_BECAUSE: Readonly<Record<ApiKeyRefusalCause, string>> = {
+  unknown: "the API key is not one this site issued",
+  revoked: "the API key is revoked",
+  expired: "the API key has expired",
+  "creator-inactive": "the API key's creator is not active",
+};
+
 /**
  * API key authentication middleware.
  *
@@ -194,9 +205,12 @@ export async function requireApiKeyAuth(req: Request): Promise<
   }
 
   // 3. Hash and look up the key — returns null for not-found, revoked, or expired
+  let cause: ApiKeyRefusalCause | undefined = known?.cause;
   const keyAuth = known
     ? known.resolved
-    : await apiKeyService.authenticateApiKey(rawKey);
+    : await apiKeyService.authenticateApiKey(rawKey, refused => {
+        cause = refused;
+      });
   if (!keyAuth) {
     // Key was present but invalid/expired/revoked — explicit 401, do NOT fall through
     // Which way the key fails is for the server's log, not the caller.
@@ -206,8 +220,9 @@ export async function requireApiKeyAuth(req: Request): Promise<
         "Invalid API key",
         "Authentication required."
       ),
-      reason:
-        "the API key is unknown, revoked, expired, or its creator is not active",
+      reason: cause
+        ? KEY_REFUSED_BECAUSE[cause]
+        : "the API key did not resolve",
     };
   }
 
@@ -406,7 +421,9 @@ export async function authorizeCaller(
         "Forbidden",
         await refusalMessageFor(action, resource, scope)
       ),
-      reason: `the caller does not hold ${action}-${resource}`,
+      // The one decision does not say whether the entity's own rule or a
+      // missing grant refused, so the reason names both rather than guess.
+      reason: `the access decision refused ${action} on ${resource}: its access rule, or no ${action}-${resource} grant`,
     };
   }
   return authResult;
@@ -420,7 +437,8 @@ export async function authorizeCaller(
  */
 export async function requireAnyPermission(
   req: Request,
-  permissions: Array<{ action: string; resource: string }>
+  permissions: Array<{ action: string; resource: string }>,
+  target?: RefusalTarget
 ): Promise<AuthContext | ErrorResponse> {
   const authResult = await requireAuthentication(req);
 
@@ -428,7 +446,32 @@ export async function requireAnyPermission(
     return authResult;
   }
 
-  return authorizeCallerForAny(authResult, permissions);
+  return authorizeCallerForAny(authResult, permissions, target);
+}
+
+/**
+ * What a refusal names as refused, where it is not what the permissions
+ * asked for say: reading a permission may be granted by `read-roles`, and is
+ * still the reading of a permission.
+ */
+export interface RefusalTarget {
+  action: string;
+  resource: string;
+}
+
+/**
+ * What an any-of refusal names: the target given, else the one thing every
+ * alternative is about. Alternatives about different things name nothing.
+ */
+function anyOfTarget(
+  permissions: ReadonlyArray<{ action: string; resource: string }>,
+  target: RefusalTarget | undefined
+): RefusalTarget | undefined {
+  if (target) return target;
+  const [first] = permissions;
+  return first && permissions.every(p => p.resource === first.resource)
+    ? first
+    : undefined;
 }
 
 /**
@@ -437,7 +480,8 @@ export async function requireAnyPermission(
  */
 export async function authorizeCallerForAny(
   authResult: AuthContext,
-  permissions: Array<{ action: string; resource: string }>
+  permissions: Array<{ action: string; resource: string }>,
+  target?: RefusalTarget
 ): Promise<AuthContext | ErrorResponse> {
   // Any one of the permissions will do, judged on the key's own grants or the
   // session's permissions, asked of the one decision.
@@ -447,9 +491,7 @@ export async function authorizeCallerForAny(
     getRBACService()
   );
   if (!verdict.allowed) {
-    // Named by the first permission it asks: the alternatives are kinds of
-    // one action on one thing (its own action, or managing it).
-    const [named] = permissions;
+    const named = anyOfTarget(permissions, target);
     return {
       ...createErrorResponse(
         403,

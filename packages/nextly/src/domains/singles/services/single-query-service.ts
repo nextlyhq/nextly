@@ -22,7 +22,10 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { inArray, type AnyColumn } from "drizzle-orm";
 
 import { singleGateVerdict } from "../../../auth/access/gate-adapters";
-import { refusalMessage } from "../../../auth/access/refusal-message";
+import {
+  logRefusal,
+  refusalMessageFor,
+} from "../../../auth/access/refusal-message";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { SYSTEM_ACTOR } from "../../../auth/request-actor";
@@ -339,8 +342,9 @@ export async function checkSingleAccess(params: {
   }
   // The caller is told what was refused in the site's words; which check
   // refused is logged here, on the server.
-  logger.info("[nextly] Refused a request", {
+  logRefusal(logger, {
     status: 403,
+    code: "FORBIDDEN",
     reason:
       verdict.refusal === "unauthenticated"
         ? `${operation} on single "${slug}" requires an authenticated user`
@@ -351,7 +355,7 @@ export async function checkSingleAccess(params: {
     statusCode: 403,
     code: "FORBIDDEN",
     // Named by the service's caller, so its slug is the site's own.
-    message: refusalMessage(operation, slug, "all", { named: true }),
+    message: await refusalMessageFor(operation, slug, "all", { named: true }),
   };
 }
 

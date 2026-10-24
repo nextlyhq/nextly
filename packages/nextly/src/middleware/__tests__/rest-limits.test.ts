@@ -568,3 +568,35 @@ describe("REST limit: where it counts", () => {
     expect(counted.length).toBeGreaterThan(0);
   });
 });
+
+describe("REST limit: a key that does not resolve", () => {
+  it("remembers why, so authentication's log can say it without a second lookup", async () => {
+    const readers = testReaders();
+    readers.lookupKey.mockImplementation(
+      async (_rawKey: string, onRefused?: (cause: "revoked") => void) => {
+        onRefused?.("revoked");
+        return null;
+      }
+    );
+    const limits = createRestLimits(
+      {
+        enabled: true,
+        readLimit: 2,
+        writeLimit: 1,
+        windowMs: 60_000,
+        trustProxy: true,
+        store: new InMemoryRateLimitStore(),
+      },
+      readers
+    );
+    const gate = openRestLimitGate(
+      limits,
+      request({ key: "revoked-k1", address: "203.0.113.7" })
+    );
+    await gate.settle("core");
+    expect(gate.knownKey("revoked-k1")).toMatchObject({
+      resolved: null,
+      cause: "revoked",
+    });
+  });
+});

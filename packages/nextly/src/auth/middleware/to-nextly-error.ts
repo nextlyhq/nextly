@@ -36,9 +36,9 @@ import type { ErrorResponse } from "./index";
  * - Anything else -> `INTERNAL_ERROR` so the boundary maps to 500. The
  *   legacy status code is preserved in `logContext` for triage.
  *
- * The legacy `message` / `error` / `code` are kept in `logContext` so
- * operators can correlate the new wire payload with the original
- * middleware decision.
+ * The legacy `message` / `error` / `code`, and the refusal's `reason`, are
+ * kept in `logContext` so operators can correlate the new wire payload with
+ * the original middleware decision.
  */
 export function toNextlyAuthError(legacy: ErrorResponse): NextlyError {
   const logContext: Record<string, unknown> = {
@@ -47,6 +47,8 @@ export function toNextlyAuthError(legacy: ErrorResponse): NextlyError {
     legacyError: legacy.error,
   };
   if (legacy.code) logContext.legacyCode = legacy.code;
+  // Which check refused, for the server's log whatever the status.
+  if (legacy.reason) logContext.reason = legacy.reason;
 
   if (legacy.statusCode === 401) {
     if (legacy.code === "TOKEN_EXPIRED") {
@@ -59,9 +61,7 @@ export function toNextlyAuthError(legacy: ErrorResponse): NextlyError {
 
   if (legacy.statusCode === 403) {
     // The middleware words every refusal for the caller (what was refused,
-    // in the site's own words), so it is passed on; its reason stays in the
-    // log context.
-    if (legacy.reason) logContext.reason = legacy.reason;
+    // in the site's own words), so it is passed on.
     return new NextlyError({
       code: "FORBIDDEN",
       publicMessage: legacy.error || legacy.message,

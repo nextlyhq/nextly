@@ -49,6 +49,7 @@ import {
 import {
   openRestLimitGate,
   type ApiKeyMemory,
+  type KnownApiKey,
   type PersonResolution,
   type RestLimitDecider,
   type RestLimitTarget,
@@ -330,7 +331,10 @@ class RestLimits implements RestLimitDecider {
     const before = await this.boundBefore(bound);
     if ("refused" in before) return this.refusal(request, before.refused);
     try {
-      const resolved = await this.readers.lookupKey(rawKey);
+      let cause: KnownApiKey["cause"];
+      const resolved = await this.readers.lookupKey(rawKey, refused => {
+        cause = refused;
+      });
       if (resolved) {
         keys.remember(rawKey, { resolved, debited: true });
         return await this.readers.debitKey(resolved.id, request);
@@ -338,7 +342,7 @@ class RestLimits implements RestLimitDecider {
       // A key that does not resolve is answered without a second lookup; one
       // nothing could ask about is left for authentication to ask again.
       if (resolved === null) {
-        keys.remember(rawKey, { resolved, debited: false });
+        keys.remember(rawKey, { resolved, debited: false, cause });
       }
       return await this.spendBound(request, bound, before);
     } finally {

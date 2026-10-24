@@ -46,4 +46,34 @@ describe("a refusal's reason", () => {
     expect(body).toContain("You can't edit this post.");
     expect(body).not.toContain("update-posts");
   });
+
+  it("carries the id the caller is answered with", async () => {
+    info.mockClear();
+    // No id of the request's own, so the one answered is made here, once.
+    const request = new Request("http://localhost/api/posts");
+    const res = createJsonErrorResponse(
+      {
+        ...createErrorResponse(403, "Forbidden", "You can't edit this post."),
+        reason: "the caller does not hold update-posts",
+      },
+      request
+    );
+    const answered = res.headers.get("x-request-id");
+    expect(answered).toMatch(/^req_/);
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining("Refused"),
+      expect.objectContaining({ requestId: answered })
+    );
+  });
+
+  it("is still answered when the logger fails", async () => {
+    info.mockImplementationOnce(() => {
+      throw new Error("the log transport is down");
+    });
+    const res = createJsonErrorResponse(
+      createErrorResponse(403, "Forbidden", "You can't edit this post.")
+    );
+    expect(res.status).toBe(403);
+    expect(await res.text()).toContain("You can't edit this post.");
+  });
 });

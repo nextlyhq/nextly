@@ -5826,6 +5826,7 @@ export class CollectionMutationService extends BaseService {
       const accessDenied = await this.accessService.checkCollectionAccess({
         collectionName: params.collectionName,
         operation: "update",
+        entryId: params.entryId,
         user: accessUser,
         overrideAccess: params.overrideAccess,
         // The route already ran the `update` gate (against the API key's scope,
@@ -5893,6 +5894,7 @@ export class CollectionMutationService extends BaseService {
       const publishDenied = await this.accessService.checkCollectionAccess({
         collectionName: params.collectionName,
         operation: direction.accessAction,
+        entryId: params.entryId,
         user: accessUser,
         overrideAccess: params.overrideAccess,
         // Not route-authorized as publish: the POST was authorized as `update`,
@@ -6785,6 +6787,7 @@ export class CollectionMutationService extends BaseService {
     const denied = await this.accessService.checkCollectionAccess({
       collectionName: params.collectionName,
       operation: "update",
+      entryId: params.entryId,
       user: params.user,
       // Never overridden: this exists to APPLY the document's rules, so a
       // caller that could opt out of them would defeat the point.
@@ -7924,6 +7927,7 @@ export class CollectionMutationService extends BaseService {
       const accessDenied = await this.accessService.checkCollectionAccess({
         collectionName: params.collectionName,
         operation: "update",
+        entryId: params.entryId,
         user: accessUser,
         overrideAccess: params.overrideAccess,
         routeAuthorized: params.routeAuthorized,
@@ -8284,6 +8288,7 @@ export class CollectionMutationService extends BaseService {
           {
             collectionName: params.collectionName,
             operation: transitionOp,
+            entryId: params.entryId,
             user: accessUser,
             overrideAccess: params.overrideAccess,
             // Never route-authorized: the route authorizes the write as `update`,
@@ -10393,6 +10398,7 @@ export class CollectionMutationService extends BaseService {
       const accessDenied = await this.accessService.checkCollectionAccess({
         collectionName: params.collectionName,
         operation: "delete",
+        entryId: params.entryId,
         user: accessUser,
         overrideAccess: params.overrideAccess,
         routeAuthorized: params.routeAuthorized,
@@ -11420,6 +11426,7 @@ export class CollectionMutationService extends BaseService {
         const accessDenied = await this.accessService.checkCollectionAccess({
           collectionName: params.collectionName,
           operation: "update",
+          entryId: entryId,
           user: params.user,
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
