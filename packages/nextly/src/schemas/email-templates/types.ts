@@ -295,11 +295,17 @@ export interface EmailTemplateRecord extends EmailTemplateInsert {
   /** Row kind (required on record). */
   kind: EmailTemplateKind;
 
-  /** Written or coded (required on record); a row stored before written templates is coded. */
-  format: TemplateFormat;
+  /**
+   * @experimental Written or coded. Every record the service returns has it;
+   * absent reads as coded, as a row stored before written templates is.
+   */
+  format?: TemplateFormat;
 
-  /** A written template's blocks (required on record, null for a coded one). */
-  blocks: WrittenDocument | null;
+  /**
+   * @experimental A written template's blocks: null, or absent, for a coded
+   * one.
+   */
+  blocks?: WrittenDocument | null;
 
   /** Wrapping layout id (required on record, nullable). */
   layoutId: string | null;

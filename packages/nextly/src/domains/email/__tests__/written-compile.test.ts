@@ -143,6 +143,9 @@ describe("values written safely for where they sit", () => {
     ["data:text/html,x", ""],
     ["https://example.com/a?b=1&c=2", "https://example.com/a?b=1&amp;c=2"],
     ["mailto:hi@example.com", "mailto:hi@example.com"],
+    ["https://", ""],
+    ["https:///path", ""],
+    ["mailto:", ""],
     [
       `https://x.test/"onmouseover="alert(1)`,
       "https://x.test/&quot;onmouseover=&quot;alert(1)",
@@ -156,6 +159,19 @@ describe("values written safely for where they sit", () => {
     const out = html(d, { url });
     expect(out).toContain(`<a href="${expected}"`);
     expect(out).toContain(`href="${expected}" style="height:44px`);
+  });
+
+  it("writes a link chip's fallback address as it is in plain text", () => {
+    const d = doc({
+      type: "button",
+      label: [{ type: "text", text: "Go" }],
+      link: {
+        chip: { variable: "url", fallback: "https://example.test/?a=1&b=2" },
+      },
+    });
+    expect(text(d)).toContain("(https://example.test/?a=1&b=2)");
+    // The control: the HTML part escapes it as an attribute.
+    expect(html(d)).toContain(`href="https://example.test/?a=1&amp;b=2"`);
   });
 
   it("allows only web addresses for an image from a chip", () => {
@@ -224,6 +240,24 @@ describe("the stored form", () => {
       { type: "text", text: [{ type: "chip", variable: "a | upcase" }] },
     ],
     ["a block it does not know", { type: "video" }],
+    ...["https://", "https:///path", "mailto:"].map(
+      (url): [string, unknown] => [
+        `a link to "${url}", which points nowhere`,
+        {
+          type: "button",
+          label: [{ type: "text", text: "x" }],
+          link: { url },
+        },
+      ]
+    ),
+    [
+      'an image at "https://", which points nowhere',
+      {
+        type: "image",
+        src: { url: "https://" },
+        alt: [{ type: "text", text: "x" }],
+      },
+    ],
     [
       "a chip reading a name the compiled email assigns",
       { type: "text", text: [{ type: "chip", variable: "nextly_shown" }] },

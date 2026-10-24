@@ -23,6 +23,7 @@ import { escapeHtml } from "../services/template-engine";
 import {
   COMPILER_NAMES,
   LIST_ITEM,
+  WRITTEN_LINK_CLASS,
   type Chip,
   type Condition,
   type ContentBlock,
@@ -58,7 +59,12 @@ function attribute(text: string): string {
 function chip(c: Chip, target: Target, filter = ""): string {
   const value = `{{ ${c.variable}${filter} }}`;
   if (c.fallback === undefined || c.fallback === "") return value;
-  const fallback = filter ? attribute(c.fallback) : literal(c.fallback, target);
+  // A fallback address is an attribute in HTML, and the address as it is in
+  // plain text.
+  const fallback =
+    filter && target === "html"
+      ? attribute(c.fallback)
+      : literal(c.fallback, target);
   return `{% if ${c.variable} == nil or ${c.variable} == "" %}${fallback}{% else %}${value}{% endif %}`;
 }
 
@@ -91,7 +97,9 @@ function rich(parts: ReadonlyArray<Inline>, target: Target): string {
         if (part.bold) out = `<strong>${out}</strong>`;
         if (part.italic) out = `<em>${out}</em>`;
         if (part.link) {
-          out = `<a href="${href(part.link)}" style="color: {{ nextly_brand.accentColor }}; text-decoration: underline;">${out}</a>`;
+          // The class is what keeps the link readable on the default
+          // layout's dark card (`brand-settings` darkModeRules).
+          out = `<a class="${WRITTEN_LINK_CLASS}" href="${href(part.link)}" style="color: {{ nextly_brand.accentColor }}; text-decoration: underline;">${out}</a>`;
         }
       } else if (part.link) {
         out = `${out} (${textHref(part.link)})`;
