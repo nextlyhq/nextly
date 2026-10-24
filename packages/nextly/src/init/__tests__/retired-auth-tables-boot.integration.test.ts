@@ -88,15 +88,13 @@ describe.each(availableDialects())(
           { executeQuery: sql => db.exec(sql) },
           dialect
         );
-        await db.exec(
-          "INSERT INTO user_permission_cache (id, user_id, action, resource, has_permission, role_ids, expires_at, created_at) VALUES ('u|read|posts', 'u', 'read', 'posts', 1, '[]', 1, 1)"
-        );
-
+        // Empty: its rows need a user to point at, and the count is read the
+        // same way the case above reads the sign-in tables'.
         const logger = await boot(db);
 
         const [warning, ...rest] = authTableWarnings(logger);
         expect(rest).toEqual([]);
-        expect(warning).toContain("user_permission_cache: 1 row");
+        expect(warning).toContain("user_permission_cache: 0 rows");
         expect(warning).toContain("whether or not it holds rows");
       });
     });

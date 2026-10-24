@@ -29,6 +29,7 @@ import { PermissionService } from "../../domains/auth/services/permission-servic
 import {
   createStoredPermissionAnswersTable,
   insertRow,
+  storedAnswerRow,
 } from "../../init/__tests__/retired-auth-tables-fixture";
 
 import {
@@ -53,17 +54,28 @@ let harness: TestNextly | undefined;
  * "yes" for `userId`, as an instance on an earlier release would have filed it.
  */
 async function leftoverStoredAnswers(userId: string): Promise<void> {
+  // The table keeps its foreign key to `users`, so the user must exist.
+  try {
+    await rawDb()
+      .insert(getDialectTables().users)
+      .values({
+        id: userId,
+        email: `${userId}@example.com`,
+        name: userId,
+        isActive: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+  } catch {
+    // Already there, as a deputy's owner is.
+  }
   await createStoredPermissionAnswersTable(harness!.adapter, "sqlite");
-  await insertRow(harness!.adapter, "sqlite", "user_permission_cache", [
-    `${userId}|read|notes`,
-    userId,
-    "read",
-    "notes",
-    1,
-    "[]",
-    Date.now() + 300_000,
-    Date.now(),
-  ]);
+  await insertRow(
+    harness!.adapter,
+    "sqlite",
+    "user_permission_cache",
+    storedAnswerRow("sqlite", { id: `${userId}|read|notes`, userId })
+  );
 }
 
 /** The stored answers an earlier release would still read. */
