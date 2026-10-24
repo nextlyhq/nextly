@@ -95,6 +95,7 @@ export async function keepDeniedAtStoredOnUpdate(params: {
         operation: "update",
         access: params.access,
         executor: params.executor,
+        stored: params.stored,
       });
     },
   });
@@ -119,22 +120,33 @@ export async function applyInlineFieldGroupWriteAccess(params: {
   access: FieldGroupWriteAccess;
   /** The write's transaction-bound executor, when it holds a connection. */
   executor?: unknown;
+  /**
+   * An update's stored document, with the instances it holds in their own
+   * tables. An instance there the update adds is created by it, and so is
+   * what that instance holds inline, as its save judges it: without it, an
+   * inline instance is judged by `operation` wherever it is held.
+   */
+  stored?: Record<string, unknown>;
 }): Promise<void> {
   const { access, operation } = params;
   if (access.overrideAccess) return;
   if (!anyFieldGroupHasAccessRule(operation)) return;
+  const fieldGroupFields = await resolveFieldGroupFields(
+    params.fields,
+    params.source,
+    params.executor
+  );
   await judgeFieldGroupInstances({
     data: params.data,
     fields: params.fields,
-    fieldGroupFields: await resolveFieldGroupFields(
-      params.fields,
-      params.source,
-      params.executor
-    ),
+    fieldGroupFields,
     operation,
     access: withGrants(access, params.executor),
     // One stored in its own table is judged by the save that writes it there.
     inlineOnly: true,
+    existing: params.stored
+      ? await storedInstanceKeys(params.stored, params.fields, fieldGroupFields)
+      : undefined,
   });
 }
 
@@ -346,20 +358,46 @@ function instanceKey(field: string, slug: string, id: string): string {
   return `${field}\u0000${slug}\u0000${id}`;
 }
 
-/** The identities of the instances `document` holds in their own tables. */
+/**
+ * The key a single field group's field has its stored instance under,
+ * whatever id an instance is sent with: the save updates the row that field's
+ * instance is, so any instance sent for it is that row. A dynamic zone's
+ * blocks, even a single one, are matched by id.
+ */
+function singleInstanceKey(field: string, slug: string): string {
+  return instanceKey(field, slug, "");
+}
+
+/**
+ * The instances `document` holds in their own tables, each by its identity,
+ * to the id it is stored under; a single field group's has it under
+ * {@link singleInstanceKey} as well.
+ */
 async function storedInstanceKeys(
   document: Record<string, unknown>,
   fields: readonly FieldConfig[],
   fieldGroupFields: FieldGroupFieldsBySlug
-): Promise<Set<string>> {
-  const keys = new Set<string>();
+): Promise<Map<string, string>> {
+  const holdsOne = new Set(
+    directFieldGroupFields(fields)
+      .filter(
+        field =>
+          (field as { repeatable?: unknown }).repeatable !== true &&
+          extractFieldGroupReferences(field).many === undefined
+      )
+      .map(nameOf)
+  );
+  const keys = new Map<string, string>();
   await forEachFieldGroupInstance(
     detachData(document),
     fields,
     fieldGroupFields,
     ({ instance, slug, field, inline }) => {
       if (!inline && typeof instance.id === "string") {
-        keys.add(instanceKey(field, slug, instance.id));
+        keys.set(instanceKey(field, slug, instance.id), instance.id);
+        if (holdsOne.has(field)) {
+          keys.set(singleInstanceKey(field, slug), instance.id);
+        }
       }
       return Promise.resolve();
     },
@@ -608,13 +646,14 @@ function directFieldGroupFields(fields: readonly FieldConfig[]): FieldConfig[] {
 /**
  * Whether an instance the walk reaches is new, and the stored id it is
  * judged with: one in its own table is new where `existing` does not hold
- * it, and one held inline is created with the instance it is held in.
- * `created` collects the new instances in their own tables, which the walk
- * reaches before what they hold.
+ * it, by its id or as its field's one instance, as the save tells; one held
+ * inline is created with the instance it is held in. `created` collects the
+ * new instances in their own tables, which the walk reaches before what they
+ * hold.
  */
 function standingOf(
   reached: FieldGroupInstanceVisit,
-  existing: ReadonlySet<string> | undefined,
+  existing: ReadonlyMap<string, string> | undefined,
   created: WeakSet<object>
 ): { isNew: boolean; storedId: string | undefined } {
   const { instance, slug, field, inline, outer } = reached;
@@ -625,11 +664,14 @@ function standingOf(
     };
   }
   const id = typeof instance.id === "string" ? instance.id : undefined;
-  const storedHere =
-    id !== undefined && existing?.has(instanceKey(field, slug, id)) === true;
-  const isNew = existing !== undefined && !storedHere;
+  const storedId =
+    (id === undefined
+      ? undefined
+      : existing?.get(instanceKey(field, slug, id))) ??
+    existing?.get(singleInstanceKey(field, slug));
+  const isNew = existing !== undefined && storedId === undefined;
   if (isNew) created.add(instance);
-  return { isNew, storedId: storedHere ? id : undefined };
+  return { isNew, storedId };
 }
 
 /** The one judgment both passes make, over the instances the walk reaches. */
@@ -641,13 +683,13 @@ async function judgeFieldGroupInstances(params: {
   access: FieldGroupWriteAccess;
   inlineOnly: boolean;
   /**
-   * The identities of the instances already stored in their own tables
+   * The instances already stored in their own tables
    * (`storedInstanceKeys`). Given, one in its own table that is not among
    * them is new, and judged as a create; an inline one has no row of its own,
    * and is created with the instance it is held in when that one is new, and
    * otherwise takes `operation`, the document's.
    */
-  existing?: ReadonlySet<string>;
+  existing?: ReadonlyMap<string, string>;
 }): Promise<void> {
   const { access, existing } = params;
   const created = new WeakSet<object>();
