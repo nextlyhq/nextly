@@ -282,6 +282,7 @@ export type {
   WidgetSetting,
   WidgetAction,
   WidgetStatCell,
+  WidgetQueryCell,
   WidgetHeight,
   WidgetSize,
   WidgetChrome,
@@ -325,7 +326,10 @@ export {
   type GetStartedStepKind,
   type GetStartedStepStatus,
 } from "./domains/widgets/get-started-steps";
-export type { WidgetQuery } from "./domains/widgets/query";
+export type {
+  SourcelessWidgetQuery,
+  WidgetQuery,
+} from "./domains/widgets/query";
 // A VALUE, and for the same reason as the batch limit below: the admin resolves
 // a contributed widget's deprecated `size` alias into the enum, and so does the
 // server when it reduces the same declaration to a canonical summary. Two

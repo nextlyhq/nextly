@@ -755,19 +755,24 @@ describe("a widget whose data core builds on the server", () => {
       label: "Collection",
       type: "collection",
     };
-    // A Filter no knob of a registered widget's query drives yet: the widget
-    // whose data core builds holds it, and one with its own query may not.
     const filter = {
       name: "filter",
       label: "Filter",
       type: "filter",
       of: "collection",
     };
+    // The widget whose data core builds holds them. One with its own query
+    // over a source no content knob drives, a system source, may not: there
+    // they would change nothing its card asks.
     expect(() =>
       validateWidgetDefinition({ ...built, settings: [collection, filter] })
     ).not.toThrow();
     expect(() =>
-      validateWidgetDefinition({ ...valid, settings: [collection, filter] })
+      validateWidgetDefinition({
+        ...valid,
+        query: { ...valid.query, source: "system:releases" },
+        settings: [collection, filter],
+      })
     ).toThrow(/WIDGET_CONTENT_SETTING_NOT_DRAWN/);
   });
 });
@@ -822,5 +827,89 @@ describe("a widget's width terms", () => {
     expect(() =>
       validateWidgetDefinition({ ...valid, allowsSeveral: "yes" })
     ).toThrow(/allowsSeveral must be true or false/);
+  });
+});
+
+describe("a query whose source a Collection setting supplies", () => {
+  const { source: _declared, ...sourceless } = valid.query;
+  const collection = { name: "collection", type: "collection" as const };
+
+  it("registers with no source of its own beside a Collection setting", () => {
+    expect(() =>
+      validateWidgetDefinition({
+        ...valid,
+        offered: "per-collection",
+        settings: [collection],
+        query: sourceless,
+      })
+    ).not.toThrow();
+  });
+
+  it("is refused with no source and nothing to supply one", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...valid, query: sourceless })
+    ).toThrow(/names no source, and no Collection setting supplies one/);
+  });
+
+  it("reads its declared source until the Collection setting is set", () => {
+    // The declared source is the card's collection until its reader picks one,
+    // so a definition may state both.
+    expect(() =>
+      validateWidgetDefinition({ ...valid, settings: [collection] })
+    ).not.toThrow();
+  });
+});
+
+describe("a custom card's cells", () => {
+  const collection = { name: "collection", type: "collection" as const };
+  const card = {
+    id: "core/count",
+    title: "Count",
+    archetype: "custom" as const,
+    component: "core#Count",
+    defaultSize: "sm" as const,
+  };
+  const split = {
+    key: "split",
+    query: {
+      op: "groupBy" as const,
+      groupBy: "status",
+      status: "all" as const,
+    },
+  };
+  const trend = {
+    key: "trend",
+    query: {
+      op: "timeseries" as const,
+      dateField: "createdAt",
+      interval: "day" as const,
+    },
+  };
+
+  it("registers keyed reads whose source the Collection setting supplies", () => {
+    expect(() =>
+      validateWidgetDefinition({
+        ...card,
+        offered: "per-collection",
+        settings: [collection],
+        cells: [split, trend],
+      })
+    ).not.toThrow();
+  });
+
+  it("refuses two cells under one key", () => {
+    expect(() =>
+      validateWidgetDefinition({
+        ...card,
+        settings: [collection],
+        cells: [split, { ...trend, key: "split" }],
+      })
+    ).toThrow(/declare the key "split" more than once/);
+  });
+
+  it("refuses a cell with no source and nothing to supply one", () => {
+    expect(() => validateWidgetDefinition({ ...card, cells: [split] })).toThrow(
+      /its cell "split" names no source, and no Collection setting supplies one/
+    );
   });
 });

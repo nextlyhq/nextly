@@ -24,6 +24,7 @@ import {
   type WidgetCondition,
 } from "./lifecycle";
 import { onboardingIsIncomplete } from "./onboarding";
+import { queryableSlugs } from "./reader-content";
 
 /**
  * Whether this reader can see any content at all.
@@ -113,20 +114,34 @@ async function contentIsPresent(probe: ConditionProbe): Promise<boolean> {
 }
 
 /**
- * Whether this reader could create an entry in some collection: the probe's one
- * create decision, the same the Get started card's first-entry step reads.
+ * Whether the Create card would offer this reader anything: a collection they
+ * may create in that the card offers, which leaves out any whose definition
+ * turns creating off. Asked over the card's own eligibility, so the card is
+ * never offered to draw nothing.
  */
 function createIsAvailable(probe: ConditionProbe): Promise<boolean> {
-  return probe.mayCreateEntry();
+  return probe.mayCreateOnDashboard();
 }
 
 /**
- * Whether this reader may read any kind Needs attention counts: content (its
- * unpublished changes), or releases (due and overdue). Asked in that order, so
- * a reader with content needs no release decision at all.
+ * Whether this reader may read any kind Needs attention can count: content
+ * with a published source (its unpublished changes), or releases (due and
+ * overdue). Content first, so a reader with some needs no release decision.
+ *
+ * Content with a published source, not every readable entry in the registry:
+ * the card counts only what a widget may query, and a collection whose
+ * migration is pending or failed has no source, so offered on it alone the
+ * card would answer "not available".
  */
 async function attentionIsReadable(probe: ConditionProbe): Promise<boolean> {
-  return (await contentIsPresent(probe)) || probe.mayReadReleases();
+  const [collections, singles] = await Promise.all([
+    probe.readableSlugs(),
+    probe.readableSingles(),
+  ]);
+  const countable =
+    queryableSlugs("collection", collections).length > 0 ||
+    queryableSlugs("single", singles).length > 0;
+  return countable || probe.mayReadReleases();
 }
 
 /** Whether a release exists that this reader may read. */

@@ -117,7 +117,7 @@ import {
   markWriteIntegrityFailure,
 } from "../../../shared/write-integrity";
 import type { SupportedDialect } from "../../../types/database";
-import { carriesContent } from "../../audit/lifecycle-fields";
+import { editsOver } from "../../audit/lifecycle-fields";
 import { willRecordMutationActivity } from "../../audit/record-activity";
 import {
   recordSaveEvent,
@@ -9016,7 +9016,24 @@ export class CollectionMutationService extends BaseService {
                 updatedAt: updatePayload.updatedAt,
               };
               promotedDraft = true;
-              promotionCarriesContent = carriesContent(callerContribution);
+              // What the caller sent that differs from the draft it promotes,
+              // the draft read as the same kind of document: an echo of the
+              // draft, or a system field the write ignores, is no edit.
+              promotionCarriesContent = editsOver(
+                this.deserializeJsonFieldsForSnapshot(
+                  this.assemblePromotedDocument(
+                    draftInput,
+                    {},
+                    {},
+                    {},
+                    fields,
+                    manyToManyFields,
+                    splitComponentSchemas
+                  ),
+                  fields
+                ),
+                callerContribution
+              );
             }
           }
 

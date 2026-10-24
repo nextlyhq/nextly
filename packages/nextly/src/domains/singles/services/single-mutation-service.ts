@@ -79,7 +79,7 @@ import {
 } from "../../../shared/lib/password-fields";
 import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import type { Logger } from "../../../shared/types";
-import { carriesContent } from "../../audit/lifecycle-fields";
+import { editsOver } from "../../audit/lifecycle-fields";
 import { willRecordSingleActivity } from "../../audit/record-activity";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
 import {
@@ -2170,12 +2170,27 @@ export class SingleMutationService extends BaseService {
                   }
                 }
                 // Read before the draft's components are written into the
-                // caller's below: the caller's own values alone, its scalars and
-                // the component values it sent.
-                const callerCarriesContent = carriesContent({
-                  ...currentData,
-                  ...attemptComponentFields,
-                });
+                // caller's below: the caller's own values alone, each compared
+                // with the draft's, its scalars against the draft document and
+                // its components tagged as the draft holds them. An echo of the
+                // draft, or a system field the write ignores, is no edit.
+                const callerCarriesContent =
+                  editsOver(
+                    snapshotRecord(pendingDraft.snapshot),
+                    currentData
+                  ) ||
+                  editsOver(
+                    draftComponentValues(
+                      pendingDraft.snapshot as Record<string, unknown>,
+                      fieldConfigs
+                    ),
+                    tagComponentTypes(
+                      attemptComponentFields,
+                      fieldConfigs,
+                      componentSlug =>
+                        singleComponentSchemas?.get(componentSlug)?.fields
+                    )
+                  );
                 // The caller's own payload wins over the pending change: a
                 // publish that also sets a field is saying something about that
                 // field now.

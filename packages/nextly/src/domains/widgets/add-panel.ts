@@ -45,6 +45,7 @@ const CORE_GROUPS = {
   "core/recently-edited": "overview",
   "core/upcoming-releases": "overview",
   "core/recent-activity": "team",
+  "core/count": "content",
 } as const satisfies Record<CoreWidgetId, AddPanelGroup>;
 
 /** A built-in's place in core's own order, for Overview's first rows. */
@@ -62,6 +63,11 @@ export interface AddPanelFacts {
   category?: string;
   /** Which sketch draws its row: the widget's archetype. */
   sketch: string;
+  /**
+   * Listed once per collection the reader may read, each row adding a card
+   * set to that collection. @experimental
+   */
+  perCollection?: true;
 }
 
 function isCoreWidgetId(id: string): id is CoreWidgetId {
@@ -82,6 +88,10 @@ function placeOf(
   }
   // Retired, so not offered; see the module note.
   if (widget.generated === true) return undefined;
+  // Offered inside each collection's part of the Content group: the admin
+  // lists it once per collection the reader may read, from the collections it
+  // already holds, so no collection is named here.
+  if (widget.offered === "per-collection") return { group: "content" };
   if (isCoreWidgetId(widget.id)) return { group: CORE_GROUPS[widget.id] };
   // The site's own: beside the built-ins, since it is the site's.
   return { group: "overview" };
@@ -103,6 +113,7 @@ export function addPanelFacts(
       : { description: widget.description }),
     ...(widget.category === undefined ? {} : { category: widget.category }),
     sketch: widget.sketch ?? widget.archetype ?? "custom",
+    ...(widget.offered === "per-collection" ? { perCollection: true } : {}),
   };
 }
 

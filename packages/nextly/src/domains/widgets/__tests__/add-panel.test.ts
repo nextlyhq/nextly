@@ -17,7 +17,7 @@ import { CORE_WIDGETS } from "../core-widgets";
 const core = (id: string): CanonicalWidget => ({ id });
 
 describe("the group each widget is listed in", () => {
-  it("puts the team's two built-ins under Team and every other built-in under Overview", () => {
+  it("puts the team's two built-ins under Team, Count under Content, and every other built-in under Overview", () => {
     const groups = Object.fromEntries(
       CORE_WIDGETS.map(definition => [
         definition.id,
@@ -34,6 +34,8 @@ describe("the group each widget is listed in", () => {
       "core/recently-edited": "overview",
       "core/upcoming-releases": "overview",
       "core/recent-activity": "team",
+      // Offered per collection, inside each collection's part of Content.
+      "core/count": "content",
     });
   });
 

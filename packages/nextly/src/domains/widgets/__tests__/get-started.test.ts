@@ -64,6 +64,7 @@ function probeOf(world: World): ConditionProbe {
     hasContent: async () => world.content ?? false,
     mayCreateEntry: async () => world.createEntry ?? false,
     mayCreateCollection: async () => world.createCollection ?? false,
+    mayCreateOnDashboard: async () => false,
     mayReadReleases: async () => false,
     releasesExist: async () => false,
     getStarted: () => {

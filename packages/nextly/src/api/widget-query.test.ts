@@ -956,6 +956,42 @@ describe("POST /api/dashboard/query", () => {
   });
 });
 
+describe("the batch's one instant", () => {
+  it("measures every query in a batch from the same moment, each handed its own copy", async () => {
+    const res = await postWidgetQuery(
+      makeReq({
+        queries: [
+          { source: "collection:posts", op: "count" },
+          {
+            source: "collection:posts",
+            op: "count",
+            where: { status: { equals: "a" } },
+          },
+          {
+            source: "collection:posts",
+            op: "count",
+            where: { status: { equals: "b" } },
+          },
+        ],
+      })
+    );
+    expect(res.status).toBe(200);
+    const instants = executeWidgetQuery.mock.calls.map(
+      call => (call[2] as { now?: Date } | undefined)?.now
+    );
+    expect(instants).toHaveLength(3);
+    const [first, ...rest] = instants;
+    expect(first).toBeInstanceOf(Date);
+    // The same moment for all three: a "last 30 days" and its neighbour
+    // cannot straddle two instants.
+    for (const instant of rest) {
+      expect(instant?.getTime()).toBe(first?.getTime());
+      // A copy each, so a resolver that moves its own cannot move the next.
+      expect(instant).not.toBe(first);
+    }
+  });
+});
+
 describe("a body that is not JSON at all", () => {
   /** A request whose body the JSON parser cannot finish reading. */
   function makeRawReq(raw: string): Request {

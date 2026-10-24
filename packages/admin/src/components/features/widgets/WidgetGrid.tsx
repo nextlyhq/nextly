@@ -24,6 +24,7 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
+import type { PublishedContentSource } from "nextly/config";
 import {
   useMemo,
   useRef,
@@ -150,7 +151,8 @@ function NothingToDraw({
 function askedWith(
   rows: ArrangedWidget[],
   dashboardWidth: number | undefined,
-  editing: boolean
+  editing: boolean,
+  sources: readonly PublishedContentSource[] | undefined
 ): Array<ArrangedWidget & { tier?: SizeTier; editing?: true }> {
   return rows.map(row => {
     // A card core answers on the server is asked by its id at rest, and with
@@ -166,7 +168,7 @@ function askedWith(
       dashboardWidth
     );
     const sized = tier ? { ...row, tier } : row;
-    const widget = widgetAsAsked(row.widget, row.config);
+    const widget = widgetAsAsked(row.widget, row.config, sources);
     // The declared query travels with the asked one, so the batch keys the card by what it
     // declares and a change of its settings asks this card again alone.
     return widget === row.widget
@@ -197,12 +199,15 @@ function useCardsAtDashboardWidth(
 ) {
   const dashboardRef = useRef<HTMLDivElement>(null);
   const dashboardWidth = useDashboardWidth(dashboardRef);
+  // The collections the reader may read, with their fields: what a card's content settings are
+  // asked against.
+  const sources = useBranding().widgetSources;
   const cards = useMemo(
     () =>
       dashboardWidth === undefined
         ? NO_CARDS
-        : askedWith(visible, dashboardWidth, editing),
-    [visible, dashboardWidth, editing]
+        : askedWith(visible, dashboardWidth, editing, sources),
+    [visible, dashboardWidth, editing, sources]
   );
   const band =
     dashboardWidth === undefined ? undefined : bandForWidth(dashboardWidth);
