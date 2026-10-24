@@ -13,7 +13,8 @@ import {
 } from "vitest";
 
 import { defineConfig } from "../collections/config/define-config";
-import { isServicesRegistered, registerServices } from "../di/register";
+import { registerServices } from "../di/register";
+import { isServicesRegistered } from "../di/service-access";
 import { buildServiceConfig } from "../init/build-service-config";
 import {
   getCachedNextly,

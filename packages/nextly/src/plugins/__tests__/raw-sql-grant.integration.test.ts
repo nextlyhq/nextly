@@ -14,7 +14,7 @@
 import { afterEach, expect, it } from "vitest";
 
 import { buildAuthRouterDeps } from "../../auth/handlers/deps-bridge";
-import { getService } from "../../di/register";
+import { getService } from "../../di/service-access";
 import type { AuthUserId } from "../../types/auth";
 import type { PluginDefinition } from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
