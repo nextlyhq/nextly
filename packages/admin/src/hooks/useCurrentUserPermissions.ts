@@ -17,6 +17,7 @@ import type {
 } from "../types/permissions";
 
 import {
+  CURRENT_USER_CAPABILITIES_KEY,
   CURRENT_USER_PERMISSIONS_KEY,
   currentUserCapabilitiesKey,
   invalidateCurrentUserAccess,
@@ -485,6 +486,20 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
         : false,
   });
   const refetchAnswer = answer.refetch;
+  // A fresh answer in one language is newer than every other language's
+  // cached one, which may be from before a change to roles or rules. Those
+  // are marked stale without being fetched, so returning to a language asks
+  // again rather than restoring its older answer.
+  const languageAnsweredAt = answer.dataUpdatedAt;
+  useEffect(() => {
+    if (languageAnsweredAt === 0) return;
+    const shown = JSON.stringify(capabilitiesKey);
+    void queryClient.invalidateQueries({
+      queryKey: CURRENT_USER_CAPABILITIES_KEY,
+      predicate: query => JSON.stringify(query.queryKey) !== shown,
+      refetchType: "none",
+    });
+  }, [languageAnsweredAt, queryClient, capabilitiesKey]);
 
   // The answer stops holding when the soonest role assignment ends, and so
   // does the permission list beside it. Then both are asked again, and until

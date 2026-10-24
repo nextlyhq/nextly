@@ -535,6 +535,48 @@ describe("useCurrentUserPermissions", () => {
     expect(later.result.current.hasPermission("read-posts")).toBe(false);
   });
 
+  it("asks again in a language returned to after a newer answer in another", async () => {
+    // A client that keeps a language's answer once nothing shows it, as the
+    // app's does, so switching back would restore it from the cache.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    onScreen.locale = "fr";
+    server.capabilities = answering({ read: true });
+    const { result, rerender } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+    onScreen.locale = "de";
+    rerender();
+    await waitFor(() =>
+      expect(server.asked).toContain("/me/capabilities?locale=de")
+    );
+
+    // A rule changes, and the German answer is asked again and refuses.
+    server.capabilities = answering({ read: false });
+    await act(async () => {
+      result.current.retry();
+    });
+    await waitFor(() =>
+      expect(result.current.canAccessCollection("posts", "read")).toBe(false)
+    );
+
+    // Back to French: its older cached answer is not restored as current.
+    const frenchAsks = server.asked.filter(
+      p => p === "/me/capabilities?locale=fr"
+    ).length;
+    onScreen.locale = "fr";
+    rerender();
+    await waitFor(() =>
+      expect(
+        server.asked.filter(p => p === "/me/capabilities?locale=fr").length
+      ).toBe(frenchAsks + 1)
+    );
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+    expect(result.current.canAccessCollection("posts", "read")).toBe(false);
+  });
+
   it("asks once at an end, however many callers are mounted", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     server.capabilities = answering({ read: true }, Date.now() + 60_000);

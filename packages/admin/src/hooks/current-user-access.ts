@@ -67,11 +67,18 @@ export function withAccessRefresh<TId, TData, TError, TContext>(
     if (changes(result)) invalidateCurrentUserAccess(queryClient);
     return result;
   };
+  // A caller's callback that throws rejects the run after its edits have
+  // landed, so the refresh is made on that path too, with nothing to say
+  // whether one of them could have changed access.
+  const afterFailure = (error: unknown): never => {
+    invalidateCurrentUserAccess(queryClient);
+    throw error;
+  };
   return {
     ...bulk,
     mutate: (ids, context, options) =>
-      bulk.mutate(ids, context, options).then(afterRun),
+      bulk.mutate(ids, context, options).then(afterRun, afterFailure),
     mutateAsync: (ids, context, options) =>
-      bulk.mutateAsync(ids, context, options).then(afterRun),
+      bulk.mutateAsync(ids, context, options).then(afterRun, afterFailure),
   };
 }

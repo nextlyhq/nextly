@@ -212,3 +212,35 @@ describe("a user edit, by whom it edits", () => {
     ).toBe(true);
   });
 });
+
+describe("a bulk role edit whose own callback throws", () => {
+  it("still asks again what the user may do, the edit having landed", async () => {
+    vi.mocked(updateRole).mockResolvedValue(undefined);
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useBulkUpdateRoles(), {
+      wrapper: wrapperFor(client),
+    });
+    const throwing = (): void => {
+      throw new Error("a caller's toast failed");
+    };
+
+    let rejected = false;
+    await act(async () => {
+      await result.current
+        .mutateAsync(["role-1"], {}, { onComplete: throwing })
+        .catch(() => {
+          rejected = true;
+        });
+    });
+
+    // POPULATION CONTROL: the run did reject, after its edit landed.
+    expect(rejected).toBe(true);
+    expect(updateRole).toHaveBeenCalled();
+    expect(
+      asksAccessAgain(invalidate.mock.calls.map(([f]) => [f?.queryKey]))
+    ).toBe(true);
+  });
+});
