@@ -114,15 +114,25 @@ describe("reading a row's level", () => {
   it("reads a built-in resource's legacy manage as Can edit", () => {
     // A role `nextly upgrade` has not converted yet: manage gave read, create,
     // update and delete, so the row shows that, never No access.
-    expect(levelOf("system", ["manage"])).toBe("edit");
-    expect(levelOf("system", ["manage", "read"])).toBe("edit");
+    expect(levelOf("system", ["manage"], "settings")).toBe("edit");
+    expect(levelOf("system", ["manage", "read"], "media")).toBe("edit");
   });
 
   it("counts a built-in resource's legacy manage among the actions its level decides", () => {
     // So a row moved off Can edit loses it with the rest, rather than keeping
     // edit access through it under the switch.
-    expect(standardActions("system").has("manage")).toBe(true);
+    expect(standardActions("system", "settings").has("manage")).toBe(true);
     expect(standardActions("collection").has("manage")).toBe(false);
+  });
+
+  it("keeps manage as its own action on a built-in resource it does not bridge", () => {
+    // Background jobs' only permission is `manage-background-jobs`: it is not
+    // a stand-in for edit, so it is neither read into the level nor replaced
+    // by a level change.
+    expect(levelOf("system", ["manage"], "background-jobs")).toBe("none");
+    expect(standardActions("system", "background-jobs").has("manage")).toBe(
+      false
+    );
   });
 
   it("does not read manage into a collection's level", () => {
@@ -152,8 +162,10 @@ describe("saving a level", () => {
     // the held actions outside the level, and manage is not among them.
     const seeded = resource("read", "manage");
     const held = ["read", "manage"];
-    expect(levelOf("system", held)).toBe("edit");
-    const kept = held.filter(action => !standardActions("system").has(action));
+    expect(levelOf("system", held, "settings")).toBe("edit");
+    const kept = held.filter(
+      action => !standardActions("system", "settings").has(action)
+    );
     const saved = [...kept, ...permissionsFor("system", "view", seeded)];
     expect(saved).toEqual(["id-read"]);
   });

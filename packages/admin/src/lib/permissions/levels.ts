@@ -71,10 +71,35 @@ const LEVEL_ORDER: readonly AccessLevel[] = ["none", "view", "edit", "publish"];
 
 /**
  * The action a role still holds where `nextly upgrade` has not yet replaced it
- * with plain permissions. On a built-in resource it gave read, create, update
+ * with plain permissions. On a bridge resource it gave read, create, update
  * and delete, so it reads as Can edit rather than as nothing.
  */
 const LEGACY_MANAGE = "manage";
+
+/**
+ * The built-in resources whose `manage` permission stands for read, create,
+ * update and delete: core's bridge for roles given `manage-<resource>` before
+ * each action had a plain permission. Anywhere else (`background-jobs`, say)
+ * `manage` is a permission of its own and stays under the row's switch.
+ *
+ * A client-safe copy of core's list, which runs in the server; the parity
+ * test holds the two together.
+ */
+export const MANAGE_BRIDGE_RESOURCES: ReadonlySet<string> = new Set([
+  "media",
+  "settings",
+  "email-providers",
+  "email-templates",
+]);
+
+/** Whether `manage` on this row is the legacy bridge rather than its own action. */
+function bridgesManage(kind: LevelKind, resource: string | undefined): boolean {
+  return (
+    kind === "system" &&
+    resource !== undefined &&
+    MANAGE_BRIDGE_RESOURCES.has(resource)
+  );
+}
 
 /** The levels a row of `kind` offers, lowest first. */
 export function levelsFor(kind: LevelKind): AccessLevel[] {
@@ -82,34 +107,42 @@ export function levelsFor(kind: LevelKind): AccessLevel[] {
 }
 
 /**
- * Every action the level of a row of `kind` decides: the ones a level is read
- * over, and the ones a changed level replaces.
+ * Every action the level of a row of `kind` on `resource` decides: the ones a
+ * level is read over, and the ones a changed level replaces.
  *
- * A built-in resource's legacy `manage` is among them. It is read as the Can
+ * A bridge resource's legacy `manage` is among them. It is read as the Can
  * edit it gave, so a row moved to another level must lose it with the rest,
  * or a row set to Can view would keep editing through it. It is never saved:
  * no level's permissions include it.
  */
-export function standardActions(kind: LevelKind): ReadonlySet<string> {
+export function standardActions(
+  kind: LevelKind,
+  resource?: string
+): ReadonlySet<string> {
   const decided = new Set(
     levelsFor(kind).flatMap(level => LEVEL_ACTIONS[kind][level] ?? [])
   );
-  if (kind === "system") decided.add(LEGACY_MANAGE);
+  if (bridgesManage(kind, resource)) decided.add(LEGACY_MANAGE);
   return decided;
 }
 
 /**
  * The level a row reads, from the actions the role holds on it.
  *
- * Only the standard actions count; any other is under the switch. A built-in
- * resource's legacy `manage` counts as the Can edit it gave. Actions matching
- * no level read "custom".
+ * Only the standard actions count; any other is under the switch. A bridge
+ * resource's legacy `manage` counts as the Can edit it gave; on any other
+ * resource `manage` is its own action, under the switch. Actions matching no
+ * level read "custom".
  */
-export function levelOf(kind: LevelKind, held: Iterable<string>): RowLevel {
-  const standard = standardActions(kind);
+export function levelOf(
+  kind: LevelKind,
+  held: Iterable<string>,
+  resource?: string
+): RowLevel {
+  const standard = standardActions(kind, resource);
   const actions = new Set<string>();
   for (const action of held) {
-    if (kind === "system" && action === LEGACY_MANAGE) {
+    if (action === LEGACY_MANAGE && bridgesManage(kind, resource)) {
       for (const granted of CAN_EDIT) actions.add(granted);
     } else if (standard.has(action)) {
       actions.add(action);
