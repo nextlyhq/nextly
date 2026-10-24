@@ -335,19 +335,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
     const existing = await this.getComponent(slug);
 
-    if (existing.locked && options?.source !== "code") {
-      // Defined in code: the caller is told so, which is a fact about the
-      // thing and not about their permissions; slug and source go to the log.
-      throw NextlyError.definedInCode({
-        thing: "component",
-        change: "change",
-        logContext: {
-          reason: "component-locked",
-          slug,
-          source: options?.source ?? "UI",
-        },
-      });
-    }
+    refuseChangeOutsideCode(existing, slug, options?.source);
 
     const updateData = this.buildComponentUpdateColumns(data);
 
@@ -514,19 +502,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
     const existing = await this.getComponent(slug);
 
-    if (existing.locked && options?.source !== "code") {
-      // Defined in code: the caller is told so, which is a fact about the
-      // thing and not about their permissions; slug and source go to the log.
-      throw NextlyError.definedInCode({
-        thing: "component",
-        change: "change",
-        logContext: {
-          reason: "component-locked",
-          slug,
-          source: options?.source ?? "UI",
-        },
-      });
-    }
+    refuseChangeOutsideCode(existing, slug, options?.source);
 
     const updateData = this.buildComponentUpdateColumns(data);
     const newSchemaVersion = expectedSchemaVersion + 1;
@@ -1326,4 +1302,22 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       updatedAt: this.normalizeDbTimestamp(updatedAt) as unknown as Date,
     };
   }
+}
+
+/**
+ * Refuse a change to a component defined in code, made from anywhere but its
+ * code. The caller is told so, which is a fact about the component and not
+ * about their permissions; the slug and source go to the log.
+ */
+function refuseChangeOutsideCode(
+  existing: { locked?: boolean },
+  slug: string,
+  source: string | undefined
+): void {
+  if (!existing.locked || source === "code") return;
+  throw NextlyError.definedInCode({
+    thing: "component",
+    change: "change",
+    logContext: { reason: "component-locked", slug, source: source ?? "UI" },
+  });
 }
