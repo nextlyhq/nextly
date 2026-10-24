@@ -309,6 +309,11 @@ export type {
   SendEmailArgs,
   SendTemplateEmailArgs,
   SendEmailResult,
+  // Queued email (experimental)
+  QueueEmailArgs,
+  QueueTemplateEmailArgs,
+  QueuedEmail,
+  QueuedEmailState,
 } from "./direct-api/types";
 
 // Email templates (experimental). Template data takes lists and objects;

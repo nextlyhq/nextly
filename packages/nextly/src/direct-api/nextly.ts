@@ -213,6 +213,8 @@ import type {
   RevokeApiKeyArgs,
   SendEmailArgs,
   SendTemplateEmailArgs,
+  QueueEmailArgs,
+  QueueTemplateEmailArgs,
   SetDefaultProviderArgs,
   SetRolePermissionsArgs,
   SubmitFormArgs,
@@ -1024,6 +1026,9 @@ export const nextly = {
     send: (args: SendEmailArgs) => requireNextly().email.send(args),
     sendWithTemplate: (args: SendTemplateEmailArgs) =>
       requireNextly().email.sendWithTemplate(args),
+    queue: (args: QueueEmailArgs) => requireNextly().email.queue(args),
+    queueWithTemplate: (args: QueueTemplateEmailArgs) =>
+      requireNextly().email.queueWithTemplate(args),
   },
 
   emailProviders: {

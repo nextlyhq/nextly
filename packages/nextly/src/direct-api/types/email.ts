@@ -564,3 +564,22 @@ export interface SendEmailResult {
    */
   repeat?: true;
 }
+
+/**
+ * @experimental Arguments for `nextly.email.queue()`: every option `send`
+ * takes. The email is stored and attempted before the call returns, retried
+ * through the job queue on a temporary failure, and sent with
+ * `idempotencyKey` (or a key of its own) on every attempt.
+ */
+export type QueueEmailArgs = SendEmailArgs;
+
+/**
+ * @experimental Arguments for `nextly.email.queueWithTemplate()`: every
+ * option `sendWithTemplate` takes. The template is rendered at each attempt.
+ */
+export type QueueTemplateEmailArgs = SendTemplateEmailArgs;
+
+export type {
+  QueuedEmail,
+  QueuedEmailState,
+} from "../../domains/email/queued-send";
