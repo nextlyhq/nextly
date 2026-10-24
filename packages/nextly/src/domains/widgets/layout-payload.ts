@@ -36,6 +36,16 @@ export const LAYOUT_SCHEMA_VERSION = 3;
 export const MAX_LAYOUT_BYTES = 32 * 1024;
 
 /**
+ * What a reader is told when their dashboard reaches `MAX_LAYOUT_BYTES`.
+ *
+ * In the reader's terms rather than the column's: they never see bytes, and
+ * the cards and notes they placed are what fill it, so the sentence names the
+ * two things they can do about it.
+ */
+export const DASHBOARD_FULL_MESSAGE =
+  "This dashboard is full: remove a card or shorten a Note";
+
+/**
  * The payload written into the `layout` column.
  *
  * `arranged` defaults to TRUE: a caller that says nothing is making the
@@ -70,7 +80,7 @@ export function layoutSizeProblem<Placement extends object>(
   // `TextEncoder` rather than `Buffer`, so a browser measures it the same way.
   const bytes = new TextEncoder().encode(serializeLayout(placements)).length;
   if (bytes > MAX_LAYOUT_BYTES) {
-    return `a layout may be at most ${MAX_LAYOUT_BYTES} bytes; this one is ${bytes}`;
+    return DASHBOARD_FULL_MESSAGE;
   }
   return undefined;
 }

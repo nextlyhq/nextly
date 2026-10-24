@@ -1994,6 +1994,22 @@ export class ReleasesService {
   }
 
   /**
+   * Whether the caller may read a release at all: one exists that the list
+   * would show them.
+   *
+   * The same authorization `find` makes and the same filters it reads through,
+   * with nothing narrowing them, so it says "yes" exactly where an unfiltered
+   * list would not be empty. One id read with a bound of one, not a count, for
+   * a question a dashboard asks on every load.
+   *
+   * @experimental
+   */
+  async anyReadable(actor: ReleaseActor): Promise<boolean> {
+    await this.authorize(actor, "read");
+    return this.deps.repository.anyRelease(this.listFilters({}));
+  }
+
+  /**
    * Whether the caller may read releases, by the decision every read here makes.
    *
    * For a reader outside this service that must withhold what releases hold

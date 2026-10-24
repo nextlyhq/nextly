@@ -6,8 +6,8 @@
  * that is not valid (an unknown key, a revoked key, a key whose creator is
  * deactivated, a session cookie that is malformed or expired), a request no
  * credential comes with, and each limit that answers 429 (the per-address
- * limit, the one for requests whose address cannot be read, an API key's own
- * budget and a plugin route's limit). Each is
+ * limit, the one for requests whose address cannot be read, an address's
+ * sign-in limit, an API key's own budget and a plugin route's limit). Each is
  * recorded as the table's refusals are, status, code, body shape and message,
  * in `access-every-way-in/refusal-cases-today.txt`, so a change to how any of
  * them is answered shows as a diff of that file.
@@ -114,6 +114,38 @@ function request(
   });
 }
 
+/**
+ * The REST handler behind a proxy the site trusts, so a client's address
+ * resolves from the header the proxy sets, and is counted under it.
+ */
+function handlersBehindProxy(): ReturnType<typeof createDynamicHandlers> {
+  return createDynamicHandlers({
+    config: sanitizeConfig({
+      collections: [notes],
+      plugins: [limitedPlugin],
+      security: { trustProxy: true },
+    }),
+  });
+}
+
+/** A JSON POST, from the trusted proxy's client. */
+function postFromClient(
+  segments: string[],
+  body: unknown,
+  handlers: ReturnType<typeof createDynamicHandlers>
+): Promise<Response> {
+  const req = new Request(`${ORIGIN}/api/${segments.join("/")}`, {
+    method: "POST",
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      "x-forwarded-for": CLIENT_ADDRESS,
+    },
+    body: JSON.stringify(body),
+  });
+  return handlers.POST(req, { params: Promise.resolve({ params: segments }) });
+}
+
 /** A request's refusal, which every case below must be. */
 async function refusalAt(res: Promise<Response>): Promise<Refusal> {
   const refusal = await refusalOf(await res);
@@ -215,6 +247,10 @@ describe.each(getConfiguredTestDialects())(
         ...(dialect === "sqlite" ? {} : { dialect }),
         plugins: [limitedPlugin],
         collections: [notes],
+        // The auth routes read the proxy they trust from the app's config, so
+        // the sign-in case can name its client through one; a request naming
+        // no client is unresolved whatever this says.
+        security: { trustProxy: true },
       });
       await seedPermissions(t);
       ownerId = await account(t, "owner@example.com");
@@ -288,13 +324,7 @@ describe.each(getConfiguredTestDialects())(
       it("the per-address limit", async () => {
         // An address resolves only through a proxy the site trusts, so the
         // handler trusts one, and only that address's own budget is spent.
-        const behindProxy = createDynamicHandlers({
-          config: sanitizeConfig({
-            collections: [notes],
-            plugins: [limitedPlugin],
-            security: { trustProxy: true },
-          }),
-        });
+        const behindProxy = handlersBehindProxy();
         cases.set(
           "address limit",
           await refusingLimits(
@@ -335,6 +365,24 @@ describe.each(getConfiguredTestDialects())(
         );
       });
 
+      it("the sign-in limit for an address", async () => {
+        // The auth routes count each address apart from the REST limit.
+        cases.set(
+          "auth route limit",
+          await refusingLimits(
+            key => key === `auth-ip:${CLIENT_ADDRESS}`,
+            () =>
+              limitRefusalAt(
+                postFromClient(
+                  ["auth", "login"],
+                  { email: "reader@example.com", password: "Password123!" },
+                  handlersBehindProxy()
+                )
+              )
+          )
+        );
+      });
+
       it("a plugin route's limit", async () => {
         const path = ["plugins", LIMITED_PLUGIN, "limited"];
         expect((await request(path)).status, "the first request").toBe(200);
@@ -369,7 +417,7 @@ describe.each(getConfiguredTestDialects())(
     describe("today's answers", () => {
       it("are the answers the file records", async () => {
         // POPULATION CONTROL: every case above recorded its refusal.
-        expect(cases.size).toBe(10);
+        expect(cases.size).toBe(11);
         const recorded = [...cases.entries()]
           .map(([name, refusal]) => formatRefusal(name, refusal))
           .join("\n");

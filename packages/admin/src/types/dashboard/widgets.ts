@@ -23,11 +23,14 @@
 
 import type {
   AnyWidgetSetting,
+  GetStartedAnswer,
   WidgetAction,
   WidgetArchetype,
+  SourcelessWidgetQuery,
   WidgetHeight,
   WidgetQuery,
   WidgetSize,
+  WidgetQueryCell,
   WidgetStatCell,
   WidgetChrome,
   WidgetDefinition,
@@ -81,8 +84,12 @@ export interface DashboardWidget {
    * reader removed with the height it was declared with.
    */
   height?: WidgetHeight;
-  /** Present for the data archetypes; absent for `text`, `actions`, `custom`. */
-  query?: WidgetQuery;
+  /**
+   * Present for the data archetypes; absent for `text`, `actions`, `custom`.
+   * Sourceless for a widget offered per collection until its card is set to
+   * one, and then never asked.
+   */
+  query?: WidgetQuery | SourcelessWidgetQuery;
   /**
    * Set when core builds this card's data on the server from the widget's
    * declaration: the card is asked for by its id, never by a query, and has none.
@@ -109,7 +116,7 @@ export interface DashboardWidget {
    * Each carries its own query, so the card's numbers are ordinary
    * access-controlled reads rather than one composite answer.
    */
-  cells?: WidgetStatCell[];
+  cells?: WidgetStatCell[] | WidgetQueryCell[];
   /** Present for `custom`; the path `PluginSlot` resolves. */
   component?: string;
   /**
@@ -195,6 +202,11 @@ export interface WidgetWidthFacts {
   category?: string;
   /** Which sketch draws its row: the widget's archetype. */
   sketch?: string;
+  /**
+   * Listed once per collection the reader may read, each row adding a card set to that
+   * collection. @experimental
+   */
+  perCollection?: true;
   /**
    * The widget's place in the add panel's order, as core ranks it. Present for every widget the
    * panel lists, a placed one too, so the panel orders its rows without deciding an order itself.
@@ -284,4 +296,24 @@ export interface DashboardLayoutResponse {
    * than this layout, and is read again.
    */
   audience: string;
+  /**
+   * The Get started card's steps, from the computation that decided whether
+   * the card is drawn, so the card and its steps cannot disagree. Absent from a
+   * server that predates the card.
+   *
+   * @experimental
+   */
+  getStarted?: GetStartedLayoutView;
+}
+
+/** What the layout read says of the Get started card. */
+export interface GetStartedLayoutView {
+  /** Whether the reader's card is drawn. */
+  drawn: boolean;
+  /**
+   * The steps with the reader's skips applied, or `null` when the server
+   * worked none out: the card is removed (and its answer not asked for), or
+   * not in this reader's dashboard.
+   */
+  answer: GetStartedAnswer | null;
 }

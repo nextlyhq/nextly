@@ -360,6 +360,34 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual([[publish!.id, BEN.id]]);
     });
 
+    it("keeps the editor's row when the publish only echoes the draft back", async () => {
+      const t = await boot(dialect);
+      const id = await create(
+        t,
+        BEN,
+        PAGES,
+        { title: "live", status: "published" },
+        at(10)
+      );
+      const [held] = await save(t, ANA, PAGES, id, { title: "pending" }, at(5));
+
+      // 🔴 Ben sends the draft's own title and the page's id with the publish:
+      // nothing he sent changes what is promoted, so the save stays Ana's.
+      const [publish] = await save(
+        t,
+        BEN,
+        PAGES,
+        id,
+        { status: "published", title: "pending", id },
+        at(1)
+      );
+      expect(metadataOf(publish!)).toMatchObject({ published: true });
+      expect(metadataOf(publish!)).not.toHaveProperty("publishedWithEdits");
+      expect(
+        (await recentlyEdited(as(BEN))).map(row => [row.id, row.userId])
+      ).toEqual([[held!.id, ANA.id]]);
+    });
+
     it("labels a Single saved as a draft with its status", async () => {
       const t = await boot(dialect);
       const singles = t.getService("singleEntryService") as unknown as {

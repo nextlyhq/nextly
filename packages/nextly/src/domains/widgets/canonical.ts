@@ -117,6 +117,14 @@ export interface CanonicalWidget {
   defaultWidth?: WidgetWidth;
   allowsSeveral?: boolean;
   /**
+   * Where the add panel offers this widget, as its definition states it: per
+   * collection, or on request (a card a reader asks for, such as a note).
+   * Either keeps it off the default dashboard and allows any number of cards.
+   *
+   * @experimental
+   */
+  offered?: "per-collection" | "on-request";
+  /**
    * How long the widget stays, and the condition it stays under.
    *
    * Carried through because the LAYOUT endpoint is where a transient card is
@@ -185,6 +193,7 @@ const REGISTRATION_FIELDS = [
   "lifecycle",
   "visibleWhen",
   "dismissible",
+  "offered",
 ] as const satisfies ReadonlyArray<
   keyof WidgetDefinition & keyof CanonicalWidget
 >;
@@ -495,9 +504,14 @@ export interface WidgetWidthFacts {
  * plugin may put one is its suggestion, which the site may decline, and an
  * unsuggested one stays in the add panel. Until suggestions are placed, no
  * declared widget enters it at all.
+ *
+ * Nor does a widget that is offered (`offered`): one offered per collection
+ * reads the collection a card is set to, and the default arrangement places a
+ * widget once, set to nothing; one offered on request, a note, has nothing to
+ * show until its reader writes it.
  */
 export function placedByDefault(widget: CanonicalWidget): boolean {
-  return widget.serverData !== true;
+  return widget.serverData !== true && widget.offered === undefined;
 }
 
 /**
@@ -521,6 +535,9 @@ export function widthFacts(widget: CanonicalWidget): WidgetWidthFacts {
   return {
     allowedWidths: allowed,
     defaultWidth: widget.defaultWidth ?? widthFromSize(widget.defaultSize),
-    allowsSeveral: widget.allowsSeveral ?? false,
+    // An offered widget is added on request: once for each collection, or a
+    // note for each thing a reader wants to keep, so a dashboard holds several
+    // of it by design.
+    allowsSeveral: widget.allowsSeveral ?? widget.offered !== undefined,
   };
 }

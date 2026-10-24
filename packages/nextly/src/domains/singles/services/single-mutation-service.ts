@@ -63,6 +63,7 @@ import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
   attachFieldValidators,
+  callerAccessGrants,
   runFieldHooks,
   resolvedCallerGrants,
   type CallerGrants,
@@ -79,7 +80,7 @@ import {
 } from "../../../shared/lib/password-fields";
 import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import type { Logger } from "../../../shared/types";
-import { carriesContent } from "../../audit/lifecycle-fields";
+import { editsOver } from "../../audit/lifecycle-fields";
 import { willRecordSingleActivity } from "../../audit/record-activity";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
 import {
@@ -87,7 +88,13 @@ import {
   recordTransitionEvents,
   recordWriteEvent,
 } from "../../content-events/write-event";
+import {
+  keepDeniedAtStoredOnUpdate,
+  keepDeniedFieldGroupsInDraft,
+  withStoredFieldGroups,
+} from "../../field-groups/field-group-write-access";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
+import { fieldGroupWriteAccessOf } from "../../field-groups/services/field-group-mutation-service";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
@@ -1211,14 +1218,55 @@ export class SingleMutationService extends BaseService {
       // via the field-level registry; serialized field defs drop them).
       // Runs BEFORE component extraction so component fields cannot bypass
       // write access, hooks, or validation.
-      await applyFieldWriteAccess({
-        kind: "single",
-        slug,
+      // With the field groups this Single stores inline, by their own rules,
+      // and every denied value inside a container kept as the row holds it: a
+      // group is written whole, so a denied child of one would otherwise clear.
+      const documentId = existingDoc.id;
+      // One resolver for the Single's own rules and its field groups', with
+      // the key's scope: a scoped key is judged by its own grants on both,
+      // never by its owner's.
+      const writeGrants = callerAccessGrants(
+        options.user,
+        options.authenticatedScope
+      );
+      const singleWriteAccess = {
+        ...fieldGroupWriteAccessOf(options),
+        grants: writeGrants,
+      };
+      // The Single's row alone carries no field-group instance, so what an
+      // update removes is read here or judged against nothing: in the write's
+      // own language, and in each other one, since a removal removes all.
+      const storedFieldGroupsIn = (locale?: string) =>
+        withStoredFieldGroups({
+          stored: existingDeserialized,
+          parentTable: singleMeta.tableName,
+          fields: fieldConfigs,
+          source: this.fieldGroupDataService,
+          access: singleWriteAccess,
+          locale,
+        });
+      await keepDeniedAtStoredOnUpdate({
         data: currentData,
-        operation: "update",
-        user: options.user,
-        overrideAccess: options.overrideAccess,
-        id: existingDoc.id,
+        stored: await storedFieldGroupsIn(options.locale),
+        storedIn: {
+          locales: this.localization?.locales.map(l => l.code) ?? [],
+          read: storedFieldGroupsIn,
+        },
+        fields: fieldConfigs,
+        source: this.fieldGroupDataService,
+        access: singleWriteAccess,
+        ownRules: document =>
+          applyFieldWriteAccess({
+            kind: "single",
+            slug,
+            data: document,
+            operation: "update",
+            user: options.user,
+            authenticatedScope: options.authenticatedScope,
+            overrideAccess: options.overrideAccess,
+            id: documentId,
+            grants: writeGrants,
+          }),
       });
       await runFieldHooks({
         kind: "single",
@@ -2170,12 +2218,27 @@ export class SingleMutationService extends BaseService {
                   }
                 }
                 // Read before the draft's components are written into the
-                // caller's below: the caller's own values alone, its scalars and
-                // the component values it sent.
-                const callerCarriesContent = carriesContent({
-                  ...currentData,
-                  ...attemptComponentFields,
-                });
+                // caller's below: the caller's own values alone, each compared
+                // with the draft's, its scalars against the draft document and
+                // its components tagged as the draft holds them. An echo of the
+                // draft, or a system field the write ignores, is no edit.
+                const callerCarriesContent =
+                  editsOver(
+                    snapshotRecord(pendingDraft.snapshot),
+                    currentData
+                  ) ||
+                  editsOver(
+                    draftComponentValues(
+                      pendingDraft.snapshot as Record<string, unknown>,
+                      fieldConfigs
+                    ),
+                    tagComponentTypes(
+                      attemptComponentFields,
+                      fieldConfigs,
+                      componentSlug =>
+                        singleComponentSchemas?.get(componentSlug)?.fields
+                    )
+                  );
                 // The caller's own payload wins over the pending change: a
                 // publish that also sets a field is saying something about that
                 // field now.
@@ -2682,6 +2745,9 @@ export class SingleMutationService extends BaseService {
               // field rule nested in a field group to see the same `user` a
               // top-level field rule sees.
               req: options.user ? { user: options.user } : {},
+              // Who the write is made as, for each instance's own field rules:
+              // the caller and trust the Single's own fields are judged with.
+              access: fieldGroupWriteAccessOf(options),
             });
             if (
               !holdEdit &&
@@ -3010,6 +3076,32 @@ export class SingleMutationService extends BaseService {
                   singleComponentSchemas
                 );
               }
+              // The held field-group values, judged by their own rules before
+              // anything is recorded, each denied one kept at what this draft
+              // replaces: no save judges a held instance, and a later
+              // publisher allowed to write a value would otherwise promote one
+              // its author was not.
+              await keepDeniedFieldGroupsInDraft({
+                draft: pending,
+                replaces,
+                // The field groups the save wrote, and the containers it
+                // wrote whole, which can hold field groups inline.
+                names: [
+                  ...Object.keys(attemptComponentFields),
+                  ...suppliedFieldNames,
+                ],
+                fields: fieldConfigs,
+                fieldGroupFields: { get: componentResolver },
+                access: {
+                  ...fieldGroupWriteAccessOf(options),
+                  // Inside the write's transaction.
+                  grants: callerAccessGrants(
+                    options.user,
+                    options.authenticatedScope,
+                    tx.getDrizzle()
+                  ),
+                },
+              });
               // The held component values are judged as the publish would
               // judge them: merged into the draft, since a save carries only the
               // sub-fields it changed, and without the type tags the draft

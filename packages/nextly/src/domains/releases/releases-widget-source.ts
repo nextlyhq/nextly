@@ -189,6 +189,10 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   // has no date column to place them on.
   dateField: "refused",
   interval: "refused",
+  // A window bounds rows by when they were created; this source answers a
+  // fixed question that has none.
+  since: "refused",
+  until: "refused",
 };
 
 /** Refuse a query carrying anything this source cannot honour. */
@@ -296,6 +300,19 @@ async function attentionRows(
  */
 export function callerMayReadReleases(caller: ReadCaller): Promise<boolean> {
   return service().mayRead(actorFor(caller));
+}
+
+/**
+ * Whether a release exists that this dashboard caller may read: the releases
+ * domain's own answer (`anyReadable`), one id read rather than a count.
+ *
+ * Refused, as every release read is, for a caller who may not read releases;
+ * ask {@link callerMayReadReleases} first to answer "no" instead.
+ *
+ * @experimental
+ */
+export function callerMayReadAnyRelease(caller: ReadCaller): Promise<boolean> {
+  return service().anyReadable(actorFor(caller));
 }
 
 /**

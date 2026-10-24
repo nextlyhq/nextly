@@ -86,6 +86,8 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   groupBy: "refused",
   dateField: "refused",
   interval: "refused",
+  since: "refused",
+  until: "refused",
 };
 
 /** The card's filters, as the query's `where` carries them. */
@@ -147,16 +149,20 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * prunes it: retention switched off (`false`), or an install initialised
  * without an audit policy, which registers no pass at all. Read through
  * `activeAuditRetention`, so a reloaded policy is the one reported, as it is
- * the one the passes run with. A window under a day reads as one.
+ * the one the passes run with.
+ *
+ * Whole days, rounded DOWN, so the span is never overstated: a 36-hour window
+ * is "the last day", and one under a day states no span at all, since "the
+ * last day" would claim edits the trail no longer holds.
  */
 function retentionDays(): number | undefined {
   const built = container.has("config")
     ? container.get<NextlyServiceConfig>("config").auditRetention
     : undefined;
   const maxAge = activeAuditRetention(built)?.activityMaxAgeMs;
-  return typeof maxAge === "number"
-    ? Math.max(1, Math.floor(maxAge / DAY_MS))
-    : undefined;
+  if (typeof maxAge !== "number") return undefined;
+  const days = Math.floor(maxAge / DAY_MS);
+  return days >= 1 ? days : undefined;
 }
 
 /** The answer's span, as the list result states it: present only when bounded. */

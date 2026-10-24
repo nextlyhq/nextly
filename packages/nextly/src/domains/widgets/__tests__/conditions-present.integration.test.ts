@@ -204,3 +204,62 @@ describe("singles:present against a real instance", () => {
     expect(await holds("singles:present")).toBe(false);
   });
 });
+
+describe("content:present against a real instance", () => {
+  it("holds for a reader with a Single and no collection, which collections:present misses", async () => {
+    // 🔴 The Content card lists both kinds: gated on collections alone, it was
+    // hidden from a reader whose only content is a Single.
+    await boot({
+      singles: [
+        {
+          slug: "homepage",
+          access: singleReadable,
+          fields: [text({ name: "h" })],
+        },
+      ],
+    });
+    expect(await holds("collections:present")).toBe(false);
+    expect(await holds("content:present")).toBe(true);
+  });
+
+  it("holds for a reader with a collection and no Single", async () => {
+    await boot({
+      collections: [
+        { slug: "notes", access: readable, fields: [text({ name: "title" })] },
+      ],
+    });
+    expect(await holds("content:present")).toBe(true);
+  });
+
+  it("does NOT hold when the reader may read neither", async () => {
+    await boot({
+      collections: [
+        { slug: "secrets", access: refused, fields: [text({ name: "title" })] },
+      ],
+      singles: [
+        {
+          slug: "private",
+          access: singleRefused,
+          fields: [text({ name: "h" })],
+        },
+      ],
+    });
+    expect(await holds("content:present")).toBe(false);
+  });
+
+  it("does NOT hold for a collection hidden from the navigation, as internal ones are", async () => {
+    // The dashboard leaves out what the navigation hides, a super-admin's
+    // included; `internal: true` sets the same flag.
+    await boot({
+      collections: [
+        {
+          slug: "hidden-notes",
+          access: readable,
+          admin: { hidden: true },
+          fields: [text({ name: "title" })],
+        },
+      ],
+    });
+    expect(await holds("content:present")).toBe(false);
+  });
+});

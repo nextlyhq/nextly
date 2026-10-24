@@ -270,3 +270,79 @@ describe("the add panel's groups", () => {
     ]);
   });
 });
+
+describe("a widget offered per collection", () => {
+  const count = {
+    id: "core/count",
+    title: "Count",
+    archetype: "metric",
+    settings: [{ name: "collection", type: "collection" }],
+  } as unknown as DashboardWidget;
+  const rowsFor = (placements: WidgetPlacement[]) =>
+    addPanelRows({
+      placements,
+      offered: ["core/count"],
+      widgets: {
+        "core/count": facts({
+          group: "content",
+          perCollection: true,
+          allowsSeveral: true,
+        }),
+      },
+      byId: new Map([["core/count", count]]),
+      collections: [
+        { collection: "posts", label: "Posts" },
+        { collection: "pages", label: "Pages" },
+      ],
+      showContent: true,
+    });
+
+  it("is one row per collection the reader may read, each adding a card set to it", () => {
+    const rows = rowsFor([]);
+    expect(rows.map(row => [row.key, row.subgroup, row.action])).toEqual([
+      [
+        "core/count:posts",
+        "Posts",
+        {
+          kind: "add",
+          widgetId: "core/count",
+          settings: { collection: "posts" },
+        },
+      ],
+      [
+        "core/count:pages",
+        "Pages",
+        {
+          kind: "add",
+          widgetId: "core/count",
+          settings: { collection: "pages" },
+        },
+      ],
+    ]);
+  });
+
+  it("counts only that collection's cards, offering another beside them", () => {
+    const rows = rowsFor([
+      { ...placement("a", "core/count"), config: { collection: "posts" } },
+    ]);
+    expect(rows.map(row => [row.key, row.placed, row.action.kind])).toEqual([
+      ["core/count:posts", 1, "add-another"],
+      ["core/count:pages", 0, "add"],
+    ]);
+  });
+
+  it("stays out of the panel while the Content group is not shown", () => {
+    expect(
+      addPanelRows({
+        placements: [],
+        offered: ["core/count"],
+        widgets: {
+          "core/count": facts({ group: "content", perCollection: true }),
+        },
+        byId: new Map([["core/count", count]]),
+        collections: [{ collection: "posts", label: "Posts" }],
+        showContent: false,
+      })
+    ).toEqual([]);
+  });
+});

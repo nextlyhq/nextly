@@ -25,7 +25,7 @@ export interface RestCallerReaders {
    */
   lookupKey(rawKey: string): Promise<ResolvedApiKey | undefined>;
   /** Spend a resolved key's own budget: its refusal once spent. */
-  debitKey(keyId: string): Promise<Response | null>;
+  debitKey(keyId: string, request: Request): Promise<Response | null>;
 }
 
 /**
@@ -97,9 +97,9 @@ export function defaultRestCallerReaders(
         return undefined;
       }
     },
-    async debitKey(keyId) {
+    async debitKey(keyId, request) {
       const refusal = await apiKeyRateLimitRefusal(keyId);
-      return refusal ? createJsonErrorResponse(refusal) : null;
+      return refusal ? createJsonErrorResponse(refusal, request) : null;
     },
   };
 }

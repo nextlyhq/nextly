@@ -575,8 +575,10 @@ export async function answerReadyQueries(
   const run: SlotRun = {
     caller,
     scope,
-    now: new Date(),
     signal: options.signal,
+    // Taken once, so every card and cell in the batch measures "the last 30
+    // days" from the same moment.
+    now: new Date(),
     settle(entries, slots) {
       const settled: SettledSlot[] = [];
       entries.forEach((entry, position) => {

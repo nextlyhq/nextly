@@ -48,6 +48,11 @@ import {
   startingValue,
 } from "./content-settings";
 import { ContentSettingControl } from "./ContentSettingControl";
+import {
+  drawnSetting,
+  overlongMessage,
+  overlongSetting,
+} from "./setting-length";
 
 export interface WidgetSettingsSheetProps {
   open: boolean;
@@ -423,8 +428,13 @@ function SheetFields({
           />
         ) : (
           // No cast: `WidgetSetting` is assignable to `FieldConfig`,
-          // and `settings.compat.test-d.ts` is what keeps that true.
-          <FieldRenderer key={setting.name} field={setting} mode="edit" />
+          // and `settings.compat.test-d.ts` is what keeps that true. A
+          // textarea's bound is judged on Done (`drawnSetting`).
+          <FieldRenderer
+            key={setting.name}
+            field={drawnSetting(setting)}
+            mode="edit"
+          />
         )
       )}
     </fieldset>
@@ -515,7 +525,19 @@ export function WidgetSettingsSheet(
               // nothing back, so the result is voided deliberately rather than
               // handed to an attribute that would ignore it silently.
               onSubmit={event => {
-                void form.handleSubmit(submit)(event);
+                void form.handleSubmit(values => {
+                  // A note over its bound is refused here, by the counter the
+                  // layout write uses, rather than by the server after Done.
+                  const overlong = overlongSetting(settings, values);
+                  if (overlong) {
+                    form.setError(overlong.name, {
+                      type: "maxLength",
+                      message: overlongMessage(overlong.maxLength),
+                    });
+                    return;
+                  }
+                  submit(values);
+                })(event);
               }}
               className="flex flex-1 flex-col gap-4 overflow-y-auto px-4"
             >

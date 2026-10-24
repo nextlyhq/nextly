@@ -664,5 +664,27 @@ describe.each(getConfiguredTestDialects())(
         app.nextly.releases.blockingReasons({ releaseId: missing })
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
+
+    it("says a release exists exactly where the list would hold one, reading one id", async () => {
+      // One where clause for both, so the existence check can never say "yes"
+      // where the list is empty: asked with no filter, and with a filter that
+      // leaves the list empty while releases exist.
+      const app = await boot(dialect);
+      const repo = new ReleasesRepository(app.adapter);
+      const now = new Date();
+      const agree = async (query: Parameters<typeof repo.anyRelease>[0]) => {
+        const page = await repo.findReleasePage({ ...query, limit: 1 });
+        const exists = await repo.anyRelease(query);
+        expect(exists).toBe(page.rows.length > 0);
+        return exists;
+      };
+
+      expect(await agree({})).toBe(false);
+      await repo.createRelease({ title: "Draft" });
+      expect(await agree({})).toBe(true);
+      // Releases exist, and none is in the Done tab: the list there is empty.
+      expect(await agree({ tab: "done", now })).toBe(false);
+      expect(await agree({ tab: "drafts", now })).toBe(true);
+    });
   }
 );
