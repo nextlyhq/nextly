@@ -107,6 +107,24 @@ function logger(): Logger {
 }
 
 /**
+ * Records which check refused, and why, on the server alone. Called where a
+ * refusal is answered: by {@link createJsonErrorResponse} for a request, and
+ * by a Direct API check, which throws its refusal to its caller with no route
+ * boundary to log it.
+ */
+export function recordRefusal(
+  refusal: ErrorResponse,
+  requestId?: string
+): void {
+  logRefusal(logger(), {
+    status: refusal.statusCode,
+    code: refusal.code,
+    reason: refusal.reason ?? refusal.message,
+    ...(requestId === undefined ? {} : { requestId }),
+  });
+}
+
+/**
  * The Response a refusal is answered with: `{ error: { code, message,
  * requestId } }` as `application/problem+json`, as every other error is.
  * Its `headers`, such as `Retry-After`, are sent as headers and never appear
@@ -121,12 +139,7 @@ export function createJsonErrorResponse(
   const requestId = request
     ? readOrGenerateRequestId(request)
     : generateRequestId();
-  logRefusal(logger(), {
-    status: error.statusCode,
-    code: error.code,
-    reason: error.reason ?? error.message,
-    requestId,
-  });
+  recordRefusal(error, requestId);
   return buildErrorResponse(refusalError(error), {
     requestId,
     headers: error.headers,

@@ -17,6 +17,7 @@ import {
   isErrorResponse,
   type AuthContext,
 } from "../../auth/middleware";
+import { recordRefusal } from "../../auth/middleware/error-response";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { runAsPrincipal } from "../../auth/principal-scope";
 import type { RequestActor } from "../../auth/request-actor";
@@ -346,7 +347,11 @@ export async function authorizeChecked(
     "anyOf" in grant
       ? await authorizeCallerForAny(caller, [...grant.anyOf], grant.names)
       : await authorizeCaller(caller, grant.action, grant.resource);
-  if (isErrorResponse(decision)) throw toNextlyAuthError(decision);
+  if (isErrorResponse(decision)) {
+    // A Direct API call has no route boundary to log the refusal it throws.
+    recordRefusal(decision);
+    throw toNextlyAuthError(decision);
+  }
 }
 
 /**
