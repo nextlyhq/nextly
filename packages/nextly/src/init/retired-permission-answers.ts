@@ -19,6 +19,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { retiredOwnedTable } from "./retired-accounts-erasure";
+import { hasRetiredShape, liveColumnsOf } from "./retired-auth-tables";
 
 /** The retired table this module empties. */
 export const RETIRED_PERMISSION_ANSWERS_TABLE = "user_permission_cache";
@@ -36,7 +37,12 @@ interface RowDeleter {
 }
 
 /**
- * Delete every stored answer, if the table is still there.
+ * Delete every stored answer, if the table is still there in the shape Nextly
+ * created it.
+ *
+ * A table that only shares the name is not Nextly's: a host app sharing the
+ * database may own one, and emptying it would delete that app's rows. It is
+ * left alone, as the startup report and the drop leave it.
  *
  * Every row, whatever the change: a stored answer is a copy, recomputed by
  * whichever instance asks next, and naming the rows a change reaches would
@@ -47,6 +53,11 @@ export async function emptyRetiredPermissionAnswers(
   store: PermissionAnswersStore
 ): Promise<void> {
   if (!(await store.tableExists(RETIRED_PERMISSION_ANSWERS_TABLE))) return;
+  const columns = await liveColumnsOf(
+    store.getDrizzle(),
+    store.dialect
+  )(RETIRED_PERMISSION_ANSWERS_TABLE);
+  if (!hasRetiredShape(RETIRED_PERMISSION_ANSWERS_TABLE, columns)) return;
   const table = retiredOwnedTable(
     RETIRED_PERMISSION_ANSWERS_TABLE,
     store.dialect
