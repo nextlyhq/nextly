@@ -161,8 +161,7 @@ written on behalf of a request does not enforce anything unless you say so:
 ```ts
 const posts = await nextly.find({
   collection: "posts",
-  // Both are needed to judge the request's own caller. Without `user`, the
-  // call is judged as an anonymous visitor.
+  // Both are needed to judge the request's own caller.
   overrideAccess: false,
   user: requestUser,
 });
@@ -173,11 +172,6 @@ const posts = await nextly.find({
 visitor without setting `overrideAccess: false` returns rows that visitor was not allowed to
 see. This is the easiest way to expose data with Nextly.
 </Callout>
-
-Forgetting the `user` is a different mistake: the call is then judged as an anonymous
-visitor. A collection's or Single's rule is asked with `user: null` and no permissions, and an
-operation it declares no rule for is allowed, as it is for any visitor, except a
-publish or an unpublish. So pass the request's `user` whenever the request has one.
 
 Passing a `user` lets a rule decide by who is asking, never by which document. Collection and
 Single rules never see a document: they answer yes or no before any document is read, so no
