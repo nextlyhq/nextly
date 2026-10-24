@@ -360,18 +360,21 @@ function rowPairing(
   const byId = idIndex(to);
   const byPosition = (index: number) => (index < to.length ? index : undefined);
   if (byId === undefined) return byPosition;
-  // The rows another row names by id are that row's. A row without an id
-  // pairs by position only with a row nothing names, so a new row added ahead
-  // of rows that keep their ids takes none of their values, while a list sent
-  // without its ids still pairs each row with the one at its place.
+  // The rows another row names by id are that row's, and only the first
+  // row naming one has it: a later row repeating the id is new, so it takes
+  // none of that row's values. A row without an id pairs by position only
+  // with a row nothing names, so a new row added ahead of rows that keep
+  // their ids takes none of their values, while a list sent without its ids
+  // still pairs each row with the one at its place.
   const named = new Set<number>();
-  for (const row of from) {
+  const pairs = from.map(row => {
     const at = byId.get(rowId(row) ?? "");
-    if (at !== undefined) named.add(at);
-  }
+    if (at === undefined || named.has(at)) return undefined;
+    named.add(at);
+    return at;
+  });
   return index => {
-    const id = rowId(from[index]);
-    if (id !== undefined) return byId.get(id);
+    if (rowId(from[index]) !== undefined) return pairs[index];
     const at = byPosition(index);
     return at === undefined || named.has(at) ? undefined : at;
   };
@@ -383,17 +386,19 @@ function rowId(row: unknown): string | undefined {
 }
 
 /**
- * The rows that carry an id, by it, or nothing when no row can be told apart
- * that way: a list with no ids, a repeated id, or an empty list all fall back
- * to position. A row without an id is left out rather than spoiling the rest,
- * so an id-less row inserted among identified ones leaves them paired by id.
+ * The rows that carry an id, by it, or nothing when no row does: a list with
+ * no ids, or an empty one, falls back to position. An id names the first row
+ * carrying it; a later row repeating it is named by nothing, rather than
+ * sending the whole list to position, where a row would be judged with the
+ * siblings of whichever row sits at its index. A row without an id is left
+ * out rather than spoiling the rest, so an id-less row inserted among
+ * identified ones leaves them paired by id.
  */
 function idIndex(rows: readonly unknown[]): Map<string, number> | undefined {
   const map = new Map<string, number>();
   for (const [index, row] of rows.entries()) {
     const id = rowId(row);
-    if (id === undefined) continue;
-    if (map.has(id)) return undefined;
+    if (id === undefined || map.has(id)) continue;
     map.set(id, index);
   }
   return map.size > 0 ? map : undefined;
