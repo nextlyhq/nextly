@@ -111,6 +111,11 @@ export const getDashboardStats = withErrorHandler(async (req: Request) => {
  *
  * Caching: `private, no-store`. The answer is per reader, and a shared cache
  * serving one reader's progress to another would leak which collections exist.
+ *
+ * @deprecated The Get started steps travel in the layout read
+ * (`GET /api/dashboard/layout`, `getStarted`), from the computation that
+ * decides whether the card is drawn. Kept for one release for a client still
+ * reading this one; it answers from the same step answer.
  */
 export const getDashboardOnboarding = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);

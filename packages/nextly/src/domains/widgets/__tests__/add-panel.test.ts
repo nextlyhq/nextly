@@ -26,8 +26,7 @@ describe("the group each widget is listed in", () => {
       ])
     );
     expect(groups).toEqual({
-      "core/seed-demo-content": "overview",
-      "core/onboarding-checklist": "overview",
+      "core/get-started": "overview",
       "core/content": "overview",
       "core/quick-create": "overview",
       "core/team": "team",

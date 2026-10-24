@@ -1208,3 +1208,120 @@ describe("Collections, Singles and the per-Single cards retire into Content", ()
     expect(read(once)).toEqual(once);
   });
 });
+
+describe("the checklist and the sample-content offer retire into Get started", () => {
+  const SEED = "core/seed-demo-content";
+  const CHECKLIST = "core/onboarding-checklist";
+  const STARTED = "core/get-started";
+
+  /** One stored row holding both old cards, in each format a release wrote. */
+  function rowsHolding(
+    first: { id: string; widgetId: string; removed: boolean },
+    second: { id: string; widgetId: string; removed: boolean }
+  ): Record<string, string> {
+    const old = [first, second];
+    return {
+      v1: JSON.stringify({
+        schemaVersion: 1,
+        placements: [
+          ...old.map((c, order) => ({
+            id: c.id,
+            widgetId: c.widgetId,
+            order,
+            hidden: c.removed,
+          })),
+          { id: "team", widgetId: "core/team", order: 2, hidden: false },
+        ],
+      }),
+      v2: columnsRow([
+        ...old.map((c, order) => ({
+          id: c.id,
+          widgetId: c.widgetId,
+          column: 0,
+          order,
+          hidden: c.removed,
+        })),
+        {
+          id: "team",
+          widgetId: "core/team",
+          column: 0,
+          order: 2,
+          hidden: false,
+        },
+      ]),
+      v3: serializeLayout([
+        ...old.map(c => card(c.id, c.widgetId, { removed: c.removed })),
+        card("team", "core/team"),
+      ]),
+    };
+  }
+
+  const read = (raw: string) =>
+    readStoredLayout(raw, RETIRED_WIDGETS).placements;
+
+  for (const [firstWidget, secondWidget] of [
+    [SEED, CHECKLIST],
+    [CHECKLIST, SEED],
+  ] as const) {
+    it(`becomes one full-width card with the first card's id and place (${firstWidget} first)`, () => {
+      const rows = rowsHolding(
+        { id: "first", widgetId: firstWidget, removed: false },
+        { id: "second", widgetId: secondWidget, removed: false }
+      );
+      for (const [format, raw] of Object.entries(rows)) {
+        const placements = read(raw);
+        expect(
+          placements.map(p => [p.id, p.widgetId]),
+          format
+        ).toEqual([
+          ["first", STARTED],
+          ["team", "core/team"],
+        ]);
+        expect(placements[0]?.width, format).toBe("full");
+      }
+    });
+  }
+
+  for (const [seedRemoved, checklistRemoved] of [
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ]) {
+    it(`starts removed when either card was (sample content removed: ${seedRemoved}, checklist removed: ${checklistRemoved})`, () => {
+      // 🔴 Removed only if BOTH were, the default rule, brought back a card a
+      // reader had dismissed: every saved row holds both old cards, and the
+      // sample-content offer could not be removed at all.
+      const expected = seedRemoved || checklistRemoved;
+      for (const order of [
+        [
+          { id: "s", widgetId: SEED, removed: seedRemoved },
+          { id: "c", widgetId: CHECKLIST, removed: checklistRemoved },
+        ],
+        [
+          { id: "c", widgetId: CHECKLIST, removed: checklistRemoved },
+          { id: "s", widgetId: SEED, removed: seedRemoved },
+        ],
+      ] as const) {
+        for (const [format, raw] of Object.entries(
+          rowsHolding(order[0], order[1])
+        )) {
+          const started = read(raw).filter(p => p.widgetId === STARTED);
+          expect(started, format).toHaveLength(1);
+          expect(started[0]?.removed, format).toBe(expected);
+        }
+      }
+    });
+  }
+
+  it("leaves the default rule, removed only if every card was, to every other retirement", () => {
+    const merged = readStoredLayout(
+      serializeLayout([
+        card("pending", "core/pending-edits", { removed: true }),
+        card("attention", "core/needs-attention", { removed: false }),
+      ]),
+      RETIRED_WIDGETS
+    ).placements;
+    expect(merged.map(p => p.removed)).toEqual([false]);
+  });
+});

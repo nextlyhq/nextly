@@ -73,7 +73,7 @@ const api = vi.mocked(protectedApi);
 
 /**
  * Two cards, only the first of which its author said may be sent away. Both
- * UNFRAMED, matching `core/onboarding-checklist`, the card this exists for.
+ * UNFRAMED: a card drawing its own chrome still gets the control.
  */
 function branding(
   patch: Record<string, Record<string, unknown>> = {}
