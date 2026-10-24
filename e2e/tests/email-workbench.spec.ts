@@ -15,6 +15,10 @@ import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.email] });
 
 const WIDTHS = [
   { width: 390, height: 844 },
@@ -261,10 +265,18 @@ for (const [theme, size] of [
     await openWelcome(page, theme);
     await expect(liquidField(page, "From")).toBeVisible({ timeout: 30_000 });
 
+    // Legacy mode merges the results in this page. The default opens a blank
+    // page to merge the frames' results, and once the preview's srcdoc frame
+    // has been scanned that merge never finishes under Playwright 1.64.1,
+    // though a page opened directly does; axe-core/playwright offers legacy
+    // mode for that. This scan is of the workbench: legacy mode does not enter
+    // the preview's sandboxed, opaque-origin frame, so the email it renders is
+    // not part of it (the iframe element itself still is).
     const results = await new AxeBuilder({ page })
       .include('[data-testid="workbench-header"]')
       .include("main")
       .withTags(AA_TAGS)
+      .setLegacyMode(true)
       .analyze();
     // A scan of nothing reports nothing, as a clean page does.
     expect(results.passes.length, "axe scanned nothing").toBeGreaterThan(10);

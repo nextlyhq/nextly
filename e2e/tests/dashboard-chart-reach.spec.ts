@@ -20,6 +20,10 @@ import { STORAGE_STATE } from "../global-setup";
 import { gotoAdmin } from "./support/admin";
 import { createEntry, expectOk } from "./support/runtime-collection";
 import { test } from "./support/test";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.dashboard] });
 
 const BREAKDOWN = "collection/posts-breakdown";
 const TIMELINE = "collection/posts-timeline";
