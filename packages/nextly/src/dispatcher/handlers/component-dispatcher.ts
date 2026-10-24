@@ -903,8 +903,10 @@ export const COMPONENTS_METHODS: Record<
 
       const isLocked = await svc.registry.isLocked(slug);
       if (isLocked) {
-        // Same NextlyError pattern as updateComponent's locked branch.
-        throw NextlyError.forbidden({
+        // Defined in code, as updateComponent's locked branch answers.
+        throw NextlyError.definedInCode({
+          thing: "component",
+          change: "delete",
           logContext: {
             reason: "component-locked",
             slug,

@@ -490,8 +490,11 @@ export class SingleRegistryService extends BaseRegistryService<
     });
 
     if (existing.locked && options?.source !== "code") {
-      // Generic FORBIDDEN — slug + source go to logContext only.
-      throw NextlyError.forbidden({
+      // Defined in code: the caller is told so, which is a fact about the
+      // thing and not about their permissions; slug and source go to the log.
+      throw NextlyError.definedInCode({
+        thing: "Single",
+        change: "change",
         logContext: {
           reason: "single-locked",
           slug,
