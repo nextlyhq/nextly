@@ -600,3 +600,26 @@ describe("REST limit: a key that does not resolve", () => {
     });
   });
 });
+
+describe("REST limit: a refused request is recorded", () => {
+  afterEach(() => {
+    container.clear();
+  });
+
+  it("writes the refusal's line, as every answered refusal does", async () => {
+    const info = vi.fn();
+    container.register("logger", () => ({
+      debug: vi.fn(),
+      info,
+      warn: vi.fn(),
+      error: vi.fn(),
+    }));
+    const check = limiter();
+    // Two reads a window from one address, so the third is refused.
+    expect(await admitted(check, { address: "203.0.113.7" }, 3)).toBe(2);
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining("Refused"),
+      expect.objectContaining({ status: 429, code: "RATE_LIMITED" })
+    );
+  });
+});

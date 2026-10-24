@@ -285,6 +285,13 @@ describe("document lock route", () => {
     expect(await res.json()).toMatchObject({
       error: { code: "FORBIDDEN", message: "You can't edit posts." },
     });
+    // Asked as a refusal of the one document the claim names.
+    expect(authorizeCaller).toHaveBeenCalledWith(
+      auth,
+      "update",
+      "posts",
+      "one"
+    );
     expect(service.acquire).not.toHaveBeenCalled();
   });
 
@@ -313,7 +320,12 @@ describe("document lock route", () => {
 
     await acquireLock(post({ ...ref, slug: "invoices" }));
 
-    expect(authorizeCaller).toHaveBeenCalledWith(auth, "update", "invoices");
+    expect(authorizeCaller).toHaveBeenCalledWith(
+      auth,
+      "update",
+      "invoices",
+      "one"
+    );
   });
 
   it("keeps a lock read out of every cache", async () => {
