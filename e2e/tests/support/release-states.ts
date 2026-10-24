@@ -48,7 +48,12 @@ export async function leaveReleasesAsTheRunnerWould(
   releases: ReadonlyArray<{ id: string; outcome: RunnerOutcome }>
 ): Promise<void> {
   const dueAt = Math.floor((Date.now() - OVERDUE_BY_MS) / 1000);
+  // The dev server holds the same file, and it, or a spec on another worker,
+  // may be writing when this opens: wait for its lock, as the server's own adapter
+  // does, rather than fail at once on `database is locked`. Set by pragma, not
+  // the constructor's `timeout`, which Node 22 accepts only from 22.16.
   const db = new DatabaseSync(E2E_DB);
+  db.exec("PRAGMA busy_timeout = 5000");
   try {
     const update = db.prepare(
       "UPDATE nextly_releases SET state = ?, scheduled_at = ? WHERE id = ?"

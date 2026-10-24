@@ -2,7 +2,7 @@
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useState } from "react";
+import { useCallback, useState, type JSX } from "react";
 
 import { ImageSizeForm } from "@admin/components/features/settings/ImageSizeForm";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
@@ -46,7 +46,7 @@ function ImageSizeErrorPage({ message }: { message: string }) {
   );
 }
 
-export default function EditImageSizePage() {
+export default function EditImageSizePage(): JSX.Element {
   const { route } = useRouter();
   const [isPending, setIsPending] = useState(false);
 

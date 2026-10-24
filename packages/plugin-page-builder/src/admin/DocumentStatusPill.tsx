@@ -37,6 +37,7 @@ import {
   pillStateFromForm,
   useDocumentStatus,
 } from "@nextlyhq/plugin-sdk/admin";
+import type { JSX } from "react";
 
 export interface DocumentStatusPillProps {
   /**
@@ -52,7 +53,9 @@ export interface DocumentStatusPillProps {
  * @param props - whether the editor has uncommitted work
  * @returns the pill, or nothing when no surrounding form published a status
  */
-export function DocumentStatusPill({ isDirty }: DocumentStatusPillProps) {
+export function DocumentStatusPill({
+  isDirty,
+}: DocumentStatusPillProps): JSX.Element | null {
   const status = useDocumentStatus();
   // Nothing rather than a guess. A blocks field also renders inside a create
   // form and inside previews, where no status has been persisted — and a pill

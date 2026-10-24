@@ -23,7 +23,7 @@ import type { RequestActor } from "../../auth/request-actor";
 import {
   roleChangeCallerFor,
   runAsRoleChangeCaller,
-} from "../../domains/auth/services/super-admin-grant";
+} from "../../domains/auth/services/role-change-caller";
 import type { RouteGrant } from "../../domains/auth/system-write-policy";
 import { withCurrentLanguages } from "../../domains/i18n/configured-locales";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
@@ -344,8 +344,10 @@ export async function authorizeChecked(
 ): Promise<void> {
   const decision =
     "anyOf" in grant
-      ? await authorizeCallerForAny(caller, [...grant.anyOf])
+      ? await authorizeCallerForAny(caller, [...grant.anyOf], grant.names)
       : await authorizeCaller(caller, grant.action, grant.resource);
+  // Converting records the refusal: a Direct API call has no route boundary
+  // to log the refusal it throws.
   if (isErrorResponse(decision)) throw toNextlyAuthError(decision);
 }
 

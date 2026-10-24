@@ -53,6 +53,10 @@ import { emailDeliveriesSqlite } from "./email-deliveries/sqlite";
 import { emailProvidersMysql } from "./email-providers/mysql";
 import { emailProvidersPg } from "./email-providers/postgres";
 import { emailProvidersSqlite } from "./email-providers/sqlite";
+import { emailQueueMysql } from "./email-queue/mysql";
+import { emailQueuePg } from "./email-queue/postgres";
+import { emailQueueSqlite } from "./email-queue/sqlite";
+import { EMAIL_QUEUE_TABLE } from "./email-queue/table-name";
 import { emailSendClaimsMysql } from "./email-send-claims/mysql";
 import { emailSendClaimsPg } from "./email-send-claims/postgres";
 import { emailSendClaimsSqlite } from "./email-send-claims/sqlite";
@@ -75,6 +79,7 @@ import {
 import { PLUGIN_SETTINGS_TABLE, pluginSettingsTables } from "./plugin-settings";
 import { previewLinksTables } from "./preview-links";
 import { rbacTables } from "./rbac";
+import { userPermissionCache as storedPermissionAnswers } from "./rbac/postgres";
 import { RBAC_EPOCH_TABLE, rbacEpochTables } from "./rbac-epoch";
 import { releasesTables } from "./releases";
 import { schemaEventsTables } from "./schema-events";
@@ -309,7 +314,8 @@ export function getCoreSchema(
         emailProvidersPg,
         emailTemplatesPg,
         emailDeliveriesPg,
-        emailSendClaimsPg
+        emailSendClaimsPg,
+        emailQueuePg
       );
       break;
     case "mysql":
@@ -322,7 +328,8 @@ export function getCoreSchema(
         emailProvidersMysql,
         emailTemplatesMysql,
         emailDeliveriesMysql,
-        emailSendClaimsMysql
+        emailSendClaimsMysql,
+        emailQueueMysql
       );
       break;
     case "sqlite":
@@ -335,7 +342,8 @@ export function getCoreSchema(
         emailProvidersSqlite,
         emailTemplatesSqlite,
         emailDeliveriesSqlite,
-        emailSendClaimsSqlite
+        emailSendClaimsSqlite,
+        emailQueueSqlite
       );
       break;
     default: {
@@ -400,6 +408,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "email_deliveries",
   "email_brand",
   EMAIL_SEND_CLAIMS_TABLE,
+  EMAIL_QUEUE_TABLE,
   "nextly_schema_events",
   "nextly_i18n_archive",
   "nextly_versions",
@@ -456,8 +465,16 @@ export {
   rolePermissions,
   userRoles,
   roleInherits,
-  userPermissionCache,
 } from "./rbac/postgres";
+
+/**
+ * The table permission answers were once stored in between requests.
+ *
+ * @deprecated Nothing reads it any more: a user's roles and permissions are
+ * kept in memory until a role or permission changes. Removed in a later
+ * release, with the table.
+ */
+export const userPermissionCache = storedPermissionAnswers;
 
 // Plan A Task 8 — media tables. PG re-exports for direct-query callers.
 export { media, mediaFolders, imageSizes } from "./media/postgres";

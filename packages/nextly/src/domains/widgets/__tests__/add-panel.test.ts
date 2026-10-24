@@ -17,7 +17,7 @@ import { CORE_WIDGETS } from "../core-widgets";
 const core = (id: string): CanonicalWidget => ({ id });
 
 describe("the group each widget is listed in", () => {
-  it("puts the team's two built-ins under Team and every other built-in under Overview", () => {
+  it("puts the team's two built-ins under Team, the content widgets under Content, and every other built-in under Overview", () => {
     const groups = Object.fromEntries(
       CORE_WIDGETS.map(definition => [
         definition.id,
@@ -26,16 +26,21 @@ describe("the group each widget is listed in", () => {
       ])
     );
     expect(groups).toEqual({
-      "core/seed-demo-content": "overview",
-      "core/onboarding-checklist": "overview",
-      "core/collections": "overview",
-      "core/singles": "overview",
+      "core/get-started": "overview",
+      "core/content": "overview",
       "core/quick-create": "overview",
       "core/team": "team",
       "core/needs-attention": "overview",
       "core/recently-edited": "overview",
       "core/upcoming-releases": "overview",
       "core/recent-activity": "team",
+      // Offered per collection, inside each collection's part of Content.
+      "core/count": "content",
+      // Offered on request: one row of Overview.
+      "core/note": "overview",
+      // Offered per collection, as Count is.
+      "core/recent-entries": "content",
+      "core/over-time": "content",
     });
   });
 

@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-mcp",
-  "version": "0.0.2-alpha.68",
+  "version": "0.0.2-alpha.69",
   "description": "Experimental: serves a Model Context Protocol endpoint for AI agents, off by default and authenticated like every other Nextly route. Read-only, and the one tool it exposes reports what the connecting credential may read",
   "license": "MIT",
   "type": "module",
@@ -21,7 +21,7 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "check-types": "tsc --noEmit",
+    "check-types": "node ../../scripts/tsc.mjs --noEmit",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest"
@@ -32,7 +32,7 @@
   },
   "peerDependencies": {
     "@nextlyhq/plugin-sdk": "workspace:*",
-    "nextly": "0.0.2-alpha.68"
+    "nextly": "0.0.2-alpha.69"
   },
   "devDependencies": {
     "@nextlyhq/plugin-sdk": "workspace:*",
@@ -40,7 +40,7 @@
     "@types/node": "^22.20.5",
     "nextly": "workspace:*",
     "tsdown": "^0.23.1",
-    "typescript": "^5.9.3",
+    "typescript": "7.0.2",
     "vitest": "^5.0.5"
   },
   "engines": {

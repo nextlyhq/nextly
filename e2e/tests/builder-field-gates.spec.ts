@@ -19,6 +19,10 @@ import {
   pageWithHeading,
   removeMigrationsOf,
 } from "./support/runtime-collection";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.dashboard, LOCK.schema] });
 
 test("refuses a read-only blocks field at its builder address, and opens an editable one", async ({
   page,

@@ -140,12 +140,23 @@ async function authorize(
 ): Promise<void> {
   const authenticated = await readCaller(auth);
   const caller = readAccessCaller(authenticated);
+  if (intent === "claim") {
+    // The update gate's own refusal, in the words it names the thing with:
+    // the one document the claim names, as "this post". It names only what
+    // the request already named, so it does not answer whether it exists.
+    const decision = await authorizeCaller(
+      auth,
+      "update",
+      ref.slug,
+      ref.entryId ? "one" : "all"
+    );
+    if (isErrorResponse(decision)) throw toNextlyAuthError(decision);
+  }
   const allowed =
     intent === "read"
       ? await canReadEntity(ref.slug, caller)
-      : intent === "claim"
-        ? !isErrorResponse(await authorizeCaller(auth, "update", ref.slug))
-        : await callerHoldsPermission(`update-${ref.slug}`, caller);
+      : intent === "claim" ||
+        (await callerHoldsPermission(`update-${ref.slug}`, caller));
 
   if (!allowed) {
     // The same refusal either way. Distinguishing "no such document" from "not

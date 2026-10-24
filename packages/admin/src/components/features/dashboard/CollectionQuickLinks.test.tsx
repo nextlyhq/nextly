@@ -9,13 +9,18 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
-import { NAV_COLLECTIONS_PARAMS, useCollections } from "@admin/hooks/queries";
+import {
+  NAV_COLLECTIONS_PARAMS,
+  useCollections,
+  useSingles,
+} from "@admin/hooks/queries";
 
 import { CollectionQuickLinks } from "./CollectionQuickLinks";
 
 vi.mock("@admin/hooks/queries", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/hooks/queries")>()),
   useCollections: vi.fn(),
+  useSingles: vi.fn(),
 }));
 
 const LIST = ["authors", "posts", "tags"].map(name => ({
@@ -32,15 +37,19 @@ function given({
 }: {
   list?: typeof LIST;
   counts?: {
+    kind?: "collection" | "single";
     slug: string;
     label: string;
     group: null;
-    count: number;
+    count?: number;
     draft?: number;
   }[];
   failed?: { error: string; code?: "unavailable" };
   onRetry?: () => void;
 }) {
+  vi.mocked(useSingles).mockReturnValue({
+    data: { items: [] },
+  } as unknown as ReturnType<typeof useSingles>);
   vi.mocked(useCollections).mockReturnValue({
     data: list ? { items: list } : undefined,
     isLoading: list === undefined,
@@ -52,8 +61,8 @@ function given({
       : undefined;
   render(
     <CollectionQuickLinks
-      widgetId="core/collections"
-      placementId="core/collections"
+      widgetId="core/content"
+      placementId="core/content"
       settings={{}}
       slot={slot}
       isFetching={slot === undefined}
@@ -185,6 +194,67 @@ describe("the Collections card's tiles", () => {
     });
     expect(screen.getAllByRole("link")).toHaveLength(49);
     expect(screen.getByText(/more exist/i)).toBeInTheDocument();
+  });
+
+  it("draws a counted collection the list lacks, after the listed ones", () => {
+    // 🔴 Joined on the list, a count for a collection outside the list's page was dropped.
+    given({
+      list: LIST,
+      counts: [
+        { slug: "posts", label: "Posts", group: null, count: 13 },
+        { slug: "zines", label: "Zines", group: null, count: 2 },
+        { slug: "tags", label: "Tags", group: null, count: 3 },
+      ],
+    });
+    expect(tileLabels()).toEqual(["Posts", "Tags", "Zines"]);
+  });
+
+  it("draws the most it draws when the list's page and the counts' page differ", () => {
+    // Past a hundred collections the list is its first hundred and the counts are their own
+    // fifty: here thirty of the fifty are listed and twenty are not.
+    const names = Array.from(
+      { length: 120 },
+      (_, i) => `n${String(i).padStart(3, "0")}`
+    );
+    given({
+      list: names.slice(0, 100).map(name => ({ name, label: name })),
+      counts: names.slice(70).map(name => ({
+        slug: name,
+        label: name,
+        group: null,
+        count: 1,
+      })),
+    });
+    expect(screen.getAllByRole("link")).toHaveLength(49);
+    expect(screen.getByText(/more exist/i)).toBeInTheDocument();
+  });
+
+  it("draws each Single after the collections, linking to it, a Single sharing a collection's slug included", () => {
+    // 🔴 Read as collections, Singles were dropped (no count), and one sharing a
+    // collection's slug was taken for that collection.
+    given({
+      list: LIST,
+      counts: [
+        {
+          kind: "collection",
+          slug: "posts",
+          label: "Posts",
+          group: null,
+          count: 13,
+        },
+        { kind: "single", slug: "home", label: "Home page", group: null },
+        { kind: "single", slug: "posts", label: "Posts page", group: null },
+      ],
+    });
+    expect(tileLabels()).toEqual(["Posts", "Home page", "Posts page"]);
+    expect(screen.getByRole("link", { name: /Home page/ })).toHaveAttribute(
+      "href",
+      expect.stringContaining("/admin/singles/home")
+    );
+    // Two groups now, so each is named.
+    expect(
+      screen.getByRole("heading", { name: /Singles/ })
+    ).toBeInTheDocument();
   });
 
   it("names a collection's drafts beside its entries, and says nothing of none", () => {

@@ -11,13 +11,13 @@ import { buildAuthRouterDeps } from "../auth/handlers/deps-bridge";
 import { routeAuthRequest } from "../auth/handlers/router";
 import { setSessionStandingBoot } from "../auth/session/session-standing";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
+import { isServicesRegistered, getService } from "../di";
+// Registration is its own import: the `../di` barrel leaves it out.
 import {
-  isServicesRegistered,
   registerServices,
-  getService,
   shutdownServices,
-} from "../di";
-import type { NextlyServiceConfig } from "../di/register";
+  type NextlyServiceConfig,
+} from "../di/register";
 import {
   localizationKey,
   recordRegisteredLocalization,
@@ -182,6 +182,23 @@ function bootView(): SanitizedNextlyConfig | null {
     _bootViewInputs = { config, booted };
   }
   return _bootView;
+}
+
+/**
+ * The plugins the running runtime booted with, read without the route's own
+ * config.
+ *
+ * {@link getHandlerConfig} answers only for a route created with a config. An
+ * app whose route was created without one, and whose instrumentation hook
+ * booted the runtime, still has a booted plugin list, and a reader that needs
+ * only the plugins reads it here. Falls back to the route's declared list when
+ * nothing has booted, and to none when there is neither.
+ */
+export function bootedPlugins(): NonNullable<SanitizedNextlyConfig["plugins"]> {
+  const booted = isServicesRegistered()
+    ? globalForBoot.__nextly_bootConfig
+    : undefined;
+  return booted?.plugins ?? _storedConfig?.plugins ?? [];
 }
 
 /**

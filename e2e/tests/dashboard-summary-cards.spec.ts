@@ -11,6 +11,8 @@
  * The cards are placed through the layout write first, so the test does not
  * depend on which conditional cards this run's other specs left offered; the
  * suite's user is the first account, a super-admin, whom every gate admits.
+ * Upcoming releases is offered only once a release exists, so one is made
+ * first, as a draft holding nothing.
  *
  * @module tests/dashboard-summary-cards.spec
  */
@@ -19,10 +21,15 @@ import { expect, type Page } from "@playwright/test";
 import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
+import { LOCK } from "./support/locks";
+import { ok } from "./support/releases-api";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.dashboard] });
 
 const CARDS = [
   "core/team",
-  "core/collections",
+  "core/content",
   "core/quick-create",
   "core/upcoming-releases",
 ] as const;
@@ -30,7 +37,7 @@ const CARDS = [
 interface Layout {
   version: number;
   scope: string;
-  widgets: Record<string, unknown>;
+  widgets: Record<string, { defaultWidth: string }>;
   placements: Array<{
     id: string;
     widgetId: string;
@@ -39,8 +46,16 @@ interface Layout {
   }>;
 }
 
-/** Place each of the four cards, full width and not removed, in the saved layout. */
+/**
+ * Place each of the four cards, at the width a new one starts at and not removed, in the saved
+ * layout: not every card may be drawn full width.
+ */
 async function placeCards(page: Page): Promise<void> {
+  await ok(
+    await page.request.post("/admin/api/releases", {
+      data: { title: `Summary cards e2e ${Date.now()}` },
+    })
+  );
   const read = await page.request.get("/admin/api/dashboard/layout");
   const layout = (await read.json()) as Layout;
   for (const id of CARDS) {
@@ -55,7 +70,7 @@ async function placeCards(page: Page): Promise<void> {
     ...CARDS.map(widgetId => ({
       id: `e2e-${widgetId.replace("/", "-")}`,
       widgetId,
-      width: "full",
+      width: layout.widgets[widgetId].defaultWidth,
       removed: false,
     })),
     ...others,
@@ -83,7 +98,7 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
       /\/admin\/users$/
     );
 
-    const content = cell(page, "core/collections");
+    const content = cell(page, "core/content");
     // At least one collection tile, each a link to its list.
     await expect(content.getByRole("link").first()).toBeVisible();
 
@@ -94,6 +109,12 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
       releases.getByRole("link", { name: "All releases" })
     ).toHaveAttribute("href", /\/admin\/releases$/);
 
+    // A card refreshing its data dims its body and marks it aria-busy until the
+    // answer lands, and a scan in that window measures dimmed text no reader is
+    // left with: wait for every card to settle first.
+    await expect(
+      page.locator('[data-testid="widget-card-body"][aria-busy="true"]')
+    ).toHaveCount(0, { timeout: 30_000 });
     await expectNoAxeViolations(page);
   });
 }

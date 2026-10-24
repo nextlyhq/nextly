@@ -59,4 +59,5 @@ type CappedMeasure = Exclude<NonNullable<PageContainerProps["width"]>, "full">;
  * the disagreement this module exists to prevent, and writing the token out
  * again by hand is how it would return.
  */
-export const CONTENT_MEASURE_LENGTH = SHELL_MEASURE[CONTENT_PAGE_MEASURE];
+export const CONTENT_MEASURE_LENGTH: string =
+  SHELL_MEASURE[CONTENT_PAGE_MEASURE];

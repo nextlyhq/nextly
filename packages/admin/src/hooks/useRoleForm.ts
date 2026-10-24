@@ -82,7 +82,13 @@ const fetchInheritedPermissions = async (childIds: string[]) => {
   return { nextMap, allPermissions: Array.from(allPermissions) };
 };
 
-const roleFormSchema = z.object({
+const roleFormSchema: z.ZodObject<{
+  name: z.ZodString;
+  slug: z.ZodString;
+  description: z.ZodOptional<z.ZodString>;
+  permissions: z.ZodArray<z.ZodString>;
+  baseRoleId: z.ZodOptional<z.ZodString>;
+}> = z.object({
   name: z
     .string()
     .min(3, { message: "Role name must be at least 3 characters." })

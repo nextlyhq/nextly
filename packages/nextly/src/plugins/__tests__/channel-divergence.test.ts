@@ -230,6 +230,23 @@ const MUST_AGREE: Array<{
   expect?: RegExp;
 }> = [
   {
+    // 🔴 Accepted as a contribution, the admin takes the cells and ignores the
+    // query, while the identical registered definition is refused.
+    case: "a custom card asking through both a query and cells",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "p#X",
+      query: { source: "collection:posts", op: "count" },
+      cells: [
+        { key: "total", query: { source: "collection:posts", op: "count" } },
+      ],
+    },
+    expect: /asks through its query or its cells, not both/,
+  },
+  {
     case: "minSize above defaultSize",
     widget: {
       id: "acme/thing",

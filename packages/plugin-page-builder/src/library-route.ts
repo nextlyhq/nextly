@@ -139,7 +139,7 @@ function mostPages(pageSize: number): number {
  * cross: every row is weighed before it is kept, so a response never totals
  * more than this.
  */
-export const MAX_LIBRARY_BYTES = 16 * 1024 * 1024;
+export const MAX_LIBRARY_BYTES: number = 16 * 1024 * 1024;
 
 /**
  * What one row costs on the wire, or nothing when it cannot be sent at all.
@@ -857,7 +857,8 @@ export const COMPLETION_CONCURRENCY = 8;
  * what is held is one batch of listed rows and one batch of by-id rows, and
  * the bound on reads grows to match so the tier still reaches the ceiling.
  */
-export const COMPONENT_LIST_PAGE_SIZE = COMPLETION_CONCURRENCY;
+export const COMPONENT_LIST_PAGE_SIZE: typeof COMPLETION_CONCURRENCY =
+  COMPLETION_CONCURRENCY;
 
 /**
  * One page of rows, each completed and then admitted under the ceiling.

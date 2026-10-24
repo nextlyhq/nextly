@@ -27,6 +27,7 @@ import {
   isErrorResponse,
   type AuthContext,
   type ErrorResponse,
+  type RefusalTarget,
 } from "@nextly/auth/middleware";
 import { actorFromAuthContext } from "@nextly/auth/request-actor";
 import type { DispatchRequest } from "@nextly/services/dispatcher";
@@ -86,6 +87,7 @@ import {
   respondData,
   respondMutation,
 } from "./api/response-shapes";
+import { getRolesScreen } from "./api/roles-screen";
 import { getSchemaJournal } from "./api/schema-journal";
 import { getTranslationWorklist } from "./api/translations";
 import {
@@ -128,7 +130,7 @@ import { readServiceConfig } from "./dispatcher/dispatcher";
 import {
   roleChangeCallerFor,
   runAsRoleChangeCaller,
-} from "./domains/auth/services/super-admin-grant";
+} from "./domains/auth/services/role-change-caller";
 import {
   appLocalization,
   withCurrentLanguages,
@@ -380,6 +382,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "translations",
   "schema",
   "contentEvents",
+  "rolesScreen",
 ]);
 
 /**
@@ -848,6 +851,15 @@ export const _needsResolvedRolesForTest = needsResolvedRoles;
 export const _applyGlobalDateFormattingForTest = applyGlobalDateFormatting;
 
 /**
+ * What a refused read of permissions names, whichever of the grants it
+ * accepts the caller lacked.
+ */
+const READING_PERMISSIONS: RefusalTarget = {
+  action: "read",
+  resource: "permissions",
+};
+
+/**
  * Centralized permission resolver for all API service endpoints.
  *
  * Determines the correct permission check for each service/method combination
@@ -1059,15 +1071,23 @@ async function resolveAuthorization(
     // listRolePermissions: allow read-roles or read-permissions
     // (role edit form needs this to populate the PermissionMatrix)
     if (method === "listRolePermissions") {
-      return requireAnyPermission(req, [
-        { action: "read", resource: "roles" },
-        { action: "read", resource: "permissions" },
-      ]);
+      return requireAnyPermission(
+        req,
+        [
+          { action: "read", resource: "roles" },
+          { action: "read", resource: "permissions" },
+        ],
+        READING_PERMISSIONS
+      );
     }
 
     // listPermissions: allow users with read-roles (for role form's permission matrix)
     if (method === "listPermissions") {
-      return requireAnyPermission(req, [{ action: "read", resource: "roles" }]);
+      return requireAnyPermission(
+        req,
+        [{ action: "read", resource: "roles" }],
+        READING_PERMISSIONS
+      );
     }
 
     // addPermissionToRole, removePermissionFromRole → update-roles
@@ -1094,10 +1114,14 @@ async function resolveAuthorization(
     // getPermissionById: allow read-roles or read-permissions
     // (reading a single permission is needed for display and role editing)
     if (method === "getPermissionById") {
-      return requireAnyPermission(req, [
-        { action: "read", resource: "roles" },
-        { action: "read", resource: "permissions" },
-      ]);
+      return requireAnyPermission(
+        req,
+        [
+          { action: "read", resource: "roles" },
+          { action: "read", resource: "permissions" },
+        ],
+        READING_PERMISSIONS
+      );
     }
 
     // ensurePermission, updatePermission, deletePermissionById → manage-permissions (or CRUD)
@@ -1543,6 +1567,13 @@ async function serveServiceRequest(
     return handleSchemaRequest(req, method);
   }
 
+  // ==================== ROLES SCREEN DIRECT DISPATCH ====================
+  // Owns its auth (the `read-roles` permission the roles list asks). Read-only
+  // GET, so there is no body to consume.
+  if (service === "rolesScreen") {
+    return getRolesScreen(req);
+  }
+
   // ==================== AUTHENTICATION & AUTHORIZATION ====================
   // Check if endpoint is public
   const isPublic = isPublicEndpoint(service, method);
@@ -1554,7 +1585,7 @@ async function serveServiceRequest(
     if (params[0] === "me") {
       const authResult = await requireAuthentication(req);
       if (isErrorResponse(authResult)) {
-        return refuseRequest(method, authResult);
+        return refuseRequest(req, method, authResult);
       }
       // Add user ID to route params for /api/me endpoints
       if (routeParams) {
@@ -1566,7 +1597,7 @@ async function serveServiceRequest(
     else if (requiresAuthOnly(service, method)) {
       const authResult = await requireAuthentication(req);
       if (isErrorResponse(authResult)) {
-        return refuseRequest(method, authResult);
+        return refuseRequest(req, method, authResult);
       }
       authorizedUser = authResult;
     }
@@ -1581,7 +1612,7 @@ async function serveServiceRequest(
         httpMethod
       );
       if (isErrorResponse(authResult)) {
-        return refuseRequest(method, authResult);
+        return refuseRequest(req, method, authResult);
       }
       authorizedUser = authResult;
     }
@@ -2107,10 +2138,12 @@ function respondAdminMeta(payload: Record<string, unknown>): Response {
  * person's 401 or 403 to another hides from them what they may read.
  */
 function refuseRequest(
+  req: Request,
   method: string,
   refusal: Parameters<typeof createJsonErrorResponse>[0]
 ): Response {
-  const response = createJsonErrorResponse(refusal);
+  // Answered with the request's own id, as every other error is.
+  const response = createJsonErrorResponse(refusal, req);
   return SESSION_PRIVATE_METHODS.has(method)
     ? withSessionCacheHeaders(response)
     : response;
@@ -2195,7 +2228,7 @@ async function handleAdminMetaWorkspaceRequest(
 ): Promise<Response> {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) {
-    return withSessionCacheHeaders(createJsonErrorResponse(auth));
+    return withSessionCacheHeaders(createJsonErrorResponse(auth, req));
   }
 
   // After the authentication precondition, never before it. Service
@@ -2244,7 +2277,9 @@ async function handleAdminMetaWorkspaceRequest(
 async function handleAdminMetaSidebarGroups(req: Request): Promise<Response> {
   try {
     const authResult = await requirePermission(req, "manage", "settings");
-    if (isErrorResponse(authResult)) return createJsonErrorResponse(authResult);
+    if (isErrorResponse(authResult)) {
+      return createJsonErrorResponse(authResult, req);
+    }
 
     const text = await req.text();
     const body = text ? JSON.parse(text) : {};

@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import { toHex } from "../color";
-import { type TokenMap } from "../parse-theme";
+import type { TokenMap } from "../parse-theme";
 import { applyOpacity, resolveColor, type ResolveContext } from "../resolve";
 
 const tokens: TokenMap = new Map([

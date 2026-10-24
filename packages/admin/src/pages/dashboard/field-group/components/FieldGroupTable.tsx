@@ -12,7 +12,7 @@ import {
   TooltipTrigger,
 } from "@nextlyhq/ui";
 import { Eye, Pencil, Plus, Puzzle, RefreshCw, Trash2 } from "lucide-react";
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, type JSX } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import { ReconcileFieldGroupDialog } from "@admin/components/features/field-groups/ReconcileFieldGroupDialog";
@@ -134,7 +134,7 @@ const ALWAYS_VISIBLE = new Set(["label", "createdAt"]);
  * selected, or deleted from the UI. Data + mutations run through TanStack Query;
  * rendering is delegated to the unified DataTableView.
  */
-export default function FieldGroupTable() {
+export default function FieldGroupTable(): JSX.Element {
   const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);

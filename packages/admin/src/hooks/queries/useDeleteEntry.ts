@@ -25,7 +25,11 @@
  * @see services/entryApi.ts - Entry API client
  */
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueryClient,
+  type UseMutationResult,
+} from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
 import {
@@ -151,7 +155,12 @@ export function useDeleteEntry<T = Entry>({
   onSuccess,
   onError,
   showToast = true,
-}: UseDeleteEntryOptions<T>) {
+}: UseDeleteEntryOptions<T>): UseMutationResult<
+  MutationResult<T>,
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   // The mutation resolves to the whole envelope so the success path can report

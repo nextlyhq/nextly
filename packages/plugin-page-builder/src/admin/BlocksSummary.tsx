@@ -16,7 +16,7 @@
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { LayoutGrid } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, type JSX } from "react";
 import {
   useWatch,
   type Control,
@@ -38,7 +38,7 @@ export interface BlocksSummaryProps<
 export function BlocksSummary<TFieldValues extends FieldValues = FieldValues>({
   name,
   control,
-}: BlocksSummaryProps<TFieldValues>) {
+}: BlocksSummaryProps<TFieldValues>): JSX.Element {
   const value = useWatch({ control, name }) as BlockDocument | null | undefined;
 
   const counts = useMemo(() => countByType(documentNodes(value)), [value]);

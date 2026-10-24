@@ -3,7 +3,7 @@
 import type { TableParams } from "@nextlyhq/ui";
 import { Alert, Badge } from "@nextlyhq/ui";
 import { Edit, Shield, Trash2 } from "lucide-react";
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, type JSX } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import { RoleDeleteDialog } from "@admin/components/features/role-management/RoleDeleteDialog";
@@ -43,7 +43,7 @@ const ALWAYS_VISIBLE = new Set(["roleName"]);
  * bulk deletion. Data + mutations run through TanStack Query; the toolbar,
  * selection bar and table come from the shared ListView.
  */
-export default function RoleTable() {
+export default function RoleTable(): JSX.Element {
   const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [search, setSearch] = useState("");
 

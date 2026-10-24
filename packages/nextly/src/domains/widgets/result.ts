@@ -89,6 +89,17 @@ export type WidgetResult =
        * widget chose and nothing honest to head them with.
        */
       fields?: WidgetResultField[];
+      /**
+       * The span of time the source looked at, in whole days back from now.
+       *
+       * A source that keeps rows only for a period answers from that period
+       * alone, so an empty answer means "none in that span" rather than
+       * "none ever", and a card can say which. Absent when the source looked
+       * without a bound, and from a source that does not say.
+       *
+       * @experimental
+       */
+      window?: { days: number };
     }
   | {
       op: "groupBy";
@@ -113,6 +124,16 @@ export type WidgetResult =
        * `atLeast` makes for a bounded count. Absent means every bucket is here.
        */
       truncated?: boolean;
+      /**
+       * The instant the answer was computed at, in ISO 8601 UTC, for a source
+       * whose buckets depend on it (a window ending "a week from now"). A card
+       * building a link from such a bucket builds it from this instant rather
+       * than its own clock, so the list it opens holds what was counted.
+       * Additive: absent, nothing in the answer depends on when it was read.
+       *
+       * @experimental
+       */
+      asOf?: string;
       /**
        * The grouped field: its label for the chart's axis, and the label of each value a bucket
        * holds. Absent when the source does not declare the field.
@@ -270,6 +291,14 @@ export type WidgetComponentProps = {
    * data gets it here as `{ op: "data", data }`.
    */
   slot: WidgetSlot | undefined;
+  /**
+   * The answer to each of this card's cells, by key, for a card that declares
+   * several reads (`cells`); absent for one that declares none. A key with no
+   * answer yet is absent from it, as `slot` is.
+   *
+   * @experimental While the content widgets are being built.
+   */
+  cells?: Readonly<Record<string, WidgetSlot>>;
   /**
    * Whether this card's question is in flight, the FIRST request included: its
    * query, or the data core builds for a widget that declares its own.

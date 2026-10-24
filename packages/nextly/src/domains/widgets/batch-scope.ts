@@ -26,6 +26,12 @@ export interface BatchScope {
    * them could still meet across; two maps cannot.
    */
   forOwner(owner: string): WidgetScope;
+  /**
+   * The view core keeps facts about the caller alone in, such as whether they
+   * have a release to read: the same for every source in the batch, so it is
+   * asked once rather than once per source. Only core computes through it.
+   */
+  forCaller(): WidgetScope;
 }
 
 /** The keys one view computes under, created the first time it is asked for. */
@@ -81,8 +87,10 @@ export function createBatchScope(): BatchScope {
   // owners' views sit in a second map, for the same reason.
   const bySource = new Map<string, Map<string, Promise<unknown>>>();
   const byOwner = new Map<string, Map<string, Promise<unknown>>>();
+  const aboutCaller = new Map<string, Promise<unknown>>();
   return {
     forSource: sourceId => viewOver(keysIn(bySource, sourceId)),
     forOwner: owner => viewOver(keysIn(byOwner, owner)),
+    forCaller: () => viewOver(aboutCaller),
   };
 }

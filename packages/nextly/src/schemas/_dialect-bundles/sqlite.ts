@@ -62,6 +62,7 @@ export { userFieldDefinitionsSqlite as userFieldDefinitions } from "../user-fiel
 export { emailProvidersSqlite as emailProviders } from "../email-providers/sqlite";
 export { emailDeliveriesSqlite as emailDeliveries } from "../email-deliveries/sqlite";
 export { emailSendClaimsSqlite as emailSendClaims } from "../email-send-claims/sqlite";
+export { emailQueueSqlite as emailQueue } from "../email-queue/sqlite";
 export { emailTemplatesSqlite as emailTemplates } from "../email-templates/sqlite";
 
 export { nextlySchemaEventsSqlite as nextlySchemaEvents } from "../schema-events/sqlite";

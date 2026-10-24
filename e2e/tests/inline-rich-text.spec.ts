@@ -22,6 +22,7 @@ import { expect, type Page } from "@playwright/test";
 import { test } from "./support/test";
 import { STORAGE_STATE } from "../global-setup";
 import { gotoAdmin } from "./support/admin";
+import { LOCK } from "./support/locks";
 
 /*
  * The control that opens the page builder, in EITHER state.
@@ -185,7 +186,8 @@ async function enterPassage(page: Page, across: number): Promise<void> {
   });
 }
 
-test.describe.configure({ mode: "serial" });
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ mode: "serial", lock: [LOCK.homepage] });
 
 test.use({ storageState: STORAGE_STATE });
 

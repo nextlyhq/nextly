@@ -15,6 +15,10 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 
+import {
+  canonicalWidgets,
+  placedByDefault,
+} from "../../domains/widgets/canonical";
 import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
 import {
   deferredEntities,
@@ -42,6 +46,7 @@ import {
   ACTIVITY_SOURCE_ID,
   ATTENTION_SOURCE_ID,
   CONTENT_SOURCE_ID,
+  RECENT_EDITS_SOURCE_ID,
   TEAM_SOURCE_ID,
 } from "../../domains/widgets/system-source-ids";
 import { resetWidgetRegistries } from "../registrations/register-widgets";
@@ -94,6 +99,7 @@ describe("resetWidgetRegistries", () => {
         ACTIVITY_SOURCE_ID,
         ATTENTION_SOURCE_ID,
         CONTENT_SOURCE_ID,
+        RECENT_EDITS_SOURCE_ID,
         RELEASES_SOURCE_ID,
         TEAM_SOURCE_ID,
         VERSIONS_SOURCE_ID,
@@ -224,17 +230,45 @@ describe("resetWidgetRegistries", () => {
     // it. Sharing one declaration is what makes that impossible; this is what
     // makes it CHECKED, since a future card could still spell the id by hand.
     resetWidgetRegistries();
-
-    const queried = CORE_WIDGETS.filter(widget => widget.query).map(
-      widget => widget.query?.source
-    );
+    const asking = CORE_WIDGETS.filter(card => asksOf(card).length > 0);
     // The population, asserted before the verdict: with no querying card at all
-    // the loop below is vacuously satisfied, which is the shape of a check
+    // the check below is vacuously satisfied, which is the shape of a check
     // reporting on nothing.
-    expect(queried.length).toBeGreaterThan(0);
-    for (const source of queried) {
-      expect(getSource(String(source))).toBeDefined();
-    }
+    expect(asking.length).toBeGreaterThan(0);
+    expect(unservedAsks(CORE_WIDGETS, placedById())).toEqual([]);
+  });
+
+  it("reports a sourceless card no Collection setting supplies, and one placed set to nothing served", () => {
+    // The control: the check above passes only because each of these fails it.
+    resetWidgetRegistries();
+    const bare = { id: "core/bare", query: { op: "count" } };
+    const placedOnNothing = {
+      id: "core/placed",
+      query: { op: "count" },
+      settings: [
+        { name: "collection", type: "collection", defaultValue: "gone" },
+      ],
+    };
+    expect(
+      unservedAsks([bare, placedOnNothing], id => id === "core/placed")
+    ).toEqual([
+      "core/bare: names no source, and no Collection setting supplies one",
+      'core/placed: is placed by default, set to "gone", which nothing serves',
+    ]);
+  });
+
+  it("registers core's sources before core's cards, so a card's filter settings are admitted", () => {
+    // 🔴 Recently edited's Collection and Only mine settings are admitted only
+    // because its source declares those filters, which admission reads from the
+    // source registry. With the sources registered after the cards, as they
+    // once were, the source is not there yet and this boot refuses the card.
+    expect(() => resetWidgetRegistries()).not.toThrow();
+    const settings = listWidgets()
+      .find(widget => widget.id === "core/recently-edited")
+      ?.settings?.map(setting => setting.name);
+    expect(settings).toEqual(
+      expect.arrayContaining(["collection", "onlyMine", "limit"])
+    );
   });
 
   it("still refuses a genuine duplicate WITHIN one boot", () => {
@@ -251,3 +285,65 @@ describe("resetWidgetRegistries", () => {
     expect(() => seedWidget("stripe/revenue")).toThrow(/already registered/);
   });
 });
+
+/** A core card as this check reads it: its query, its cells' queries and its settings. */
+interface AskingCard {
+  id: string;
+  query?: { source?: unknown; op?: unknown };
+  cells?: readonly { query?: { source?: unknown; op?: unknown } }[];
+  settings?: readonly { type: string; defaultValue?: unknown }[];
+}
+
+/** Every query a card asks: its own, and each of its cells'. */
+function asksOf(card: AskingCard): { source?: unknown }[] {
+  return [
+    ...(card.query === undefined ? [] : [card.query]),
+    ...(card.cells ?? []).flatMap(cell => (cell.query ? [cell.query] : [])),
+  ];
+}
+
+/** Whether core places each of its cards on a new dashboard, by the one rule. */
+function placedById(): (id: string) => boolean {
+  const canonical = new Map(canonicalWidgets([]).map(card => [card.id, card]));
+  return id => {
+    const card = canonical.get(id);
+    return card !== undefined && placedByDefault(card);
+  };
+}
+
+/**
+ * Why a card would query a source nothing serves, one line each: a named
+ * source no one registered; a sourceless query no Collection setting supplies;
+ * or a sourceless card placed by default set to a collection nothing serves.
+ */
+function unservedAsks(
+  cards: readonly AskingCard[],
+  placed: (id: string) => boolean
+): string[] {
+  return cards.flatMap(card => {
+    const asks = asksOf(card);
+    const named = asks.flatMap(ask =>
+      typeof ask.source === "string" && getSource(ask.source) === undefined
+        ? [`${card.id}: queries ${ask.source}, which nothing serves`]
+        : []
+    );
+    if (!asks.some(ask => typeof ask.source !== "string")) return named;
+    const setting = card.settings?.find(entry => entry.type === "collection");
+    if (setting === undefined) {
+      return [
+        ...named,
+        `${card.id}: names no source, and no Collection setting supplies one`,
+      ];
+    }
+    const start = setting.defaultValue;
+    const served =
+      typeof start === "string" &&
+      getSource(`collection:${start}`) !== undefined;
+    return placed(card.id) && !served
+      ? [
+          ...named,
+          `${card.id}: is placed by default, set to ${JSON.stringify(start)}, which nothing serves`,
+        ]
+      : named;
+  });
+}

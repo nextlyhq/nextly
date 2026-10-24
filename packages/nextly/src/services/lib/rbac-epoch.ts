@@ -127,6 +127,19 @@ let retirements = 0;
 let degraded = false;
 
 /**
+ * Retirements this process made and could not announce.
+ *
+ * A retirement whose shared half failed publishes nothing, so every other
+ * instance keeps the epoch it has. This process still knows the roles changed.
+ * Counted into its own stamps, the retirement makes everything it filed before
+ * no longer current HERE, in every cache that asks {@link stampIsCurrent},
+ * including the ones in other modules. The count is never written to the
+ * shared row and no other instance compares against it, so it is not a second
+ * epoch: the shared value stays whatever the row last gave.
+ */
+let unannounced = 0;
+
+/**
  * The narrow view of the query builder this module uses.
  *
  * `getDrizzle()` is typed `unknown` because the concrete builder differs per
@@ -218,7 +231,21 @@ function reportDegraded(message: string, detail?: string): void {
  * another instance made.
  */
 export function currentEpoch(): string {
+  const published = publishedEpoch();
+  return unannounced === 0 ? published : `${published}+${String(unannounced)}`;
+}
+
+/** The epoch as the shared row last gave it, which every instance sees. */
+export function publishedEpoch(): string {
   return `${generation}:${String(revision)}`;
+}
+
+/**
+ * Make everything this process filed before now no longer current here, and
+ * announce nothing; see {@link unannounced}.
+ */
+export function retireHereOnly(): void {
+  unannounced += 1;
 }
 
 /**
@@ -531,5 +558,6 @@ export function resetEpochForTests(): void {
   pendingBumps = 0;
   observed = true;
   retirements = 0;
+  unannounced = 0;
   inFlight = null;
 }

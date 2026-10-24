@@ -35,10 +35,16 @@ import {
 } from "../../auth/collection-definition-policy";
 import { wouldReadOwnNewCollection } from "../../auth/new-entity-access-policy";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
+import {
+  callerMayReadAnyRelease,
+  callerMayReadReleases,
+} from "../releases/releases-widget-source";
 
 import { getStartedSteps } from "./get-started";
 import type { GetStartedAnswer } from "./get-started-steps";
 import {
+  createDisabledSlugs,
+  createVerdict,
   readableOfKind,
   readerHasContent,
   readerMayCreateEntry,
@@ -81,6 +87,13 @@ export interface ConditionProbe {
    */
   mayCreateEntry(): Promise<boolean>;
   /**
+   * Whether this reader could create an entry from the dashboard's Create
+   * card, resolved at most once: the same decision as {@link mayCreateEntry},
+   * over the collections that card offers, which leaves out any whose
+   * definition turns creating off (`admin.disableCreate`).
+   */
+  mayCreateOnDashboard(): Promise<boolean>;
+  /**
    * Whether this reader could create a COLLECTION, resolved at most once.
    *
    * Two halves: may they DEFINE one (the grant
@@ -91,6 +104,17 @@ export interface ConditionProbe {
    * reach a new collection.
    */
   mayCreateCollection(): Promise<boolean>;
+  /**
+   * Whether this reader may read releases, by the releases domain's own rule,
+   * resolved at most once. Permissions only: nothing is read.
+   */
+  mayReadReleases(): Promise<boolean>;
+  /**
+   * Whether a release exists that this reader may read, resolved at most once:
+   * `false` without asking the database when they may read none, and otherwise
+   * one id read with a bound of one (`ReleasesService.anyReadable`).
+   */
+  releasesExist(): Promise<boolean>;
   /**
    * The Get started steps offered to this reader, before their skips, resolved
    * at most once: the one answer the setup condition and the step list both
@@ -104,7 +128,10 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
   let singlesRead: Promise<RegistryAnswer> | undefined;
   let content: Promise<ContentAnswer> | undefined;
   let createEntry: Promise<boolean> | undefined;
+  let createOnDashboard: Promise<boolean> | undefined;
   let createCollection: Promise<boolean> | undefined;
+  let readReleases: Promise<boolean> | undefined;
+  let anyRelease: Promise<boolean> | undefined;
   let started: Promise<GetStartedAnswer> | undefined;
 
   const readCollections = (): Promise<RegistryAnswer> => {
@@ -151,6 +178,21 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
     return createCollection;
   };
 
+  // Each collection's create decision, made at most once for the request and
+  // shared by the onboarding step and the Create card's condition: both ask it,
+  // often of the same collections, and asked twice a rule could answer the two
+  // differently within one response.
+  const createVerdicts = new Map<string, Promise<boolean>>();
+  const decideCreate = createVerdict(caller);
+  const mayCreateIn = (slug: string): Promise<boolean> => {
+    let verdict = createVerdicts.get(slug);
+    if (verdict === undefined) {
+      verdict = decideCreate(slug);
+      createVerdicts.set(slug, verdict);
+    }
+    return verdict;
+  };
+
   const probe: ConditionProbe = {
     caller,
     readableSlugs,
@@ -188,11 +230,36 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
       // it, and "they might be granted something on a collection that does not
       // exist yet" is not one.
       createEntry ??= readableSlugs().then(resolved =>
-        readerMayCreateEntry(caller, resolved)
+        readerMayCreateEntry(caller, resolved, mayCreateIn)
       );
       return createEntry;
     },
     mayCreateCollection,
+    mayCreateOnDashboard: () => {
+      createOnDashboard ??= Promise.all([
+        readableSlugs(),
+        createDisabledSlugs(),
+      ]).then(([readable, disabled]) =>
+        readerMayCreateEntry(
+          caller,
+          readable.filter(slug => !disabled.has(slug)),
+          mayCreateIn
+        )
+      );
+      return createOnDashboard;
+    },
+    mayReadReleases: () => {
+      readReleases ??= callerMayReadReleases(caller);
+      return readReleases;
+    },
+    releasesExist: () => {
+      // The read only for a reader the releases domain lets read: the same
+      // question it would refuse otherwise, answered here as "none".
+      anyRelease ??= probe
+        .mayReadReleases()
+        .then(may => (may ? callerMayReadAnyRelease(caller) : false));
+      return anyRelease;
+    },
     getStarted: () => {
       started ??= getStartedSteps(probe);
       return started;

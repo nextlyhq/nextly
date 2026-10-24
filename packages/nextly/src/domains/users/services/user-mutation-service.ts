@@ -1077,16 +1077,7 @@ export class UserMutationService extends BaseService {
         // transaction refuses. SQLite needs no lock (BEGIN IMMEDIATE
         // serializes writers), matching the anchor probe above; the limit is
         // the requested count, which is every row the ids can answer.
-        const rolesQuery = txDb
-          .select({ id: roles.id, slug: roles.slug })
-          .from(roles)
-          .where(inArray(roles.id, input.roleIds))
-          .limit(input.roleIds.length);
-        const txRoles = (
-          this.dialect === "sqlite"
-            ? await rolesQuery
-            : await rolesQuery.for("update")
-        ) as Array<{ id: string; slug: string }>;
+        const txRoles = await this.lockExistingRoles(txDb, input.roleIds);
         if (txRoles.length !== new Set(input.roleIds).size) {
           throw NextlyError.validation({
             errors: [
@@ -1555,8 +1546,12 @@ export class UserMutationService extends BaseService {
         : [];
       const insertRequestedRoles = async (txDb: DrizzleTransactionLike) => {
         if (requestedRoleIds.length === 0) return;
-        // Asked again here, under the lock and in the account's transaction,
-        // so the roles are judged as they stand when they are written.
+        // Asked again here, in the account's transaction, so the roles are
+        // judged as they stand when they are written. It takes the
+        // `super-admin` row's lock, which comes before the roles' own rows
+        // below, the order every change to who is a super-admin takes them
+        // in: deleting a role takes that lock first and the role's row last,
+        // so taken the other way round here the two would deadlock.
         if (caller === "app") {
           await refuseGrantingSuperAdmin(
             txDb as unknown as LastSuperAdminTx,
@@ -1564,6 +1559,23 @@ export class UserMutationService extends BaseService {
             requestedRoleIds,
             { email }
           );
+        }
+        // RE-READ here, holding what exists: a role deleted since the early
+        // lookup would otherwise be assigned as a dangling row on MySQL,
+        // whose `user_roles` carries no foreign key, and the account would
+        // report a role it does not have.
+        const existing = await this.lockExistingRoles(txDb, requestedRoleIds);
+        if (existing.length !== requestedRoleIds.length) {
+          throw NextlyError.validation({
+            errors: [
+              {
+                path: "roles",
+                code: "INVALID_ROLE_ID",
+                message: "One or more role ids are invalid.",
+              },
+            ],
+            logContext: { email },
+          });
         }
         await txDb.insert(this.tables.userRoles).values(
           requestedRoleIds.map(roleId => ({
@@ -2106,16 +2118,32 @@ export class UserMutationService extends BaseService {
             }
             // A deactivation or a role replacement may not leave the install
             // without an active super-admin. First, before any row lock, for
-            // the lock order `refuseRemovingLastSuperAdmin` describes.
-            if (changes.isActive === false || requestedRoleIds) {
+            // the lock order `refuseRemovingLastSuperAdmin` describes. Each is
+            // judged when one request makes both: a role replacement that
+            // takes super-admin from someone is a super-admin's to make, even
+            // beside a deactivation.
+            if (requestedRoleIds) {
               await refuseRemovingLastSuperAdmin(
                 tx as LastSuperAdminTx,
                 this.tables,
                 this.dialect,
-                currentUser.id,
-                changes.isActive === false
-                  ? { kind: "deactivate" }
-                  : { kind: "replaceRoles", roleIds: requestedRoleIds ?? [] }
+                {
+                  kind: "replaceRoles",
+                  userId: currentUser.id,
+                  roleIds: requestedRoleIds,
+                }
+              );
+            }
+            // Only when this update writes the deactivation: an account that
+            // is already inactive, sent `isActive: false` again as the edit
+            // form resends it, loses nothing, so nothing is asked of the
+            // caller for it.
+            if (updateData.isActive === false) {
+              await refuseRemovingLastSuperAdmin(
+                tx as LastSuperAdminTx,
+                this.tables,
+                this.dialect,
+                { kind: "deactivate", userId: currentUser.id }
               );
             }
             if (guardsAdministrator) {
@@ -2200,6 +2228,15 @@ export class UserMutationService extends BaseService {
           await this.afterCommit(() =>
             services.userRoles.invalidateRoleCaches(String(currentUser.id))
           );
+        } else if (updateData.isActive === false) {
+          // A deactivated account's kept access is retired with it, here and
+          // in every other instance, so the next request reads it afresh.
+          await this.afterCommit(async () => {
+            const { invalidatePermissionCache } = await import(
+              "../../../services/lib/permissions"
+            );
+            await invalidatePermissionCache({ userId: String(currentUser.id) });
+          });
         }
         // A deactivated author can no longer be acted as, and a changed email
         // or name is what a code-defined rule judging the author may read, so
@@ -2443,6 +2480,27 @@ export class UserMutationService extends BaseService {
    *
    * @param logContext - Where the refusal came from, for the log only.
    */
+  /**
+   * The roles among `roleIds` that exist, read inside `txDb`'s transaction
+   * and held until it ends, so none can be deleted before the rows that
+   * name them are written. SQLite takes no lock: its write transactions run
+   * one at a time already.
+   */
+  private async lockExistingRoles(
+    txDb: DrizzleTransactionLike,
+    roleIds: readonly string[]
+  ): Promise<Array<{ id: string; slug: string }>> {
+    const { roles } = this.tables;
+    const query = txDb
+      .select({ id: roles.id, slug: roles.slug })
+      .from(roles)
+      .where(inArray(roles.id, [...roleIds]))
+      .limit(roleIds.length);
+    return (
+      this.dialect === "sqlite" ? await query : await query.for("update")
+    ) as Array<{ id: string; slug: string }>;
+  }
+
   private async refuseSuperAdminRoles(
     roleIds: string[],
     logContext: Record<string, unknown>
@@ -2985,8 +3043,7 @@ export class UserMutationService extends BaseService {
           tx as LastSuperAdminTx,
           this.tables,
           this.dialect,
-          userId,
-          { kind: "delete" }
+          { kind: "delete", userId }
         );
 
         // Read the removed account's identity INSIDE the transaction, right
@@ -3268,6 +3325,12 @@ export class UserMutationService extends BaseService {
     // transaction's commit, so neither runs for a deletion it rolls back.
     await this.afterCommit(async () => {
       if (userWasDeleted) {
+        // Their kept access goes with the account, here and in every other
+        // instance.
+        const { invalidatePermissionCache } = await import(
+          "../../../services/lib/permissions"
+        );
+        await invalidatePermissionCache({ userId: String(userId) });
         const payload: UserDeletedPayload = { userId: String(userId) };
         safeEmit(UserEvents.Deleted, payload);
       }

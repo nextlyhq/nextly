@@ -35,7 +35,8 @@ function recordingTx(log: string[], savepoints = true): TransactionContext {
 function linked(tx: TransactionContext) {
   const scope = transactionScope("ctx.db.transaction");
   const surface = {};
-  linkPluginTransaction(surface, tx, scope);
+  // No commit follows here; the dialect suite runs the held effects.
+  linkPluginTransaction(surface, tx, scope, () => undefined);
   return { scope, link: linkedTransaction(surface, "test write") };
 }
 

@@ -15,6 +15,18 @@ linkWorkspacePackages: true
 # migration, unchanged entry for entry. Modern pnpm does not read that block,
 # so leaving it there would have silently dropped every security floor below.
 overrides:
+  # One TypeScript, exactly 7.0.2, for everything that depends on it, which
+  # also answers the older peer ranges some tools declare. Those never load
+  # the compiler on any path this repository runs, measured on 7.0.2 by
+  # recording every request for `typescript`: `@typescript-eslint/*` (`<6.1`)
+  # come only through `eslint-plugin-import-x`, whose `order` rule made none
+  # in a real lint and none alone on a file it reports; `tsconfck` (`^5`), via
+  # `vite-tsconfig-paths`, loads it only for the `parseNative` option, which
+  # no configuration here sets.
+  "typescript": "7.0.2"
+  # attw keeps its own compiler, pinned by attw, to read our packed
+  # declarations: `scripts/typescript-resolves-once.test.mjs` names it.
+  "@arethetypeswrong/core>typescript": "5.6.1-rc"
   "esbuild": ">=0.25.0"
   "undici": "^7.29.0"
   "ws": "^8.21.0"
@@ -92,3 +104,4 @@ allowBuilds:
   msgpackr-extract: false
   sharp: true
   unrs-resolver: true
+

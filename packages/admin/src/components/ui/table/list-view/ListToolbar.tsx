@@ -24,7 +24,7 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { Filter } from "@admin/components/icons";
 import { SearchBar } from "@admin/components/shared/search-bar";
@@ -73,7 +73,7 @@ export function ListToolbar<Row extends object>({
   hasActiveFilters,
   columnsControl,
   actions,
-}: ListToolbarProps<Row>) {
+}: ListToolbarProps<Row>): JSX.Element {
   const hasControls = Boolean(
     filters || inlineFilters || columnsControl || actions
   );

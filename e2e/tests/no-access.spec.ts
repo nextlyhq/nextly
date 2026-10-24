@@ -13,9 +13,11 @@ import { STORAGE_STATE } from "../global-setup";
 
 import { gotoAdmin } from "./support/admin";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
+import { LOCK } from "./support/locks";
 
 // One signed-in user for the whole file: signing in spends the auth budget.
-test.describe.configure({ mode: "serial" });
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ mode: "serial", lock: [LOCK.usersRoles] });
 
 let limited: LimitedUser;
 let page: Page;

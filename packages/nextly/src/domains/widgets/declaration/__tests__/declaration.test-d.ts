@@ -153,10 +153,12 @@ expectTypeOf<WidgetData<typeof unpaidCount>>().toEqualTypeOf<
 // function's literal answer was.
 // `field` describes the grouped field (its label and value labels) when the source declares it;
 // `atLeast` says the bucket counts are floors, from a source that grouped under a work bound,
-// and a bucket's own `atLeast` says that one bucket's count is.
+// and a bucket's own `atLeast` says that one bucket's count is. `asOf` is the
+// instant the answer was computed at, for a source whose buckets depend on it.
 expectTypeOf<WidgetData<typeof ordersByState>>().toEqualTypeOf<{
   buckets: { value: string | null; count: number; atLeast?: boolean }[];
   truncated?: boolean;
+  asOf?: string;
   field?: WidgetResultField;
   atLeast?: boolean;
 }>();

@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineConfig } from "../../collections/config/define-config";
 import { container } from "../../di/container";
-import { clearServices, getService, registerServices } from "../../di/register";
+import { clearServices, registerServices } from "../../di/register";
+import { getService } from "../../di/service-access";
 import { getNextly } from "../../init";
 import { getImageProcessor } from "../../storage/image-processor";
 import {

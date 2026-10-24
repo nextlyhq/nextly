@@ -90,6 +90,16 @@ export type ApiKeyTokenType = "read-only" | "full-access" | "role-based";
 /** Token duration options for key expiry. "unlimited" means the key never expires. */
 export type ExpiresIn = "7d" | "30d" | "90d" | "unlimited";
 
+/**
+ * Why a presented key does not authenticate: for the server's log, never the
+ * caller, who is told the same thing whichever it is.
+ */
+export type ApiKeyRefusalCause =
+  | "unknown"
+  | "revoked"
+  | "expired"
+  | "creator-inactive";
+
 /** The key value returned by generateApiKey(). fullKey is shown once and never stored. */
 export interface GeneratedApiKey {
   /** The full raw key — e.g. "nx_live_<random>...". Show to the user once, then discard. */
@@ -1123,8 +1133,10 @@ export class ApiKeyService extends BaseService {
    *
    * Returns `null` for any failure case (not found, revoked, expired) so the
    * middleware can respond with a uniform 401 without leaking the reason.
+   * Which one it was is told to `onRefused`, for the server's log.
    *
    * @param rawKey - The full raw key from the `Authorization: Bearer` header
+   * @param onRefused - Told why the key does not authenticate, when it does not
    * @returns Auth tuple `{ id, userId, tokenType, roleId }` on success, or `null`
    *
    * @example
@@ -1136,7 +1148,10 @@ export class ApiKeyService extends BaseService {
    * );
    * ```
    */
-  async authenticateApiKey(rawKey: string): Promise<{
+  async authenticateApiKey(
+    rawKey: string,
+    onRefused?: (cause: ApiKeyRefusalCause) => void
+  ): Promise<{
     id: string;
     userId: string;
     tokenType: ApiKeyTokenType;
@@ -1152,14 +1167,12 @@ export class ApiKeyService extends BaseService {
         roleId: this.apiKeysTable.roleId,
         expiresAt: this.apiKeysTable.expiresAt,
         lastUsedAt: this.apiKeysTable.lastUsedAt,
+        // Read rather than filtered on, so a revoked key is told from one
+        // that was never issued.
+        isActive: this.apiKeysTable.isActive,
       })
       .from(this.apiKeysTable)
-      .where(
-        and(
-          eq(this.apiKeysTable.keyHash, keyHash),
-          eq(this.apiKeysTable.isActive, true)
-        )
-      )
+      .where(eq(this.apiKeysTable.keyHash, keyHash))
       .limit(1);
 
     type AuthRow = {
@@ -1169,10 +1182,16 @@ export class ApiKeyService extends BaseService {
       roleId: string | null;
       expiresAt: Date | number | null;
       lastUsedAt: Date | number | null;
+      isActive: boolean | number;
     };
-    if ((rows as AuthRow[]).length === 0) return null;
+    const refused = (cause: ApiKeyRefusalCause): null => {
+      onRefused?.(cause);
+      return null;
+    };
+    if ((rows as AuthRow[]).length === 0) return refused("unknown");
 
     const row = (rows as AuthRow[])[0];
+    if (!row.isActive) return refused("revoked");
 
     // Normalise expiresAt — SQLite returns numeric timestamps, PG/MySQL return Date objects
     const expiresAt: Date | null =
@@ -1182,14 +1201,16 @@ export class ApiKeyService extends BaseService {
           ? new Date(row.expiresAt)
           : null;
 
-    if (isKeyExpired(expiresAt)) return null;
+    if (isKeyExpired(expiresAt)) return refused("expired");
 
     // A key acts with its creator's authority, so it is refused while the
     // creator is deactivated and works again once they are reactivated. Read
     // through the account-standing cache sessions use, so a deactivation is
     // refused at once on the instance that made it and within the cache's
     // lifetime elsewhere. A failed read throws rather than admitting the key.
-    if (!(await accountIsActive(row.userId))) return null;
+    if (!(await accountIsActive(row.userId))) {
+      return refused("creator-inactive");
+    }
 
     await this.recordLastUse(row.id, row.lastUsedAt);
 

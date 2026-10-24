@@ -17,7 +17,7 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 
 /** The `tsc` entry script: `NEXTLY_TSC`, or the one the installed `typescript` declares. */
-function tscEntry() {
+export function tscEntry() {
   if (process.env.NEXTLY_TSC) return resolve(process.env.NEXTLY_TSC);
   const manifest = createRequire(import.meta.url).resolve(
     "typescript/package.json"
@@ -65,6 +65,11 @@ const DIAGNOSTIC = /^(?:(.+?)\((\d+),(\d+)\): )?error (TS\d+): (.*)$/;
  * The diagnostics in `--pretty false` output, in order: the file as printed
  * (undefined for one about the configuration as a whole), its line and column,
  * the code, and the message with its indented continuation lines.
+ *
+ * `chain` keeps those continuation lines as printed, indentation included,
+ * because the indentation is the depth of each step in the message chain: a
+ * caller rendering the chain on one line, as the compiler API's
+ * `flattenDiagnosticMessageText` did, needs it to say the same thing.
  */
 export function diagnosticsIn(output) {
   const found = [];
@@ -78,8 +83,10 @@ export function diagnosticsIn(output) {
         column: column === undefined ? undefined : Number(column),
         code,
         message,
+        chain: [],
       });
     } else if (found.length > 0 && /^\s+\S/.test(line)) {
+      found.at(-1).chain.push(line);
       found.at(-1).message += `\n${line.trim()}`;
     }
   }
@@ -90,10 +97,14 @@ export function diagnosticsIn(output) {
  * Compiles with `args` (files and options, `--noEmit` added) and returns the
  * diagnostics. A run that failed without printing one could not compile at
  * all, which is reported rather than read as a clean result.
+ *
+ * `--incremental false` because the shared base config turns incremental on:
+ * a build-info file another program wrote answers from that program's state,
+ * and an error count read from it can be stale.
  */
 export function compile(args, cwd) {
   const { status, output } = runTsc(
-    ["--noEmit", "--pretty", "false", ...args],
+    ["--noEmit", "--incremental", "false", "--pretty", "false", ...args],
     cwd
   );
   const diagnostics = diagnosticsIn(output);

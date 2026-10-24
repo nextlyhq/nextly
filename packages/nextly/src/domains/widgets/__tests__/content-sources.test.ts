@@ -94,6 +94,32 @@ describe("the content sources a card's settings may offer", () => {
     expect(names).not.toContain("shout");
   });
 
+  it("names the field that titles an entry, so a list can ask each row's name", () => {
+    expect(offeredFor("posts")[0]?.titleField).toBe("title");
+  });
+
+  it("names no title the reader is not offered", () => {
+    // 🔴 Published regardless, a list would ask for a field a read rule may
+    // refuse this reader, and every row would read as untitled or fail.
+    registerFieldFunctions("collection", "notes", [
+      { name: "secret", access: { read: () => true } },
+    ]);
+    registerBuiltInSources([
+      {
+        slug: "notes",
+        useAsTitle: "secret",
+        fields: [
+          { name: "secret", type: "text" },
+          { name: "body", type: "text" },
+        ],
+        timestamps: false,
+      },
+    ]);
+    const [notes] = offeredFor("notes");
+    expect(notes?.collection).toBe("notes");
+    expect(notes).not.toHaveProperty("titleField");
+  });
+
   it("offers only collections whose own card the reader may see", () => {
     // Derived from the visible cards: a declared card and a collection with no
     // card here are not collections this reader was found able to read.

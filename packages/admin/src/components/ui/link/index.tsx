@@ -39,7 +39,9 @@ function prefersNativeNavigation(
 
 // SPA Link: client-side routing for plain left clicks, and the browser's own
 // behavior for modifier/middle clicks, other targets, and downloads.
-export const Link = forwardRef<HTMLAnchorElement, LinkProps>(
+export const Link: React.ForwardRefExoticComponent<
+  LinkProps & React.RefAttributes<HTMLAnchorElement>
+> = forwardRef<HTMLAnchorElement, LinkProps>(
   ({ href, children, className, onClick, target, download, ...props }, ref) => {
     const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
       // Run the consumer's handler first so it can cancel the navigation, and

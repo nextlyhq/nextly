@@ -3,6 +3,8 @@
 // tree; which files each applies to, and which are exempt, is the config's
 // business (oxlint.config.mjs).
 
+import { tabIndicator } from "./tab-indicator/call-sites.mjs";
+
 /** Every built-in error constructor: each carries no code, so each is a 500. */
 const BUILT_IN_ERRORS = new Set([
   "Error",
@@ -290,5 +292,6 @@ export default {
     "no-keyboard-listener": noKeyboardListener,
     "no-static-restricted-import": noStaticRestrictedImport,
     "no-legacy-lifecycle": noLegacyLifecycle,
+    "tab-indicator": tabIndicator,
   },
 };

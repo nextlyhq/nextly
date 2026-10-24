@@ -63,7 +63,16 @@ export function collectPluginContributedSlugs(
     // `contributes` entries are rewritten to their renamed form by the schema
     // fold (identity when the plugin declares no rename for the slug).
     for (const entity of plugin.contributes?.[kind] ?? []) {
-      if (entity?.slug) slugs.add(renameMap[entity.slug] ?? entity.slug);
+      // `Object.hasOwn`, not `renameMap[slug] ?? slug`: a plugin may own a
+      // slug such as `constructor`, which a plain lookup answers with the
+      // inherited function rather than undefined.
+      if (entity?.slug) {
+        slugs.add(
+          Object.hasOwn(renameMap, entity.slug)
+            ? renameMap[entity.slug]
+            : entity.slug
+        );
+      }
     }
     // Legacy top-level entries keep their declared slug: the fold never renames
     // them, so the config carries the declared slug regardless of `renameMap`.

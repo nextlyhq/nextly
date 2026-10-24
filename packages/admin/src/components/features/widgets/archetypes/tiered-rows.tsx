@@ -13,8 +13,9 @@
  * @module components/features/widgets/archetypes/tiered-rows
  */
 
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 
+import { Link } from "@admin/components/ui/link";
 import { cn } from "@admin/lib/utils";
 import type { WidgetResultField } from "@admin/types/dashboard/widgets";
 
@@ -33,7 +34,7 @@ import {
 import { rowsDrawn, rowsLayout, useCardTier, useRowsTier } from "../frame/tier";
 
 import { asPresentedText } from "./cell-text";
-import { MoreExist } from "./more-exist";
+import { MoreExist, ViewAll } from "./more-exist";
 import type { ArchetypeBody } from "./types";
 
 export interface TieredRowsProps {
@@ -44,7 +45,16 @@ export interface TieredRowsProps {
   labelField: string;
   detailField: string | undefined;
   query: Parameters<ArchetypeBody>[1]["query"];
+  /** Where a row's label links to, for a card whose rows each open a document; unlinked when absent. */
+  hrefOf?: (item: Record<string, unknown>) => string | undefined;
+  /** A row's line of detail, for a card whose detail joins several fields; `detailField`'s otherwise. */
+  detailOf?: (item: Record<string, unknown>) => string | undefined;
+  /** A "View all" link under the rows whether or not more exist, in place of "More exist". */
+  viewAll?: boolean;
 }
+
+/** Row links and details beyond the fields a list reads, as a card supplies them. */
+type RowExtras = Pick<TieredRowsProps, "hrefOf" | "detailOf">;
 
 export function TieredRows({
   items,
@@ -52,6 +62,9 @@ export function TieredRows({
   labelField,
   detailField,
   query,
+  hrefOf,
+  detailOf,
+  viewAll = false,
 }: TieredRowsProps): JSX.Element {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
@@ -63,7 +76,7 @@ export function TieredRows({
   return (
     <div className={ROWS_STACK_CLASS}>
       {rowsLayout(tier, columns.length).kind === "table" ? (
-        <RowsTable rows={rows} columns={columns} />
+        <RowsTable rows={rows} columns={columns} hrefOf={hrefOf} />
       ) : (
         <RowsList
           rows={rows}
@@ -71,9 +84,15 @@ export function TieredRows({
           labelField={labelField}
           // Small is title only: a line of detail is the medium layout's.
           detailField={tier === "small" ? undefined : detailField}
+          hrefOf={hrefOf}
+          detailOf={tier === "small" ? undefined : detailOf}
         />
       )}
-      {items.length > drawn && <MoreExist query={query} />}
+      {viewAll ? (
+        <ViewAll query={query} />
+      ) : (
+        items.length > drawn && <MoreExist query={query} />
+      )}
     </div>
   );
 }
@@ -83,12 +102,14 @@ function RowsList({
   columnOf,
   labelField,
   detailField,
+  hrefOf,
+  detailOf,
 }: {
   rows: readonly Record<string, unknown>[];
   columnOf: ReadonlyMap<string, WidgetResultField>;
   labelField: string;
   detailField: string | undefined;
-}) {
+} & RowExtras) {
   return (
     <ul data-testid="widget-list" className={LIST_CLASS}>
       {rows.map((item, index) => {
@@ -96,9 +117,7 @@ function RowsList({
           item[labelField],
           columnOf.get(labelField)
         );
-        const detail = detailField
-          ? asPresentedText(item[detailField], columnOf.get(detailField))
-          : undefined;
+        const detail = rowDetail(item, columnOf, detailField, detailOf);
         return (
           <li
             // The index, because a widget's rows have no identity core can
@@ -113,9 +132,9 @@ function RowsList({
             {/* An em dash rather than an empty line, so a row whose label is absent or
                 unprintable still occupies its place and the count of rows matches the
                 count of results. */}
-            <span className={cn(LIST_LABEL_CLASS, "text-foreground")}>
+            <RowLabel href={hrefOf?.(item)} className={LIST_LABEL_CLASS}>
               {label ?? "—"}
-            </span>
+            </RowLabel>
             {detail !== undefined && (
               <span className={cn(LIST_DETAIL_CLASS, "text-muted-foreground")}>
                 {detail}
@@ -131,10 +150,11 @@ function RowsList({
 function RowsTable({
   rows,
   columns,
+  hrefOf,
 }: {
   rows: readonly Record<string, unknown>[];
   columns: readonly WidgetResultField[];
-}) {
+} & Pick<RowExtras, "hrefOf">) {
   return (
     <table data-testid="widget-table" className={TABLE_CLASS}>
       <thead>
@@ -176,7 +196,14 @@ function RowsTable({
                 {/* Presented by the column's declared kind, so a date column reads as a date
                     rather than as the ISO string it crossed the wire as. An em dash rather than
                     an empty cell, so a missing value is visibly a missing value. */}
-                {asPresentedText(item[column.name], column) ?? "—"}
+                {column === columns[0] ? (
+                  // The first column names the row, so it is the link to its document.
+                  <RowLabel href={hrefOf?.(item)}>
+                    {asPresentedText(item[column.name], column) ?? "—"}
+                  </RowLabel>
+                ) : (
+                  (asPresentedText(item[column.name], column) ?? "—")
+                )}
               </td>
             ))}
           </tr>
@@ -184,4 +211,39 @@ function RowsTable({
       </tbody>
     </table>
   );
+}
+
+/** A row's label: a link to its document where the card gives one, plain text otherwise. */
+function RowLabel({
+  href,
+  className,
+  children,
+}: {
+  href: string | undefined;
+  className?: string;
+  children: ReactNode;
+}) {
+  return href === undefined ? (
+    <span className={cn(className, "text-foreground")}>{children}</span>
+  ) : (
+    <Link
+      href={href}
+      className={cn(className, "font-medium text-foreground hover:underline")}
+    >
+      {children}
+    </Link>
+  );
+}
+
+/** A row's line of detail: the card's own, or its detail field's, or none. */
+function rowDetail(
+  item: Record<string, unknown>,
+  columnOf: ReadonlyMap<string, WidgetResultField>,
+  detailField: string | undefined,
+  detailOf: RowExtras["detailOf"]
+): string | undefined {
+  if (detailOf) return detailOf(item);
+  return detailField
+    ? asPresentedText(item[detailField], columnOf.get(detailField))
+    : undefined;
 }

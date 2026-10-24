@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/storage-uploadthing",
-  "version": "0.0.2-alpha.68",
+  "version": "0.0.2-alpha.69",
   "description": "Uploadthing storage adapter for Nextly",
   "license": "MIT",
   "type": "module",
@@ -20,7 +20,7 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "check-types": "tsc --noEmit",
+    "check-types": "node ../../scripts/tsc.mjs --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
@@ -40,7 +40,7 @@
     "@vitest/ui": "^5.0.5",
     "nextly": "workspace:*",
     "tsdown": "^0.23.1",
-    "typescript": "^5.9.3",
+    "typescript": "7.0.2",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^5.0.5"
   },

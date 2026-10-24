@@ -1,15 +1,22 @@
+import {
+  INSTEAD_OF_A_KEY_CHECK,
+  warnDeprecatedExport,
+} from "../deprecated-exports";
 import type { AuthContext } from "../session/session-types";
 
-import {
-  createErrorResponse,
-  type ErrorResponse,
-} from "./require-permission";
+import { createErrorResponse, type ErrorResponse } from "./require-permission";
 
 /**
  * Attempt API key authentication from the Authorization header.
  * Returns null if no Bearer token present (not an error -- caller should try session auth).
  * Returns ErrorResponse if token is present but invalid/expired/rate-limited.
  * Returns AuthContext on success.
+ *
+ * @deprecated Use `nextly.access.checkApiKey({ rawKey })`, which
+ * authenticates the key and returns its own permissions and roles. It applies
+ * no rate limit, and neither does this function: it only passes on the
+ * refusal the `validateApiKey` given to it reports. Removed in the next
+ * release.
  */
 export async function authenticateApiKey(
   request: Request,
@@ -24,6 +31,7 @@ export async function authenticateApiKey(
     }>;
   }
 ): Promise<AuthContext | ErrorResponse | null> {
+  warnDeprecatedExport("authenticateApiKey", INSTEAD_OF_A_KEY_CHECK);
   const authHeader = request.headers.get("authorization");
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return null; // No API key -- not an error

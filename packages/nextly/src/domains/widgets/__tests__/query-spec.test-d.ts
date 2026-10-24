@@ -70,4 +70,7 @@ expectTypeOf<keyof WidgetQuery>().toEqualTypeOf<
   | "dateField"
   | "interval"
   | "limit"
+  | "since"
+  | "until"
+  | "range"
 >();

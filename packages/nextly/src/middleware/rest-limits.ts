@@ -22,11 +22,15 @@
  *
  * @module middleware/rest-limits
  */
+import { buildErrorResponse } from "../api/error-response";
+import { readOrGenerateRequestId } from "../api/request-id";
+import { recordRefusalReason } from "../auth/access/refusal-message";
 import { container } from "../di/container";
 import { LIMIT_STORE_CALL_TIMEOUT_MS } from "../domains/limits/call-deadline";
 import { openWhileStoreIsDown } from "../domains/limits/core-limit-outage";
 import { guardedAppRateLimitStore } from "../domains/limits/core-limit-store";
 import type { LimitStoreSelection } from "../domains/limits/limit-store-setting";
+import { NEXTLY_ERROR_STATUS } from "../errors/error-codes";
 import { NextlyError } from "../errors/nextly-error";
 import { consoleLogger } from "../shared/types";
 import { getTrustedClientIp } from "../utils/get-trusted-client-ip";
@@ -47,6 +51,7 @@ import {
 import {
   openRestLimitGate,
   type ApiKeyMemory,
+  type KnownApiKey,
   type PersonResolution,
   type RestLimitDecider,
   type RestLimitTarget,
@@ -328,15 +333,18 @@ class RestLimits implements RestLimitDecider {
     const before = await this.boundBefore(bound);
     if ("refused" in before) return this.refusal(request, before.refused);
     try {
-      const resolved = await this.readers.lookupKey(rawKey);
+      let cause: KnownApiKey["cause"];
+      const resolved = await this.readers.lookupKey(rawKey, refused => {
+        cause = refused;
+      });
       if (resolved) {
         keys.remember(rawKey, { resolved, debited: true });
-        return await this.readers.debitKey(resolved.id);
+        return await this.readers.debitKey(resolved.id, request);
       }
       // A key that does not resolve is answered without a second lookup; one
       // nothing could ask about is left for authentication to ask again.
       if (resolved === null) {
-        keys.remember(rawKey, { resolved, debited: false });
+        keys.remember(rawKey, { resolved, debited: false, cause });
       }
       return await this.spendBound(request, bound, before);
     } finally {
@@ -414,8 +422,15 @@ class RestLimits implements RestLimitDecider {
   }
 
   private refusal(request: Request, result: RateLimitResult): Response {
+    // Recorded as every refusal is, whoever words the answer.
+    recordRefusalReason({
+      status: NEXTLY_ERROR_STATUS.RATE_LIMITED,
+      code: "RATE_LIMITED",
+      reason: `the REST rate limit of ${result.limit} a window is spent`,
+      requestId: readOrGenerateRequestId(request),
+    });
     if (this.settings.handler) return this.settings.handler(request, result);
-    return tooManyRequests(result);
+    return tooManyRequests(request, result);
   }
 }
 
@@ -423,26 +438,20 @@ function refusedBy(bucket: Bucket, resetTime: number): RateLimitResult {
   return { allowed: false, limit: bucket.limit, remaining: 0, resetTime };
 }
 
-/** The standard 429 for a spent REST budget. */
-function tooManyRequests(result: RateLimitResult): Response {
+/**
+ * The standard 429 for a spent REST budget, in the one error body every
+ * refusal is answered with; the budget's state rides in its headers.
+ */
+function tooManyRequests(request: Request, result: RateLimitResult): Response {
   const retryAfter = Math.max(
     0,
     Math.ceil((result.resetTime - Date.now()) / 1000)
   );
-  return new Response(
-    JSON.stringify({
-      success: false,
-      error: {
-        code: "RATE_LIMIT_EXCEEDED",
-        message: "Too many requests. Please try again later.",
-        retryAfter,
-      },
-    }),
+  return buildErrorResponse(
+    NextlyError.rateLimited({ retryAfterSeconds: retryAfter }),
     {
-      status: 429,
+      requestId: readOrGenerateRequestId(request),
       headers: {
-        "Content-Type": "application/json",
-        "Retry-After": String(retryAfter),
         "X-RateLimit-Limit": String(result.limit),
         "X-RateLimit-Remaining": "0",
         "X-RateLimit-Reset": String(result.resetTime),

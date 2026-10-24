@@ -1,6 +1,6 @@
 {
   "name": "playground",
-  "version": "0.1.2-alpha.12",
+  "version": "0.1.2-alpha.13",
   "description": "Nextly contributor playground (internal — not for end users)",
   "private": true,
   "scripts": {
@@ -9,7 +9,7 @@
     "start": "next start",
     "nextly": "nextly",
     "ci": "nextly migrate && next build",
-    "check-types": "next typegen && tsc --noEmit --incremental false",
+    "check-types": "next typegen && node ../../scripts/tsc.mjs --noEmit --incremental false",
     "env:copy": "cp .env.example .env",
     "db:seed": "tsx --env-file=.env scripts/seed.ts",
     "plugins:install": "nextly plugins install --all",
@@ -53,10 +53,10 @@
     "better-sqlite3": "^12.10.0",
     "culori": "^4.0.2",
     "jsdom": "^27.1.0",
-    "playwright": "^1.61.1",
+    "playwright": "^1.64.1",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.3.2",
-    "typescript": "^5.9.3",
+    "typescript": "7.0.2",
     "vitest": "^5.0.5"
   }
 }

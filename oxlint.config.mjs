@@ -190,6 +190,7 @@ export default defineConfig({
     // project. Every other configuration file is linted.
     "oxlint.config.mjs",
     "oxlint.scripts.config.mjs",
+    "oxlint.templates.config.mjs",
     "**/vitest.config.{ts,mjs}",
     "**/vitest.*.config.ts",
     "**/vitest.global-setup.{js,ts,mjs,cjs}",
@@ -290,6 +291,11 @@ export default defineConfig({
     "typescript/no-floating-promises": "error",
     "typescript/no-for-in-array": "error",
     "typescript/no-implied-eval": "error",
+    // Under `verbatimModuleSyntax` an import whose names are all marked `type`
+    // inline (`import { type A } from "./x"`) is kept as `import "./x"`, so the
+    // bundler keeps a module the code never uses. `import type { A }` is
+    // dropped whole.
+    "typescript/no-import-type-side-effects": "error",
     "typescript/no-misused-new": "error",
     "typescript/no-misused-promises": "error",
     "typescript/no-namespace": "error",
@@ -505,6 +511,13 @@ export default defineConfig({
       // One owner for keyboard shortcuts: the admin's shortcut manager.
       files: ["packages/admin/src/**/*.{ts,tsx}"],
       rules: { "nextly/no-keyboard-listener": "error" },
+    },
+    {
+      // The Tabs primitive owns its indicator: a call site passes layout, and a
+      // different indicator is a change to the primitive. Every extension JSX
+      // is legal in, since a JavaScript app writes JSX in `.js` too.
+      files: ["packages/**/*.{tsx,jsx,js}", "apps/**/*.{tsx,jsx,js}"],
+      rules: { "nextly/tab-indicator": "error" },
     },
   ],
 });

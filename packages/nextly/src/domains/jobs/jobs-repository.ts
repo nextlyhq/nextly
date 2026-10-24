@@ -29,11 +29,16 @@
 
 import type {
   SelectOptions,
+  TransactionContext,
   UpdateOptions,
   WhereClause,
 } from "@nextlyhq/adapter-drizzle/types";
+import { getColumns } from "drizzle-orm";
 
 import { NextlyError } from "../../errors";
+import { nextlyJobsMysql } from "../../schemas/jobs/mysql";
+import { nextlyJobsPg } from "../../schemas/jobs/postgres";
+import { nextlyJobsSqlite } from "../../schemas/jobs/sqlite";
 import type { JobState } from "../../schemas/jobs/types";
 import { isUniqueViolation } from "../../shared/lib/unique-violation";
 
@@ -192,6 +197,85 @@ export interface FinalizeInput {
   now: Date;
 }
 
+/** A new job's row, as every path that adds one writes it. */
+function newJobRow(id: string, input: NewJob): Record<string, unknown> {
+  return {
+    id,
+    slug: input.slug,
+    input: input.input ?? null,
+    state: "pending" satisfies JobState,
+    run_at: input.runAt,
+    run_as_user_id: input.runAsUserId,
+    dedupe_key: input.dedupeKey,
+    attempt_count: 0,
+    next_attempt_at: null,
+    locked_by: null,
+    locked_until: null,
+    last_error: null,
+    created_at: input.now,
+    updated_at: input.now,
+  };
+}
+
+/** The jobs table's Drizzle model for a dialect. */
+function jobsTableFor(
+  dialect: string
+): typeof nextlyJobsPg | typeof nextlyJobsMysql | typeof nextlyJobsSqlite {
+  switch (dialect) {
+    case "postgresql":
+      return nextlyJobsPg;
+    case "mysql":
+      return nextlyJobsMysql;
+    case "sqlite":
+      return nextlyJobsSqlite;
+    default:
+      throw NextlyError.internal({
+        logContext: { reason: "unsupported dialect for jobs", dialect },
+      });
+  }
+}
+
+/** The Drizzle insert a transaction's handle offers. */
+interface JobInsertDb {
+  insert(table: unknown): { values(row: unknown): PromiseLike<unknown> };
+}
+
+/**
+ * Add a job inside a transaction the caller holds, so it exists only if that
+ * transaction commits.
+ *
+ * Written through the table's Drizzle model, which stores `input` as JSON on
+ * every dialect: a transaction's own `insert` hands a structured value to the
+ * driver as it is, and mysql2 writes an object as `[object Object]`. The row
+ * is `newJobRow`'s, read by each column's SQL name.
+ *
+ * Without a dedupe key: a duplicate-key refusal cannot be recovered from
+ * inside the caller's transaction, since on PostgreSQL the failed insert
+ * aborts it, and a job with no key never meets one. The slug is checked as
+ * `enqueue` checks it.
+ */
+export async function enqueueInTransaction(
+  tx: Pick<TransactionContext, "getDrizzle">,
+  dialect: string,
+  input: Omit<NewJob, "dedupeKey">
+): Promise<{ id: string }> {
+  const id = crypto.randomUUID();
+  const row = newJobRow(id, {
+    ...input,
+    slug: normalizeJobSlug(input.slug),
+    dedupeKey: null,
+  });
+  const table = jobsTableFor(dialect);
+  const values = Object.fromEntries(
+    Object.entries(getColumns(table)).map(([property, column]) => [
+      property,
+      row[column.name],
+    ])
+  );
+  await tx.getDrizzle<JobInsertDb>().insert(table).values(values);
+  return { id };
+}
+
 export class JobsRepository {
   constructor(private readonly db: JobsDatabase) {}
 
@@ -243,22 +327,7 @@ export class JobsRepository {
   ): Promise<EnqueueResult> {
     const id = crypto.randomUUID();
     try {
-      await this.db.insert(JOBS, {
-        id,
-        slug: input.slug,
-        input: input.input ?? null,
-        state: "pending" satisfies JobState,
-        run_at: input.runAt,
-        run_as_user_id: input.runAsUserId,
-        dedupe_key: input.dedupeKey,
-        attempt_count: 0,
-        next_attempt_at: null,
-        locked_by: null,
-        locked_until: null,
-        last_error: null,
-        created_at: input.now,
-        updated_at: input.now,
-      });
+      await this.db.insert(JOBS, newJobRow(id, input));
       return { id, deduped: false };
     } catch (error) {
       // A duplicate key reaches here in one of several shapes and nested a
@@ -378,12 +447,19 @@ export class JobsRepository {
    * `ids` narrows the answer to those rows and changes nothing else: a row
    * named there is returned only when it is due and unheld by the same rule as
    * any other, which is what lets one job be run on demand without a second
-   * definition of "due".
+   * definition of "due". `slug` narrows it the same way, to one job type, so
+   * a caller asking whether that type's jobs are overdue reads this rule too.
+   * `createdBy` narrows it to jobs created at or before that instant: asked
+   * with an instant in the past, the answer is the jobs that have been due
+   * since then at least, since a job with neither a schedule nor a retry is
+   * due from the moment it was created.
    */
   async findDue(input: {
     now: Date;
     limit: number;
     ids?: readonly string[];
+    slug?: string;
+    createdBy?: Date;
   }): Promise<JobRow[]> {
     return this.db.select<JobRow>(JOBS, {
       where: {
@@ -391,6 +467,18 @@ export class JobsRepository {
           ...(input.ids === undefined
             ? []
             : [{ column: "id", op: "IN" as const, value: [...input.ids] }]),
+          ...(input.slug === undefined
+            ? []
+            : [{ column: "slug", op: "=" as const, value: input.slug }]),
+          ...(input.createdBy === undefined
+            ? []
+            : [
+                {
+                  column: "createdAt",
+                  op: "<=" as const,
+                  value: input.createdBy,
+                },
+              ]),
           { column: "state", op: "=", value: "pending" },
           // `runAt` is the schedule and `nextAttemptAt` is the retry. Either
           // being unset means "no constraint from that side", which is why each

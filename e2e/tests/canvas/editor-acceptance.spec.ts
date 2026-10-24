@@ -30,6 +30,7 @@ import {
   boxOf,
   clearSelection,
   clickBlock,
+  editorSelectionText,
   field as fieldOf,
   glyphPoint,
   canvasScope,
@@ -46,6 +47,10 @@ import {
   EDITOR_PROPERTIES,
   editorTitleFor,
 } from "./editor-manifest";
+import { LOCK } from "../support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.homepage] });
 
 function text(id: string, words: string) {
   return { id, type: "core/text", version: 1, props: { text: words } };
@@ -154,7 +159,8 @@ async function editField(
 
 // Not `serial`: every test reseeds the page it edits, so none depends on one
 // before it, and a failure should not hide the verdicts after it. The shared
-// homepage single is safe because the config runs one worker everywhere.
+// homepage single is safe because this file holds the homepage lock (above):
+// no other spec that writes or asserts it runs beside this one.
 
 test.use({ storageState: STORAGE_STATE });
 
@@ -386,16 +392,10 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     await page.keyboard.press(`Shift+${WORD}+ArrowLeft`);
     // The editor applies a selection asynchronously, so each step waits for
     // the previous one to land: a format pressed before the word is selected
-    // formats nothing, and the passage commits plain. Read from the passage's
-    // own window, which is the canvas frame's once there is one.
-    await expect
-      .poll(() =>
-        field.evaluate(
-          element =>
-            element.ownerDocument.defaultView?.getSelection()?.toString() ?? ""
-        )
-      )
-      .toBe("bold");
+    // formats nothing, and the passage commits plain. Waited on in the editor's
+    // own state, not the browser's: the browser shows the word selected before
+    // the editor has read it, and the format acts on what the editor holds.
+    await expect.poll(() => editorSelectionText(field)).toBe("bold");
     await page.keyboard.press("ControlOrMeta+b");
     await expect(field.locator("strong")).toHaveText("bold");
     await clickBlock(page, "ea-heading");

@@ -55,10 +55,9 @@ vi.mock("../di/container", () => ({
 // on either side of it without standing up the RBAC stack.
 const { canReadEntity } = vi.hoisted(() => ({ canReadEntity: vi.fn() }));
 // `importOriginal` rather than a bare factory: the handler now also imports
-// `authorizationGroups` from this module, and that one must stay REAL. It is a
-// pure function of a slug list and the concurrency constant, so a stand-in
-// would make the batching test assert against the test's own arithmetic
-// instead of the bound the product enforces.
+// `authorizationScheduler` from this module, and that one must stay REAL. It is
+// the bound the product enforces, so a stand-in would make the batching test
+// assert against the test's own arithmetic instead.
 vi.mock("../auth/entity-read-access", async importOriginal => {
   const actual =
     await importOriginal<typeof import("../auth/entity-read-access")>();
@@ -410,10 +409,10 @@ describe("POST /api/dashboard/query", () => {
       //
       // Asserted on the GROUPING rather than on elapsed time: each decision is
       // held open, and what is checked is how many are in flight before any of
-      // them answers. `authorizationGroups` prescribes one warm-up decision and
-      // then rounds of eight, so the in-flight count must climb 1, 9, 17, 25,
-      // 30 -- and the unbounded version dispatches all 30 from a single
-      // synchronous `.map`, so its very first observable count is 30.
+      // them answers. The schedule prescribes one warm-up decision and then at
+      // most eight at once, so as each round is answered the count must climb
+      // 1, 9, 17, 25, 30 -- and the unbounded version dispatches all 30 from a
+      // single synchronous `.map`, so its very first observable count is 30.
       registeredCollections = Array.from({ length: 30 }, (_, i) => ({
         slug: `c${i}`,
         fields: [{ name: "title", type: "text" }],
@@ -954,6 +953,42 @@ describe("POST /api/dashboard/query", () => {
 
       expect(JSON.stringify(logged)).toContain("collection:salaries");
     });
+  });
+});
+
+describe("the batch's one instant", () => {
+  it("measures every query in a batch from the same moment, each handed its own copy", async () => {
+    const res = await postWidgetQuery(
+      makeReq({
+        queries: [
+          { source: "collection:posts", op: "count" },
+          {
+            source: "collection:posts",
+            op: "count",
+            where: { status: { equals: "a" } },
+          },
+          {
+            source: "collection:posts",
+            op: "count",
+            where: { status: { equals: "b" } },
+          },
+        ],
+      })
+    );
+    expect(res.status).toBe(200);
+    const instants = executeWidgetQuery.mock.calls.map(
+      call => (call[2] as { now?: Date } | undefined)?.now
+    );
+    expect(instants).toHaveLength(3);
+    const [first, ...rest] = instants;
+    expect(first).toBeInstanceOf(Date);
+    // The same moment for all three: a "last 30 days" and its neighbour
+    // cannot straddle two instants.
+    for (const instant of rest) {
+      expect(instant?.getTime()).toBe(first?.getTime());
+      // A copy each, so a resolver that moves its own cannot move the next.
+      expect(instant).not.toBe(first);
+    }
   });
 });
 

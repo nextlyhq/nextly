@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/admin",
-  "version": "0.0.2-alpha.68",
+  "version": "0.0.2-alpha.69",
   "description": "Nextly - Admin dashboard and management interface",
   "license": "MIT",
   "type": "module",
@@ -33,7 +33,7 @@
     "build:css": "node scripts/build-css.mjs",
     "build:css:watch": "node scripts/build-css-watch.mjs",
     "dev": "node scripts/dev.mjs",
-    "check-types": "tsc --noEmit",
+    "check-types": "node ../../scripts/tsc.mjs --noEmit",
     "check:published-build": "node scripts/check-published-build.mjs",
     "report:bundle": "node scripts/bundle-report.mjs",
     "test": "node scripts/ensure-dist.mjs && vitest run",
@@ -49,7 +49,7 @@
   "peerDependencies": {
     "@nextlyhq/ui": "workspace:^",
     "next": "^15.5.28 || ^16.4.1",
-    "nextly": "0.0.2-alpha.68",
+    "nextly": "0.0.2-alpha.69",
     "react": "^18.0.0 || ^19.0.0",
     "react-dom": "^18.0.0 || ^19.0.0"
   },
@@ -83,15 +83,17 @@
     "tailwindcss": "^4.3.2",
     "terser": "^5.44.1",
     "tsdown": "^0.23.1",
-    "typescript": "^5.9.3",
+    "typescript": "7.0.2",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^5.0.5"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.0",
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-html": "^6.4.11",
     "@codemirror/lang-javascript": "^6.2.4",
     "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-liquid": "^6.3.3",
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/lang-python": "^6.2.1",
     "@codemirror/lang-sql": "^6.10.0",
@@ -140,6 +142,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "lexical": "^0.47.0",
+    "liquidjs": "^10.30.0",
     "lucide-react": "^0.544.0",
     "pluralize": "^8.0.0",
     "react-dropzone": "^14.3.8",

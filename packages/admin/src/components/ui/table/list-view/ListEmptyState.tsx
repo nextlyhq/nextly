@@ -10,6 +10,8 @@
  * @module components/ui/table/list-view/ListEmptyState
  */
 
+import type { JSX } from "react";
+
 import { cn } from "@admin/lib/utils";
 
 import type { ListEmpty } from "./types";
@@ -20,7 +22,7 @@ export function ListEmptyState({
   description,
   action,
   className,
-}: ListEmpty & { className?: string }) {
+}: ListEmpty & { className?: string }): JSX.Element {
   return (
     <div
       className={cn(

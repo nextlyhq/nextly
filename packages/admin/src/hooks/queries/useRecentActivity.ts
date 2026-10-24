@@ -7,6 +7,7 @@
  * @module hooks/queries/useRecentActivity
  */
 
+import type { UseQueryResult } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
@@ -222,7 +223,9 @@ export function activityFromRow(
  * @param limit - Maximum number of activities to fetch (default: 10)
  * @returns TanStack Query result with recent activity data
  */
-export function useRecentActivity(limit = 10) {
+export function useRecentActivity(
+  limit = 10
+): UseQueryResult<RecentActivityResponse, Error> {
   return useQuery<RecentActivityResponse, Error>({
     queryKey: ["dashboard", "activity", limit],
     queryFn: async () => {
