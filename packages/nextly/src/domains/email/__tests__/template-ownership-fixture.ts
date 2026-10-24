@@ -7,6 +7,7 @@
  * so building it in place would leave this suite's shape for the others.
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { eq } from "drizzle-orm";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
@@ -14,6 +15,7 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 
 import {
   createScratchDatabase,
+  type FreshDatabase,
   type ScratchDatabase,
 } from "../../../__tests__/helpers/fresh-database";
 import { getDrizzleKitForDialect } from "../../../database/drizzle-kit-lazy";
@@ -136,4 +138,44 @@ export async function forgetOwnership(store: TemplateStore): Promise<void> {
   await store.exec(
     `UPDATE ${q("email_templates")} SET ${q("owner_kind")} = NULL, ${q("owner_name")} = NULL, ${q("overridden")} = NULL, ${q("base_digest")} = NULL, ${q("base_version")} = NULL`
   );
+}
+
+/** The service over the fresh database, as a boot constructs it. */
+export function serviceOver(fresh: FreshDatabase): EmailTemplateService {
+  const adapter = {
+    dialect: fresh.dialect,
+    getDrizzle: () => fresh.db,
+    getCapabilities: () => ({ dialect: fresh.dialect }),
+    connect: async () => {},
+    disconnect: async () => {},
+    executeQuery: async (sql: string) => {
+      await fresh.exec(sql);
+      return [];
+    },
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(fresh.db),
+  };
+  return new EmailTemplateService(
+    adapter as unknown as DrizzleAdapter,
+    silentLogger
+  );
+}
+
+/** An `email_templates` row as the fresh database stores it, read by id. */
+export async function storedRow(
+  fresh: FreshDatabase,
+  id: string
+): Promise<Record<string, unknown> | undefined> {
+  const db = fresh.db as unknown as {
+    select: () => {
+      from: (table: unknown) => {
+        where: (cond: unknown) => Promise<Record<string, unknown>[]>;
+      };
+    };
+  };
+  const table = fresh.tables.emailTemplates as unknown as { id: unknown };
+  const [row] = await db
+    .select()
+    .from(table)
+    .where(eq(table.id as never, id));
+  return row;
 }

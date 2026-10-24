@@ -18,6 +18,10 @@ import type {
   OwnerChangeChoice as ChangeChoice,
 } from "../../domains/email/template-merge";
 import type { EmailAttachmentInput } from "../../domains/email/types";
+import type {
+  TemplateFormat,
+  WrittenDocument,
+} from "../../domains/email/written/document";
 import type { PrincipalRef } from "../../plugins/principals/types";
 import type { EmailProviderType } from "../../schemas/email-providers/types";
 import type { EmailTemplateVersion as TemplateVersion } from "../../schemas/email-templates/types";
@@ -244,6 +248,15 @@ export interface CreateEmailTemplateArgs extends DirectAPIConfig {
      * beside it.
      */
     description?: string;
+    /**
+     * @experimental `"written"` for a template written in blocks; unset or
+     * `"code"` for one written in HTML. A written template's HTML and plain
+     * text are written from its blocks, so pass `htmlContent: ""` for it.
+     * A coded template is never turned into blocks.
+     */
+    format?: TemplateFormat;
+    /** @experimental A written template's blocks. */
+    blocks?: WrittenDocument;
   };
 }
 

@@ -29,6 +29,7 @@
 import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
 
 import type { EmailAttachmentInput } from "../../domains/email/types";
+import type { WrittenDocument } from "../../domains/email/written/document";
 
 import type { EmailTemplateVariable, EmailTemplateVersion } from "./types";
 
@@ -117,6 +118,15 @@ export const emailTemplatesSqlite = sqliteTable(
      * Supports `{{variable}}` interpolation. Null renders no preheader.
      */
     preheader: text("preheader"),
+
+    /**
+     * Whether the template is written (blocks) or coded (HTML). Null, as on
+     * every row stored before written templates, is coded.
+     */
+    format: text("format"),
+
+    /** A written template's blocks (`domains/email/written`); null for a coded one. */
+    blocks: text("blocks", { mode: "json" }).$type<WrittenDocument>(),
 
     // --------------------------------------------------------
     // Template Metadata
