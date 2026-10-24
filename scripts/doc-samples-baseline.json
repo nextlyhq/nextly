@@ -80,6 +80,10 @@
       "samples": 1,
       "compiled": 1
     },
+    "docs/getting-started/build-a-blog.mdx": {
+      "samples": 5,
+      "compiled": 5
+    },
     "docs/getting-started/index.mdx": {
       "samples": 2,
       "compiled": 2
@@ -91,10 +95,6 @@
     "docs/getting-started/project-structure.mdx": {
       "samples": 3,
       "compiled": 3
-    },
-    "docs/getting-started/quick-start.mdx": {
-      "samples": 5,
-      "compiled": 5
     },
     "docs/guides/authentication.mdx": {
       "samples": 6,
@@ -326,7 +326,7 @@
     }
   },
   "pages": {
-    "docs/getting-started/quick-start.mdx": 1,
+    "docs/getting-started/build-a-blog.mdx": 1,
     "docs/guides/routing-and-seo.mdx": 3,
     "docs/plugins/admin-ui.mdx": 1,
     "docs/plugins/auth.mdx": 2,
@@ -341,7 +341,7 @@
     "docs/plugins/services.mdx": 4
   },
   "findings": {
-    "docs/getting-started/quick-start.mdx": {
+    "docs/getting-started/build-a-blog.mdx": {
       "#1 error TS2769: No overload matches this call. The last overload gave the following error. Argument of type 'unknown' is not assignable to parameter of type 'string | number'.": 1,
       "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
       "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
