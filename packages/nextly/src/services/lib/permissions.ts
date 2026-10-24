@@ -492,8 +492,12 @@ function warnRetiredPermissionCacheSettings(): void {
   );
   if (set.length === 0) return;
   consoleLogger.warn(
-    `${set.join(", ")} no longer change anything: permission answers are no longer cached. ` +
-      "A user's roles and permissions are read once and kept until a role or permission changes. " +
+    `${set.join(", ")} no longer change how access is cached: a user's roles and permissions ` +
+      "are read once and kept until a role or permission changes. " +
+      (set.includes("PERMISSION_CACHE_ENABLED")
+        ? "PERMISSION_CACHE_ENABLED=false still says no instance reads stored permission answers, " +
+          "so they are not emptied when access changes. "
+        : "") +
       "These settings are removed in a later release."
   );
 }
@@ -1029,6 +1033,13 @@ async function retireSharedThenPublish(
   logContext: Record<string, unknown> = {}
 ): Promise<void> {
   return duringRetirement(async () => {
+    // Where the stored answers were turned off, no instance on the release
+    // that reads them reads any, so there is nothing to empty and nothing to
+    // withhold the version for.
+    if (!storedAnswersReadElsewhere()) {
+      await bumpEpoch();
+      return;
+    }
     try {
       await retireShared();
     } catch (error) {
@@ -1046,6 +1057,20 @@ async function retireSharedThenPublish(
     }
     await bumpEpoch();
   });
+}
+
+/**
+ * Whether an instance on the release that reads the stored answers may be
+ * reading them.
+ *
+ * `PERMISSION_CACHE_ENABLED=false` (or `0`) turned the stored answers off in
+ * that release, so an instance running it with the same setting reads none,
+ * and emptying them protects nobody. Read for that alone, on each retirement:
+ * the setting changes nothing else here.
+ */
+function storedAnswersReadElsewhere(): boolean {
+  const setting = process.env.PERMISSION_CACHE_ENABLED;
+  return setting !== "false" && setting !== "0";
 }
 
 async function flushPermissionCaches(): Promise<void> {

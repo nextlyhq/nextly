@@ -832,6 +832,32 @@ describe("the order the two tiers are retired in", () => {
     expect(rbacRevision()).toBe(before);
   });
 
+  it("announces regardless where the stored answers were turned off", async () => {
+    // An instance on the release that reads them, running with them turned
+    // off, reads none, so silence would protect nobody while every other
+    // instance kept serving what it holds, an API key's copied grants for five
+    // minutes among them.
+    const proto = PermissionCacheService.prototype as unknown as Record<
+      string,
+      Tombstone
+    >;
+    const original = proto.invalidateAll;
+    const setting = process.env.PERMISSION_CACHE_ENABLED;
+    const before = rbacRevision();
+    proto.invalidateAll = () =>
+      Promise.reject(new Error("the stored tier is unreachable"));
+    process.env.PERMISSION_CACHE_ENABLED = "false";
+    try {
+      await invalidateAllPermissionCaches();
+    } finally {
+      proto.invalidateAll = original;
+      if (setting === undefined) delete process.env.PERMISSION_CACHE_ENABLED;
+      else process.env.PERMISSION_CACHE_ENABLED = setting;
+    }
+
+    expect(rbacRevision()).not.toBe(before);
+  });
+
   it("announces when it CAN retire them, which is what makes silence a choice", async () => {
     // The control. Without it, "announces nothing on failure" is equally
     // satisfied by an epoch that never moves at all.

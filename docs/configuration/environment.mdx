@@ -300,7 +300,7 @@ The variables below configured the permission cache this replaced. They no longe
 
 | Variable | Status |
 |---|---|
-| `PERMISSION_CACHE_ENABLED` | No longer read. The access cache cannot be turned off. |
+| `PERMISSION_CACHE_ENABLED` | The access cache cannot be turned off. Where an earlier release ran with this set to `false`, keep it so during the upgrade: it tells Nextly that no instance reads the stored answers, so they are not emptied when access changes. |
 | `PERMISSION_CACHE_TTL_SECONDS` | No longer read. |
 | `PERMISSION_CACHE_MEMORY_SIZE` | No longer read. |
 
