@@ -240,6 +240,24 @@ export class SinglePublishAllService extends BaseService {
       if ("result" in resolved) return resolved.result;
       const plan = resolved.plan;
 
+      // The publish permission and rule, asked once for each language this
+      // puts live, before the transaction and off its connection: a rule is
+      // the app's own code and may read the database. The lock re-reads what
+      // goes live, and asks nothing. Asked before the grants and readiness
+      // below too, so a caller who may not publish is refused before any of
+      // the work only a publish needs.
+      const askedLanguages = await this.languagesAsStored(
+        this.adapter,
+        plan,
+        (plan.existingDoc as { status?: unknown }).status
+      );
+      const denied = await this.refusedInEachLanguage(
+        plan,
+        options,
+        askedLanguages
+      );
+      if (denied) return denied;
+
       // Resolved here because the gate that uses them runs inside the write
       // transaction, and resolving grants queries the pooled connection that
       // transaction is holding.
@@ -257,22 +275,6 @@ export class SinglePublishAllService extends BaseService {
         data: {},
         locale: undefined,
       });
-
-      // The publish permission and rule, asked once for each language this
-      // puts live, before the transaction and off its connection: a rule is
-      // the app's own code and may read the database. The lock re-reads what
-      // goes live, and asks nothing.
-      const askedLanguages = await this.languagesAsStored(
-        this.adapter,
-        plan,
-        (plan.existingDoc as { status?: unknown }).status
-      );
-      const denied = await this.refusedInEachLanguage(
-        plan,
-        options,
-        askedLanguages
-      );
-      if (denied) return denied;
 
       const outcome = await withVersionConflictRetry(() =>
         this.adapter.transaction(tx =>

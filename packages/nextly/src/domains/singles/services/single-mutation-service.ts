@@ -812,6 +812,35 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
+   * The language whose pending change a write to every language promotes, as
+   * stored on `db`: the one holding a working draft in that write's own slot,
+   * where the Single is localized and keeps drafts. Already live, it is not
+   * among the languages going live, yet its pending change goes live with the
+   * write, so it is asked about too. A draft the schema has since made
+   * ineligible is not promoted, and is asked about all the same: asking about
+   * one more language can only refuse.
+   */
+  private async languagePromoted(
+    db: TransactionContext | DrizzleAdapter,
+    singleMeta: DynamicSingleRecord,
+    slug: string,
+    entryId: string
+  ): Promise<string[]> {
+    if (singleMeta.versions?.drafts?.enabled !== true) return [];
+    const locale = workingDraftLocale({
+      documentLocalized: singleMeta.localized === true,
+      requestLocale: null,
+      defaultLocale: this.localization?.defaultLocale ?? null,
+    });
+    if (locale === null) return [];
+    const draft = await new VersionsRepository(db).findWorkingDraft(
+      { scopeKind: "single", scopeSlug: slug, entryId },
+      locale
+    );
+    return draft === undefined ? [] : [locale];
+  }
+
+  /**
    * The configured languages other than a document-wide write's own holding a
    * working draft of this Single, through `languagesHoldingWorkingDrafts`;
    * none, without a read, when the Single keeps no drafts.
@@ -1648,9 +1677,10 @@ export class SingleMutationService extends BaseService {
       const companionPhysicallyExists = companionReadiness === "ready";
 
       // A write to every language that publishes asks the publish permission
-      // and rule once for each language it puts live, each time told that
-      // language and all of them, as publishing every language does: a rule
-      // that answers by language answers for each, and any refusal refuses the
+      // and rule once for each language it puts live, the language whose
+      // pending change it promotes among them, each time told that language
+      // and all of them, as publishing every language does: a rule that
+      // answers by language answers for each, and any refusal refuses the
       // write. Asked here, before the transaction and off its connection: a
       // rule is the app's own code and may read the database. The lock
       // re-reads what goes live (below), and asks nothing. Asked before the
@@ -1666,23 +1696,33 @@ export class SingleMutationService extends BaseService {
         sweepAllLocales &&
         !options.overrideAccess &&
         (currentData as { status?: unknown }).status === "published"
-          ? this.languagesToPublish(
-              sweepStatusesReadable && companion
-                ? await readCompanionLocaleStatusAll(
-                    this.adapter.getDrizzle<
-                      Parameters<typeof readCompanionLocaleStatusAll>[0]
-                    >(),
-                    companion.table,
-                    existingDoc.id,
-                    cachedCompanionReadiness(
-                      this.adapter,
-                      companion.companionTableName
-                    )
-                  )
-                : new Map<string, string | null>(),
-              existingDoc.status,
-              reachesLocalizedGroup
-            )
+          ? [
+              ...new Set([
+                ...this.languagesToPublish(
+                  sweepStatusesReadable && companion
+                    ? await readCompanionLocaleStatusAll(
+                        this.adapter.getDrizzle<
+                          Parameters<typeof readCompanionLocaleStatusAll>[0]
+                        >(),
+                        companion.table,
+                        existingDoc.id,
+                        cachedCompanionReadiness(
+                          this.adapter,
+                          companion.companionTableName
+                        )
+                      )
+                    : new Map<string, string | null>(),
+                  existingDoc.status,
+                  reachesLocalizedGroup
+                ),
+                ...(await this.languagePromoted(
+                  this.adapter,
+                  singleMeta,
+                  slug,
+                  existingDoc.id
+                )),
+              ]),
+            ]
           : undefined;
       if (askedLanguages !== undefined) {
         const denied = await askEachLanguage(askedLanguages, () =>
@@ -2061,8 +2101,8 @@ export class SingleMutationService extends BaseService {
                 status => status === "published"
               );
             }
-            // What goes live, re-read under the lock on the statuses it reads,
-            // before the write lands. The rule was asked before the
+            // What goes live, re-read under the lock on the statuses it reads
+            // and the pending change it promotes, before the write lands. The rule was asked before the
             // transaction; a language it was not asked about refuses the write
             // as a conflict. No rule runs here. A write the earlier check did
             // not see publishing was asked about nothing, so any language it
@@ -2072,14 +2112,19 @@ export class SingleMutationService extends BaseService {
               !options.overrideAccess &&
               mainStatusWritten === "published"
             ) {
-              const unasked = unaskedLanguages(
-                askedLanguages ?? [],
-                this.languagesToPublish(
+              const unasked = unaskedLanguages(askedLanguages ?? [], [
+                ...this.languagesToPublish(
                   priorStatuses,
                   preRowMainStatus,
                   reachesLocalizedGroup
-                )
-              );
+                ),
+                ...(await this.languagePromoted(
+                  tx,
+                  singleMeta,
+                  slug,
+                  existingDoc.id
+                )),
+              ]);
               if (unasked.length > 0) {
                 const conflict = languagesChangedConflict(unasked);
                 transitionDeniedResult = {
