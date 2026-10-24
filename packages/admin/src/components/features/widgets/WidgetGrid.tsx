@@ -169,11 +169,16 @@ function askedWith(
     );
     const sized = tier ? { ...row, tier } : row;
     const widget = widgetAsAsked(row.widget, row.config, sources);
-    // The declared query travels with the asked one, so the batch keys the card by what it
-    // declares and a change of its settings asks this card again alone.
+    // The declared query, or cells, travel with the asked ones, so the batch keys the card by
+    // what it declares and a change of its settings asks this card again alone.
     return widget === row.widget
       ? sized
-      : { ...sized, widget, declaredQuery: row.widget.query };
+      : {
+          ...sized,
+          widget,
+          declaredQuery: row.widget.query,
+          declaredCells: row.widget.cells,
+        };
   });
 }
 

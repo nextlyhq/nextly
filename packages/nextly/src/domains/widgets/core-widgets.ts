@@ -442,7 +442,10 @@ const CORE_WIDGET_LITERALS = [
         query: { op: "count", status: "all" },
       },
       {
+        // The trend and the change against the 30 days before are drawn by a
+        // large card alone, so a narrower one does not ask them.
         key: "trend",
+        drawnFrom: "large",
         query: {
           op: "timeseries",
           dateField: "createdAt",
@@ -454,6 +457,7 @@ const CORE_WIDGET_LITERALS = [
       },
       {
         key: "prior",
+        drawnFrom: "large",
         query: { op: "count", status: "all", since: "60d", until: "30d" },
       },
       {
@@ -463,6 +467,8 @@ const CORE_WIDGET_LITERALS = [
         // available", and the card leaves the figure out.
         key: "scheduled",
         when: "lifecycle",
+        // Beside the split, which a small card leaves out.
+        drawnFrom: "medium",
         query: {
           op: "count",
           status: "all",

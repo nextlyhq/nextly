@@ -11,7 +11,6 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
-import { resolveWidgetSettings } from "nextly/config";
 import {
   useMemo,
   useState,
@@ -31,7 +30,11 @@ import type {
 import type { CellSlotLookup } from "../archetypes/types";
 import type { MoveDirection } from "../layout-editor";
 import { cardSpanClass, drawnWidth } from "../sizes";
-import { widgetAsAsked } from "../widget-as-asked";
+import {
+  settingsAsAsked,
+  titleAsAsked,
+  widgetAsAsked,
+} from "../widget-as-asked";
 import { WidgetRenderer } from "../WidgetRenderer";
 
 import { CardActionsMenu, CardWidthLabel } from "./CardActionsMenu";
@@ -508,21 +511,23 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   const hasSettings = (row.widget.settings?.length ?? 0) > 0;
   // Drawn as it was asked: the query the batch sent, with the reader's settings applied.
   const sources = useBranding().widgetSources;
-  const widget = useMemo(
-    () => widgetAsAsked(row.widget, row.config, sources),
-    [row.widget, row.config, sources]
-  );
+  const widget = useMemo(() => {
+    const asked = widgetAsAsked(row.widget, row.config, sources);
+    const title = titleAsAsked(row.widget, row.config, sources);
+    return title === asked.title ? asked : { ...asked, title };
+  }, [row.widget, row.config, sources]);
   /*
    * Resolved HERE, the one place a card's declaration and its reader's stored
-   * config are both in scope. `resolveWidgetSettings` returns only DECLARED
-   * names, so a component cannot act on a key its widget never offered.
+   * config are both in scope. Only DECLARED names are returned, so a component
+   * cannot act on a key its widget never offered, and each as the card's query
+   * was asked with it, so a link the component builds matches its answer.
    */
   const placement = useMemo(
     () => ({
       id: row.placementId,
-      settings: resolveWidgetSettings(widget.settings, row.config),
+      settings: settingsAsAsked(row.widget, row.config, sources),
     }),
-    [row.placementId, widget.settings, row.config]
+    [row.placementId, row.widget, row.config, sources]
   );
   const {
     quick,

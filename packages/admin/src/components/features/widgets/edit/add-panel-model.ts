@@ -41,11 +41,11 @@ export const ADD_PANEL_SECTIONS: ReadonlyArray<{
 ];
 
 /**
- * Whether the Content group is shown. Off until the per-collection content widgets exist: the
- * cards core generates per collection today are retired, and listing them would offer what is
- * about to go.
+ * Whether the Content group is shown. On: core groups only widgets offered per collection there,
+ * so the group lists Count for each collection the reader may read, and each further content
+ * widget joins it as core offers it.
  */
-export const SHOW_CONTENT_GROUP = false;
+export const SHOW_CONTENT_GROUP = true;
 
 /** What a row's control does, or that there is nothing to do. */
 export type AddPanelAction =
@@ -154,7 +154,7 @@ export function addPanelRows(input: {
    * collection gets one row for each.
    */
   collections?: readonly { collection: string; label: string }[];
-  /** Whether the Content group is shown; absent, as this release ships it. */
+  /** Whether the Content group is shown; absent, `SHOW_CONTENT_GROUP` decides. */
   showContent?: boolean;
 }): AddPanelRow[] {
   const { placements, widgets, byId } = input;
@@ -213,6 +213,30 @@ export function addPanelRows(input: {
   return [...removed, ...rows];
 }
 
+/**
+ * What a widget's row says about the widget, whichever row it is: its name, and the description,
+ * category, sketch and widths core states for it, each shown and searched alike on every row.
+ */
+function rowFacts(
+  widgetId: string,
+  facts: WidgetWidthFacts,
+  widget: DashboardWidget | undefined
+): Pick<
+  AddPanelRow,
+  "name" | "description" | "category" | "sketch" | "widths"
+> {
+  const widths = widthsLabel(facts);
+  return {
+    name: widget?.title ?? widgetId,
+    ...(facts.description === undefined
+      ? {}
+      : { description: facts.description }),
+    ...(facts.category === undefined ? {} : { category: facts.category }),
+    ...(facts.sketch === undefined ? {} : { sketch: facts.sketch }),
+    ...(widths === undefined ? {} : { widths }),
+  };
+}
+
 /** One widget's row in its add-panel group, carrying only the facts it states. */
 function widgetRowOf(
   widgetId: string,
@@ -221,18 +245,11 @@ function widgetRowOf(
   placed: number,
   action: AddPanelAction
 ): AddPanelRow {
-  const widths = widthsLabel(facts);
   return {
     key: widgetId,
     section: facts.group as AddPanelGroup,
     ...(facts.subgroup === undefined ? {} : { subgroup: facts.subgroup }),
-    name: widget?.title ?? widgetId,
-    ...(facts.description === undefined
-      ? {}
-      : { description: facts.description }),
-    ...(facts.category === undefined ? {} : { category: facts.category }),
-    ...(facts.sketch === undefined ? {} : { sketch: facts.sketch }),
-    ...(widths === undefined ? {} : { widths }),
+    ...rowFacts(widgetId, facts, widget),
     placed,
     action,
   };
@@ -264,14 +281,7 @@ function perCollectionRows(
       key: `${widgetId}:${collection}`,
       section: "content" as const,
       subgroup: label,
-      name: widget?.title ?? widgetId,
-      ...(facts.description === undefined
-        ? {}
-        : { description: facts.description }),
-      ...(facts.sketch === undefined ? {} : { sketch: facts.sketch }),
-      ...(widthsLabel(facts) === undefined
-        ? {}
-        : { widths: widthsLabel(facts) }),
+      ...rowFacts(widgetId, facts, widget),
       placed,
       action:
         placed > 0

@@ -11,12 +11,15 @@
 
 import {
   applyWidgetSettings,
-  resolveWidgetSettings,
+  effectiveWidgetSettings,
+  type KnobContext,
   type PublishedContentSource,
   type WidgetQuery,
 } from "nextly/config";
 
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
+
+import { collectionSlugOf } from "./archetypes/more-exist";
 
 /**
  * Whether a query names what it reads. A card of a widget offered per
@@ -30,24 +33,81 @@ export function sourcedQuery(
 }
 
 /**
- * Which of a card's conditional cells apply to it: `"lifecycle"` when the collection it is set to
- * has a draft and published lifecycle, as the server published it. A collection whose source is
- * not known asks the cells that need no lifecycle, which every collection can answer.
+ * Which conditional cells a read answers: `"lifecycle"` when the collection it
+ * reads has a draft and published lifecycle, as the server published it. A read
+ * whose collection is not known answers the cells that need no lifecycle, which
+ * every collection can answer.
  */
-function cellConditionFor(
+function cellConditionOf(
+  query: { source?: string },
+  sources: readonly PublishedContentSource[] | undefined
+): "lifecycle" | "no-lifecycle" {
+  const collection = collectionSlugOf(query.source);
+  const source = sources?.find(entry => entry.collection === collection);
+  return source?.lifecycle === true ? "lifecycle" : "no-lifecycle";
+}
+
+/** What the knobs consult: the fields each collection offers this reader, as published. */
+function readerContext(
+  sources: readonly PublishedContentSource[] | undefined
+): KnobContext {
+  return {
+    fieldsOf: (collection: string) =>
+      sources?.find(source => source.collection === collection)?.fields,
+  };
+}
+
+/**
+ * The context a widget's own query is asked in: the reader's fields, and the
+ * widget's source with the filters it narrows by. A knob such as Collection
+ * then sets a key of the query's `where` on a source that reads across
+ * collections, where on a collection source it would replace the source
+ * itself. A widget with no source yet has none to hand on.
+ */
+function queryContext(
+  widget: DashboardWidget,
+  sources: readonly PublishedContentSource[] | undefined
+): KnobContext {
+  const source = widget.query?.source;
+  return {
+    ...readerContext(sources),
+    ...(source === undefined
+      ? {}
+      : {
+          source: {
+            id: source,
+            ...(widget.sourceFilters ? { filters: widget.sourceFilters } : {}),
+          },
+        }),
+  };
+}
+
+/**
+ * A custom card's cells with `config` applied, keeping only those that apply:
+ * each cell's condition is read from the source it reads once the settings
+ * apply, so a cell declaring its own collection is judged by that collection,
+ * and one the Collection setting supplies by the collection the card is set to.
+ * Returns the cells it was given when nothing changes.
+ */
+function cellsAsAsked(
   widget: DashboardWidget,
   config: Record<string, unknown> | undefined,
   sources: readonly PublishedContentSource[] | undefined
-): "lifecycle" | "no-lifecycle" {
-  const name = widget.settings?.find(
-    setting => setting.type === "collection"
-  )?.name;
-  const collection =
-    name === undefined
-      ? undefined
-      : resolveWidgetSettings(widget.settings, config)[name];
-  const source = sources?.find(entry => entry.collection === collection);
-  return source?.lifecycle === true ? "lifecycle" : "no-lifecycle";
+): DashboardWidget["cells"] {
+  const cells = widget.cells ?? [];
+  const ctx = readerContext(sources);
+  const asked = cells.flatMap(cell => {
+    const query = applyWidgetSettings(cell.query, widget.settings, config, ctx);
+    const when = "when" in cell ? cell.when : undefined;
+    if (when !== undefined && when !== cellConditionOf(query, sources)) {
+      return [];
+    }
+    return [query === cell.query ? cell : { ...cell, query }];
+  });
+  const unchanged =
+    asked.length === cells.length &&
+    asked.every((cell, index) => cell === cells[index]);
+  return unchanged ? widget.cells : asked;
 }
 
 /**
@@ -64,49 +124,75 @@ export function widgetAsAsked(
   config: Record<string, unknown> | undefined,
   sources?: readonly PublishedContentSource[]
 ): DashboardWidget {
-  const ctx = {
-    fieldsOf: (collection: string) =>
-      sources?.find(source => source.collection === collection)?.fields,
-  };
   // A custom card's cells are its reads, each asked with the same settings,
-  // and only those that apply to the collection the card is set to.
+  // and only those that apply to the collection each reads.
   if (widget.archetype === "custom" && widget.cells?.length) {
-    const applies = cellConditionFor(widget, config, sources);
-    const cells = widget.cells.filter(
-      cell =>
-        !("when" in cell) || cell.when === undefined || cell.when === applies
-    );
-    const asked = cells.map(cell => {
-      const query = applyWidgetSettings(
-        cell.query,
-        widget.settings,
-        config,
-        ctx
-      );
-      return query === cell.query ? cell : { ...cell, query };
-    });
-    return asked.length === widget.cells.length &&
-      asked.every((cell, index) => cell === widget.cells?.[index])
-      ? widget
-      : { ...widget, cells: asked };
+    const cells = cellsAsAsked(widget, config, sources);
+    return cells === widget.cells ? widget : { ...widget, cells };
   }
   if (!widget.query) return widget;
-  // The widget's own source, with the filters it narrows by: a knob such as
-  // Collection then sets a key of the query's `where` on a source that reads
-  // across collections, where on a collection source it would replace the
-  // source itself. A query with no source yet has none to hand on.
-  const query = applyWidgetSettings(widget.query, widget.settings, config, {
-    ...ctx,
-    ...(widget.query.source === undefined
-      ? {}
-      : {
-          source: {
-            id: widget.query.source,
-            ...(widget.sourceFilters ? { filters: widget.sourceFilters } : {}),
-          },
-        }),
-  });
+  const query = applyWidgetSettings(
+    widget.query,
+    widget.settings,
+    config,
+    queryContext(widget, sources)
+  );
   return query === widget.query ? widget : { ...widget, query };
+}
+
+/**
+ * The settings a card's component is handed: as its query was asked with them, so a component
+ * building a link from its Filter names the filter its answer was read under, never a stored one
+ * the query set aside for a field this reader may not use. One reading with `widgetAsAsked`.
+ */
+export function settingsAsAsked(
+  widget: DashboardWidget,
+  config: Record<string, unknown> | undefined,
+  sources?: readonly PublishedContentSource[]
+): Record<string, unknown> {
+  return effectiveWidgetSettings(
+    widget.settings,
+    config,
+    widget.archetype === "custom" && widget.cells?.length
+      ? readerContext(sources)
+      : queryContext(widget, sources)
+  );
+}
+
+/**
+ * The name of a collection as the server published it to this reader: its label, or its slug
+ * where none is known.
+ */
+export function collectionLabel(
+  collection: string,
+  sources: readonly { collection: string; label: string }[] | undefined
+): string {
+  return (
+    sources?.find(source => source.collection === collection)?.label ??
+    collection
+  );
+}
+
+/**
+ * The title a card is drawn under: its widget's, naming the collection its Collection setting
+ * sets it to, so two of a widget's cards for different collections can be told apart, by sight
+ * and by the region's name alike. A card set to none is titled as its widget.
+ */
+export function titleAsAsked(
+  widget: DashboardWidget,
+  config: Record<string, unknown> | undefined,
+  sources?: readonly PublishedContentSource[]
+): string {
+  const name = widget.settings?.find(
+    setting => setting.type === "collection"
+  )?.name;
+  const collection =
+    name === undefined
+      ? undefined
+      : effectiveWidgetSettings(widget.settings, config)[name];
+  return typeof collection === "string"
+    ? `${widget.title}: ${collectionLabel(collection, sources)}`
+    : widget.title;
 }
 
 /**

@@ -40,7 +40,9 @@ export function moreExistHref(query: CardQuery): string | undefined {
 }
 
 /** The collection a `collection:<slug>` source id names, or `undefined` for any other source. */
-function collectionSlugOf(source: string | undefined): string | undefined {
+export function collectionSlugOf(
+  source: string | undefined
+): string | undefined {
   if (!source?.startsWith(COLLECTION_SOURCE)) return undefined;
   const slug = source.slice(COLLECTION_SOURCE.length);
   return slug === "" ? undefined : slug;

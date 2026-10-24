@@ -33,7 +33,7 @@ import {
 import { answerAsAsked } from "./answer-as-asked";
 import { resolveExecutableSource } from "./executable-source";
 import { relativeSpanStart, type WidgetQuery } from "./query";
-import type { ResolverOptions } from "./resolved-sources";
+import type { ResolverOptions, WidgetScope } from "./resolved-sources";
 import type { WidgetResult, WidgetResultField } from "./result";
 import {
   failUnavailableSourceOrOp,
@@ -117,6 +117,15 @@ function sharedReadArgs(query: WidgetQuery, caller: ReadCaller) {
  * condition the filter already places on the same field still applies, and a
  * reserved top-level condition keeps its place.
  */
+/**
+ * Where a query's window ends: its `until` boundary, or the batch's instant
+ * when it states none. One reading for the rows a window keeps and the
+ * intervals a timeseries draws, so the two cannot cover different periods.
+ */
+function windowEnd(query: WidgetQuery, now: Date): Date {
+  return query.until === undefined ? now : relativeSpanStart(query.until, now);
+}
+
 function windowedQuery(
   query: WidgetQuery,
   field: string,
@@ -125,9 +134,7 @@ function windowedQuery(
   if (query.since === undefined) return query;
   const window: Record<string, string> = {
     greater_than_equal: relativeSpanStart(query.since, now).toISOString(),
-    ...(query.until === undefined
-      ? { less_than: now.toISOString() }
-      : { less_than: relativeSpanStart(query.until, now).toISOString() }),
+    less_than: windowEnd(query, now).toISOString(),
   };
   const where = query.where ?? {};
   const and = Array.isArray(where.and) ? where.and : [];
@@ -237,9 +244,10 @@ async function runTimeseries(
     // and defaults it, so ignoring it here would let a card asking for a week
     // receive a month.
     intervals: query.limit,
-    // The batch's instant ends the chart's last interval, as it ends every
-    // window here, so the bars and a span's bounds come from one clock.
-    now,
+    // The window's end closes the chart's last interval: the batch's instant,
+    // or the `until` boundary of a period in the past, so the bars cover the
+    // rows the window keeps rather than the most recent intervals.
+    now: windowEnd(query, now),
     ...sharedReadArgs(windowedQuery(query, dateField, now), caller),
   });
   return { op: "timeseries", points: result.points, interval: result.interval };
@@ -454,21 +462,22 @@ function namesReleaseCondition(query: WidgetQuery): boolean {
   );
 }
 
-/** The scope key the answer below is kept under, once per source per batch. */
+/** The scope key the answer below is kept under, once per batch. */
 const READABLE_RELEASE_KEY = "has-readable-release";
 
 /**
- * Whether the caller has a release to read, asked once per source in a batch:
- * every card reading this collection's release condition shares one answer.
+ * Whether the caller has a release to read, asked once in a batch: it is a
+ * fact about the caller, not about any collection, so every card reading a
+ * release condition shares one answer, whichever collection it reads. Without
+ * the batch's caller-wide view it falls back to the source's own.
  */
 function hasReadableRelease(
   caller: ReadCaller,
-  opts: ResolverOptions | undefined
+  opts: CoreQueryOptions | undefined
 ): Promise<boolean> {
-  return opts?.scope
-    ? opts.scope.getOrCompute(READABLE_RELEASE_KEY, () =>
-        hasReleaseToRead(caller)
-      )
+  const scope = opts?.callerScope ?? opts?.scope;
+  return scope
+    ? scope.getOrCompute(READABLE_RELEASE_KEY, () => hasReleaseToRead(caller))
     : hasReleaseToRead(caller);
 }
 
@@ -484,10 +493,19 @@ async function hasReleaseToRead(caller: ReadCaller): Promise<boolean> {
   );
 }
 
+/**
+ * What core's own executor is handed beyond a resolver's options: the batch's
+ * view for facts about the caller alone, shared by every source in the batch.
+ * Never handed to a plugin's resolver, whose keys stay in its source's view.
+ */
+export interface CoreQueryOptions extends ResolverOptions {
+  callerScope?: WidgetScope;
+}
+
 export async function executeWidgetQuery(
   query: WidgetQuery,
   caller: ReadCaller,
-  opts?: ResolverOptions
+  opts?: CoreQueryOptions
 ): Promise<WidgetResult> {
   const executable = resolveExecutableSource(query.source);
 

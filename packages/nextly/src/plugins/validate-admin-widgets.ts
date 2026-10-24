@@ -38,7 +38,10 @@ import {
   WIDGET_ARCHETYPES,
 } from "../domains/widgets/definition";
 import type { WidgetQuerySpec } from "../domains/widgets/query";
-import { widgetSettingsProblem } from "../domains/widgets/settings";
+import {
+  settingsSourceOf,
+  widgetSettingsProblem,
+} from "../domains/widgets/settings";
 import { getNextlyLogger } from "../observability/logger";
 
 import type { PluginAdminWidget } from "./admin-contributions";
@@ -341,7 +344,7 @@ const FIELD_RULES: ReadonlyArray<
   // install that declared it.
   // Judged on the widget's own source, as registration judges it.
   widget =>
-    widgetSettingsProblem(widget.settings, false, declaredSourceOf(widget)),
+    widgetSettingsProblem(widget.settings, false, settingsSourceOf(widget)),
 
   // Through the SAME rule the registry applies. Without it a contributed
   // `{ archetype: "metric", chrome: "none" }` passed boot while the registry
@@ -401,18 +404,6 @@ const FIELD_RULES: ReadonlyArray<
  * a Collection setting supplies; `null` for a widget that asks nothing a knob
  * could drive.
  */
-function declaredSourceOf(
-  widget: Record<string, unknown>
-): { id: string } | null | undefined {
-  const query = widget.query;
-  if (typeof query === "object" && query !== null) {
-    const source = (query as { source?: unknown }).source;
-    return typeof source === "string" ? { id: source } : undefined;
-  }
-  const cells = widget.cells;
-  return Array.isArray(cells) && cells.length > 0 ? undefined : null;
-}
-
 function undrawableReason(widget: Record<string, unknown>): string | undefined {
   for (const rule of FIELD_RULES) {
     const problem = rule(widget);
