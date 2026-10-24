@@ -413,7 +413,10 @@ function idIndex(rows: readonly unknown[]): Map<string, number[]> | undefined {
   for (const [index, row] of rows.entries()) {
     const id = rowId(row);
     if (id === undefined) continue;
-    map.set(id, [...(map.get(id) ?? []), index]);
+    // Appended in place: a list repeating one id many times is copied once.
+    const indices = map.get(id);
+    if (indices) indices.push(index);
+    else map.set(id, [index]);
   }
   return map.size > 0 ? map : undefined;
 }
