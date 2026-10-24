@@ -340,6 +340,47 @@ describe("PermissionService - Smoke Tests", () => {
       expectArrayLength(permissions, 0);
     });
 
+    it("refuses a built-in permission, as the delete by id does, and keeps it", async () => {
+      // Named by action and resource rather than id, which the system-resource
+      // guard used to run on alone.
+      const permission = permissionFactory({
+        action: "read",
+        resource: "users",
+      });
+      await testDb.db.insert(testDb.schema.permissions).values(permission);
+
+      await expect(
+        service.deletePermission("read", "users")
+      ).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        publicMessage: "This permission is built in, so it can't be deleted.",
+      });
+      const kept = await testDb.db.query.permissions.findMany({
+        where: { id: permission.id },
+      });
+      expectArrayLength(kept, 1);
+    });
+
+    it("refuses a hidden internal permission without confirming it exists", async () => {
+      // The read by id answers these as absent; a delete must not name them.
+      const permission = permissionFactory({
+        action: "read",
+        resource: "permissions",
+      });
+      await testDb.db.insert(testDb.schema.permissions).values(permission);
+      const generic = {
+        code: "FORBIDDEN",
+        publicMessage: "You don't have permission to perform this action.",
+      };
+
+      await expect(
+        service.deletePermission("read", "permissions")
+      ).rejects.toMatchObject(generic);
+      await expect(
+        service.deletePermissionById(permission.id)
+      ).rejects.toMatchObject(generic);
+    });
+
     it("should return 404 when permission not found by action/resource", async () => {
       // Act: Try to delete non-existent permission
       await expect(
