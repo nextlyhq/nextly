@@ -86,6 +86,13 @@ describe("the content check, booted", () => {
     expect(await contentEmpty()).toBe(true);
     expect(counted).toHaveBeenCalledTimes(50);
     expect(most).toBe(AUTHORIZATION_CONCURRENCY);
+    // Answered in time, setup is known and the first-entry step is offered,
+    // still open: the half the case below must differ from.
+    const progress = await onboardingProgress(conditionProbe(admin));
+    expect(progress.unknown).toBe(false);
+    expect(progress.steps.find(step => step.id === "entry")?.complete).toBe(
+      false
+    );
   });
 
   it('says "unknown" rather than "empty" when the counts outlast the budget', async () => {
@@ -103,8 +110,12 @@ describe("the content check, booted", () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(
       CONTENT_CHECK_BUDGET_MS - 50
     );
-    // And the first-entry step stays open rather than being ticked on a guess.
-    const { steps } = await onboardingProgress(conditionProbe(admin));
-    expect(steps.find(step => step.id === "entry")?.complete).toBe(false);
+    // And the first-entry step is not ticked on a guess. A step whose check
+    // could not finish is not offered at all, since that check is also what
+    // decides whether the reader could finish it, and the answer says setup is
+    // not known, which keeps the card offered.
+    const progress = await onboardingProgress(conditionProbe(admin));
+    expect(progress.unknown).toBe(true);
+    expect(progress.steps.map(step => step.id)).not.toContain("entry");
   }, 20_000);
 });
