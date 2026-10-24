@@ -1397,9 +1397,7 @@ export async function isSuperAdmin(
   // answers `false` as before.
   if (executor === undefined) {
     try {
-      return await keptForRequest(userId, "super-admin", () =>
-        superAdminOnPool(userId)
-      );
+      return await superAdminForRequest(userId);
     } catch (error) {
       getAuthLogger()?.log?.("error", {
         category: "auth",
@@ -1411,6 +1409,30 @@ export async function isSuperAdmin(
     }
   }
   return superAdminAnswer(userId, executor);
+}
+
+/**
+ * Whether a user holds `super-admin`, refusing rather than answering `false`
+ * when the roles cannot be read: for a reader on the pool that must tell "not
+ * a super-admin" from "could not tell", such as one that answers many
+ * questions from a single read and would otherwise answer them all as a
+ * non-admin. The same decision `isSuperAdmin` asks, kept for the request in
+ * the same place.
+ *
+ * @throws NextlyError when the roles cannot be read.
+ */
+export async function isSuperAdminOrRefuse(userId: string): Promise<boolean> {
+  if (!userId) return false;
+  try {
+    return await superAdminForRequest(userId);
+  } catch (cause) {
+    throw unreadable(cause, { reason: "roles-unreadable", userId });
+  }
+}
+
+/** The pooled decision, decided once per request; throws on a failed read. */
+function superAdminForRequest(userId: string): Promise<boolean> {
+  return keptForRequest(userId, "super-admin", () => superAdminOnPool(userId));
 }
 
 /** The pooled super-admin decision, served from the process cache when fresh. */

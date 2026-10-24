@@ -61,6 +61,7 @@ import {
 // `layout-payload.ts`, so the browser asks the endpoint's own question about
 // what fits. Re-exported, so this module's importers are unchanged.
 export {
+  DASHBOARD_FULL_MESSAGE,
   LAYOUT_SCHEMA_VERSION,
   MAX_LAYOUT_BYTES,
   layoutSizeProblem,

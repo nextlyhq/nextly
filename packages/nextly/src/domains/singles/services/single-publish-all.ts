@@ -41,6 +41,10 @@ import type { Logger } from "../../../shared/types";
 import type { PublicationFacts } from "../../audit/record-activity";
 import { recordTransitionEvents } from "../../content-events/write-event";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
+import {
+  fieldGroupWriteAccessOf,
+  type FieldGroupWriteAccess,
+} from "../../field-groups/services/field-group-mutation-service";
 import { readCompanionLocaleStatusAll } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
@@ -546,7 +550,7 @@ export class SinglePublishAllService extends BaseService {
       lockedRow,
       priorCompanionStatuses,
       pending,
-      options.user
+      fieldGroupWriteAccessOf(options)
     );
 
     let publishVersionNo: number | null = null;
@@ -641,8 +645,8 @@ export class SinglePublishAllService extends BaseService {
     priorCompanionStatuses: Map<string, string | null>,
     /** The pending changes, already judged. */
     pending: readonly PendingChange[],
-    /** The publisher, whom the component save's own field rules see. */
-    user: UserContext | undefined
+    /** The publisher, whom the component save's own field rules judge. */
+    access: FieldGroupWriteAccess
   ): Promise<{
     publishedRow: Record<string, unknown>;
     mainRowTransitioned: boolean;
@@ -677,7 +681,7 @@ export class SinglePublishAllService extends BaseService {
     // the statuses would all say published while the content each author was
     // holding stayed unapplied — the document would report itself fully
     // published and show none of the work being published.
-    await this.promotePendingChanges(tx, plan, publishNow, pending, user);
+    await this.promotePendingChanges(tx, plan, publishNow, pending, access);
 
     if (companion && plan.companionPublishable) {
       // Every stored translation moves in ONE statement, through the adapter's
@@ -836,7 +840,8 @@ export class SinglePublishAllService extends BaseService {
     publishNow: Date,
     /** Judged before the statuses moved; see the transaction body. */
     pending: readonly PendingChange[],
-    user: UserContext | undefined
+    /** The publisher, whom the component save's own field rules judge. */
+    access: FieldGroupWriteAccess
   ): Promise<void> {
     if (pending.length === 0) return;
     const { singleMeta, existingDoc, companion } = plan;
@@ -881,7 +886,7 @@ export class SinglePublishAllService extends BaseService {
           values: companionValues,
         });
       }
-      await this.promoteComponents(tx, plan, components, draft.locale, user);
+      await this.promoteComponents(tx, plan, components, draft.locale, access);
     }
 
     await new VersionsRepository(tx).deleteAllWorkingDrafts(
@@ -902,7 +907,7 @@ export class SinglePublishAllService extends BaseService {
     plan: PublishPlan,
     components: Record<string, unknown>,
     locale: string | null,
-    user: UserContext | undefined
+    access: FieldGroupWriteAccess
   ): Promise<void> {
     if (!this.fieldGroupDataService || Object.keys(components).length === 0) {
       return;
@@ -913,7 +918,8 @@ export class SinglePublishAllService extends BaseService {
       fields: plan.fieldConfigs,
       data: structuredClone(components),
       locale: locale ?? undefined,
-      req: user ? { user } : {},
+      req: access.user ? { user: access.user } : {},
+      access,
     });
   }
 
