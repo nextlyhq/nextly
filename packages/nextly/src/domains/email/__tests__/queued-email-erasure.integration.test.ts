@@ -19,7 +19,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { container } from "../../../di/container";
 import { env } from "../../../lib/env";
@@ -56,6 +56,8 @@ import {
 import { scopedSender } from "../send-claims";
 import type { EmailService } from "../services/email-service";
 import { EmailDeliveryService } from "../services/email-delivery-service";
+import type { EmailTemplateService } from "../services/email-template-service";
+import { sealSetting } from "../../plugins/settings-crypto";
 import type { EmailProviderAdapter } from "../types";
 
 type SentOptions = Parameters<EmailProviderAdapter["send"]>[0];
@@ -88,6 +90,7 @@ let current: TestNextly | undefined;
 let ctx: PluginContext | undefined;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   setNextlyLogger(undefined);
   await current?.destroy();
   current = undefined;
@@ -207,6 +210,9 @@ function latch(): { promise: Promise<void>; open: () => void } {
 }
 
 const message = { subject: SUBJECT, html: BODY };
+
+/** A template every boot seeds, for a call that never gets as far as it. */
+const SHARED_TEMPLATE = "welcome";
 
 describe.each(getConfiguredTestDialects())(
   "queued email and erasure (%s)",
@@ -417,6 +423,69 @@ describe.each(getConfiguredTestDialects())(
       expect(calls).toHaveLength(2);
       expect(calls[1]?.cc).toEqual(["first-copy@example.com"]);
       expect((await queued(t, result.id)).state).toBe("sent");
+    });
+
+    it("sends none of its frozen copies once its template carries a secret", async () => {
+      // An owner redeploys the template marked as carrying a secret between
+      // attempts: the retry renders that content, so the copies frozen when
+      // the email was queued must not receive it.
+      const t = await boot(dialect);
+      await t.nextly.emailTemplates.create({
+        data: {
+          name: "Turns secret",
+          slug: "turns-secret",
+          subject: "Hello",
+          htmlContent: "<p>hi</p>",
+          isActive: true,
+          cc: ["copied@example.com"],
+        },
+      } as never);
+      behaviour.failures = 1;
+      const result = await t.nextly.email.queueWithTemplate({
+        template: "turns-secret",
+        to: SHARED,
+        variables: {},
+      });
+      expect(result.state).toBe("waiting");
+      expect(calls[0]?.cc).toEqual(["copied@example.com"]);
+      await t.adapter.update(
+        "email_templates",
+        { carriesSecret: true },
+        { and: [{ column: "slug", op: "=", value: "turns-secret" }] }
+      );
+
+      await trigger(t);
+
+      // Without its copies the message differs from the one its key went
+      // out with, so the retry is refused rather than sent: the copy never
+      // receives what the template now carries.
+      expect(calls).toHaveLength(1);
+      const row = await queued(t, result.id);
+      expect(row.state).toBe("failed");
+      expect(
+        JSON.parse((row as unknown as { failure: string }).failure)
+      ).toMatchObject({ retryable: false, status: 409 });
+    });
+
+    it("refuses a template email queued in an open transaction without tx, before reading the template", async () => {
+      // Read on the pool from inside the transaction, the lookup could wait
+      // on that transaction's own connection.
+      const t = await boot(dialect);
+      const lookup = vi.spyOn(
+        container.get<EmailTemplateService>("emailTemplateService"),
+        "resolveForSend"
+      );
+      await expect(
+        plugin().db.transaction(async () => {
+          await plugin().services.email.queueWithTemplate(
+            SHARED_TEMPLATE,
+            SHARED,
+            {}
+          );
+        })
+      ).rejects.toThrow();
+      expect(lookup).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
     });
 
     it("has its recipients' digests removed with it when it is pruned", async () => {
@@ -647,6 +716,47 @@ describe.each(getConfiguredTestDialects())(
         resealed: 0,
         unreadable: 1,
       });
+    });
+
+    it("re-seals the rest when one held message opens but does not parse", async () => {
+      const t = await boot(dialect);
+      const [old, current] = [
+        "old-secret-at-least-32-characters-long!!!!!",
+        "current-secret-at-least-32-characters-long!",
+      ];
+      const dialectName = t.adapter.getCapabilities().dialect;
+      const store = () =>
+        t.adapter.transaction(ctx =>
+          storeQueuedEmail(ctx, {
+            scope: "site",
+            message: { kind: "message", send: { ...message, to: SHARED } },
+            person: null,
+            secrets: [old],
+            lockServer: rowLockServer(t.adapter, dialectName),
+            dialect: dialectName,
+            now: new Date(),
+          })
+        );
+      const damaged = await store();
+      const sound = await store();
+      // Sealed under the old secret, authenticated, and not a message.
+      await t.adapter.update(
+        "email_queue",
+        {
+          message: `sealed:${sealSetting("not a message", old, "nextly core", ["email_queue", damaged.id])}`,
+        },
+        { and: [{ column: "id", op: "=", value: damaged.id }] }
+      );
+
+      expect(await resealQueuedMessages(t.adapter, [current, old])).toEqual({
+        resealed: 1,
+        unreadable: 1,
+      });
+      expect(
+        openQueuedMessage((await queued(t, sound.id)).message ?? "", sound.id, [
+          current,
+        ])
+      ).toBeDefined();
     });
 
     it("never writes its address, subject or body to a log", async () => {

@@ -1378,6 +1378,9 @@ export class EmailService extends BaseService {
     tx: TxOption["tx"],
     operation: string
   ): Promise<QueuedEmail> {
+    // Refused before anything is read: a lookup on the pool from inside an
+    // open transaction can wait on that transaction's own connection.
+    if (tx === undefined) assertNoOpenTransaction(this.adapter, operation);
     const sealed: QueuedMessage =
       message.kind === "template"
         ? {
@@ -1405,7 +1408,6 @@ export class EmailService extends BaseService {
       }
       return { id: stored.id, state: stored.state };
     }
-    assertNoOpenTransaction(this.adapter, operation);
     const person = await this.assertQueueable(checks);
     const stored = await runAdapterTransaction<
       StoredQueuedEmail,
@@ -1709,20 +1711,27 @@ export class EmailService extends BaseService {
       replyTo,
       ...withTemplateCopies(
         given,
-        this.frozenCopies ?? this.templateCopies(template, slug)
+        this.templateCopies(template, slug, this.frozenCopies)
       ),
     };
   }
 
   /**
-   * The copies a template adds to every send: its stored `cc` and `bcc`,
-   * none on a template that carries a secret.
+   * The copies a template adds to every send: its stored `cc` and `bcc`, or
+   * `frozen` in their place when given, and none either way on a template
+   * that carries a secret now. Checked on the template as it is at the send,
+   * so copies frozen when an email was queued are left out once its owner
+   * marks it as carrying a secret.
    */
   private templateCopies(
     template: EmailTemplateRecord | null,
-    slug: string
+    slug: string,
+    frozen?: { cc: string[]; bcc: string[] }
   ): { cc: string[] | null; bcc: string[] | null } {
-    const copies = { cc: template?.cc ?? null, bcc: template?.bcc ?? null };
+    const copies = frozen ?? {
+      cc: template?.cc ?? null,
+      bcc: template?.bcc ?? null,
+    };
     if (template?.carriesSecret && (copies.cc?.length || copies.bcc?.length)) {
       this.logger.warn(
         "Left out an email template's copies: the template carries a secret",
