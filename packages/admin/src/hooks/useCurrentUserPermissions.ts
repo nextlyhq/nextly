@@ -7,6 +7,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
+import { SYSTEM_RESOURCE_SET } from "../constants/permissions";
 import { LOCALE_PARAM } from "../constants/search-params";
 import { protectedApi } from "../lib/api/protectedApi";
 import type {
@@ -223,6 +224,33 @@ const CAPABILITY_OF_ACTION = {
   unpublish: "canUnpublish",
 } as const satisfies Record<string, keyof CollectionCapabilities>;
 
+/** An action the server's answer about collections and Singles covers. */
+type EntityAction = keyof typeof CAPABILITY_OF_ACTION;
+
+/**
+ * The action and resource a permission slug (`<action>-<resource>`) names,
+ * when the action is one the server's answer covers and the resource is not
+ * built in: such a slug may be about a collection or Single. Null for any
+ * other slug, which only the permission list answers. Actions have no hyphen
+ * and slugs may, so the slug splits at its first.
+ */
+function entityPermission(
+  slug: string
+): { action: EntityAction; resource: string } | null {
+  const dash = slug.indexOf("-");
+  const action = slug.slice(0, dash);
+  const resource = slug.slice(dash + 1);
+  if (
+    dash <= 0 ||
+    resource === "" ||
+    !Object.hasOwn(CAPABILITY_OF_ACTION, action) ||
+    SYSTEM_RESOURCE_SET.has(resource)
+  ) {
+    return null;
+  }
+  return { action: action as EntityAction, resource };
+}
+
 /** Where an answer the hook asks for stands. */
 type AnswerState = {
   isLoading: boolean;
@@ -257,6 +285,12 @@ type CurrentUserPermissions = AnswerState & {
     collectionSlug: string,
     action: "read" | "create" | "update" | "delete" | "publish" | "unpublish"
   ) => boolean;
+  /**
+   * Whether the user may do what a permission slug names: an action on a
+   * collection or Single as the server's answer decides it, code rules
+   * included, and any other slug from the permission list.
+   */
+  can: (permission: string) => boolean;
 };
 
 /** Whether the content answer has failed and has never answered. */
@@ -696,6 +730,24 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     return entity[CAPABILITY_OF_ACTION[action]];
   };
 
+  /**
+   * Whether the user may do what `permission` names. A slug the server's
+   * answer names the entity of is answered from it, so a code rule that
+   * refuses what a role's permission allows is followed. Until that answer is
+   * in hand nothing is known about any entity, so such a slug is refused
+   * rather than guessed from the permission list, which cannot see the rules.
+   * Every other slug (a system resource, a plugin's own permission) is the
+   * permission list's.
+   */
+  const can = (permission: string): boolean => {
+    const asked = entityPermission(permission);
+    if (asked === null) return hasPermission(permission);
+    if (!content.hasAnswer) return false;
+    return Object.hasOwn(answer.data?.entities ?? {}, asked.resource)
+      ? canAccessCollection(asked.resource, asked.action)
+      : hasPermission(permission);
+  };
+
   return {
     capabilities,
     permissions,
@@ -709,5 +761,6 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     },
     hasPermission,
     canAccessCollection,
+    can,
   };
 }
