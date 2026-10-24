@@ -1048,15 +1048,14 @@ async function retireSharedThenPublish(
       await bumpEpoch();
       return;
     }
-    // A later release drops the table once nothing reads it, possibly while
-    // this one still serves. Gone, it holds nothing to empty, and failing on
-    // it would withhold the version from every other instance.
-    if (!(await getAdapter().tableExists(STORED_ANSWERS_TABLE))) {
-      await bumpEpoch();
-      return;
-    }
     try {
-      await retireShared();
+      // A later release drops the table once nothing reads it, possibly while
+      // this one still serves. Gone, it holds nothing to empty, and failing on
+      // it would withhold the version from every other instance. Asked inside
+      // this `try`, so a probe that fails is handled as a failed emptying.
+      if (await getAdapter().tableExists(STORED_ANSWERS_TABLE)) {
+        await retireShared();
+      }
     } catch (error) {
       // Reported, not thrown: an invalidation failure must not break the
       // write that raised it. Unpublished, though, for the reason above.

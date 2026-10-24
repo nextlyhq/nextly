@@ -20,9 +20,10 @@ import { randomUUID } from "node:crypto";
 
 import { eq, sql } from "drizzle-orm";
 import { createTestNextly, type TestNextly } from "nextly/testing";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getDialectTables } from "../../database/index";
+import { container } from "../../di/container";
 import { ApiKeyService } from "../../domains/auth/services/api-key-service";
 import { PermissionCacheService } from "../../domains/auth/services/permission-cache-service";
 import { PermissionService } from "../../domains/auth/services/permission-service";
@@ -390,6 +391,36 @@ describe("an API key's grants are retired when the roles behind them change", ()
     }
 
     // POPULATION CONTROL: the failure path ran, so nothing was announced.
+    expect(rbacRevision()).toBe(before);
+    expect(await grants()).not.toContain(ONLY_IN_THE_CATALOGUE);
+  });
+
+  it("loses it here when the stored table cannot even be asked about, though nothing is announced", async () => {
+    // A probe that fails tells nothing about the stored answers, so it is
+    // handled as a failed emptying: nothing announced, and what this process
+    // kept retired all the same.
+    await seedDeputy();
+    expect(await grants()).toContain(ONLY_IN_THE_CATALOGUE);
+    await revokeInheritance();
+    // The adapter the retirement asks, which is the registered one.
+    const adapter = container.get<{
+      tableExists(table: string): Promise<boolean>;
+    }>("adapter");
+    const probe = vi
+      .spyOn(adapter, "tableExists")
+      .mockRejectedValue(new Error("the catalogue is unreadable"));
+    const before = rbacRevision();
+    let asked = 0;
+    try {
+      await invalidateAllPermissionCaches();
+    } finally {
+      // Counted before the restore, which clears the spy's calls.
+      asked = probe.mock.calls.length;
+      probe.mockRestore();
+    }
+
+    // POPULATION CONTROL: the probe was asked, and nothing was announced.
+    expect(asked).toBeGreaterThan(0);
     expect(rbacRevision()).toBe(before);
     expect(await grants()).not.toContain(ONLY_IN_THE_CATALOGUE);
   });
