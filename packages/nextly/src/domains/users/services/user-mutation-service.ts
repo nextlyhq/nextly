@@ -2224,6 +2224,15 @@ export class UserMutationService extends BaseService {
           await this.afterCommit(() =>
             services.userRoles.invalidateRoleCaches(String(currentUser.id))
           );
+        } else if (updateData.isActive === false) {
+          // A deactivated account's kept access is retired with it, here and
+          // in every other instance, so the next request reads it afresh.
+          await this.afterCommit(async () => {
+            const { invalidatePermissionCache } = await import(
+              "../../../services/lib/permissions"
+            );
+            await invalidatePermissionCache({ userId: String(currentUser.id) });
+          });
         }
         // A deactivated author can no longer be acted as, and a changed email
         // or name is what a code-defined rule judging the author may read, so
@@ -3312,6 +3321,12 @@ export class UserMutationService extends BaseService {
     // transaction's commit, so neither runs for a deletion it rolls back.
     await this.afterCommit(async () => {
       if (userWasDeleted) {
+        // Their kept access goes with the account, here and in every other
+        // instance.
+        const { invalidatePermissionCache } = await import(
+          "../../../services/lib/permissions"
+        );
+        await invalidatePermissionCache({ userId: String(userId) });
         const payload: UserDeletedPayload = { userId: String(userId) };
         safeEmit(UserEvents.Deleted, payload);
       }
