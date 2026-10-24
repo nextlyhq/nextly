@@ -330,6 +330,73 @@ export class NextlyError extends Error {
   }
 
   /**
+   * Something only a signed-in person can do, asked by a caller that is not
+   * one: an API key, or a request acting as no person. Forbidden, and the
+   * message says so, since it is about what kind of caller asked, not about
+   * the caller's permissions. `doing` completes "Only a signed-in person can".
+   */
+  static personOnly(opts: {
+    doing: string;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "FORBIDDEN",
+      publicMessage: `Only a signed-in person can ${opts.doing}.`,
+      logContext: opts.logContext,
+    });
+  }
+
+  /**
+   * A role or permission built into Nextly, which is never changed or
+   * deleted. Forbidden, and the message says so: it is a fact about the role,
+   * not about the caller's permissions.
+   */
+  static builtIn(opts: {
+    thing: "role" | "permission";
+    change: "change" | "delete";
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "FORBIDDEN",
+      publicMessage: `This ${opts.thing} is built in, so it can't be ${
+        opts.change === "change" ? "changed" : "deleted"
+      }.`,
+      logContext: opts.logContext,
+    });
+  }
+
+  /**
+   * A request from a site not allowed to make it: its own `Origin` names a
+   * site the installation does not allow. Forbidden, and the message says so;
+   * the origin is the caller's own, so naming its kind tells them nothing.
+   */
+  static originRefused(opts?: {
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "FORBIDDEN",
+      publicMessage:
+        "This request came from a site that isn't allowed to make it.",
+      logContext: opts?.logContext,
+    });
+  }
+
+  /**
+   * A Single deleted without `force`: Singles hold a site's lasting settings,
+   * so they are not deleted from here, only by an admin or CLI clean-up that
+   * passes `force`. Forbidden, and the message says so.
+   */
+  static singleNotDeletable(opts?: {
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "FORBIDDEN",
+      publicMessage: "A Single can't be deleted from here.",
+      logContext: opts?.logContext,
+    });
+  }
+
+  /**
    * A collection, Single or component defined in code, which is changed by
    * changing its code and not from here. Forbidden, and the message says so:
    * it is a fact about the thing, not about the caller's permissions, so it

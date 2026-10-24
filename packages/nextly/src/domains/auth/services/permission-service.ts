@@ -838,10 +838,12 @@ export class PermissionService extends BaseService {
     }
 
     if (isSystemResource(permission.resource)) {
-      // §13.8: forbidden messages must not reveal *why* (the policy / which
-      // resource is system). Generic "You don't have permission..." comes
-      // from the factory; the detail moves to logContext.
-      throw NextlyError.forbidden({
+      // A permission built into Nextly is never deleted, and the caller is
+      // told so: a fact about the permission, not about their permissions,
+      // which §13.8 keeps generic. The detail moves to logContext.
+      throw NextlyError.builtIn({
+        thing: "permission",
+        change: "delete",
         logContext: {
           reason: "system-permission-undeletable",
           permissionId,

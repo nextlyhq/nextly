@@ -271,7 +271,10 @@ describe("PermissionService - Smoke Tests", () => {
 
       await expect(
         service.deletePermissionById(permission.id)
-      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      ).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        publicMessage: "This permission is built in, so it can't be deleted.",
+      });
     });
 
     it("should return 404 when deleting non-existent permission", async () => {

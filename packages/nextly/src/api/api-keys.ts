@@ -66,13 +66,14 @@ async function requireApiKeyPermission(req: Request, action: ApiKeyOperation) {
 }
 
 /**
- * Throw the canonical FORBIDDEN error for session-only operations. Per spec
- * §13.8 every 403 across the API ships the same canonical sentence; the
- * session-only reason and the attempted action live in `logContext` for
- * operator triage.
+ * Refuse a session-only operation asked by an API key: only a signed-in
+ * person may manage keys. The refusal is about what kind of caller asked,
+ * not its permissions, so it says so; §13.8 keeps refusals for want of
+ * permission generic. The attempted action lives in `logContext`.
  */
 function denySessionOnly(action: "create" | "update" | "delete"): never {
-  throw NextlyError.forbidden({
+  throw NextlyError.personOnly({
+    doing: "manage API keys",
     logContext: { reason: "session-only", action },
   });
 }

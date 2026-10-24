@@ -335,6 +335,12 @@ describe.each(getConfiguredTestDialects())(
           user: { id: holderId },
           actor,
         });
+        // Told why: what kind of caller asked, not a permission it lacks.
+        const ONLY_A_PERSON = {
+          code: "FORBIDDEN",
+          statusCode: 403,
+          publicMessage: "Only a signed-in person can manage API keys.",
+        };
         const key = await keyOf(holderId, "kept by key");
         const before = await ownedBy(holderId);
 
@@ -345,13 +351,13 @@ describe.each(getConfiguredTestDialects())(
             tokenType: "read-only",
             expiresIn: "unlimited",
           })
-        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+        ).rejects.toMatchObject(ONLY_A_PERSON);
         await expect(
           asKey.apiKeys.update({ id: key.id, name: "by a key" })
-        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+        ).rejects.toMatchObject(ONLY_A_PERSON);
         await expect(
           asKey.apiKeys.revoke({ id: key.id })
-        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+        ).rejects.toMatchObject(ONLY_A_PERSON);
 
         expect(await ownedBy(holderId)).toBe(before);
         expect(await stored(key.id)).toMatchObject({

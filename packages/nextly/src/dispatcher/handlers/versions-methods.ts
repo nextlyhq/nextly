@@ -366,7 +366,8 @@ export async function markVersionSeenForDocument(
   }
   const userId = readingPersonId(args.user, args.authenticatedScope);
   if (userId === null) {
-    throw NextlyError.forbidden({
+    throw NextlyError.personOnly({
+      doing: "mark a version as seen",
       logContext: {
         reason: "mark-seen-not-a-person",
         actorType: args.authenticatedScope?.actorType,
