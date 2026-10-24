@@ -511,14 +511,20 @@ export interface WidgetDefinition {
    * Where the add panel offers this widget, when not as one card for the
    * whole dashboard.
    *
-   * `"per-collection"`: offered only inside each collection's group of the add
-   * panel, one row per collection, a card starting with that collection as its
-   * Collection setting, any number of cards; never on the default dashboard.
-   * One fact for all four, so they cannot disagree.
+   * - Absent: placed on the default dashboard, and offered as one card.
+   * - `"per-collection"`: offered only inside each collection's group of the
+   *   add panel, one row per collection, a card starting with that collection
+   *   as its Collection setting.
+   * - `"on-request"`: offered only from the add panel, as a card a reader asks
+   *   for, such as a note; nothing to show until they set it up.
+   *
+   * Either value keeps the widget off the default dashboard and allows any
+   * number of cards, unless it says otherwise (`allowsSeveral`). One fact, so
+   * the placement, the panel and the count cannot disagree.
    *
    * @experimental While the content widgets are being built.
    */
-  offered?: "per-collection";
+  offered?: "per-collection" | "on-request";
   /**
    * The card's data is built on the server from the widget's declaration (a
    * data function, or a query written from its settings), so the definition

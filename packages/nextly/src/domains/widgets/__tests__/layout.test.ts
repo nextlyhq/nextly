@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   LAYOUT_SCHEMA_VERSION,
   MAX_CONFIG_DEPTH,
+  DASHBOARD_FULL_MESSAGE,
   MAX_PLACEMENTS,
   MAX_STORED_PLACEMENTS,
   RETIRED_WIDGETS,
@@ -813,12 +814,18 @@ describe("the size ceiling", () => {
     expect(layoutSizeProblem(many)).toMatch(/at most/);
   });
 
-  it("measures BYTES, not characters", () => {
+  it("measures BYTES, not characters, and says the dashboard is full", () => {
     // A multi-byte payload under the character count but over the byte limit.
     const wide = "\u{1F600}".repeat(9000);
+    expect(layoutSizeProblem([card("a", "core/a", { config: { wide } })])).toBe(
+      DASHBOARD_FULL_MESSAGE
+    );
+    // The must-differ half: as many characters, one byte each, fit.
     expect(
-      layoutSizeProblem([card("a", "core/a", { config: { wide } })])
-    ).toMatch(/bytes/);
+      layoutSizeProblem([
+        card("a", "core/a", { config: { wide: "x".repeat(9000) } }),
+      ])
+    ).toBeUndefined();
   });
 });
 

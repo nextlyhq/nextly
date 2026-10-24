@@ -117,13 +117,13 @@ export interface CanonicalWidget {
   defaultWidth?: WidgetWidth;
   allowsSeveral?: boolean;
   /**
-   * Where the add panel offers this widget, as its definition states it:
-   * `"per-collection"` keeps it off the default dashboard and offers it per
-   * collection, any number of times.
+   * Where the add panel offers this widget, as its definition states it: per
+   * collection, or on request (a card a reader asks for, such as a note).
+   * Either keeps it off the default dashboard and allows any number of cards.
    *
    * @experimental
    */
-  offered?: "per-collection";
+  offered?: "per-collection" | "on-request";
   /**
    * How long the widget stays, and the condition it stays under.
    *
@@ -505,11 +505,13 @@ export interface WidgetWidthFacts {
  * unsuggested one stays in the add panel. Until suggestions are placed, no
  * declared widget enters it at all.
  *
- * Nor does a widget offered per collection: it reads the collection a card is
- * set to, and the default arrangement places a widget once, set to nothing.
+ * Nor does a widget that is offered (`offered`): one offered per collection
+ * reads the collection a card is set to, and the default arrangement places a
+ * widget once, set to nothing; one offered on request, a note, has nothing to
+ * show until its reader writes it.
  */
 export function placedByDefault(widget: CanonicalWidget): boolean {
-  return widget.serverData !== true && widget.offered !== "per-collection";
+  return widget.serverData !== true && widget.offered === undefined;
 }
 
 /**
@@ -533,8 +535,9 @@ export function widthFacts(widget: CanonicalWidget): WidgetWidthFacts {
   return {
     allowedWidths: allowed,
     defaultWidth: widget.defaultWidth ?? widthFromSize(widget.defaultSize),
-    // A widget offered per collection is added once for each collection, so a
-    // dashboard holds several of it by design.
-    allowsSeveral: widget.allowsSeveral ?? widget.offered === "per-collection",
+    // An offered widget is added on request: once for each collection, or a
+    // note for each thing a reader wants to keep, so a dashboard holds several
+    // of it by design.
+    allowsSeveral: widget.allowsSeveral ?? widget.offered !== undefined,
   };
 }

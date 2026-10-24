@@ -59,6 +59,7 @@ import {
   type StoredLayout,
   type WidgetPlacement,
 } from "../domains/widgets/layout";
+import { getWidget } from "../domains/widgets/registry";
 import { widgetAudience } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -66,6 +67,7 @@ import {
   NO_STORED_LAYOUT_VERSION,
   type WidgetLayoutService,
 } from "../services/widgets/widget-layout-service";
+import { textLength } from "../shared/text-length";
 
 import {
   PRIVATE_NO_STORE_HEADERS,
@@ -575,6 +577,86 @@ function refuseDisallowedWidths(
 }
 
 /**
+ * Refuses a card whose text setting is over the length its widget declares.
+ *
+ * A placement's `config` is otherwise opaque here, bounded only by size; a
+ * widget's own `textarea` setting is the one value this endpoint judges, so a
+ * note a sheet would refuse cannot be saved by writing the layout directly.
+ * Counted with `textLength`, the counter the settings sheet uses, so the sheet
+ * and this write agree on what fits.
+ *
+ * Judged only where the value CHANGED from the one the caller was shown, as
+ * widths are: a note saved before its widget lowered the bound can still be
+ * saved as it is, while a new or edited one is held to the bound.
+ */
+function refuseOverlongText(
+  submitted: readonly WidgetPlacement[],
+  shown: readonly WidgetPlacement[]
+): void {
+  const shownById = new Map(shown.map(p => [p.id, p]));
+  for (const placement of submitted) {
+    const overlong = overlongTextIn(placement, shownById.get(placement.id));
+    if (overlong) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "placements",
+            code: "TOO_LONG",
+            message: `"${overlong.label}" is at most ${overlong.maxLength} characters.`,
+          },
+        ],
+      });
+    }
+  }
+}
+
+/**
+ * The first textarea setting of `placement` whose value changed from the one
+ * `shown` held and is over its widget's bound, or `undefined`.
+ */
+function overlongTextIn(
+  placement: WidgetPlacement,
+  shown: WidgetPlacement | undefined
+): { label: string; maxLength: number } | undefined {
+  for (const bound of boundedTextareas(placement.widgetId)) {
+    const value = changedText(placement, shown, bound.name);
+    if (value !== undefined && textLength(value) > bound.maxLength) {
+      return { label: bound.label, maxLength: bound.maxLength };
+    }
+  }
+  return undefined;
+}
+
+/** A widget's textarea settings that declare a bound, each with the label a reader knows it by. */
+function boundedTextareas(
+  widgetId: string
+): { name: string; label: string; maxLength: number }[] {
+  return (getWidget(widgetId)?.settings ?? []).flatMap(setting =>
+    setting.type === "textarea" && setting.maxLength !== undefined
+      ? [
+          {
+            name: setting.name,
+            label: setting.label ?? setting.name,
+            maxLength: setting.maxLength,
+          },
+        ]
+      : []
+  );
+}
+
+/** The text `placement` holds for `name`, when it is text and changed from what `shown` held. */
+function changedText(
+  placement: WidgetPlacement,
+  shown: WidgetPlacement | undefined,
+  name: string
+): string | undefined {
+  const value = placement.config?.[name];
+  return typeof value === "string" && shown?.config?.[name] !== value
+    ? value
+    : undefined;
+}
+
+/**
  * Refuses a second card of a widget that allows one.
  *
  * Counted against what the caller was SHOWN, so an arrangement that already
@@ -695,6 +777,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const widths = widthsOf(view.widgets);
   refuseDisallowedWidths(submitted, shown, widths);
   refuseExtraCards(submitted, shown, widths);
+  refuseOverlongText(submitted, shown);
 
   // 🔴 MONOTONIC. A row a reader has arranged stays arranged whatever a later
   // write says: a removal outside customise mode states `false` because IT is
