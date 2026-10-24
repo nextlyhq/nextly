@@ -1,12 +1,23 @@
 /**
  * Written templates on every dialect, beside an installation's existing ones.
  *
- * Every template stored before written templates has no format: it reads as
- * coded, a boot leaves the column as it is (nothing is rewritten), and it
- * renders exactly as before. A written template's blocks are stored and read
- * back unchanged by each dialect's JSON column.
+ * The `format` and `blocks` columns reach an existing installation through
+ * the real core reconcile (`migrateCore`, as `nextly migrate` and the boot
+ * run it), its rows untouched. Every template stored before them has no
+ * format: it reads as coded, a boot leaves the column as it is (nothing is
+ * rewritten), and it renders exactly as before. A written template's blocks
+ * are stored and read back unchanged by each dialect's JSON column.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+
+import {
+  availableDialects,
+  withFreshDatabase,
+} from "../../../__tests__/helpers/fresh-database";
+import {
+  migrateFresh,
+  noMigrationsDir,
+} from "../../../__tests__/helpers/migrate-core";
 
 import type { EmailTemplateService } from "../services/email-template-service";
 import { BUILT_IN_TEMPLATES } from "../services/templates";
@@ -14,6 +25,8 @@ import type { WrittenDocument } from "../written/document";
 
 import {
   openTemplateStore,
+  serviceOver,
+  storedRow,
   TEMPLATE_STORE_DIALECTS,
   type TemplateStore,
 } from "./template-ownership-fixture";
@@ -145,3 +158,74 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
     });
   });
 }
+
+const WRITTEN_COLUMNS = ["format", "blocks"];
+const LEGACY_ID = "00000000-0000-4000-8000-0000000000f1";
+
+const { dir: NO_MIGRATIONS, remove } = noMigrationsDir("nextly-wtc-");
+afterAll(remove);
+
+describe.each(availableDialects())(
+  "the written template columns on an existing database (%s)",
+  dialect => {
+    it("adds them in place, keeps the rows coded and unchanged, and a written template then saves", async () => {
+      await withFreshDatabase(dialect, "nextly_wtc_existing", async fresh => {
+        await migrateFresh(fresh, NO_MIGRATIONS);
+        for (const column of WRITTEN_COLUMNS) {
+          await fresh.exec(`ALTER TABLE email_templates DROP COLUMN ${column}`);
+        }
+        const before = await fresh.columnsOf("email_templates");
+        for (const column of WRITTEN_COLUMNS) {
+          expect(before).not.toContain(column);
+        }
+        // A site's own template, stored as an older release stored it.
+        const yes = fresh.dialect === "postgresql" ? "true" : "1";
+        const now =
+          fresh.dialect === "sqlite" ? "1760000000" : "'2026-10-01 09:00:00'";
+        await fresh.exec(
+          `INSERT INTO email_templates (id, name, slug, subject, html_content, kind, use_layout, is_active, created_at, updated_at) VALUES ('${LEGACY_ID}', 'Newsletter', 'newsletter', 'News for {{userName}}', '<p>Hi {{userName}}</p>', 'template', ${yes}, ${yes}, ${now}, ${now})`
+        );
+
+        // The production reconcile adds the columns.
+        expect(await migrateFresh(fresh, NO_MIGRATIONS)).toBe(true);
+        expect(await fresh.columnsOf("email_templates")).toEqual(
+          expect.arrayContaining(WRITTEN_COLUMNS)
+        );
+
+        const service = serviceOver(fresh);
+        service.configureOwnership({ plugins: [] });
+        await service.ensureBuiltInTemplates();
+
+        // The row keeps no format, reads as coded, and renders as it did.
+        const row = await storedRow(fresh, LEGACY_ID);
+        expect(row).toMatchObject({
+          format: null,
+          blocks: null,
+          htmlContent: "<p>Hi {{userName}}</p>",
+        });
+        const legacy = await service.getTemplate(LEGACY_ID);
+        expect(legacy).toMatchObject({ format: "code", blocks: null });
+        const sent = await service.renderStored(legacy, DATA);
+        expect(sent.subject).toBe("News for Priya");
+        expect(sent.html).toContain("Hi Priya");
+
+        // The reconciled table takes a written template.
+        const created = await service.createTemplate({
+          name: "Order",
+          slug: "order",
+          subject: "Order {{ order.number }}",
+          htmlContent: "",
+          format: "written",
+          blocks: BLOCKS,
+        });
+        expect(await service.getTemplate(created.id)).toMatchObject({
+          format: "written",
+          blocks: BLOCKS,
+        });
+
+        // Nothing left to add.
+        expect(await migrateFresh(fresh, NO_MIGRATIONS)).toBe(false);
+      });
+    }, 180_000);
+  }
+);

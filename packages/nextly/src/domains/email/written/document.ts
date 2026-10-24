@@ -17,6 +17,20 @@ import { z } from "zod";
 /** The format a template is stored in. Rows stored before written emails read as `code`. */
 export type TemplateFormat = "code" | "written";
 
+/**
+ * The names a compiled written email assigns for itself. A chip, a condition
+ * or a list can't read them: the assignment would replace the caller's value
+ * for the rest of the email.
+ */
+export const COMPILER_NAMES = {
+  shown: "nextly_shown",
+  items: "nextly_items",
+} as const;
+
+const compilerNames: ReadonlySet<string> = new Set(
+  Object.values(COMPILER_NAMES)
+);
+
 /** A variable a send supplies, by path: `name`, `order.total`, and inside a list `item.price`. */
 const variablePath = z
   .string()
@@ -24,7 +38,11 @@ const variablePath = z
     /^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$/,
     "Use a variable name such as order.total."
   )
-  .max(200);
+  .max(200)
+  .refine(
+    path => !compilerNames.has(path.split(".")[0]),
+    "That name is Nextly's own. Use another."
+  );
 
 /** Where a link or an image may point: the web, and for a link a mail client. */
 const WEB = /^https?:\/\//i;
@@ -183,6 +201,10 @@ const blockSchema = z.discriminatedUnion("type", [
 
 export type WrittenBlock = z.infer<typeof blockSchema>;
 
+/** Every kind of block, as the schema declares them. */
+export const WRITTEN_BLOCK_TYPES: readonly WrittenBlock["type"][] =
+  blockSchema.options.map(option => option.shape.type.value);
+
 /** The written form of a template, as stored. */
 export const writtenDocumentSchema = z
   .object({
@@ -195,3 +217,48 @@ export type WrittenDocument = z.infer<typeof writtenDocumentSchema>;
 
 /** The name a list's blocks read their current item under. */
 export const LIST_ITEM = "item";
+
+/** Why a template's format, blocks and kind can't go together. */
+export interface FormatMismatch {
+  reason:
+    | "blocks-on-coded-template"
+    | "written-not-a-template"
+    | "written-without-blocks";
+  message: string;
+}
+
+/**
+ * Whether these fields can be one template: a coded one has no blocks, and a
+ * written one is a template (a layout or a partial is always coded) with its
+ * blocks. Saves and previews both ask this, so a preview never shows a draft
+ * a save would refuse.
+ */
+export function formatMismatch(fields: {
+  format?: TemplateFormat | null;
+  blocks?: unknown;
+  kind?: string | null;
+}): FormatMismatch | null {
+  const hasBlocks = fields.blocks !== undefined && fields.blocks !== null;
+  if ((fields.format ?? "code") === "code") {
+    return hasBlocks
+      ? {
+          reason: "blocks-on-coded-template",
+          message:
+            'A coded template has no blocks. Save it with format "written" to write it in blocks.',
+        }
+      : null;
+  }
+  if ((fields.kind ?? "template") !== "template") {
+    return {
+      reason: "written-not-a-template",
+      message:
+        "Only a template can be written. A layout or a partial is always coded.",
+    };
+  }
+  return hasBlocks
+    ? null
+    : {
+        reason: "written-without-blocks",
+        message: "A written template needs its blocks.",
+      };
+}

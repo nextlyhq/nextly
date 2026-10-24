@@ -21,6 +21,7 @@
 import { escapeHtml } from "../services/template-engine";
 
 import {
+  COMPILER_NAMES,
   LIST_ITEM,
   type Chip,
   type Condition,
@@ -112,7 +113,7 @@ function shown(condition: Condition | undefined, body: string): string {
   const v = condition.variable;
   const test =
     condition.when === "present"
-      ? `{% assign nextly_shown = ${v} | has_value %}{% if nextly_shown %}`
+      ? `{% assign ${COMPILER_NAMES.shown} = ${v} | has_value %}{% if ${COMPILER_NAMES.shown} %}`
       : condition.when === "yes"
         ? `{% if ${v} == true %}`
         : `{% if ${v} == false %}`;
@@ -188,7 +189,7 @@ function compileBlock(block: WrittenBlock, target: Target): string {
   const body = block.blocks.map(inner => compileBlock(inner, target)).join("");
   return shown(
     block.show,
-    `{% assign nextly_items = ${block.variable} | as_list %}{% for ${LIST_ITEM} in nextly_items %}${body}{% endfor %}`
+    `{% assign ${COMPILER_NAMES.items} = ${block.variable} | as_list %}{% for ${LIST_ITEM} in ${COMPILER_NAMES.items} %}${body}{% endfor %}`
   );
 }
 

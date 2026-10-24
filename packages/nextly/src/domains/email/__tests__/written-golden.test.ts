@@ -16,7 +16,7 @@ import {
   type TemplateFields,
 } from "../services/render-template";
 import { defaultLayoutTemplate } from "../services/templates";
-import type { WrittenBlock } from "../written/document";
+import { WRITTEN_BLOCK_TYPES, type WrittenBlock } from "../written/document";
 import { WRITTEN_SAMPLES } from "../written/samples";
 
 const DATASETS: Record<string, Record<string, unknown>> = {
@@ -91,8 +91,6 @@ describe("every written block renders as pinned", () => {
     const kinds = new Set(
       Object.values(WRITTEN_SAMPLES).map(block => block.type)
     );
-    expect([...kinds].sort()).toEqual(
-      ["button", "divider", "heading", "image", "list", "spacer", "text"].sort()
-    );
+    expect([...kinds].sort()).toEqual([...WRITTEN_BLOCK_TYPES].sort());
   });
 });

@@ -17,7 +17,7 @@
 import { z } from "zod";
 
 import { brandSettingsUpdateSchema } from "./brand-settings";
-import { writtenDocumentSchema } from "./written/document";
+import { formatMismatch, writtenDocumentSchema } from "./written/document";
 
 /**
  * The fields a render needs, and nothing else.
@@ -26,32 +26,47 @@ import { writtenDocumentSchema } from "./written/document";
  * accepting a name, a slug or an id would take input it has no use for.
  */
 export const draftPreviewSchema = z.object({
-  template: z.object({
-    subject: z.string(),
-    htmlContent: z.string(),
-    plainTextContent: z.string().nullable().default(null),
-    preheader: z.string().nullable().default(null),
-    useLayout: z.boolean(),
-    kind: z.enum(["template", "layout", "partial"]),
-    layoutId: z.string().nullable().default(null),
-    /**
-     * The saved template these fields are a draft of, if any. Without
-     * `legacy`, its engine decides the preview's: one kept on the old engine
-     * previews as it sends.
-     */
-    id: z.string().optional(),
-    /**
-     * Preview with the old `{{variable}}` engine (true) or Liquid (false),
-     * whatever the saved template uses.
-     */
-    legacy: z.boolean().optional(),
-    /**
-     * A written draft's blocks, previewed from the blocks as they are typed.
-     * Checked by the same rules a save of them is.
-     */
-    format: z.enum(["code", "written"]).optional(),
-    blocks: writtenDocumentSchema.nullable().optional(),
-  }),
+  template: z
+    .object({
+      subject: z.string(),
+      htmlContent: z.string(),
+      plainTextContent: z.string().nullable().default(null),
+      preheader: z.string().nullable().default(null),
+      useLayout: z.boolean(),
+      kind: z.enum(["template", "layout", "partial"]),
+      layoutId: z.string().nullable().default(null),
+      /**
+       * The saved template these fields are a draft of, if any. Without
+       * `legacy`, its engine decides the preview's: one kept on the old engine
+       * previews as it sends.
+       */
+      id: z.string().optional(),
+      /**
+       * Preview with the old `{{variable}}` engine (true) or Liquid (false),
+       * whatever the saved template uses.
+       */
+      legacy: z.boolean().optional(),
+      /**
+       * A written draft's blocks, previewed from the blocks as they are typed.
+       * Checked by the same rules a save of them is.
+       */
+      format: z.enum(["code", "written"]).optional(),
+      blocks: writtenDocumentSchema.nullable().optional(),
+    })
+    // The rule a save applies to the same fields, so a preview never shows
+    // a draft that can't be saved.
+    .superRefine((template, ctx) => {
+      const mismatch = formatMismatch(template);
+      if (mismatch) {
+        ctx.addIssue({
+          code: "custom",
+          path: [
+            mismatch.reason === "written-not-a-template" ? "kind" : "blocks",
+          ],
+          message: mismatch.message,
+        });
+      }
+    }),
   data: z.record(z.string(), z.unknown()),
   /**
    * Brand settings to preview with instead of the saved ones, for this render

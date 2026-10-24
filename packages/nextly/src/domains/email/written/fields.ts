@@ -14,6 +14,7 @@ import { NextlyError } from "../../../errors";
 
 import { compileWrittenHtml, compileWrittenText } from "./compile";
 import {
+  formatMismatch,
   writtenDocumentSchema,
   type TemplateFormat,
   type WrittenDocument,
@@ -111,22 +112,15 @@ interface FormatInput {
  * written from its blocks, a coded one with none.
  *
  * @throws NextlyError VALIDATION_ERROR for blocks that don't pass their rules
- * @throws NextlyError BUSINESS_RULE_VIOLATION for blocks on a coded template,
- *   or a written layout (a layout is always coded)
+ * @throws NextlyError BUSINESS_RULE_VIOLATION for fields that can't be one
+ *   template (`formatMismatch`): blocks on a coded template, a written layout
+ *   or partial, or a written template without blocks
  */
 export function writtenForCreate<T extends FormatInput>(data: T): T {
-  if (checkedFormat(data.format) === "code") {
-    if (data.blocks !== undefined && data.blocks !== null) {
-      throw refused(
-        'A coded template has no blocks. Save it with format "written" to write it in blocks.',
-        "blocks-on-coded-template"
-      );
-    }
-    return { ...data, format: "code", blocks: null };
-  }
-  if ((data.kind ?? "template") !== "template") {
-    throw refused("A layout is always coded.", "written-layout");
-  }
+  const format = checkedFormat(data.format);
+  const mismatch = formatMismatch({ ...data, format });
+  if (mismatch) throw refused(mismatch.message, mismatch.reason);
+  if (format === "code") return { ...data, format: "code", blocks: null };
   return { ...data, ...writtenFields(data.blocks) };
 }
 
