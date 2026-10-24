@@ -26,6 +26,7 @@ import {
   EMAIL_TEMPLATE_FORM_ID,
   templateSchemaFor,
   templateToFormValues,
+  testDraftOf,
   type TemplateFormValues,
 } from "./schema";
 import { SendTestDialog } from "./SendTestDialog";
@@ -66,7 +67,7 @@ function ContentColumn({
   acts,
   isPending,
   isLayoutRow,
-  previewSubject,
+  inbox,
   editor,
 }: {
   form: FormOf;
@@ -76,7 +77,8 @@ function ContentColumn({
   acts: OwnershipActs;
   isPending: boolean;
   isLayoutRow: boolean;
-  previewSubject: string;
+  /** The inbox line as rendered from the draft: subject, preview text, From. */
+  inbox: { subject: string; preheader: string; from: string | null };
   editor: Omit<
     React.ComponentProps<typeof BodyEditor>,
     "control" | "isPending" | "readOnly" | "liquid"
@@ -102,9 +104,10 @@ function ContentColumn({
       />
       {isLayoutRow ? null : (
         <InboxStrip
-          from={fromOverride}
-          subject={previewSubject || subject}
-          preheader={preheader}
+          // Rendered from the draft once it has been; as written until then.
+          from={inbox.from ?? fromOverride}
+          subject={inbox.subject || subject}
+          preheader={inbox.preheader || preheader}
         />
       )}
       <div
@@ -201,10 +204,10 @@ export function EmailTemplateForm({
     preheader,
     useLayout,
     isActive,
-    slug,
     name,
     variables,
     layoutId,
+    fromOverride,
   ] = form.watch([
     "htmlContent",
     "plainTextContent",
@@ -212,10 +215,10 @@ export function EmailTemplateForm({
     "preheader",
     "useLayout",
     "isActive",
-    "slug",
     "name",
     "variables",
     "layoutId",
+    "fromOverride",
   ]);
 
   useEffect(() => {
@@ -254,6 +257,8 @@ export function EmailTemplateForm({
     useLayout,
     layoutId,
     kind: currentKind,
+    fromOverride,
+    templateId: template?.id,
   });
 
   // What the editors complete: the declared variables, and the test data's
@@ -331,7 +336,11 @@ export function EmailTemplateForm({
               acts={acts}
               isPending={isPending}
               isLayoutRow={isLayoutRow}
-              previewSubject={derived.previewSubject}
+              inbox={{
+                subject: derived.previewSubject,
+                preheader: derived.previewPreheader,
+                from: derived.previewFrom,
+              }}
               editor={{
                 editorTab,
                 onEditorTabChange: setEditorTab,
@@ -398,8 +407,8 @@ export function EmailTemplateForm({
             onOpenChange={setSendTestOpen}
             templateId={template?.id ?? ""}
             templateName={name}
-            slug={slug}
             sampleData={derived.sampleData}
+            draftOf={() => testDraftOf(form.getValues())}
           />
         )}
       </form>
