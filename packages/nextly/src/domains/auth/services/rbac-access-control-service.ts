@@ -7,8 +7,11 @@
  *
  * Evaluation priority:
  * 1. **Super-admin bypass** — always returns `true`
- * 2. **Code-defined access** — function or boolean from collection/single config
- * 3. **Database permission** — checks RBAC tables via `hasPermission()`
+ * 2. **Database permission** — checks RBAC tables via `hasPermission()`; a
+ *    signed-in user without it is refused before any rule is asked
+ * 3. **Code-defined access** — function or boolean from collection/single
+ *    config, where it names the operation: it only narrows the permission,
+ *    and allows only by answering `true`
  *
  * Default behavior: **deny** (fail-secure). If no code access is defined and
  * the user has no database permission for the resource+action, access is denied.
@@ -71,8 +74,9 @@ import type {
  *
  * Orchestrates the three-tier access evaluation:
  * 1. Super-admin bypass
- * 2. Code-defined access functions/booleans (from in-memory registry or explicit param)
- * 3. Database role/permission checks
+ * 2. Database role/permission checks, which a signed-in user must pass first
+ * 3. Code-defined access functions/booleans (from in-memory registry or
+ *    explicit param), which only narrow the permission
  *
  * Holds an in-memory registry of code-defined access configs registered
  * at startup from `defineCollection({ access })` and `defineSingle({ access })`.

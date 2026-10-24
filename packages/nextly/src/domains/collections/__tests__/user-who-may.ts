@@ -9,6 +9,7 @@
  * a caller, and the permission is created only where the boot did not seed it.
  */
 import { getDialectTables } from "../../../database/index";
+import { permissionSlug } from "../../../schemas/_zod/rbac";
 import type { TestNextly } from "../../../plugins/test-nextly";
 
 interface PermissionsApi {
@@ -36,7 +37,7 @@ async function permissionId(
   action: string,
   resource: string
 ): Promise<string> {
-  const slug = `${action}-${resource}`;
+  const slug = permissionSlug(action, resource);
   const seeded = await api.permissions.find({ limit: 1000 });
   const found = seeded.items.find(permission => permission.slug === slug);
   if (found) return found.id;

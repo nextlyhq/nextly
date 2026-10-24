@@ -13,6 +13,7 @@
  * rule to fix. The notice goes for the release that removes the behaviour it
  * describes.
  */
+import { permissionSlug } from "../../schemas/_zod/rbac";
 import { consoleLogger } from "../../shared/types";
 
 /** What was refused, already named, so each is logged once per process. */
@@ -74,11 +75,12 @@ export function noticePermissionNowComesFirst(
   const key = `permission:${slug}:${action}:${caller}`;
   if (named.has(key)) return;
   named.add(key);
+  const permission = permissionSlug(action, slug);
   consoleLogger.warn(
     `[rbac] "${slug}" declares a ${action} rule, and a ${caller} without ` +
-      `the ${action}-${slug} permission is now refused even where the rule ` +
+      `the ${permission} permission is now refused even where the rule ` +
       `would allow. A code access rule only narrows the permission; grant ` +
-      `${action}-${slug} to the roles that should ${action}.`
+      `${permission} to the roles that should ${action}.`
   );
 }
 
