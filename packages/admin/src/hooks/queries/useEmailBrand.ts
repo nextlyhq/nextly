@@ -9,6 +9,8 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 
 import {
@@ -28,17 +30,24 @@ import {
 import { emailTemplateKeys } from "./useEmailTemplates";
 
 export const emailBrandKeys = {
-  all: () => ["emailBrand"] as const,
-  overview: () => [...emailBrandKeys.all(), "overview"] as const,
+  all: (): readonly ["emailBrand"] => ["emailBrand"] as const,
+  overview: (): readonly ["emailBrand", "overview"] =>
+    [...emailBrandKeys.all(), "overview"] as const,
   preview: (
     template: DraftPreviewTemplate,
     data: DraftPreviewData,
     brand: BrandSettingsChange | undefined
-  ) => [...emailBrandKeys.all(), "preview", template, data, brand] as const,
+  ): readonly [
+    "emailBrand",
+    "preview",
+    DraftPreviewTemplate,
+    DraftPreviewData,
+    BrandSettingsChange | undefined,
+  ] => [...emailBrandKeys.all(), "preview", template, data, brand] as const,
 };
 
 /** The settings, where they started, the fonts, and which emails they reach. */
-export function useEmailBrand() {
+export function useEmailBrand(): UseQueryResult<BrandOverview, Error> {
   return useQuery<BrandOverview, Error>({
     queryKey: emailBrandKeys.overview(),
     queryFn: getBrand,
@@ -49,7 +58,11 @@ export function useEmailBrand() {
  * Save a change to the settings. Every preview and the list of emails read
  * them, so both refetch.
  */
-export function useUpdateEmailBrand() {
+export function useUpdateEmailBrand(): UseMutationResult<
+  BrandSettings,
+  Error,
+  BrandSettingsChange
+> {
   const queryClient = useQueryClient();
   return useMutation<BrandSettings, Error, BrandSettingsChange>({
     mutationFn: updateBrand,
@@ -71,7 +84,7 @@ export function useBrandPreview(
   template: DraftPreviewTemplate | null,
   data: DraftPreviewData,
   brand: BrandSettingsChange | undefined
-) {
+): UseQueryResult<DraftPreviewResult, Error> {
   return useQuery<DraftPreviewResult, Error>({
     queryKey: template
       ? emailBrandKeys.preview(template, data, brand)
