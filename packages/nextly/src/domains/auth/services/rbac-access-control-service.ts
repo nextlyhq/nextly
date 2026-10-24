@@ -44,6 +44,7 @@ import {
   clearDeclaredTargets,
   declareTarget,
 } from "../../../auth/access/declared-rules";
+import { noticeRuleNoLongerAllows } from "../../../auth/access/rule-answer-log";
 import { buildRuleContext } from "../../../auth/access/rule-context";
 import type { Principal } from "../../../plugins/principals/types";
 import type { AccessOperation } from "../../../services/access/types";
@@ -215,20 +216,39 @@ export class RBACAccessControlService {
           operationAccess,
           executor
         );
-        try {
-          return await operationAccess(ctx);
-        } catch (error) {
-          // Code access function threw — fail-secure
-          consoleLogger.error(
-            `[rbac] Code access function for ${operation}:${resource} threw`,
-            { error: error }
-          );
-          return false;
-        }
+        return this.userRuleAllows(operationAccess, ctx, operation, resource);
       }
     }
 
     return hasPermission(userId, operation, resource, executor);
+  }
+
+  /**
+   * Whether a signed-in user's rule function allows: only by answering
+   * `true`. A rule that throws refuses. A truthy answer that is not `true`
+   * let the user in before, so that refusal is named once.
+   */
+  private async userRuleAllows(
+    rule: (ctx: AccessControlContext) => unknown,
+    ctx: AccessControlContext,
+    operation: AccessOperation,
+    resource: string
+  ): Promise<boolean> {
+    let answer: unknown;
+    try {
+      answer = await rule(ctx);
+    } catch (error) {
+      // Code access function threw — fail-secure
+      consoleLogger.error(
+        `[rbac] Code access function for ${operation}:${resource} threw`,
+        { error: error }
+      );
+      return false;
+    }
+    if (answer !== true && Boolean(answer)) {
+      noticeRuleNoLongerAllows(resource, operation, "signed-in user", answer);
+    }
+    return answer === true;
   }
 
   /**
@@ -311,8 +331,9 @@ export class RBACAccessControlService {
     if (typeof rule === "boolean") return rule;
     if (typeof rule !== "function") return undefined;
 
+    let answer: unknown;
     try {
-      return await rule(
+      answer = await rule(
         buildRuleContext(
           rule,
           { user: null, roles: [], permissions: [], principal },
@@ -328,6 +349,13 @@ export class RBACAccessControlService {
       );
       return false;
     }
+    // A rule allows only by answering `true`. A visitor was refused before
+    // only by `false`, so any other answer that now refuses one is named
+    // once; a plugin's person was already held to `true`.
+    if (principal === null && answer !== true && answer !== false) {
+      noticeRuleNoLongerAllows(resource, operation, "visitor", answer);
+    }
+    return answer === true;
   }
 
   /**

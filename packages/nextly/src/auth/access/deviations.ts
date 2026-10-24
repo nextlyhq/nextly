@@ -16,11 +16,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 export const DEVIATIONS = [
-  // A signed-in user's declared rule decides alone, judged truthy, without
-  // the permission.
+  // A signed-in user's declared rule decides alone, without the permission.
   "rule-alone-for-people",
   // A visitor with no rule is allowed every action but a publish or an
-  // unpublish, and a rule refuses a visitor only by answering `false`.
+  // unpublish, where the decision reads the Public role's permissions.
   "visitor-public-default",
   // A publish or an unpublish is judged on its own permission and rule, not
   // on update's as well.
@@ -49,9 +48,6 @@ export const DEVIATIONS = [
   // A read with no caller, a visitor or a plugin's person, keeps the media
   // rows it populates, where the decision refuses a caller with no grant.
   "visitor-keeps-media",
-  // `ctx.caller.can` hands back a signed-in user's rule answer as the rule
-  // gave it, `null` or a string included, rather than a yes or no.
-  "can-returns-raw-rule-value",
   // Without the access-control service, `ctx.caller.can` and a held
   // permission refuse a signed-in user, where a route reads their permission.
   "can-no-service-refuses-people",
