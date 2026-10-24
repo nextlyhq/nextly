@@ -19,6 +19,7 @@ function probeAnswering(answer: GetStartedAnswer): ConditionProbe {
     hasContent: unused,
     mayCreateEntry: unused,
     mayCreateCollection: unused,
+    mayCreateOnDashboard: unused,
     mayReadReleases: unused,
     releasesExist: unused,
     getStarted: async () => answer,

@@ -8,6 +8,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const reads = vi.hoisted(() => ({
   readableOfKind: vi.fn(),
   readerMayCreateEntry: vi.fn(),
+  createDisabledSlugs: vi.fn(),
+  /** Readable entities with no published source: a pending or failed migration. */
+  unpublished: new Set<string>(),
   callerMayReadReleases: vi.fn(),
   callerMayReadAnyRelease: vi.fn(),
 }));
@@ -15,6 +18,9 @@ vi.mock("../reader-content", async importOriginal => ({
   ...(await importOriginal<typeof import("../reader-content")>()),
   readableOfKind: reads.readableOfKind,
   readerMayCreateEntry: reads.readerMayCreateEntry,
+  createDisabledSlugs: reads.createDisabledSlugs,
+  queryableSlugs: (_kind: string, readable: readonly string[]) =>
+    readable.filter(slug => !reads.unpublished.has(slug)),
 }));
 vi.mock("../../releases/releases-widget-source", () => ({
   callerMayReadReleases: reads.callerMayReadReleases,
@@ -31,7 +37,12 @@ function given(world: {
   singles?: string[];
   mayReadReleases?: boolean;
   releaseExists?: boolean;
+  unpublished?: string[];
+  createDisabled?: string[];
 }) {
+  reads.unpublished.clear();
+  for (const slug of world.unpublished ?? []) reads.unpublished.add(slug);
+  reads.createDisabledSlugs.mockResolvedValue(new Set(world.createDisabled));
   reads.readableOfKind.mockImplementation(
     async (_caller: unknown, kind: "collection" | "single") => ({
       slugs: (kind === "collection" ? world.collections : world.singles) ?? [],
@@ -70,6 +81,7 @@ describe("the dashboard's conditions, asked together", () => {
     expect(reads.callerMayReadReleases).toHaveBeenCalledTimes(1);
     expect(reads.callerMayReadAnyRelease).toHaveBeenCalledTimes(1);
     expect(reads.readerMayCreateEntry).toHaveBeenCalledTimes(1);
+    expect(reads.createDisabledSlugs).toHaveBeenCalledTimes(1);
     // One listing per kind, for the presence conditions and the create decision alike.
     expect(reads.readableOfKind).toHaveBeenCalledTimes(2);
   });
@@ -95,5 +107,33 @@ describe("the dashboard's conditions, asked together", () => {
     expect((await ask(["releases:present"])).get("releases:present")).toBe(
       false
     );
+  });
+
+  it("offers Needs attention on nothing it could not count: a collection without a published source", async () => {
+    // 🔴 Offered on the registry's listing, a reader whose one collection was
+    // mid-migration got a card that could only answer "not available".
+    given({
+      collections: ["pending"],
+      unpublished: ["pending"],
+      mayReadReleases: false,
+    });
+    expect((await ask(["attention:readable"])).get("attention:readable")).toBe(
+      false
+    );
+    // The same reader still has content: the presence conditions read the registry.
+    expect((await ask(["content:present"])).get("content:present")).toBe(true);
+  });
+
+  it("offers Create only where the card would offer something, leaving out collections that turn creating off", async () => {
+    // 🔴 Asked over every readable collection, a site whose only writable
+    // collection was form submissions got a Create card with nothing in it.
+    given({ collections: ["submissions"], createDisabled: ["submissions"] });
+    reads.readerMayCreateEntry.mockImplementation(
+      async (_caller: unknown, slugs: readonly string[]) => slugs.length > 0
+    );
+    expect((await ask(["create:available"])).get("create:available")).toBe(
+      false
+    );
+    expect(reads.readerMayCreateEntry).toHaveBeenCalledWith(caller, []);
   });
 });

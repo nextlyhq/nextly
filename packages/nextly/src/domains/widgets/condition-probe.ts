@@ -43,6 +43,7 @@ import {
 import { getStartedSteps } from "./get-started";
 import type { GetStartedAnswer } from "./get-started-steps";
 import {
+  createDisabledSlugs,
   readableOfKind,
   readerHasContent,
   readerMayCreateEntry,
@@ -85,6 +86,13 @@ export interface ConditionProbe {
    */
   mayCreateEntry(): Promise<boolean>;
   /**
+   * Whether this reader could create an entry from the dashboard's Create
+   * card, resolved at most once: the same decision as {@link mayCreateEntry},
+   * over the collections that card offers, which leaves out any whose
+   * definition turns creating off (`admin.disableCreate`).
+   */
+  mayCreateOnDashboard(): Promise<boolean>;
+  /**
    * Whether this reader could create a COLLECTION, resolved at most once.
    *
    * Two halves: may they DEFINE one (the grant
@@ -119,6 +127,7 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
   let singlesRead: Promise<RegistryAnswer> | undefined;
   let content: Promise<ContentAnswer> | undefined;
   let createEntry: Promise<boolean> | undefined;
+  let createOnDashboard: Promise<boolean> | undefined;
   let createCollection: Promise<boolean> | undefined;
   let readReleases: Promise<boolean> | undefined;
   let anyRelease: Promise<boolean> | undefined;
@@ -210,6 +219,18 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
       return createEntry;
     },
     mayCreateCollection,
+    mayCreateOnDashboard: () => {
+      createOnDashboard ??= Promise.all([
+        readableSlugs(),
+        createDisabledSlugs(),
+      ]).then(([readable, disabled]) =>
+        readerMayCreateEntry(
+          caller,
+          readable.filter(slug => !disabled.has(slug))
+        )
+      );
+      return createOnDashboard;
+    },
     mayReadReleases: () => {
       readReleases ??= callerMayReadReleases(caller);
       return readReleases;

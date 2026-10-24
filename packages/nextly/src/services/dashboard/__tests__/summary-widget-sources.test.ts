@@ -170,7 +170,21 @@ describe("the content source", () => {
     ]);
     expect(
       rows(await askContent({ select: ["slug", "draft"], limit: 1 }))
-    ).toEqual([{ slug: "posts", draft: 2 }]);
+    ).toEqual([{ slug: "posts", draft: 2, kind: "collection" }]);
+  });
+
+  it("keeps each row's kind whatever was selected, so a Single sharing a collection's slug stays apart", async () => {
+    // 🔴 A select without `kind` stripped it, and the two `posts` rows below
+    // could not be told apart.
+    getContentSingles.mockResolvedValue([
+      { slug: "posts", label: "Posts page" },
+    ]);
+    expect(
+      rows(await askContent({ select: ["slug", "label"], limit: 5 }))
+    ).toEqual([
+      { slug: "posts", label: "Posts", kind: "collection" },
+      { slug: "posts", label: "Posts page", kind: "single" },
+    ]);
   });
 
   it("refuses a filter rather than answering a different question", async () => {
