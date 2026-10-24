@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Whether services are registered, as this file sets it: a cold process says
 // no until its boot has run.
 const ready = vi.hoisted(() => ({ registered: false }));
-vi.mock("../../../di/register", () => ({
+vi.mock("../../../di/service-access", () => ({
   isServicesRegistered: () => ready.registered,
 }));
 

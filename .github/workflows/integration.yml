@@ -244,12 +244,18 @@ jobs:
         ports:
           - 5432:5432
         # Health-gate so test steps never race a database that is still
-        # starting up.
+        # starting up. The data directory lives in memory, as the mysql leg's
+        # does: the job throws the database away, so nothing gains from
+        # surviving a crash, and the runner's shared disk sets no pace. With
+        # the data in memory, also turning off fsync, synchronous_commit and
+        # full_page_writes was measured and made the suite no faster, so the
+        # server keeps its defaults.
         options: >-
           --health-cmd "pg_isready -U nextly"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+          --tmpfs /var/lib/postgresql/data
 
     steps:
       - name: Checkout

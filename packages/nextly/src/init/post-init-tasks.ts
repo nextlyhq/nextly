@@ -12,7 +12,7 @@ import {
   repairSqliteTimestamps,
   TIMESTAMP_REPAIR_META_KEY,
 } from "../database/repair-sqlite-timestamps";
-import { getService } from "../di/register";
+import { getService } from "../di/service-access";
 import { warnAboutUnusableProviders } from "../domains/email/boot-check";
 import { warnAboutLateQueuedEmail } from "../domains/email/queued-email-warning";
 import { getEmailProviderRegistry } from "../domains/email/services/email-provider-registry";

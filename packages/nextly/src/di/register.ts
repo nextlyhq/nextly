@@ -307,6 +307,9 @@ import {
   resetWidgetRegistries,
   type RegistrationContext,
 } from "./registrations";
+// Looking a service up needs only the container, so it lives apart from
+// this file and its every registration.
+import { getService } from "./service-access";
 
 // ============================================================
 // Configuration Interface
@@ -4679,25 +4682,6 @@ async function initializePlugins(
   }
 
   return teardown;
-}
-
-// ============================================================
-// Service Access Functions
-// ============================================================
-
-/**
- * Get a service from the container with type safety.
- * Services must be registered first via `registerServices()`.
- */
-export function getService<T extends keyof ServiceMap>(name: T): ServiceMap[T] {
-  return container.get<ServiceMap[T]>(name);
-}
-
-/**
- * Check if services have been registered.
- */
-export function isServicesRegistered(): boolean {
-  return globalForReg.__nextly_isRegistered ?? false;
 }
 
 /**

@@ -102,6 +102,7 @@ const RULE_BODIES: Record<Rule, boolean | RuleFn | undefined> = {
   "returns-false": () => false,
   "returns-null": () => null,
   "returns-undefined": () => undefined,
+  "returns-string": () => "yes",
   throws: () => {
     throw new Error("the rule failed");
   },

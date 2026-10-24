@@ -395,7 +395,7 @@ export function setSessionStandingBoot(
 export async function startServicesForAuthentication(): Promise<void> {
   // Loaded on first use, as this module is imported by every session read and
   // the registry imports most of core.
-  const { isServicesRegistered } = await import("../../di/register");
+  const { isServicesRegistered } = await import("../../di/service-access");
   if (!isServicesRegistered() && boot) await boot();
   // The gate every serving surface waits on (`getCachedNextly()` does too):
   // a boot still migrating is waited for, and one that refused keeps
@@ -440,7 +440,7 @@ async function standingAdapter(): Promise<DrizzleAdapter> {
   // The start an API key's lookup shares, so both credentials meet a cold
   // process the same way.
   await startServicesForAuthentication();
-  const { isServicesRegistered } = await import("../../di/register");
+  const { isServicesRegistered } = await import("../../di/service-access");
   if (!isServicesRegistered() || !adapterIsRegistered()) {
     throw NextlyError.internal({
       logContext: {

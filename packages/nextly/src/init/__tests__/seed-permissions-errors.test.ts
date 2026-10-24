@@ -16,7 +16,7 @@ const seedSystemPermissions = vi.fn();
 const seedRolePresets = vi.fn();
 const seedPluginRoles = vi.fn();
 
-vi.mock("../../di/register", () => ({
+vi.mock("../../di/service-access", () => ({
   getService: (name: string) => {
     switch (name) {
       case "adapter":

@@ -36,13 +36,9 @@
 import { warnIfCacheComponentsOn } from "./cache-components";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { checkConsumerDrizzleVersion } from "./database/drizzle-version";
-import {
-  getService,
-  isServicesRegistered,
-  registerServices,
-  shutdownServices,
-} from "./di/register";
+import { registerServices, shutdownServices } from "./di/register";
 import { recordRegisteredLocalization } from "./di/registered-localization";
+import { getService, isServicesRegistered } from "./di/service-access";
 import { installLegacyFieldGroupsNamespaceGuard } from "./direct-api/legacy-field-groups-namespace";
 import { requireNextly as getDirectAPI } from "./direct-api/nextly";
 import { NextlyError } from "./errors/nextly-error";
