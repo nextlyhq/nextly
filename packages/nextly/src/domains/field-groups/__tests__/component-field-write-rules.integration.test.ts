@@ -18,6 +18,11 @@
  * that instance, judged as an update, while one sent without is a new instance,
  * judged as a create. The allowed person and trusted server code are the
  * controls.
+ *
+ * The field group `card` holds the field group `chip` inline, in a group;
+ * `chip`'s `stamp` may be set on a new instance but changed only by the
+ * allowed person. An inline instance is created with the instance it is held
+ * in, so a new `card` sent in an update creates its `chip` too.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -36,6 +41,8 @@ import {
   defineSingle,
   fieldGroup,
   group,
+  password,
+  repeater,
   text,
 } from "../../../config";
 import { Nextly } from "../../../direct-api/nextly";
@@ -46,6 +53,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
+import { verifyPassword } from "../../../auth/password";
 import { restoreVersion } from "../../versions/restore-version";
 import { writeFieldGroupType } from "../storage/field-group-type-key";
 
@@ -112,6 +120,22 @@ function typed(type: string, data: Doc): Doc {
   const instance: Doc = { ...data };
   writeFieldGroupType(instance, type);
   return instance;
+}
+
+/** A `card` instance whose inline `chip` carries a stamp marked with `tag`. */
+function card(tag: string): Doc {
+  return { heading: `h-${tag}`, wrap: { held: chip(tag) } };
+}
+
+function chip(tag: string): Doc {
+  return { heading: "c", stamp: `stamp-${tag}` };
+}
+
+/** The stamp each `card` instance in `value` holds inline. */
+function stamps(value: unknown): unknown[] {
+  return list(value).map(
+    instance => list(list(instance.wrap)[0]?.held)[0]?.stamp ?? null
+  );
 }
 
 /** The collection's own group, and the group inside it, with guarded fields. */
@@ -375,6 +399,27 @@ describe.each(getConfiguredTestDialects())(
       );
     }
 
+    /** An update of an entry of `collection` through REST or the checked Direct API. */
+    async function updateIn(
+      collection: string,
+      door: "rest" | "direct",
+      who: "editor" | "allowed",
+      id: string,
+      data: Doc
+    ): Promise<void> {
+      if (door === "rest") {
+        const res = await rest(
+          who,
+          "PATCH",
+          ["collections", collection, "entries", id],
+          data
+        );
+        expect(res.status).toBe(200);
+        return;
+      }
+      await checkedAs(who).update({ collection, id, data } as never);
+    }
+
     beforeAll(async () => {
       const pageFields = () => [
         text({ name: "title" }),
@@ -424,6 +469,73 @@ describe.each(getConfiguredTestDialects())(
             slug: "quote",
             fields: [text({ name: "line" })],
           }),
+          defineFieldGroup({
+            slug: "chip",
+            fields: [
+              text({ name: "heading" }),
+              // Set freely on a new instance; changed only by the allowed person.
+              text({ name: "stamp", access: { update: onlyAllowed } }),
+            ],
+          }),
+          // A field named like one of the store's own columns, in a group
+          // inside a field group: content, judged by its rule like any other.
+          defineFieldGroup({
+            slug: "logbook",
+            fields: [
+              text({ name: "heading" }),
+              group({
+                name: "trail",
+                fields: [
+                  text({ name: "updatedAt", access: { update: onlyAllowed } }),
+                ],
+              }),
+            ],
+          }),
+          // A password only the allowed person may change: its stored hash is
+          // never read back, so an instance holding one is judged unread.
+          defineFieldGroup({
+            slug: "pinned",
+            fields: [
+              text({ name: "heading" }),
+              password({ name: "pin", access: { update: onlyAllowed } }),
+            ],
+          }),
+          // A protected value beside a password any writer may set, in a
+          // group: an instance kept for the first must keep the second's hash.
+          // A pin whose rule allows one literal value and no other: a stored
+          // hash is never it, so an instance holding one is protected.
+          defineFieldGroup({
+            slug: "pinlit",
+            fields: [
+              text({ name: "heading" }),
+              password({
+                name: "pin",
+                access: {
+                  update: ({ data }) =>
+                    (data as { pin?: unknown } | undefined)?.pin ===
+                    "stored-password",
+                },
+              }),
+            ],
+          }),
+          defineFieldGroup({
+            slug: "vault",
+            fields: [
+              text({ name: "heading" }),
+              text({ name: "locked", access: { update: onlyAllowed } }),
+              group({ name: "keys", fields: [password({ name: "code" })] }),
+            ],
+          }),
+          defineFieldGroup({
+            slug: "card",
+            fields: [
+              text({ name: "heading" }),
+              group({
+                name: "wrap",
+                fields: [fieldGroup({ name: "held", component: "chip" })],
+              }),
+            ],
+          }),
         ],
         collections: [
           defineCollection({ slug: "pages", fields: pageFields() }),
@@ -450,6 +562,72 @@ describe.each(getConfiguredTestDialects())(
             versions: true,
             fields: pageFields(),
           }),
+          // Field groups holding a field group inline.
+          defineCollection({
+            slug: "cards",
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "deck", component: "card", repeatable: true }),
+              fieldGroup({ name: "solo", component: "card" }),
+            ],
+          }),
+          defineCollection({
+            slug: "logged",
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "log", component: "logbook" }),
+            ],
+          }),
+          defineCollection({
+            slug: "pinlits",
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "one", component: "pinlit" }),
+            ],
+          }),
+          defineCollection({
+            slug: "vaults",
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "one", component: "vault" }),
+            ],
+          }),
+          defineCollection({
+            slug: "pinboard",
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "one", component: "pinned" }),
+              fieldGroup({
+                name: "many",
+                component: "pinned",
+                repeatable: true,
+              }),
+            ],
+          }),
+          // A repeater stored whole, in its own column, whose rows carry ids.
+          defineCollection({
+            slug: "rowed",
+            fields: [
+              text({ name: "title" }),
+              repeater({
+                name: "lines",
+                fields: [
+                  text({ name: "heading" }),
+                  text({
+                    name: "locked",
+                    access: { create: onlyAllowed, update: onlyAllowed },
+                  }),
+                  text({ name: "mode" }),
+                  text({
+                    name: "gated",
+                    access: { update: ({ data }) => data?.mode !== "closed" },
+                  }),
+                ],
+              }),
+            ],
+          }),
         ],
         singles: [
           defineSingle({ slug: "site", fields: singleFields() }),
@@ -458,6 +636,15 @@ describe.each(getConfiguredTestDialects())(
             status: true,
             versions: { drafts: true },
             fields: singleFields(),
+          }),
+          defineSingle({
+            slug: "ledger",
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "log", component: "logbook" }),
+            ],
           }),
         ],
       } as never);
@@ -488,7 +675,16 @@ describe.each(getConfiguredTestDialects())(
             name: "editors",
             slug: "editors",
             permissionIds: [
-              ...["pages", "drafted", "versioned"].flatMap(slug => [
+              ...[
+                "pages",
+                "drafted",
+                "versioned",
+                "cards",
+                "rowed",
+                "pinboard",
+                "vaults",
+                "pinlits",
+              ].flatMap(slug => [
                 `create-${slug}`,
                 `read-${slug}`,
                 `update-${slug}`,
@@ -503,6 +699,13 @@ describe.each(getConfiguredTestDialects())(
               "read-board",
               "update-board",
               "publish-board",
+              "create-logged",
+              "read-logged",
+              "update-logged",
+              "publish-logged",
+              "read-ledger",
+              "update-ledger",
+              "publish-ledger",
             ].map(id),
           },
         })
@@ -622,6 +825,257 @@ describe.each(getConfiguredTestDialects())(
         await updateAs("direct", "allowed", id, changedFrom(doc, "a2"));
         const after = await stored("pages", id);
         expect(inNotes(after, "locked")[0]).toBe("locked-a2-changed");
+      });
+    });
+
+    describe("a field group held inline in another field group's instance", () => {
+      /** A `cards` entry written by trusted code: one card in each field. */
+      async function seededCards(tag: string): Promise<string> {
+        const { item } = await trusted.create({
+          collection: "cards",
+          data: { title: tag, deck: [card(tag)], solo: card(`${tag}-solo`) },
+        } as never);
+        return String(item.id);
+      }
+
+      /** `instance` sent back with its inline chip's stamp changed. */
+      function restamped(instance: Doc, tag: string): Doc {
+        const held = list(list(instance.wrap)[0]?.held)[0] ?? {};
+        return { ...instance, wrap: { held: { ...held, ...chip(tag) } } };
+      }
+
+      describe.each(["rest", "direct"] as const)("through %s", door => {
+        it("creates the inline instance of a new one, and updates a stored one's", async () => {
+          const id = await seededCards(`n-${door}`);
+          const before = await stored("cards", id);
+
+          await updateIn("cards", door, "editor", id, {
+            deck: [
+              restamped(list(before.deck)[0]!, `n-${door}-changed`),
+              card(`n-${door}-new`),
+            ],
+          });
+          const after = await stored("cards", id);
+
+          // The stored card's chip keeps its stamp; the new card's chip is
+          // new with it, so its stamp is set.
+          expect(stamps(after.deck)).toEqual([
+            `stamp-n-${door}`,
+            `stamp-n-${door}-new`,
+          ]);
+        });
+
+        it("updates a single field group's inline instance sent without its id", async () => {
+          const id = await seededCards(`s-${door}`);
+
+          // The stored instance is updated whatever id is sent, so what it
+          // holds inline is updated, not created.
+          await updateIn("cards", door, "editor", id, {
+            solo: card(`s-${door}-changed`),
+          });
+          const after = await stored("cards", id);
+
+          expect(list(after.solo)[0]?.heading).toBe(`h-s-${door}-changed`);
+          expect(stamps(after.solo)).toEqual([`stamp-s-${door}-solo`]);
+        });
+      });
+
+      it("lets the allowed person change a stored instance's inline child", async () => {
+        const id = await seededCards("a");
+        const before = await stored("cards", id);
+
+        await updateIn("cards", "direct", "allowed", id, {
+          deck: [restamped(list(before.deck)[0]!, "a-changed")],
+          solo: card("a-solo-changed"),
+        });
+        const after = await stored("cards", id);
+
+        expect(stamps(after.deck)).toEqual(["stamp-a-changed"]);
+        expect(stamps(after.solo)).toEqual(["stamp-a-solo-changed"]);
+      });
+    });
+
+    describe("a field-group instance holding a password its updater may not change", () => {
+      /** A `pinboard` entry, its instances each holding a pin. */
+      async function pinnedBoard(tag: string): Promise<string> {
+        const { item } = await trusted.create({
+          collection: "pinboard",
+          data: {
+            title: tag,
+            one: { heading: `h-${tag}`, pin: "pin-one-secret" },
+            many: [
+              { heading: "a", pin: "pin-a-secret" },
+              { heading: "b", pin: "pin-b-secret" },
+            ],
+          },
+        } as never);
+        return String(item.id);
+      }
+
+      describe.each(["rest", "direct"] as const)("through %s", door => {
+        it("is kept when an update clears its field", async () => {
+          const id = await pinnedBoard(`c-${door}`);
+
+          // Removing it would delete the pin's hash, which the rule protects.
+          await updateIn("pinboard", door, "editor", id, { one: null });
+
+          expect(list((await stored("pinboard", id)).one)[0]?.heading).toBe(
+            `h-c-${door}`
+          );
+        });
+
+        it("is kept when its rule allows one value, which no stored hash is", async () => {
+          const { item } = await trusted.create({
+            collection: "pinlits",
+            data: {
+              title: door,
+              one: { heading: `h-${door}`, pin: "real-pin" },
+            },
+          } as never);
+          const id = String(item.id);
+
+          // The stored value is a hash, which the rule refuses to change; the
+          // judgment must not answer for a value of its own choosing.
+          await updateIn("pinlits", door, "editor", id, { one: null });
+
+          expect(list((await stored("pinlits", id)).one)[0]?.heading).toBe(
+            `h-${door}`
+          );
+        });
+
+        it("keeps a nested password it may change as stored, when another value keeps the instance", async () => {
+          const { item } = await trusted.create({
+            collection: "vaults",
+            data: {
+              title: door,
+              one: { heading: "h", locked: "L", keys: { code: "secret-code" } },
+            },
+          } as never);
+          const id = String(item.id);
+          const instanceId = String(
+            list((await stored("vaults", id)).one)[0]!.id
+          );
+
+          // `locked` keeps the instance. The judgment of what removing it
+          // would delete must not write into the instance it keeps.
+          await updateIn("vaults", door, "editor", id, { one: null });
+          const row = (
+            await t.adapter.select<Doc>("comp_vault", {
+              where: { and: [{ column: "id", op: "=", value: instanceId }] },
+            })
+          )[0];
+          const keys = list(
+            typeof row?.keys === "string" ? JSON.parse(row.keys) : row?.keys
+          )[0];
+
+          expect(row?.locked).toBe("L");
+          const code = keys?.code;
+          expect(
+            typeof code === "string" &&
+              (await verifyPassword("stored-password", code))
+          ).toBe(false);
+        });
+
+        it("is kept when an update leaves it out of a list", async () => {
+          const id = await pinnedBoard(`l-${door}`);
+          const [first] = list((await stored("pinboard", id)).many);
+
+          await updateIn("pinboard", door, "editor", id, {
+            many: [{ id: first!.id, heading: "a2" }],
+          });
+
+          expect(
+            list((await stored("pinboard", id)).many).map(row => row.heading)
+          ).toEqual(["a2", "b"]);
+        });
+      });
+
+      it("lets the allowed person remove it", async () => {
+        const id = await pinnedBoard("ok");
+        const [first] = list((await stored("pinboard", id)).many);
+
+        await updateIn("pinboard", "direct", "allowed", id, {
+          one: null,
+          many: [{ id: first!.id, heading: "a2" }],
+        });
+        const after = await stored("pinboard", id);
+
+        expect(list(after.one)).toEqual([]);
+        expect(list(after.many).map(row => row.heading)).toEqual(["a2"]);
+      });
+    });
+
+    describe("a repeater stored whole, sent with a repeated row id", () => {
+      async function seededRows(rows: Doc[]): Promise<string> {
+        const { item } = await trusted.create({
+          collection: "rowed",
+          data: { title: "r", lines: rows },
+        } as never);
+        return String(item.id);
+      }
+
+      const rowsOf = async (id: string) =>
+        list((await stored("rowed", id)).lines);
+
+      describe.each(["rest", "direct"] as const)("through %s", door => {
+        it("gives the repeated row none of the stored row's values", async () => {
+          const id = await seededRows([
+            { id: "r1", heading: "h", locked: `locked-${door}` },
+          ]);
+
+          // One id names one stored row: the second row sent with it is new.
+          await updateIn("rowed", door, "editor", id, {
+            lines: [
+              { id: "r1", heading: "h2" },
+              { id: "r1", heading: "copy" },
+            ],
+          });
+          const rows = await rowsOf(id);
+
+          expect(rows.map(row => row.heading)).toEqual(["h2", "copy"]);
+          expect(rows.map(row => row.locked ?? null)).toEqual([
+            `locked-${door}`,
+            null,
+          ]);
+        });
+
+        it("judges a row by its own siblings when another row's id repeats", async () => {
+          const id = await seededRows([
+            { id: "r1", mode: "open" },
+            { id: "r2", mode: "closed", gated: `gated-${door}` },
+          ]);
+
+          // The closed row is sent without its child, behind a repeated id
+          // that moves it off its index: it is still judged as closed.
+          await updateIn("rowed", door, "editor", id, {
+            lines: [
+              { id: "r1", mode: "open" },
+              { id: "r1", mode: "open" },
+              { id: "r2", mode: "closed" },
+            ],
+          });
+          const rows = await rowsOf(id);
+
+          expect(rows.map(row => row.gated ?? null)).toEqual([
+            null,
+            null,
+            `gated-${door}`,
+          ]);
+        });
+      });
+
+      it("lets the allowed person set the repeated row's guarded value", async () => {
+        const id = await seededRows([{ id: "r1", heading: "h", locked: "l" }]);
+
+        await updateIn("rowed", "direct", "allowed", id, {
+          lines: [
+            { id: "r1", heading: "h2", locked: "l2" },
+            { id: "r1", heading: "copy", locked: "set" },
+          ],
+        });
+        const rows = await rowsOf(id);
+
+        expect(rows.map(row => row.locked ?? null)).toEqual(["l2", "set"]);
       });
     });
 
@@ -775,6 +1229,181 @@ describe.each(getConfiguredTestDialects())(
           slug: "board",
         } as never)) as Doc;
         expect((after.one as Doc).locked).toBe("locked-board");
+      });
+    });
+
+    describe("the publish of a field-group child named like a store column", () => {
+      /** What the `log` instance's `trail.updatedAt` holds in `doc`. */
+      const trailOf = (doc: Doc) =>
+        list(list(list(doc.log)[0]?.trail)[0])[0]?.updatedAt ?? null;
+      const logWith = (doc: Doc, value: string): Doc => ({
+        ...(list(doc.log)[0] ?? {}),
+        trail: { updatedAt: value },
+      });
+
+      /** A published `logged` entry whose pending change, by the allowed person, edits the child. */
+      async function pendingEntry(tag: string): Promise<string> {
+        const { item } = await trusted.create({
+          collection: "logged",
+          data: {
+            title: tag,
+            status: "published",
+            log: { heading: "h", trail: { updatedAt: `live-${tag}` } },
+          },
+        } as never);
+        const id = String(item.id);
+        const live = await stored("logged", id);
+        await checkedAs("allowed").update({
+          collection: "logged",
+          id,
+          data: { log: logWith(live, `pending-${tag}`) },
+        } as never);
+        return id;
+      }
+
+      /** The `ledger` Single, published, with the same pending change. */
+      async function pendingLedger(tag: string): Promise<void> {
+        await trusted.updateSingle({
+          slug: "ledger",
+          data: {
+            title: tag,
+            status: "published",
+            log: { heading: "h", trail: { updatedAt: `live-${tag}` } },
+          },
+        } as never);
+        const live = (await trusted.findSingle({
+          slug: "ledger",
+        } as never)) as Doc;
+        await checkedAs("allowed").updateSingle({
+          slug: "ledger",
+          data: { log: logWith(live, `pending-${tag}`) },
+        } as never);
+      }
+
+      /** The status a publish through `door` answers with, as `who`. */
+      async function publish(
+        door: "rest" | "direct",
+        who: "editor" | "allowed",
+        target: { collection: string; id: string } | { single: string }
+      ): Promise<number> {
+        const body = { status: "published" };
+        if (door === "rest") {
+          const path =
+            "single" in target
+              ? ["singles", target.single]
+              : ["collections", target.collection, "entries", target.id];
+          return (await rest(who, "PATCH", path, body)).status;
+        }
+        try {
+          if ("single" in target) {
+            await checkedAs(who).updateSingle({
+              slug: target.single,
+              data: body,
+            } as never);
+          } else {
+            await checkedAs(who).update({ ...target, data: body } as never);
+          }
+          return 200;
+        } catch (error) {
+          return (error as { statusCode?: number }).statusCode ?? 500;
+        }
+      }
+
+      describe.each(["rest", "direct"] as const)("through %s", door => {
+        it("refuses a collection's publish when the pending change edits it", async () => {
+          const id = await pendingEntry(`c-${door}`);
+
+          // The publisher may not write the child, so the pending edit is
+          // refused, not dropped to the live value as if it were bookkeeping.
+          expect(
+            await publish(door, "editor", { collection: "logged", id })
+          ).toBe(400);
+          expect(trailOf(await stored("logged", id))).toBe(`live-c-${door}`);
+          const draft = (await trusted.findByID({
+            collection: "logged",
+            id,
+            depth: 1,
+            draft: true,
+          } as never)) as Doc;
+          expect(trailOf(draft)).toBe(`pending-c-${door}`);
+        });
+
+        it("refuses a Single's publish when the pending change edits it", async () => {
+          await pendingLedger(`s-${door}`);
+
+          expect(await publish(door, "editor", { single: "ledger" })).toBe(400);
+          const live = (await trusted.findSingle({
+            slug: "ledger",
+          } as never)) as Doc;
+          expect(trailOf(live)).toBe(`live-s-${door}`);
+        });
+      });
+
+      it("lets the allowed person publish it", async () => {
+        const id = await pendingEntry("a");
+        expect(
+          await publish("direct", "allowed", { collection: "logged", id })
+        ).toBe(200);
+        expect(trailOf(await stored("logged", id))).toBe("pending-a");
+
+        await pendingLedger("as");
+        expect(await publish("direct", "allowed", { single: "ledger" })).toBe(
+          200
+        );
+        const live = (await trusted.findSingle({
+          slug: "ledger",
+        } as never)) as Doc;
+        expect(trailOf(live)).toBe("pending-as");
+      });
+    });
+
+    describe("a held draft that removes an instance holding nothing protected", () => {
+      /** The draft a published entry holds, as a by-id read with drafts. */
+      const heldDraft = async (collection: string, id: string) =>
+        (await trusted.findByID({
+          collection,
+          id,
+          depth: 1,
+          draft: true,
+        } as never)) as Doc;
+
+      it("records a cleared single field group", async () => {
+        const { item } = await trusted.create({
+          collection: "groupdrafted",
+          data: { title: "c6", status: "published", one: { heading: "h" } },
+        } as never);
+        const id = String(item.id);
+        await checkedAs("editor").update({
+          collection: "groupdrafted",
+          id,
+          data: { one: null },
+        } as never);
+
+        const draft = await heldDraft("groupdrafted", id);
+        expect(draft._isWorkingDraft).toBe(true);
+        expect(list(draft.one)).toEqual([]);
+      });
+
+      it("records an instance left out of a list", async () => {
+        const { item } = await trusted.create({
+          collection: "drafted",
+          data: {
+            title: "c6l",
+            status: "published",
+            many: [{ heading: "a" }, { heading: "b" }],
+          },
+        } as never);
+        const id = String(item.id);
+        const [first] = list((await stored("drafted", id)).many);
+        await checkedAs("editor").update({
+          collection: "drafted",
+          id,
+          data: { many: [{ id: first.id, heading: "a" }] },
+        } as never);
+
+        const draft = await heldDraft("drafted", id);
+        expect(draft._isWorkingDraft).toBe(true);
+        expect(list(draft.many).map(note => note.heading)).toEqual(["a"]);
       });
     });
 
