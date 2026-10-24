@@ -302,6 +302,15 @@ function messageText(message: QueuedMessage): string {
   });
 }
 
+/** `messageFromText`, undefined rather than a throw for text that does not parse. */
+function parsedMessage(text: string): QueuedMessage | undefined {
+  try {
+    return messageFromText(text);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The text that was sealed, as the message it was made from. */
 function messageFromText(text: string): QueuedMessage | undefined {
   const parsed = JSON.parse(text) as QueuedMessage | undefined;
@@ -882,8 +891,14 @@ export async function resealQueuedMessages(
     if (rows.length === 0) return result;
     for (const row of rows) {
       const next = resealedForm(row.message, row.id, secrets);
-      if (next !== undefined) {
-        if (await resealOne(adapter, row, next)) result.resealed += 1;
+      // Parsed before anything is written: a message that opens but does not
+      // parse is damaged, counted as unreadable, and the scan goes on to the
+      // rest, which would otherwise stay sealed under the retired secret.
+      const parsed = next === undefined ? undefined : parsedMessage(next.text);
+      if (next !== undefined && parsed === undefined) {
+        result.unreadable += 1;
+      } else if (next !== undefined && parsed !== undefined) {
+        if (await resealOne(adapter, row, next, parsed)) result.resealed += 1;
       } else if (
         openQueuedMessage(row.message, row.id, secrets) === undefined
       ) {
@@ -908,7 +923,8 @@ export async function resealQueuedMessages(
 async function resealOne(
   adapter: DrizzleAdapter,
   row: { id: string; message: string },
-  next: { stored: string; text: string }
+  next: { stored: string; text: string },
+  message: QueuedMessage
 ): Promise<boolean> {
   const dialect = adapter.getCapabilities().dialect;
   const table = emailQueueTableFor(dialect);
@@ -928,8 +944,7 @@ async function resealOne(
       if (now?.message !== next.stored) return false;
       const recipients = emailQueueRecipientsTableFor(dialect);
       await db.delete(recipients).where(eq(recipients.queuedId, row.id));
-      const message = messageFromText(next.text);
-      if (message) await insertRecipientDigests(db, dialect, row.id, message);
+      await insertRecipientDigests(db, dialect, row.id, message);
       return true;
     }
   );
