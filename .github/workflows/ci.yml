@@ -24,8 +24,11 @@ permissions:
 
 # Turborepo's shared remote cache. A task whose inputs another run already
 # built replays that run's output instead of building again. Only `main`'s
-# pushes and the merge queue write to it, since those are what every later
-# run starts from; a pull request reads, so its build replays `main`'s tasks.
+# pushes write to it, since those are what every later run starts from; a pull
+# request reads, so its build replays `main`'s tasks. The merge queue reads
+# too: its temporary branch is the base plus the queued pull requests' own
+# changes, so a queued pull request's code runs there, and with the signing key
+# it could upload a correctly signed entry for a task it never built.
 # Entries are content-addressed per task and signed (`remoteCache.signature`
 # in turbo.jsonc), so a cancelled or altered upload is a miss, never a
 # half-built `dist/`. Without TURBO_TOKEN (a fork, or before the secret
@@ -33,14 +36,14 @@ permissions:
 #
 # Write access is enforced by GitHub, not by TURBO_CACHE, which the code under
 # test could override. The token and the signing key are secrets of the
-# `turbo-cache` environment, whose branch policy admits only `main` and the
-# merge queue's `gh-readonly-queue/main/*` refs; each job that builds names it
-# there and `turbo-cache-read` on every other event (`environment:` with
+# `turbo-cache` environment, whose branch policy admits `main`; each job that
+# builds names it only for a push to `main` and `turbo-cache-read` on every
+# other event, the merge queue's included (`environment:` with
 # `deployment: false`, so no deployment is recorded). A pull request that
 # rewrites its workflow to name `turbo-cache` is refused the secrets.
 env:
   TURBO_TEAM: ${{ vars.TURBO_TEAM }}
-  TURBO_CACHE: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'local:rw,remote:rw' || 'local:rw,remote:r' }}
+  TURBO_CACHE: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'local:rw,remote:rw' || 'local:rw,remote:r' }}
 
 # Superseding is right for a branch under review and wrong for `main`.
 #
@@ -391,7 +394,7 @@ jobs:
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
     environment:
-      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
       deployment: false
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
@@ -838,7 +841,7 @@ jobs:
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
     environment:
-      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
       deployment: false
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
@@ -908,7 +911,7 @@ jobs:
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
     environment:
-      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
       deployment: false
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
@@ -988,7 +991,7 @@ jobs:
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
     environment:
-      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
       deployment: false
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
@@ -1097,7 +1100,7 @@ jobs:
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
     environment:
-      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
       deployment: false
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
@@ -1165,7 +1168,7 @@ jobs:
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
     environment:
-      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
       deployment: false
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
@@ -1245,7 +1248,7 @@ jobs:
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
     environment:
-      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
       deployment: false
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
@@ -1415,7 +1418,7 @@ jobs:
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
     environment:
-      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
       deployment: false
     # 45, not 30. The suite runs on one worker, and at 402 tests a passing run
     # was still going when 30 minutes cancelled it (job 120021242729: setup and
@@ -1549,7 +1552,7 @@ jobs:
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
     environment:
-      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
       deployment: false
     # Higher than `Browser tests` because the build is inside the budget rather
     # than done for it. The suite itself is two specs.
@@ -1645,7 +1648,7 @@ jobs:
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
     environment:
-      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
       deployment: false
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
@@ -1709,7 +1712,7 @@ jobs:
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
     environment:
-      name: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'turbo-cache' || 'turbo-cache-read' }}
+      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
       deployment: false
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
