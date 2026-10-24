@@ -55,9 +55,9 @@ describe("schemas public API", () => {
     });
 
     it("no longer names the stored permission answers", () => {
-      // Nothing reads or writes `user_permission_cache` any more: a user's
-      // access is kept in memory. Out of this list, an existing database's
-      // copy is left alone until `nextly migrate` is asked to drop it.
+      // Nothing reads `user_permission_cache` any more: a user's
+      // access is kept in memory. Out of this list, an existing database
+      // keeps its copy until `nextly migrate` is asked to drop it.
       expect(schemas.CORE_TABLE_NAMES).not.toContain("user_permission_cache");
       expect(schemas).not.toHaveProperty("userPermissionCache");
     });

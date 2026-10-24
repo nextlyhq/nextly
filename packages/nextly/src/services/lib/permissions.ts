@@ -29,14 +29,16 @@ import { isDatabaseBusy } from "../../database/errors";
 import { getDialectTables } from "../../database/index";
 import { container } from "../../di/container";
 import { NextlyError } from "../../errors/nextly-error";
+import { emptyRetiredPermissionAnswers } from "../../init/retired-permission-answers";
 import { getAuthLogger } from "../../lib/logger";
 import { consoleLogger } from "../../shared/types";
 
 import {
   bumpEpoch,
-  currentEpoch,
   duringRetirement,
+  publishedEpoch,
   refreshEpoch,
+  retireHereOnly,
   stampIsCurrent,
 } from "./rbac-epoch";
 import {
@@ -87,6 +89,10 @@ interface RbacQueryExecutor {
  */
 function rbacQuery(executor?: unknown): RbacQueryExecutor {
   return (executor ?? getDb()) as RbacQueryExecutor;
+}
+
+function getAdapter(): DrizzleAdapter {
+  return container.get<DrizzleAdapter>("adapter");
 }
 
 export type PermissionCheck = { action: string; resource: string };
@@ -799,7 +805,7 @@ async function grantsOf(
 
 /** The current count; see {@link invalidatePermissionCache}. */
 export function rbacRevision(): string {
-  return currentEpoch();
+  return publishedEpoch();
 }
 
 /**
@@ -819,8 +825,9 @@ export function rbacRevision(): string {
  *
  * A retirement that is still running counts as not current, whatever the
  * numbers say. A batch of permission writes holds one open for its whole
- * length, and publishing the role version is itself an awaited write: a check
- * that starts and finishes inside either reads rows mid-change, compares two
+ * length, and publishing the role version, after emptying the retired stored
+ * answers while they exist, is itself awaited: a check that starts and
+ * finishes inside either reads rows mid-change, compares two
  * numbers that have not moved since it captured one, and would keep an answer
  * the change is about to retire. Nothing is cacheable while a retirement runs.
  */
@@ -990,15 +997,42 @@ export async function writingPermissions<TTable, T>(
 }
 
 /**
- * Publish the role version that retires every actor kept in every instance.
+ * Empty the retired stored answers, then publish the role version that retires
+ * every actor kept in every instance.
  *
- * The depth is held across the write, so nothing this process resolves while
- * it runs is kept as current; see {@link resolvedUnderCurrentRevision}. A write
- * that fails is owed rather than lost, and nothing kept is served until the
- * shared row accepts it; see `bumpEpoch`.
+ * Nothing here reads the stored answers, but an instance still running an
+ * earlier release does, while the table exists, and the version is the only
+ * signal it receives; see `init/retired-permission-answers`. So a retirement
+ * whose emptying failed publishes nothing: published, the version would tell
+ * such an instance to drop its in-memory answer and read a stored row the
+ * failure left live, filing it under the new version where nothing left to
+ * happen can reach it. Withheld, those rows are served until their own expiry,
+ * as they would have been. This process still retires what it kept: its actors
+ * were dropped before this ran, and everything else it filed under the role
+ * version, an API key's copied grants among them, stops being current here.
+ *
+ * The depth is held across both steps, so nothing this process resolves while
+ * they run is kept as current; see {@link resolvedUnderCurrentRevision}. A
+ * version write that fails is owed rather than lost; see `bumpEpoch`.
  */
 async function publishRetirement(): Promise<void> {
-  await duringRetirement(bumpEpoch);
+  await duringRetirement(async () => {
+    try {
+      await emptyRetiredPermissionAnswers(getAdapter());
+    } catch (error) {
+      // Reported, not thrown: an invalidation failure must not break the
+      // write that raised it. Unpublished, though, for the reason above.
+      getAuthLogger()?.log?.("error", {
+        category: "auth",
+        op: "cache",
+        message: "Emptying the retired stored permission answers failed",
+        error: String(error),
+      });
+      retireHereOnly();
+      return;
+    }
+    await bumpEpoch();
+  });
 }
 
 /** The table the earlier release stored permission answers in. */

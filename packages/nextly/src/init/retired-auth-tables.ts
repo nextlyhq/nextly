@@ -6,7 +6,9 @@
  * uses: sessions are stateless JWTs with an opaque refresh token of their own.
  * Nothing has written either table since that change, and nothing reads them
  * now. `user_permission_cache` held permission answers between requests; a
- * user's access is now kept in memory, and nothing reads or writes it either.
+ * user's access is now kept in memory and nothing reads it; it is only emptied
+ * on each access change while it exists, for an instance still running a
+ * release that reads it.
  *
  * A fresh install no longer creates them. An existing database keeps them,
  * because dropping a table that may still hold rows is the operator's decision
@@ -242,8 +244,9 @@ export function formatRetiredAuthTablesWarning(
       ? [
           "",
           "  user_permission_cache held permission answers between requests. A user's access is now",
-          "  kept in memory, nothing reads or writes this table, and a new install no longer creates",
-          "  it. Its rows are copies recomputed from roles, so `nextly migrate` with",
+          "  kept in memory, nothing reads this table, and a new install no longer creates it; it is",
+          "  emptied on each access change only for instances still on an earlier release. Its rows",
+          "  are copies recomputed from roles, so `nextly migrate` with",
           "  NEXTLY_DROP_RETIRED_AUTH_TABLES=1 drops it whether or not it holds rows.",
         ]
       : []),
