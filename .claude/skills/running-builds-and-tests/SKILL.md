@@ -70,13 +70,15 @@ held in every session.
   `--incremental false`, as a fresh checkout in CI has none. Measured on
   nextly: 0.48 s reading an earlier run's build info, 19.6 s with none.
 
-  `check-types` runs TypeScript 7 with `--checkers 4` everywhere, pinned by
-  `scripts/check-types-checkers.test.mjs`, because the number of parallel
-  checkers can occasionally change which diagnostics appear. A result that
-  looks order-dependent, appearing or vanishing between runs or machines, is
-  ruled in or out by rerunning that package's command with `--singleThreaded`,
-  which checks in one fixed order. Do not change the pinned value to make a
-  result go away.
+  `check-types` runs TypeScript 7 through `scripts/tsc.mjs`, which passes
+  `--checkers` sized to the machine by `local-limits.mjs`: 4 on a 16 GB machine,
+  2 below that, 1 under `NEXTLY_LOCAL_MAX_WORKERS=1` (`pnpm local-limits` prints
+  it). `scripts/check-types-checkers.test.mjs` holds every package to the
+  wrapper. The number of parallel checkers can occasionally change which
+  diagnostics appear, so a result that looks order-dependent, appearing or
+  vanishing between runs or machines, is ruled in or out by rerunning that
+  package's command with `--singleThreaded`, which checks in one fixed order.
+  Do not change a package's checkers to make a result go away.
 
   `TS2307` naming a workspace package (`nextly/...`, `@nextlyhq/...`) is USUALLY
   a missing build, and the rebuild is what confirms it. It is not proof on its

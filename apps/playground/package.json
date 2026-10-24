@@ -9,7 +9,7 @@
     "start": "next start",
     "nextly": "nextly",
     "ci": "nextly migrate && next build",
-    "check-types": "next typegen && tsc --noEmit --checkers 4 --incremental false",
+    "check-types": "next typegen && node ../../scripts/tsc.mjs --noEmit --incremental false",
     "env:copy": "cp .env.example .env",
     "db:seed": "tsx --env-file=.env scripts/seed.ts",
     "plugins:install": "nextly plugins install --all",

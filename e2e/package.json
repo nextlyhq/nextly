@@ -11,7 +11,7 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:report": "playwright show-report",
-    "check-types": "tsc --noEmit --checkers 4"
+    "check-types": "node ../scripts/tsc.mjs --noEmit"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
