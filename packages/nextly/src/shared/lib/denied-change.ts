@@ -145,6 +145,61 @@ export async function resolvePromotedDocument(
 }
 
 /**
+ * What an UPDATE writes once the field rules have judged it: everything the
+ * writer may set, as sent, and every denied value inside a container at the
+ * value the row already holds.
+ *
+ * A group or a repeater is stored whole, in one column, so the rules deleting
+ * a denied child from the update would write the container without it and
+ * clear a value the writer may not change. That is the same question a
+ * promotion asks of a denied field, so it is answered the same way, by
+ * `restoreDenied`: the update keeps its own allowed values and takes the row's
+ * for the rest, including a denied child the update left out, since leaving it
+ * out of a container that is written whole would delete it.
+ *
+ * A denied field at the top level is left out, as the rules leave it: its
+ * column is not written, so the row keeps it without being handed it back.
+ * The row is narrowed to the update's own keys for the same reason, so a field
+ * the update does not name is never written.
+ */
+export async function keepDeniedAtStored(input: {
+  /** The update as the caller sent it, before any rule has run. */
+  update: Record<string, unknown>;
+  /** The row as it stands, in the update's representation. */
+  stored: Record<string, unknown>;
+  /** Applies the field rules to the document it is given, in place. */
+  applyRules: (document: Record<string, unknown>) => Promise<void>;
+}): Promise<Record<string, unknown>> {
+  const permitted = detachData(input.update);
+  await input.applyRules(permitted);
+  const stored: Record<string, unknown> = {};
+  for (const key of Object.keys(input.update)) {
+    if (hasOwn(input.stored, key)) stored[key] = input.stored[key];
+  }
+  // Judged too, so a denied child the update omits is told from an allowed
+  // one it deletes: only the first is put back.
+  //
+  // Judged on the container as this update LEAVES it, not on the row's own
+  // copy. A rule reads its siblings, so a child whose rule turns on a sibling
+  // the same update changes would be judged against that sibling's old value:
+  // the stale verdict allows it, the restoration leaves it out, and the
+  // whole-column write deletes a value the final document protects.
+  const asLeft = overlay(stored, permitted);
+  const permittedStored = detachData(isRecord(asLeft) ? asLeft : stored);
+  await input.applyRules(permittedStored);
+  const out = restoreDenied(
+    input.update,
+    permitted,
+    stored,
+    permittedStored
+  ) as Record<string, unknown>;
+  for (const key of Object.keys(input.update)) {
+    if (!hasOwn(permitted, key)) delete out[key];
+  }
+  return out;
+}
+
+/**
  * Every path the rules deny, on the promoted document AND on the live row,
  * both kept whole.
  *
@@ -250,14 +305,144 @@ function restoreArray(
 ): unknown {
   // The rules removed the whole list, so the row keeps what it has.
   if (!Array.isArray(permitted)) return live;
-  return before.map((row, index) =>
-    restoreDenied(
+  // Paired by row identity, not by position: a list that is merely reordered
+  // pairs each row with whatever row now sits at its index, and a denied value
+  // taken from there is written onto a row it never belonged to — the
+  // protected value of one row landing on another.
+  const rows = Array.isArray(live) ? live : [];
+  const pairing = rowPairing(before, rows);
+  const paired = new Set<number>();
+  const out = before.map((row, index) => {
+    const at = pairing(index);
+    if (at !== undefined) paired.add(at);
+    return restoreDenied(
       row,
       permitted[index],
-      itemAt(live, index),
-      itemAt(permittedLive, index)
-    )
-  );
+      at === undefined ? undefined : rows[at],
+      at === undefined ? undefined : itemAt(permittedLive, at)
+    );
+  });
+  keepDeniedLiveOnlyRows(out, rows, paired, permittedLive);
+  return out;
+}
+
+/**
+ * A row the list holds that this document drops, put back at its own place
+ * when it holds a value the caller may not change: the list is written whole,
+ * so dropping it would delete that value. A row holding none is a deletion the
+ * caller may make.
+ */
+function keepDeniedLiveOnlyRows(
+  out: unknown[],
+  rows: readonly unknown[],
+  paired: ReadonlySet<number>,
+  permittedLive: unknown
+): void {
+  for (const [index, row] of rows.entries()) {
+    if (paired.has(index)) continue;
+    if (!removedAValue(row, itemAt(permittedLive, index))) continue;
+    out.splice(Math.min(index, out.length), 0, row);
+  }
+}
+
+/**
+ * Where each row of `from` sits in `to`: by its own `id` where every row of
+ * `to` carries a distinct one, and by position otherwise.
+ *
+ * Position is the fallback rather than the rule because a list whose rows have
+ * no identity has nothing else to pair on; where they do, identity survives a
+ * reorder, an insertion and a removal, and position survives none of them.
+ */
+function rowPairing(
+  from: readonly unknown[],
+  to: readonly unknown[]
+): (index: number) => number | undefined {
+  const byId = idIndex(to);
+  const byPosition = (index: number) => (index < to.length ? index : undefined);
+  if (byId === undefined) return byPosition;
+  // The rows another row names by id are that row's. A row without an id
+  // pairs by position only with a row nothing names, so a new row added ahead
+  // of rows that keep their ids takes none of their values, while a list sent
+  // without its ids still pairs each row with the one at its place.
+  const named = new Set<number>();
+  for (const row of from) {
+    const at = byId.get(rowId(row) ?? "");
+    if (at !== undefined) named.add(at);
+  }
+  return index => {
+    const id = rowId(from[index]);
+    if (id !== undefined) return byId.get(id);
+    const at = byPosition(index);
+    return at === undefined || named.has(at) ? undefined : at;
+  };
+}
+
+/** A row's own identity, where it carries one. */
+function rowId(row: unknown): string | undefined {
+  return isRecord(row) && typeof row.id === "string" ? row.id : undefined;
+}
+
+/**
+ * The rows that carry an id, by it, or nothing when no row can be told apart
+ * that way: a list with no ids, a repeated id, or an empty list all fall back
+ * to position. A row without an id is left out rather than spoiling the rest,
+ * so an id-less row inserted among identified ones leaves them paired by id.
+ */
+function idIndex(rows: readonly unknown[]): Map<string, number> | undefined {
+  const map = new Map<string, number>();
+  for (const [index, row] of rows.entries()) {
+    const id = rowId(row);
+    if (id === undefined) continue;
+    if (map.has(id)) return undefined;
+    map.set(id, index);
+  }
+  return map.size > 0 ? map : undefined;
+}
+
+/**
+ * The row as an update leaves it: its stored values, with every change the
+ * writer is allowed to make laid over them.
+ *
+ * Only PERMITTED changes are laid over, because a denied one never reaches the
+ * row. The shape of `stored` is kept, so a caller can still read this
+ * alongside the row key by key and row by row, with one addition: a key the
+ * update adds to a record is laid over too, since a rule reading a sibling
+ * must see the sibling the update writes.
+ */
+function overlay(stored: unknown, permitted: unknown): unknown {
+  if (permitted === undefined) return stored;
+  if (Array.isArray(stored)) {
+    if (!Array.isArray(permitted)) return stored;
+    const pairing = rowPairing(stored, permitted);
+    return stored.map((row, index) => {
+      const at = pairing(index);
+      return at === undefined ? row : overlay(row, permitted[at]);
+    });
+  }
+  if (!isRecord(stored)) return isRecord(permitted) ? stored : permitted;
+  if (!isRecord(permitted)) return stored;
+  return overlayRecord(stored, permitted);
+}
+
+/** {@link overlay} for one record: its own keys, then the ones the update adds. */
+function overlayRecord(
+  stored: Record<string, unknown>,
+  permitted: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(stored)) {
+    assign(
+      out,
+      key,
+      hasOwn(permitted, key)
+        ? overlay(stored[key], permitted[key])
+        : stored[key]
+    );
+  }
+  for (const key of Object.keys(permitted)) {
+    if (!hasOwn(stored, key)) assign(out, key, permitted[key]);
+  }
+  return out;
 }
 
 function restoreRecord(
@@ -291,8 +476,10 @@ function restoreRecord(
 /**
  * A key the row holds that this document drops. Allowed, that is a deletion the
  * promotion is entitled to make; denied, it is one the caller may not, so the
- * value stays. Anything the pending change was deleting has already been
- * refused, so what reaches here is the caller's own.
+ * value stays. Denied counts anywhere inside it too: a branch holding a value
+ * the caller may not change cannot be dropped without deleting that value.
+ * Anything the pending change was deleting has already been refused, so what
+ * reaches here is the caller's own.
  */
 function keepDeniedLiveOnlyKeys(
   out: Record<string, unknown>,
@@ -303,9 +490,45 @@ function keepDeniedLiveOnlyKeys(
   if (!live) return;
   for (const key of Object.keys(live)) {
     if (hasOwn(before, key)) continue;
-    if (permittedLive && hasOwn(permittedLive, key)) continue;
+    if (!holdsDenied(live[key], permittedLive, key)) continue;
     assign(out, key, live[key]);
   }
+}
+
+/**
+ * Whether the rules removed `value`, the live value at `key`, or anything
+ * inside it: what judging live left at `key` is not the value itself.
+ */
+function holdsDenied(
+  value: unknown,
+  permittedLive: Record<string, unknown> | undefined,
+  key: string
+): boolean {
+  const judged =
+    permittedLive && hasOwn(permittedLive, key)
+      ? permittedLive[key]
+      : undefined;
+  return removedAValue(value, judged);
+}
+
+/**
+ * Whether judging `value` removed something it holds: an empty field (`null`
+ * or absent) is no value to protect, so a rule removing one removes nothing.
+ */
+function removedAValue(value: unknown, judged: unknown): boolean {
+  return !sameStoredValue(withoutEmpty(value), withoutEmpty(judged));
+}
+
+/** `value` with its empty fields left out, at any depth. */
+function withoutEmpty(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutEmpty);
+  if (!isRecord(value)) return value;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    const held = withoutEmpty(value[key]);
+    if (held !== null && held !== undefined) assign(out, key, held);
+  }
+  return out;
 }
 
 function recordOrUndefined(

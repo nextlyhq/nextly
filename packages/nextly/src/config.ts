@@ -310,6 +310,22 @@ export {
   type OnboardingStepId,
   type OnboardingStep,
 } from "./domains/widgets/onboarding-steps";
+/**
+ * The Get started steps the layout read answers, for the card that draws them:
+ * the admin names each kind of step, and restating the shapes there would be
+ * a second answer to the host's.
+ *
+ * @experimental The card is new, and these shapes may change before it settles.
+ */
+export {
+  GET_STARTED_SKIPPABLE_KINDS,
+  GET_STARTED_STEP_KINDS,
+  GET_STARTED_WIDGET_ID,
+  type GetStartedAnswer,
+  type GetStartedStep,
+  type GetStartedStepKind,
+  type GetStartedStepStatus,
+} from "./domains/widgets/get-started-steps";
 export type {
   SourcelessWidgetQuery,
   WidgetQuery,
@@ -380,6 +396,9 @@ export {
   MAX_LAYOUT_BYTES,
   layoutSizeProblem,
 } from "./domains/widgets/layout-payload";
+// A text's length in characters, as the layout write counts a note against its
+// bound, so the settings sheet counts it the same way. Import-free.
+export { textLength } from "./shared/text-length";
 // The width vocabulary a dashboard stores and draws: the five widths in their
 // ranking, and the one conversion from a declared size. The admin derives its
 // own list, check and size map from these rather than restating them, since a

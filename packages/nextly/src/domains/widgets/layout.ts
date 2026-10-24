@@ -61,6 +61,7 @@ import {
 // `layout-payload.ts`, so the browser asks the endpoint's own question about
 // what fits. Re-exported, so this module's importers are unchanged.
 export {
+  DASHBOARD_FULL_MESSAGE,
   LAYOUT_SCHEMA_VERSION,
   MAX_LAYOUT_BYTES,
   layoutSizeProblem,
@@ -170,6 +171,13 @@ export interface WidgetRetirement {
    * function of the stored text and this map. Absent, every width.
    */
   allowedWidths?: readonly WidgetWidth[];
+  /**
+   * When a merged card starts removed: `"all"` (the default) only if every card
+   * merged into it was removed; `"any"` if any one was. `"any"` is for cards
+   * whose removal was a reader's explicit dismissal of what the successor now
+   * does, so merging must not undo it; the card stays recoverable from Removed.
+   */
+  removed?: "all" | "any";
 }
 
 /**
@@ -229,7 +237,8 @@ const PER_SINGLE_CARD = /^single\/[a-z0-9-]+-status$/;
  *   attention card, merging into one the layout already holds. Needs attention
  *   draws from a third to the full width, so a quarter-width card is drawn at a
  *   third.
- * - Collections, Singles and the per-Single cards became Content (below).
+ * - Collections, Singles and the per-Single cards became Content, and the
+ *   setup checklist and the sample-content offer became Get started (below).
  */
 export const RETIRED_WIDGETS: WidgetRetirements = widgetRetirements(
   new Map<string, WidgetRetirement>([
@@ -246,6 +255,29 @@ export const RETIRED_WIDGETS: WidgetRetirements = widgetRetirements(
     //   Content allows, removed only if both were.
     ["core/collections", INTO_CONTENT],
     ["core/singles", INTO_CONTENT],
+    // - The setup checklist and the sample-content offer became the one Get
+    //   started card, at full width only. A layout holding both (every saved
+    //   row does, since a save carries the cards a condition hid) gets one
+    //   card, with the first one's id and position. Removed if EITHER was:
+    //   removing either one was a reader turning that help away, and Get
+    //   started is both, so merging must not bring it back. It stays
+    //   recoverable from Removed.
+    [
+      "core/onboarding-checklist",
+      {
+        successor: "core/get-started",
+        allowedWidths: ["full"],
+        removed: "any",
+      },
+    ],
+    [
+      "core/seed-demo-content",
+      {
+        successor: "core/get-started",
+        allowedWidths: ["full"],
+        removed: "any",
+      },
+    ],
   ]),
   [
     // - A per-Single card became Content, merging into the Content card a
@@ -590,6 +622,8 @@ interface RetiringCard {
   retired: boolean;
   /** The successor's allowed widths, for a retired card. */
   allowedWidths?: readonly WidgetWidth[];
+  /** Its retirement's removed rule, for a retired card. */
+  removedRule?: "all" | "any";
 }
 
 /** A card's merge key: its successor and which card of it. */
@@ -661,6 +695,7 @@ function retiringCards(
         key: mergeKey(last.successor, last.identity, converted),
         retired: true,
         ...(last.allowedWidths ? { allowedWidths: last.allowedWidths } : {}),
+        ...(last.removed ? { removedRule: last.removed } : {}),
       };
     }
     if (identityOf.has(placement.widgetId)) {
@@ -708,16 +743,19 @@ function widestAllowed(
  * settings, and the retired cards merge into it. Otherwise the first card in
  * the order keeps its id, position and settings, and takes the largest of the
  * group's widths that the successor allows. Either way the card is removed only
- * if every card in the group was.
+ * if every card in the group was, unless a retired card's retirement says any
+ * one removal carries over (`removed: "any"`).
  */
 function mergedCard(group: readonly RetiringCard[]): RetiringCard {
   const kept = group.find(card => !card.retired) ?? group[0];
   // Over the cards IN the merge: the kept one and the retired ones. Another
   // successor card the layout already held stays as it was, so its state is
   // no part of this card's.
-  const removed = group
-    .filter(card => card === kept || card.retired)
-    .every(card => card.placement.removed);
+  const merged = group.filter(card => card === kept || card.retired);
+  const wasRemoved = (card: RetiringCard) => card.placement.removed === true;
+  const removed = merged.some(card => card.removedRule === "any")
+    ? merged.some(wasRemoved)
+    : merged.every(wasRemoved);
   if (!kept.retired) {
     return { ...kept, placement: { ...kept.placement, removed } };
   }

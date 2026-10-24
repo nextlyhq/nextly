@@ -240,6 +240,14 @@ export const settings = {
   /** A setting of the widget's own: a line of text. */
   text: (options: { default: string }) =>
     declare<string, "text">("text", options),
+  /**
+   * A setting of the widget's own: text over several lines, at most
+   * `maxLength` characters when given, counted in code points.
+   *
+   * @experimental The shape may still change.
+   */
+  textarea: (options: { default?: string; maxLength?: number } = {}) =>
+    declare<string, "textarea">("textarea", options),
   /** A setting of the widget's own: a number. */
   number: (options: { default: number; min?: number; max?: number }) =>
     declare<number, "number">("number", options),

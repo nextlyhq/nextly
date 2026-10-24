@@ -19,12 +19,12 @@
 
 import { CollectionQuickLinks } from "@admin/components/features/dashboard/CollectionQuickLinks";
 import { CountCard } from "@admin/components/features/dashboard/CountCard";
+import { GetStartedCard } from "@admin/components/features/dashboard/GetStartedCard";
 import { NeedsAttention } from "@admin/components/features/dashboard/NeedsAttention";
-import { OnboardingChecklist } from "@admin/components/features/dashboard/OnboardingChecklist";
+import { NoteCard } from "@admin/components/features/dashboard/NoteCard";
 import { QuickCreate } from "@admin/components/features/dashboard/QuickCreate";
 import { RecentActivityCard } from "@admin/components/features/dashboard/RecentActivity";
 import { RecentlyEdited } from "@admin/components/features/dashboard/RecentlyEdited";
-import { SeedDemoContentCard } from "@admin/components/features/dashboard/SeedDemoContentCard";
 import { TeamSummary } from "@admin/components/features/dashboard/TeamSummary";
 import { UpcomingReleasesCard } from "@admin/components/features/dashboard/UpcomingReleases";
 import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
@@ -38,8 +38,7 @@ import { registerCoreComponent } from "@admin/lib/plugins/component-registry-int
  * one card reports itself and the dashboard stands.
  */
 export function registerCoreWidgetComponents(): void {
-  registerCoreComponent("core#SeedDemoContentCard", SeedDemoContentCard);
-  registerCoreComponent("core#OnboardingChecklist", OnboardingChecklist);
+  registerCoreComponent("core#GetStartedCard", GetStartedCard);
   registerCoreComponent("core#CollectionQuickLinks", CollectionQuickLinks);
   registerCoreComponent("core#QuickCreate", QuickCreate);
   registerCoreComponent("core#TeamSummary", TeamSummary);
@@ -48,4 +47,5 @@ export function registerCoreWidgetComponents(): void {
   registerCoreComponent("core#RecentlyEdited", RecentlyEdited);
   registerCoreComponent("core#UpcomingReleases", UpcomingReleasesCard);
   registerCoreComponent("core#Count", CountCard);
+  registerCoreComponent("core#Note", NoteCard);
 }

@@ -22,6 +22,8 @@
  *
  * @module middleware/rest-limits
  */
+import { buildErrorResponse } from "../api/error-response";
+import { readOrGenerateRequestId } from "../api/request-id";
 import { container } from "../di/container";
 import { LIMIT_STORE_CALL_TIMEOUT_MS } from "../domains/limits/call-deadline";
 import { openWhileStoreIsDown } from "../domains/limits/core-limit-outage";
@@ -331,7 +333,7 @@ class RestLimits implements RestLimitDecider {
       const resolved = await this.readers.lookupKey(rawKey);
       if (resolved) {
         keys.remember(rawKey, { resolved, debited: true });
-        return await this.readers.debitKey(resolved.id);
+        return await this.readers.debitKey(resolved.id, request);
       }
       // A key that does not resolve is answered without a second lookup; one
       // nothing could ask about is left for authentication to ask again.
@@ -415,7 +417,7 @@ class RestLimits implements RestLimitDecider {
 
   private refusal(request: Request, result: RateLimitResult): Response {
     if (this.settings.handler) return this.settings.handler(request, result);
-    return tooManyRequests(result);
+    return tooManyRequests(request, result);
   }
 }
 
@@ -423,26 +425,20 @@ function refusedBy(bucket: Bucket, resetTime: number): RateLimitResult {
   return { allowed: false, limit: bucket.limit, remaining: 0, resetTime };
 }
 
-/** The standard 429 for a spent REST budget. */
-function tooManyRequests(result: RateLimitResult): Response {
+/**
+ * The standard 429 for a spent REST budget, in the one error body every
+ * refusal is answered with; the budget's state rides in its headers.
+ */
+function tooManyRequests(request: Request, result: RateLimitResult): Response {
   const retryAfter = Math.max(
     0,
     Math.ceil((result.resetTime - Date.now()) / 1000)
   );
-  return new Response(
-    JSON.stringify({
-      success: false,
-      error: {
-        code: "RATE_LIMIT_EXCEEDED",
-        message: "Too many requests. Please try again later.",
-        retryAfter,
-      },
-    }),
+  return buildErrorResponse(
+    NextlyError.rateLimited({ retryAfterSeconds: retryAfter }),
     {
-      status: 429,
+      requestId: readOrGenerateRequestId(request),
       headers: {
-        "Content-Type": "application/json",
-        "Retry-After": String(retryAfter),
         "X-RateLimit-Limit": String(result.limit),
         "X-RateLimit-Remaining": "0",
         "X-RateLimit-Reset": String(result.resetTime),

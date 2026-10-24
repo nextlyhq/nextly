@@ -43,7 +43,7 @@ The Count card in the add panel, and content widgets that ask only what they dra
 - **Registration refuses:**
   - a custom card declaring both a query and cells;
   - a widget offered per collection with no Collection setting;
-  - an `offered` value other than `"per-collection"`;
+  - an `offered` value outside its closed list (`"per-collection"`, `"on-request"`);
   - a content setting that no cell's source lets a knob drive.
 - **A timeseries with `until`** draws its intervals up to that boundary, where its rows end.
 - **Whether a caller has a release to read** is asked once per batch, not once per collection.

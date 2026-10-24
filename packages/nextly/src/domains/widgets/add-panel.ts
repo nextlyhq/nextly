@@ -37,8 +37,7 @@ export type AddPanelGroup = (typeof ADD_PANEL_GROUPS)[number];
  * without a group here does not compile.
  */
 const CORE_GROUPS = {
-  "core/seed-demo-content": "overview",
-  "core/onboarding-checklist": "overview",
+  "core/get-started": "overview",
   "core/content": "overview",
   "core/quick-create": "overview",
   "core/team": "team",
@@ -47,6 +46,7 @@ const CORE_GROUPS = {
   "core/upcoming-releases": "overview",
   "core/recent-activity": "team",
   "core/count": "content",
+  "core/note": "overview",
 } as const satisfies Record<CoreWidgetId, AddPanelGroup>;
 
 /** A built-in's place in core's own order, for Overview's first rows. */

@@ -524,14 +524,20 @@ export interface WidgetDefinition {
    * Where the add panel offers this widget, when not as one card for the
    * whole dashboard.
    *
-   * `"per-collection"`: offered only inside each collection's group of the add
-   * panel, one row per collection, a card starting with that collection as its
-   * Collection setting, any number of cards; never on the default dashboard.
-   * One fact for all four, so they cannot disagree.
+   * - Absent: placed on the default dashboard, and offered as one card.
+   * - `"per-collection"`: offered only inside each collection's group of the
+   *   add panel, one row per collection, a card starting with that collection
+   *   as its Collection setting.
+   * - `"on-request"`: offered only from the add panel, as a card a reader asks
+   *   for, such as a note; nothing to show until they set it up.
+   *
+   * Either value keeps the widget off the default dashboard and allows any
+   * number of cards, unless it says otherwise (`allowsSeveral`). One fact, so
+   * the placement, the panel and the count cannot disagree.
    *
    * @experimental While the content widgets are being built.
    */
-  offered?: "per-collection";
+  offered?: "per-collection" | "on-request";
   /**
    * The card's data is built on the server from the widget's declaration (a
    * data function, or a query written from its settings), so the definition
@@ -1770,19 +1776,27 @@ function declaresCollectionSetting(settings: unknown): boolean {
   );
 }
 
+/** The modes `offered` may name, the closed list its type spells. */
+const OFFERED_MODES = [
+  "per-collection",
+  "on-request",
+] as const satisfies readonly NonNullable<WidgetDefinition["offered"]>[];
+
 /**
- * Refuses a widget offered per collection that declares no Collection setting:
+ * Refuses an `offered` mode outside its closed list, and a widget offered per
+ * collection that declares no Collection setting:
  * its add-panel rows each start a card set to a collection, so without one the
  * widget could be added nowhere.
  */
 function validateOffered(d: Partial<WidgetDefinition>): void {
-  if (d.offered === undefined) return;
   // An untyped registration with a misspelt mode would otherwise be read as an
-  // ordinary widget: placed by default, with no collection to read.
-  if (d.offered !== "per-collection") {
-    fail(`${d.id}: offered must be "per-collection" when set`);
-  }
-  if (!declaresCollectionSetting(d.settings)) {
+  // ordinary widget: placed by default, perhaps with no collection to read.
+  const outside = closedValueProblem("offered", d.offered, OFFERED_MODES);
+  if (outside !== undefined) fail(`${d.id}: ${outside}`);
+  if (
+    d.offered === "per-collection" &&
+    !declaresCollectionSetting(d.settings)
+  ) {
     fail(
       `${d.id}: a widget offered per collection needs a Collection setting, which each card starts set to`
     );

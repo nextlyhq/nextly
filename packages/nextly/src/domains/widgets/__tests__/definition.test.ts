@@ -985,7 +985,9 @@ describe("a custom card's cells", () => {
           { ...split, query: { ...split.query, source: "collection:posts" } },
         ],
       })
-    ).toThrow(/offered must be "per-collection" when set/);
+    ).toThrow(
+      /has offered "per-colletion", which is not one of per-collection, on-request/
+    );
   });
 
   it("refuses a cell with no source and nothing to supply one", () => {
