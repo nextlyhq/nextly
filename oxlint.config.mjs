@@ -7,6 +7,12 @@ import { readFileSync } from "node:fs";
 
 import { defineConfig } from "oxlint";
 
+import {
+  IMPORT_CYCLES,
+  NEXTLY_SOURCE,
+  NO_CYCLE,
+} from "./lint/import-cycles.mjs";
+
 /** Prefixes each path of a package-relative allowlist with the package. */
 const inPackage = (pkg, paths) => paths.map(path => `packages/${pkg}/${path}`);
 
@@ -429,6 +435,16 @@ export default defineConfig({
       files: ["packages/nextly/src/**/*.{ts,tsx}"],
       excludeFiles: [...API_KEY_SCOPE_ALLOWED, ...TESTS],
       rules: { "nextly/api-key-scope": "error" },
+    },
+    {
+      // No new import cycle in nextly's source. The files already on one are
+      // exempt, and scripts/lint-config.test.mjs holds those cycles to the
+      // groups lint/import-cycles.mjs lists, so the exemption only shrinks.
+      files: [`${NEXTLY_SOURCE}/**/*.{ts,tsx}`],
+      excludeFiles: IMPORT_CYCLES.flat().map(
+        file => `${NEXTLY_SOURCE}/${file}`
+      ),
+      rules: { "import/no-cycle": NO_CYCLE },
     },
     {
       // nextly writes through a masked logger, not the console.

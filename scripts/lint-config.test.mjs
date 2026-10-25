@@ -26,6 +26,11 @@ import { pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import {
+  IMPORT_CYCLES,
+  NEXTLY_SOURCE,
+  NO_CYCLE,
+} from "../lint/import-cycles.mjs";
 import committed from "../oxlint.config.mjs";
 import { everyPass, oxlintCommand, TEMPLATES_PASS } from "./lint.mjs";
 
@@ -323,6 +328,90 @@ describe("the API-key scope guard's allowlist", () => {
       );
     }
   });
+});
+
+describe("the import-cycle guard's allowlist", () => {
+  const listed = IMPORT_CYCLES.flat().map(file => `${NEXTLY_SOURCE}/${file}`);
+
+  /**
+   * The cycles `import/no-cycle` reports, as groups of files: each report
+   * prints the path of one cycle through its file, and files joined by any
+   * printed path are one group. Read from oxlint's own reports so the cycles
+   * come from the graph the lint uses rather than a second one built here.
+   */
+  function cycleGroups(diagnostics) {
+    const at = new RegExp(`\\((${NEXTLY_SOURCE}/[^)]+)\\)`, "g");
+    const parent = new Map();
+    const find = file => {
+      if (!parent.has(file)) parent.set(file, file);
+      while (parent.get(file) !== file) file = parent.get(file);
+      return file;
+    };
+    for (const report of diagnostics) {
+      if (report.code !== "import(no-cycle)") continue;
+      const path = [...(report.note ?? "").matchAll(at)].map(match => match[1]);
+      // A report whose path cannot be read would join nothing and make every
+      // group look smaller, so a change in how oxlint prints it fails here.
+      expect(
+        path.length,
+        `no cycle path read from ${report.filename}`
+      ).toBeGreaterThan(0);
+      for (const file of path) parent.set(find(file), find(report.filename));
+    }
+    const groups = new Map();
+    for (const file of parent.keys()) {
+      groups.set(find(file), [...(groups.get(find(file)) ?? []), file]);
+    }
+    return [...groups.values()].map(group => group.sort()).sort();
+  }
+
+  it("is the setting the configuration lints nextly's source with", () => {
+    const override = overrideFor("import/no-cycle");
+    expect(override.rules["import/no-cycle"]).toEqual(NO_CYCLE);
+    expect(override.files).toEqual([`${NEXTLY_SOURCE}/**/*.{ts,tsx}`]);
+    expect([...override.excludeFiles].sort()).toEqual([...listed].sort());
+  });
+
+  it("is what suppresses the guard on the listed files", () => {
+    const off = lint(committed, listed);
+    expect(off.files).toBe(listed.length);
+    expect(countsPerFile(off.diagnostics, "import(no-cycle)")).toEqual({});
+  }, 120_000);
+
+  it("lists exactly the cycles nextly's source has", () => {
+    // With the exemptions removed, every file on a cycle is reported. The
+    // groups must equal the listed ones: a file that joined a cycle, two cycles
+    // that merged, and a file that left one all change them. A merge is the
+    // case the per-file exemption alone cannot see, since every merged file is
+    // already exempt; fallow's new-only circular-dependency check reports it
+    // too, as an introduced cycle.
+    const on = lint(withoutExemptions("import/no-cycle"), [NEXTLY_SOURCE]);
+    const found = cycleGroups(on.diagnostics);
+    const expected = IMPORT_CYCLES.map(group =>
+      group.map(file => `${NEXTLY_SOURCE}/${file}`).sort()
+    ).sort();
+    const foundFiles = new Set(found.flat());
+    const joined = found.flat().filter(file => !listed.includes(file));
+    const left = listed.filter(file => !foundFiles.has(file));
+    expect(
+      found,
+      [
+        "The import cycles in nextly's source differ from lint/import-cycles.mjs.",
+        left.length
+          ? `No longer on a cycle, so remove them from the list: ${left.join(", ")}.`
+          : "",
+        joined.length
+          ? `Newly on a cycle: ${joined.join(", ")}. Make the import that closed it ` +
+            "type-only, or load it with import() inside the function that needs it."
+          : "",
+        !left.length && !joined.length
+          ? "Two listed cycles merged, or one split: the groups changed with the same files."
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" ")
+    ).toEqual(expected);
+  }, 120_000);
 });
 
 // Each guard above is shown live at a path no allowlist names: a probe doing
