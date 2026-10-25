@@ -117,8 +117,8 @@
       "compiled": 5
     },
     "docs/guides/media-storage.mdx": {
-      "samples": 15,
-      "compiled": 10
+      "samples": 16,
+      "compiled": 11
     },
     "docs/guides/production-migrations.mdx": {
       "samples": 1,
@@ -446,6 +446,10 @@
       "implicit-any #4 error TS7006: Parameter 'data' implicitly has an 'any' type.": 3,
       "reader-file #5 error TS2307: Cannot find module '@/nextly' or its corresponding type declarations.": 1
     },
+    "docs/guides/media-storage.mdx": {
+      "uninstalled #0 error TS2307: Cannot find module '@nextly-config' or its corresponding type declarations.": 1,
+      "reader-file #12 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
+    },
     "docs/plugins/commerce/index.mdx": {
       "uninstalled #0 error TS2307: Cannot find module '@nextlyhq/plugin-commerce' or its corresponding type declarations.": 1,
       "uninstalled #1 error TS2307: Cannot find module '@nextlyhq/plugin-commerce' or its corresponding type declarations.": 1
@@ -510,9 +514,6 @@
       "reader-file #0 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #1 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
-    },
-    "docs/guides/media-storage.mdx": {
-      "reader-file #11 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/jobs/index.mdx": {
       "reader-file #1 error TS2307: Cannot find module './jobs/send-digest' or its corresponding type declarations.": 1

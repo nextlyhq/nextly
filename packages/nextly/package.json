@@ -115,6 +115,10 @@
       "types": "./dist/api/media-handlers.d.mts",
       "import": "./dist/api/media-handlers.mjs"
     },
+    "./api/uploads": {
+      "types": "./dist/api/uploads.d.mts",
+      "import": "./dist/api/uploads.mjs"
+    },
     "./api/collections-schema": {
       "types": "./dist/api/collections-schema.d.mts",
       "import": "./dist/api/collections-schema.mjs"
