@@ -65,7 +65,6 @@ const NEXTLY_FILES = [
   "app/admin/api/media/[[...path]]/route.ts",
   "app/api/media/[[...path]]/route.ts",
   "app/api/health/route.ts",
-  "app/uploads/[...path]/route.ts",
   "instrumentation.ts",
   "types/generated/.gitkeep",
   "types/generated/nextly-types.ts",

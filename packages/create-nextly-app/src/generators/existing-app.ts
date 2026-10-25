@@ -4,11 +4,7 @@ import { generateAdminPage } from "./admin";
 import { generateConfig } from "./config";
 import type { GeneratedFiles } from "./generated-files";
 import { generateInstrumentation } from "./instrumentation";
-import {
-  generateMediaRoutes,
-  generateUploadsRoute,
-  type MediaRouteTemplates,
-} from "./media-routes";
+import { generateMediaRoutes, type MediaRouteTemplates } from "./media-routes";
 import {
   cacheComponentsFiles,
   nextConfigFiles,
@@ -41,7 +37,6 @@ export async function generateIntoExistingApp(
     await generateRoutes(cwd, projectInfo),
     await generateAdminPage(cwd, projectInfo),
     await generateMediaRoutes(cwd, projectInfo, templates),
-    await generateUploadsRoute(cwd, projectInfo, templates),
     await generateInstrumentation(cwd, projectInfo),
     await generateTypesDirectory(cwd, projectInfo),
     nextConfigFiles(await patchNextConfig(cwd, database)),
