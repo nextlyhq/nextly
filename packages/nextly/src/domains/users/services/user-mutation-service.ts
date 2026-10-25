@@ -81,7 +81,9 @@ import {
 } from "../../../schemas/widget-layout";
 import { BaseService } from "../../../services/base-service";
 import type { EmailService } from "../../../services/email/email-service";
-import { ServiceContainer } from "../../../services/index";
+// Built per call from this service's adapter, and loaded then: the container
+// imports every core service.
+import { serviceContainerFor } from "../../../services/service-container-for";
 import type { Logger } from "../../../services/shared";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
@@ -1304,7 +1306,7 @@ export class UserMutationService extends BaseService {
       // VALIDATION_ERROR for the caller.
       if (userData.roles && userData.roles.length > 0) {
         const uniqueRoleIds = Array.from(new Set(userData.roles));
-        const services = new ServiceContainer(this.adapter);
+        const services = await serviceContainerFor(this.adapter);
         const invalidRoleIds: string[] = [];
         for (const rid of uniqueRoleIds) {
           try {
@@ -1710,9 +1712,9 @@ export class UserMutationService extends BaseService {
       // role caches that answered for this account before it existed are
       // flushed now.
       if (grantedFirstAdministrator || requestedRoleIds.length > 0) {
-        await new ServiceContainer(this.adapter).userRoles.invalidateRoleCaches(
-          String(user.id)
-        );
+        await (
+          await serviceContainerFor(this.adapter)
+        ).userRoles.invalidateRoleCaches(String(user.id));
       }
 
       // Hand the invite link back to the admin. The token was committed with
@@ -2026,7 +2028,7 @@ export class UserMutationService extends BaseService {
           : undefined;
       let hasRoleUpdates = false;
       const services = requestedRoleIds
-        ? new ServiceContainer(this.adapter)
+        ? await serviceContainerFor(this.adapter)
         : undefined;
 
       // 2c) The custom fields' user_ext row, written in the account's own
@@ -2540,7 +2542,9 @@ export class UserMutationService extends BaseService {
    */
   private async roleForSignUpToWaitOn(): Promise<void> {
     try {
-      await new ServiceContainer(this.adapter).roles.ensureSuperAdminRole();
+      await (
+        await serviceContainerFor(this.adapter)
+      ).roles.ensureSuperAdminRole();
     } catch {
       // Refused when a role of the install's own already holds the
       // administrator role's name: then no administrator role can exist, so
@@ -2561,7 +2565,9 @@ export class UserMutationService extends BaseService {
     if (await superAdminRoleHeld(this.db, this.tables)) {
       return false;
     }
-    await new ServiceContainer(this.adapter).roles.ensureSuperAdminRole();
+    await (
+      await serviceContainerFor(this.adapter)
+    ).roles.ensureSuperAdminRole();
     return true;
   }
 
