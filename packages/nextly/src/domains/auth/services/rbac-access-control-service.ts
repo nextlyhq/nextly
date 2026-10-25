@@ -261,8 +261,8 @@ export class RBACAccessControlService {
    * !!user` had its declaration accepted, recorded and never consulted.
    *
    * Answers `undefined` when no code-defined rule governs this operation, which
-   * means "no opinion" and leaves the caller to its public default. A boolean
-   * is a verdict.
+   * means "no opinion": a read falls to its public default, while the
+   * collection gate refuses a write no rule names. A boolean is a verdict.
    *
    * The context is a real anonymous one rather than a stand-in: `user` is
    * `null`, which the type has always allowed, and both lists are empty. A rule
@@ -282,10 +282,10 @@ export class RBACAccessControlService {
    *
    * The rule is the whole decision. A person holds no role and no permission
    * and is never a super-admin, so nothing `checkAccess` resolves from a user
-   * id applies; and where an anonymous caller with no rule falls through to
-   * the public default, a person is refused. A collection admits a person only
-   * where its author wrote a rule that does, or one set to `true`, which
-   * admits everyone.
+   * id applies; and where an anonymous caller's read with no rule falls
+   * through to the public default, a person is refused. A collection admits a
+   * person only where its author wrote a rule that does, or one set to
+   * `true`, which admits everyone.
    *
    * Publishing is refused whatever the rule says, as it is for an anonymous
    * caller: it moves a document into a privileged published state, and a

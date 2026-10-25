@@ -145,6 +145,56 @@ describe("a rule's answer, at the collection gate", () => {
   });
 });
 
+describe("a visitor's write", () => {
+  const WRITES = ["create", "update", "delete"] as const;
+
+  it("is refused as needing a signed-in caller where no rule names it", async () => {
+    // `read: true` is declared so the target has an access object: only the
+    // write's own rule is missing, which is the case the public default used
+    // to let through.
+    for (const action of WRITES) {
+      const verdict = await collectionGateVerdict(
+        asked({ read: true }, { action })
+      );
+      expect(verdict, action).toEqual({
+        allowed: false,
+        refusal: "unauthenticated",
+      });
+    }
+  });
+
+  it("is refused at a Single where no rule names the update", async () => {
+    const target: AccessTarget = { kind: "single", slug: "site", access: {} };
+    const verdict = await singleGateVerdict({
+      slug: "site",
+      action: "update",
+      principal: null,
+      rules: { getRegisteredTarget: () => target },
+    });
+    expect(verdict.allowed).toBe(false);
+  });
+
+  it("is allowed where the target's rule answers true, plain or as a function", async () => {
+    for (const action of WRITES) {
+      const plain = await collectionGateVerdict(
+        asked({ [action]: true }, { action })
+      );
+      expect(plain.allowed, `${action}: true`).toBe(true);
+      const fn = await collectionGateVerdict(
+        asked({ [action]: () => true }, { action })
+      );
+      expect(fn.allowed, `${action}: () => true`).toBe(true);
+    }
+  });
+
+  it("leaves a visitor's read with no rule on the public default", async () => {
+    // The control for the refusals above: the same target with no rule at
+    // all still admits a visitor's read, so only writes changed.
+    const verdict = await collectionGateVerdict(asked({}, { action: "read" }));
+    expect(verdict.allowed).toBe(true);
+  });
+});
+
 describe("a key that lacks the grant", () => {
   it("is refused a publish without its rule being asked", async () => {
     // Today's key check refuses on the missing grant before reading the rule,
