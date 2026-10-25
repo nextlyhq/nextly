@@ -358,13 +358,16 @@ export {
 // DI Container - for advanced use cases
 export { Container, container, type Factory } from "./di";
 
-// Service Registration
+// Service Registration. The `./di` barrel leaves registration out, so the
+// registration functions come from `./di/register` itself.
 export {
   registerServices,
   shutdownServices,
+  clearServices,
+} from "./di/register";
+export {
   getService,
   isServicesRegistered,
-  clearServices,
   type NextlyServiceConfig,
   type ServiceMap,
 } from "./di";

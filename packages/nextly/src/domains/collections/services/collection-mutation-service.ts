@@ -3064,18 +3064,28 @@ export class CollectionMutationService extends BaseService {
       grants: () => Promise<CallerGrants>;
     }
   ): Promise<ValidationIssue[]> {
+    const draftInput = buildRestorePayload(
+      args.snapshot,
+      shared.fields as unknown as FieldConfig[],
+      args.restoreCtx
+    ).payload;
     return refusalIssues(async () => {
       await this.judgePromotionAccess({
-        before: this.promotedDocumentOf(
-          shared,
-          buildRestorePayload(
-            args.snapshot,
-            shared.fields as unknown as FieldConfig[],
-            args.restoreCtx
-          ).payload
-        ),
+        before: this.promotedDocumentOf(shared, draftInput),
         live: args.live,
         callerSupplied: this.promotedDocumentOf(shared, {}),
+        // The draft with nothing of the write's laid over it, judged as the
+        // publish judges it, so the release is refused for what its run
+        // would refuse.
+        pending: this.promotedDocumentOf(
+          {
+            ...shared,
+            finalData: {},
+            componentFieldData: {},
+            manyToManyData: {},
+          },
+          draftInput
+        ),
         collectionName: args.collectionName,
         entryId: args.entryId,
         user: args.user,
@@ -7103,6 +7113,8 @@ export class CollectionMutationService extends BaseService {
     before: Record<string, unknown>;
     live: Record<string, unknown>;
     callerSupplied: Record<string, unknown>;
+    /** The pending change alone, where `before` lays the caller's payload over it. */
+    pending?: Record<string, unknown>;
     collectionName: string;
     entryId: string;
     user: UserContext | undefined;
@@ -7118,6 +7130,7 @@ export class CollectionMutationService extends BaseService {
       before: args.before,
       live: args.live,
       callerSupplied: args.callerSupplied,
+      pending: args.pending,
       // The entry's own rules, then every field group's on the instances the
       // document holds: a pending change can carry a field-group edit too, and
       // a denied one is refused or kept at its live value like any other.
@@ -9178,21 +9191,38 @@ export class CollectionMutationService extends BaseService {
                 fields
               );
               // The caller's own contribution, from the payload the field gate
-              // has ALREADY filtered, so it holds only what this publisher was
-              // allowed to send. Read from the raw request, it would credit the
-              // publisher with the pending change's edit whenever they echo the
-              // same path: the gate strips their value, the merged document still
-              // holds the draft's, the resolver treats that edit as theirs and
-              // restores live, and the publish consumes the draft. Filtered, an
-              // echoed protected value is simply absent, so the draft's edit is
-              // refused rather than lost. Logical, through the same conversion as
-              // the document it is compared against.
+              // has ALREADY judged, never the raw request. Read from the request,
+              // it would credit the publisher with the pending change's edit
+              // whenever they echo the same path: the gate drops their value, the
+              // merged document still holds the draft's, the resolver treats that
+              // edit as theirs and restores live, and the publish consumes the
+              // draft. The gate keeps a protected child of a group they sent at
+              // its stored value rather than dropping it, so the resolver credits
+              // them only with what the rules let them send, and judges the rest
+              // as the pending change holds it. Logical, through the same
+              // conversion as the document it is compared against.
               const callerContribution = this.deserializeJsonFieldsForSnapshot(
                 this.assemblePromotedDocument(
                   {},
                   finalData,
                   componentFieldData,
                   manyToManyData,
+                  fields,
+                  manyToManyFields,
+                  splitComponentSchemas
+                ),
+                fields
+              );
+              // The locked draft on its own, through the same conversion: the
+              // field gate keeps a protected child of a group the caller sent
+              // at its LIVE value, so where that group replaced the draft's,
+              // only the draft still says what its author changed there.
+              const pendingDocument = this.deserializeJsonFieldsForSnapshot(
+                this.assemblePromotedDocument(
+                  draftInput,
+                  {},
+                  {},
+                  {},
                   fields,
                   manyToManyFields,
                   splitComponentSchemas
@@ -9208,6 +9238,7 @@ export class CollectionMutationService extends BaseService {
                 before: mergedPromoteData,
                 live: previousDocument ?? {},
                 callerSupplied: callerContribution,
+                pending: pendingDocument,
                 collectionName: params.collectionName,
                 entryId: params.entryId,
                 user: params.user,

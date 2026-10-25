@@ -321,6 +321,18 @@ function parseRoleRoutes(
     };
   }
 
+  if (id === "screen" && !subresource && httpMethod === "GET") {
+    // GET /api/roles/screen → what the roles screen shows for each collection
+    // and Single. Ahead of the role-by-id branch, which would otherwise read
+    // "screen" as a role id.
+    return {
+      service: "rolesScreen",
+      operation: "list",
+      method: "getRolesScreen",
+      routeParams,
+    };
+  }
+
   if (id && !subresource && httpMethod === "GET") {
     // GET /api/roles/123 → get role by id
     routeParams.roleId = id;

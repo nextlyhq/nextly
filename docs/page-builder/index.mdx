@@ -1,6 +1,6 @@
 ---
 title: Page Builder
-description: Let your team compose pages from blocks you define, rendered on the server with no client JavaScript by default.
+description: Let your team compose pages from blocks you define. Pages render on the server, and the core blocks add no JavaScript of their own.
 ---
 
 The Page Builder gives non-developers a canvas. They drag blocks onto a page, arrange
@@ -18,10 +18,12 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
   accordion item, spacer, divider), content (heading, paragraph, rich text, list, quote,
   image, gallery, button, embed, form), and one that reads from your content
   ([collection loop](#reading-content-into-a-page)).
-- **Your own blocks**, defined in code, sitting beside the built-in ones.
+- **Your own blocks**, defined in code, which the page renderer takes beside the
+  built-in ones.
 - **Responsive control** per block, against breakpoints you declare.
-- **Server-first rendering.** A page ships no client JavaScript unless a block on it
-  needs some.
+- **Server rendering.** Pages render on the server, and the core blocks add no
+  JavaScript of their own. Every page still loads the Next.js runtime, and a block you
+  write as a client component sends its own JavaScript.
 
 ## Availability
 

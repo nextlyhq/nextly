@@ -467,7 +467,7 @@ interface MinimalField {
 
 // Default resolver: lazy-imports DI to avoid a circular import with init.ts.
 async function defaultResolver(name: string): Promise<unknown> {
-  const { getService } = await import("../di/register");
+  const { getService } = await import("../di/service-access");
   // The DI key types are a fixed map; we cast through the resolver edge.
   return getService(name as Parameters<typeof getService>[0]);
 }
