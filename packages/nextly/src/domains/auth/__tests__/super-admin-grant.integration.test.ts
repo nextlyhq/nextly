@@ -869,33 +869,42 @@ describe.each(getConfiguredTestDialects())(
           name: "Ordered",
           roles: [install.staffRole],
         });
-        expect(await untilAnotherWaitsOnALock()).toBe(true);
+        let competing: Promise<string> = Promise.resolve("not started");
+        let outcome = "not measured";
+        // The lock is let go whatever happens inside: an assertion failing
+        // while it is held would leave the account's request and the
+        // competing insert waiting on it, and the run would end in a teardown
+        // timeout instead of that assertion's own failure.
+        try {
+          expect(await untilAnotherWaitsOnALock()).toBe(true);
 
-        // An account row written before the lock would hold the address's
-        // unique key, and this insert would wait on it. Taken in order, the
-        // creation has written nothing yet, and the insert goes straight in.
-        const competing = raw()
-          .insert(users)
-          .values({
-            id: "competing-account",
-            email: "ordered@example.com",
-            name: "Competing",
-            isActive: true,
-          })
-          .then(
-            () => "inserted",
-            () => "refused"
-          );
-        const outcome = await Promise.race([
-          competing,
-          new Promise<string>(resolve =>
-            setTimeout(() => resolve("waiting"), 3000)
-          ),
-        ]);
-        release();
-        await holding;
-        await creation.catch(() => undefined);
-        await competing;
+          // An account row written before the lock would hold the address's
+          // unique key, and this insert would wait on it. Taken in order, the
+          // creation has written nothing yet, and the insert goes straight in.
+          competing = raw()
+            .insert(users)
+            .values({
+              id: "competing-account",
+              email: "ordered@example.com",
+              name: "Competing",
+              isActive: true,
+            })
+            .then(
+              () => "inserted",
+              () => "refused"
+            );
+          outcome = await Promise.race([
+            competing,
+            new Promise<string>(resolve =>
+              setTimeout(() => resolve("waiting"), 3000)
+            ),
+          ]);
+        } finally {
+          release();
+          await holding;
+          await creation.catch(() => undefined);
+          await competing;
+        }
 
         expect(outcome).toBe("inserted");
       }
