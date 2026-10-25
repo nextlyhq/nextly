@@ -43,10 +43,11 @@
  * - The registry itself gaining modules (a new service): the same heavy files
  *   and chains, each loading more. Raise the pin in the same pull request to
  *   the measured value plus the same margin, and say so in its description.
- * Otherwise the pins only go down.
+ * Otherwise the pins only go down, and a run lighter than a pin by more than
+ * its margin fails until the pin is lowered.
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import type { Reporter, TestModule, Vitest } from "vitest/node";
@@ -61,7 +62,9 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * The judged project's pins, each a margin above what it measured when they
  * were set (66 heavy files and 1,035 modules at the 90th percentile, over 577
  * files), and the heavy files of that measurement. A run that measures below a
- * pin by more than its margin says to lower it; the list is updated with them.
+ * pin by more than its margin fails, naming the pin to set; the list is
+ * refreshed with them. The pins are edited by hand so that a change to one is
+ * a line a reviewer reads; only the list has a command.
  */
 export const BUDGET = { heavyFiles: 69, p90Modules: 1_070 };
 const MARGIN = { heavyFiles: 3, p90Modules: 35 };
@@ -69,6 +72,8 @@ const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",
   import.meta.url
 );
+/** Set to 1 on a whole run to write that run's heavy files to the pinned list. */
+const WRITE_HEAVY = "NEXTLY_MODULE_BUDGET_WRITE_HEAVY";
 
 /** The modules a heavy file's load is explained by, relative to the package. */
 const PULLS = [
@@ -103,13 +108,17 @@ export function measure(counts: readonly number[]): Measured {
 export function judge(measured: Measured, budget = BUDGET) {
   const over: string[] = [];
   const lower: string[] = [];
+  const pins = { ...budget };
   for (const key of ["heavyFiles", "p90Modules"] as const) {
     if (measured[key] > budget[key]) over.push(key);
     else if (measured[key] + MARGIN[key] < budget[key]) {
-      lower.push(`${key} to ${measured[key] + MARGIN[key]}`);
+      lower.push(key);
+      pins[key] = measured[key] + MARGIN[key];
     }
   }
-  return { over, lower };
+  // `pins` is the budget as it should now read: each pin the suite has moved
+  // below by more than its margin, lowered to the measurement plus the margin.
+  return { over, lower, pins };
 }
 
 /** How this run's heavy files differ from the pinned ones. */
@@ -242,26 +251,31 @@ export default class ModuleBudgetReporter implements Reporter {
       console.log(`module budget not judged: ${partial}`);
       return;
     }
+    // Decided before the records are read: a run that judges nothing needs
+    // none, and one told to select projects may run without the cache that
+    // writes them.
+    if (!testModules.some(m => m.project.name === JUDGED_PROJECT)) {
+      // A run told to select projects, such as `--project nextly`, ran no file
+      // of the judged one by request. Without that request, its absence means
+      // the project was renamed, and the budget would judge nothing while
+      // every run reported it as passing.
+      const selected = this.vitest.config.project;
+      if (selected.length > 0) {
+        console.log(
+          `module budget not judged: this run selected the projects ${selected.join(", ")}`
+        );
+        return;
+      }
+      return fail(
+        `module budget: no test file of the project "${JUDGED_PROJECT}" ran; ` +
+          "set JUDGED_PROJECT in src/__tests__/module-budget-reporter.ts to its name"
+      );
+    }
     const counted = this.recordedCounts(testModules);
     if (typeof counted === "string") return fail(counted);
-    const judged = counted.filter(
-      c => c.module.project.name === JUDGED_PROJECT
-    );
-    if (judged.length > 0) return this.report(counted, judged);
-    // A run told to select projects, such as `--project nextly`, ran no file
-    // of the judged one by request. Without that request, its absence means
-    // the project was renamed, and the budget would judge nothing while every
-    // run reported it as passing.
-    const selected = this.vitest.config.project;
-    if (selected.length > 0) {
-      console.log(
-        `module budget not judged: this run selected the projects ${selected.join(", ")}`
-      );
-      return;
-    }
-    fail(
-      `module budget: no test file of the project "${JUDGED_PROJECT}" ran; ` +
-        "set JUDGED_PROJECT in src/__tests__/module-budget-reporter.ts to its name"
+    this.report(
+      counted,
+      counted.filter(c => c.module.project.name === JUDGED_PROJECT)
     );
   }
 
@@ -324,7 +338,7 @@ export default class ModuleBudgetReporter implements Reporter {
   private report(counted: Counted[], judged: Counted[]): void {
     const root = this.vitest.config.root;
     const measured = measure(judged.map(c => c.count));
-    const { over, lower } = judge(measured);
+    const { over, lower, pins } = judge(measured);
     const heavy = judged.filter(c => c.count > HEAVY_MODULES);
     const pinned = JSON.parse(readFileSync(PINNED_HEAVY_FILES, "utf8")) as {
       files: string[];
@@ -342,15 +356,29 @@ export default class ModuleBudgetReporter implements Reporter {
       "module budget, reported, not judged (shared workers vary by run order): " +
         describeUnjudged(counted)
     );
-    if (lower.length > 0) {
+    if (process.env[WRITE_HEAVY] === "1") {
+      writeFileSync(
+        PINNED_HEAVY_FILES,
+        `${JSON.stringify({ files: heavy.map(c => recordKey(root, c.module.moduleId)).sort() }, null, 2)}\n`
+      );
       console.log(
-        `module budget: ${JUDGED_PROJECT} is lighter than its pins; lower them in ` +
-          `src/__tests__/module-budget-reporter.ts (${lower.join(", ")}), and set ` +
-          "module-budget-heavy-files.json to this run's heavy files"
+        `module budget: wrote this run's ${heavy.length} heavy files to the pinned list`
       );
     }
     if (over.length > 0) {
       fail(exceededMessage(root, over, measured, change, heavy));
+    } else if (lower.length > 0) {
+      // A ratchet that only asks leaves the headroom for a later regression
+      // to spend unseen, so a suite lighter than a pin by more than its margin
+      // fails until the pin comes down. The counts are the same on every run,
+      // so this cannot flake.
+      fail(
+        `module budget: ${JUDGED_PROJECT} is lighter than its pins (${lower.join(", ")}), ` +
+          "and the pins only go down. In src/__tests__/module-budget-reporter.ts set\n" +
+          `  export const BUDGET = { heavyFiles: ${pins.heavyFiles}, p90Modules: ${pins.p90Modules} };\n` +
+          "and refresh the pinned heavy files from a whole run:\n" +
+          `  ${WRITE_HEAVY}=1 pnpm --filter nextly exec vitest run`
+      );
     }
   }
 }

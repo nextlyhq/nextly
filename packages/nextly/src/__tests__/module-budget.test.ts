@@ -54,13 +54,26 @@ describe("judge", () => {
     expect(at(BUDGET.heavyFiles, BUDGET.p90Modules)).toEqual({
       over: [],
       lower: [],
+      pins: BUDGET,
     });
   });
 
-  it("asks for a lower pin once a suite is lighter by more than the margin", () => {
+  it("asks for nothing while a suite is lighter by no more than the margin", () => {
+    // 3 heavy files and 35 modules are the margins.
+    expect(at(BUDGET.heavyFiles - 3, BUDGET.p90Modules - 35).lower).toEqual([]);
+  });
+
+  it("names the exact lower pins once a suite is lighter by more than the margin", () => {
     const light = at(50, 500);
     expect(light.over).toEqual([]);
-    expect(light.lower).toEqual(["heavyFiles to 53", "p90Modules to 535"]);
+    expect(light.lower).toEqual(["heavyFiles", "p90Modules"]);
+    expect(light.pins).toEqual({ heavyFiles: 53, p90Modules: 535 });
+  });
+
+  it("lowers only the pin the suite moved below, and keeps the other", () => {
+    const { lower, pins } = at(50, BUDGET.p90Modules);
+    expect(lower).toEqual(["heavyFiles"]);
+    expect(pins).toEqual({ heavyFiles: 53, p90Modules: BUDGET.p90Modules });
   });
 });
 
