@@ -13,13 +13,12 @@ import {
   type APIRequestContext,
   type Page,
   type PlaywrightWorkerArgs,
+  type TestInfo,
 } from "@playwright/test";
-
-import { STORAGE_STATE } from "../global-setup";
 
 import { gotoAdmin } from "./support/admin";
 import { createEntry, expectOk } from "./support/runtime-collection";
-import { test } from "./support/test";
+import { fileAccount, test } from "./support/test";
 import { LOCK } from "./support/locks";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
@@ -52,17 +51,18 @@ interface Layout {
 
 async function signedIn(
   playwright: PlaywrightWorkerArgs["playwright"],
-  baseURL: string | undefined
+  testInfo: TestInfo
 ): Promise<APIRequestContext> {
+  const baseURL = testInfo.project.use.baseURL;
   if (baseURL === undefined) throw new Error("[e2e] No baseURL configured.");
   return playwright.request.newContext({
     baseURL,
-    storageState: STORAGE_STATE,
+    storageState: await fileAccount(baseURL, testInfo),
   });
 }
 
 test.beforeAll(async ({ playwright }, testInfo) => {
-  const api = await signedIn(playwright, testInfo.project.use.baseURL);
+  const api = await signedIn(playwright, testInfo);
   try {
     // Two drafts and a published post, so the breakdown draws at least two bars.
     for (const [index, status] of ["draft", "draft", "published"].entries()) {
@@ -80,7 +80,7 @@ test.beforeAll(async ({ playwright }, testInfo) => {
 });
 
 test.afterAll(async ({ playwright }, testInfo) => {
-  const api = await signedIn(playwright, testInfo.project.use.baseURL);
+  const api = await signedIn(playwright, testInfo);
   try {
     for (const id of created) {
       await expectOk(await api.delete(`${ENTRIES}/${id}`), "deleting a post");

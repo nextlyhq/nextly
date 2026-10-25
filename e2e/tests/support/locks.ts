@@ -55,6 +55,13 @@ export const LOCK = {
   /** The `related-links` single, written and read back exactly. */
   relatedLinks: "related-links",
   /**
+   * The `site-settings` single's form, which claims the document for whoever
+   * opens it. Its holders free the claim before they start (`./test`).
+   */
+  siteSettings: "site-settings",
+  /** The `landing-page` single's form, claimed as `siteSettings` is. */
+  landingPage: "landing-page",
+  /**
    * A second `next dev` of the playground, with the files it snapshots and
    * restores in the playground root.
    */

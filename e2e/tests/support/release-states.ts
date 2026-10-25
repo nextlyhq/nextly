@@ -26,7 +26,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
-import { expect, type Page } from "@playwright/test";
+import { expect } from "@playwright/test";
+
+import type { Requester } from "./releases-api";
 
 /** The suite's own database, never the one `pnpm dev:app` uses. */
 const E2E_DB = path.resolve(
@@ -44,7 +46,7 @@ export type RunnerOutcome = "overdue" | "stopped";
  * the server reads it that way.
  */
 export async function leaveReleasesAsTheRunnerWould(
-  page: Page,
+  page: Requester,
   releases: ReadonlyArray<{ id: string; outcome: RunnerOutcome }>
 ): Promise<void> {
   const dueAt = Math.floor((Date.now() - OVERDUE_BY_MS) / 1000);

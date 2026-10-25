@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
 
 import { E2E_NEXTLY_SECRET } from "./tests/support/preview-links";
-import { STORAGE_STATE } from "./tests/support/session";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const NEXTLY_ROOT = path.resolve(HERE, "..");
@@ -39,16 +38,41 @@ const E2E_DB_RELATIVE = "file:./data/e2e.db";
  * Which server the suite runs against. `dev` (the default) is `pnpm dev:app`:
  * what a contributor runs, compiling each route on its first request.
  * `production` is the same playground built with `next build` and served by
- * `next start`, with the same database, secrets and e2e fixtures, so the two
- * can be measured against each other on the same specs. Specs that need the
- * dev server itself (its reload, its own second dev server) stay on `dev`.
- *
- * `production` runs chosen specs, not yet the whole suite. Its session keeps
- * the default REST budget (see `NEXTLY_E2E_SESSION_BUDGET` in the playground
- * config), and the whole suite through one session spends several times that
- * in a minute, so a full run there meets 429s.
+ * `next start`, with the same database, secrets and e2e fixtures. It runs the
+ * same specs about four times as fast, so CI runs the suite there, and runs the
+ * specs below on `dev` by themselves (`E2E_DEV_SPECS_ONLY=1`).
  */
 const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
+
+/**
+ * The specs that need the dev server, each for a reason a production build
+ * removes rather than a difference to paper over:
+ *
+ * - `setup-*`: first-run setup's origin rules for loopback names hold in
+ *   development only, and `next dev` is what serves those names a page.
+ * - `component-map-dev`: a development server refusing a stale component map.
+ * - The Schema Builder specs: a production build turns the builder off unless
+ *   the app opts in, and refuses its writes with `BUILDER_DISABLED`.
+ */
+const DEV_SPECS = [
+  "**/setup-*.spec.ts",
+  "**/component-map-dev.spec.ts",
+  "**/schema-builder.spec.ts",
+  "**/schema-leaving-translation.spec.ts",
+  "**/builder-field-gates.spec.ts",
+  "**/builder-runtime-collection.spec.ts",
+];
+
+/** Only the dev specs, for the run beside a production one. */
+const DEV_SPECS_ONLY =
+  SERVER === "dev" && process.env.E2E_DEV_SPECS_ONLY === "1";
+
+/**
+ * Where a run writes its results and report. The dev specs' run has its own,
+ * since Playwright empties its results folder as it starts, and a shared one
+ * would lose the production run's traces and screenshots beside it.
+ */
+const RUN_OUTPUT = DEV_SPECS_ONLY ? "dev-specs" : "suite";
 
 /**
  * The commands that start each server, after the database is emptied.
@@ -86,8 +110,12 @@ export default defineConfig({
    * by path is what keeps "which server does this suite need" a property of the
    * directory rather than something each spec has to survive.
    */
-  testIgnore: "**/production/**",
-  outputDir: "./.playwright/results",
+  testIgnore: [
+    "**/production/**",
+    ...(SERVER === "production" ? DEV_SPECS : []),
+  ],
+  ...(DEV_SPECS_ONLY ? { testMatch: DEV_SPECS } : {}),
+  outputDir: `./.playwright/results/${RUN_OUTPUT}`,
 
   // A failing assertion in a shared admin is usually a real failure, so the
   // suite is not retried into passing locally. CI retries once, for the
@@ -98,16 +126,17 @@ export default defineConfig({
   // report adds nothing but minutes on a runner. A green run still needs every
   // test, so this only shortens a run that has already failed.
   maxFailures: process.env.CI ? 25 : 0,
-  // One worker, in CI as well. A second was measured on the CI runner and
-  // gained nothing: both workers stayed busy, and every test took about twice
-  // as long, because `next dev` compiling routes already takes the runner's
-  // CPU. The suite is still written to run side by side, for `--workers=2` on a
-  // machine with room: every worker shares the one dev server, the one database
-  // and the one signed-in user, so a spec that writes shared state, or reads it
-  // as a whole, takes that state's named lock (`tests/support/locks.ts`), and
-  // files holding the same lock never overlap. `fullyParallel: false` keeps each
-  // file's tests in order on one worker.
-  workers: 1,
+  // Two workers on a production server and one on `dev`. Measured on the CI
+  // runner: a second worker made each test about a quarter slower on a
+  // production server and finished the run a third sooner, while on `dev`,
+  // where compiling routes already takes the runner's CPU, each test took
+  // about twice as long for little gain. Every worker shares the one server and
+  // the one database, so a spec that writes shared state, or reads it as a
+  // whole, takes that state's named lock (`tests/support/locks.ts`), and files
+  // holding the same lock never overlap. Each file signs in as an account of
+  // its own (`tests/support/test`). `fullyParallel: false` keeps each file's
+  // tests in order on one worker.
+  workers: SERVER === "production" ? 2 : 1,
   // A retry runs ALONE, after everything else, rather than beside another
   // file. A test that fails only next to another one then passes on its
   // retry and is reported flaky, which names the coupling, instead of failing
@@ -126,11 +155,17 @@ export default defineConfig({
     ? [
         ["github"],
         ["./flaky-reporter.ts"],
-        ["html", { outputFolder: "./.playwright/report", open: "never" }],
+        [
+          "html",
+          { outputFolder: `./.playwright/report/${RUN_OUTPUT}`, open: "never" },
+        ],
       ]
     : [
         ["list"],
-        ["html", { outputFolder: "./.playwright/report", open: "never" }],
+        [
+          "html",
+          { outputFolder: `./.playwright/report/${RUN_OUTPUT}`, open: "never" },
+        ],
       ],
 
   use: {
@@ -143,12 +178,9 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: {
-        ...devices["Desktop Chrome"],
-        // Signed in before the first test, by global-setup, and renewed as
-        // the suite runs by `tests/support/test`.
-        storageState: STORAGE_STATE,
-      },
+      // Each file's session comes from `tests/support/test`, which signs in
+      // an account of its own for it.
+      use: devices["Desktop Chrome"],
     },
   ],
 
@@ -207,11 +239,6 @@ export default defineConfig({
       // harnesses are deliberately different: the shell's slots are inert
       // markers, and this one mounts the real canvas so a pointer can drive it.
       NEXTLY_E2E_CANVAS_HARNESS: "1",
-      // A session REST budget for the suite's one signed-in session, which
-      // loads pages far faster than a person can: at the default 500 reads a
-      // minute it is refused mid-run. Only the session budget is raised; see
-      // the playground's nextly.config.ts.
-      NEXTLY_E2E_SESSION_BUDGET: "1",
       // The running app never rewrites generated files. The fixtures above add
       // components the committed component map was not generated with, and
       // `next dev` would otherwise write the map again, leaving the checkout

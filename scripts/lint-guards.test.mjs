@@ -149,6 +149,45 @@ tester.run(
   }
 );
 
+// Parsed as a module, as the TypeScript files this rule runs on are: in a
+// script, `await (…)()` is a call to a function named `await`, and a
+// top-level `for await` does not parse at all.
+const moduleTester = new RuleTester({
+  languageOptions: { sourceType: "module", parserOptions: { lang: "ts" } },
+});
+
+moduleTester.run("no-top-level-await", guards.rules["no-top-level-await"], {
+  valid: [
+    // Inside a function, an await waits in that function's promise.
+    "async function boot() { await load(); }",
+    "export const boot = async () => { await load(); };",
+    "(async () => { await load(); })();",
+    "async function each(items) { for await (const item of items) use(item); }",
+    "async function scoped() { await using res = acquire(); }",
+    // Left alone on purpose: an import() the module does not wait on, even
+    // one that runs while it loads. The module finishes evaluating first, so
+    // it cannot deadlock on it, however the call is spelled.
+    "void import('./b');",
+    "export const ready = import('./b');",
+    "(function () { void import('./b'); }).call(null);",
+  ],
+  invalid: [
+    // The module itself waits, whatever it waits on: a loader defined
+    // anywhere, which no rule over this file could look inside.
+    { code: "await load();", errors: 1 },
+    { code: "const config = await loadConfig();", errors: 1 },
+    { code: "await import('./b');", errors: 1 },
+    { code: "await (async () => import('./b'))();", errors: 1 },
+    {
+      code: "await (function () { return import('./b'); }).call(null);",
+      errors: 1,
+    },
+    { code: "for await (const item of items) use(item);", errors: 1 },
+    // Its disposal is awaited when the module body ends.
+    { code: "await using res = acquire();", errors: 1 },
+  ],
+});
+
 tester.run("no-legacy-lifecycle", guards.rules["no-legacy-lifecycle"], {
   valid: [
     // The lifecycles React kept, and the deliberate UNSAFE_ spelling.

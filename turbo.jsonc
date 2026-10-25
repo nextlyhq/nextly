@@ -648,9 +648,11 @@
       // E2E_SETUP_PORT: where the empty install the first-run setup specs use
       // is served, beside the servers E2E_PORT and E2E_PROD_PORT place.
       // E2E_SERVER and E2E_PRODUCTION_PREBUILT choose the server the suite
-      // runs against (dev or production) and whether that build is reused.
+      // runs against (dev or production) and whether that build is reused;
+      // E2E_DEV_SPECS_ONLY runs only the specs that need the dev server.
       "env": [
         "CI",
+        "E2E_DEV_SPECS_ONLY",
         "E2E_PORT",
         "E2E_PROD_PORT",
         "E2E_PRODUCTION_PREBUILT",
