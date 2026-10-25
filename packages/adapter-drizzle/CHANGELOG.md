@@ -1,5 +1,47 @@
 # @nextlyhq/adapter-drizzle
 
+## 0.0.2-alpha.70
+
+### Patch Changes
+
+- [#2728](https://github.com/nextlyhq/nextly/pull/2728) [`7138012`](https://github.com/nextlyhq/nextly/commit/71380124cdbf3b3bf0c2964a0fac3b27902a41ce) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Two refusals that aren't about permission now say why, and stay 403 `FORBIDDEN`.
+
+  A change or delete of a collection, Single or component defined in code, made from anywhere but its code, reads "This collection is defined in code, so it can't be changed here." (or "deleted", or "Single", or "component"). An autosave where the collection or Single doesn't autosave reads "Autosave is turned off for this collection." (or "this Single"). Both used to read "You don't have permission to perform this action.", which sent people looking for a permission that wouldn't help.
+
+  One status changes. The admin's schema routes checked the lock themselves and answered a thing defined in code with a 500 internal error: changing a Single's schema, previewing or applying a schema change to a collection, Single or component, and deleting a Single. They now answer 403 with the same sentence.
+
+  Refusals for want of permission are unchanged: they never say which check refused.
+
+- [#2734](https://github.com/nextlyhq/nextly/pull/2734) [`d5263f6`](https://github.com/nextlyhq/nextly/commit/d5263f6a8a54b8669e18b17d145c1f47600025c8) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Creating a user with roles takes the super-admin lock before it writes the account, the same order as every other change to who is a super-admin. Run at the same moment as such a change, a role deletion for instance, it could otherwise deadlock on MySQL and fail with a retryable `409`.
+
+- [#2751](https://github.com/nextlyhq/nextly/pull/2751) [`edceef5`](https://github.com/nextlyhq/nextly/commit/edceef5b8619ba45d221168598d2809d270a5dbe) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - **Security: an anonymous create, update or delete now needs a rule that allows it.** A
+  checked write with no signed-in caller (the Direct API with `overrideAccess: false` and no
+  `user`, or a plugin service call made `{ as: "public" }`, as a `public: true` route makes
+  one) used to be allowed on a collection or Single whose `access` named no rule for that
+  write. It is now refused. Reads keep the public default, publishing still needs a signed-in
+  user, and the admin's REST API is unchanged.
+
+  If you take anonymous writes on purpose, say so in the collection's `access`, for example a
+  public form-like collection: `access: { create: () => true }`. The form builder's
+  submissions already declare `create: true` and keep working.
+
+  A plugin's `deleteEntryInTransaction` made `{ as: "system" }` is now trusted, as its other
+  `{ as: "system" }` writes are; it was judged as an anonymous caller.
+
+- [#2743](https://github.com/nextlyhq/nextly/pull/2743) [`dab8664`](https://github.com/nextlyhq/nextly/commit/dab86644383813c1685536bc28e157ebbc33e82b) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Core's built-in emails (welcome, password reset, email verification) and the default layout's footer now meet WCAG AA contrast: the small print under each button is darker on the card, and the footer line and links paragraph are darker on the page. Installs that never edited these templates get the new colours on their next boot; an edited template keeps its own.
+
+- [#2679](https://github.com/nextlyhq/nextly/pull/2679) [`869482c`](https://github.com/nextlyhq/nextly/commit/869482c1e1954ceacc2a3d01e32293c2433f626d) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A code access rule now allows only by returning `true`. A rule that returns `null`, `undefined`, a string or any other value refuses, as `false` does, for every caller and at every way in. Before, a visitor was refused only by `false`, so `null` and `undefined` let one through, and a signed-in user was let in by any truthy value. Return `true` to allow.
+
+  `ctx.caller.can` in a plugin route and `nextly.access.check` now return a boolean. Before, a rule's own answer could come back as it was, `null` or a string included.
+
+  For this release, each request refused this way that a rule allowed before is logged once, naming the collection or Single, the action and the kind of caller, so a rule that relied on the old reading can be found and changed.
+
+- [#2757](https://github.com/nextlyhq/nextly/pull/2757) [`6c7904f`](https://github.com/nextlyhq/nextly/commit/6c7904fb69712c1533808bba36b53e47e8e66bde) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A route handler's error now answers as that error on a host whose function bundle lacks part of `next/navigation`. Nextly loads Next's `unstable_rethrow` lazily, which file tracing cannot follow, and on such a bundle (seen on Vercel with Next 16.4.3) loading it failed for every error a handler caught: a signed-out caller's 401, for one, became a 500, so the admin stopped working for anyone signed out. Where it cannot be loaded, Nextly now makes the same check from the errors' digests, so `redirect()` and `notFound()` still pass through and every other error gets its own response.
+
+- [#2750](https://github.com/nextlyhq/nextly/pull/2750) [`0eb828f`](https://github.com/nextlyhq/nextly/commit/0eb828f0536e250c74f90bae15680b414b93ba1a) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - nextly's route handler, boot and role and user services no longer load the service registry or every core service just by being imported. They load them when they first register or build services, so a module that needs one service loads far fewer. The services barrel no longer re-exports the dispatcher; the root `nextly` entry exports the same names as before.
+
+- [#2737](https://github.com/nextlyhq/nextly/pull/2737) [`ab13109`](https://github.com/nextlyhq/nextly/commit/ab13109fc0575745678f482dac04dd8c43e73d61) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Asking nextly's DI container for a service no longer loads every service registration. `getService` and `isServicesRegistered` read the container without importing the registry, so code that only looks services up loads far fewer modules. The root `nextly` entry exports the same names as before.
+
 ## 0.0.2-alpha.69
 
 ### Patch Changes

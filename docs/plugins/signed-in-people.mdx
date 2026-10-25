@@ -192,8 +192,9 @@ defineCollection({
 });
 ```
 
-- A collection with **no rule** for the operation refuses a person, where an
-  anonymous visitor would fall through to the public default.
+- A collection with **no rule** for the operation refuses a person. An
+  anonymous visitor is refused there too for a create, update or delete, and
+  falls through to the public default only for a read.
 - A rule written for staff, such as `({ user }) => !!user`, refuses a person,
   because their `user` is `null`.
 - A rule set to `true` admits a person, as it admits every anonymous visitor.

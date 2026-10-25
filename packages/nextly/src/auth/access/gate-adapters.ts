@@ -249,10 +249,38 @@ async function visitorVerdict(
     noticeWhereRuleAllowedBefore(outcome, allowedVisitorBefore, q, "visitor");
     return INSUFFICIENT;
   }
-  const allowed = await deviate("visitor-public-default", true, () =>
-    decided(visitor, q.action, target)
+  return visitorPassVerdict(q, target, outcome.declared);
+}
+
+/**
+ * A visitor whose rule did not refuse: no rule for the action, or one that
+ * answered `true`.
+ *
+ * Only a read keeps the public default. Every other action changes data, so
+ * with no rule naming it the write needs a signed-in caller: an anonymous
+ * create, update or delete is allowed only where the target's author wrote a
+ * rule that answers `true`. Asked of every action but a read, so an action
+ * added later is refused rather than let through.
+ */
+async function visitorPassVerdict(
+  q: GateQuestion,
+  target: AccessTarget,
+  ruleDeclared: boolean
+): Promise<GateVerdict> {
+  const visitor = actorForVisitor();
+  if (q.action === "read") {
+    return verdictOf(
+      await deviate("visitor-public-default", true, () =>
+        decided(visitor, q.action, target)
+      )
+    );
+  }
+  if (!ruleDeclared) return UNAUTHENTICATED;
+  return verdictOf(
+    await deviate("visitor-write-by-rule", true, () =>
+      decided(visitor, q.action, target)
+    )
   );
-  return verdictOf(allowed);
 }
 
 async function keyVerdict(

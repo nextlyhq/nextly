@@ -1,6 +1,6 @@
 service none visitor
   read:A
-  update:A
+  update:403 You can't edit home.
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 service none user-with
@@ -1040,7 +1040,7 @@ service signed-in key-in-the-request
   unpublish:403 You can't unpublish home.
 no-service none visitor
   read:A
-  update:A
+  update:403 You can't edit home.
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 no-service none user-with
@@ -1120,7 +1120,7 @@ no-service none key-in-the-request
   unpublish:403 You can't unpublish home.
 route-authorized none visitor
   read:A
-  update:A
+  update:403 You can't edit home.
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 route-authorized none user-with

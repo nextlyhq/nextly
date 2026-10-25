@@ -444,7 +444,11 @@ describe("SingleEntryService", () => {
     it("returns 404 when single is not in the registry", async () => {
       ctx.registry.getSingleBySlug.mockResolvedValue(null);
 
-      const result = await ctx.service.update("missing", { siteName: "New" });
+      const result = await ctx.service.update(
+        "missing",
+        { siteName: "New" },
+        { overrideAccess: true }
+      );
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(404);
@@ -470,9 +474,13 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      const result = await ctx.service.update("site-settings", {
-        siteName: "New",
-      });
+      const result = await ctx.service.update(
+        "site-settings",
+        {
+          siteName: "New",
+        },
+        { overrideAccess: true }
+      );
 
       expect(result.success).toBe(true);
       expect(result.data?.siteName).toBe("New");
@@ -497,9 +505,13 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      const result = await ctx.service.update("site-settings", {
-        siteName: "Set",
-      });
+      const result = await ctx.service.update(
+        "site-settings",
+        {
+          siteName: "Set",
+        },
+        { overrideAccess: true }
+      );
 
       // The auto-created default document once, with the history and outbox
       // events appended in the same update transaction.
@@ -531,9 +543,13 @@ describe("SingleEntryService", () => {
         Object.assign(new Error("database error"), { cause: validationError })
       );
 
-      const result = await ctx.service.update("site-settings", {
-        siteName: "New",
-      });
+      const result = await ctx.service.update(
+        "site-settings",
+        {
+          siteName: "New",
+        },
+        { overrideAccess: true }
+      );
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(400);
@@ -549,11 +565,15 @@ describe("SingleEntryService", () => {
         { id: "doc-1", updated_at: "2026-02-01T00:00:00.000Z" },
       ]);
 
-      await ctx.service.update("site-settings", {
-        id: "should-be-stripped",
-        createdAt: new Date(),
-        siteName: "Keep",
-      });
+      await ctx.service.update(
+        "site-settings",
+        {
+          id: "should-be-stripped",
+          createdAt: new Date(),
+          siteName: "Keep",
+        },
+        { overrideAccess: true }
+      );
 
       const payload = ctx.adapter.update.mock.calls[0][1] as Record<
         string,
@@ -572,9 +592,13 @@ describe("SingleEntryService", () => {
       });
       ctx.adapter.update.mockResolvedValue([]);
 
-      const result = await ctx.service.update("site-settings", {
-        siteName: "X",
-      });
+      const result = await ctx.service.update(
+        "site-settings",
+        {
+          siteName: "X",
+        },
+        { overrideAccess: true }
+      );
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(500);
@@ -604,9 +628,13 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      await ctx.service.update("site-settings", {
-        settings: { theme: "dark" },
-      });
+      await ctx.service.update(
+        "site-settings",
+        {
+          settings: { theme: "dark" },
+        },
+        { overrideAccess: true }
+      );
 
       const payload = ctx.adapter.update.mock.calls[0][1] as Record<
         string,
@@ -639,13 +667,17 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      await ctx.service.update("site-settings", {
-        logo: {
-          id: "media-2",
-          url: "/uploads/logo.png",
-          filename: "logo.png",
+      await ctx.service.update(
+        "site-settings",
+        {
+          logo: {
+            id: "media-2",
+            url: "/uploads/logo.png",
+            filename: "logo.png",
+          },
         },
-      });
+        { overrideAccess: true }
+      );
 
       const payload = ctx.adapter.update.mock.calls[0][1] as Record<
         string,
@@ -670,13 +702,17 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      await ctx.service.update("site-settings", {
-        gallery: [
-          { id: "media-1", url: "/a.png" },
-          "media-2",
-          { id: "media-3", url: "/c.png" },
-        ],
-      });
+      await ctx.service.update(
+        "site-settings",
+        {
+          gallery: [
+            { id: "media-1", url: "/a.png" },
+            "media-2",
+            { id: "media-3", url: "/c.png" },
+          ],
+        },
+        { overrideAccess: true }
+      );
 
       const payload = ctx.adapter.update.mock.calls[0][1] as Record<
         string,
@@ -713,10 +749,14 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      await ctx.service.update("site-settings", {
-        siteName: "New",
-        seo: { metaTitle: "Hello" },
-      });
+      await ctx.service.update(
+        "site-settings",
+        {
+          siteName: "New",
+          seo: { metaTitle: "Hello" },
+        },
+        { overrideAccess: true }
+      );
 
       // The main update payload should NOT contain the component field
       const payload = ctx.adapter.update.mock.calls[0][1] as Record<
@@ -752,7 +792,11 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      await ctx.service.update("site-settings", { siteName: "New" });
+      await ctx.service.update(
+        "site-settings",
+        { siteName: "New" },
+        { overrideAccess: true }
+      );
 
       expect(
         ctx.fieldGroupDataService.saveComponentDataInTransaction
@@ -781,7 +825,11 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      await ctx.service.update("site-settings", { siteName: "New" });
+      await ctx.service.update(
+        "site-settings",
+        { siteName: "New" },
+        { overrideAccess: true }
+      );
 
       expect(ctx.hookRegistry.executeBeforeOperation).toHaveBeenCalledTimes(1);
       const call = ctx.hookRegistry.executeBeforeOperation.mock.calls[0][0];
@@ -808,7 +856,11 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      await ctx.service.update("site-settings", { siteName: "Original" });
+      await ctx.service.update(
+        "site-settings",
+        { siteName: "Original" },
+        { overrideAccess: true }
+      );
 
       const payload = ctx.adapter.update.mock.calls[0][1] as Record<
         string,
@@ -838,9 +890,13 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      const result = await ctx.service.update("site-settings", {
-        siteName: "Whatever",
-      });
+      const result = await ctx.service.update(
+        "site-settings",
+        {
+          siteName: "Whatever",
+        },
+        { overrideAccess: true }
+      );
 
       expect(result.data?.siteName).toBe("After transform");
     });
@@ -910,7 +966,11 @@ describe("SingleEntryService", () => {
         })
       );
 
-      const result = await ctx.service.update("site-settings", {});
+      const result = await ctx.service.update(
+        "site-settings",
+        {},
+        { overrideAccess: true }
+      );
 
       expect(result.success).toBe(false);
       expect(result.message).toBe("bad input");
@@ -923,9 +983,13 @@ describe("SingleEntryService", () => {
       });
       ctx.adapter.update.mockRejectedValue(new Error("db exploded"));
 
-      const result = await ctx.service.update("site-settings", {
-        siteName: "X",
-      });
+      const result = await ctx.service.update(
+        "site-settings",
+        {
+          siteName: "X",
+        },
+        { overrideAccess: true }
+      );
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(500);

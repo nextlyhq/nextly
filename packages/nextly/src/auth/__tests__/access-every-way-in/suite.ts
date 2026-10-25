@@ -53,8 +53,9 @@
  * related row is asked by a visitor, a user with and without the permission
  * and a role-based key, under no rule, a rule returning `true`, one returning
  * `false` and one returning `null`: the callers and rules whose answer a
- * missing service can change. Some rows join this table later (`table.ts`,
- * `joinsLater`).
+ * missing service can change. A visitor is asked to create, update and
+ * delete as every other caller is, so an anonymous write with no rule naming
+ * it is pinned as refused at every door that can make it.
  *
  * **Without the service.** Lookups that ask the container per call are shown
  * no service. The Direct API's gates took the service when the instance
