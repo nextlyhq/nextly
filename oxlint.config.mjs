@@ -7,6 +7,12 @@ import { readFileSync } from "node:fs";
 
 import { defineConfig } from "oxlint";
 
+import {
+  IMPORT_CYCLES,
+  NEXTLY_SOURCE,
+  NO_CYCLE,
+} from "./lint/import-cycles.mjs";
+
 /** Prefixes each path of a package-relative allowlist with the package. */
 const inPackage = (pkg, paths) => paths.map(path => `packages/${pkg}/${path}`);
 
@@ -429,6 +435,27 @@ export default defineConfig({
       files: ["packages/nextly/src/**/*.{ts,tsx}"],
       excludeFiles: [...API_KEY_SCOPE_ALLOWED, ...TESTS],
       rules: { "nextly/api-key-scope": "error" },
+    },
+    {
+      // No file newly on an import cycle in nextly's source. The files already
+      // on one are exempt, and scripts/lint-config.test.mjs holds those cycles
+      // to the groups lint/import-cycles.mjs lists, so the exemption only
+      // shrinks. A new import between two files already in one group is not
+      // caught: see lint/import-cycles.mjs.
+      files: [`${NEXTLY_SOURCE}/**/*.{ts,tsx}`],
+      excludeFiles: IMPORT_CYCLES.flat().map(
+        file => `${NEXTLY_SOURCE}/${file}`
+      ),
+      rules: { "import/no-cycle": NO_CYCLE },
+    },
+    {
+      // No top-level await in nextly's source: the deadlock a cycle through a
+      // dynamic import could cause, which import/no-cycle cannot see. Every
+      // file, the cycle-exempt ones included; tests load modules at their top
+      // level on purpose. What it covers and what it does not: lint/guards.mjs.
+      files: [`${NEXTLY_SOURCE}/**/*.{ts,tsx}`],
+      excludeFiles: TESTS,
+      rules: { "nextly/no-top-level-await": "error" },
     },
     {
       // nextly writes through a masked logger, not the console.
