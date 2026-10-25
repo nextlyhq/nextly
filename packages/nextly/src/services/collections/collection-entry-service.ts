@@ -975,6 +975,12 @@ export class CollectionEntryService extends BaseService {
       entryId: string;
       user?: UserContext;
       /**
+       * Trusted server work, which the gate lets through before any check.
+       * Declared for the reason the scope below is: a spread carrying it
+       * would otherwise be dropped silently.
+       */
+      overrideAccess?: boolean;
+      /**
        * The caller's own grants when they arrived on an API key. Declared here
        * or a spread carrying it is silently dropped: a spread into an object
        * literal is exempt from excess-property checking, so the omission

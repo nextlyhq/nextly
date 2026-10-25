@@ -1070,3 +1070,28 @@ no-service key-role-based read single returns-false at widget  # holds-permissio
 no-service key-role-based read single returns-false at capabilities  # no-service
 no-service key-role-based read single returns-null at widget  # holds-permission-key-skips-rules
 no-service key-role-based read single returns-null at capabilities  # no-service
+
+# A visitor's write, allowed only by a rule that answers `true`: with no
+# rule naming the write, the visitor is refused, as the one decision refuses
+# it, so only the rules that say `true` remain here.
+service visitor create collection true at direct  # visitor-write-by-rule
+service visitor create collection true at service  # visitor-write-by-rule
+service visitor update collection true at direct  # visitor-write-by-rule
+service visitor update collection true at service  # visitor-write-by-rule
+service visitor delete collection true at direct  # visitor-write-by-rule
+service visitor delete collection true at service  # visitor-write-by-rule
+service visitor update single true at direct  # visitor-write-by-rule
+service visitor create collection returns-true at direct  # visitor-write-by-rule
+service visitor create collection returns-true at service  # visitor-write-by-rule
+service visitor update collection returns-true at direct  # visitor-write-by-rule
+service visitor update collection returns-true at service  # visitor-write-by-rule
+service visitor delete collection returns-true at direct  # visitor-write-by-rule
+service visitor delete collection returns-true at service  # visitor-write-by-rule
+service visitor update single returns-true at direct  # visitor-write-by-rule
+service visitor create collection async-true at direct  # visitor-write-by-rule
+service visitor create collection async-true at service  # visitor-write-by-rule
+service visitor update collection async-true at direct  # visitor-write-by-rule
+service visitor update collection async-true at service  # visitor-write-by-rule
+service visitor delete collection async-true at direct  # visitor-write-by-rule
+service visitor delete collection async-true at service  # visitor-write-by-rule
+service visitor update single async-true at direct  # visitor-write-by-rule
