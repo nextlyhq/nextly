@@ -42,6 +42,11 @@ const E2E_DB_RELATIVE = "file:./data/e2e.db";
  * `next start`, with the same database, secrets and e2e fixtures, so the two
  * can be measured against each other on the same specs. Specs that need the
  * dev server itself (its reload, its own second dev server) stay on `dev`.
+ *
+ * `production` runs chosen specs, not yet the whole suite. Its session keeps
+ * the default REST budget (see `NEXTLY_E2E_SESSION_BUDGET` in the playground
+ * config), and the whole suite through one session spends several times that
+ * in a minute, so a full run there meets 429s.
  */
 const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
 

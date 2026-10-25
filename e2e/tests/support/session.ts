@@ -79,10 +79,6 @@ export async function signIn(
     // The admin is client-rendered: the shell is served empty and filled after
     // hydration, so the session is only real once a screen has drawn.
     await page.locator("main").waitFor({ state: "visible", timeout: 60_000 });
-    // The dashboard behind `main` starts its card queries as it draws. Closing
-    // the browser while they upload cuts them off mid-body, and the server logs
-    // each one as a request whose JSON it could not read.
-    await page.waitForLoadState("networkidle");
 
     const cookies = await page.context().cookies();
     if (!cookies.some(cookie => cookie.name === "nextly_session")) {
