@@ -168,7 +168,7 @@ overrides:
   esbuild: '>=0.25.0'
   undici: ^7.29.0
   ws: ^8.21.0
-  dompurify: ^3.4.13
+  dompurify: ^3.4.17
   fast-uri: ^3.1.6
   fast-xml-builder: ^1.1.7
   '@babel/core': ^7.29.6
@@ -227,8 +227,8 @@ importers:
         specifier: ^4.3.2
         version: 4.3.2
       zod:
-        specifier: ^4.6.2
-        version: 4.6.2
+        specifier: ^4.6.7
+        version: 4.6.7
     devDependencies:
       '@arethetypeswrong/cli':
         specifier: ^0.18.5
@@ -394,7 +394,7 @@ importers:
         version: link:../../packages/ui
       drizzle-orm:
         specifier: 1.0.0-rc.4
-        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.2)
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
       mysql2:
         specifier: ^3.23.1
         version: 3.23.1(@types/node@22.20.5)
@@ -512,7 +512,7 @@ importers:
     dependencies:
       drizzle-orm:
         specifier: 1.0.0-rc.4
-        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.2)
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
     devDependencies:
       '@nextlyhq/tsconfig':
         specifier: workspace:*
@@ -546,7 +546,7 @@ importers:
         version: link:../adapter-drizzle
       drizzle-orm:
         specifier: 1.0.0-rc.4
-        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.2)
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
       mysql2:
         specifier: ^3.23.1
         version: 3.23.1(@types/node@22.20.5)
@@ -580,7 +580,7 @@ importers:
         version: link:../adapter-drizzle
       drizzle-orm:
         specifier: 1.0.0-rc.4
-        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.2)
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
       pg:
         specifier: ^8.16.3
         version: 8.16.3
@@ -620,7 +620,7 @@ importers:
         version: 12.11.1
       drizzle-orm:
         specifier: 1.0.0-rc.4
-        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.2)
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
     devDependencies:
       '@nextlyhq/tsconfig':
         specifier: workspace:*
@@ -842,8 +842,8 @@ importers:
         specifier: ^1.0.7
         version: 1.0.7(tailwindcss@4.3.2)
       zod:
-        specifier: ^4.6.2
-        version: 4.6.2
+        specifier: ^4.6.7
+        version: 4.6.7
     devDependencies:
       '@nextlyhq/admin-css':
         specifier: workspace:*
@@ -1263,7 +1263,7 @@ importers:
         version: 1.0.0-rc.4
       drizzle-orm:
         specifier: 1.0.0-rc.4
-        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.2)
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
       file-type:
         specifier: ^21
         version: 21.3.4(supports-color@7.2.0)
@@ -1292,8 +1292,8 @@ importers:
         specifier: ^0.0.1
         version: 0.0.1
       zod:
-        specifier: ^4.6.2
-        version: 4.6.2
+        specifier: ^4.6.7
+        version: 4.6.7
     devDependencies:
       '@nextlyhq/adapter-mysql':
         specifier: workspace:*
@@ -1393,8 +1393,8 @@ importers:
         specifier: ^16.4.2
         version: 16.4.2(@babel/core@7.29.7(supports-color@7.2.0))(@playwright/test@1.64.1)(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       zod:
-        specifier: ^4.6.2
-        version: 4.6.2
+        specifier: ^4.6.7
+        version: 4.6.7
     devDependencies:
       '@nextlyhq/admin':
         specifier: workspace:*
@@ -1445,8 +1445,8 @@ importers:
   packages/plugin-commerce:
     dependencies:
       zod:
-        specifier: ^4.6.2
-        version: 4.6.2
+        specifier: ^4.6.7
+        version: 4.6.7
     devDependencies:
       '@nextlyhq/plugin-sdk':
         specifier: workspace:*
@@ -1488,8 +1488,8 @@ importers:
         specifier: ^16.4.2
         version: 16.4.2(@babel/core@7.29.7(supports-color@7.2.0))(@playwright/test@1.64.1)(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       zod:
-        specifier: ^4.6.2
-        version: 4.6.2
+        specifier: ^4.6.7
+        version: 4.6.7
     devDependencies:
       '@nextlyhq/admin':
         specifier: workspace:*
@@ -1552,8 +1552,8 @@ importers:
         specifier: 2.0.0
         version: 2.0.0
       zod:
-        specifier: ^4.6.2
-        version: 4.6.2
+        specifier: ^4.6.7
+        version: 4.6.7
     devDependencies:
       '@nextlyhq/plugin-sdk':
         specifier: workspace:*
@@ -6248,8 +6248,8 @@ packages:
   dom-accessibility-api@0.6.3:
     resolution: {integrity: sha512-7ZgogeTnjuHbo+ct10G9Ffp0mif17idi0IyWNVA/wcwcm7NPOD/WEHVP3n7n3MhXqxoIYm8d6MuZohYWIZ4T3w==}
 
-  dompurify@3.4.13:
-    resolution: {integrity: sha512-2vmYIoqjze2d+kakP8S/nS5shfsl587kzwEjcGlTdiksUVgFHnFCsLYDVj/JNqJVOQZGSYBTmuycv0PodwmnMQ==}
+  dompurify@3.4.17:
+    resolution: {integrity: sha512-B/pSlYVHQ58kqISD/yDjuJ1yfzI34m1gF4lAod2bwSRhiN4K5Cl3H8Af7hqB2PmTL911tdEudnnXn5FnhRoz0w==}
 
   dot-prop@5.3.0:
     resolution: {integrity: sha512-QM8q3zDe58hqUqjraQOmzZ1LIH9SWQJTlEKCH4kJ2oQvLZk7RbQXvtDM2XEq3fwkV9CCvvH4LA0AV+ogFsBM2Q==}
@@ -8942,8 +8942,8 @@ packages:
     resolution: {integrity: sha512-XrBh9ZiQK5mJVRxZBAvD6LwRyAYrK3MFtH3+onyuxFL5hFD44EC3QOmIC1FjTj6H2MMwq46/NAI+NZxLZPZgxg==}
     engines: {node: '>=14.18.0'}
 
-  zod@4.6.2:
-    resolution: {integrity: sha512-lh5RCAGFa1Cm2hjtNwLQhSs/AsqdWnTQaBER9fEwN/88pSh7KOtJavtBx/0VlkN/uFd61SwYmljLMDAsHlvzBQ==}
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
 
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
@@ -10657,12 +10657,12 @@ snapshots:
 
   '@modelcontextprotocol/core@2.0.0':
     dependencies:
-      zod: 4.6.2
+      zod: 4.6.7
 
   '@modelcontextprotocol/server@2.0.0':
     dependencies:
       '@modelcontextprotocol/core': 2.0.0
-      zod: 4.6.2
+      zod: 4.6.7
 
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4':
     optional: true
@@ -12982,7 +12982,7 @@ snapshots:
 
   dom-accessibility-api@0.6.3: {}
 
-  dompurify@3.4.13:
+  dompurify@3.4.17:
     optionalDependencies:
       '@types/trusted-types': 2.0.7
 
@@ -13010,7 +13010,7 @@ snapshots:
       get-tsconfig: 4.14.0
       jiti: 2.7.0
 
-  drizzle-orm@1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.2):
+  drizzle-orm@1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7):
     optionalDependencies:
       '@types/better-sqlite3': 7.6.13
       '@types/pg': 8.15.5
@@ -13018,7 +13018,7 @@ snapshots:
       effect: 3.21.2
       mysql2: 3.23.1(@types/node@22.20.5)
       pg: 8.16.3
-      zod: 4.6.2
+      zod: 4.6.7
 
   dts-resolver@3.0.0: {}
 
@@ -13676,7 +13676,7 @@ snapshots:
 
   isomorphic-dompurify@2.36.0(supports-color@7.2.0):
     dependencies:
-      dompurify: 3.4.13
+      dompurify: 3.4.17
       jsdom: 28.1.0(supports-color@7.2.0)
     transitivePeerDependencies:
       - '@noble/hashes'
@@ -15777,6 +15777,6 @@ snapshots:
       '@yuku-toolchain/types': 0.19.0
       yuku-core: 0.19.0
 
-  zod@4.6.2: {}
+  zod@4.6.7: {}
 
   zwitch@2.0.4: {}
