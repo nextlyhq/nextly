@@ -59,7 +59,8 @@ export const Posts = defineCollection({
 
 A rule is given the caller's `permissions` spelled as the Roles screen spells them —
 `update-posts` — for a signed-in user and an API key alike. A visitor holds none, so a
-permission check refuses them. A super-admin is admitted before any rule runs.
+permission check refuses them. A super-admin is admitted before any collection or Single
+rule runs; field rules still apply to them.
 
 Rules were once given the other spelling, `posts:update`. For one release the list still
 carries it, after the Roles screen's, so a rule written that way keeps working; Nextly logs
@@ -224,9 +225,9 @@ code that genuinely needs to write a protected field says so with `overrideAcces
 - **Rules are code.** Access rules can't be set in the admin or in the Visual Schema
   Builder, and a collection made in the Visual Schema Builder can't carry rule functions,
   so its access comes from grants alone.
-- **Two callers skip the rules.** A super-admin is admitted before any rule runs, and the
-  Direct API skips collection, Single and field rules unless you pass `overrideAccess: false`
-  (see above).
+- **Two callers skip rules.** A super-admin is admitted before any collection or Single
+  rule runs, though field rules still apply to them. The Direct API skips collection,
+  Single and field rules unless you pass `overrideAccess: false` (see above).
 
 ## Related
 
