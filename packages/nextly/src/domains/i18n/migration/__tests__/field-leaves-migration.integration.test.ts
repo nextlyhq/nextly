@@ -12,6 +12,10 @@
  * A file that fails is the runner's to handle: PostgreSQL and SQLite run it in one transaction, so
  * it runs again cleanly, and MySQL, which commits each schema statement as it runs, refuses to run
  * it again and says how to tell whether it landed.
+ *
+ * Each case runs on a database of its own. The runner refuses a database that already holds tables
+ * it did not make (drift), which is the behaviour under test, so a shared database another suite
+ * left tables in would fail these cases for a reason that is not theirs.
  */
 import { randomBytes } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
@@ -42,6 +46,10 @@ import {
   type MinimalConfigEntity,
 } from "../../../schema/migrate-create/generate";
 import { withMigrateLock } from "../../../schema/pipeline/locks";
+import {
+  createScratchDatabase,
+  type ScratchDatabase,
+} from "../../../../__tests__/helpers/fresh-database";
 
 interface TestAdapter {
   connect(): Promise<void>;
@@ -85,6 +93,7 @@ for (const entry of DIALECTS) {
         dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 
       let adapter: TestAdapter;
+      let scratch: ScratchDatabase | null = null;
       let migrationsDir: string;
       // Per-run names, so a shared database cannot let two runs collide.
       let slug: string;
@@ -116,7 +125,12 @@ for (const entry of DIALECTS) {
           ],
         };
         created = 0;
-        adapter = entry.make(entry.url ?? "");
+        // SQLite runs in memory; a server dialect gets an empty database for the case.
+        scratch =
+          dialect === "sqlite"
+            ? null
+            : await createScratchDatabase(dialect, "field_leaves");
+        adapter = entry.make(scratch?.url ?? entry.url ?? "");
         await adapter.connect();
         // What `nextly migrate` creates first: the ledger, the owner registry and the archive.
         await reconcileCore({
@@ -128,12 +142,9 @@ for (const entry of DIALECTS) {
       });
 
       afterEach(async () => {
-        await adapter.executeQuery(`DROP TABLE IF EXISTS ${q(companion)}`);
-        await adapter.executeQuery(`DROP TABLE IF EXISTS ${q(table)}`);
-        await adapter.executeQuery(
-          `DELETE FROM ${q("nextly_i18n_archive")} WHERE ${q("collection")} = '${slug}'`
-        );
         await adapter.disconnect();
+        await scratch?.drop();
+        scratch = null;
         await rm(migrationsDir, { recursive: true, force: true });
       });
 
