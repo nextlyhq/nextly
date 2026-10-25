@@ -11,26 +11,15 @@ import {
 } from "./transaction-escapes";
 import {
   CLAIMS_ENV,
-  POSTGRES_BASE_ENV,
   claimWorker,
-  integrationWorkers,
+  pointAtWorkerDatabases,
   releaseWorker,
-  workerDatabaseUrl,
-  workerPoolId,
 } from "./worker-database-guard";
 
-// On PostgreSQL with more than one worker, this file's suites connect to its
-// worker's own database, which the run's global setup created. Every suite
-// reads TEST_POSTGRES_URL, so pointing it there before any suite loads moves
-// them all. The URL is derived from the one the run was given (kept apart),
-// never from a value an earlier file in this process already rewrote.
-const postgresBase = process.env[POSTGRES_BASE_ENV];
-if (postgresBase) {
-  process.env.TEST_POSTGRES_URL = workerDatabaseUrl(
-    postgresBase,
-    workerPoolId(process.env.VITEST_POOL_ID, integrationWorkers(process.env))
-  );
-}
+// On PostgreSQL or MySQL with more than one worker, this file's suites connect
+// to its worker's own database, which the run's global setup created. Pointing
+// the URLs there before any suite loads moves every suite that reads them.
+pointAtWorkerDatabases(process.env);
 
 // This file's claim on its worker's pool id, and so on its database, for as
 // long as its tests run. Vitest may start a slot's next process while the last

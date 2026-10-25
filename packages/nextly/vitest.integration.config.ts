@@ -56,9 +56,8 @@ export default defineConfig({
     // per-file table prefix, so two of them sharing a database drop and
     // recreate the same table out from under each other. With more workers
     // each worker process has a database of its own (in-memory SQLite, or the
-    // PostgreSQL database the global setup made for its pool id; MySQL stays
-    // on one worker, which `integrationWorkers` enforces), so files run in
-    // parallel across workers and still one at a time within each.
+    // PostgreSQL or MySQL database the global setup made for its pool id), so
+    // files run in parallel across workers and still one at a time within each.
     fileParallelism: workers > 1,
   },
 });

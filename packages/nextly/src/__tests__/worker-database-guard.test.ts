@@ -16,6 +16,7 @@ import {
   workerDatabaseName,
   workerDatabaseUrl,
   workerPoolId,
+  pointAtWorkerDatabases,
 } from "./worker-database-guard";
 
 describe("integrationWorkers", () => {
@@ -35,11 +36,7 @@ describe("integrationWorkers", () => {
   });
 
   it("refuses more than one worker on a database a URL names, which every worker would share", () => {
-    for (const name of [
-      "TEST_MYSQL_URL",
-      "TEST_SQLITE_URL",
-      "TEST_DATABASE_URL",
-    ]) {
+    for (const name of ["TEST_SQLITE_URL", "TEST_DATABASE_URL"]) {
       expect(
         () =>
           integrationWorkers({ NEXTLY_INTEGRATION_WORKERS: "2", [name]: "x" }),
@@ -55,25 +52,70 @@ describe("integrationWorkers", () => {
     ).toBe(1);
   });
 
-  it("allows more than one worker on PostgreSQL, where each gets a database of its own", () => {
+  it("allows more than one worker on PostgreSQL and MySQL, where each gets a database of its own", () => {
     expect(
       integrationWorkers({
         NEXTLY_INTEGRATION_WORKERS: "2",
         TEST_POSTGRES_URL: "postgres://u:p@localhost:5432/nextly_test",
+        TEST_MYSQL_URL: "mysql://u:p@localhost:3306/nextly_test",
       })
     ).toBe(2);
     // Still refused beside a URL every worker would share.
     expect(() =>
       integrationWorkers({
         NEXTLY_INTEGRATION_WORKERS: "2",
-        TEST_POSTGRES_URL: "postgres://u:p@localhost:5432/nextly_test",
         TEST_MYSQL_URL: "mysql://u:p@localhost:3306/nextly_test",
+        TEST_SQLITE_URL: "file:./one.db",
       })
-    ).toThrow("TEST_MYSQL_URL");
+    ).toThrow("TEST_SQLITE_URL");
   });
 });
 
-describe("a worker's PostgreSQL database", () => {
+describe("pointing a test file at its worker's databases", () => {
+  const run = {
+    NEXTLY_INTEGRATION_WORKERS: "2",
+    NEXTLY_INTEGRATION_POSTGRES_URL:
+      "postgres://u:p@localhost:5432/nextly_test",
+    NEXTLY_INTEGRATION_MYSQL_URL: "mysql://u:p@localhost:3306/nextly_test",
+  };
+
+  it("moves each server's URL to the worker's database on it", () => {
+    const env: NodeJS.ProcessEnv = { ...run, VITEST_POOL_ID: "2" };
+    pointAtWorkerDatabases(env);
+    expect(env.TEST_POSTGRES_URL).toBe(
+      "postgres://u:p@localhost:5432/nextly_test_pool2"
+    );
+    expect(env.TEST_MYSQL_URL).toBe(
+      "mysql://u:p@localhost:3306/nextly_test_pool2"
+    );
+  });
+
+  it("derives from the run's URL, so a second file in the process lands on the same database", () => {
+    const env: NodeJS.ProcessEnv = { ...run, VITEST_POOL_ID: "1" };
+    pointAtWorkerDatabases(env);
+    pointAtWorkerDatabases(env);
+    expect(env.TEST_MYSQL_URL).toBe(
+      "mysql://u:p@localhost:3306/nextly_test_pool1"
+    );
+  });
+
+  it("leaves a run whose setup made no databases as it is", () => {
+    const env: NodeJS.ProcessEnv = {
+      TEST_MYSQL_URL: "mysql://u:p@localhost:3306/nextly_test",
+      VITEST_POOL_ID: "3",
+    };
+    pointAtWorkerDatabases(env);
+    expect(env.TEST_MYSQL_URL).toBe("mysql://u:p@localhost:3306/nextly_test");
+  });
+
+  it("refuses a worker the setup made no database for", () => {
+    expect(() =>
+      pointAtWorkerDatabases({ ...run, VITEST_POOL_ID: "3" })
+    ).toThrow("has no database of its own");
+  });
+});
+
+describe("a worker's server database", () => {
   it("is the run's database suffixed with the pool id, on the same server", () => {
     expect(workerDatabaseName("nextly_test_w7", 2)).toBe(
       "nextly_test_w7_pool2"

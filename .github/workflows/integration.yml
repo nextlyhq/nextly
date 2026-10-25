@@ -454,6 +454,31 @@ jobs:
         env:
           TEST_MYSQL_URL: mysql://root:nextly@127.0.0.1:3306/nextly_test
           TURBO_CACHE_DIR: .turbo
+          # nextly's files on two workers, each on a database of its own
+          # (nextly_test_pool1, nextly_test_pool2) that the run's global setup
+          # creates beside nextly_test and drops at the end
+          # (packages/nextly/src/__tests__/worker-database-guard.ts).
+          NEXTLY_INTEGRATION_WORKERS: "2"
+
+      # How close the shard came to MySQL's connection limit, judged rather than
+      # printed: more workers or larger pools would otherwise first show as
+      # "too many connections" in whichever suite ran out. The service is this
+      # job's own, so its Max_used_connections is this shard's peak. A peak that
+      # cannot be read fails too, so the check never passes by saying nothing.
+      - name: Check the MySQL connection peak
+        if: success() || failure()
+        run: |
+          read -r used max < <(mysql -h 127.0.0.1 -uroot -pnextly -N -e "SELECT VARIABLE_VALUE, @@max_connections FROM performance_schema.global_status WHERE VARIABLE_NAME = 'Max_used_connections'" 2>/dev/null) || true
+          if [ -z "${used:-}" ] || [ -z "${max:-}" ]; then
+            echo "::error::Could not read Max_used_connections and max_connections from the MySQL service."
+            exit 1
+          fi
+          limit=$(( max * 8 / 10 ))
+          echo "MySQL connection peak: ${used} of max_connections ${max} (this step fails above ${limit}, 80%)."
+          if [ "$used" -gt "$limit" ]; then
+            echo "::error::The shard used ${used} of MySQL's ${max} connections, over the ${limit} (80%) this leg allows. Fewer workers or smaller pools, or raise the service's max_connections."
+            exit 1
+          fi
 
       # Only a job that finished its work publishes what it learned. A cancelled or
       # failed run leaves the cache as it found it — `actions/cache` saves in a post
@@ -574,8 +599,7 @@ jobs:
         env:
           TURBO_CACHE_DIR: .turbo
           # nextly's files on two workers. This leg sets no TEST_*_URL, so
-          # each worker runs on its own in-memory SQLite database; the MySQL
-          # leg shares one server database and stays on one worker
+          # each worker runs on its own in-memory SQLite database
           # (packages/nextly/src/__tests__/worker-database-guard.ts).
           NEXTLY_INTEGRATION_WORKERS: "2"
 
