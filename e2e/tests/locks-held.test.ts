@@ -1,10 +1,12 @@
-import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
 import { expect, test } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { configuredLocks } from "./support/configured-locks";
+import { documentsToFree } from "./support/test";
 
 /**
  * Every spec that writes shared state holds that state's lock
@@ -69,62 +71,27 @@ function suiteFiles(): string[] {
     dirname(require.resolve("@playwright/test/package.json")),
     "cli.js"
   );
+  // The whole suite whichever server this run uses, so the dev server's own
+  // specs are held too, and its JSON on stdout: a JSON output file named in
+  // the environment would take it, leaving only "Listing tests" here.
+  const env: NodeJS.ProcessEnv = { ...process.env, E2E_SERVER: "dev" };
+  delete env.E2E_DEV_SPECS_ONLY;
+  delete env.PLAYWRIGHT_JSON_OUTPUT_FILE;
   const listed = execFileSync(
     process.execPath,
     [cli, "test", "--list", "--reporter=json"],
-    { cwd: join(TESTS, ".."), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
+    {
+      cwd: join(TESTS, ".."),
+      encoding: "utf8",
+      env,
+      maxBuffer: 64 * 1024 * 1024,
+    }
   );
   const { suites } = JSON.parse(listed) as { suites: { file: string }[] };
   const self = fileURLToPath(import.meta.url);
   return [...new Set(suites.map(suite => join(TESTS, suite.file)))].filter(
     file => file !== self
   );
-}
-
-/**
- * The locks a spec actually configures: each `LOCK.<name>` in the `lock` array
- * of a `test.describe.configure({ ... })` call, read from the parsed source.
- * Not the constant appearing anywhere: an import, a comment or a configure call
- * that was never written would otherwise pass while Playwright schedules the
- * file with no lock at all.
- */
-function configuredLocks(source: string, file: string): Set<string> {
-  const { program } = parseSource(source, file);
-  const locks = new Set<string>();
-  walk(program, node => {
-    if (node.type !== "CallExpression") return;
-    const callee = source.slice(node.callee.start, node.callee.end);
-    if (callee !== "test.describe.configure") return;
-    for (const name of lockNames(node.arguments[0])) locks.add(name);
-  });
-  return locks;
-}
-
-/** The node types `lockNames` reads, as oxc names them. */
-type Parsed = Parameters<Parameters<typeof walk>[1]>[0];
-
-/** The `LOCK.<name>` names in the `lock` array of a configure call's options. */
-function lockNames(options: Parsed | undefined): string[] {
-  if (options?.type !== "ObjectExpression") return [];
-  return options.properties.flatMap(property =>
-    property.type === "Property" &&
-    property.key.type === "Identifier" &&
-    property.key.name === "lock" &&
-    property.value.type === "ArrayExpression"
-      ? property.value.elements.flatMap(lockMember)
-      : []
-  );
-}
-
-/** The name in one `LOCK.<name>` element, or none for anything else. */
-function lockMember(element: Parsed | null): string[] {
-  if (element?.type !== "MemberExpression") return [];
-  const { object, property } = element;
-  return object.type === "Identifier" &&
-    object.name === "LOCK" &&
-    property.type === "Identifier"
-    ? [property.name]
-    : [];
 }
 
 test("every spec that writes shared state holds its lock", () => {
@@ -188,4 +155,26 @@ test("reads the locks a spec configures, not the constant anywhere", () => {
       `test.describe.configure({ mode: "serial", lock: [LOCK.usersRoles, LOCK.email] });\n`
     )
   ).toEqual(["usersRoles", "email"]);
+});
+
+test("a file holding the homepage's lock frees the homepage before it starts", () => {
+  // Every such file of this suite, read the way the suite's `test` reads it,
+  // so a file added with the lock is held to it without being named here.
+  const holders = suiteFiles().filter(file =>
+    configuredLocks(readFileSync(file, "utf8"), file).has("homepage")
+  );
+  expect(holders.length).toBeGreaterThan(0);
+  expect(
+    holders.filter(
+      file =>
+        !documentsToFree(readFileSync(file, "utf8"), file).includes("homepage")
+    )
+  ).toEqual([]);
+  // And a file without the lock frees nothing.
+  expect(
+    documentsToFree(
+      "test.describe.configure({ lock: [LOCK.dashboard] });\n",
+      "a.spec.ts"
+    )
+  ).toEqual([]);
 });

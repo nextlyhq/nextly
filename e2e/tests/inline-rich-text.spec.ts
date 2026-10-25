@@ -20,7 +20,6 @@
 import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
-import { STORAGE_STATE } from "../global-setup";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
 
@@ -188,8 +187,6 @@ async function enterPassage(page: Page, across: number): Promise<void> {
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ mode: "serial", lock: [LOCK.homepage] });
-
-test.use({ storageState: STORAGE_STATE });
 
 test.describe("a passage edited on the canvas", () => {
   test("types where the author clicked, not at the end", async ({ page }) => {
