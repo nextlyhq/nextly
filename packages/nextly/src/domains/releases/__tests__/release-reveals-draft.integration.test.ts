@@ -67,7 +67,7 @@ async function draftInRelease(
 ): Promise<string> {
   const handler = t.getService("collectionsHandler") as CollectionsHandler;
   const created = await handler.createEntry(
-    { collectionName: SLUG },
+    { collectionName: SLUG, overrideAccess: true },
     { title: "pending", status: "draft" }
   );
   const id = (created.data as { id?: string } | undefined)?.id;

@@ -5,9 +5,9 @@
  * The REST limit counts a session against a budget of its own: by default
  * five times the per-address budgets (`SESSION_BUDGET_MULTIPLE` times
  * `RATE_LIMIT_DEFAULTS`, 100 reads and 30 writes a minute), so 500 reads and
- * 150 writes. The suite's server raises only its session budget, since one
- * session drives every spec faster than a person can, so the bar below is
- * taken from the defaults rather than from what the server allows.
+ * 150 writes. The suite's server keeps those defaults, and each spec file
+ * runs as an account of its own (see `support/test`), so the bar below is the
+ * one the server enforces.
  * Each page here must spend no more than a tenth of that on a load, so a
  * person working quickly across pages never meets the limit. A page that
  * spends more means the session budget's default is too small, and that

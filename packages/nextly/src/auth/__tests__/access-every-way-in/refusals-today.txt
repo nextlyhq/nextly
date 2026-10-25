@@ -5792,6 +5792,158 @@ service visitor count collection true at rest  401 AUTH_REQUIRED error  | Authen
 service visitor count collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't see c user is key makers.
 service visitor count collection user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor count collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't see c user is key makers.
+service visitor create collection async-false at direct  403 FORBIDDEN thrown  | You can't create c async falses.
+service visitor create collection async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection async-false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection async-false at service  403 FORBIDDEN thrown  | You can't create c async falses.
+service visitor create collection async-throws at direct  403 FORBIDDEN thrown  | You can't create c async throws.
+service visitor create collection async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection async-throws at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection async-throws at service  403 FORBIDDEN thrown  | You can't create c async throws.
+service visitor create collection async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection async-true at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection false at direct  403 FORBIDDEN thrown  | You can't create c falses.
+service visitor create collection false at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection false at service  403 FORBIDDEN thrown  | You can't create c falses.
+service visitor create collection none at direct  403 FORBIDDEN thrown  | You can't create c nones.
+service visitor create collection none at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection none at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection none at service  403 FORBIDDEN thrown  | You can't create c nones.
+service visitor create collection other-operation at direct  403 FORBIDDEN thrown  | You can't create c other operations.
+service visitor create collection other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection other-operation at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection other-operation at service  403 FORBIDDEN thrown  | You can't create c other operations.
+service visitor create collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service visitor create collection permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection permission-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service visitor create collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service visitor create collection principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection principal-kind at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection principal-kind at service  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service visitor create collection publish-false at direct  403 FORBIDDEN thrown  | You can't create c publish falses.
+service visitor create collection publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection publish-false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection publish-false at service  403 FORBIDDEN thrown  | You can't create c publish falses.
+service visitor create collection returns-false at direct  403 FORBIDDEN thrown  | You can't create c returns falses.
+service visitor create collection returns-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection returns-false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection returns-false at service  403 FORBIDDEN thrown  | You can't create c returns falses.
+service visitor create collection returns-null at direct  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service visitor create collection returns-null at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection returns-null at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection returns-null at service  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service visitor create collection returns-string at direct  403 FORBIDDEN thrown  | You can't create c returns strings.
+service visitor create collection returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection returns-string at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection returns-string at service  403 FORBIDDEN thrown  | You can't create c returns strings.
+service visitor create collection returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection returns-true at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service visitor create collection returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection returns-undefined at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service visitor create collection role-name at direct  403 FORBIDDEN thrown  | You can't create c role names.
+service visitor create collection role-name at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection role-name at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection role-name at service  403 FORBIDDEN thrown  | You can't create c role names.
+service visitor create collection role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't create c role screen spellings.
+service visitor create collection role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection role-screen-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection role-screen-spelling at service  403 FORBIDDEN thrown  | You can't create c role screen spellings.
+service visitor create collection throws at direct  403 FORBIDDEN thrown  | You can't create c throws.
+service visitor create collection throws at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection throws at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
+service visitor create collection true at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection true at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create c user is key makers.
+service visitor create collection user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection user-is-key-maker at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create c user is key makers.
+service visitor create providers none at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create providers none at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create roles none at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create roles none at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create users none at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor create users none at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c async false.
+service visitor delete collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection async-false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c async false.
+service visitor delete collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c async throws.
+service visitor delete collection async-throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection async-throws at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c async throws.
+service visitor delete collection async-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection async-true at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c false.
+service visitor delete collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c false.
+service visitor delete collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c none.
+service visitor delete collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection none at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c none.
+service visitor delete collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c other operation.
+service visitor delete collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection other-operation at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c other operation.
+service visitor delete collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c permission spelling.
+service visitor delete collection permission-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection permission-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c permission spelling.
+service visitor delete collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c principal kind.
+service visitor delete collection principal-kind at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection principal-kind at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c principal kind.
+service visitor delete collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c publish false.
+service visitor delete collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection publish-false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c publish false.
+service visitor delete collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns false.
+service visitor delete collection returns-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection returns-false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns false.
+service visitor delete collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns null.
+service visitor delete collection returns-null at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection returns-null at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns null.
+service visitor delete collection returns-string at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns string.
+service visitor delete collection returns-string at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection returns-string at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns string.
+service visitor delete collection returns-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection returns-true at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns undefined.
+service visitor delete collection returns-undefined at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection returns-undefined at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns undefined.
+service visitor delete collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c role name.
+service visitor delete collection role-name at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection role-name at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c role name.
+service visitor delete collection role-screen-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c role screen spelling.
+service visitor delete collection role-screen-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection role-screen-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection role-screen-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c role screen spelling.
+service visitor delete collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c throws.
+service visitor delete collection throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection throws at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c throws.
+service visitor delete collection true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection true at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c user is key maker.
+service visitor delete collection user-is-key-maker at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor delete collection user-is-key-maker at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c user is key maker.
+service visitor delete providers none at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete providers none at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete roles none at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete roles none at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete users none at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor delete users none at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor list collection async-false at direct  403 FORBIDDEN thrown  | You can't see c async falses.
 service visitor list collection async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor list collection async-false at service  403 FORBIDDEN thrown  | You can't see c async falses.
@@ -5853,10 +6005,10 @@ service visitor publish collection false at direct  403 FORBIDDEN thrown  missin
 service visitor publish collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection false at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c false.
-service visitor publish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c none.
+service visitor publish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c none.
 service visitor publish collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection none at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c none.
+service visitor publish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c none.
 service visitor publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service visitor publish collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection other-operation at route  401 AUTH_REQUIRED error  | Authentication required.
@@ -5869,10 +6021,10 @@ service visitor publish collection principal-kind at direct  403 FORBIDDEN throw
 service visitor publish collection principal-kind at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection principal-kind at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
-service visitor publish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c publish false.
+service visitor publish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c publish false.
 service visitor publish collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection publish-false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c publish false.
+service visitor publish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c publish false.
 service visitor publish collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns false.
 service visitor publish collection returns-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection returns-false at route  401 AUTH_REQUIRED error  | Authentication required.
@@ -5925,7 +6077,7 @@ service visitor publish single-pub async-true at route  401 AUTH_REQUIRED error 
 service visitor publish single-pub false at direct  403 FORBIDDEN thrown  | You can't edit S Pub False.
 service visitor publish single-pub false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub none at direct  403 FORBIDDEN thrown  | You can't publish S Pub None.
+service visitor publish single-pub none at direct  403 FORBIDDEN thrown  | You can't edit S Pub None.
 service visitor publish single-pub none at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub none at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
@@ -5937,7 +6089,7 @@ service visitor publish single-pub permission-spelling at route  401 AUTH_REQUIR
 service visitor publish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
 service visitor publish single-pub principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub principal-kind at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub publish-false at direct  403 FORBIDDEN thrown  | You can't publish S Pub Publish False.
+service visitor publish single-pub publish-false at direct  403 FORBIDDEN thrown  | You can't edit S Pub Publish False.
 service visitor publish single-pub publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub publish-false at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub returns-false at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns False.
@@ -6129,10 +6281,10 @@ service visitor unpublish collection false at direct  403 FORBIDDEN thrown  miss
 service visitor unpublish collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection false at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c false.
-service visitor unpublish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c none.
+service visitor unpublish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c none.
 service visitor unpublish collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection none at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c none.
+service visitor unpublish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c none.
 service visitor unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service visitor unpublish collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection other-operation at route  401 AUTH_REQUIRED error  | Authentication required.
@@ -6145,10 +6297,10 @@ service visitor unpublish collection principal-kind at direct  403 FORBIDDEN thr
 service visitor unpublish collection principal-kind at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection principal-kind at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
-service visitor unpublish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c publish false.
+service visitor unpublish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c publish false.
 service visitor unpublish collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection publish-false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c publish false.
+service visitor unpublish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c publish false.
 service visitor unpublish collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns false.
 service visitor unpublish collection returns-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection returns-false at route  401 AUTH_REQUIRED error  | Authentication required.
@@ -6201,7 +6353,7 @@ service visitor unpublish single-pub async-true at route  401 AUTH_REQUIRED erro
 service visitor unpublish single-pub false at direct  403 FORBIDDEN thrown  | You can't edit S Pub False.
 service visitor unpublish single-pub false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub none at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub None.
+service visitor unpublish single-pub none at direct  403 FORBIDDEN thrown  | You can't edit S Pub None.
 service visitor unpublish single-pub none at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub none at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
@@ -6213,7 +6365,7 @@ service visitor unpublish single-pub permission-spelling at route  401 AUTH_REQU
 service visitor unpublish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
 service visitor unpublish single-pub principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub principal-kind at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub publish-false at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Publish False.
+service visitor unpublish single-pub publish-false at direct  403 FORBIDDEN thrown  | You can't edit S Pub Publish False.
 service visitor unpublish single-pub publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub publish-false at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub returns-false at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns False.
@@ -6246,3 +6398,171 @@ service visitor unpublish single-pub true at route  401 AUTH_REQUIRED error  | A
 service visitor unpublish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't edit S Pub User Is Key Maker.
 service visitor unpublish single-pub user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub user-is-key-maker at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async false.
+service visitor update collection async-false at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection async-false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async false.
+service visitor update collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async throws.
+service visitor update collection async-throws at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection async-throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection async-throws at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async throws.
+service visitor update collection async-true at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection async-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection async-true at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c false.
+service visitor update collection false at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c false.
+service visitor update collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c none.
+service visitor update collection none at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection none at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c none.
+service visitor update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service visitor update collection other-operation at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection other-operation at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service visitor update collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service visitor update collection permission-spelling at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection permission-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection permission-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service visitor update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
+service visitor update collection principal-kind at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection principal-kind at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection principal-kind at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
+service visitor update collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c publish false.
+service visitor update collection publish-false at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection publish-false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c publish false.
+service visitor update collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns false.
+service visitor update collection returns-false at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection returns-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection returns-false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns false.
+service visitor update collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns null.
+service visitor update collection returns-null at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection returns-null at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection returns-null at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns null.
+service visitor update collection returns-string at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns string.
+service visitor update collection returns-string at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection returns-string at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection returns-string at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns string.
+service visitor update collection returns-true at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection returns-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection returns-true at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns undefined.
+service visitor update collection returns-undefined at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection returns-undefined at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection returns-undefined at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns undefined.
+service visitor update collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role name.
+service visitor update collection role-name at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection role-name at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection role-name at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role name.
+service visitor update collection role-screen-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role screen spelling.
+service visitor update collection role-screen-spelling at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection role-screen-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection role-screen-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection role-screen-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role screen spelling.
+service visitor update collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c throws.
+service visitor update collection throws at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection throws at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c throws.
+service visitor update collection true at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection true at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c user is key maker.
+service visitor update collection user-is-key-maker at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection user-is-key-maker at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update collection user-is-key-maker at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c user is key maker.
+service visitor update providers none at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update providers none at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update roles none at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update roles none at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single async-false at direct  403 FORBIDDEN thrown  | You can't edit S Async False.
+service visitor update single async-false at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single async-false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single async-throws at direct  403 FORBIDDEN thrown  | You can't edit S Async Throws.
+service visitor update single async-throws at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single async-throws at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single async-true at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single async-true at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single false at direct  403 FORBIDDEN thrown  | You can't edit S False.
+service visitor update single false at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single false at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single none at direct  403 FORBIDDEN thrown  | You can't edit S None.
+service visitor update single none at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single none at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single none at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Other Operation.
+service visitor update single other-operation at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single other-operation at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Permission Spelling.
+service visitor update single permission-spelling at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single permission-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Principal Kind.
+service visitor update single principal-kind at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single principal-kind at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single publish-false at direct  403 FORBIDDEN thrown  | You can't edit S Publish False.
+service visitor update single publish-false at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single publish-false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single returns-false at direct  403 FORBIDDEN thrown  | You can't edit S Returns False.
+service visitor update single returns-false at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single returns-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single returns-false at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single returns-null at direct  403 FORBIDDEN thrown  | You can't edit S Returns Null.
+service visitor update single returns-null at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single returns-null at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single returns-null at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single returns-string at direct  403 FORBIDDEN thrown  | You can't edit S Returns String.
+service visitor update single returns-string at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single returns-string at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single returns-true at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single returns-true at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single returns-undefined at direct  403 FORBIDDEN thrown  | You can't edit S Returns Undefined.
+service visitor update single returns-undefined at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single returns-undefined at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single role-name at direct  403 FORBIDDEN thrown  | You can't edit S Role Name.
+service visitor update single role-name at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single role-name at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single role-name at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Role Screen Spelling.
+service visitor update single role-screen-spelling at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single role-screen-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single throws at direct  403 FORBIDDEN thrown  | You can't edit S Throws.
+service visitor update single throws at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single throws at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single throws at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single true at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single true at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single true at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't edit S User Is Key Maker.
+service visitor update single user-is-key-maker at lock  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+service visitor update single user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update single user-is-key-maker at route  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update users none at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor update users none at route  401 AUTH_REQUIRED error  | Authentication required.

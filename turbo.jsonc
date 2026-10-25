@@ -620,7 +620,11 @@
       ],
       "outputs": [],
       "cache": false,
-      "env": ["TEST_POSTGRES_URL", "TEST_MYSQL_URL", "TEST_SQLITE_URL"]
+      "env": ["TEST_POSTGRES_URL", "TEST_MYSQL_URL", "TEST_SQLITE_URL"],
+      // How many workers run nextly's integration files. Passed through
+      // rather than hashed: the worker count changes how long a run takes,
+      // not its results, and strict environment mode would otherwise drop it.
+      "passThroughEnv": ["NEXTLY_INTEGRATION_WORKERS"]
     },
 
     // test:e2e - Drive the admin in a real browser (see e2e/README.md)
@@ -643,10 +647,16 @@
       // it changes no result — but it is still an input turbo must know about.
       // E2E_SETUP_PORT: where the empty install the first-run setup specs use
       // is served, beside the servers E2E_PORT and E2E_PROD_PORT place.
+      // E2E_SERVER and E2E_PRODUCTION_PREBUILT choose the server the suite
+      // runs against (dev or production) and whether that build is reused;
+      // E2E_DEV_SPECS_ONLY runs only the specs that need the dev server.
       "env": [
         "CI",
+        "E2E_DEV_SPECS_ONLY",
         "E2E_PORT",
         "E2E_PROD_PORT",
+        "E2E_PRODUCTION_PREBUILT",
+        "E2E_SERVER",
         "E2E_SETUP_PORT",
         "GITHUB_STEP_SUMMARY"
       ]

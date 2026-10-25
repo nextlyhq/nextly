@@ -8,8 +8,7 @@
  */
 import { expect, type Page } from "@playwright/test";
 
-import { test } from "./support/test";
-import { STORAGE_STATE } from "../global-setup";
+import { fileAccount, test } from "./support/test";
 
 import { gotoAdmin } from "./support/admin";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
@@ -17,7 +16,10 @@ import { LOCK } from "./support/locks";
 
 // One signed-in user for the whole file: signing in spends the auth budget.
 // Shares state with other specs; see support/locks.ts for what each lock guards.
-test.describe.configure({ mode: "serial", lock: [LOCK.usersRoles] });
+test.describe.configure({
+  mode: "serial",
+  lock: [LOCK.usersRoles, LOCK.siteSettings],
+});
 
 let limited: LimitedUser;
 let page: Page;
@@ -27,7 +29,7 @@ test.beforeAll(async ({ browser, playwright }, testInfo) => {
   if (baseURL === undefined) throw new Error("[e2e] No baseURL configured.");
   const admin = await playwright.request.newContext({
     baseURL,
-    storageState: STORAGE_STATE,
+    storageState: await fileAccount(baseURL, testInfo),
   });
   try {
     // Reads Posts and nothing else: Tags and every Single are out of reach.
