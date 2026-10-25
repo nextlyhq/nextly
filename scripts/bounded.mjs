@@ -139,6 +139,20 @@ export function withWorkerCap(argv, workers) {
   return isTurbo(argv[0]) ? afterSeparator(argv, flag) : beforeSeparator(argv, flag);
 }
 
+/**
+ * How many Vitest workers to pass: the machine's cap, or fewer when an
+ * integration run asks for fewer with `NEXTLY_INTEGRATION_WORKERS`. A
+ * `--maxWorkers` on Vitest's command line overrides the integration config's
+ * own, so passing the cap alone would start more workers than the run asked
+ * for, each needing a database of its own. The cap still wins when it is the
+ * smaller.
+ */
+export function workerCount(command, cap, env = process.env) {
+  const asked = Number(env.NEXTLY_INTEGRATION_WORKERS);
+  if (!command.some(arg => arg.includes("test:integration")) || !Number.isInteger(asked) || asked < 1) return cap;
+  return Math.min(cap, asked);
+}
+
 function isTurbo(command) {
   return /(^|[\\/])turbo(\.cmd|\.exe)?$/.test(String(command));
 }
@@ -886,7 +900,9 @@ export function requireBounded(what, env = process.env) {
 }
 
 function boundedCommand(request, limits) {
-  return request.vitestWorkers ? withWorkerCap(request.command, limits.maxWorkers) : request.command;
+  return request.vitestWorkers
+    ? withWorkerCap(request.command, workerCount(request.command, limits.maxWorkers))
+    : request.command;
 }
 
 function boundedEnv(limits) {

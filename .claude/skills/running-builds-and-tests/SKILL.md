@@ -139,9 +139,12 @@ held in every session.
     that is rarely the one you are standing in, and compose then tries to
     CREATE containers whose names are taken and fails. `docker start` addresses
     them by name and does not care which project owns them.
-- Integration files in `packages/nextly` run sequentially on purpose
-  (`fileParallelism: false`, single fork): system-table suites share fixed
-  table names. Do not "fix" slow integration runs by re-enabling parallelism.
+- Integration files in `packages/nextly` run in sequence on one worker by
+  default: system-table suites share fixed table names. More workers
+  (`NEXTLY_INTEGRATION_WORKERS`) run only where each worker has its own
+  database, which `packages/nextly/src/__tests__/worker-database-guard.ts`
+  enforces (today: in-memory SQLite, no TEST\_\*\_URL set). Never run them
+  in parallel on a shared database.
 - E2E: the root `e2e/` package (Playwright) boots its own playground on :3100
   with a fresh SQLite database per run.
 - Some unit suites have a known pre-existing failing baseline. NEVER add to

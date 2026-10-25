@@ -9,6 +9,24 @@ import {
   recordTransactionEscapes,
   takeTransactionEscapes,
 } from "./transaction-escapes";
+import {
+  CLAIMS_ENV,
+  claimWorker,
+  releaseWorker,
+} from "./worker-database-guard";
+
+// This file's claim on its worker's pool id, and so on its database, for as
+// long as its tests run. Vitest may start a slot's next process while the last
+// one is still exiting, so the claim is held per file rather than per process:
+// what must never happen is two files running at once on one database. Only
+// integration runs set the claims directory (their global setup); a unit run,
+// which loads this file too, has none.
+const claims = process.env[CLAIMS_ENV];
+if (claims) {
+  const poolId = process.env.VITEST_POOL_ID ?? "unknown";
+  beforeAll(() => claimWorker(claims, poolId));
+  afterAll(() => releaseWorker(claims, poolId));
+}
 
 beforeAll(() => {
   // Setup test environment

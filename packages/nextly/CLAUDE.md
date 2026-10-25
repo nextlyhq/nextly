@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (26d49b7a048783c3). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (31784289d06eb275). Edit that file, never this one. -->
 
 # packages/nextly: Agent Guide
 
@@ -79,12 +79,12 @@ inside `packages/nextly`.
 ## Testing in this package
 
 - Unit: `vitest run` (excludes `*.integration.test.ts`).
-- Integration: separate config (`vitest.integration.config.ts`), forks pool,
-  single fork, `fileParallelism: false`. Test-owned tables use a unique
-  per-file prefix (see
+- Integration: separate config (`vitest.integration.config.ts`), forks
+  pool, a database per worker (`src/__tests__/worker-database-guard.ts`).
+  Test-owned tables take a per-file prefix (see
   `src/database/__tests__/integration/helpers/test-db.ts`); fixed-name
-  system tables (created via the production DDL helpers) cannot be prefixed
-  and rely on the sequential run for isolation.
+  system tables (production DDL helpers) cannot be prefixed
+  and rely on each worker running its files in turn.
 - Integration tests self-skip when `TEST_POSTGRES_URL` / `TEST_MYSQL_URL` is
   unset; SQLite falls back to in-memory. Run from the repo root so turbo
   builds first.

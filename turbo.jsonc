@@ -620,7 +620,11 @@
       ],
       "outputs": [],
       "cache": false,
-      "env": ["TEST_POSTGRES_URL", "TEST_MYSQL_URL", "TEST_SQLITE_URL"]
+      "env": ["TEST_POSTGRES_URL", "TEST_MYSQL_URL", "TEST_SQLITE_URL"],
+      // How many workers run nextly's integration files. Passed through
+      // rather than hashed: the worker count changes how long a run takes,
+      // not its results, and strict environment mode would otherwise drop it.
+      "passThroughEnv": ["NEXTLY_INTEGRATION_WORKERS"]
     },
 
     // test:e2e - Drive the admin in a real browser (see e2e/README.md)
