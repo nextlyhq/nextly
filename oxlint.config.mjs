@@ -448,11 +448,15 @@ export default defineConfig({
     },
     {
       // The one kind of cycle that rule cannot see: an import() run while the
-      // module loads. Every file, the cycle-exempt ones included; tests load
-      // modules at their top level on purpose.
+      // module loads, and the top-level await that would deadlock on one.
+      // Every file, the cycle-exempt ones included; tests load modules at
+      // their top level on purpose.
       files: [`${NEXTLY_SOURCE}/**/*.{ts,tsx}`],
       excludeFiles: TESTS,
-      rules: { "nextly/no-eager-dynamic-import": "error" },
+      rules: {
+        "nextly/no-eager-dynamic-import": "error",
+        "nextly/no-top-level-await": "error",
+      },
     },
     {
       // nextly writes through a masked logger, not the console.

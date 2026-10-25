@@ -446,6 +446,10 @@ describe("each guard, at a path no allowlist names", () => {
       `${src}/lint-probe-eager-import.ts`,
       'export const loaded = await import("./lint-probe-console-value");\n',
     ],
+    "nextly(no-top-level-await)": [
+      `${src}/lint-probe-top-level-await.ts`,
+      "export const ready = await Promise.resolve(true);\n",
+    ],
     "import(no-cycle)": [
       `${src}/lint-probe-cycle-a.ts`,
       'import { b } from "./lint-probe-cycle-b";\nexport const a = () => b;\n',

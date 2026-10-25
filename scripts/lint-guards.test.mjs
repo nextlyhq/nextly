@@ -149,26 +149,66 @@ tester.run(
   }
 );
 
-tester.run("no-eager-dynamic-import", guards.rules["no-eager-dynamic-import"], {
+// Parsed as a module, as the TypeScript files these rules run on are: in a
+// script, `await (…)()` is a call to a function named `await`, and a
+// top-level `for await` does not parse at all.
+const moduleTester = new RuleTester({
+  languageOptions: { sourceType: "module", parserOptions: { lang: "ts" } },
+});
+
+moduleTester.run(
+  "no-eager-dynamic-import",
+  guards.rules["no-eager-dynamic-import"],
+  {
+    valid: [
+      // Deferred: each runs only when its function is called, after both
+      // modules have loaded, which is why the cycle rule may leave it out.
+      "async function load() { return import('./register'); }",
+      "export const load = async () => (await import('./register')).registerServices;",
+      "const lazy = function () { return import('./register'); };",
+      "class Boot { async start() { await import('./register'); } }",
+      "async function outer() { class Inner { static { void import('./x'); } } }",
+      // A function invoked in place inside a deferred one runs only when that
+      // one does.
+      "async function outer() { return (async () => import('./x'))(); }",
+      // Passed to a call rather than called in place: run when the callee
+      // decides, which is no longer this module's evaluation.
+      "export const later = queueMicrotask(() => void import('./x'));",
+      // A static import is the cycle rule's to judge, not this one's.
+      "import { registerServices } from './register';",
+    ],
+    invalid: [
+      // Each runs during the module's own evaluation.
+      { code: "const { b } = await import('./b');", errors: 1 },
+      { code: "await import('./b');", errors: 1 },
+      { code: "export const ready = import('./b');", errors: 1 },
+      { code: "void import('./b');", errors: 1 },
+      { code: "class Boot { static { void import('./b'); } }", errors: 1 },
+      { code: "class Boot { static loaded = import('./b'); }", errors: 1 },
+      // A function invoked where it is written runs with the module.
+      { code: "await (async () => import('./b'))();", errors: 1 },
+      { code: "(function () { void import('./b'); })();", errors: 1 },
+      { code: "export const ready = (() => import('./b'))();", errors: 1 },
+      { code: "new (function () { void import('./b'); })();", errors: 1 },
+    ],
+  }
+);
+
+moduleTester.run("no-top-level-await", guards.rules["no-top-level-await"], {
   valid: [
-    // Deferred: each runs only when its function is called, after both
-    // modules have loaded, which is why the cycle rule may leave it out.
-    "async function load() { return import('./register'); }",
-    "export const load = async () => (await import('./register')).registerServices;",
-    "const lazy = function () { return import('./register'); };",
-    "class Boot { async start() { await import('./register'); } }",
-    "async function outer() { class Inner { static { void import('./x'); } } }",
-    // A static import is the cycle rule's to judge, not this one's.
-    "import { registerServices } from './register';",
+    // Inside a function, an await waits in that function's promise.
+    "async function boot() { await load(); }",
+    "export const boot = async () => { await load(); };",
+    "(async () => { await load(); })();",
+    "async function each(items) { for await (const item of items) use(item); }",
   ],
   invalid: [
-    // Each runs during the module's own evaluation.
-    { code: "const { b } = await import('./b');", errors: 1 },
-    { code: "await import('./b');", errors: 1 },
-    { code: "export const ready = import('./b');", errors: 1 },
-    { code: "void import('./b');", errors: 1 },
-    { code: "class Boot { static { void import('./b'); } }", errors: 1 },
-    { code: "class Boot { static loaded = import('./b'); }", errors: 1 },
+    // The module itself waits, whatever it waits on: a loader defined
+    // anywhere, which no rule over this file could look inside.
+    { code: "await load();", errors: 1 },
+    { code: "const config = await loadConfig();", errors: 1 },
+    { code: "await (async () => import('./b'))();", errors: 1 },
+    { code: "for await (const item of items) use(item);", errors: 1 },
   ],
 });
 
