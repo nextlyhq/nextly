@@ -283,18 +283,29 @@ export default class ModuleBudgetReporter implements Reporter {
   private async partialRun(
     testModules: ReadonlyArray<TestModule>
   ): Promise<string | undefined> {
+    const {
+      cliExclude = [],
+      tagsFilter = [],
+      testNamePattern,
+    } = this.vitest.config;
+    // Narrowed before discovery: files left out with `--exclude` are missing
+    // from the glob below as well, so comparing the two cannot see them, and a
+    // name or tag filter narrows the tests inside files that all ran.
+    const narrowed = [
+      cliExclude.length > 0 ? `files excluded with --exclude` : "",
+      tagsFilter.length > 0 ? "filtered by tag" : "",
+      testNamePattern ? "filtered by test name" : "",
+    ].filter(Boolean);
     const all = await this.vitest.globTestSpecifications();
     const key = (project: string, file: string) =>
       JSON.stringify([project, file]);
     const ran = new Set(testModules.map(m => key(m.project.name, m.moduleId)));
     const missing = all.filter(s => !ran.has(key(s.project.name, s.moduleId)));
-    if (!this.vitest.config.testNamePattern && missing.length === 0) {
-      return undefined;
-    }
-    return (
-      `this run ran ${testModules.length} of ${all.length} test files` +
-      (this.vitest.config.testNamePattern ? ", filtered by test name" : "")
-    );
+    if (narrowed.length === 0 && missing.length === 0) return undefined;
+    return [
+      `this run ran ${testModules.length} of ${all.length} test files`,
+      ...narrowed,
+    ].join(", ");
   }
 
   /**

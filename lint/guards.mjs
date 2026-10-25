@@ -250,8 +250,10 @@ function inModuleBody(node) {
 }
 
 /**
- * A top-level `await`, or `for await`: one in no function, which makes its
- * module wait while it loads.
+ * A module waiting at its top level, in any of the three ways the language
+ * has: an `await` expression, a `for await` loop, or an `await using`
+ * declaration, whose disposal the module awaits when its body ends. Each is in
+ * no function, which makes its module wait while it loads.
  *
  * What it catches: the one way an import cycle hidden from
  * `import/no-cycle` can deadlock. That rule leaves every dynamic `import()` out
@@ -283,6 +285,9 @@ const noTopLevelAwait = {
       },
       ForOfStatement(node) {
         if (node.await && inModuleBody(node)) report(node);
+      },
+      VariableDeclaration(node) {
+        if (node.kind === "await using" && inModuleBody(node)) report(node);
       },
     };
   },

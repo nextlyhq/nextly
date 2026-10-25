@@ -163,6 +163,7 @@ moduleTester.run("no-top-level-await", guards.rules["no-top-level-await"], {
     "export const boot = async () => { await load(); };",
     "(async () => { await load(); })();",
     "async function each(items) { for await (const item of items) use(item); }",
+    "async function scoped() { await using res = acquire(); }",
     // Left alone on purpose: an import() the module does not wait on, even
     // one that runs while it loads. The module finishes evaluating first, so
     // it cannot deadlock on it, however the call is spelled.
@@ -182,6 +183,8 @@ moduleTester.run("no-top-level-await", guards.rules["no-top-level-await"], {
       errors: 1,
     },
     { code: "for await (const item of items) use(item);", errors: 1 },
+    // Its disposal is awaited when the module body ends.
+    { code: "await using res = acquire();", errors: 1 },
   ],
 });
 
