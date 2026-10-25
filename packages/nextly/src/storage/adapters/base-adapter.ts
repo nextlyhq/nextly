@@ -162,3 +162,27 @@ export abstract class BaseStorageAdapter implements IStorageAdapter {
     return `${prefix}/${uuid}-${sanitized}`;
   }
 }
+
+/**
+ * A key shaped as {@link BaseStorageAdapter.generateKey} writes it: an
+ * optional folder, the year and month, then a random UUID before the
+ * sanitized name. Kept beside that method so the two change together.
+ */
+const GENERATED_KEY =
+  /^(?:.+\/)?\d{4}\/\d{2}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[a-zA-Z0-9._-]+$/;
+
+/**
+ * Whether a stored path is one the adapters generated, and so names bytes
+ * that never change.
+ *
+ * Every write goes through `generateKey`, which puts a fresh UUID in the
+ * name, so a generated path is written once and never rewritten: a changed
+ * image (a new crop, regenerated sizes) is stored under a new key. A file
+ * placed in the storage folder by hand carries no such promise, which is why
+ * a caller deciding how long a response may be cached asks this first.
+ *
+ * @param key - A stored path, relative to the storage root, with `/`
+ */
+export function isGeneratedStorageKey(key: string): boolean {
+  return GENERATED_KEY.test(key);
+}

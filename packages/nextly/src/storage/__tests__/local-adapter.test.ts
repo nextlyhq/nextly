@@ -11,7 +11,12 @@ import * as path from "node:path";
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-import { LocalStorageAdapter } from "../adapters/local-adapter";
+import { consoleLogger } from "../../shared/types";
+import {
+  LocalStorageAdapter,
+  markLocalUploadsRouteLoaded,
+  resetLocalAdapterState,
+} from "../adapters/local-adapter";
 
 describe("LocalStorageAdapter", () => {
   let adapter: LocalStorageAdapter;
@@ -56,6 +61,61 @@ describe("LocalStorageAdapter", () => {
       }
 
       expect(listed).toHaveLength(2);
+    });
+  });
+
+  /*
+   * `next start` serves only the files `public/` held when it started, so a
+   * production upload with no route serving the folder is a 404 until the
+   * next restart. The upload is where that can be said.
+   */
+  describe("an upload in production", () => {
+    let warn: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      resetLocalAdapterState();
+      warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      warn.mockRestore();
+      resetLocalAdapterState();
+    });
+
+    const store = () =>
+      adapter.upload(Buffer.from("x"), {
+        filename: "a.png",
+        mimeType: "image/png",
+      });
+
+    it("warns once, naming the URL and the route to add, when no uploads route has loaded", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+
+      const first = await store();
+      await store();
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      const message = String(warn.mock.calls[0][0]);
+      expect(message).toContain(first.url);
+      expect(message).toContain("app/uploads/[...path]/route.ts");
+    });
+
+    it("does not warn once the uploads route has loaded", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      markLocalUploadsRouteLoaded();
+
+      await store();
+
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("does not warn outside production, where Next.js reads the folder on every request", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+
+      await store();
+
+      expect(warn).not.toHaveBeenCalled();
     });
   });
 
@@ -286,6 +346,44 @@ describe("LocalStorageAdapter", () => {
       // The file outside basePath should NOT have been deleted
       // (we can't verify this without creating a real file, but the adapter
       // should resolve the path and check it's within basePath)
+    });
+
+    /*
+     * A folder BESIDE the storage folder whose name starts with the storage
+     * folder's name: `uploads-private` next to `uploads`. A containment check
+     * comparing string prefixes counts it as inside. `....//` is what reaches
+     * it, because stripping `../` once leaves `../` behind.
+     */
+    describe("a sibling folder sharing the storage folder's name as a prefix", () => {
+      let root: string;
+      let sibling: string;
+      let prefixed: LocalStorageAdapter;
+      const escape = "....//uploads-private/secret.txt";
+
+      beforeEach(async () => {
+        root = path.join(testDir, "site");
+        sibling = path.join(root, "uploads-private", "secret.txt");
+        await fs.mkdir(path.join(root, "uploads"), { recursive: true });
+        await fs.mkdir(path.dirname(sibling), { recursive: true });
+        await fs.writeFile(sibling, "not for the public");
+        prefixed = new LocalStorageAdapter({
+          basePath: path.join(root, "uploads"),
+          baseUrl: "/uploads",
+        });
+      });
+
+      it("is not read", async () => {
+        await expect(prefixed.read(escape)).resolves.toBeNull();
+      });
+
+      it("is not deleted from", async () => {
+        await prefixed.delete(escape);
+        expect(await fileExists(sibling)).toBe(true);
+      });
+
+      it("is not reported as stored", async () => {
+        await expect(prefixed.exists(escape)).resolves.toBe(false);
+      });
     });
   });
 });

@@ -27,6 +27,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+import { consoleLogger } from "../../shared/types";
 import {
   deadlineSignal,
   resolveReadBounds,
@@ -34,6 +35,7 @@ import {
 } from "../fetch-stored-bytes";
 import { StorageReadTooLargeError } from "../read-errors";
 import type {
+  IStorageAdapter,
   UploadOptions,
   UploadResult,
   BulkDeleteResult,
@@ -52,6 +54,98 @@ export interface LocalAdapterConfig {
   basePath: string;
   /** URL prefix for serving files (default: /uploads) */
   baseUrl: string;
+}
+
+/**
+ * A stored file opened for sending to a client, as {@link LocalStorageAdapter.openForServing}
+ * returns it. The caller owns `handle` and closes it, directly or by reading
+ * it through a stream that closes it at the end.
+ */
+export interface OpenedStoredFile {
+  /** The open descriptor every byte of the response is read from. */
+  handle: fs.FileHandle;
+  /** Its size, from the same descriptor. */
+  size: number;
+  /** When it was last written, from the same descriptor. */
+  modified: Date;
+}
+
+/**
+ * Failures that mean "there is no servable file at this path" rather than
+ * "the disk could not be read": a missing name, a name through something that
+ * is not a folder, a name too long or looping through links, and a name the
+ * platform refuses outright (a NUL byte).
+ */
+const ABSENT_FILE_CODES = new Set([
+  "ENOENT",
+  "ENOTDIR",
+  "ENAMETOOLONG",
+  "ELOOP",
+  "ERR_INVALID_ARG_VALUE",
+  "ERR_INVALID_ARG_TYPE",
+]);
+
+function isAbsentFileError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return typeof code === "string" && ABSENT_FILE_CODES.has(code);
+}
+
+/**
+ * Opening never waits on the file: a FIFO placed in the folder would
+ * otherwise hold a threadpool slot until something wrote to it. It changes
+ * nothing for a regular file, and the platforms without the flag get 0.
+ */
+const OPEN_FOR_SERVING = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0);
+
+/**
+ * The marker a route serving local uploads sets when it loads, on the global
+ * object so a second copy of this module in another server bundle sees it.
+ */
+const UPLOADS_ROUTE_LOADED = Symbol.for("nextly.local-uploads-route-loaded");
+
+/** Whether the unserved-upload warning has been given in this process. */
+let unservedWarningGiven = false;
+
+/** Where serving local uploads, and the route it needs, are explained. */
+const LOCAL_UPLOADS_DOCS_URL =
+  "https://nextlyhq.com/docs/guides/media-storage#how-local-uploads-are-served";
+
+/**
+ * Record that a route serving local uploads has loaded in this process, so
+ * an upload made in production is not warned about.
+ */
+export function markLocalUploadsRouteLoaded(): void {
+  Reflect.set(globalThis, UPLOADS_ROUTE_LOADED, true);
+}
+
+function localUploadsRouteLoaded(): boolean {
+  return Reflect.get(globalThis, UPLOADS_ROUTE_LOADED) === true;
+}
+
+/**
+ * Warn, once per process, when a production server stores a file locally and
+ * no route serving local uploads has loaded.
+ *
+ * Next.js reads `public/` once when `next start` begins and serves only what
+ * was there, so without the route a file uploaded afterwards answers 404
+ * until the server restarts. Asked at upload time rather than at boot:
+ * Next.js loads route modules after the instrumentation hook has run, so at
+ * boot the route has not loaded yet even where it exists, and by the first
+ * upload it has, unless the app turned `preloadEntriesOnStart` off.
+ *
+ * @param publicUrl - The URL the stored file was given
+ * @param baseUrl - This adapter's URL prefix, for the route's location
+ */
+function warnIfUploadUnserved(publicUrl: string, baseUrl: string): void {
+  if (process.env.NODE_ENV !== "production") return;
+  if (unservedWarningGiven || localUploadsRouteLoaded()) return;
+  unservedWarningGiven = true;
+  consoleLogger.warn(
+    `[Nextly] ${publicUrl} was stored on local disk, but no route serving ${baseUrl}/ has loaded in this server, ` +
+      "so Next.js answers 404 for it until the server restarts. " +
+      `Add app${baseUrl}/[...path]/route.ts exporting GET and HEAD from createUploadsHandlers (nextly/api/uploads): ` +
+      LOCAL_UPLOADS_DOCS_URL
+  );
 }
 
 // Track whether we've already added to .gitignore this session
@@ -112,6 +206,26 @@ async function readCounted(
   return Buffer.concat(chunks);
 }
 
+/**
+ * Whether `candidate` names `base` itself or something below it.
+ *
+ * Asked of the relative path between the two rather than of a string prefix,
+ * because a prefix also matches a SIBLING whose name starts with the base's:
+ * `public/uploads-private` begins with `public/uploads`. Every check that a
+ * path stays inside the storage folder goes through this one test.
+ *
+ * @param base - An absolute, resolved folder
+ * @param candidate - An absolute, resolved path
+ */
+function isWithin(base: string, candidate: string): boolean {
+  const relative = path.relative(base, candidate);
+  return (
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
 // ============================================================
 // Adapter Implementation
 // ============================================================
@@ -148,10 +262,10 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
     // Auto-add uploads dir to .gitignore on first upload
     await this.ensureGitignore();
 
-    return {
-      url: this.getPublicUrl(key),
-      path: key,
-    };
+    const url = this.getPublicUrl(key);
+    warnIfUploadUnserved(url, this.baseUrl);
+
+    return { url, path: key };
   }
 
   /**
@@ -262,6 +376,97 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
   getPublicUrl(filePath: string): string {
     const cleanPath = filePath.replace(/^\/+/, "");
     return `${this.baseUrl}/${cleanPath}`;
+  }
+
+  /**
+   * The stored path a request path names, or null when it is not under this
+   * adapter's `baseUrl`. The inverse of {@link getPublicUrl}: the request
+   * path arrives percent-encoded, so each segment is decoded, and one that
+   * does not decode names nothing. An absolute `baseUrl` (another host)
+   * answers on no path of this server.
+   *
+   * @param urlPath - A request's path, such as `/uploads/2026/04/x.png`
+   */
+  storedPathForUrl(urlPath: string): string | null {
+    if (!this.baseUrl.startsWith("/") && this.baseUrl !== "") return null;
+    const prefix = `${this.baseUrl}/`;
+    if (!urlPath.startsWith(prefix)) return null;
+    const rest = urlPath.slice(prefix.length);
+    if (rest === "") return null;
+    try {
+      return rest.split("/").map(decodeURIComponent).join("/");
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Open a stored file to send to a client, or null when there is no file
+   * this adapter would serve at that path.
+   *
+   * The same containment check as every other operation decides the path,
+   * and then the REAL path, links resolved, must still sit inside the real
+   * storage folder, so a link placed in the folder cannot hand out a file
+   * from elsewhere on the disk. Names with a segment starting with `.` are
+   * never served: no generated key has one, and the folder may hold files
+   * of its own such as a `.gitignore`.
+   *
+   * Opened once and described from that descriptor, so the size and date a
+   * response states belong to the bytes it sends. Nothing is read here: the
+   * caller streams from the handle, which is what lets a file larger than
+   * {@link read}'s cap be served without holding it in memory.
+   *
+   * A missing file is null; a disk that cannot be read throws, so a caller
+   * does not answer "no such file" during an outage.
+   *
+   * @param filePath - A stored path, relative to the storage folder
+   */
+  async openForServing(filePath: string): Promise<OpenedStoredFile | null> {
+    let fullPath: string;
+    try {
+      fullPath = this.resolveAndValidate(filePath);
+    } catch {
+      return null;
+    }
+    const relative = path.relative(this.basePath, fullPath);
+    if (
+      relative === "" ||
+      relative.split(path.sep).some(part => part.startsWith("."))
+    ) {
+      return null;
+    }
+
+    let realPath: string;
+    try {
+      const [realBase, realFile] = await Promise.all([
+        fs.realpath(this.basePath),
+        fs.realpath(fullPath),
+      ]);
+      if (!isWithin(realBase, realFile)) return null;
+      realPath = realFile;
+    } catch (error) {
+      if (isAbsentFileError(error)) return null;
+      throw error;
+    }
+
+    let handle: fs.FileHandle;
+    try {
+      handle = await fs.open(realPath, OPEN_FOR_SERVING);
+    } catch (error) {
+      if (isAbsentFileError(error)) return null;
+      throw error;
+    }
+    try {
+      const stats = await handle.stat();
+      if (!stats.isFile()) {
+        await handle.close();
+        return null;
+      }
+      return { handle, size: stats.size, modified: stats.mtime };
+    } catch (error) {
+      await handle.close().catch(() => undefined);
+      throw error;
+    }
   }
 
   /**
@@ -415,7 +620,7 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
     const fullPath = path.resolve(this.basePath, sanitized);
 
     // Verify the resolved path is still within basePath
-    if (!fullPath.startsWith(this.basePath)) {
+    if (!isWithin(this.basePath, fullPath)) {
       throw new Error(
         `Path traversal detected: ${filePath} resolves outside of storage directory`
       );
@@ -460,8 +665,33 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
 }
 
 /**
- * Reset gitignore tracking (for testing)
+ * The adapter as a {@link LocalStorageAdapter}, or null when it is not one.
+ *
+ * Judged by the adapter's type and the methods serving needs rather than by
+ * `instanceof`, because a route bundle and the storage it reads can each
+ * hold a copy of this module, and `instanceof` is false across two copies of
+ * one class.
+ *
+ * @param adapter - Any storage adapter, or nothing
+ */
+export function asLocalStorageAdapter(
+  adapter: IStorageAdapter | null | undefined
+): LocalStorageAdapter | null {
+  if (!adapter || adapter.getType() !== "local") return null;
+  if (adapter instanceof LocalStorageAdapter) return adapter;
+  const candidate = adapter as Partial<LocalStorageAdapter>;
+  return typeof candidate.storedPathForUrl === "function" &&
+    typeof candidate.openForServing === "function"
+    ? (adapter as LocalStorageAdapter)
+    : null;
+}
+
+/**
+ * Reset the once-per-process state: gitignore tracking, the unserved-upload
+ * warning and the route marker (for testing)
  */
 export function resetLocalAdapterState(): void {
   gitignoreUpdated = false;
+  unservedWarningGiven = false;
+  Reflect.deleteProperty(globalThis, UPLOADS_ROUTE_LOADED);
 }

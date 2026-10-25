@@ -87,7 +87,7 @@ Enter your name, an email and a password. The first account gets the Super Admin
 
 ### Default storage is local disk
 
-Out of the box, Nextly uses your project's `./public/uploads/` directory as the media store -- no env vars, no cloud account, no credentials. Files you upload through the admin's media library land there and are served by Next.js as static assets. When you're ready to move to S3, Vercel Blob, or Uploadthing, see [Media & Storage](/docs/guides/media-storage).
+Out of the box, Nextly uses your project's `./public/uploads/` directory as the media store -- no env vars, no cloud account, no credentials. Files you upload through the admin's media library land there and are served at `/uploads/...` by your app, including under `next start`, where a route in `src/app/uploads/` serves the files uploaded since the server started. When you're ready to move to S3, Vercel Blob, or Uploadthing, see [Media & Storage](/docs/guides/media-storage).
 
 ## Option B: Add to an Existing Next.js Project
 
