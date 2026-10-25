@@ -9,6 +9,12 @@
 // exemption it no longer needs. A file that joins a cycle is reported by the
 // lint itself; two listed cycles merging, which no per-file exemption can see,
 // fails the test as a changed group.
+//
+// What these guards hold is which files are on a cycle and how the cycles
+// group, not each import between them. A new import between two files already
+// in one group adds a cycle inside it and passes: it puts no file newly on a
+// cycle, and the group already loads as one unit. Telling it apart would take
+// the import edges themselves, which oxlint does not report.
 
 /** Where the rule applies, relative to the repository root. */
 export const NEXTLY_SOURCE = "packages/nextly/src";
@@ -21,9 +27,10 @@ export const NEXTLY_SOURCE = "packages/nextly/src";
  * Dynamic imports are not exempted here: `allowUnsafeDynamicCyclicDependency`
  * would exempt a cycle through any `import()`, a top-level `await import()`
  * that runs while the module loads included. oxlint 1.89 leaves every dynamic
- * import out of the cycles it reports whatever this says, so the eager form is
- * refused by a rule of its own, `nextly/no-eager-dynamic-import`, and one
- * inside a function, which runs after both modules have loaded, stays allowed.
+ * import out of the cycles it reports whatever this says. The harm such a
+ * cycle can do is a deadlock, which needs the module to wait on the import, so
+ * `nextly/no-top-level-await` refuses the wait; an `import()` the module does
+ * not wait on stays allowed and invisible to this rule.
  */
 export const NO_CYCLE = [
   "error",

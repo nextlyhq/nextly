@@ -234,87 +234,39 @@ const noStaticRestrictedImport = {
   },
 };
 
-/** The nodes whose body runs only when called, not when the module loads. */
-const DEFERRING = new Set([
+/** The nodes whose body runs in a promise of its own when it awaits. */
+const FUNCTIONS = new Set([
   "FunctionDeclaration",
   "FunctionExpression",
   "ArrowFunctionExpression",
 ]);
 
-/** `node` with any parentheses around it stepped over, as its parent sees it. */
-function unparenthesized(node) {
-  let at = node;
-  while (at.parent?.type === "ParenthesizedExpression") at = at.parent;
-  return at;
-}
-
-/** Whether a function is called where it is written, as `(() => …)()` is. */
-function invokedInPlace(fn) {
-  const outer = unparenthesized(fn);
-  const call = outer.parent;
-  return (
-    (call?.type === "CallExpression" || call?.type === "NewExpression") &&
-    call.callee === outer
-  );
-}
-
-/** Whether `node` runs while its module loads: inside no function that waits to be called. */
-function runsWhileLoading(node) {
-  for (let at = node.parent; at; at = at.parent) {
-    if (DEFERRING.has(at.type) && !invokedInPlace(at)) return false;
-  }
-  return true;
-}
-
-/**
- * An `import()` that runs while its module loads: one in no function, at the
- * module's top level, in a top-level class's static block or field, or in any
- * other expression evaluated with the module. A function invoked where it is
- * written runs with them, so its body counts as the module's own.
- *
- * `import/no-cycle` leaves every dynamic import out of the cycles it reports,
- * because one inside a function runs after both modules have loaded. One that
- * runs during loading closes a cycle the rule cannot see. So the lazy form
- * stays allowed and the eager one is refused: a static import, which the cycle
- * rule does see, says the same thing.
- *
- * A loader called from the top level by name, `await load()`, is a call this
- * rule cannot follow from the syntax of one file. What makes a load-time import
- * dangerous is the deadlock it causes when the module waits for it, and that
- * waiting is a top-level `await`, which `no-top-level-await` refuses.
- */
-const noEagerDynamicImport = {
-  meta: { type: "problem", schema: [] },
-  create(context) {
-    return {
-      ImportExpression(node) {
-        if (!runsWhileLoading(node)) return;
-        context.report({
-          node,
-          message:
-            "This import() runs while the module loads, so the import-cycle rule cannot see a cycle it closes. Import it statically, or move it into the function that needs it.",
-        });
-      },
-    };
-  },
-};
-
 /** Whether `node` is in no function at all, so the module itself waits on it. */
 function inModuleBody(node) {
   for (let at = node.parent; at; at = at.parent) {
-    if (DEFERRING.has(at.type)) return false;
+    if (FUNCTIONS.has(at.type)) return false;
   }
   return true;
 }
 
 /**
- * A top-level `await`, or `for await`, which makes its module wait while it
- * loads. A dynamic import the module waits on, directly or through any call,
- * deadlocks when it closes a cycle back to that module, and the import-cycle
- * rule cannot see such a cycle. Refusing the wait itself covers every route to
- * it, including a loader defined in another module, which no syntax rule over
- * one file could follow. An `await` in any function, one invoked in place
- * included, waits inside that function's promise, not the module's.
+ * A top-level `await`, or `for await`: one in no function, which makes its
+ * module wait while it loads.
+ *
+ * What it catches: the one way an import cycle hidden from
+ * `import/no-cycle` can deadlock. That rule leaves every dynamic `import()` out
+ * of the cycles it reports, and a module that waits on a dynamic import closing
+ * a cycle back to itself waits forever. Refusing the wait covers every route to
+ * it, a loader defined in another module and called from the top level
+ * included, since what deadlocks is the waiting, not the call that leads there.
+ *
+ * What it deliberately leaves alone: an `import()` the module does not wait on,
+ * however it is reached, even one that runs while the module loads. The
+ * importing module finishes evaluating before the imported one runs, so it
+ * neither deadlocks nor reads a binding before its value is set, and the
+ * modules it loads appear in the unit suite's module budget. An `await` inside
+ * any function, one invoked in place included, waits in that function's
+ * promise, not the module's.
  */
 const noTopLevelAwait = {
   meta: { type: "problem", schema: [] },
@@ -393,7 +345,6 @@ export default {
     "api-key-scope": apiKeyScope,
     "no-keyboard-listener": noKeyboardListener,
     "no-static-restricted-import": noStaticRestrictedImport,
-    "no-eager-dynamic-import": noEagerDynamicImport,
     "no-top-level-await": noTopLevelAwait,
     "no-legacy-lifecycle": noLegacyLifecycle,
     "tab-indicator": tabIndicator,

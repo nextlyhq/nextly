@@ -384,7 +384,9 @@ describe("the import-cycle guard's allowlist", () => {
     // that merged, and a file that left one all change them. A merge is the
     // case the per-file exemption alone cannot see, since every merged file is
     // already exempt; fallow's new-only circular-dependency check reports it
-    // too, as an introduced cycle.
+    // too, as an introduced cycle. A new import between two files already in
+    // one group changes none of this and passes: the groups hold membership,
+    // not edges (lint/import-cycles.mjs says why).
     const on = lint(withoutExemptions("import/no-cycle"), [NEXTLY_SOURCE]);
     const found = cycleGroups(on.diagnostics);
     const expected = IMPORT_CYCLES.map(group =>
@@ -441,10 +443,6 @@ describe("each guard, at a path no allowlist names", () => {
     "eslint(no-restricted-imports)": [
       `${src}/api/lint-probe-migrate-import.ts`,
       'export { runMigrate } from "../cli/commands/migrate";\n',
-    ],
-    "nextly(no-eager-dynamic-import)": [
-      `${src}/lint-probe-eager-import.ts`,
-      'export const loaded = await import("./lint-probe-console-value");\n',
     ],
     "nextly(no-top-level-await)": [
       `${src}/lint-probe-top-level-await.ts`,

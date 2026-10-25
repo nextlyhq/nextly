@@ -437,9 +437,11 @@ export default defineConfig({
       rules: { "nextly/api-key-scope": "error" },
     },
     {
-      // No new import cycle in nextly's source. The files already on one are
-      // exempt, and scripts/lint-config.test.mjs holds those cycles to the
-      // groups lint/import-cycles.mjs lists, so the exemption only shrinks.
+      // No file newly on an import cycle in nextly's source. The files already
+      // on one are exempt, and scripts/lint-config.test.mjs holds those cycles
+      // to the groups lint/import-cycles.mjs lists, so the exemption only
+      // shrinks. A new import between two files already in one group is not
+      // caught: see lint/import-cycles.mjs.
       files: [`${NEXTLY_SOURCE}/**/*.{ts,tsx}`],
       excludeFiles: IMPORT_CYCLES.flat().map(
         file => `${NEXTLY_SOURCE}/${file}`
@@ -447,16 +449,13 @@ export default defineConfig({
       rules: { "import/no-cycle": NO_CYCLE },
     },
     {
-      // The one kind of cycle that rule cannot see: an import() run while the
-      // module loads, and the top-level await that would deadlock on one.
-      // Every file, the cycle-exempt ones included; tests load modules at
-      // their top level on purpose.
+      // No top-level await in nextly's source: the deadlock a cycle through a
+      // dynamic import could cause, which import/no-cycle cannot see. Every
+      // file, the cycle-exempt ones included; tests load modules at their top
+      // level on purpose. What it covers and what it does not: lint/guards.mjs.
       files: [`${NEXTLY_SOURCE}/**/*.{ts,tsx}`],
       excludeFiles: TESTS,
-      rules: {
-        "nextly/no-eager-dynamic-import": "error",
-        "nextly/no-top-level-await": "error",
-      },
+      rules: { "nextly/no-top-level-await": "error" },
     },
     {
       // nextly writes through a masked logger, not the console.
