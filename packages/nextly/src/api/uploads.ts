@@ -38,6 +38,7 @@
  * @module api/uploads
  */
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
+import { genericPublicMessage } from "../errors/error-codes";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly, getNextly } from "../init";
 import { DEFAULT_ACCEPTED_FORMATS } from "../services/upload-validation/mime";
@@ -294,6 +295,12 @@ function bodyStream(
  * through, and of any local storage plugin besides it. Only a LOCAL one is
  * asked: a cloud adapter's files are not on this disk, and its URLs never
  * name this server.
+ *
+ * When two adapters' URLs nest (media at `/uploads`, another at
+ * `/uploads/documents`), a path under both belongs to the one with the
+ * LONGER `baseUrl`: that is the adapter that handed the URL out, and the
+ * shorter prefix would look for the file in the wrong folder. So every
+ * candidate is asked, not just the first that matches.
  */
 function findStoredPath(
   urlPath: string
@@ -303,12 +310,19 @@ function findStoredPath(
     storage.getAdapterForCollection("media"),
     ...storage.getPlugins().map(plugin => plugin.adapter),
   ];
+  let best: { adapter: LocalStorageAdapter; storedPath: string } | null = null;
   for (const candidate of candidates) {
     const adapter = asLocalStorageAdapter(candidate);
     const storedPath = adapter?.storedPathForUrl(urlPath) ?? null;
-    if (adapter && storedPath !== null) return { adapter, storedPath };
+    if (!adapter || storedPath === null) continue;
+    if (
+      best === null ||
+      adapter.getBaseUrl().length > best.adapter.getBaseUrl().length
+    ) {
+      best = { adapter, storedPath };
+    }
   }
-  return null;
+  return best;
 }
 
 /** The span a range answer sends, the whole file when it names none. */
@@ -329,6 +343,29 @@ async function headersOnly(
 ): Promise<Response> {
   await file.handle.close();
   return new Response(null, { status, headers });
+}
+
+/**
+ * The refusal of a span past the end of the file: the canonical error, with
+ * the `Content-Range` HTTP requires, which states the file's size so the
+ * client can ask again for a span that exists. The file opened to learn that
+ * size is closed first, since nothing is read from it.
+ */
+async function rangeNotSatisfiable(
+  request: Request,
+  file: OpenedStoredFile
+): Promise<Response> {
+  await file.handle.close();
+  const response = buildErrorResponse(
+    new NextlyError({
+      code: "RANGE_NOT_SATISFIABLE",
+      publicMessage: genericPublicMessage("RANGE_NOT_SATISFIABLE"),
+    }),
+    { requestId: readOrGenerateRequestId(request) }
+  );
+  response.headers.set("Content-Range", `bytes */${file.size}`);
+  response.headers.set("Accept-Ranges", "bytes");
+  return response;
 }
 
 /**
@@ -355,9 +392,7 @@ async function answerWithFile(
     ? readRange(request.headers.get("range"), file.size)
     : { kind: "whole" };
   if (range.kind === "unsatisfiable") {
-    headers.set("Content-Range", `bytes */${file.size}`);
-    headers.delete("Content-Type");
-    return headersOnly(file, 416, headers);
+    return rangeNotSatisfiable(request, file);
   }
 
   const { start, end, partial } = spanOf(range, file.size);

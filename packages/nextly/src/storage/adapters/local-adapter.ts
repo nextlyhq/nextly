@@ -379,6 +379,14 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
   }
 
   /**
+   * The URL prefix this adapter's files are served under, without a trailing
+   * slash, as {@link getPublicUrl} builds URLs from it.
+   */
+  getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
+  /**
    * The stored path a request path names, or null when it is not under this
    * adapter's `baseUrl`. The inverse of {@link getPublicUrl}: the request
    * path arrives percent-encoded, so each segment is decoded, and one that

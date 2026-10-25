@@ -219,6 +219,30 @@ describe("ranges", () => {
     expect(response.headers.get("content-range")).toBe("bytes */10");
   });
 
+  // The refusal is an error like any other the API gives: the canonical
+  // code and envelope, and the file it opened to find the size is closed.
+  it("a span past the end is refused in the canonical error envelope, and the file is closed", async () => {
+    const opened: Array<{ fd: number }> = [];
+    const open = adapter.openForServing.bind(adapter);
+    vi.spyOn(adapter, "openForServing").mockImplementation(async storedPath => {
+      const file = await open(storedPath);
+      if (file) opened.push(file.handle);
+      return file;
+    });
+
+    const response = await get(url, { range: "bytes=10-" });
+
+    expect(response.status).toBe(416);
+    expect(response.headers.get("content-range")).toBe("bytes */10");
+    const body = (await response.json()) as {
+      error?: { code?: string; requestId?: string };
+    };
+    expect(body.error?.code).toBe("RANGE_NOT_SATISFIABLE");
+    expect(body.error?.requestId).toEqual(expect.any(String));
+    expect(opened).toHaveLength(1);
+    expect(opened[0].fd).toBe(-1);
+  });
+
   it("several spans are answered with the whole file", async () => {
     const response = await get(url, { range: "bytes=0-1,4-5" });
     expect(response.status).toBe(200);
@@ -393,5 +417,46 @@ describe("with cloud storage holding media", () => {
 
     expect(response.status).toBe(200);
     expect(await bytesOf(response)).toEqual(PNG);
+  });
+});
+
+describe("local adapters whose URLs nest", () => {
+  /*
+   * Media at `/uploads`, and a second local adapter at `/uploads/documents`
+   * writing to another folder. A request under `/uploads/documents` is under
+   * both prefixes, and only the longer one names where the file is.
+   */
+  it("serves from the adapter with the most specific baseUrl, though a broader one is asked first", async () => {
+    const documentsDir = path.join(root, "documents-store");
+    const documents = new LocalStorageAdapter({
+      basePath: documentsDir,
+      baseUrl: "/uploads/documents",
+    });
+    mocks.storage = new MediaStorage({
+      local: { uploadDir: uploads, publicPath: "/uploads" },
+      plugins: [
+        {
+          name: "documents",
+          type: "local",
+          collections: { documents: true },
+          adapter: documents,
+        },
+      ],
+    });
+    // The same relative name under the media folder, so serving from the
+    // wrong adapter answers with the wrong bytes rather than a 404.
+    await place("documents/report.pdf", "from the media folder");
+    await fs.mkdir(documentsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(documentsDir, "report.pdf"),
+      "from the documents folder"
+    );
+
+    const response = await get("/uploads/documents/report.pdf");
+
+    expect(response.status).toBe(200);
+    expect((await bytesOf(response)).toString()).toBe(
+      "from the documents folder"
+    );
   });
 });
