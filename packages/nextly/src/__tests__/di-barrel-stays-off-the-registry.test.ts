@@ -21,20 +21,38 @@
  * `import/no-cycle` covers it, since it is not on the cycle allowlist.
  */
 
-import { readdirSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const di = new URL("../di/", import.meta.url);
 
-/** The registry: `register` itself and every registration module beside it. */
-const REGISTRY = [
-  fileURLToPath(new URL("register.ts", di)),
-  ...readdirSync(new URL("registrations/", di), { withFileTypes: true })
+/**
+ * The registration modules under `dir`, at any depth, so one placed in a
+ * subfolder later is watched too. Tests, and anything in a `__tests__` folder,
+ * are not registrations.
+ */
+function registrationModules(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter(entry => entry.isFile() && /\.ts$/.test(entry.name))
     .filter(entry => !/\.test\.ts$/.test(entry.name))
-    .map(entry => fileURLToPath(new URL(`registrations/${entry.name}`, di))),
+    .filter(entry => !entry.parentPath.split(sep).includes("__tests__"))
+    .map(entry => join(entry.parentPath, entry.name));
+}
+
+/** The registry: `register` itself and every registration module under it. */
+const REGISTRY = [
+  fileURLToPath(new URL("register.ts", di)),
+  ...registrationModules(fileURLToPath(new URL("registrations/", di))),
 ];
 
 /**
@@ -69,6 +87,32 @@ describe("the DI barrel stays off the service registry", () => {
     // and the test below would be watching nothing.
     expect(REGISTRY.length).toBeGreaterThan(10);
     expect(REGISTRY).toContain(fileURLToPath(new URL("register.ts", di)));
+  });
+
+  it("discovers a registration in a subfolder, and no test", () => {
+    // On a directory laid out for it, since `di/registrations/` has no
+    // subfolder today: a registration placed in one later must be watched,
+    // and a test or a `__tests__` folder beside the modules must not be.
+    const root = mkdtempSync(join(tmpdir(), "di-registrations-"));
+    try {
+      const files = [
+        "register-a.ts",
+        "nested/register-b.ts",
+        "register-a.test.ts",
+        "nested/register-b.test.ts",
+        "__tests__/helper.ts",
+      ];
+      for (const file of files) {
+        mkdirSync(dirname(join(root, file)), { recursive: true });
+        writeFileSync(join(root, file), "export {};\n", { flag: "wx" });
+      }
+      expect(registrationModules(root).sort()).toEqual([
+        join(root, "nested/register-b.ts"),
+        join(root, "register-a.ts"),
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("sees a load when the registry is imported directly", async () => {
