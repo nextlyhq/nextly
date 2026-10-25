@@ -6,6 +6,10 @@
  * `migrate:create` makes the main table, with the field shared, and its companion; an entry goes
  * in; a second `migrate:create` makes the field translated. The field's value has to become the
  * default language's value in the companion before the main table loses its column.
+ *
+ * Each case runs on a database of its own. The runner refuses a database that already holds tables
+ * it did not make (drift), so a shared database another suite left tables in would fail these
+ * cases for a reason that is not theirs.
  */
 import { randomBytes } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
@@ -35,6 +39,10 @@ import {
   type MinimalConfigEntity,
 } from "../../../schema/migrate-create/generate";
 import { withMigrateLock } from "../../../schema/pipeline/locks";
+import {
+  createScratchDatabase,
+  type ScratchDatabase,
+} from "../../../../__tests__/helpers/fresh-database";
 
 interface TestAdapter {
   connect(): Promise<void>;
@@ -78,6 +86,7 @@ for (const entry of DIALECTS) {
         dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 
       let adapter: TestAdapter;
+      let scratch: ScratchDatabase | null = null;
       let migrationsDir: string;
       // Per-run names, so a shared database cannot let two runs collide.
       let slug: string;
@@ -109,7 +118,12 @@ for (const entry of DIALECTS) {
           ],
         };
         created = 0;
-        adapter = entry.make(entry.url ?? "");
+        // SQLite runs in memory; a server dialect gets an empty database for the case.
+        scratch =
+          dialect === "sqlite"
+            ? null
+            : await createScratchDatabase(dialect, "field_joins");
+        adapter = entry.make(scratch?.url ?? entry.url ?? "");
         await adapter.connect();
         // What `nextly migrate` creates first: the ledger, the owner registry and the archive.
         await reconcileCore({
@@ -121,9 +135,9 @@ for (const entry of DIALECTS) {
       });
 
       afterEach(async () => {
-        await adapter.executeQuery(`DROP TABLE IF EXISTS ${q(companion)}`);
-        await adapter.executeQuery(`DROP TABLE IF EXISTS ${q(table)}`);
         await adapter.disconnect();
+        await scratch?.drop();
+        scratch = null;
         await rm(migrationsDir, { recursive: true, force: true });
       });
 
