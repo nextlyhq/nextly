@@ -13,6 +13,12 @@ Nextly ships a complete custom authentication system. It is **not** built on Nex
 
 There is no OAuth provider integration in the runtime. Authentication is local to your database.
 
+## Limits
+
+- **Email and password, built in.** Nextly has no built-in sign-in through another provider and no built-in second factor. A plugin can add either through the `@experimental` [auth extensibility](/docs/plugins/auth) surface; no official plugin adds one.
+- **For the people who use the admin.** This is sign-in for your team: the session cookies are scoped to `/admin`. Accounts for your site's visitors are not built in; a plugin can define its own kind of signed-in person, an `@experimental` feature (see [Signed-in people of your own kind](/docs/plugins/signed-in-people)).
+- **Fixed settings.** Token lifetimes, the lockout and the login stall time are the defaults listed under [Auth configuration](#auth-configuration), not settings you can change.
+
 ## How sessions work
 
 Sessions use a two-token architecture:

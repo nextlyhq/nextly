@@ -14,7 +14,7 @@ Plugins extend Nextly with new functionality without modifying core code. A plug
 | Plugin                                     | Package                         | Description                                                                                                                                                                                         |
 | ------------------------------------------ | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [Form Builder](/docs/plugins/form-builder) | `@nextlyhq/plugin-form-builder` | Visual drag-and-drop form builder with submission management, email notifications, spam protection, and export                                                                                      |
-| [Page Builder](/docs/page-builder)         | `@nextlyhq/plugin-page-builder` | Blocks your team arranges on a page, rendered on the server with no client JavaScript by default                                                                                                    |
+| [Page Builder](/docs/page-builder)         | `@nextlyhq/plugin-page-builder` | Blocks your team arranges on a page, rendered on the server; the core blocks add no JavaScript of their own (see [What reaches the browser](/docs/page-builder#what-reaches-the-browser))           |
 | [SEO](/docs/plugins/seo)                   | `@nextlyhq/plugin-seo`          | An SEO field group on the collections you name, and a sitemap of published content over plain HTTP. Turning those fields into `<meta>` tags is `buildMetadata` from `nextly/runtime`, which is core |
 
 ## Community Plugins
@@ -57,7 +57,7 @@ export default defineConfig({
 
 ## How Plugins Work
 
-Every plugin implements the `PluginDefinition` interface from `@nextlyhq/plugin-sdk`, the stable import surface for plugin authors. The lifecycle has two phases:
+Every plugin implements the `PluginDefinition` interface from `@nextlyhq/plugin-sdk`, the import surface for plugin authors. It is alpha: its `@public` surface becomes semver-protected at 1.0, parts of it are `@experimental`, and it may change before then (see [API stability](/docs/plugins/stability)). The lifecycle has two phases:
 
 ### 1. Declarative + setup phase
 
