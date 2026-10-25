@@ -41,7 +41,7 @@ import type { SanitizedNextlyConfig } from "../collections/config/define-config"
 import { genericPublicMessage } from "../errors/error-codes";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly, getNextly } from "../init";
-import { DEFAULT_ACCEPTED_FORMATS } from "../services/upload-validation/mime";
+import { acceptedMimeFromFilename } from "../services/upload-validation/mime";
 import { isGeneratedStorageKey } from "../storage/adapters/base-adapter";
 import {
   asLocalStorageAdapter,
@@ -73,17 +73,6 @@ export interface UploadsHandlerOptions {
 // Content type
 // ============================================================
 
-/**
- * The type each accepted extension is served as, DERIVED from the formats
- * an upload is accepted in, so a format added there is served with its own
- * type here.
- */
-const TYPE_BY_EXTENSION: ReadonlyMap<string, string> = new Map(
-  DEFAULT_ACCEPTED_FORMATS.flatMap(format =>
-    format.extensions.map(extension => [extension, format.mimeType] as const)
-  )
-);
-
 /** How a stored file is labelled: its type, and whether it downloads rather than displays. */
 interface ServedType {
   contentType: string;
@@ -91,18 +80,18 @@ interface ServedType {
 }
 
 /**
- * The type a stored file is served as, by its extension, as Next.js serves
- * a static file. A file of a type the default formats do not name (an
+ * The type a stored file is served as, by its name, as Next.js serves a
+ * static file. The name is resolved by `acceptedMimeFromFilename`, the same
+ * resolver an upload is validated with, so a file is served as the type it
+ * was accepted as. A file of a type the default formats do not name (an
  * install can accept more) is sent as a download of unknown type, so a
  * browser never renders bytes this route cannot vouch for.
  *
- * @param storedPath - The stored path, whose last extension decides
+ * @param storedPath - The stored path, whose file name decides
  */
 function servedTypeFor(storedPath: string): ServedType {
   const name = storedPath.slice(storedPath.lastIndexOf("/") + 1);
-  const dot = name.lastIndexOf(".");
-  const known =
-    dot > 0 ? TYPE_BY_EXTENSION.get(name.slice(dot).toLowerCase()) : undefined;
+  const known = acceptedMimeFromFilename(name);
   return known
     ? { contentType: known, attachment: false }
     : { contentType: "application/octet-stream", attachment: true };
