@@ -447,6 +447,14 @@ export default defineConfig({
       rules: { "import/no-cycle": NO_CYCLE },
     },
     {
+      // The one kind of cycle that rule cannot see: an import() run while the
+      // module loads. Every file, the cycle-exempt ones included; tests load
+      // modules at their top level on purpose.
+      files: [`${NEXTLY_SOURCE}/**/*.{ts,tsx}`],
+      excludeFiles: TESTS,
+      rules: { "nextly/no-eager-dynamic-import": "error" },
+    },
+    {
       // nextly writes through a masked logger, not the console.
       files: ["packages/nextly/src/**/*.{ts,tsx}"],
       excludeFiles: [...CONSOLE_ALLOWED, ...TESTS],

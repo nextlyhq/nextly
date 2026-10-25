@@ -26,9 +26,21 @@
  * the same code, the shared project's heavy files went from 40 to 39 and nine
  * files crossed the line, while the isolated project's records were identical.
  * The shared and whole-suite numbers are printed on every run, not judged.
+ *
+ * When the budget is exceeded, there are two readings, and they need different
+ * fixes, so the message prints the evidence for both: the chain from each of
+ * the heaviest files to the module that makes it heavy, and whether the set of
+ * heavy files still matches the one pinned in `module-budget-heavy-files.json`.
+ * - A new import pulling `di/register` or a dialect bundle into files that did
+ *   not load it: new files in the set, or chains through the new import. Fix
+ *   the import, by loading it lazily; do not raise the pin.
+ * - The registry itself gaining modules (a new service): the same heavy files
+ *   and chains, each loading more. Raise the pin in the same pull request to
+ *   the measured value plus the same margin, and say so in its description.
+ * Otherwise the pins only go down.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import type { Reporter, TestModule, Vitest } from "vitest/node";
@@ -41,12 +53,16 @@ export const JUDGED_PROJECT = "nextly (isolated)";
 
 /**
  * The judged project's pins, each a margin above what it measured when they
- * were set (67 heavy files and 1,036 modules at the 90th percentile, over 577
- * files). They only go down: a run that measures below a pin by more than its
- * margin says to lower it.
+ * were set (66 heavy files and 1,035 modules at the 90th percentile, over 577
+ * files), and the heavy files of that measurement. A run that measures below a
+ * pin by more than its margin says to lower it; the list is updated with them.
  */
-export const BUDGET = { heavyFiles: 70, p90Modules: 1_071 };
+export const BUDGET = { heavyFiles: 69, p90Modules: 1_070 };
 const MARGIN = { heavyFiles: 3, p90Modules: 35 };
+const PINNED_HEAVY_FILES = new URL(
+  "./module-budget-heavy-files.json",
+  import.meta.url
+);
 
 /** The modules a heavy file's load is explained by, relative to the package. */
 const PULLS = [
@@ -88,6 +104,36 @@ export function judge(measured: Measured, budget = BUDGET) {
     }
   }
   return { over, lower };
+}
+
+/** How this run's heavy files differ from the pinned ones. */
+export function compareHeavy(
+  current: readonly string[],
+  pinned: readonly string[]
+): { added: string[]; removed: string[] } {
+  const now = new Set(current);
+  const then = new Set(pinned);
+  return {
+    added: [...now].filter(file => !then.has(file)).sort(),
+    removed: [...then].filter(file => !now.has(file)).sort(),
+  };
+}
+
+/** The line saying whether the heavy files are the pinned ones. */
+function describeHeavyChange({
+  added,
+  removed,
+}: ReturnType<typeof compareHeavy>): string {
+  if (added.length === 0 && removed.length === 0) {
+    return "heavy-file set unchanged vs. pinned: yes";
+  }
+  return [
+    "heavy-file set unchanged vs. pinned: no",
+    added.length > 0 ? `newly heavy: ${added.join(", ")}` : "",
+    removed.length > 0 ? `no longer heavy: ${removed.join(", ")}` : "",
+  ]
+    .filter(Boolean)
+    .join("; ");
 }
 
 /** One line of numbers, as every line here prints them. */
@@ -174,9 +220,14 @@ function chainToPull(module: TestModule): string | undefined {
 
 export default class ModuleBudgetReporter implements Reporter {
   private vitest!: Vitest;
+  private started = 0;
 
   onInit(vitest: Vitest): void {
     this.vitest = vitest;
+  }
+
+  onTestRunStart(): void {
+    this.started = Date.now();
   }
 
   async onTestRunEnd(testModules: ReadonlyArray<TestModule>): Promise<void> {
@@ -194,8 +245,27 @@ export default class ModuleBudgetReporter implements Reporter {
       );
       return;
     }
+    // From here the whole suite ran, and Vitest records every file of such a
+    // run. A missing record is then the instrument failing (the cache or
+    // `recordDependencies` turned off), not a reason to pass: the run fails
+    // rather than going green with the budget silently unjudged.
     if (!existsSync(path)) {
-      console.log(`module budget not judged: no dependency records at ${path}`);
+      console.error(
+        `module budget: the whole suite ran but Vitest wrote no dependency records at ${path}; ` +
+          "keep experimental.recordDependencies on and the cache enabled"
+      );
+      process.exitCode = 1;
+      return;
+    }
+    // A file left by an earlier run is still on disk when this one wrote
+    // nothing, and its counts would be judged as this run's.
+    if (statSync(path).mtimeMs < this.started) {
+      console.error(
+        `module budget: the whole suite ran but its dependency records at ${path} ` +
+          "predate this run, so this run wrote none; keep experimental.recordDependencies " +
+          "on and the cache enabled"
+      );
+      process.exitCode = 1;
       return;
     }
     const records = JSON.parse(readFileSync(path, "utf8")) as Records;
@@ -209,10 +279,11 @@ export default class ModuleBudgetReporter implements Reporter {
     }));
     const unrecorded = counted.filter(c => c.count === undefined);
     if (unrecorded.length > 0) {
-      console.log(
-        `module budget not judged: ${unrecorded.length} test files have no record, ` +
-          `for example ${relative(root, unrecorded[0]!.module.moduleId)}`
+      console.error(
+        `module budget: the whole suite ran but ${unrecorded.length} test files have no ` +
+          `dependency record, for example ${relative(root, unrecorded[0]!.module.moduleId)}`
       );
+      process.exitCode = 1;
       return;
     }
 
@@ -232,8 +303,19 @@ export default class ModuleBudgetReporter implements Reporter {
 
     const measured = measure(judged.map(c => c.count!));
     const { over, lower } = judge(measured);
+    const heavyChange = compareHeavy(
+      judged
+        .filter(c => c.count! > HEAVY_MODULES)
+        .map(c => recordKey(root, c.module.moduleId)),
+      (
+        JSON.parse(readFileSync(PINNED_HEAVY_FILES, "utf8")) as {
+          files: string[];
+        }
+      ).files
+    );
     console.log(
-      `module budget, judged on ${JUDGED_PROJECT}: ${describeMeasured(measured, BUDGET)}`
+      `module budget, judged on ${JUDGED_PROJECT}: ${describeMeasured(measured, BUDGET)}; ` +
+        describeHeavyChange(heavyChange)
     );
     const reported = [
       ...new Set(counted.map(c => c.module.project.name)),
@@ -257,7 +339,8 @@ export default class ModuleBudgetReporter implements Reporter {
     if (lower.length > 0) {
       console.log(
         `module budget: ${JUDGED_PROJECT} is lighter than its pins; lower them in ` +
-          `src/__tests__/module-budget-reporter.ts: ${lower.join(", ")}`
+          `src/__tests__/module-budget-reporter.ts (${lower.join(", ")}), and set ` +
+          "module-budget-heavy-files.json to this run's heavy files"
       );
     }
     if (over.length === 0) return;
@@ -270,9 +353,14 @@ export default class ModuleBudgetReporter implements Reporter {
       [
         `module budget EXCEEDED on ${JUDGED_PROJECT} (${over.join(", ")}): a test file ` +
           `loads more modules than ${HEAVY_MODULES} when it reaches the service registry ` +
-          "or a dialect's schema bundle. Find the import that now reaches one of them " +
-          "from a widely used module, and make it type-only or load it with import() " +
-          "where it is needed.",
+          "or a dialect's schema bundle.",
+        "- If the chains below show a NEW import pulling di/register or a dialect bundle " +
+          "into files that did not load it, fix the import (load it lazily with import() " +
+          "where it is needed, or make it type-only). Do not raise the pin.",
+        "- If the heavy files and chains are unchanged and the numbers grew because the " +
+          "registry itself gained modules (a new service), raise the pin in the same pull " +
+          "request to the measured value plus the same margin, and say so in its description.",
+        describeHeavyChange(heavyChange),
         `The heaviest of its ${measured.heavyFiles} heavy files:`,
         ...heaviest.map(({ module, count }) => {
           const chain = chainToPull(module);

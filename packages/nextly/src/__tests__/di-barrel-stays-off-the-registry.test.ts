@@ -37,14 +37,21 @@ const REGISTRY = [
     .map(entry => fileURLToPath(new URL(`registrations/${entry.name}`, di))),
 ];
 
-/** Replaces each registry module with one that records its own load. */
-function watchRegistry(): Set<string> {
+/**
+ * Replaces each registry module with one that records its own load. By
+ * default the factory returns the real module, so a barrel that does reach
+ * the registry still evaluates and fails on the assertion rather than on a
+ * missing export. `stub` returns an empty module instead, for the control,
+ * which needs only to see the factory called and would otherwise load the
+ * whole registry to show it.
+ */
+function watchRegistry({ stub = false } = {}): Set<string> {
   const loaded = new Set<string>();
   vi.resetModules();
   for (const file of REGISTRY) {
     vi.doMock(file, async importOriginal => {
       loaded.add(file);
-      return importOriginal();
+      return stub ? {} : importOriginal();
     });
   }
   return loaded;
@@ -68,7 +75,7 @@ describe("the DI barrel stays off the service registry", () => {
     // The positive control: the same watch, on an import that does reach the
     // registry, has to record it. Without this, a watch that never fires
     // would pass the assertion below for any barrel.
-    const loaded = watchRegistry();
+    const loaded = watchRegistry({ stub: true });
     await import("../di/register");
     expect([...loaded]).toContain(fileURLToPath(new URL("register.ts", di)));
   });

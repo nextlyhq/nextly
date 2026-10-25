@@ -442,10 +442,26 @@ describe("each guard, at a path no allowlist names", () => {
       `${src}/api/lint-probe-migrate-import.ts`,
       'export { runMigrate } from "../cli/commands/migrate";\n',
     ],
+    "nextly(no-eager-dynamic-import)": [
+      `${src}/lint-probe-eager-import.ts`,
+      'export const loaded = await import("./lint-probe-console-value");\n',
+    ],
+    "import(no-cycle)": [
+      `${src}/lint-probe-cycle-a.ts`,
+      'import { b } from "./lint-probe-cycle-b";\nexport const a = () => b;\n',
+    ],
+  };
+  // The other half of the cycle the no-cycle probe closes.
+  const cycleBack = {
+    [`${src}/lint-probe-cycle-b.ts`]:
+      'import { a } from "./lint-probe-cycle-a";\nexport const b = () => a;\n',
   };
 
   it("reports each forbidden construct in the file it was written to", () => {
-    const diagnostics = lintProbes(Object.fromEntries(Object.values(probes)));
+    const diagnostics = lintProbes({
+      ...Object.fromEntries(Object.values(probes)),
+      ...cycleBack,
+    });
     for (const [rule, [path]] of Object.entries(probes)) {
       expect(
         countsPerFile(diagnostics, rule)[path] ?? 0,

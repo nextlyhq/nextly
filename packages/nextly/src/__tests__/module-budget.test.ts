@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   BUDGET,
+  compareHeavy,
   type GraphModule,
   HEAVY_MODULES,
   judge,
@@ -107,5 +108,21 @@ describe("shortestPath", () => {
     expect(ids(shortestPath(start, m => m.id === "register"))).toEqual([
       "register",
     ]);
+  });
+});
+
+describe("compareHeavy", () => {
+  it("names the files that became heavy and the ones that stopped", () => {
+    expect(compareHeavy(["a", "c", "d"], ["a", "b", "c"])).toEqual({
+      added: ["d"],
+      removed: ["b"],
+    });
+  });
+
+  it("finds no change between the same files in another order", () => {
+    expect(compareHeavy(["b", "a"], ["a", "b"])).toEqual({
+      added: [],
+      removed: [],
+    });
   });
 });

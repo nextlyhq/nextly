@@ -15,14 +15,19 @@ export const NEXTLY_SOURCE = "packages/nextly/src";
 
 /**
  * The rule's setting, shared by the configuration and the test that measures
- * the cycles. Type-only imports load nothing at runtime, and a dynamic
- * `import()` inside a function runs after both modules have loaded, so neither
- * closes a cycle that matters. oxlint 1.89 already leaves both out; the options
- * say so rather than depend on that default.
+ * the cycles. Type-only imports load nothing at runtime, so they close no cycle
+ * that matters, and `ignoreTypes` leaves them out.
+ *
+ * Dynamic imports are not exempted here: `allowUnsafeDynamicCyclicDependency`
+ * would exempt a cycle through any `import()`, a top-level `await import()`
+ * that runs while the module loads included. oxlint 1.89 leaves every dynamic
+ * import out of the cycles it reports whatever this says, so the eager form is
+ * refused by a rule of its own, `nextly/no-eager-dynamic-import`, and one
+ * inside a function, which runs after both modules have loaded, stays allowed.
  */
 export const NO_CYCLE = [
   "error",
-  { ignoreTypes: true, allowUnsafeDynamicCyclicDependency: true },
+  { ignoreTypes: true, allowUnsafeDynamicCyclicDependency: false },
 ];
 
 /** Each cycle as its member files, relative to `NEXTLY_SOURCE`. */

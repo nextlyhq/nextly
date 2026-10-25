@@ -234,6 +234,43 @@ const noStaticRestrictedImport = {
   },
 };
 
+/** The nodes whose body runs only when called, not when the module loads. */
+const DEFERRING = new Set([
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
+]);
+
+/**
+ * An `import()` that runs while its module loads: one in no function, at the
+ * module's top level, in a top-level class's static block or field, or in any
+ * other expression evaluated with the module.
+ *
+ * `import/no-cycle` leaves every dynamic import out of the cycles it reports,
+ * because one inside a function runs after both modules have loaded. One that
+ * runs during loading closes a cycle the rule cannot see, and with a top-level
+ * `await` it can deadlock the cycle it closes. So the lazy form stays allowed
+ * and the eager one is refused: a static import, which the cycle rule does
+ * see, says the same thing.
+ */
+const noEagerDynamicImport = {
+  meta: { type: "problem", schema: [] },
+  create(context) {
+    return {
+      ImportExpression(node) {
+        for (let at = node.parent; at; at = at.parent) {
+          if (DEFERRING.has(at.type)) return;
+        }
+        context.report({
+          node,
+          message:
+            "This import() runs while the module loads, so the import-cycle rule cannot see a cycle it closes. Import it statically, or move it into the function that needs it.",
+        });
+      },
+    };
+  },
+};
+
 /** The lifecycle methods React deprecated in 16.9, by the name a class component defines. */
 const LEGACY_LIFECYCLES = new Set([
   "componentWillMount",
@@ -291,6 +328,7 @@ export default {
     "api-key-scope": apiKeyScope,
     "no-keyboard-listener": noKeyboardListener,
     "no-static-restricted-import": noStaticRestrictedImport,
+    "no-eager-dynamic-import": noEagerDynamicImport,
     "no-legacy-lifecycle": noLegacyLifecycle,
     "tab-indicator": tabIndicator,
   },
