@@ -83,7 +83,7 @@ The first time you run the dev server, the database is empty -- there's no admin
 http://localhost:3000/admin/setup
 ```
 
-Enter an email, password, and name. The first user is bootstrapped with a `Super Admin` role that has every permission. After that, you'll be redirected to the login screen at `/admin`.
+Enter your name, an email and a password. The first account gets the Super Admin role, with every permission. Setup then signs you in and opens the admin's dashboard at `/admin`.
 
 ### Default storage is local disk
 
@@ -463,7 +463,7 @@ bun run dev
 </Tab>
 </Tabs>
 
-Open [http://localhost:3000/admin/setup](http://localhost:3000/admin/setup) to create the first super admin account, then log in at [http://localhost:3000/admin](http://localhost:3000/admin).
+Open [http://localhost:3000/admin/setup](http://localhost:3000/admin/setup) to create the first super admin account. Setup signs you in and opens the admin's dashboard at [http://localhost:3000/admin](http://localhost:3000/admin).
 
 ## Requirements
 
@@ -489,7 +489,8 @@ Next.js 17 turns Cache Components on for every app and removes the option, so Ne
 
 ## Next Steps
 
-- [Quick Start](/docs/getting-started/quick-start) -- Build a blog, step by step
+- [Quick start](/docs/getting-started/quick-start) -- Create a project, start it and create the first admin
+- [Tutorial: build a blog](/docs/getting-started/build-a-blog) -- Build a blog, step by step
 - [Project Structure](/docs/getting-started/project-structure) -- Understand the file layout
 - [Configuration](/docs/configuration) -- Full configuration reference
 - [Environment Variables](/docs/configuration/environment) -- All environment variables explained
