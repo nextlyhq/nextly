@@ -3,8 +3,9 @@
  * them ever share a database.
  *
  * A worker's database is keyed by its `VITEST_POOL_ID` (1 to `maxWorkers`): on
- * SQLite it is the worker process's own in-memory database, and a per-worker
- * server database is named after the id. So two live workers holding one id
+ * SQLite it is the worker process's own in-memory database, and on PostgreSQL
+ * it is `<database>_pool<id>`, beside the database `TEST_POSTGRES_URL` names,
+ * which the run's global setup creates and drops. So two live workers holding one id
  * would share a database, and files running at the same moment would drop and
  * recreate each other's tables. Each test file claims its worker's id, in a
  * directory the run creates, for as long as its tests run; a second file
@@ -12,7 +13,7 @@
  * than letting the two collide in silence.
  *
  * The default export is the run's global setup: it creates that directory and
- * removes it at the end.
+ * the per-worker PostgreSQL databases, and removes both at the end.
  */
 import {
   appendFileSync,
@@ -26,6 +27,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import {
+  createDatabaseStatement,
+  dropDatabaseStatement,
+} from "../database/test-database-ddl";
+
 /** The directory the run's workers claim their ids in, handed to them through the environment. */
 export const CLAIMS_ENV = "NEXTLY_INTEGRATION_WORKER_CLAIMS";
 
@@ -33,11 +39,19 @@ export const CLAIMS_ENV = "NEXTLY_INTEGRATION_WORKER_CLAIMS";
 export const WORKERS_ENV = "NEXTLY_INTEGRATION_WORKERS";
 
 /**
+ * The PostgreSQL URL the run was given, kept by its global setup when the
+ * workers get databases of their own, so each test file derives its worker's
+ * URL from it rather than from a `TEST_POSTGRES_URL` it already rewrote.
+ */
+export const POSTGRES_BASE_ENV = "NEXTLY_INTEGRATION_POSTGRES_URL";
+
+/**
  * The worker count a run asked for, refused when more than one would share a
- * database: a PostgreSQL or MySQL URL names one database every worker would
- * connect to, a SQLite URL names one file, and the older TEST_DATABASE_URL is
- * still read as a PostgreSQL URL by some suites. Without one, SQLite runs in
- * memory in each worker process.
+ * database: a MySQL URL names one database every worker would connect to, a
+ * SQLite URL names one file, and the older TEST_DATABASE_URL is still read as
+ * a PostgreSQL URL by some suites. Without one, SQLite runs in memory in each
+ * worker process; with `TEST_POSTGRES_URL`, each worker gets a PostgreSQL
+ * database of its own (`workerDatabaseUrl`).
  */
 export function integrationWorkers(
   env: Readonly<Record<string, string | undefined>>
@@ -52,7 +66,6 @@ export function integrationWorkers(
   }
   if (workers === 1) return 1;
   const shared = [
-    "TEST_POSTGRES_URL",
     "TEST_MYSQL_URL",
     "TEST_SQLITE_URL",
     "TEST_DATABASE_URL",
@@ -60,10 +73,87 @@ export function integrationWorkers(
   if (shared.length > 0) {
     throw new Error(
       `${WORKERS_ENV}=${workers} would put every worker on the one database ${shared.join(" and ")} names. ` +
-        `Run more than one worker only on in-memory SQLite (no TEST_*_URL set) until each worker gets a database of its own.`
+        `Run more than one worker only on in-memory SQLite or on TEST_POSTGRES_URL, where each worker gets a database of its own.`
     );
   }
   return workers;
+}
+
+/**
+ * A worker's pool id as a number, refused outside 1 to `workers`: the run's
+ * global setup made a database for each of those ids and no other, so a
+ * worker beyond them (a `--maxWorkers` above the asked-for count) has none.
+ */
+export function workerPoolId(
+  poolId: string | undefined,
+  workers: number
+): number {
+  const id = Number(poolId);
+  if (!Number.isInteger(id) || id < 1 || id > workers) {
+    throw new Error(
+      `VITEST_POOL_ID ${poolId ?? "(unset)"} has no database of its own: ${WORKERS_ENV}=${workers} made one for each of ids 1 to ${workers}. ` +
+        `Run Vitest with no more workers than ${WORKERS_ENV} asks for.`
+    );
+  }
+  return id;
+}
+
+/** The PostgreSQL database a worker uses: the run's own, suffixed with its pool id. */
+export function workerDatabaseName(base: string, poolId: number): string {
+  return `${base}_pool${poolId}`;
+}
+
+/** `url` pointed at the worker's database on the same server. */
+export function workerDatabaseUrl(url: string, poolId: number): string {
+  const parsed = new URL(url);
+  parsed.pathname = `/${workerDatabaseName(baseDatabase(parsed), poolId)}`;
+  return parsed.toString();
+}
+
+function baseDatabase(url: URL): string {
+  return decodeURIComponent(url.pathname.replace(/^\//, ""));
+}
+
+/**
+ * Create a fresh database for each of `workers` pool ids beside the one `url`
+ * names, dropping any a stopped run left behind, and answer how to drop them.
+ * The names go through the test-database DDL helpers, which refuse anything
+ * but a plain lowercase identifier.
+ */
+async function createWorkerDatabases(
+  url: string,
+  workers: number
+): Promise<() => Promise<void>> {
+  const base = baseDatabase(new URL(url));
+  const names = Array.from({ length: workers }, (_, i) =>
+    workerDatabaseName(base, i + 1)
+  );
+  const { Pool } = await import("pg");
+  const admin = new Pool({ connectionString: url, max: 1 });
+  try {
+    for (const name of names) {
+      await admin.query(dropDatabaseStatement("postgresql", name));
+      await admin.query(createDatabaseStatement("postgresql", name));
+    }
+  } catch (error) {
+    await admin.end();
+    throw error;
+  }
+  // A worker's connection can outlive its process by a moment, and a database
+  // with a session attached cannot be dropped. A drop that fails here is only
+  // reported: the next run drops what this one left before creating its own.
+  return async () => {
+    for (const name of names) {
+      await admin
+        .query(dropDatabaseStatement("postgresql", name))
+        .catch((error: unknown) =>
+          console.warn(
+            `[integration workers] could not drop ${name}: ${String(error)}`
+          )
+        );
+    }
+    await admin.end();
+  };
 }
 
 /** Whether a process is running, by the signal-0 probe. */
@@ -162,18 +252,26 @@ export function releaseWorker(
   }
 }
 
-/** The run's global setup: the claims directory, removed when the run ends. */
-export default function setup(): () => void {
+/**
+ * The run's global setup: the claims directory and, on PostgreSQL with more
+ * than one worker, a database per worker. Both are removed when the run ends.
+ */
+export default async function setup(): Promise<() => Promise<void>> {
+  const workers = integrationWorkers(process.env);
   const dir = mkdtempSync(join(tmpdir(), "nextly-integration-workers-"));
   process.env[CLAIMS_ENV] = dir;
-  return () => {
+  const postgres = process.env.TEST_POSTGRES_URL;
+  let dropDatabases = async (): Promise<void> => {};
+  if (workers > 1 && postgres) {
+    dropDatabases = await createWorkerDatabases(postgres, workers);
+    process.env[POSTGRES_BASE_ENV] = postgres;
+  }
+  return async () => {
     const log = join(dir, CLAIMS_LOG);
     console.log(
-      describeClaims(
-        existsSync(log) ? readFileSync(log, "utf8") : "",
-        integrationWorkers(process.env)
-      )
+      describeClaims(existsSync(log) ? readFileSync(log, "utf8") : "", workers)
     );
     rmSync(dir, { recursive: true, force: true });
+    await dropDatabases();
   };
 }
