@@ -23,7 +23,6 @@
 import { expect, type Page } from "@playwright/test";
 
 import { test } from "../support/test";
-import { STORAGE_STATE } from "../../global-setup";
 
 import {
   announcer,
@@ -171,8 +170,6 @@ async function editField(
 // before it, and a failure should not hide the verdicts after it. The shared
 // homepage single is safe because this file holds the homepage lock (above):
 // no other spec that writes or asserts it runs beside this one.
-
-test.use({ storageState: STORAGE_STATE });
 
 /**
  * What each covered property does, by its number.

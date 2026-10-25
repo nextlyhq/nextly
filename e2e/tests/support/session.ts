@@ -59,7 +59,13 @@ export async function signIn(
 ): Promise<void> {
   const browser = await chromium.launch();
   try {
-    const page = await browser.newPage({ baseURL });
+    // An empty jar, said explicitly: inside a test, Playwright gives every new
+    // context the test's own `storageState` unless told otherwise, and a page
+    // already signed in as the test's account never shows the sign-in form.
+    const page = await browser.newPage({
+      baseURL,
+      storageState: { cookies: [], origins: [] },
+    });
     // The admin route compiles lazily, so on a cold dev server the first sign
     // in spends the whole compile inside this navigation; the default 30s is
     // not enough on a slow CI runner, where `webServer` already allows 240s for

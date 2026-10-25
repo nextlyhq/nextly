@@ -26,8 +26,7 @@
  */
 import { expect, type APIResponse } from "@playwright/test";
 
-import { test } from "./support/test";
-import { STORAGE_STATE } from "../global-setup";
+import { fileAccount, test } from "./support/test";
 
 test.describe.configure({ mode: "serial" });
 
@@ -211,7 +210,7 @@ test.beforeAll(async ({ playwright }, testInfo) => {
   // `beforeAll`. The signed-in state is the same one every test runs with.
   const api = await playwright.request.newContext({
     baseURL,
-    storageState: STORAGE_STATE,
+    storageState: await fileAccount(baseURL, testInfo),
   });
 
   try {
