@@ -9,7 +9,7 @@ description: >-
   not appear in the admin, a field change does not reach the database, or a
   page reading content fails to build.
 metadata:
-  nextly-version: 0.0.2-alpha.69
+  nextly-version: 0.0.2-alpha.70
 ---
 
 # Define a collection in Nextly

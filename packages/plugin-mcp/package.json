@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-mcp",
-  "version": "0.0.2-alpha.69",
+  "version": "0.0.2-alpha.70",
   "description": "Experimental: serves a Model Context Protocol endpoint for AI agents, off by default and authenticated like every other Nextly route. Read-only, and the one tool it exposes reports what the connecting credential may read",
   "license": "MIT",
   "type": "module",
@@ -32,7 +32,7 @@
   },
   "peerDependencies": {
     "@nextlyhq/plugin-sdk": "workspace:*",
-    "nextly": "0.0.2-alpha.69"
+    "nextly": "0.0.2-alpha.70"
   },
   "devDependencies": {
     "@nextlyhq/plugin-sdk": "workspace:*",
