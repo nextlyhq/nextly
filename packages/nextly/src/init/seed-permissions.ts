@@ -14,7 +14,7 @@
  */
 
 import { seedRolePresets } from "../database/seeders/role-presets";
-import { getService } from "../di/register";
+import { getService } from "../di/service-access";
 import { isMissingTable } from "../domains/field-groups/migration/session";
 import { describeError } from "../errors/describe-error";
 import { NextlyError } from "../errors/nextly-error";

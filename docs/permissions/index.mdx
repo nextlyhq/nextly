@@ -71,10 +71,34 @@ created that holds `update-posts`, and every API key whose roles carry none of t
 listed, while the Roles screen says both may act. The role's permissions are what the admin
 manages, so a rule that reads them stays in step with that screen.
 
-`true` means anyone, including unauthenticated readers.
+`true` means anyone, including callers with no session, for reads and writes alike.
 
 A collection whose `access` says nothing about an operation falls back to grants: a
 signed-in user needs `read-posts` to read `posts`.
+
+A caller with **no session** — the Direct API with `overrideAccess: false` and no `user`, or
+a plugin service call made `{ as: "public" }` — holds no grants, so only a rule can let it
+write. With no rule for the operation, it may **read** (the public default, which public
+pages rely on), but a **create, update or delete is refused**. A collection that takes
+anonymous writes on purpose, such as a contact form, says so with a rule:
+
+```ts
+defineCollection({
+  slug: "contact-messages",
+  access: {
+    // Visitors may send a message.
+    create: () => true,
+    // Reading them needs the grant. Without this rule a visitor could read
+    // them too, since a read with no rule keeps the public default.
+    read: ({ permissions }) => permissions.includes("read-contact-messages"),
+    // Update and delete need no rule: a visitor is refused, and a signed-in
+    // user needs the grant.
+  },
+  fields: [/* ... */],
+});
+```
+
+Publishing and unpublishing always need a signed-in user, whatever the rule says.
 
 An **API key** must hold the permission in its own grants, and then satisfy the rule if there
 is one.
@@ -176,6 +200,14 @@ see. This is the easiest way to expose data with Nextly.
 Passing a `user` lets a rule decide by who is asking, never by which document. Collection and
 Single rules never see a document: they answer yes or no before any document is read, so no
 rule can limit someone to their own entries (see [Limits](#limits)).
+
+Forgetting the `user` is a different and much less dangerous mistake. The caller then has no
+session and holds no permissions, so a rule that checks them refuses the request rather than
+answering loosely: you get an authorization error, not somebody else's rows. If a query that
+should return data returns "authentication required", a missing `user` alongside
+`overrideAccess: false` is the first thing to check. Where no rule names the operation, a read
+keeps the public default, but a create, update or delete is refused; only a rule that answers
+`true` lets such a write through.
 
 Field-level rules behave differently: they run whenever `overrideAccess` is `false`, user or
 not, because "which fields may this writer set" has a sensible answer for nobody. Internal

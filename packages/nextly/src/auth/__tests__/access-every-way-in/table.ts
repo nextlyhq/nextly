@@ -439,15 +439,6 @@ const NO_SERVICE_RULES: readonly Rule[] = [
   "returns-null",
 ];
 
-/** Rows left out of this table for now, which join it later. */
-function joinsLater(row: Row): boolean {
-  return (
-    row.setup === "service" &&
-    row.caller === "visitor" &&
-    ["create", "update", "delete"].includes(row.action)
-  );
-}
-
 /** Every combination of the lists, target first and caller last. */
 function cross(
   setup: Setup,
@@ -493,8 +484,11 @@ export function rows(): Row[] {
     READ,
     CALLERS
   );
-  return [...withService, ...withoutService, ...bound].filter(
-    row => !joinsLater(row) && DOORS.some(door => asks(door, row))
+  // A visitor's create, update and delete are rows like any other: with no
+  // rule naming the write they are refused, and a rule answering `true` is
+  // what lets one through.
+  return [...withService, ...withoutService, ...bound].filter(row =>
+    DOORS.some(door => asks(door, row))
   );
 }
 

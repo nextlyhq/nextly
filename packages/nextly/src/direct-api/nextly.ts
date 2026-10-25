@@ -52,7 +52,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { passwordCredentialDeps } from "../auth/credentials/credential-deps";
 import type { CredentialDeps } from "../auth/credentials/verify-credentials";
 import { container } from "../di/container";
-import { isServicesRegistered } from "../di/register";
+import { isServicesRegistered } from "../di/service-access";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import { AuthService } from "../domains/auth/services/auth-service";
 import { PermissionService } from "../domains/auth/services/permission-service";

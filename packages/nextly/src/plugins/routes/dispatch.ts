@@ -448,7 +448,7 @@ async function generalRouteBudget(method: string): Promise<{
   limit: number;
   windowMs: number;
 } | null> {
-  const { getService } = await import("../../di/register");
+  const { getService } = await import("../../di/service-access");
   const config = getService("config") as
     | {
         rateLimit?: {
@@ -603,7 +603,7 @@ async function applyRouteRateLimit(
     "../../utils/get-trusted-client-ip"
   );
   const { readProxyTrustSettings } = await import("../../utils/proxy-trust");
-  const { getService } = await import("../../di/register");
+  const { getService } = await import("../../di/service-access");
 
   const trust = readProxyTrustSettings(() => getService("config"));
   const resolved = getTrustedClientIp(req, trust);
@@ -720,7 +720,7 @@ async function auditRouteCsrfFailure(
   req: Request,
   matched: RouteMatch
 ): Promise<void> {
-  const { getService } = await import("../../di/register");
+  const { getService } = await import("../../di/service-access");
   const { buildAuditLogWriter } = await import(
     "../../domains/audit/audit-log-writer"
   );

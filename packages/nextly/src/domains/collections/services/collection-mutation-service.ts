@@ -481,8 +481,8 @@ interface DeleteEntryWriteParams {
   collectionName: string;
   user?: UserContext;
   /**
-   * Not consulted on this path. The batch caller honours it at its
-   * once-per-batch gate, and the transaction API's gate never received it.
+   * Trusted server work. The batch caller honours it at its once-per-batch
+   * gate, and the transaction API's gate returns before any check on it.
    */
   overrideAccess?: boolean;
   /**
@@ -12766,6 +12766,8 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       entryId: string;
       user?: UserContext;
+      /** Trusted server work; see {@link DeleteEntryWriteParams}. */
+      overrideAccess?: boolean;
       /** The caller's own grants; see {@link DeleteEntryWriteParams}. */
       authenticatedScope?: AuthenticatedScope;
       /** Who performed the delete, recorded on the outbox event. */
@@ -12862,13 +12864,17 @@ export class CollectionMutationService extends BaseService {
         // collection-level delete gate out of its loop, and no row-ownership
         // rule remains for a safety net to compare against.
       } else {
-        // The transaction API asks the access service for the whole verdict.
+        // The transaction API asks the access service for the whole verdict,
+        // with the caller's `overrideAccess` as the create and update paths
+        // forward it. Without it, trusted work naming no user was judged as
+        // an anonymous visitor, whose write needs a rule that allows it.
         const accessDenied = await this.accessService.checkCollectionAccess<{
           deleted: boolean;
         }>({
           collectionName: params.collectionName,
           operation: "delete",
           user: params.user,
+          overrideAccess: params.overrideAccess,
           executor: tx.getDrizzle(),
         });
         if (accessDenied) {

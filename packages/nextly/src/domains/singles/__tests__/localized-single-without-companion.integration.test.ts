@@ -156,7 +156,7 @@ describe.each(getConfiguredTestDialects())(
         .update(
           "swin_settings",
           { headline: "Edited while the companion was missing" },
-          { locale: "en" }
+          { locale: "en", overrideAccess: true }
         );
 
       expect(result.success).toBe(false);
