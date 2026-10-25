@@ -1,5 +1,24 @@
 # playground
 
+## 0.1.2-alpha.14
+
+### Patch Changes
+
+- Updated dependencies [[`7138012`](https://github.com/nextlyhq/nextly/commit/71380124cdbf3b3bf0c2964a0fac3b27902a41ce), [`d5263f6`](https://github.com/nextlyhq/nextly/commit/d5263f6a8a54b8669e18b17d145c1f47600025c8), [`edceef5`](https://github.com/nextlyhq/nextly/commit/edceef5b8619ba45d221168598d2809d270a5dbe), [`dab8664`](https://github.com/nextlyhq/nextly/commit/dab86644383813c1685536bc28e157ebbc33e82b), [`869482c`](https://github.com/nextlyhq/nextly/commit/869482c1e1954ceacc2a3d01e32293c2433f626d), [`6c7904f`](https://github.com/nextlyhq/nextly/commit/6c7904fb69712c1533808bba36b53e47e8e66bde), [`0eb828f`](https://github.com/nextlyhq/nextly/commit/0eb828f0536e250c74f90bae15680b414b93ba1a), [`ab13109`](https://github.com/nextlyhq/nextly/commit/ab13109fc0575745678f482dac04dd8c43e73d61)]:
+  - nextly@0.0.2-alpha.70
+  - @nextlyhq/admin@0.0.2-alpha.70
+  - @nextlyhq/blocks-engine@0.0.2-alpha.70
+  - @nextlyhq/blocks-react@0.0.2-alpha.70
+  - @nextlyhq/ui@0.0.2-alpha.70
+  - @nextlyhq/adapter-drizzle@0.0.2-alpha.70
+  - @nextlyhq/adapter-postgres@0.0.2-alpha.70
+  - @nextlyhq/adapter-mysql@0.0.2-alpha.70
+  - @nextlyhq/adapter-sqlite@0.0.2-alpha.70
+  - @nextlyhq/plugin-form-builder@0.0.2-alpha.70
+  - @nextlyhq/plugin-page-builder@0.0.2-alpha.70
+  - @nextlyhq/plugin-sdk@0.0.2-alpha.70
+  - @nextlyhq/builder@0.0.2-alpha.70
+
 ## 0.1.2-alpha.13
 
 ### Patch Changes
