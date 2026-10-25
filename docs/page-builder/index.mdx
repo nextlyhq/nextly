@@ -169,16 +169,47 @@ manager beside it adds, changes and removes the site's breakpoints.
   `findSingle`, adding `NextlySingleReader` from `nextly/runtime` to its type:
 
 ```tsx
+// src/app/(frontend)/[...slug]/page.tsx, serving the breakpoints the editor saved
+import { createBlockResolver } from "@nextlyhq/blocks-react";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { createBlocksPage } from "@nextlyhq/blocks-react/next";
+import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
+import { getNextly } from "nextly";
+import type { NextlyContentReader, NextlySingleReader } from "nextly/runtime";
+
+import nextlyConfig from "../../../../nextly.config";
+
+type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
+
+const instance = () => getNextly({ config: nextlyConfig });
+
+const reader: NextlyContentReader &
+  NextlySingleReader & {
+    media: Pick<NextlyInstance["media"], "findByID">;
+  } = {
+  find: async args => (await instance()).find(args),
+  findByID: async args => (await instance()).findByID(args),
+  // The site style is a single, read through this.
+  findSingle: async args => (await instance()).findSingle(args),
+  media: {
+    findByID: async args => (await instance()).media.findByID(args),
+  },
+};
+
 const { ContentPage, generateMetadata } = createBlocksPage({
-  // ...the options above. `reader` is typed
-  // `NextlyContentReader & NextlySingleReader & { media: ... }`, and gains:
-  //   findSingle: async args => (await instance()).findSingle(args),
+  collections: ["pages"],
+  field: "content",
+  nextly: reader,
+  blocks: createBlockResolver(coreBlocks),
   siteStyles: {
     read: () => loadSiteStyle({ nextly: reader }),
     // Named so that saving the site style refreshes cached pages.
     singles: [SITE_STYLE_SLUG],
   },
 });
+
+export { generateMetadata };
+export default ContentPage;
 ```
 
 ## What reaches the browser
