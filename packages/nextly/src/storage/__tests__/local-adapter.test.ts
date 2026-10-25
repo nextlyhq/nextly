@@ -12,6 +12,7 @@ import * as path from "node:path";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import { consoleLogger } from "../../shared/types";
+import { isGeneratedStorageKey } from "../adapters/base-adapter";
 import {
   LocalStorageAdapter,
   markLocalUploadsRouteLoaded,
@@ -122,6 +123,28 @@ describe("LocalStorageAdapter", () => {
   describe("getType()", () => {
     it("should return 'local'", () => {
       expect(adapter.getType()).toBe("local");
+    });
+  });
+
+  // The cache policy trusts `isGeneratedStorageKey` to recognize what the
+  // writer produced; a key the writer stores that the recognizer rejects (or
+  // the reverse) is how the two layouts would drift apart.
+  describe("a generated key", () => {
+    it("is recognized for every key upload writes, with or without a folder", async () => {
+      for (const options of [
+        { filename: "photo.jpg", mimeType: "image/jpeg" },
+        { filename: "Résumé (final).PDF", mimeType: "application/pdf" },
+        { filename: "a.b.c.png", mimeType: "image/png", folder: "documents" },
+        { filename: "x.webp", mimeType: "image/webp", folder: "a/b" },
+      ]) {
+        const { path: key } = await adapter.upload(Buffer.from("x"), options);
+        expect(isGeneratedStorageKey(key), key).toBe(true);
+      }
+    });
+
+    it("is not recognized for a name placed in the folder by hand", () => {
+      expect(isGeneratedStorageKey("logo.png")).toBe(false);
+      expect(isGeneratedStorageKey("2026/10/logo.png")).toBe(false);
     });
   });
 

@@ -157,19 +157,49 @@ export abstract class BaseStorageAdapter implements IStorageAdapter {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, "0");
 
-    const prefix = folder ? `${folder}/${year}/${month}` : `${year}/${month}`;
-
-    return `${prefix}/${uuid}-${sanitized}`;
+    return composeStorageKey(folder, year, month, uuid, sanitized);
   }
 }
 
 /**
- * A key shaped as {@link BaseStorageAdapter.generateKey} writes it: an
- * optional folder, the year and month, then a random UUID before the
- * sanitized name. Kept beside that method so the two change together.
+ * The layout of a generated key: an optional folder, the year and month,
+ * then a random UUID before the sanitized name. The ONE definition: keys are
+ * written through it, and {@link GENERATED_KEY} is derived from it, so the
+ * writer and the recognizer cannot describe two different layouts.
  */
-const GENERATED_KEY =
-  /^(?:.+\/)?\d{4}\/\d{2}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[a-zA-Z0-9._-]+$/;
+function composeStorageKey(
+  folder: string | undefined,
+  year: number | string,
+  month: string,
+  uuid: string,
+  name: string
+): string {
+  const prefix = folder ? `${folder}/${year}/${month}` : `${year}/${month}`;
+  return `${prefix}/${uuid}-${name}`;
+}
+
+/** Placeholders composed in place of each part, then swapped for its pattern. */
+const KEY_PART_PATTERNS: ReadonlyArray<readonly [string, string]> = [
+  ["\u0000F/", "(?:.+/)?"],
+  ["\u0000Y", "\\d{4}"],
+  ["\u0000M", "\\d{2}"],
+  ["\u0000U", "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"],
+  ["\u0000N", "[a-zA-Z0-9._-]+"],
+];
+
+/**
+ * A key {@link BaseStorageAdapter.generateKey} wrote, recognized by
+ * composing the layout with placeholders and swapping each for its pattern.
+ */
+const GENERATED_KEY = new RegExp(
+  `^${KEY_PART_PATTERNS.reduce(
+    (pattern, [placeholder, part]) => pattern.split(placeholder).join(part),
+    composeStorageKey("\u0000F", "\u0000Y", "\u0000M", "\u0000U", "\u0000N")
+      .split("")
+      .map(char => (/[.*+?^${}()|[\]\\]/.test(char) ? `\\${char}` : char))
+      .join("")
+  )}$`
+);
 
 /**
  * Whether a stored path is one the adapters generated, and so names bytes
