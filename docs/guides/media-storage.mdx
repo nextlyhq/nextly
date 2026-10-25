@@ -324,7 +324,7 @@ You can also register **multiple plugins** in the `storage` array if different c
 
 ## Named image sizes
 
-Nextly can automatically generate resized image variants for every uploaded image, using `sharp`. Manage the sizes in the admin (**Settings -> Image Sizes**) or through the REST endpoints below. `nextly.config.ts` has no option for them: a `media` key there is a type error and is not read.
+Nextly can automatically generate resized image variants for every uploaded image, using `sharp`, which your app installs (see [Limits](#limits)). Manage the sizes in the admin (**Settings -> Image Sizes**) or through the REST endpoints below. `nextly.config.ts` has no option for them: a `media` key there is a type error and is not read.
 
 ### Size options
 
@@ -608,6 +608,13 @@ A common pattern is to switch automatically based on env vars:
 - Staging / Production -> set `S3_BUCKET` etc. -> S3.
 
 `getStorageFromEnv()` makes this a one-liner in `nextly.config.ts`.
+
+## Limits
+
+- **Image processing needs `sharp` in your app.** `sharp` is an optional peer dependency of `nextly`, so Nextly does not install it: add it to your app's dependencies (`npm install sharp`) rather than relying on another package to bring it. Without it, uploads are still stored, but images get no thumbnail, no named sizes and no width or height, and **Settings -> Image Sizes** says so and shows the install command.
+- **Four places to store files.** The built-in local disk, or one of three adapter packages: `@nextlyhq/storage-s3` for S3 and S3-compatible services, `@nextlyhq/storage-vercel-blob` and `@nextlyhq/storage-uploadthing`.
+- **Local disk is for one long-lived server.** Files written to `./public/uploads/` do not survive a restart on a serverless or ephemeral host.
+- **Switching adapters moves nothing.** Existing files and their stored URLs stay where they were; see [Migrating between adapters](#migrating-between-adapters).
 
 ## Next steps
 
