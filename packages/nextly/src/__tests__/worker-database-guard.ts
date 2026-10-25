@@ -15,6 +15,8 @@
  * removes it at the end.
  */
 import {
+  appendFileSync,
+  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -33,7 +35,8 @@ export const WORKERS_ENV = "NEXTLY_INTEGRATION_WORKERS";
 /**
  * The worker count a run asked for, refused when more than one would share a
  * database: a PostgreSQL or MySQL URL names one database every worker would
- * connect to, and a SQLite URL names one file. Without one, SQLite runs in
+ * connect to, a SQLite URL names one file, and the older TEST_DATABASE_URL is
+ * still read as a PostgreSQL URL by some suites. Without one, SQLite runs in
  * memory in each worker process.
  */
 export function integrationWorkers(
@@ -52,6 +55,7 @@ export function integrationWorkers(
     "TEST_POSTGRES_URL",
     "TEST_MYSQL_URL",
     "TEST_SQLITE_URL",
+    "TEST_DATABASE_URL",
   ].filter(name => env[name]);
   if (shared.length > 0) {
     throw new Error(
@@ -87,6 +91,7 @@ export function claimWorker(
   const claim = join(dir, `pool-${poolId}`);
   try {
     writeFileSync(claim, String(pid), { flag: "wx" });
+    recordClaim(dir, poolId, pid);
     return;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
@@ -100,6 +105,42 @@ export function claimWorker(
     );
   }
   writeFileSync(claim, String(pid));
+  recordClaim(dir, poolId, pid);
+}
+
+/** Every claim the run made, one line each, for the run's end to report what it saw. */
+const CLAIMS_LOG = "claims.log";
+
+function recordClaim(dir: string, poolId: string, pid: number): void {
+  // One short line per append, so claims from parallel workers never interleave.
+  appendFileSync(join(dir, CLAIMS_LOG), `${poolId} ${pid}\n`);
+}
+
+/**
+ * What a run's claims show: how many files each pool id ran, and in how many
+ * processes. Printed at the run's end, so a log shows how many workers the
+ * files really ran on rather than how many were asked for.
+ */
+export function describeClaims(log: string, asked: number): string {
+  const byPool = new Map<string, { files: number; pids: Set<string> }>();
+  for (const line of log.split("\n").filter(Boolean)) {
+    const [poolId, pid] = line.split(" ");
+    const entry = byPool.get(poolId) ?? { files: 0, pids: new Set<string>() };
+    entry.files += 1;
+    entry.pids.add(pid);
+    byPool.set(poolId, entry);
+  }
+  const pools = [...byPool].sort(([a], [b]) =>
+    a.localeCompare(b, undefined, { numeric: true })
+  );
+  const each = pools.map(
+    ([poolId, { files, pids }]) =>
+      `pool ${poolId}: ${files} file(s) in ${pids.size} process(es)`
+  );
+  return (
+    `[integration workers] ${WORKERS_ENV}=${asked}; files ran on ${pools.length} worker(s), each on its own database: ` +
+    (each.join("; ") || "no file claimed a worker")
+  );
 }
 
 /**
@@ -125,5 +166,14 @@ export function releaseWorker(
 export default function setup(): () => void {
   const dir = mkdtempSync(join(tmpdir(), "nextly-integration-workers-"));
   process.env[CLAIMS_ENV] = dir;
-  return () => rmSync(dir, { recursive: true, force: true });
+  return () => {
+    const log = join(dir, CLAIMS_LOG);
+    console.log(
+      describeClaims(
+        existsSync(log) ? readFileSync(log, "utf8") : "",
+        integrationWorkers(process.env)
+      )
+    );
+    rmSync(dir, { recursive: true, force: true });
+  };
 }

@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   claimWorker,
+  describeClaims,
   integrationWorkers,
   releaseWorker,
 } from "./worker-database-guard";
@@ -35,6 +36,7 @@ describe("integrationWorkers", () => {
       "TEST_POSTGRES_URL",
       "TEST_MYSQL_URL",
       "TEST_SQLITE_URL",
+      "TEST_DATABASE_URL",
     ]) {
       expect(
         () =>
@@ -90,5 +92,17 @@ describe("claimWorker", () => {
     // The id is free for the next process in the slot.
     claimWorker(dir, "1", 300, () => true);
     expect(readFileSync(join(dir, "pool-1"), "utf8")).toBe("300");
+  });
+});
+
+describe("describeClaims", () => {
+  it("reports how many workers the files ran on, from what they claimed", () => {
+    const log = "1 100\n2 200\n1 101\n1 101\n";
+    expect(describeClaims(log, 2)).toBe(
+      "[integration workers] NEXTLY_INTEGRATION_WORKERS=2; files ran on 2 worker(s), each on its own database: pool 1: 3 file(s) in 2 process(es); pool 2: 1 file(s) in 1 process(es)"
+    );
+    expect(describeClaims("", 1)).toMatch(
+      /files ran on 0 worker\(s\).*no file claimed a worker/
+    );
   });
 });
