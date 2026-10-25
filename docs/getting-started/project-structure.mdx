@@ -151,7 +151,7 @@ Public routes: a health check and media reads. A new project has no `/api` catch
 
 ### `public/uploads/`
 
-Default media store when no storage adapter is configured in `nextly.config.ts`. Files uploaded through the admin's media library land here and are served directly by Next.js. To switch to S3, Vercel Blob, or Uploadthing, see [Media & Storage](/docs/guides/media-storage).
+Default media store when no storage adapter is configured in `nextly.config.ts`. Files uploaded through the admin's media library land here. Next.js serves the ones that were here when the server started; under `next start`, the ones uploaded since need the uploads route described in [How local uploads are served](/docs/guides/media-storage#how-local-uploads-are-served). To switch to S3, Vercel Blob, or Uploadthing, see [Media & Storage](/docs/guides/media-storage).
 
 ### `src/types/generated/`
 
