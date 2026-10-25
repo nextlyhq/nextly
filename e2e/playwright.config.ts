@@ -35,6 +35,41 @@ const BASE_URL = `http://localhost:${PORT}`;
  */
 const E2E_DB_RELATIVE = "file:./data/e2e.db";
 
+/**
+ * Which server the suite runs against. `dev` (the default) is `pnpm dev:app`:
+ * what a contributor runs, compiling each route on its first request.
+ * `production` is the same playground built with `next build` and served by
+ * `next start`, with the same database, secrets and e2e fixtures, so the two
+ * can be measured against each other on the same specs. Specs that need the
+ * dev server itself (its reload, its own second dev server) stay on `dev`.
+ *
+ * `production` runs chosen specs, not yet the whole suite. Its session keeps
+ * the default REST budget (see `NEXTLY_E2E_SESSION_BUDGET` in the playground
+ * config), and the whole suite through one session spends several times that
+ * in a minute, so a full run there meets 429s.
+ */
+const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
+
+/**
+ * The commands that start each server, after the database is emptied.
+ *
+ * The dev server applies the schema to the empty database on boot. A
+ * production server does not, so the seed and the plugin install run first, as
+ * the production suite's config does. `E2E_PRODUCTION_PREBUILT=1` skips the
+ * build, for a caller that built once and runs the suite several times on it.
+ */
+const START = {
+  dev: ["pnpm dev:app"],
+  production: [
+    "pnpm --filter playground exec tsx scripts/seed.ts",
+    "pnpm --filter playground exec nextly plugins install --all",
+    ...(process.env.E2E_PRODUCTION_PREBUILT === "1"
+      ? []
+      : ["pnpm --filter playground exec next build"]),
+    "pnpm --filter playground exec next start",
+  ],
+}[SERVER];
+
 export default defineConfig({
   testDir: "./tests",
   /*
@@ -123,12 +158,16 @@ export default defineConfig({
     // open. The dev server, not a production build: it is what a contributor
     // runs, and it applies the schema to the empty database on boot, which is
     // how the throwaway file becomes usable without a separate push step.
-    command: "node e2e/scripts/reset-e2e-db.mjs && pnpm dev:app",
+    command: ["node e2e/scripts/reset-e2e-db.mjs", ...START].join(" && "),
     cwd: NEXTLY_ROOT,
     url: `${BASE_URL}/api/health`,
     // Generous: a cold Next.js dev boot compiles the admin on first request,
-    // and CI machines are slower than the laptop this was written on.
-    timeout: 240 * 1000,
+    // and CI machines are slower than the laptop this was written on. A
+    // production server that builds first needs the build's time as well.
+    timeout:
+      SERVER === "production" && process.env.E2E_PRODUCTION_PREBUILT !== "1"
+        ? 15 * 60 * 1000
+        : 240 * 1000,
     // Never reuse: a server already on this port is running against a
     // database this suite has not emptied, and the whole safety story is that
     // it has.
@@ -146,7 +185,7 @@ export default defineConfig({
       // two `next dev` processes on one app fight over `.next`, and the
       // second dies before it serves anything. With this, the suite runs
       // while a contributor's dev server keeps going on 3000.
-      NEXT_DIST_DIR: ".next-e2e",
+      NEXT_DIST_DIR: SERVER === "production" ? ".next-e2e-start" : ".next-e2e",
       // Turns on the playground's brand colors, which admin-branding.spec.ts
       // asserts against. They are off by default so a contributor's admin
       // keeps the monochrome identity a default install has.
@@ -178,6 +217,9 @@ export default defineConfig({
       // `next dev` would otherwise write the map again, leaving the checkout
       // changed after every run.
       NEXTLY_GENERATED_FILES_WRITE: "0",
+      // `next start` refuses to boot without the app's own address, which the
+      // dev server never needed.
+      NEXT_PUBLIC_APP_URL: BASE_URL,
     },
   },
 
