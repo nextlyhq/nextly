@@ -16,7 +16,10 @@ import { LOCK } from "./support/locks";
 
 // One signed-in user for the whole file: signing in spends the auth budget.
 // Shares state with other specs; see support/locks.ts for what each lock guards.
-test.describe.configure({ mode: "serial", lock: [LOCK.usersRoles] });
+test.describe.configure({
+  mode: "serial",
+  lock: [LOCK.usersRoles, LOCK.siteSettings],
+});
 
 let limited: LimitedUser;
 let page: Page;

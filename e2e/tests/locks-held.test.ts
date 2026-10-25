@@ -6,7 +6,7 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { configuredLocks } from "./support/configured-locks";
-import { documentsToFree } from "./support/test";
+import { CLAIMED_DOCUMENT_LOCKS, documentsToFree } from "./support/test";
 
 /**
  * Every spec that writes shared state holds that state's lock
@@ -27,6 +27,14 @@ import { documentsToFree } from "./support/test";
 
 const TESTS = dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Whether a spec opens a single's form, which claims the document: an admin
+ * path that starts with the single, not the Schema Builder's route for it.
+ */
+function opensSingle(source: string, slug: string): boolean {
+  return new RegExp(`["'\`]/singles/${slug}(?![a-z-])`).test(source);
+}
+
 /** What writes each piece of shared state, as it appears in a spec's source. */
 const WRITERS: {
   lock: string;
@@ -45,7 +53,18 @@ const WRITERS: {
     what: "edits the homepage",
     writes: source =>
       /\bopenEditorWith\(/.test(source) ||
+      opensSingle(source, "homepage") ||
       (source.includes("singles/homepage") && /\.patch\(/.test(source)),
+  },
+  {
+    lock: "siteSettings",
+    what: "opens the site-settings form, which claims it",
+    writes: source => opensSingle(source, "site-settings"),
+  },
+  {
+    lock: "landingPage",
+    what: "opens the landing-page form, which claims it",
+    writes: source => opensSingle(source, "landing-page"),
   },
   {
     lock: "schema",
@@ -130,6 +149,22 @@ test("recognises each kind of write it is there for", () => {
     )
   ).toBe(true);
   expect(
+    WRITERS.find(w => w.lock === "siteSettings")?.writes(
+      'await gotoAdmin(page, "/singles/site-settings");'
+    )
+  ).toBe(true);
+  // The Schema Builder's route for a single is not its form.
+  expect(
+    WRITERS.find(w => w.lock === "homepage")?.writes(
+      'path: "/builder/singles/homepage",'
+    )
+  ).toBe(false);
+  expect(
+    WRITERS.find(w => w.lock === "landingPage")?.writes(
+      'await gotoAdmin(page, "/singles/landing-page");'
+    )
+  ).toBe(true);
+  expect(
     WRITERS.find(w => w.lock === "schema")?.writes(
       "await createRuntimeCollection(api, slug)"
     )
@@ -157,20 +192,24 @@ test("reads the locks a spec configures, not the constant anywhere", () => {
   ).toEqual(["usersRoles", "email"]);
 });
 
-test("a file holding the homepage's lock frees the homepage before it starts", () => {
+test("a file holding a claimed document's lock frees it before it starts", () => {
   // Every such file of this suite, read the way the suite's `test` reads it,
-  // so a file added with the lock is held to it without being named here.
-  const holders = suiteFiles().filter(file =>
-    configuredLocks(readFileSync(file, "utf8"), file).has("homepage")
-  );
-  expect(holders.length).toBeGreaterThan(0);
-  expect(
-    holders.filter(
-      file =>
-        !documentsToFree(readFileSync(file, "utf8"), file).includes("homepage")
-    )
-  ).toEqual([]);
-  // And a file without the lock frees nothing.
+  // so a file added with one of these locks is held to it without being named.
+  const files = suiteFiles();
+  for (const lock of CLAIMED_DOCUMENT_LOCKS) {
+    const holders = files.filter(file =>
+      configuredLocks(readFileSync(file, "utf8"), file).has(lock)
+    );
+    expect(holders.length, `files holding LOCK.${lock}`).toBeGreaterThan(0);
+    expect(
+      holders.filter(
+        file =>
+          !documentsToFree(readFileSync(file, "utf8"), file).includes(lock)
+      ),
+      `files holding LOCK.${lock} that do not free it`
+    ).toEqual([]);
+  }
+  // And a file without one of these locks frees nothing.
   expect(
     documentsToFree(
       "test.describe.configure({ lock: [LOCK.dashboard] });\n",

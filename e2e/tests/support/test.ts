@@ -49,28 +49,43 @@ interface DocumentRef {
 }
 
 /**
+ * A single's claim reference, from its id, or `null` when the single has no
+ * document yet: nothing can claim a document that does not exist.
+ */
+function single(slug: string) {
+  return async (api: APIRequestContext): Promise<DocumentRef | null> => {
+    const read = await api.get(`/admin/api/singles/${slug}`);
+    if (read.status() === 404) return null;
+    expect(read.ok(), await read.text()).toBe(true);
+    // A single's read is the bare document, not a mutation's `{ item }`.
+    const { id } = (await read.json()) as { id: string };
+    expect(id, `the ${slug} single's id`).toBeTruthy();
+    return { scopeKind: "single", slug, entryId: id };
+  };
+}
+
+/**
  * The locks whose state is a document an editor claims, and that document.
  *
- * Opening the homepage's form or builder claims the homepage for whoever
+ * Opening a shared single's form or builder claims the document for whoever
  * opened it, and the claim outlives the file that made it until its lease
- * runs out. The next file, signed in as someone else, would find the page
- * held and open it read-only. So each file holding the lock frees the
- * document before its first test, through the route the builder's "Take
- * over" uses. Done at the start rather than left to the file before, so a
- * file that crashed cannot leave the next one read-only.
+ * runs out. The next file, or a retry, is signed in as someone else and would
+ * find the document held and open it read-only. So each file holding one of
+ * these locks frees its document before its first test, through the route the
+ * builder's "Take over" uses. Done at the start rather than left to the file
+ * before, so a file that crashed cannot leave the next one read-only, and only
+ * under the lock, so it never takes a claim from a file still editing.
  */
 const CLAIMED_DOCUMENTS: Readonly<
-  Record<string, (api: APIRequestContext) => Promise<DocumentRef>>
+  Record<string, (api: APIRequestContext) => Promise<DocumentRef | null>>
 > = {
-  homepage: async api => {
-    const single = await api.get("/admin/api/singles/homepage");
-    expect(single.ok(), await single.text()).toBe(true);
-    // A single's read is the bare document, not a mutation's `{ item }`.
-    const { id } = (await single.json()) as { id: string };
-    expect(id, "the homepage's id").toBeTruthy();
-    return { scopeKind: "single", slug: "homepage", entryId: id };
-  },
+  homepage: single("homepage"),
+  siteSettings: single("site-settings"),
+  landingPage: single("landing-page"),
 };
+
+/** The locks guarding a document its holders free, by `LOCK` name. */
+export const CLAIMED_DOCUMENT_LOCKS = Object.keys(CLAIMED_DOCUMENTS);
 
 /** The locks a spec file holds whose document it frees before it starts. */
 export function documentsToFree(source: string, file: string): string[] {
@@ -85,6 +100,7 @@ export function documentsToFree(source: string, file: string): string[] {
  */
 async function freeDocument(api: APIRequestContext, lock: string) {
   const ref = await CLAIMED_DOCUMENTS[lock](api);
+  if (ref === null) return;
   const claimed = await api.post("/admin/api/document-lock", {
     data: { ...ref, takeover: true },
   });
