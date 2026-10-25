@@ -53,8 +53,6 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  * - `component-map-dev`: a development server refusing a stale component map.
  * - The Schema Builder specs: a production build turns the builder off unless
  *   the app opts in, and refuses its writes with `BUILDER_DISABLED`.
- * - `media-urls`: a production server serves only the files `public/` held
- *   when it started, so an image uploaded during the run is not found there.
  */
 const DEV_SPECS = [
   "**/setup-*.spec.ts",
@@ -63,7 +61,6 @@ const DEV_SPECS = [
   "**/schema-leaving-translation.spec.ts",
   "**/builder-field-gates.spec.ts",
   "**/builder-runtime-collection.spec.ts",
-  "**/media-urls.spec.ts",
 ];
 
 /** Only the dev specs, for the run beside a production one. */
