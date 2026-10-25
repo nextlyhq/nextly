@@ -135,10 +135,14 @@ for (const entry of DIALECTS) {
       });
 
       afterEach(async () => {
-        await adapter.disconnect();
-        await scratch?.drop();
-        scratch = null;
-        await rm(migrationsDir, { recursive: true, force: true });
+        // The case's database and folder go even when closing the connection fails.
+        try {
+          await adapter.disconnect();
+        } finally {
+          await scratch?.drop();
+          scratch = null;
+          await rm(migrationsDir, { recursive: true, force: true });
+        }
       });
 
       /** `nextly migrate:create` for the entity as it is now. */
