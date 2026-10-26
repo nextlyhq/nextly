@@ -1524,32 +1524,33 @@ export class CollectionBulkService extends BaseService {
     // Note: For update, we check access without document since we don't have it yet
     // Owner-only checks will be done per-entry when we fetch the document
     const accessUser = params.overrideAccess ? undefined : params.user;
-    const accessDenied =
-      await this.accessService.checkCollectionAccess<BatchOperationResult>({
-        collectionName: params.collectionName,
-        operation: "update",
-        user: accessUser,
-        overrideAccess: params.overrideAccess,
-        // Judge a scoped API key on its OWN update grant, not the key owner's:
-        // otherwise a super-admin-owned key without update-<slug> could
-        // batch-update via this collection-level gate (the transition
-        // pre-resolve below already carries the scope, but this gate ran without
-        // it).
-        authenticatedScope: params.authenticatedScope,
-      });
     // Where a row changes only an entry's status, each row is judged on its
     // own: a status-only row by the gate its status names, whether or not the
     // caller may update, and any other by update. So a caller refused update
     // may still change only entries' status, and one allowed it is still
-    // asked publish of a status-only row. Otherwise the gate above judges
-    // every row.
+    // asked publish of a status-only row. Otherwise one update gate, below,
+    // judges every row; it is asked only then, so no rule runs outside the
+    // gate that decides a write.
     const rowGate =
       (params.overrideAccess
         ? undefined
         : await this.statusRowsGate(params.collectionName, entries)) ??
       "batch-hoisted";
-    if (accessDenied && rowGate === "batch-hoisted") {
-      return everyItemRefused(accessDenied, entries.length);
+    if (rowGate === "batch-hoisted") {
+      const accessDenied =
+        await this.accessService.checkCollectionAccess<BatchOperationResult>({
+          collectionName: params.collectionName,
+          operation: "update",
+          user: accessUser,
+          overrideAccess: params.overrideAccess,
+          // Judge a scoped API key on its OWN update grant, not the key
+          // owner's: otherwise a super-admin-owned key without update-<slug>
+          // could batch-update via this collection-level gate (the transition
+          // pre-resolve below already carries the scope, but this gate ran
+          // without it).
+          authenticatedScope: params.authenticatedScope,
+        });
+      if (accessDenied) return everyItemRefused(accessDenied, entries.length);
     }
 
     // Resolve the caller's publish/unpublish authorization ONCE on the pooled
@@ -1686,25 +1687,25 @@ export class CollectionBulkService extends BaseService {
     // inside the caller's transaction, so the RBAC/metadata reads are bound to
     // the transaction's connection (`tx.getDrizzle()`) rather than taking a
     // second pooled connection, which can stall against a small pool.
-    const accessDenied =
-      await this.accessService.checkCollectionAccess<BatchOperationResult>({
-        collectionName: params.collectionName,
-        operation: "update",
-        user: params.user,
-        // Judge a scoped API key on its OWN update grant, not the key owner's.
-        authenticatedScope: params.authenticatedScope,
-        executor: tx.getDrizzle(),
-      });
     // As above: where a row changes only an entry's status, each row is
-    // judged on its own.
+    // judged on its own, and the one update gate is asked only otherwise.
     const rowGate =
       (await this.statusRowsGate(
         params.collectionName,
         entries,
         tx.getDrizzle()
       )) ?? "batch-hoisted";
-    if (accessDenied && rowGate === "batch-hoisted") {
-      return everyItemRefused(accessDenied, entries.length);
+    if (rowGate === "batch-hoisted") {
+      const accessDenied =
+        await this.accessService.checkCollectionAccess<BatchOperationResult>({
+          collectionName: params.collectionName,
+          operation: "update",
+          user: params.user,
+          // Judge a scoped API key on its OWN update grant, not the key owner's.
+          authenticatedScope: params.authenticatedScope,
+          executor: tx.getDrizzle(),
+        });
+      if (accessDenied) return everyItemRefused(accessDenied, entries.length);
     }
 
     // Resolve the caller's publish/unpublish authorization ONCE before looping

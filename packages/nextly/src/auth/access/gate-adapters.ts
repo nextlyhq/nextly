@@ -569,10 +569,11 @@ async function ruleVerdict({
  * Whether the caller holds the permission to `action` on `slug`, its rule not
  * read: asked of a publish or an unpublish of every language before the work
  * only that change needs, its rule being asked once the languages going live
- * are known. `false` only where the caller certainly lacks it, a signed-in
- * user without the permission or a key whose grants do not hold it; anything
- * else, trusted work included, is left to the full gate, which a caller
- * refused here is asked too, so the refusal reads as that gate words it.
+ * are known. Trusted work holds it. `false` where the caller certainly lacks
+ * it: no user, who never publishes or unpublishes, a signed-in user without
+ * the permission, or a key whose grants do not hold it. Anything else is left
+ * to the full gate, which a caller refused here is asked too, so the refusal
+ * reads as that gate words it.
  */
 export async function holdsGrant(params: {
   action: AccessOperation;
@@ -581,8 +582,9 @@ export async function holdsGrant(params: {
   overrideAccess?: boolean;
   authenticatedScope?: AuthenticatedScope;
 }): Promise<boolean> {
+  if (params.overrideAccess) return true;
   const userId = params.user?.id;
-  if (params.overrideAccess || !userId) return true;
+  if (!userId) return false;
   const scope = params.authenticatedScope;
   if (scope?.actorType === "apiKey") {
     try {

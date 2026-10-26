@@ -8981,7 +8981,11 @@ export class CollectionMutationService extends BaseService {
             askedLanguages,
           };
         } else {
-          const permissionDenied = await transitionDenied();
+          // A status-only write already asked this gate before its hooks ran;
+          // where they left the action as it was, that answer stands, so a
+          // rule is not asked twice about one write, its hooks run between.
+          const permissionDenied =
+            transitionOp === gate ? null : await transitionDenied();
           if (permissionDenied) {
             transitionGuard = {
               op: transitionOp,

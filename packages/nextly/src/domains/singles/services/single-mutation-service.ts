@@ -1717,24 +1717,30 @@ export class SingleMutationService extends BaseService {
       ) {
         const transitionOp =
           transitionNextStatus === "published" ? "publish" : "unpublish";
-        const permissionDenied = await checkSingleAccess({
-          slug,
-          operation: transitionOp,
-          user: options.user,
-          overrideAccess: options.overrideAccess,
-          // Narrows that bypass per RELATED collection. Absent means unchanged;
-          // dropping it here would silently restore the full bypass.
-          trusted: options.trusted,
-          // NOT route-authorized: the route authorizes a Single write as
-          // `update`, never as `publish`/`unpublish`, so the RBAC check for the
-          // transition permission must actually run.
-          routeAuthorized: false,
-          rbacAccessControlService: this.rbacAccessControlService,
-          // A scoped API key is judged on its own publish/unpublish grant, not
-          // the key owner's — the route only checked `update` against the scope.
-          authenticatedScope: options.authenticatedScope,
-          logger: this.logger,
-        });
+        // A status-only write already asked this gate before its hooks ran;
+        // where they left the action as it was, that answer stands, so a rule
+        // is not asked twice about one write, its hooks run between.
+        const permissionDenied =
+          transitionOp === gate
+            ? null
+            : await checkSingleAccess({
+                slug,
+                operation: transitionOp,
+                user: options.user,
+                overrideAccess: options.overrideAccess,
+                // Narrows that bypass per RELATED collection. Absent means unchanged;
+                // dropping it here would silently restore the full bypass.
+                trusted: options.trusted,
+                // NOT route-authorized: the route authorizes a Single write as
+                // `update`, never as `publish`/`unpublish`, so the RBAC check for the
+                // transition permission must actually run.
+                routeAuthorized: false,
+                rbacAccessControlService: this.rbacAccessControlService,
+                // A scoped API key is judged on its own publish/unpublish grant, not
+                // the key owner's — the route only checked `update` against the scope.
+                authenticatedScope: options.authenticatedScope,
+                logger: this.logger,
+              });
         // Only guard under the lock when there is something to enforce there.
         if (permissionDenied) {
           transitionGuard = {
