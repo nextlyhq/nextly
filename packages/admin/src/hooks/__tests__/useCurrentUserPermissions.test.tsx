@@ -604,6 +604,77 @@ describe("useCurrentUserPermissions", () => {
     expect(capabilityAsks()).toBe(before);
   });
 
+  it("does not let another language's older request revive its answer", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    onScreen.locale = "fr";
+    server.capabilities = answering({ read: true });
+    const { result, rerender } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+
+    // French is asked again and its answer held, while German answers after
+    // a rule change.
+    let release = (): void => {};
+    server.capabilitiesGate = new Promise(done => {
+      release = done;
+    });
+    await act(async () => {
+      result.current.retry();
+    });
+    server.capabilities = answering({ read: false });
+    onScreen.locale = "de";
+    rerender();
+    await waitFor(() =>
+      expect(result.current.canAccessCollection("posts", "read")).toBe(false)
+    );
+    // The held French request now lands, with what it saw before the change.
+    await act(async () => {
+      release();
+    });
+
+    // Back to French: it is asked again rather than restored from that.
+    const frenchAsks = server.asked.filter(
+      p => p === "/me/capabilities?locale=fr"
+    ).length;
+    onScreen.locale = "fr";
+    rerender();
+    await waitFor(() =>
+      expect(
+        server.asked.filter(p => p === "/me/capabilities?locale=fr").length
+      ).toBe(frenchAsks + 1)
+    );
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+    expect(result.current.canAccessCollection("posts", "read")).toBe(false);
+  });
+
+  it("keeps asking on the schedule after a change's refresh fails", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    server.capabilities = answering({ read: true });
+    const client = newClient();
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+
+    // A role change lands and the content answer cannot be had again.
+    server.capabilities = new Error("capabilities unavailable");
+    act(() => {
+      invalidateCurrentUserAccess(client);
+    });
+    await waitFor(() => expect(result.current.content.error).not.toBeNull());
+    expect(result.current.content.hasAnswer).toBe(false);
+
+    // The endpoint recovers; the next scheduled ask brings the answer back.
+    server.capabilities = answering({ read: true });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+  });
+
   it("asks once at an end, however many callers are mounted", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     server.capabilities = answering({ read: true }, Date.now() + 60_000);

@@ -264,8 +264,22 @@ function contentUnanswered(
   queryClient: ReturnType<typeof useQueryClient>,
   key: readonly unknown[]
 ): boolean {
-  const state = queryClient.getQueryState(key);
-  return state?.data === undefined && state?.error != null;
+  return unansweredAfterFailure(queryClient.getQueryState(key));
+}
+
+/**
+ * Whether a query's last request failed with no answer that counts: none
+ * ever arrived, or the one kept was invalidated by a change. Either way it is
+ * asked again on the schedule, which a kept answer would otherwise stop.
+ */
+function unansweredAfterFailure(
+  state: { data?: unknown; error: unknown; isInvalidated: boolean } | undefined
+): boolean {
+  return (
+    state !== undefined &&
+    (state.data === undefined || state.isInvalidated) &&
+    state.error != null
+  );
 }
 
 /**
@@ -485,9 +499,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     // every mount would otherwise ask the whole matrix again.
     retryOnMount: false,
     refetchInterval: query =>
-      query.state.data === undefined && query.state.error !== null
-        ? UNANSWERED_RECHECK_MS
-        : false,
+      unansweredAfterFailure(query.state) ? UNANSWERED_RECHECK_MS : false,
   });
   const refetchAnswer = answer.refetch;
   // A fresh answer in one language is newer than every other language's
@@ -498,11 +510,19 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   useEffect(() => {
     if (languageAnsweredAt === 0) return;
     const shown = JSON.stringify(capabilitiesKey);
-    void queryClient.invalidateQueries({
+    const others = {
       queryKey: CURRENT_USER_CAPABILITIES_KEY,
-      predicate: query => JSON.stringify(query.queryKey) !== shown,
-      refetchType: "none",
-    });
+      predicate: (query: { queryKey: readonly unknown[] }) =>
+        JSON.stringify(query.queryKey) !== shown,
+    };
+    // A request still under way for another language was asked before this
+    // answer, so it is cancelled rather than let to clear the mark when it
+    // lands with what it saw.
+    void queryClient
+      .cancelQueries(others)
+      .then(() =>
+        queryClient.invalidateQueries({ ...others, refetchType: "none" })
+      );
   }, [languageAnsweredAt, queryClient, capabilitiesKey]);
 
   // The answer stops holding when the soonest role assignment ends, and so
