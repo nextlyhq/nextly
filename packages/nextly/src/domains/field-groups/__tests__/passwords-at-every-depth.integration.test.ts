@@ -328,6 +328,25 @@ describe.each(getConfiguredTestDialects())(
             slug: "pwlpin",
             fields: [text({ name: "heading" }), password({ name: "pin" })],
           }),
+          // A translated field group whose translated group holds a password
+          // of its own and one in a field group inline: both are kept on the
+          // companion row, per language.
+          defineFieldGroup({
+            slug: "pwlbox",
+            localized: true,
+            fields: [
+              text({ name: "heading" }),
+              group({
+                name: "box",
+                localized: true,
+                fields: [
+                  text({ name: "b" }),
+                  password({ name: "pin" }),
+                  fieldGroup({ name: "held", component: "pwlpin" }),
+                ],
+              }),
+            ],
+          }),
         ],
         collections: [
           defineCollection({
@@ -352,6 +371,7 @@ describe.each(getConfiguredTestDialects())(
                 localized: true,
                 fields: [fieldGroup({ name: "held", component: "pwlpin" })],
               }),
+              fieldGroup({ name: "fg", component: "pwlbox" }),
             ],
           }),
         ],
@@ -392,6 +412,57 @@ describe.each(getConfiguredTestDialects())(
         // Every language's value is there, and no password in any of them.
         expect(valuesAt(read, "a")).toEqual(["1", "2"]);
         expect(valuesAt(read, "pin")).toEqual([]);
+      }
+    });
+
+    it("returns no password from a translated field group, in one language or every one", async () => {
+      const { item } = await trusted.create({
+        collection: "pwlentries",
+        data: {
+          title: "f",
+          fg: {
+            heading: "h",
+            box: {
+              b: "1",
+              pin: "box-en",
+              held: { heading: "i", pin: "in-en" },
+            },
+          },
+        },
+      } as never);
+      const id = String(item.id);
+      await trusted.update({
+        collection: "pwlentries",
+        id,
+        locale: "es",
+        data: {
+          fg: {
+            heading: "h",
+            box: {
+              b: "2",
+              pin: "box-es",
+              held: { heading: "i", pin: "in-es" },
+            },
+          },
+        },
+      } as never);
+
+      for (const reader of [trusted, new Nextly({ overrideAccess: false })]) {
+        for (const [locale, values] of [
+          ["en", ["1"]],
+          ["es", ["2"]],
+          ["all", ["1", "2"]],
+        ] as const) {
+          const read = await reader.findByID({
+            collection: "pwlentries",
+            id,
+            locale,
+            depth: 1,
+          } as never);
+          // The translated group is there, and no password in it.
+          expect(valuesAt(read, "b")).toEqual(values);
+          expect(valuesAt(read, "pin")).toEqual([]);
+        }
       }
     });
   }
