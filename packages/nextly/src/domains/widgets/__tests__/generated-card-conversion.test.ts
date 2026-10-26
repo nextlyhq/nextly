@@ -10,6 +10,7 @@ import { CORE_WIDGETS } from "../core-widgets";
 import {
   conversionFacts,
   generatedCardConversion,
+  registeredWidths,
   resolveGeneratedCardCollection,
   type GeneratedCard,
 } from "../generated-card-conversion";
@@ -503,5 +504,17 @@ describe("the facts a conversion is exact on, as scope-token inputs", () => {
         { id: "collection/posts-breakdown", query: { op: "groupBy" } },
       ])
     ).toHaveLength(1);
+  });
+});
+
+describe("each successor's widths as registered", () => {
+  it("reads the install's widget, whether or not a reader may see it", () => {
+    // 🔴 From the canonical set the caller passes, never a reader's visible
+    // cards: a plugin's wider Count is honoured for a reader without its gate.
+    const widths = registeredWidths([
+      { id: COUNT_WIDGET_ID, allowedWidths: ["quarter", "full"] },
+    ]);
+    expect(widths(COUNT_WIDGET_ID)).toEqual(["quarter", "full"]);
+    expect(widths("core/over-time")).toBeUndefined();
   });
 });

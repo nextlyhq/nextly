@@ -77,35 +77,14 @@ function withSourceFilters(definition: WidgetDefinition): WidgetDefinition {
 export type { PublishedContentSource } from "./published-content-source";
 
 /**
- * The collections this reader may read, as the cards they may see show them:
- * each collection whose own generated card is visible to them.
- *
- * ONE derivation for what a card's content settings may name and for which
- * collection a saved count card resolves to (`generatedCardConversion`), so the
- * two never disagree about what this reader may read.
- */
-export function readableCollectionsOf(
-  visible: readonly { generated?: boolean; collection?: string }[]
-): Set<string> {
-  const slugs = new Set<string>();
-  for (const card of visible) {
-    if (card.generated === true && card.collection !== undefined) {
-      slugs.add(card.collection);
-    }
-  }
-  return slugs;
-}
-
-/**
  * The collections, and their fields, a card's content settings may offer this
  * reader.
  *
- * 🔴 Derived from the cards the reader may see, never decided again here. A
- * collection's own card is shown only when the reader may read the collection
- * (`readableEntities`, the gate the list routes use, asked once per request in
- * `widgetAudience`), so its source is offered on exactly the same answer. A
- * collection with no card of its own is not offered: there is no answer to
- * read for it, and offering it would be a second, hand-made check.
+ * 🔴 Derived from the audience's readable collections, never decided again
+ * here: `readableEntities`, the gate the list routes use, asked once per
+ * request in `widgetAudience` of every collection with a content source. A
+ * card's settings may then name exactly the collections a card set to one is
+ * shown for.
  *
  * Only fields the source does not mark `offered: false`: a field a read rule
  * could refuse, or a read hook transforms, is never offered as a choice. A
@@ -113,10 +92,10 @@ export function readableCollectionsOf(
  * `groupable: false`, so a Group by setting leaves it out.
  */
 export function publishableContentSources(
-  visible: readonly { generated?: boolean; collection?: string }[]
+  readableCollections: Iterable<string>
 ): PublishedContentSource[] {
   const published: PublishedContentSource[] = [];
-  for (const slug of readableCollectionsOf(visible)) {
+  for (const slug of readableCollections) {
     const source = getSource(`collection:${slug}`);
     if (source !== undefined) published.push(publishedSourceOf(slug, source));
   }

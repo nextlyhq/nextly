@@ -171,3 +171,38 @@ describe("a declaration as a reader is told it", () => {
     expect(collectionDefaultForReader(bare, new Set())).toBe(bare);
   });
 });
+
+describe("a Collection setting judged by the query it drives", () => {
+  it("withholds nothing for a setting no knob drives on the widget's effective query", () => {
+    // 🔴 A registration that overrides the query can leave the setting reaching
+    // nothing: the card reads a Single, not the collection the setting names.
+    const overridden = collectionWidgets([
+      {
+        id: "acme/pinned",
+        collectionSetting: pinnedSetting,
+        knobQueries: [{ source: "single:homepage", op: "count" }],
+      },
+    ]);
+    expect(
+      unreadableCollectionCard(
+        overridden,
+        new Set(["posts"])
+      )(card("acme/pinned", { source: "secret" }))
+    ).toBe(false);
+    // The must-differ half: over a collection's query the setting names the
+    // collection read, and the card is withheld.
+    const reading = collectionWidgets([
+      {
+        id: "acme/pinned",
+        collectionSetting: pinnedSetting,
+        knobQueries: [{ source: "collection:posts", op: "count" }],
+      },
+    ]);
+    expect(
+      unreadableCollectionCard(
+        reading,
+        new Set(["posts"])
+      )(card("acme/pinned", { source: "secret" }))
+    ).toBe(true);
+  });
+});

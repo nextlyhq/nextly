@@ -64,7 +64,7 @@
  * @module domains/widgets/generated-card-conversion
  */
 
-import { widthFacts } from "./canonical";
+import { widthFacts, type CanonicalWidget } from "./canonical";
 import { CORE_WIDGETS } from "./core-widgets";
 import type {
   WidgetPlacement,
@@ -239,6 +239,24 @@ function settingsIdentity(placement: WidgetPlacement): string | undefined {
   return placement.config === undefined
     ? undefined
     : stableJson(placement.config);
+}
+
+/**
+ * Each successor's widths as registered, from the install's canonical widgets.
+ *
+ * 🔴 The canonical set, not the reader's visible cards: a reader who may not
+ * see Count still has hidden saved count cards, carried by their saves. Read
+ * from their own visible set, those cards would convert to core's declared
+ * widths rather than the registered Count's, and keep that narrower width
+ * when the reader is later granted Count.
+ */
+export function registeredWidths(
+  canonical: readonly CanonicalWidget[]
+): (successor: string) => readonly WidgetWidth[] | undefined {
+  return successor => {
+    const widget = canonical.find(entry => entry.id === successor);
+    return widget === undefined ? undefined : widthFacts(widget).allowedWidths;
+  };
 }
 
 /**

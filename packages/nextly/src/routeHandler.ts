@@ -142,7 +142,6 @@ import { visibilityToken } from "./domains/widgets/layout";
 import {
   publishableContentSources,
   publishableWidgets,
-  readableCollectionsOf,
 } from "./domains/widgets/publish";
 import {
   widgetAudience,
@@ -1837,6 +1836,7 @@ const NO_WIDGETS: WidgetAudience = {
   token: visibilityToken([], []),
   // No reader and no cards, so no collection a card could name.
   registeredCollections: undefined,
+  readableCollections: new Set(),
 };
 
 /**
@@ -2036,7 +2036,7 @@ async function buildAdminMeta(
   // The collections this reader may read, as the layout judges them: a widget
   // declaration below ships its Collection setting's default only when it
   // names one of them (`collectionDefaultForReader`).
-  const readable = readableCollectionsOf(audience.visible);
+  const readable = audience.readableCollections;
   const plugins = buildPluginAdminMeta(
     config?.plugins ?? [],
     pluginOverrides
@@ -2106,7 +2106,7 @@ async function buildAdminMeta(
   }
   // What a card's content settings may offer this reader, derived from the
   // cards above: a collection is offered exactly when its own card is.
-  const widgetSources = publishableContentSources(audience.visible);
+  const widgetSources = publishableContentSources(audience.readableCollections);
   if (widgetSources.length > 0) {
     workspace.widgetSources = widgetSources;
   }

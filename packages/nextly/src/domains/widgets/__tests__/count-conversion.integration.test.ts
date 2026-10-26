@@ -43,6 +43,9 @@ const silent = {
 const POSTS = "cv_blog_posts";
 /** No rule: only the super admin may read it. */
 const SECRET = "cv_secret";
+/** Two collections whose slugs spell one generated id, so neither gets generated cards. */
+const TWIN_UNDERSCORE = "cv_twin";
+const TWIN_HYPHEN = "cv-twin";
 
 interface LayoutRead {
   placements: WidgetPlacement[];
@@ -148,6 +151,14 @@ describe.each(getConfiguredTestDialects())(
             fields: [text({ name: "title" })],
           }),
           defineCollection({ slug: SECRET, fields: [text({ name: "title" })] }),
+          defineCollection({
+            slug: TWIN_UNDERSCORE,
+            fields: [text({ name: "title" })],
+          }),
+          defineCollection({
+            slug: TWIN_HYPHEN,
+            fields: [text({ name: "title" })],
+          }),
         ],
       });
       // The first account of an instance is its super admin.
@@ -204,6 +215,28 @@ describe.each(getConfiguredTestDialects())(
         card("secret", "collection/cv-secret-count"),
         card("gone", "collection/cv-gone-count"),
       ]);
+    });
+
+    it("shows a Count card set to either of two readable collections whose slugs collide", async () => {
+      // 🔴 Judged by the reader's verdict on each collection, not read off the
+      // generated cards, which the collision drops for both: read that way,
+      // a card set to either was withheld as one they may not read.
+      const reader = await account("cv-twins@example.com");
+      await grantTo(handle, reader, "read", [TWIN_UNDERSCORE, TWIN_HYPHEN]);
+      const own = [
+        card("under", "core/count", {
+          config: { collection: TWIN_UNDERSCORE },
+        }),
+        card("hyphen", "core/count", { config: { collection: TWIN_HYPHEN } }),
+      ];
+      await service().saveLayout("user", reader, own, 0);
+      const seen = await read(reader);
+      expect(seen.placements).toEqual(own);
+      // The must-differ half: a reader who may read only one is shown only it.
+      const half = await account("cv-one-twin@example.com");
+      await grantTo(handle, half, "read", [TWIN_UNDERSCORE]);
+      await service().saveLayout("user", half, own, 0);
+      expect((await read(half)).placements).toEqual([own[0]]);
     });
 
     it("withholds a Count card set to a collection the reader may not read, and keeps it in the row", async () => {
