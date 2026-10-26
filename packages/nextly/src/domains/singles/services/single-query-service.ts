@@ -329,12 +329,12 @@ export async function checkSingleAccess(params: {
   const verdict = await ask(operation);
   if (verdict.allowed) return null;
   // A Single is its one document: a caller who may not read it is answered
-  // as a missing Single is. A caller with no identity is left to the sign-in
-  // answer, which comes before this one.
+  // as a missing Single is. A caller with no identity, neither a user nor a
+  // plugin's own principal, is left to the sign-in answer, which comes first.
   const answer = await answerForRefusal(
     verdict,
     operation,
-    user !== undefined,
+    user !== undefined || currentPrincipal() !== null,
     ask
   );
 

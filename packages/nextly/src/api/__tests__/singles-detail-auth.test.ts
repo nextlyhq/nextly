@@ -67,6 +67,14 @@ describe("singles-detail PATCH route auth forwarding", () => {
     const response = await PATCH(request, context);
 
     expect(response.status).toBe(200);
+    // Asked as a refusal of the Single's one document, so a caller who may
+    // not read it is answered as if it were missing, as the dispatcher's is.
+    expect(requireRouteCollectionAccessSpy).toHaveBeenCalledWith(
+      request,
+      "update",
+      "site-settings",
+      expect.objectContaining({ namesOne: true })
+    );
     // The standalone route runs the update as the authorized user with
     // overrideAccess:false (stored single access + field-level write access are
     // still enforced); routeAuthorized skips only the redundant RBAC re-check

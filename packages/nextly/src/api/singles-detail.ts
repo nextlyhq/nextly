@@ -212,7 +212,13 @@ export const PATCH = withErrorHandler(
     // response stays redacted to what they may read. Without forwarding the
     // user, the standalone route ran the update anonymously and diverged from
     // the dispatcher's updateSingleDocument.
-    const auth = await requireRouteCollectionAccess(request, "update", slug);
+    // A Single is its one document, refused about it as the dispatcher's
+    // Single routes refuse: a caller who may not read it is told it is missing.
+    const auth = await requireRouteCollectionAccess(request, "update", slug, {
+      method: "updateSingleDocument",
+      params: {},
+      namesOne: true,
+    });
 
     const service = await getSingleEntryService();
 

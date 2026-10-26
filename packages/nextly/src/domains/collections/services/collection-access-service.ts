@@ -151,12 +151,13 @@ export class CollectionAccessService extends BaseService {
     const verdict = await ask(operation);
     if (verdict.allowed) return null;
     // A caller naming one entry it may not read is answered as if the entry
-    // were missing. A caller with no identity is left to the sign-in answer,
-    // which comes before this one.
+    // were missing. A caller with no identity, neither a user nor a plugin's
+    // own principal, is left to the sign-in answer, which comes before this.
     const answer = await answerForRefusal(
       verdict,
       operation,
-      params.entryId !== undefined && user !== undefined,
+      params.entryId !== undefined &&
+        (user !== undefined || currentPrincipal() !== null),
       ask
     );
 
