@@ -549,8 +549,25 @@ describe.each(getConfiguredTestDialects())(
             slug: "vpin",
             fields: [text({ name: "heading" }), password({ name: "pin" })],
           }),
+          defineFieldGroup({
+            slug: "vplain",
+            fields: [text({ name: "heading" })],
+          }),
         ],
         collections: [
+          // Its group once held `vpin`, and now holds `vplain`, which has no
+          // password: a version captured before keeps `vpin`'s instance.
+          defineCollection({
+            slug: "upretarget",
+            versions: true,
+            fields: [
+              text({ name: "title" }),
+              group({
+                name: "own",
+                fields: [fieldGroup({ name: "held", component: "vplain" })],
+              }),
+            ],
+          }),
           defineCollection({
             slug: "upversioned",
             versions: true,
@@ -575,6 +592,45 @@ describe.each(getConfiguredTestDialects())(
       t.adapter.select<Doc>("nextly_versions", {
         where: { and: [{ column: "entryId", op: "=", value: entryId }] },
       });
+
+    // First: the upgrades below install their own table resolver.
+    it("strips a password from an instance a snapshot tags with the field group it held then", async () => {
+      const { item } = await trusted.create({
+        collection: "upretarget",
+        data: { title: "r1", own: { held: { heading: "h" } } },
+      } as never);
+      const id = String(item.id);
+      await trusted.update({
+        collection: "upretarget",
+        id,
+        data: { title: "r2" },
+      } as never);
+      const versions = await versionsOf(id);
+      for (const version of versions) {
+        const snapshot = parsed(version.snapshot) as Doc;
+        snapshot.own = {
+          held: { _componentType: "vpin", heading: "h", pin: "retarget-plain" },
+        };
+        await t.adapter.update(
+          "nextly_versions",
+          { snapshot },
+          { and: [{ column: "id", op: "=", value: version.id as string }] }
+        );
+      }
+      for (const version of await versionsOf(id)) {
+        expect(valuesAt(version.snapshot, "pin")).toEqual(["retarget-plain"]);
+      }
+
+      await runUpgrade(
+        { confirmBackedUp: true },
+        { adapter: t.adapter as unknown as UpgradeAdapter }
+      );
+
+      for (const version of await versionsOf(id)) {
+        expect(valuesAt(version.snapshot, "pin")).toEqual([]);
+        expect(valuesAt(version.snapshot, "heading")).toEqual(["h"]);
+      }
+    });
 
     it("strips each password a version's snapshot holds, and reports only the count", async () => {
       const { item } = await trusted.create({
