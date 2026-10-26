@@ -10,7 +10,7 @@
  *
  * @module components/features/widgets/edit/useLayoutLifecycle
  */
-import { useCallback, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useRef, type Dispatch, type SetStateAction } from "react";
 
 import {
   fetchGetStartedOnRestore,
@@ -151,31 +151,50 @@ export function useLayoutLifecycle(
     [draft, layout, setDraft]
   );
 
+  // The draft the latest staged reset produced: a later answer for that reset
+  // may replace it, and only it.
+  const stagedDraft = useRef<LayoutDraft | null>(null);
+
   const stageReset = useCallback(() => {
     const read = layout.layout;
     if (!read?.defaultPlacements) return;
-    const staged = (defaults: readonly WidgetPlacement[]) =>
-      setDraft(current =>
-        current
-          ? {
-              ...current,
-              placements: [...defaults],
-              stagedReset: [...defaults],
-            }
-          : current
-      );
+    const withDefaults = (
+      current: LayoutDraft,
+      defaults: readonly WidgetPlacement[]
+    ): LayoutDraft => ({
+      ...current,
+      placements: [...defaults],
+      stagedReset: [...defaults],
+    });
+    // Staged at once from this read's default, so the reset answers now.
+    setDraft(current => {
+      const next = current
+        ? withDefaults(current, read.defaultPlacements)
+        : current;
+      stagedDraft.current = next;
+      return next;
+    });
     // A read that worked out no Get started steps (the arrangement holds no
     // card of its own) has a default that leaves the card out, though a reset
     // may draw it. The read that works the steps out answers the default a
-    // reset would actually land on; if it cannot be had, this one stands.
+    // reset would actually land on.
     if (read.getStarted !== undefined && read.getStarted.answer === null) {
+      const staged = stagedDraft;
       void fetchGetStartedOnRestore().then(
-        fresh => staged(fresh.defaultPlacements),
-        () => staged(read.defaultPlacements)
+        fresh =>
+          setDraft(current => {
+            // 🔴 Applied only to the very draft this reset staged. Arriving
+            // after the reader edited, cancelled, began again or staged
+            // another reset, it would overwrite work it never saw.
+            if (current === null || current !== staged.current) return current;
+            const next = withDefaults(current, fresh.defaultPlacements);
+            staged.current = next;
+            return next;
+          }),
+        // Unanswered, this read's default stays staged.
+        () => {}
       );
-      return;
     }
-    staged(read.defaultPlacements);
   }, [layout.layout, setDraft]);
 
   return { begin, cancel, save, stageReset };

@@ -100,12 +100,13 @@ function SetupNotChecked({ onRetry }: { onRetry: () => void }) {
  * the card go. A failed load says so, with its message and a Retry, rather than
  * taking the controls away.
  */
-function SampleContentOffer({ markActed }: { markActed: () => void }) {
+function SampleContentOffer({
+  markActed,
+}: {
+  markActed: (then?: () => void) => void;
+}) {
   const { status, startSeed, skip } = useSeedStatus();
-  const acting = (action: () => void) => () => {
-    markActed();
-    action();
-  };
+  const acting = (action: () => void) => () => markActed(action);
   if (status.kind === "seeding") {
     return (
       <span className="text-xs text-muted-foreground">
@@ -198,7 +199,7 @@ function StepActions({
       {open && (
         <Link
           href={href}
-          onClick={write.markActed}
+          onClick={() => write.markActed()}
           className="text-xs font-medium text-foreground underline decoration-primary/40 underline-offset-4 hover:decoration-primary focus-visible:decoration-primary"
         >
           {step.kind === "single" ? "Open" : "Start"}
