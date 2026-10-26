@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  MODE_VARIABLE,
   SELECTION_SWITCH,
   directMerges,
   directPaths,
@@ -111,12 +112,12 @@ function api(routes) {
 }
 
 describe("main", () => {
-  it("writes the mode to the step's outputs and fails the step on a switch with no queue behind it", async () => {
+  it("sets the mode for the job's later steps and fails the step on a switch with no queue behind it", async () => {
     const output = join(mkdtempSync(join(tmpdir(), "merge-path-")), "out");
     const { fetchImpl } = api({ [`repos/${REPO}/rules/branches/main`]: [{ type: "pull_request" }] });
-    const env = { GITHUB_REPOSITORY: REPO, GITHUB_EVENT_NAME: "pull_request", [SELECTION_SWITCH]: "on", GITHUB_OUTPUT: output };
+    const env = { GITHUB_REPOSITORY: REPO, GITHUB_EVENT_NAME: "pull_request", [SELECTION_SWITCH]: "on", GITHUB_ENV: output };
     expect(await main(["select"], env, { fetchImpl })).toBe(1);
-    expect(readFileSync(output, "utf8")).toBe("mode=full\n");
+    expect(readFileSync(output, "utf8")).toBe(`${MODE_VARIABLE}=full\n`);
   });
 
   it("asks GitHub nothing for a run that cannot select", async () => {

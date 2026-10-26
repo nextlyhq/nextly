@@ -24,10 +24,10 @@
  *   still tests everything the merge brought.
  * - `enablement`, run by hand with an admin login before the switch is flipped:
  *   every ruleset that applies to `main` is read with its bypass actors, and
- *   the verdict is printed for the pull request that enables selection.
+ *   the verdict is printed, to be quoted where selection is switched on.
  *
  * Usage:
- *   node scripts/merge-path.mjs select                    # a workflow step; writes mode= to GITHUB_OUTPUT
+ *   node scripts/merge-path.mjs select                    # a workflow step; sets NEXTLY_UNIT_TESTS in GITHUB_ENV
  *   node scripts/merge-path.mjs tripwire <before> <after> # a workflow step on push to main
  *   node scripts/merge-path.mjs enablement                # by hand, with GH_TOKEN of an admin
  * Reads GITHUB_REPOSITORY (default nextlyhq/nextly), GH_TOKEN or GITHUB_TOKEN,
@@ -62,7 +62,7 @@ export function selectionMode({ event, switchValue, rules }) {
   if (switchValue !== "on") {
     return {
       mode: "shadow",
-      reason: `${SELECTION_SWITCH} is not on, so the pull request tests everything and its selection is only reported`,
+      reason: `${SELECTION_SWITCH} is not on, so a pull request tests everything and its selection is only reported`,
       guardFailure: null,
     };
   }
@@ -145,9 +145,17 @@ async function readOrNull(path, context) {
   }
 }
 
-/** Appends `name=value` to the step's outputs, when the step has them. */
-function setOutput(env, name, value) {
-  if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `${name}=${value}\n`);
+/**
+ * The job variable later steps read the mode from. A variable rather than a
+ * step output, so a step's condition can test it without naming this step:
+ * the full suite runs whenever it is not exactly `select`, including when this
+ * step failed or never ran.
+ */
+export const MODE_VARIABLE = "NEXTLY_UNIT_TESTS";
+
+/** Sets a variable for the job's later steps, when there is a job to set it for. */
+function setJobVariable(env, name, value) {
+  if (env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, `${name}=${value}\n`);
 }
 
 async function select(env, context, repo) {
@@ -157,7 +165,7 @@ async function select(env, context, repo) {
   const rules = event === "pull_request" && switchValue === "on" ? await readOrNull(`repos/${repo}/rules/branches/main`, context) : [];
   const verdict = selectionMode({ event, switchValue, rules });
   console.log(`merge-path: ${verdict.mode}, because ${verdict.reason}`);
-  setOutput(env, "mode", verdict.mode);
+  setJobVariable(env, MODE_VARIABLE, verdict.mode);
   if (verdict.guardFailure) {
     console.log(`::error title=Selection guard::${verdict.guardFailure}`);
     return 1;
