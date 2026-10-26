@@ -15,6 +15,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -49,6 +50,9 @@ describe("publish enforcement on the batch worker paths (integration)", () => {
         }),
       ],
     });
+    // A code rule only narrows the permission, so the author holds create on
+    // posts; the publish rule still refuses the published rows.
+    await userWhoMay(current, "author", "create", ["posts"]);
     const collectionService =
       current.getService<CollectionService>("collectionService");
 
@@ -95,6 +99,9 @@ describe("publish enforcement on the batch worker paths (integration)", () => {
         }),
       ],
     });
+    // A code rule only narrows the permission, so the author holds update on
+    // posts; the publish rule still refuses the move to published.
+    await userWhoMay(current, "author", "update", ["posts"]);
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     const entryService = handler.getEntryService();

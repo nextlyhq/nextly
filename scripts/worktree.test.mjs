@@ -20,6 +20,7 @@ import {
   MAX_SLOTS,
   TEST_DATABASES,
   databaseToDrop,
+  dropDatabases,
   findWorktree,
   isReclaimable,
   parseSlot,
@@ -108,6 +109,50 @@ describe("the database a slot owns", () => {
   it("never drops the shared default", () => {
     expect(databaseToDrop(0)).toBeNull();
     expect(databaseToDrop(2)).toBe("nextly_test_w2");
+  });
+});
+
+describe("dropping a slot's databases", () => {
+  /**
+   * A stand-in for the test containers: the databases each one holds, the
+   * listing queries answered from them, and DROP removing from them. The
+   * integration suite's per-worker databases (`<slot database>_pool<n>`, made
+   * by its global setup) are planted beside the slot's own.
+   */
+  function servers(held) {
+    const databases = new Map(Object.entries(held).map(([c, names]) => [c, new Set(names)]));
+    const run = (_cmd, args) => {
+      const container = args[1];
+      const statement = args[args.length - 1];
+      const held = databases.get(container);
+      const listing = /'\^(.+)\$'/.exec(statement);
+      if (/^SELECT/.test(statement) && listing) {
+        const pattern = new RegExp(`^${listing[1]}$`);
+        return [...held].filter(name => pattern.test(name)).join("\n");
+      }
+      const drop = /^DROP DATABASE IF EXISTS `?(\w+)`?$/.exec(statement);
+      if (drop) {
+        held.delete(drop[1]);
+        return "";
+      }
+      throw new Error(`unexpected statement: ${statement}`);
+    };
+    return { databases, run, isRunning: () => true };
+  }
+
+  it("drops the slot's per-worker databases with its own, on every container", () => {
+    const { databases, run, isRunning } = servers({
+      "nextly-postgres17-test": ["nextly_test_w7", "nextly_test_w7_pool1", "nextly_test_w7_pool2", "nextly_test_w70_pool1"],
+      "nextly-postgres15-test": ["nextly_test_w7"],
+      "nextly-mysql-test": ["nextly_test_w7", "nextly_test_w7_pool1"],
+    });
+    const results = dropDatabases(7, { run, isRunning });
+
+    expect([...databases.get("nextly-postgres17-test")]).toEqual(["nextly_test_w70_pool1"]);
+    expect([...databases.get("nextly-postgres15-test")]).toEqual([]);
+    expect([...databases.get("nextly-mysql-test")]).toEqual([]);
+    expect(results.filter(r => r.state === "dropped").map(r => r.detail)).toContain("nextly_test_w7_pool2");
+    expect(teardownIncomplete(results)).toBe(false);
   });
 });
 

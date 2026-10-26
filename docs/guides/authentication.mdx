@@ -309,7 +309,7 @@ export async function GET(req: Request) {
 }
 ```
 
-`hasRole`, `hasAnyRole`, `hasAllRoles` and the `requireRole*` guards are deprecated and are removed in the next release. They compare the user's role ids with role names, so they never match a role by its name.
+`nextly/auth` has no role checks. A session carries role ids, not role names, so ask the question you mean: a permission through `nextly.access.check`, or super-admin authority through `isSuperAdmin`.
 
 ## Permissions
 
@@ -321,7 +321,7 @@ For the full RBAC reference (role hierarchy, the seeded permission inventory, si
 
 ## Code-defined access control
 
-You can attach access rules directly to collections and singles via `defineCollection({ access })`. Rules can be a boolean or a function that receives the request context. A declared rule is what a signed-in user is judged by, so it checks the role's permission itself and only narrows from there; Super Admin always bypasses everything. Don't decide by a role's name: a custom role, or an API key, that holds the permission would be refused.
+You can attach access rules directly to collections and singles via `defineCollection({ access })`. Rules can be a boolean or a function that receives the request context. A declared rule only narrows the role's permission: a signed-in user or an API key needs the permission first, and the rule lets them through only by returning `true`. Super Admin always bypasses everything. Don't decide by a role's name: a custom role, or an API key, that holds the permission would be refused.
 
 ```typescript
 // src/collections/posts.ts
@@ -330,13 +330,13 @@ import { defineCollection } from "nextly/config";
 export default defineCollection({
   slug: "posts",
   access: {
-    // Boolean: anyone, visitors included, can read
+    // Boolean: visitors can read, and signed-in callers holding read-posts
     read: true,
 
-    // Function: the caller's role holds the permission (`create-posts`, ...)
-    create: ({ permissions }) => permissions.includes("create-posts"),
-    update: ({ permissions }) => permissions.includes("update-posts"),
-    delete: ({ permissions }) => permissions.includes("delete-posts"),
+    // Function: on top of the role's update-posts, not during a content freeze
+    update: () => process.env.CONTENT_FREEZE !== "on",
+
+    // Create and delete declare no rule: the role's permission decides
   },
   fields: [
     // ...

@@ -95,11 +95,12 @@ const PRINCIPALS: readonly Caller[] = ["principal", "principal-other"];
  * read, a create or a delete meets an access object with no rule for it.
  * `role-name` admits a caller whose roles include one named `editor`, the
  * shape a template rule takes when it checks names instead of permissions.
- * `permission-spelling` admits a caller whose rule-facing permissions hold
- * `<collection>:<operation>`, the earlier spelling a rule is still handed for
- * one release, so a door that drops it refuses. `role-screen-spelling` admits
- * one whose permissions hold `<operation>-<collection>`, as the role screen
- * spells it, so a door that hands a rule only the earlier spelling refuses.
+ * `permission-spelling` checks for `<collection>:<operation>`, the spelling
+ * rules were once handed and are handed no more, so it must refuse at every
+ * door: a door that still hands a rule that spelling allows where it should
+ * not. `role-screen-spelling` admits a caller whose permissions hold
+ * `<operation>-<collection>`, as the role screen spells it, so a door that
+ * hands a rule any other spelling refuses.
  * `principal-kind` admits only a person of the `principal` caller's kind,
  * so a door that drops the person from the rule's context refuses it too.
  * `user-is-key-maker` admits only the caller whose `user` is `user-with`:
@@ -109,6 +110,14 @@ const PRINCIPALS: readonly Caller[] = ["principal", "principal-other"];
  * one, answers it differently. `publish-false` declares only a refusing
  * publish and unpublish rule, so a door that judges a publish by the update
  * rule allows what it refuses.
+ *
+ * The filter kinds answer with a filter over the target's entries instead of
+ * a boolean: `returns-filter` one matching the probe entry and `async-filter`
+ * the same from a promise. `returns-empty-in` gives an empty `in` and
+ * `malformed-filter` an operator no filter has, neither of them a well-formed
+ * filter, so they stay refused once filters apply. A door that applies filters
+ * returns only the entries a well-formed one matches; until one does, a filter
+ * is not `true`, and every door refuses it.
  */
 export const RULES = [
   "none",
@@ -130,13 +139,18 @@ export const RULES = [
   "principal-kind",
   "user-is-key-maker",
   "publish-false",
+  "returns-filter",
+  "async-filter",
+  "returns-empty-in",
+  "malformed-filter",
 ] as const;
 export type Rule = (typeof RULES)[number];
 
 /**
  * What a caller asks to do. `list` and `count` read a collection's entries
  * through the list and count paths, which a door judges apart from the read
- * of one entry by its id.
+ * of one entry by its id. `new-pub` creates an entry already
+ * published, which needs the create and the publish permission together.
  */
 export const ACTIONS = [
   "read",
@@ -147,12 +161,17 @@ export const ACTIONS = [
   "unpublish",
   "list",
   "count",
+  "new-pub",
 ] as const;
 export type Action = (typeof ACTIONS)[number];
 
-/** The actions that name one entry, which every collection door can ask. */
+/**
+ * The actions every collection door can ask: each names one permission. A
+ * list and a count read many entries, and a create sent as published is two
+ * permissions at once, so only the doors that send a write ask it.
+ */
 export const ENTRY_ACTIONS = ACTIONS.filter(
-  action => action !== "list" && action !== "count"
+  action => action !== "list" && action !== "count" && action !== "new-pub"
 );
 
 /**
@@ -437,6 +456,12 @@ const NO_SERVICE_RULES: readonly Rule[] = [
   "returns-true",
   "returns-false",
   "returns-null",
+  // A rule's filter reaches the fallbacks a missing service leaves too, which
+  // judge a rule's answer apart from the service's doors.
+  "returns-filter",
+  "async-filter",
+  "returns-empty-in",
+  "malformed-filter",
 ];
 
 /** Every combination of the lists, target first and caller last. */
@@ -532,9 +557,7 @@ const RULE_SAYS: Record<Rule, RuleAnswer> = {
   "async-throws": SAYS_NOT_TRUE,
   "other-operation": action => (action === "update" ? false : null),
   "role-name": (_action, caller) => holdsRoleNamedEditor(caller),
-  "permission-spelling": (action, caller) =>
-    HOLDS_ROLES.includes(caller) &&
-    holdsPermission(caller, action, "collection"),
+  "permission-spelling": SAYS_NOT_TRUE,
   "role-screen-spelling": (action, caller) =>
     HOLDS_ROLES.includes(caller) &&
     holdsPermission(caller, action, "collection"),
@@ -542,6 +565,11 @@ const RULE_SAYS: Record<Rule, RuleAnswer> = {
   "user-is-key-maker": (_action, caller) => MADE_BY_USER_WITH.includes(caller),
   "publish-false": action =>
     action === "publish" || action === "unpublish" ? false : null,
+  // A filter is not `true`, and no door applies one yet, so each refuses.
+  "returns-filter": SAYS_NOT_TRUE,
+  "async-filter": SAYS_NOT_TRUE,
+  "returns-empty-in": SAYS_NOT_TRUE,
+  "malformed-filter": SAYS_NOT_TRUE,
 };
 
 /**
@@ -670,8 +698,16 @@ function rulesAllow(rule: Rule, action: Action, caller: Caller): boolean {
  *   unpublish is judged on top of update (`shared/types/access.ts`), so where
  *   the target declares an update rule, it must allow the change as well.
  *   A `list` and a `count` are reads, judged by the read permission and rule.
+ *   A create sent as published is a create and a publish, allowed only where
+ *   both are.
  */
 export function oneAnswer(row: Row): Verdict {
+  if (row.action === "new-pub") {
+    const both = (["create", "publish"] as const).every(
+      action => oneAnswer({ ...row, action }) === "allow"
+    );
+    return both ? "allow" : "refuse";
+  }
   const { caller, target, rule } = row;
   const action = judgedAs(row.action);
   if (PRINCIPALS.includes(caller) && target === "media") return "refuse";
@@ -699,7 +735,10 @@ export function oneAnswer(row: Row): Verdict {
  * one, and `.` where the door does not ask the row. `S` is a media row a read
  * was refused and still populated with its file, its internal columns taken
  * off: the way a trusted read bounded away from media presents a refusal, so
- * it counts as one.
+ * it counts as one. `=absent` is a capabilities answer that does not name the
+ * target, which the admin offers nothing for, so it counts as a refusal too:
+ * an entity left out where the caller may act on it still disagrees with the
+ * allow expected there.
  */
 export type Answer = string;
 
@@ -708,6 +747,7 @@ export function verdictOf(answer: Answer): Verdict | "error" {
   if (answer === "R" || answer === "401" || answer === "403") return "refuse";
   if (answer === "S") return "refuse";
   if (answer === "404") return "refuse";
+  if (answer === "=absent") return "refuse";
   return "error";
 }
 

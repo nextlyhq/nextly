@@ -503,9 +503,13 @@ describe("SingleRegistryService", () => {
     it("throws FORBIDDEN when force is not set", async () => {
       ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 0 }));
 
-      await expect(ctx.service.deleteSingle("site-settings")).rejects.toThrow(
-        NextlyError
-      );
+      await expect(
+        ctx.service.deleteSingle("site-settings")
+      ).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        // Told why, in words: a Single is not deleted from here.
+        publicMessage: "A Single can't be deleted from here.",
+      });
     });
 
     it("force-deletes and removes associated permissions", async () => {

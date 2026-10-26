@@ -17,6 +17,7 @@ process.env.NEXTLY_SECRET =
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { defineCollection, text } from "../../../config";
@@ -128,9 +129,11 @@ describe.each(getConfiguredTestDialects())(
         ],
       });
       // The first account of an instance is its super admin; the editor is
-      // the second, reading both collections through their rules.
+      // the second, holding read on both collections, which their rules then
+      // narrow: the permission comes before a code rule.
       await account("re-admin@example.com");
       editor = await account("re-editor@example.com");
+      await grantTo(handle, editor, "read", [POSTS, PAGES]);
     }, 120_000);
 
     afterAll(async () => {

@@ -345,6 +345,7 @@ export { legacySizeToWidgetSize } from "./domains/widgets/definition";
 export {
   applyWidgetSettings,
   effectiveWidgetSettings,
+  naturalGroupBy,
   resolveWidgetSettings,
 } from "./domains/widgets/settings";
 // Whether a link a plugin wrote stays inside the admin: asked at startup and

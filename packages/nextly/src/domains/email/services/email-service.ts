@@ -43,6 +43,7 @@ import { BaseService } from "../../../shared/base-service";
 import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { runAdapterTransaction } from "../../../shared/lib/run-adapter-transaction";
+import { rowLockServer } from "../../audit/audit-log-writer";
 import { pluginSettingsSecrets } from "../../plugins/settings-service";
 import { warnQuietly } from "../../retention/safe-log";
 import {
@@ -50,10 +51,15 @@ import {
   mailboxOf,
   refusedMailboxes,
   messageIdWithoutRecipients,
+  type EmailDeliveryInput,
   type EmailDeliveryRecipientKind,
 } from "../delivery-record";
 import { EmailErrorCode } from "../errors";
-import type { EmailFailure } from "../failure";
+import {
+  type EmailFailure,
+  noAnswerFailure,
+  withEmailFailure,
+} from "../failure";
 import { describeProviderFailure } from "../provider-definition";
 import { warnAboutLateQueuedEmail } from "../queued-email-warning";
 import {
@@ -61,6 +67,7 @@ import {
   type QueuedEmailState,
   type QueuedMessage,
   queuedEmailState,
+  type StoredQueuedEmail,
   storeQueuedEmail,
 } from "../queued-send";
 import {
@@ -69,6 +76,11 @@ import {
   sendKeyOf,
   type HeldClaim,
 } from "../send-claims";
+import {
+  CALL_DEADLINE_MS,
+  LEASE_LIMIT_MS,
+  LEASE_RENEWAL_MS,
+} from "../send-timing";
 import {
   renderTemplateFrom,
   renderTemplateReplyTo,
@@ -94,6 +106,12 @@ import type { EmailProviderService } from "./email-provider-service";
 import type { EmailTemplateService } from "./email-template-service";
 import { LOG_PROVIDER_TYPE } from "./providers/log-provider";
 import {
+  type CallOutcome,
+  pendingEnvelope,
+  sendResultOf,
+  slotsOf,
+} from "./recipient-outcomes";
+import {
   assertSendable,
   assertSendableReplyTo,
   declaredMaxTo,
@@ -115,7 +133,6 @@ import {
   refusedRecipients,
   refusedRecordError,
   type RefusedRecipient,
-  splitSendOutcome,
   thrownFailure,
 } from "./send-failures";
 import { mergeTemplateAttachments } from "./template-attachment-merge";
@@ -185,6 +202,23 @@ function deliveryRecipients(payload: {
 /** What a send, or one message of it, reports to the caller. */
 type SendOutcome = EmailSendOutcome;
 
+/** A template send's own provider, addresses, attachments and identity. */
+interface TemplateSendOptions {
+  providerId?: string;
+  from?: string;
+  replyTo?: string;
+  cc?: string[];
+  bcc?: string[];
+  attachments?: EmailAttachmentInput[];
+  /**
+   * @experimental The plugin-defined person `to` is, by kind and id, so
+   * the delivery record names them and their deletion report erases it.
+   */
+  person?: PrincipalRef;
+  /** @experimental Send this message once for the key (see `send`). */
+  idempotencyKey?: string;
+}
+
 /** What one message's dispatch needs beyond the message itself. */
 interface DispatchContext {
   adapter: EmailProviderAdapter;
@@ -198,6 +232,11 @@ interface DispatchContext {
   keyed?: KeyedSend;
   /** Runs, or queues, the `email.afterSend` actions for this message. */
   afterSend: (value: EmailAfterSendValue) => Promise<void>;
+  /**
+   * Writes, or keeps for the claim's commit, this message's delivery
+   * records. Never throws.
+   */
+  record: (rows: EmailDeliveryInput[]) => Promise<void>;
 }
 
 /** A keyed send's claim, while it sends. */
@@ -242,6 +281,69 @@ function adapterMessage(
     bcc: message.bcc,
     attachments,
   };
+}
+
+/**
+ * The calls a keyed send has had accepted, by provider key: those an earlier
+ * attempt recorded and those of this one, kept on the claim for an instance of
+ * the earlier version that reads progress only that way. A call that took
+ * some of its recipients and refused others counts too: that version cannot
+ * record part of a call, and resending the call would send to the accepted
+ * recipients twice, so it does not retry the refused ones instead.
+ */
+function acceptedCallsOf(
+  claim: HeldClaim,
+  calls: readonly CallOutcome[]
+): string[] {
+  return [
+    ...claim.acceptedCalls,
+    ...calls
+      .filter(call => call.accepted)
+      .map(call => claim.providerKey(call.message)),
+  ];
+}
+
+/** Resolve once `at` (epoch milliseconds) has passed. */
+function untilTime(at: number): Promise<void> {
+  return new Promise(resolve => {
+    // Never what keeps a process alive: nothing else is waiting on it.
+    setTimeout(resolve, Math.max(0, at - Date.now())).unref?.();
+  });
+}
+
+/**
+ * Run after-send actions in turn. Every message has been handed over by
+ * now, so nothing an action or its reporting does can change what was sent.
+ * Contained per value: a failure here would otherwise replace the send's
+ * result with an exception and skip the remaining actions.
+ */
+async function runActions(
+  values: readonly EmailAfterSendValue[],
+  run: (value: EmailAfterSendValue) => Promise<void>
+): Promise<void> {
+  for (const value of values) {
+    try {
+      await run(value);
+    } catch {
+      // The registry already isolates a failing action; reaching here means
+      // its own reporting failed too, and there is nowhere left to report it.
+    }
+  }
+}
+
+/** Whether `promise` settles, either way, within `ms`. */
+function settlesWithin(
+  promise: Promise<unknown>,
+  ms: number
+): Promise<boolean> {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => resolve(false), ms);
+    const settled = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    promise.then(settled, settled);
+  });
 }
 
 /**
@@ -326,6 +428,12 @@ export class EmailService extends BaseService {
   /** Who sends through this instance: a keyed send is scoped to them. */
   private keyScope: string = CORE_KEY_SCOPE;
 
+  /**
+   * The copies a template send adds in place of the template's own, when
+   * set (`withTemplateCopies`).
+   */
+  private frozenCopies?: { cc: string[]; bcc: string[] };
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -398,6 +506,17 @@ export class EmailService extends BaseService {
   }
 
   /**
+   * @internal This service, sending a template with `copies` in place of the
+   * copies the template has now: a queued template email is sent with the
+   * copies it was queued with, which are the ones its erasure can find.
+   */
+  withTemplateCopies(copies: { cc: string[]; bcc: string[] }): EmailService {
+    const view = Object.create(this) as EmailService;
+    view.frozenCopies = copies;
+    return view;
+  }
+
+  /**
    * Send an email using a named template.
    *
    * Resolution order for templates:
@@ -420,21 +539,40 @@ export class EmailService extends BaseService {
     templateSlug: string,
     to: string | string[],
     variables: Record<string, unknown>,
-    options?: {
-      providerId?: string;
-      from?: string;
-      replyTo?: string;
-      cc?: string[];
-      bcc?: string[];
-      attachments?: EmailAttachmentInput[];
-      /**
-       * @experimental The plugin-defined person `to` is, by kind and id, so
-       * the delivery record names them and their deletion report erases it.
-       */
-      person?: PrincipalRef;
-      /** @experimental Send this message once for the key (see `send`). */
-      idempotencyKey?: string;
-    }
+    options?: TemplateSendOptions
+  ): Promise<EmailSendOutcome> {
+    return this.sendTemplate(templateSlug, to, variables, options, {
+      templateCopies: true,
+    });
+  }
+
+  /**
+   * Send a template's test to one person: the one who asked for it.
+   *
+   * Rendered and delivered as a real send of the template is, with the
+   * template's own copies left out: a test carries sample data, so it is not
+   * the email anyone the template copies (a team inbox, a manager) expects.
+   *
+   * @param templateSlug - Template slug
+   * @param to - The address the test goes to, and the only one
+   * @param variables - The sample data it renders with
+   */
+  async sendTemplateTest(
+    templateSlug: string,
+    to: string,
+    variables: Record<string, unknown>
+  ): Promise<EmailSendOutcome> {
+    return this.sendTemplate(templateSlug, to, variables, undefined, {
+      templateCopies: false,
+    });
+  }
+
+  private async sendTemplate(
+    templateSlug: string,
+    to: string | string[],
+    variables: Record<string, unknown>,
+    options: TemplateSendOptions | undefined,
+    { templateCopies }: { templateCopies: boolean }
   ): Promise<EmailSendOutcome> {
     // Whitespace-only overrides must not shadow the template/provider
     // defaults or reach a provider as malformed headers.
@@ -508,6 +646,7 @@ export class EmailService extends BaseService {
           replyTo: replyToOverride,
           cc: options?.cc,
           bcc: options?.bcc,
+          templateCopies,
         }),
         providerId: options?.providerId ?? dbTemplate.providerId ?? undefined,
         // Which template this was, for the delivery log. Without it every
@@ -567,6 +706,7 @@ export class EmailService extends BaseService {
           replyTo: replyToOverride,
           cc: options?.cc,
           bcc: options?.bcc,
+          templateCopies,
         }),
         attachments:
           mergedAttachments.length > 0 ? mergedAttachments : undefined,
@@ -763,8 +903,6 @@ export class EmailService extends BaseService {
     // recipients, and is held to the same rule before any provider is called.
     assertSendableReplyTo(envelope.replyTo);
 
-    const messages = messagesFor(envelope, maxToPerMessage);
-
     // Claimed on the envelope that goes out, so a filter's change is part of
     // the message the key names. A repeat is answered here, sending nothing.
     const claimed = await this.claimForSend(options.idempotencyKey, {
@@ -773,6 +911,17 @@ export class EmailService extends BaseService {
       person,
     });
     if (claimed && "answer" in claimed) return claimed.answer;
+
+    // A keyed retry sends only to the recipients an earlier attempt with the
+    // key had not reached. With none, this is the envelope itself.
+    const previouslyAccepted = this.acceptedBefore(
+      claimed?.keyed.claim,
+      envelope
+    );
+    const messages = messagesFor(
+      pendingEnvelope(envelope, previouslyAccepted),
+      maxToPerMessage
+    );
 
     const runAfterSend = (value: EmailAfterSendValue) =>
       registry.runActions<EmailAfterSendValue, EmailFilterContext>(
@@ -784,16 +933,23 @@ export class EmailService extends BaseService {
     // action runs. Actions are awaited, and one that never settles would
     // otherwise keep every later recipient from being sent to. A single
     // message runs its actions where it always has.
+    //
+    // A keyed send's actions also wait, until its records and outcome are
+    // committed: an action that stalls must not keep a delivered message
+    // uncommitted, to be sent again once its claim lapses.
     const deferred: EmailAfterSendValue[] = [];
     const afterSend =
-      messages.length === 1
+      messages.length === 1 && !claimed
         ? runAfterSend
         : (value: EmailAfterSendValue) => {
             deferred.push(value);
             return Promise.resolve();
           };
 
-    const { outcomes, acceptedLegs } = await this.dispatchAll(messages, {
+    // A keyed send's records are kept, to commit with its claim's outcome;
+    // any other send's are written as each message is answered, as before.
+    const records: EmailDeliveryInput[] | undefined = claimed ? [] : undefined;
+    const calls = await this.dispatchAll(messages, {
       adapter,
       providerType,
       resolvedProviderId,
@@ -803,63 +959,157 @@ export class EmailService extends BaseService {
       resolvedAttachments,
       keyed: claimed?.keyed,
       afterSend,
+      record: rows => this.recordOrKeep(rows, records),
     });
     // One message is today's send, and its result is returned as it is; a
     // split send's messages are combined into one result.
-    const outcome =
-      outcomes.length === 1 ? outcomes[0] : splitSendOutcome(outcomes);
-    if (claimed) {
-      await this.deliveries?.settleSend(
-        claimed.keyed.claim,
-        outcome,
-        acceptedLegs
-      );
+    const { outcome, accepted } = sendResultOf(
+      envelope,
+      previouslyAccepted,
+      calls
+    );
+    const late = calls.some(call => call.late);
+    let committed = true;
+    if (late) {
+      // A call is still unsettled: its claim stays held, renewed, until the
+      // call answers or the lease limit passes, and is settled then.
+      void this.finishLateCalls({
+        keyed: claimed?.keyed,
+        envelope,
+        previouslyAccepted,
+        calls,
+        records,
+        actions: { deferred, run: runAfterSend },
+      });
+    } else if (claimed) {
+      committed =
+        (await this.deliveries?.settleSend(
+          claimed.keyed.claim,
+          outcome,
+          accepted,
+          records,
+          acceptedCallsOf(claimed.keyed.claim, calls)
+        )) ?? true;
     }
 
-    for (const value of deferred) {
-      // Every message has been handed over by now, so nothing an action or
-      // its reporting does can change what was sent. Contained per message,
-      // as a one-message send's are: a failure here would otherwise replace
-      // the send's result with an exception and skip the remaining actions.
-      try {
-        await runAfterSend(value);
-      } catch {
-        // The registry already isolates a failing action; reaching here
-        // means its own reporting failed too, and there is nowhere left to
-        // report it. The send's result stands.
-      }
+    // A keyed send's actions run once its outcome is committed: not at all
+    // when the commit failed, since the send that takes its claim over runs
+    // them, and from the late finisher when a call is still unsettled.
+    // Taken, not iterated in place: a late call adds its actions afterwards.
+    if (committed && !(claimed && late)) {
+      await runActions(deferred.splice(0), runAfterSend);
     }
 
     return outcome;
   }
 
   /**
-   * Hand each message to the provider in turn, and say which calls of a keyed
-   * send have been accepted, by their provider key.
+   * The recipients an earlier attempt with the key had accepted, by place: as
+   * the claim records them, or, for a claim that recorded accepted calls,
+   * every recipient of each call it records.
+   */
+  private acceptedBefore(
+    claim: HeldClaim | undefined,
+    envelope: SendEnvelope
+  ): ReadonlySet<string> {
+    // Calls are read only from a claim the earlier version wrote, which has no
+    // recipients: a claim that records both is read by its recipients, which
+    // keep a refused copy apart from the call that carried it.
+    if (
+      !claim ||
+      claim.acceptedRecipients.size > 0 ||
+      claim.acceptedCalls.size === 0
+    ) {
+      return claim?.acceptedRecipients ?? new Set<string>();
+    }
+    // The calls are matched in both shapes a send can take, whole and one
+    // message per `to`, whatever the provider now: the earlier attempt may
+    // have gone through a provider that groups recipients differently.
+    const candidates = [
+      envelope,
+      ...(envelope.to.length > 1 ? messagesFor(envelope, 1) : []),
+    ];
+    const calls = candidates.filter(message =>
+      claim.acceptedCalls.has(claim.providerKey(message))
+    );
+    return new Set([...claim.acceptedRecipients, ...slotsOf(envelope, calls)]);
+  }
+
+  /**
+   * Hand each message to the provider in turn, and say what each call
+   * answered.
    *
    * In turn rather than at once: a provider that takes one `to` per message
    * is usually one that rate-limits, and the delivery records of each message
-   * are written before the next is sent. A call an earlier attempt with the
-   * key already had accepted is not sent again.
+   * are written before the next is sent.
    */
   private async dispatchAll(
     messages: readonly SendMessage[],
     context: DispatchContext
-  ): Promise<{ outcomes: SendOutcome[]; acceptedLegs: string[] }> {
-    const claim = context.keyed?.claim;
-    const accepted = new Set(claim?.acceptedLegs ?? []);
-    const outcomes: SendOutcome[] = [];
+  ): Promise<CallOutcome[]> {
+    const calls: CallOutcome[] = [];
     for (const message of messages) {
-      const leg = claim?.providerKey(message);
-      if (leg !== undefined && accepted.has(leg)) {
-        outcomes.push({ success: true });
-        continue;
-      }
-      const outcome = await this.dispatchMessage(message, context);
-      if (leg !== undefined && outcome.success) accepted.add(leg);
-      outcomes.push(outcome);
+      calls.push(await this.dispatchMessage(message, context));
     }
-    return { outcomes, acceptedLegs: [...accepted] };
+    return calls;
+  }
+
+  /**
+   * Finish a send whose calls were still unsettled at their deadline: renew
+   * its claim's lease while they are, record what each answers within the
+   * lease limit (or that it never answered), and settle the claim with the
+   * send's outcome then. Never throws: the caller has its result.
+   */
+  private async finishLateCalls(late: {
+    keyed?: KeyedSend;
+    envelope: SendEnvelope;
+    previouslyAccepted: ReadonlySet<string>;
+    calls: readonly CallOutcome[];
+    records?: EmailDeliveryInput[];
+    actions: {
+      deferred: EmailAfterSendValue[];
+      run: (value: EmailAfterSendValue) => Promise<void>;
+    };
+  }): Promise<void> {
+    let committed = true;
+    const renewal = setInterval(() => {
+      void late.keyed?.renew();
+    }, LEASE_RENEWAL_MS);
+    // A renewal timer must not keep a process alive that has nothing else.
+    renewal.unref?.();
+    try {
+      const calls = await Promise.all(
+        late.calls.map(call =>
+          call.late ? call.late() : Promise.resolve(call)
+        )
+      );
+      if (late.keyed) {
+        const { outcome, accepted } = sendResultOf(
+          late.envelope,
+          late.previouslyAccepted,
+          calls
+        );
+        committed =
+          (await this.deliveries?.settleSend(
+            late.keyed.claim,
+            outcome,
+            accepted,
+            late.records,
+            acceptedCallsOf(late.keyed.claim, calls)
+          )) ?? true;
+      }
+    } catch (error) {
+      committed = false;
+      warnQuietly(this.logger, "A late email send could not be finished", {
+        error,
+      });
+    } finally {
+      clearInterval(renewal);
+    }
+    // The actions still waiting, after the commit, and only once it holds.
+    if (committed) {
+      await runActions(late.actions.deferred.splice(0), late.actions.run);
+    }
   }
 
   /**
@@ -914,8 +1164,91 @@ export class EmailService extends BaseService {
   private async dispatchMessage(
     message: SendMessage,
     context: DispatchContext
-  ): Promise<SendOutcome> {
+  ): Promise<CallOutcome> {
+    // A keyed send of several messages renews its claim before each one, so a
+    // later send with the key does not take over a send still in progress.
+    await context.keyed?.renew();
     const startedAt = Date.now();
+    const controller = new AbortController();
+    // Started once, and answered within the deadline or carried on past it:
+    // never started again, which would send the message twice.
+    const sending = Promise.resolve().then(() =>
+      context.adapter.send({
+        ...adapterMessage(message, context),
+        signal: controller.signal,
+      })
+    );
+    if (await settlesWithin(sending, CALL_DEADLINE_MS)) {
+      const answered = await this.recordAnswer(
+        message,
+        context,
+        sending,
+        startedAt
+      );
+      // An unknown answer, such as a connection lost after the request went
+      // out, may still be delivered by the provider: a keyed call's claim is
+      // held to the lease limit, as a late call's is, so a retry with the key
+      // is told the send is in progress rather than sending it again.
+      if (context.keyed && answered.outcome.failure?.unknown) {
+        const heldUntil = startedAt + LEASE_LIMIT_MS;
+        return {
+          ...answered,
+          late: async () => {
+            await untilTime(heldUntil);
+            return answered;
+          },
+        };
+      }
+      return answered;
+    }
+    // No answer yet: the caller is told so now, the adapter is told to stop,
+    // and the call is finished later with whatever it answers, by its own
+    // lease limit, counted from when it started.
+    controller.abort();
+    const limitAt = startedAt + LEASE_LIMIT_MS;
+    return {
+      message,
+      outcome: { success: false, failure: noAnswerFailure() },
+      accepted: false,
+      late: async () => {
+        if (await settlesWithin(sending, Math.max(0, limitAt - Date.now()))) {
+          const answered = await this.recordAnswer(
+            message,
+            context,
+            sending,
+            startedAt
+          );
+          // An answer that is itself unknown, as the cancellation gives a
+          // keyless adapter that honours it, may still be processing at the
+          // provider: its claim is held to the lease limit all the same.
+          // Only a keyed call has a claim to hold.
+          if (context.keyed && answered.outcome.failure?.unknown) {
+            await untilTime(limitAt);
+          }
+          return answered;
+        }
+        // Never answered: recorded as without an answer, and its claim let go.
+        const outcome = await this.recordFailed(
+          message,
+          withEmailFailure(
+            new Error("no answer by the lease limit"),
+            noAnswerFailure()
+          ),
+          context,
+          startedAt
+        );
+        return { message, outcome, accepted: false };
+      },
+    };
+  }
+
+  /** Record what a provider call answered, or how it failed. */
+  private async recordAnswer(
+    message: SendMessage,
+    context: DispatchContext,
+    sending: Promise<Awaited<ReturnType<EmailProviderAdapter["send"]>>>,
+    startedAt: number
+  ): Promise<CallOutcome> {
     // Two fields rather than one, because they answer different questions
     // and only one of them can be answered immediately. `verdict` is the fact
     // that the provider took the message; `dispatched` is the response, which
@@ -929,14 +1262,9 @@ export class EmailService extends BaseService {
     // failed, and an auth flow withholding a token for a message that was
     // delivered.
     const state: DispatchState = {};
-    // A keyed send of several messages renews its claim before each one, so a
-    // later send with the key does not take over a send still in progress.
-    await context.keyed?.renew();
 
     try {
-      const result = await context.adapter.send(
-        adapterMessage(message, context)
-      );
+      const result = await sending;
 
       // The provider has answered, and WHAT it answered. Both are recorded
       // here: a later throw must not be able to turn a refusal into a success
@@ -946,25 +1274,33 @@ export class EmailService extends BaseService {
       // said it did not send.
       state.verdict = result.success === true;
 
-      return await this.recordAccepted(
+      const outcome = await this.recordAccepted(
         message,
         result,
         context,
         state,
         startedAt
       );
+      return { message, outcome, accepted: state.verdict };
     } catch (error) {
       // The message was already accepted, so this is not a provider failure
       // however it reached here. Reporting one would contradict the rows and
       // the action that have already gone out, and would tell an auth flow to
       // withhold a token for a mail that was sent.
       if (state.verdict !== undefined) {
-        return this.acceptedDespite(error, context.providerType, {
+        const outcome = this.acceptedDespite(error, context.providerType, {
           verdict: state.verdict,
           dispatched: state.dispatched,
         });
+        return { message, outcome, accepted: state.verdict };
       }
-      return await this.recordFailed(message, error, context, startedAt);
+      const outcome = await this.recordFailed(
+        message,
+        error,
+        context,
+        startedAt
+      );
+      return { message, outcome, accepted: false };
     }
   }
 
@@ -1077,7 +1413,7 @@ export class EmailService extends BaseService {
     // `success: false`, and tell the caller a delivered message failed.
     state.dispatched = outcome;
 
-    await this.deliveries?.recordAll(
+    await context.record(
       recipients.map(recipient =>
         acceptedRow(recipient, {
           refused,
@@ -1207,7 +1543,7 @@ export class EmailService extends BaseService {
     // Contained, like the log line below: a recorder or a logger that throws
     // here would otherwise turn this message's failure into an exception, and
     // on a split send stop every later message from being sent.
-    await this.containedRecord(
+    await context.record(
       recipients.map(recipient => ({
         ...rowBase(recipient, context),
         status: "failed" as const,
@@ -1259,10 +1595,18 @@ export class EmailService extends BaseService {
     return { success: false, failure };
   }
 
-  /** Record delivery rows, never letting the recorder's own failure escape. */
-  private async containedRecord(
-    rows: Parameters<EmailDeliveryService["recordAll"]>[0]
+  /**
+   * Record delivery rows, or keep them in `kept` for a keyed send's commit,
+   * never letting the recorder's own failure escape.
+   */
+  private async recordOrKeep(
+    rows: EmailDeliveryInput[],
+    kept: EmailDeliveryInput[] | undefined
   ): Promise<void> {
+    if (kept) {
+      kept.push(...rows);
+      return;
+    }
     try {
       await this.deliveries?.recordAll(rows);
     } catch {
@@ -1335,11 +1679,13 @@ export class EmailService extends BaseService {
    * and the recipients as the caller gave them. A staff person is read in
    * `tx` when the email is queued in a transaction, so a user that
    * transaction wrote is seen, as the queued email will be.
+   *
+   * @returns The person as the send records them, when it names one
    */
   private async assertQueueable(
     checks: QueueChecks,
     tx?: TransactionContext
-  ): Promise<void> {
+  ): Promise<PrincipalRef | null> {
     if (checks.idempotencyKey !== undefined) {
       assertIdempotencyKey(checks.idempotencyKey);
     }
@@ -1347,6 +1693,7 @@ export class EmailService extends BaseService {
     assertSendable(toAddressList(checks.to), {
       namesPerson: recorded !== null,
     });
+    return recorded;
   }
 
   /** Store a queued email, and start its first attempt once it is durable. */
@@ -1356,33 +1703,51 @@ export class EmailService extends BaseService {
     tx: TxOption["tx"],
     operation: string
   ): Promise<QueuedEmail> {
-    const input = {
+    // Refused before anything is read: a lookup on the pool from inside an
+    // open transaction can wait on that transaction's own connection.
+    if (tx === undefined) assertNoOpenTransaction(this.adapter, operation);
+    const sealed: QueuedMessage =
+      message.kind === "template"
+        ? {
+            ...message,
+            templateCopies: await this.queuedTemplateCopies(message.slug),
+          }
+        : message;
+    const input = (person: PrincipalRef | null) => ({
       scope: this.keyScope,
-      message,
+      message: sealed,
+      person,
       secrets: pluginSettingsSecrets(env),
+      lockServer: rowLockServer(this.adapter, this.dialect),
       dialect: this.dialect,
       now: new Date(),
-    };
+    });
     if (tx !== undefined) {
       const link = linkedTransaction(tx, operation);
-      const { id, jobId } = await link.run(async adapterTx => {
-        await this.assertQueueable(checks, adapterTx);
-        return storeQueuedEmail(adapterTx, input);
+      const stored = await link.run(async adapterTx => {
+        const person = await this.assertQueueable(checks, adapterTx);
+        return storeQueuedEmail(adapterTx, input(person));
       });
-      link.afterCommit(() => this.firstAttempt(jobId));
-      return { id, state: "waiting" };
+      if (stored.state === "waiting") {
+        link.afterCommit(() => this.firstAttempt(stored.jobId));
+      }
+      return { id: stored.id, state: stored.state };
     }
-    assertNoOpenTransaction(this.adapter, operation);
-    await this.assertQueueable(checks);
-    const { id, jobId } = await runAdapterTransaction<
-      { id: string; jobId: string },
+    const person = await this.assertQueueable(checks);
+    const stored = await runAdapterTransaction<
+      StoredQueuedEmail,
       TransactionContext
     >(
       run => this.adapter.transaction(ctx => run(ctx)),
-      ctx => storeQueuedEmail(ctx, input)
+      ctx => storeQueuedEmail(ctx, input(person))
     );
-    await this.firstAttempt(jobId);
-    return { id, state: await this.stateAfterFirstAttempt(id) };
+    // Stored cancelled: its person was deleted first, and nothing is sent.
+    if (stored.state === "cancelled") return stored;
+    await this.firstAttempt(stored.jobId);
+    return {
+      id: stored.id,
+      state: await this.stateAfterFirstAttempt(stored.id),
+    };
   }
 
   /**
@@ -1654,6 +2019,8 @@ export class EmailService extends BaseService {
       replyTo?: string;
       cc?: string[];
       bcc?: string[];
+      /** False for a test, which reaches only the person who asked for it. */
+      templateCopies: boolean;
     }
   ): { from?: string; replyTo?: string; cc?: string[]; bcc?: string[] } {
     const from =
@@ -1666,15 +2033,61 @@ export class EmailService extends BaseService {
       (template?.replyTo != null
         ? renderTemplateReplyTo(template.replyTo, variables, slug)
         : undefined);
-    let copies = { cc: template?.cc ?? null, bcc: template?.bcc ?? null };
+    return {
+      from,
+      replyTo,
+      ...withTemplateCopies(
+        { to: given.to, cc: given.cc, bcc: given.bcc },
+        given.templateCopies
+          ? this.templateCopies(template, slug, this.frozenCopies)
+          : { cc: null, bcc: null }
+      ),
+    };
+  }
+
+  /**
+   * The copies a template adds to every send: its stored `cc` and `bcc`, or
+   * `frozen` in their place when given, and none either way on a template
+   * that carries a secret now. Checked on the template as it is at the send,
+   * so copies frozen when an email was queued are left out once its owner
+   * marks it as carrying a secret.
+   */
+  private templateCopies(
+    template: EmailTemplateRecord | null,
+    slug: string,
+    frozen?: { cc: string[]; bcc: string[] }
+  ): { cc: string[] | null; bcc: string[] | null } {
+    const copies = frozen ?? {
+      cc: template?.cc ?? null,
+      bcc: template?.bcc ?? null,
+    };
     if (template?.carriesSecret && (copies.cc?.length || copies.bcc?.length)) {
       this.logger.warn(
         "Left out an email template's copies: the template carries a secret",
         { slug }
       );
-      copies = { cc: null, bcc: null };
+      return { cc: null, bcc: null };
     }
-    return { from, replyTo, ...withTemplateCopies(given, copies) };
+    return copies;
+  }
+
+  /**
+   * The copies a queued template email will be sent with, as the template
+   * has them now, so erasing a copied address finds the email. None when the
+   * template cannot be read, as a send falls back to the site's code version
+   * then too.
+   */
+  private async queuedTemplateCopies(
+    slug: string
+  ): Promise<{ cc: string[]; bcc: string[] }> {
+    let template: EmailTemplateRecord | null = null;
+    try {
+      ({ template } = await this.templateService.resolveForSend(slug));
+    } catch {
+      return { cc: [], bcc: [] };
+    }
+    const copies = this.templateCopies(template, slug);
+    return { cc: copies.cc ?? [], bcc: copies.bcc ?? [] };
   }
 
   /** The site's code version of a template, from `email.templates`, if it sets one. */

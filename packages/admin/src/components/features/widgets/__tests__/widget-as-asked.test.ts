@@ -9,6 +9,8 @@ import { describe, expect, it } from "vitest";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import {
+  askableQuery,
+  askableWith,
   settingsAsAsked,
   titleAsAsked,
   widgetAsAsked,
@@ -148,5 +150,101 @@ describe("a custom card asking through cells", () => {
       "Count: drafts"
     );
     expect(titleAsAsked(count, {}, [posts])).toBe("Count");
+  });
+});
+
+describe("whether a card can be asked", () => {
+  const choices = [{ value: "a", label: "A" }];
+  const sources: PublishedContentSource[] = [
+    {
+      collection: "posts",
+      label: "Posts",
+      lifecycle: true,
+      fields: [{ name: "status", type: "string", choices }],
+    },
+    {
+      collection: "notes",
+      label: "Notes",
+      lifecycle: false,
+      fields: [{ name: "title", type: "string" }],
+    },
+  ];
+  const breakdown = {
+    id: "core/breakdown",
+    title: "Breakdown",
+    archetype: "bars",
+    settings: [
+      { name: "collection", type: "collection" },
+      {
+        name: "groupBy",
+        type: "groupBy",
+        of: "collection",
+        defaultFrom: "collection",
+      },
+    ],
+    query: { op: "groupBy", status: "all" },
+  } as unknown as DashboardWidget;
+
+  it("is asked where its collection gives it a source and a group key", () => {
+    expect(
+      widgetAsAsked(breakdown, { collection: "posts" }, sources).query
+    ).toMatchObject({ source: "collection:posts", groupBy: "status" });
+    expect(askableWith(breakdown, { collection: "posts" }, sources)).toBe(true);
+  });
+
+  it("is not asked where the collection has nothing to divide by", () => {
+    // 🔴 The query has a source, so a test of the source alone sends it, and
+    // the endpoint refuses a grouping of nothing.
+    expect(
+      widgetAsAsked(breakdown, { collection: "notes" }, sources).query?.source
+    ).toBe("collection:notes");
+    expect(askableWith(breakdown, { collection: "notes" }, sources)).toBe(
+      false
+    );
+  });
+
+  it("is not asked where every cell it declares falls away on the collection", () => {
+    // Its only cell needs a lifecycle: on Notes nothing is left to ask.
+    const lifecycleOnly = {
+      id: "core/lifecycle-only",
+      title: "Lifecycle only",
+      archetype: "custom",
+      settings: [{ name: "collection", type: "collection" }],
+      cells: [
+        {
+          key: "split",
+          when: "lifecycle",
+          query: { op: "groupBy", groupBy: "status", status: "all" },
+        },
+      ],
+    } as unknown as DashboardWidget;
+    // 🔴 Read from the cells as asked, an empty list fell through to "no
+    // query, so askable", and the card was offered asking nothing.
+    expect(askableWith(lifecycleOnly, { collection: "notes" }, sources)).toBe(
+      false
+    );
+    // The control: where the cell applies, it is asked.
+    expect(askableWith(lifecycleOnly, { collection: "posts" }, sources)).toBe(
+      true
+    );
+  });
+
+  it("judges each collection from the declaration, not from a card already asked", () => {
+    // What the settings sheet must be handed: the card as asked on Posts has
+    // Posts' group key, which a test of Notes would then carry along.
+    const asked = widgetAsAsked(breakdown, { collection: "posts" }, sources);
+    expect(asked.query?.groupBy).toBe("status");
+    expect(askableWith(asked, { collection: "notes" }, sources)).toBe(true);
+    expect(askableWith(breakdown, { collection: "notes" }, sources)).toBe(
+      false
+    );
+  });
+
+  it("asks a query with a source and, where grouped, a group key", () => {
+    expect(askableQuery({ source: "collection:posts", op: "list" })).toBe(true);
+    expect(askableQuery({ op: "list" })).toBe(false);
+    expect(askableQuery({ source: "collection:posts", op: "groupBy" })).toBe(
+      false
+    );
   });
 });

@@ -232,7 +232,9 @@ describe("widgetAudience", () => {
     readableEntities.mockImplementation(async (slugs: string[]) => {
       setGeneratedWidgets(
         generatedWidgets().map(widget =>
-          widget.id === "collection/posts-count" && widget.query
+          // Narrowed to the count it is, so the copy with another source is
+          // still a query a source can answer.
+          widget.id === "collection/posts-count" && widget.query?.op === "count"
             ? {
                 ...widget,
                 title: "Secret",

@@ -484,6 +484,9 @@ function CellSettings({
       onOpenChange={onOpenChange}
       title={widget.title}
       settings={widget.settings ?? []}
+      // The declaration, not the card as asked: each candidate collection is
+      // judged from it, so this card's own grouping is not carried to another.
+      widget={row.widget}
       config={row.config}
       onDone={done.done}
       {...(done.blocked === undefined ? {} : { blocked: done.blocked })}

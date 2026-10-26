@@ -36,7 +36,7 @@ import { UNSOURCED_SLOT } from "../useWidgetBatch";
 import {
   questionOf,
   settingsAsAsked,
-  sourcedQuery,
+  askableQuery,
   titleAsAsked,
   widgetAsAsked,
 } from "../widget-as-asked";
@@ -98,13 +98,13 @@ function previewRequests(
   // source asks nothing, as on the dashboard.
   if (definition.cells?.length) {
     return definition.cells.flatMap(cell =>
-      sourcedQuery(cell.query)
+      askableQuery(cell.query)
         ? [{ placementId: previewId, cellKey: cell.key, query: cell.query }]
         : []
     );
   }
   const query = definition.query;
-  if (!sourcedQuery(query)) return [];
+  if (!askableQuery(query)) return [];
   if (definition.archetype === "custom") {
     return [{ placementId: previewId, query }];
   }
@@ -198,7 +198,7 @@ function previewCellLookup(
 ): CellSlotLookup | undefined {
   if (!cells?.length) return undefined;
   const unsourced = new Set(
-    cells.filter(cell => !sourcedQuery(cell.query)).map(cell => cell.key)
+    cells.filter(cell => !askableQuery(cell.query)).map(cell => cell.key)
   );
   return key => {
     if (unsourced.has(key)) return UNSOURCED_SLOT;

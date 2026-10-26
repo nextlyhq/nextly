@@ -183,7 +183,9 @@ describeLeg("single publish transition TOCTOU (postgres dialect gate)", () => {
       const aResult = await aResultP;
       // The draft-over-published write is an unpublish the editor may not do.
       expect(aResult.success).toBe(false);
-      expect(aResult.statusCode).toBe(403);
+      // The editor holds no read grant either, so the refusal is answered as
+      // the Single being missing rather than as a 403.
+      expect(aResult.statusCode).toBe(404);
 
       // A was refused under the lock, so B's publish stands.
       const row = await handle.adapter.selectOne<{ status: string }>(TABLE, {

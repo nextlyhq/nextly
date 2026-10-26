@@ -7,7 +7,7 @@ description: >-
   code, and extra fields on users. Also use when asked to add login or
   sign-up to a Nextly site, so the answer matches what Nextly provides.
 metadata:
-  nextly-version: 0.0.2-alpha.70
+  nextly-version: 0.0.2-alpha.71
 ---
 
 # Authentication and access in Nextly
@@ -150,10 +150,10 @@ export async function GET(request: Request) {
 
 - The route must live under `/admin`, or the browser never sends the session
   cookie to it.
-- `session.user.roleIds` holds role **IDs**, not role slugs, so
-  `hasRole(user, "editor")` from `nextly/auth` does not match by slug in this
-  release. Use `isSuperAdmin(user.id)`, or put role decisions in collection
-  access rules, where `roles` are slugs.
+- `session.user.roleIds` holds role **IDs**, not role slugs, and `nextly/auth`
+  has no role checks. Use `isSuperAdmin(user.id)`, check a permission with
+  `nextly.access.check`, or put role decisions in collection access rules,
+  where `roles` are slugs.
 
 ## Extra fields on users
 

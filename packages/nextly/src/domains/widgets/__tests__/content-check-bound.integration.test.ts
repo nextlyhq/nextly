@@ -15,6 +15,10 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import { AUTHORIZATION_CONCURRENCY } from "../../../auth/entity-read-access";
 import { defineCollection, text } from "../../../config";
 import { requireNextly } from "../../../direct-api/nextly";
@@ -42,16 +46,21 @@ afterEach(async () => {
 
 /** An instance with `n` empty collections, every one readable, published as sources. */
 async function bootWith(n: number): Promise<TestNextly> {
+  const slugs = Array.from({ length: n }, (_, i) => `empty_${i}`);
   const t = await createTestNextly({
-    collections: Array.from({ length: n }, (_, i) =>
+    collections: slugs.map(slug =>
       defineCollection({
-        slug: `empty_${i}`,
+        slug,
         access: { read: () => true, create: () => true, update: () => true },
         fields: [text({ name: "title" })],
       })
     ),
   });
   current = t;
+  // A code rule only narrows the permission, so the admin holds read and
+  // create on every collection here, for the check and the first-entry step.
+  await userWhoMay(t, admin.user.id, "read", slugs);
+  await grantTo(t, admin.user.id, "create", slugs);
   // As `POST /api/dashboard/query` does first: publish the collection sources from the live
   // registry, which is what the check walks.
   await refreshCollectionSources();

@@ -13,6 +13,9 @@ import {
   describeClaims,
   integrationWorkers,
   releaseWorker,
+  workerDatabaseName,
+  workerDatabaseUrl,
+  workerPoolId,
 } from "./worker-database-guard";
 
 describe("integrationWorkers", () => {
@@ -33,7 +36,6 @@ describe("integrationWorkers", () => {
 
   it("refuses more than one worker on a database a URL names, which every worker would share", () => {
     for (const name of [
-      "TEST_POSTGRES_URL",
       "TEST_MYSQL_URL",
       "TEST_SQLITE_URL",
       "TEST_DATABASE_URL",
@@ -51,6 +53,53 @@ describe("integrationWorkers", () => {
         TEST_POSTGRES_URL: "x",
       })
     ).toBe(1);
+  });
+
+  it("allows more than one worker on PostgreSQL, where each gets a database of its own", () => {
+    expect(
+      integrationWorkers({
+        NEXTLY_INTEGRATION_WORKERS: "2",
+        TEST_POSTGRES_URL: "postgres://u:p@localhost:5432/nextly_test",
+      })
+    ).toBe(2);
+    // Still refused beside a URL every worker would share.
+    expect(() =>
+      integrationWorkers({
+        NEXTLY_INTEGRATION_WORKERS: "2",
+        TEST_POSTGRES_URL: "postgres://u:p@localhost:5432/nextly_test",
+        TEST_MYSQL_URL: "mysql://u:p@localhost:3306/nextly_test",
+      })
+    ).toThrow("TEST_MYSQL_URL");
+  });
+});
+
+describe("a worker's PostgreSQL database", () => {
+  it("is the run's database suffixed with the pool id, on the same server", () => {
+    expect(workerDatabaseName("nextly_test_w7", 2)).toBe(
+      "nextly_test_w7_pool2"
+    );
+    expect(
+      workerDatabaseUrl(
+        "postgres://u:p@localhost:5435/nextly_test_w7?sslmode=disable",
+        2
+      )
+    ).toBe(
+      "postgres://u:p@localhost:5435/nextly_test_w7_pool2?sslmode=disable"
+    );
+  });
+
+  it("gives two workers two databases", () => {
+    const url = "postgres://u:p@localhost:5432/nextly_test";
+    expect(workerDatabaseUrl(url, 1)).not.toBe(workerDatabaseUrl(url, 2));
+  });
+
+  it("exists only for the pool ids the run made one for", () => {
+    expect(workerPoolId("2", 2)).toBe(2);
+    for (const id of ["3", "0", "x", undefined]) {
+      expect(() => workerPoolId(id, 2), String(id)).toThrow(
+        "has no database of its own"
+      );
+    }
   });
 });
 

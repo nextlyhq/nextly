@@ -2,7 +2,7 @@
  * RBAC tables — dialect-aware barrel.
  *
  * Re-exports per-dialect Drizzle tables (roles, permissions, rolePermissions,
- * userRoles, roleInherits, userPermissionCache) under canonical names. The
+ * userRoles, roleInherits) under canonical names. The
  * runtime dialect determines which set of tables a caller sees.
  *
  * Distinct from `schemas/_zod/rbac.ts`, which holds Zod validators
@@ -23,20 +23,13 @@ import { loadedDialect } from "../../database/dialect-tables";
 export function rbacTables(dialect: SupportedDialect) {
   // The loaded dialect's own tables, so only that dialect's files are
   // imported; `createAdapter` loads them.
-  const {
-    permissions,
-    roleInherits,
-    rolePermissions,
-    roles,
-    userPermissionCache,
-    userRoles,
-  } = loadedDialect(dialect).tables;
+  const { permissions, roleInherits, rolePermissions, roles, userRoles } =
+    loadedDialect(dialect).tables;
   return {
     permissions,
     roleInherits,
     rolePermissions,
     roles,
-    userPermissionCache,
     userRoles,
   };
 }

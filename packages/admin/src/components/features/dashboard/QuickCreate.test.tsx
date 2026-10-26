@@ -58,14 +58,31 @@ function listing(
   } as unknown as ReturnType<typeof useCollections>;
 }
 
+/**
+ * The reader's slugs, and the server's answer about each collection, which
+ * agrees with them unless `allows` says otherwise.
+ */
 function granting(
   slugs: string[],
-  extra: { isLoading?: boolean; error?: Error } = {}
+  extra: {
+    isLoading?: boolean;
+    error?: Error;
+    allows?: string[];
+    content?: { isLoading?: boolean; hasAnswer?: boolean };
+  } = {}
 ) {
+  const allows = extra.allows ?? slugs;
   return {
     hasPermission: (slug: string) => slugs.includes(slug),
+    canAccessCollection: (slug: string, action: string) =>
+      allows.includes(`${action}-${slug}`),
     isLoading: extra.isLoading ?? false,
     error: extra.error ?? null,
+    content: {
+      isLoading: extra.content?.isLoading ?? false,
+      hasAnswer: extra.content?.hasAnswer ?? true,
+      error: null,
+    },
   } as unknown as ReturnType<typeof useCurrentUserPermissions>;
 }
 
@@ -91,6 +108,35 @@ describe("the quick-create card", () => {
     // The control: `pages` IS in the list the server returned, so its absence
     // is this filter acting rather than the fixture never offering it.
     expect(screen.queryByTestId("quick-create-pages")).toBeNull();
+  });
+
+  it("follows the server where a code rule refuses a create the role's permission allows", () => {
+    mockCollections.mockReturnValue(
+      listing([collection({ name: "posts" }), collection({ name: "pages" })])
+    );
+    // Both slugs are held; the server allows the create in `pages` only.
+    mockPermissions.mockReturnValue(
+      granting(["create-posts", "create-pages"], { allows: ["create-pages"] })
+    );
+
+    render(<QuickCreate />);
+
+    expect(screen.getByTestId("quick-create-pages")).toBeInTheDocument();
+    expect(screen.queryByTestId("quick-create-posts")).toBeNull();
+  });
+
+  it("says nothing while the server's answer about collections is missing", () => {
+    // The permission list has arrived and holds the slug; the answer that
+    // decides the shortcut has not, so "nothing to create" would be a guess.
+    mockCollections.mockReturnValue(listing([collection({ name: "posts" })]));
+    mockPermissions.mockReturnValue(
+      granting(["create-posts"], { allows: [], content: { hasAnswer: false } })
+    );
+
+    render(<QuickCreate />);
+
+    expect(screen.queryByTestId("quick-create-empty")).toBeNull();
+    expect(screen.queryByTestId("quick-create")).toBeNull();
   });
 
   it("offers no shortcut for a collection kept off the dashboard, even one the reader may create in", () => {
@@ -198,18 +244,34 @@ describe("the quick-create card", () => {
     expect(screen.getByTestId("quick-create-empty")).toBeInTheDocument();
   });
 
-  it("says nothing while the PERMISSIONS are still in flight", () => {
-    // 🔴 The two requests resolve independently. `hasPermission` answers from
-    // an empty set until `/me/permissions` lands, so a collection list that
-    // arrives first filters every row out — and the card tells the reader they
-    // may create nothing, for the whole of that interval, on every page load.
+  it("says nothing while the answer about collections is still in flight", () => {
+    // 🔴 The two requests resolve independently. `canAccessCollection`
+    // answers no until the server's answer about collections lands, so a
+    // collection list that arrives first filters every row out — and the card
+    // tells the reader they may create nothing, for the whole of that
+    // interval, on every page load.
     mockCollections.mockReturnValue(listing([collection({ name: "posts" })]));
-    mockPermissions.mockReturnValue(granting([], { isLoading: true }));
+    mockPermissions.mockReturnValue(
+      granting([], { content: { isLoading: true, hasAnswer: false } })
+    );
 
     render(<QuickCreate />);
 
     expect(screen.queryByTestId("quick-create-empty")).toBeNull();
     expect(screen.queryByTestId("quick-create")).toBeNull();
+  });
+
+  it("offers what the answer about collections allows, though the permission list failed", () => {
+    // The permission list decides nothing here, so its failure takes nothing
+    // the answer about collections allows away.
+    mockCollections.mockReturnValue(listing([collection({ name: "posts" })]));
+    mockPermissions.mockReturnValue(
+      granting([], { error: new Error("boom"), allows: ["create-posts"] })
+    );
+
+    render(<QuickCreate />);
+
+    expect(screen.getByTestId("quick-create-posts")).toBeInTheDocument();
   });
 
   it("says nothing when either request FAILED", () => {

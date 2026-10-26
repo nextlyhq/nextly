@@ -21,6 +21,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -87,6 +88,9 @@ async function boot(readableRows: boolean): Promise<TestNextly> {
     { collectionName: EMPLOYEES, overrideAccess: true },
     { title: "bob", salary: "60000" }
   );
+  // A code rule only narrows the permission, so the editor holds read on
+  // employees and the collection's read rule decides.
+  await userWhoMay(t, editor.user.id, "read", [EMPLOYEES]);
 
   // What `POST /api/dashboard/query` does before resolving any query: publish
   // the collection sources from the LIVE collection registry. Boot does not do

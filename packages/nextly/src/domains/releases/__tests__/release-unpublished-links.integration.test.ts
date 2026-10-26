@@ -16,6 +16,7 @@ process.env.NEXTLY_SECRET =
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import {
   defineCollection,
   defineFieldGroup,
@@ -480,6 +481,10 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const author = await seedLiveAuthor(t);
       const leaver = await seedLiveAuthor(t);
+      // A code rule only narrows the permission, so the leaver holds update
+      // and publish on authors while still able to act.
+      await grantTo(t, leaver, "update", ["authors"]);
+      await grantTo(t, leaver, "publish", ["authors"]);
       const draftAuthor = await entry(t, "authors");
       const post = await entry(t, "posts", { author: draftAuthor });
       await releaseWith(

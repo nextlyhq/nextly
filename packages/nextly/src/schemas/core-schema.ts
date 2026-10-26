@@ -31,6 +31,7 @@ import {
 import { documentLockTables } from "./document-lock";
 import { emailBrandTables } from "./email-brand";
 import { EMAIL_QUEUE_TABLE } from "./email-queue/table-name";
+import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "./email-queue-recipients/table-name";
 import { EMAIL_SEND_CLAIMS_TABLE } from "./email-send-claims/table-name";
 import { fieldGroupLockTables } from "./field-group-lock";
 import { jobsTables } from "./jobs";
@@ -275,7 +276,8 @@ export function getCoreSchema(
     loaded.emailTemplates,
     loaded.emailDeliveries,
     loaded.emailSendClaims,
-    loaded.emailQueue
+    loaded.emailQueue,
+    loaded.emailQueueRecipients
   );
 
   return {
@@ -299,7 +301,6 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "role_permissions",
   "user_roles",
   "role_inherits",
-  "user_permission_cache",
   "api_keys",
   "audit_log",
   "activity_log",
@@ -330,6 +331,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "email_brand",
   EMAIL_SEND_CLAIMS_TABLE,
   EMAIL_QUEUE_TABLE,
+  EMAIL_QUEUE_RECIPIENTS_TABLE,
   "nextly_schema_events",
   "nextly_i18n_archive",
   "nextly_versions",

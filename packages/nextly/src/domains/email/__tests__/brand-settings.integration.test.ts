@@ -225,6 +225,53 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
       });
     });
 
+    it("previews unsaved settings over the saved ones, and saves nothing", async () => {
+      const service = await boot();
+      await service.updateBrand({
+        accentColor: "#ff0066",
+        footerText: "Acme Ltd, 1 Main St",
+      });
+      const draft = {
+        subject: "Hi",
+        htmlContent: "<p>Draft</p>",
+        plainTextContent: null,
+        preheader: null,
+        useLayout: true,
+        kind: "template" as const,
+        layoutId: null,
+      };
+
+      const preview = await service.previewDraft(
+        draft,
+        {},
+        {
+          backgroundColor: "#abcdef",
+          // Null previews a setting at its starting value.
+          footerText: null,
+        }
+      );
+      expect(preview.html).toContain(`style="background-color: #abcdef;"`);
+      expect(preview.html).toContain("All rights reserved.");
+      expect(preview.html).not.toContain("Acme Ltd, 1 Main St");
+
+      // What is saved is untouched, for this service and the next.
+      const unchanged = {
+        accentColor: "#ff0066",
+        backgroundColor: STARTING_BRAND.backgroundColor,
+        footerText: "Acme Ltd, 1 Main St",
+      };
+      expect((await service.getBrand()).settings).toMatchObject(unchanged);
+      expect((await store.newService().getBrand()).settings).toMatchObject(
+        unchanged
+      );
+      // And a preview without a change shows the saved settings.
+      const saved = await service.previewDraft(draft, {});
+      expect(saved.html).toContain(
+        `style="background-color: ${STARTING_BRAND.backgroundColor};"`
+      );
+      expect(saved.html).toContain("Acme Ltd, 1 Main St");
+    });
+
     it("leaves an edited default layout and the site's layouts as they are, and says which emails it reaches", async () => {
       await seedBeforeBrand(EDITED_LAYOUT);
       const service = await boot();

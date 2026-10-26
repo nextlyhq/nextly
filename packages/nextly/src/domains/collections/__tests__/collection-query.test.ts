@@ -816,7 +816,7 @@ describe("CollectionEntryService — Query Contracts", () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
     });
 
     it("should load the dynamic schema for the requested collection", async () => {

@@ -19,6 +19,7 @@ import { randomUUID } from "node:crypto";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../../__tests__/fixtures/permission-holders";
 import { checkbox, defineCollection, number, text } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
 import {
@@ -38,13 +39,16 @@ import { bindReadServices } from "../read-services";
  */
 const RUN = randomUUID();
 const PARCELS = "widget_read_parcels";
-/** The one person the collection's read rule admits. */
-const READER = "reader-a";
+/**
+ * The one person the collection's read rule admits. Named anew for each case,
+ * as a server database keeps the users a case writes.
+ */
+let readerId = "reader-a";
 
 const parcels = defineCollection({
   slug: PARCELS,
   access: {
-    read: ({ user }) => user?.id === READER,
+    read: ({ user }) => user?.id === readerId,
     create: () => true,
     delete: () => true,
   },
@@ -56,8 +60,8 @@ const parcels = defineCollection({
   ],
 });
 
-const reader: ReadCaller = { user: { id: READER, roles: ["editor"] } };
-const stranger: ReadCaller = { user: { id: "reader-b", roles: ["editor"] } };
+let reader: ReadCaller = { user: { id: readerId, roles: ["editor"] } };
+let stranger: ReadCaller = { user: { id: "reader-b", roles: ["editor"] } };
 
 function servicesFor(
   caller: ReadCaller,
@@ -103,6 +107,19 @@ function readServicesSuite(label: string, boot: () => Promise<TestNextly>) {
         });
         written.push(String(created.item.id));
       }
+      // A code rule only narrows the permission, so both people hold read on
+      // parcels and the rule alone tells them apart.
+      const suffix = randomUUID().slice(0, 8);
+      readerId = await userWhoMay(handle, `reader-a-${suffix}`, "read", [
+        PARCELS,
+      ]);
+      reader = { user: { id: readerId, roles: ["editor"] } };
+      stranger = {
+        user: {
+          id: await userWhoMay(handle, `reader-b-${suffix}`, "read", [PARCELS]),
+          roles: ["editor"],
+        },
+      };
       // What `POST /api/dashboard/query` does before it resolves any query.
       await refreshCollectionSources();
     }

@@ -18,8 +18,6 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
-import { userPermissionCache as storedPermissionAnswers } from "./rbac/postgres";
-
 // The core schema and table names live in `./core-schema`; re-exported here
 // unchanged, so `nextly/schemas` keeps every name it published.
 export {
@@ -59,15 +57,6 @@ export {
   userRoles,
   roleInherits,
 } from "./rbac/postgres";
-
-/**
- * The table permission answers were once stored in between requests.
- *
- * @deprecated Nothing reads it any more: a user's roles and permissions are
- * kept in memory until a role or permission changes. Removed in a later
- * release, with the table.
- */
-export const userPermissionCache = storedPermissionAnswers;
 
 // Plan A Task 8 — media tables. PG re-exports for direct-query callers.
 export { media, mediaFolders, imageSizes } from "./media/postgres";

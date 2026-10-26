@@ -447,9 +447,18 @@ const SINGLE_QUERY_FIELD_USE: Record<
  * no such claim, or claims another single, and stays the failure it is: the
  * Direct API surfaces it, and a card drawn over it would say "Nothing yet"
  * about a document that exists.
+ *
+ * Nor is a `NOT_FOUND` the access gate gave: a caller who may not read the
+ * Single is answered as if it were missing, identically on the wire, and the
+ * gate's reason rides only in the server-side `logContext`. A card is the one
+ * place that answer is not taken at its word. Singles are the site's own
+ * configuration, defined in code, so their names are no secret to hide, and a
+ * card reading "Nothing yet" for a refusal would tell the admin something
+ * false; the refusal fails the card instead.
  */
 function singleAnswersNoDocument(error: unknown, slug: string): boolean {
   if (!NextlyError.is(error) || error.code !== "NOT_FOUND") return false;
+  if (error.logContext?.reason !== undefined) return false;
   const about = error.publicData;
   return about !== undefined && "single" in about && about.single === slug;
 }

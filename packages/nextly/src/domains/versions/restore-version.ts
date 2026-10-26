@@ -329,6 +329,8 @@ async function dropFieldsTheReaderMayNotRead(
   componentSchemas: ComponentSchemas,
   droppedFields: string[]
 ): Promise<void> {
+  // `args.entryId` is the id as stored: the versions routes refuse a restore
+  // whose id is not exactly the live row's (`assertVersionDocumentReadable`).
   const readProbe: Record<string, unknown> = {
     ...structuredClone(payload),
     id: args.entryId,
@@ -558,6 +560,7 @@ export async function restoreVersion(
       operation: "update",
       user: args.user,
       overrideAccess: false,
+      // The id as stored, as the read probe above is told.
       id: args.entryId,
     });
     dropFieldsTheProbeRejected(payload, accessProbe, droppedFields);

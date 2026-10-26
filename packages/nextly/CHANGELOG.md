@@ -1,5 +1,24 @@
 # nextly
 
+## 0.0.2-alpha.71
+
+### Patch Changes
+
+- [#2756](https://github.com/nextlyhq/nextly/pull/2756) [`709babb`](https://github.com/nextlyhq/nextly/commit/709babbdce0f78b957e71b974178d4f34b20f657) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A production server (`next build` and `next start`) now serves a file uploaded to Nextly's default local-disk storage as soon as the upload finishes, at the same `/uploads/...` URL `next dev` gives it. Before, Next.js answered 404 for it until the server restarted, because `next start` serves only the files `public/` held when it started. A route at `src/app/uploads/[...path]/route.ts`, built on the new `nextly/api/uploads` export, serves the rest: it streams files, answers `Range` requests for video and audio, sends `ETag` and caching headers, sets `nosniff` and a script-blocking policy on SVGs, and answers 404 for any path outside the storage folder and whenever cloud storage holds media. The local adapter's check that a path stays inside its folder no longer accepts a sibling folder whose name starts with the folder's own, such as `public/uploads-private` beside `public/uploads`.
+
+  **Before you upgrade:** projects don't ship the uploads route yet, so an app keeps the old behaviour until it has one. Add `src/app/uploads/[...path]/route.ts` (or `app/uploads/[...path]/route.ts` without a `src/` folder) exporting `GET` and `HEAD` from `createUploadsHandlers({ config })` in `nextly/api/uploads`, as shown in [Media & Storage](https://nextlyhq.com/docs/guides/media-storage#how-local-uploads-are-served). Until then, a production server logs a warning naming the file the first time an upload would be unreachable.
+
+- [#2765](https://github.com/nextlyhq/nextly/pull/2765) [`ed1b2f1`](https://github.com/nextlyhq/nextly/commit/ed1b2f19f440dc02dcc12e2d2940f74cc44fdaae) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Security: zod moves to 4.6.7 and DOMPurify to 3.4.17.
+  - zod before 4.6.6 could run out of memory validating a very large array against an array schema without a length limit (GHSA-mrhx-c7xc-m3w5). Every package that validates input with zod gets the fixed version.
+  - DOMPurify before 3.4.17 had sanitizer bypasses in its `SAFE_FOR_TEMPLATES`, DOM-output and `IN_PLACE` modes (GHSA-cg2g-xh64-v4q7, GHSA-mrv2-3pqr-j5jr). Nextly's SVG upload sanitizer uses none of those modes, so it was not affected; the floor still rises, so no install can resolve an affected version.
+
+- Updated dependencies [[`709babb`](https://github.com/nextlyhq/nextly/commit/709babbdce0f78b957e71b974178d4f34b20f657), [`ed1b2f1`](https://github.com/nextlyhq/nextly/commit/ed1b2f19f440dc02dcc12e2d2940f74cc44fdaae)]:
+  - @nextlyhq/adapter-drizzle@0.0.2-alpha.71
+  - @nextlyhq/adapter-mysql@0.0.2-alpha.71
+  - @nextlyhq/adapter-postgres@0.0.2-alpha.71
+  - @nextlyhq/adapter-sqlite@0.0.2-alpha.71
+  - @nextlyhq/blocks-engine@0.0.2-alpha.71
+
 ## 0.0.2-alpha.70
 
 ### Patch Changes

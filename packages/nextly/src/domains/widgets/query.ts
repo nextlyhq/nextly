@@ -212,7 +212,7 @@ export interface RangeWindow {
 export function rangeWindow(range: TimeseriesRange, now: Date): RangeWindow {
   const interval = RANGE_INTERVAL[range];
   const start = new Date(now.getTime());
-  if (range === "12m") start.setUTCMonth(start.getUTCMonth() - 12);
+  if (range === "12m") start.setTime(yearBefore(now).getTime());
   else start.setUTCDate(start.getUTCDate() - Number(range.slice(0, -1)));
   const anchor = new Date(now.getTime() - 1);
   // Counted by stepping the calendar, as the chart's own window is built: a
@@ -227,6 +227,20 @@ export function rangeWindow(range: TimeseriesRange, now: Date): RangeWindow {
     intervals += 1;
   }
   return { interval, start, anchor, intervals };
+}
+
+/**
+ * The same instant a calendar year before `now`, its day clamped to the
+ * month's last: February 29 steps back to February 28, where `setUTCMonth`
+ * would roll over into March 1 and drop the window's first day.
+ */
+function yearBefore(now: Date): Date {
+  const year = now.getUTCFullYear() - 1;
+  const month = now.getUTCMonth();
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const at = new Date(now.getTime());
+  at.setUTCFullYear(year, month, Math.min(now.getUTCDate(), lastDay));
+  return at;
 }
 
 /**
@@ -279,14 +293,15 @@ export type WidgetQuerySpec =
       sort?: never;
     })
   | (WidgetQuery & {
-      // A chart over a range: the range sets the interval and the window, so
-      // neither is stated beside it.
+      // A chart over a range: the range sets the interval, the window and so
+      // the number of points, so none of them is stated beside it.
       op: "timeseries";
       dateField: string;
       range: TimeseriesRange;
       interval?: never;
       since?: never;
       until?: never;
+      limit?: never;
       groupBy?: never;
       select?: never;
       sort?: never;
@@ -312,11 +327,21 @@ export type SourcelessWidgetQuery = Omit<WidgetQuery, "source"> & {
  * collection each card reads. A card whose Collection setting is empty asks
  * nothing.
  *
+ * A grouped one may leave its group key to the card's Group by setting as
+ * well: which field a collection divides by depends on the collection, so a
+ * widget offered per collection cannot always name it. Registration requires
+ * that setting where the key is left out.
+ *
  * @experimental While the content widgets are being built.
  */
 export type SettingSourcedQuerySpec = WidgetQuerySpec extends infer Spec
   ? Spec extends WidgetQuerySpec
-    ? Omit<Spec, "source"> & { source?: undefined }
+    ? Spec extends { op: "groupBy" }
+      ? Omit<Spec, "source" | "groupBy"> & {
+          source?: undefined;
+          groupBy?: string;
+        }
+      : Omit<Spec, "source"> & { source?: undefined }
     : never
   : never;
 
@@ -1267,7 +1292,7 @@ function timelineAsAsked(
  * rather than settled by which one wins.
  */
 function assertRangeAgreesWithOp(
-  raw: Pick<RawWidgetQuery, "range" | "since" | "until" | "interval">,
+  raw: Pick<RawWidgetQuery, "range" | "since" | "until" | "interval" | "limit">,
   op: WidgetOp
 ): TimeseriesRange | undefined {
   if (raw.range === undefined) return undefined;
@@ -1277,6 +1302,11 @@ function assertRangeAgreesWithOp(
   }
   if (raw.interval !== undefined) {
     fail("range sets the interval; a query with a range names none");
+  }
+  if (raw.limit !== undefined) {
+    fail(
+      "range sets how many points are drawn; a query with a range names no limit"
+    );
   }
   if (!isTimeseriesRange(raw.range)) {
     fail(`range must be one of ${TIMESERIES_RANGES.join(", ")}`);

@@ -15,11 +15,9 @@ import {
   type LastSuperAdminTx,
 } from "../../users/services/last-super-admin";
 
-import {
-  listDescendantRoleIds,
-  MAX_ROLE_HIERARCHY_DEPTH,
-} from "./role-descendants";
+import { listDescendantRoleIds } from "./role-descendants";
 import { afterRoleGrantsChanged } from "./role-grants-changed";
+import { MAX_ROLE_HIERARCHY_DEPTH, walkRoleGraph } from "./role-graph";
 import { refuseGrantingSuperAdmin } from "./super-admin-grant";
 
 /**
@@ -60,9 +58,15 @@ export class RoleInheritanceService extends BaseService {
    * @throws Error if self-inheritance or cycle would be created
    */
   async addRoleInheritance(
-    childRoleId: string,
-    parentRoleId: string
+    requestedChildRoleId: string,
+    requestedParentRoleId: string
   ): Promise<void> {
+    // Judged and written as the roles' rows spell their ids. MySQL matches
+    // ids case-insensitively, so a request can name a role in another case:
+    // compared as given, a role named twice in two spellings would pass as
+    // two roles, and the row written would carry an id other than the role's.
+    const childRoleId = await this.storedRoleId(requestedChildRoleId);
+    const parentRoleId = await this.storedRoleId(requestedParentRoleId);
     if (childRoleId === parentRoleId) throw new Error("INHERIT_SELF_FORBIDDEN");
     await this.refuseEditingSystemRole(parentRoleId);
     if (await this.willCreateCycle(childRoleId, parentRoleId))
@@ -162,6 +166,17 @@ export class RoleInheritanceService extends BaseService {
    *
    * @throws {NextlyError} `forbidden` when `roleId` is a system role.
    */
+  /** `id` as its role's row spells it, or as given when no role has it. */
+  private async storedRoleId(id: string): Promise<string> {
+    const { roles } = this.tables;
+    const [role] = (await (this.db as LastSuperAdminTx)
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.id, id))
+      .limit(1)) as Array<{ id: unknown }>;
+    return role ? String(role.id) : id;
+  }
+
   private async refuseEditingSystemRole(roleId: string): Promise<void> {
     const { roles } = this.tables;
     const [role] = (await (this.db as LastSuperAdminTx)
@@ -170,7 +185,9 @@ export class RoleInheritanceService extends BaseService {
       .where(eq(roles.id, roleId))
       .limit(1)) as Array<{ isSystem: unknown }>;
     if (role && Boolean(role.isSystem)) {
-      throw NextlyError.forbidden({
+      throw NextlyError.builtIn({
+        thing: "role",
+        change: "change",
         logContext: { reason: "system-role-immutable", roleId },
       });
     }
@@ -188,33 +205,20 @@ export class RoleInheritanceService extends BaseService {
    * @returns Array of ancestor role IDs (excluding the starting roleId)
    */
   async listAncestorRoles(roleId: string): Promise<string[]> {
-    const visited = new Set<string>();
-    const queue: string[] = [roleId];
-
-    while (queue.length) {
-      const batch = queue.splice(0, 50);
-      const inheritances = await (
-        this.db as RBACDatabaseInstance
-      ).query.roleInherits.findMany({
-        where: { childRoleId: { in: batch } },
-        columns: {
-          parentRoleId: true,
-        },
-      });
-
-      for (const r of inheritances) {
-        const parent = String(r.parentRoleId);
-        if (!visited.has(parent)) {
-          visited.add(parent);
-          queue.push(parent);
-        }
-      }
-
-      // Safety limit to prevent infinite loops
-      if (visited.size > MAX_ROLE_HIERARCHY_DEPTH) break;
-    }
-
-    return Array.from(visited);
+    // Up the inheritance, as far as the limit reaches: a list, so a walk cut
+    // short is the part it reached.
+    const { ids } = await walkRoleGraph(
+      [roleId],
+      async batch =>
+        (
+          await (this.db as RBACDatabaseInstance).query.roleInherits.findMany({
+            where: { childRoleId: { in: [...batch] } },
+            columns: { parentRoleId: true },
+          })
+        ).map(r => r.parentRoleId),
+      { seedsVisited: false, limit: MAX_ROLE_HIERARCHY_DEPTH }
+    );
+    return ids;
   }
 
   /**

@@ -1,8 +1,7 @@
 /**
  * RBAC tables — PostgreSQL.
  *
- * Tables: roles, permissions, rolePermissions, userRoles, roleInherits,
- * userPermissionCache.
+ * Tables: roles, permissions, rolePermissions, userRoles, roleInherits.
  * Moved verbatim from packages/nextly/src/database/schema/postgres.ts as part
  * of Plan A schemas consolidation. No behavior change.
  *
@@ -23,7 +22,6 @@ import {
   text,
   timestamp,
   integer,
-  jsonb,
   index,
   uniqueIndex,
   boolean,
@@ -182,57 +180,5 @@ export const roleInherits = pgTable(
     ),
     index("role_inherits_child_idx").on(t.childRoleId),
     index("role_inherits_parent_idx").on(t.parentRoleId), // For bidirectional hierarchy queries
-  ]
-);
-
-/**
- * Permission cache table for denormalized permission storage.
- *
- * This table stores pre-computed permission check results to reduce
- * database queries and improve performance for permission checking.
- *
- * Cache Strategy:
- * - Tier 1: In-memory LRU cache (10k entries, 60s TTL)
- * - Tier 2: Database cache (this table, 24h TTL default)
- * - Tier 3: Fresh computation from RBAC tables
- *
- * Invalidation:
- * - By userId: When user's roles change
- * - By roleId: When role's permissions change (JSONB contains query)
- * - TTL expiration: Background cleanup job
- *
- * Performance:
- * - Cache hit: <5ms (indexed lookup)
- * - Target: 60%+ query reduction
- * - Target: 90%+ cache hit rate
- */
-export const userPermissionCache = pgTable(
-  "user_permission_cache",
-  {
-    // Composite key: userId|action|resource
-    id: text("id").primaryKey(),
-    userId: text("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    action: varchar("action", { length: 50 }).notNull(),
-    resource: varchar("resource", { length: 100 }).notNull(),
-    hasPermission: boolean("has_permission").notNull(),
-    // Store role IDs for invalidation (JSONB array of strings)
-    roleIds: jsonb("role_ids").$type<string[]>().notNull(),
-    expiresAt: timestamp("expires_at", { withTimezone: false }).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: false })
-      .defaultNow()
-      .notNull(),
-  },
-  t => [
-    // Primary invalidation path: by user
-    index("upc_user_id_idx").on(t.userId),
-    // Cleanup expired entries efficiently
-    index("upc_expires_at_idx").on(t.expiresAt),
-    // Composite index for fast cache lookups
-    index("upc_user_action_resource_idx").on(t.userId, t.action, t.resource),
-    // Note: GIN index on roleIds is added manually in migration SQL
-    // for efficient JSONB contains queries used by invalidateByRole()
-    // Note: createdAt has no index - it's only for audit/display purposes
   ]
 );

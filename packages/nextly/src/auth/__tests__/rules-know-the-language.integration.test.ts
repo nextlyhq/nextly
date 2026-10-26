@@ -25,6 +25,10 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../__tests__/fixtures/permission-holders";
 import { assertEntryPreviewable } from "../../api/preview-access";
 import {
   registeredWriteAsNamedLanguagesFor,
@@ -234,6 +238,28 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
     ],
   });
+  // The signed-in caller below, `user-1`. A rule only narrows a permission,
+  // so it holds every action on every collection and on the Single, and the
+  // rules alone decide what it is refused.
+  const collections = [
+    NOTES,
+    ENGLISH,
+    NOT_ENGLISH,
+    OPEN,
+    SECRETS,
+    SHARED,
+    SHARED_GROUPED,
+    SHARED_ENGLISH,
+    SHARED_OPEN,
+    LINKING,
+    PREVIEW_CLOSED,
+    PREVIEW_OPEN,
+    PREVIEW_EDIT_CLOSED,
+  ];
+  await userWhoMay(current, "user-1", "read", [...collections, SETTINGS]);
+  await grantTo(current, "user-1", "update", [...collections, SETTINGS]);
+  await grantTo(current, "user-1", "create", collections);
+  await grantTo(current, "user-1", "delete", collections);
   return current;
 }
 

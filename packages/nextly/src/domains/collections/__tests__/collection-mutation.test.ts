@@ -540,7 +540,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
     });
 
     it("should execute beforeOperation hooks", async () => {
@@ -646,7 +646,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
     });
 
     it("runs no hook for a caller it refuses", async () => {
@@ -808,7 +808,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
     });
 
     it("should execute beforeOperation hooks", async () => {

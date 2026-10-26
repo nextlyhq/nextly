@@ -23,9 +23,10 @@ inside `packages/nextly`.
 - `overrideAccess` defaults to `true` (trusted server context) and returns
   before any check. Under `overrideAccess: false` there is ONE decision, the
   RBAC gate (`checkCollectionAccess` → `rbacAccessControlService.checkAccess`,
-  or `apiKeyWriteAllowed` for a scoped key): super-admin bypass, then the
-  code-defined `access` from `defineCollection`/`defineSingle` when it names
-  the operation, else DB permissions. There is no stored rule layer; the
+  or `apiKeyWriteAllowed` for a scoped key): super-admin bypass, then DB
+  permissions, then the code-defined `access` from
+  `defineCollection`/`defineSingle` when it names the operation (only
+  `true` allows). There is no stored rule layer; the
   `access_rules` registry column is retired, nothing reads it, and a database
   that still carries values in it is named at boot and by `nextly migrate`.
 - Only the DB-permission half of the gate needs a `user`. An anonymous
@@ -37,17 +38,17 @@ inside `packages/nextly`.
   that same question, so one rule gives one answer on every door. With no
   user, `publish`/`unpublish` and `routeAuthorized` fail closed regardless.
 - A permission is spelled `read-posts` everywhere, rules included; their
-  context comes from `buildRuleContext`, which for one release also lists the
-  earlier `posts:read`, warned once per rule. `ReadAccessCaller` carries a
-  key's slugs (`permissions`) and rows (`grants`). Build callers with
+  context comes from `buildRuleContext`, and the earlier `posts:read` is not
+  in it, so a rule checking that spelling does not allow. `ReadAccessCaller`
+  carries a key's slugs (`permissions`) and rows (`grants`). Build callers with
   `readAccessCaller`; a hand-assembled literal is how two doors came to answer
   one key differently.
 - A collection whose code-defined `access` says nothing about an operation
   falls through to DB permissions (a visitor's read: the default above); a
   caller with no matching grant is refused.
   A rule that throws denies. Relationship expansion (`relatedRowReads`) asks
-  a populated TARGET the same: no read rule means a person needs a grant, and a
-  key needs `read-<target>` in its own scope before any rule; `users` and
+  a populated TARGET the same: a person needs a grant, a key
+  `read-<target>` in its own scope, before any rule; `users` and
   media need `read-users` / `read-media` of a person or key; a visitor keeps
   media and never gets a user.
   A row refused by name is withheld from a relationship too.

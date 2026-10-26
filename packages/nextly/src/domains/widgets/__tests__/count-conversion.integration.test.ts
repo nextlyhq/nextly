@@ -18,6 +18,7 @@ process.env.NEXTLY_SECRET =
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { defineCollection, text } from "../../../config";
@@ -149,6 +150,9 @@ describe.each(getConfiguredTestDialects())(
       // The first account of an instance is its super admin.
       admin = await account("cv-admin@example.com");
       editor = await account("cv-editor@example.com");
+      // A code rule only narrows the permission, so the editor holds read on
+      // the posts their rule admits everyone to.
+      await grantTo(handle, editor, "read", [POSTS]);
     }, 120_000);
 
     afterAll(async () => {
@@ -197,6 +201,112 @@ describe.each(getConfiguredTestDialects())(
         card("secret", "collection/cv-secret-count"),
         card("gone", "core/count"),
       ]);
+    });
+
+    it("withholds a Count card set to a collection the reader may not read, and keeps it in the row", async () => {
+      const own = [
+        card("mine", "core/count", { config: { collection: POSTS } }),
+        card("theirs", "core/count", { config: { collection: SECRET } }),
+        card("old", "core/count", { config: { collection: "cv_deleted" } }),
+      ];
+      const reader = await account("cv-reader@example.com");
+      // The permission comes before the posts' code rule, which only narrows it.
+      await grantTo(handle, reader, "read", [POSTS]);
+      await service().saveLayout("user", reader, own, 0);
+
+      const seen = await read(reader);
+      // 🔴 Handed over, the card's settings would name the collection. And
+      // the one set to a collection that does not exist is withheld the same
+      // way: drawn instead, it would tell the reader which names exist.
+      expect(seen.placements.map(placement => placement.id)).toEqual(["mine"]);
+      expect(JSON.stringify(seen)).not.toMatch(/cv[-_]secret/);
+
+      const res = await call(reader, "PUT", {
+        placements: seen.placements,
+        version: seen.version,
+        scope: seen.scope,
+      });
+      expect(res.status).toBe(200);
+      const stored = await service().getLayout("user", reader);
+      expect(stored.layout?.placements).toEqual(own);
+    });
+
+    it("withholds a Recent entries, Over time or Breakdown card set to a collection the reader may not read, as it does a Count card", async () => {
+      // Every widget offered per collection reads the collection its
+      // Collection setting names, so the same rule withholds each, not Count's
+      // cards alone.
+      const own = [
+        card("recent", "core/recent-entries", {
+          config: { collection: POSTS },
+        }),
+        card("recent-theirs", "core/recent-entries", {
+          config: { collection: SECRET },
+        }),
+        card("over-theirs", "core/over-time", {
+          config: { collection: SECRET },
+        }),
+        card("breakdown-theirs", "core/breakdown", {
+          config: { collection: SECRET },
+        }),
+      ];
+      const reader = await account("cv-lister@example.com");
+      // The permission comes before the posts' code rule, which only narrows it.
+      await grantTo(handle, reader, "read", [POSTS]);
+      await service().saveLayout("user", reader, own, 0);
+
+      const seen = await read(reader);
+      expect(seen.placements.map(placement => placement.id)).toEqual([
+        "recent",
+      ]);
+      expect(JSON.stringify(seen)).not.toMatch(/cv[-_]secret/);
+
+      // Their save carries every withheld card back in place.
+      const res = await call(reader, "PUT", {
+        placements: seen.placements,
+        version: seen.version,
+        scope: seen.scope,
+      });
+      expect(res.status).toBe(200);
+      const stored = await service().getLayout("user", reader);
+      expect(stored.layout?.placements).toEqual(own);
+    });
+
+    it("refuses a card set to a collection the reader may not read, whether it exists or not, with one answer", async () => {
+      const reader = await account("cv-guesser@example.com");
+      const seen = await read(reader);
+      const attempt = async (collection: string) => {
+        const res = await call(reader, "PUT", {
+          placements: [
+            ...seen.placements,
+            card("guess", "core/count", { config: { collection } }),
+          ],
+          version: seen.version,
+          scope: seen.scope,
+        });
+        const body = (await res.json()) as {
+          error?: { code?: string; message?: string; data?: unknown };
+        };
+        return {
+          status: res.status,
+          code: body.error?.code,
+          message: body.error?.message,
+          data: body.error?.data,
+        };
+      };
+      const existing = await attempt(SECRET);
+      const missing = await attempt("cv_nowhere");
+      // 🔴 Refused, and refused identically: a write that answered the two
+      // differently would tell the reader which names exist.
+      expect(existing.status).toBe(400);
+      expect(missing).toEqual(existing);
+      expect(JSON.stringify(existing)).not.toMatch(/cv[-_]secret/);
+      // Nothing was stored for either.
+      const stored = await service().getLayout("user", reader);
+      expect(
+        (stored.layout?.placements ?? []).some(
+          placement => placement.id === "guess"
+        )
+      ).toBe(false);
     });
 
     it("converts the same card for a reader who may read its collection", async () => {
