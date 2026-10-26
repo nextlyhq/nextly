@@ -85,6 +85,26 @@ function useOpenThroughSwitch(
   return { switching, keepsPage: switching && openedFor === entityKey };
 }
 
+/**
+ * Whether the route opens: a collection or Single route as the server's answer
+ * about its entity says, any other as the permission list does, any one of
+ * several slugs sufficing.
+ */
+function routeAllows(
+  entity: EntityAccess | undefined,
+  requiredPermission: string | string[],
+  canAccessCollection: (
+    slug: string,
+    action: EntityAccess["action"]
+  ) => boolean,
+  hasPermission: (slug: string) => boolean
+): boolean {
+  if (entity) return canAccessCollection(entity.slug, entity.action);
+  return Array.isArray(requiredPermission)
+    ? requiredPermission.some(hasPermission)
+    : hasPermission(requiredPermission);
+}
+
 export function PermissionGuard({
   requiredPermission,
   subject,
@@ -100,11 +120,12 @@ export function PermissionGuard({
   // failure of either leaves the pages the other decides open.
   const decidedBy = entity ? content : access;
   const { hasAnswer, error } = decidedBy;
-  const hasAccess = entity
-    ? canAccessCollection(entity.slug, entity.action)
-    : Array.isArray(requiredPermission)
-      ? requiredPermission.some(hasPermission)
-      : hasPermission(requiredPermission);
+  const hasAccess = routeAllows(
+    entity,
+    requiredPermission,
+    canAccessCollection,
+    hasPermission
+  );
 
   useEffect(() => {
     if (typeof window !== "undefined") {
