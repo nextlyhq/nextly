@@ -229,6 +229,41 @@ describe.each(getConfiguredTestDialects())(
       expect(stored.layout?.placements).toEqual(own);
     });
 
+    it("withholds a Recent entries or Over time card set to a collection the reader may not read, as it does a Count card", async () => {
+      // Every widget offered per collection reads the collection its
+      // Collection setting names, so the same rule withholds each, not Count's
+      // cards alone.
+      const own = [
+        card("recent", "core/recent-entries", {
+          config: { collection: POSTS },
+        }),
+        card("recent-theirs", "core/recent-entries", {
+          config: { collection: SECRET },
+        }),
+        card("over-theirs", "core/over-time", {
+          config: { collection: SECRET },
+        }),
+      ];
+      const reader = await account("cv-lister@example.com");
+      await service().saveLayout("user", reader, own, 0);
+
+      const seen = await read(reader);
+      expect(seen.placements.map(placement => placement.id)).toEqual([
+        "recent",
+      ]);
+      expect(JSON.stringify(seen)).not.toMatch(/cv[-_]secret/);
+
+      // Their save carries both withheld cards back in place.
+      const res = await call(reader, "PUT", {
+        placements: seen.placements,
+        version: seen.version,
+        scope: seen.scope,
+      });
+      expect(res.status).toBe(200);
+      const stored = await service().getLayout("user", reader);
+      expect(stored.layout?.placements).toEqual(own);
+    });
+
     it("refuses a card set to a collection the reader may not read, whether it exists or not, with one answer", async () => {
       const reader = await account("cv-guesser@example.com");
       const seen = await read(reader);
