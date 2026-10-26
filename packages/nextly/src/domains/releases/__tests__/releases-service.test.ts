@@ -1162,15 +1162,18 @@ describe("ReleasesService.anyReadable", () => {
       order: _order,
       offset: _offset,
       limit: _limit,
-      now: _now,
+      now: listedNow,
       ...listed
     } = (
       repo.findReleasePage.mock.calls[0] as unknown[] | undefined
     )?.[0] as Record<string, unknown>;
     expect(repo.anyRelease).toHaveBeenCalledWith({
       ...listed,
-      now: expect.any(Date),
+      now: new Date("2026-06-15T10:00:00.000Z"),
     });
+    // Each request's own reading, not one shared or remembered: the list's
+    // instant is the clock as it stood when the list was asked.
+    expect(listedNow).toEqual(new Date("2026-06-15T10:00:00.005Z"));
   });
 });
 

@@ -411,17 +411,22 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   // own settings, which is why this is decided here, after the row is read,
   // and not by a condition before it. `?getStarted=1` asks for the answer of a
   // removed card, which the admin needs as it restores one.
+  const askedForSteps = new URL(req.url).searchParams.get("getStarted") === "1";
   const getStarted = await getStartedView(
     view.probe,
     getStartedPlacement(arrangement),
-    new URL(req.url).searchParams.get("getStarted") === "1"
+    askedForSteps
   );
   const placements = withoutDormantCard(arrangement, () => getStarted.drawn);
   // The default as a reader following it would be handed it: their card has
-  // no settings yet, so it is drawn from the answer alone. With no answer
-  // worked out, the card is left out; a reset reads it afresh.
+  // no settings yet, so it is drawn from the answer alone. The steps are
+  // worked out when this read worked them out, or when the admin asks
+  // (`?getStarted=1`), as it does before staging a reset: an arrangement with
+  // no card of its own still resets onto a default that may draw one.
   const steps =
-    getStarted.answer === null ? null : await view.probe.getStarted();
+    getStarted.answer === null && !askedForSteps
+      ? null
+      : await view.probe.getStarted();
   const defaults = withoutDormantCard(
     visibleArrangement(undefined, view),
     card => steps !== null && getStartedDrawn(steps, card.config)

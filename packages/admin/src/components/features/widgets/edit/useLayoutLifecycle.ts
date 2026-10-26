@@ -13,9 +13,11 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 
 import {
+  fetchGetStartedOnRestore,
   isConflictError,
   type UseDashboardLayoutResult,
 } from "@admin/hooks/queries/useDashboardLayout";
+import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 
 import { hasChanges, withinSubmissionLimit } from "../layout-editor";
 
@@ -150,17 +152,30 @@ export function useLayoutLifecycle(
   );
 
   const stageReset = useCallback(() => {
-    const defaults = layout.layout?.defaultPlacements;
-    if (!defaults) return;
-    setDraft(current =>
-      current
-        ? {
-            ...current,
-            placements: [...defaults],
-            stagedReset: [...defaults],
-          }
-        : current
-    );
+    const read = layout.layout;
+    if (!read?.defaultPlacements) return;
+    const staged = (defaults: readonly WidgetPlacement[]) =>
+      setDraft(current =>
+        current
+          ? {
+              ...current,
+              placements: [...defaults],
+              stagedReset: [...defaults],
+            }
+          : current
+      );
+    // A read that worked out no Get started steps (the arrangement holds no
+    // card of its own) has a default that leaves the card out, though a reset
+    // may draw it. The read that works the steps out answers the default a
+    // reset would actually land on; if it cannot be had, this one stands.
+    if (read.getStarted !== undefined && read.getStarted.answer === null) {
+      void fetchGetStartedOnRestore().then(
+        fresh => staged(fresh.defaultPlacements),
+        () => staged(read.defaultPlacements)
+      );
+      return;
+    }
+    staged(read.defaultPlacements);
   }, [layout.layout, setDraft]);
 
   return { begin, cancel, save, stageReset };

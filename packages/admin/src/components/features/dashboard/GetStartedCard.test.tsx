@@ -16,12 +16,17 @@ let read: UseGetStartedResult;
 vi.mock("@admin/hooks/queries/useGetStarted", () => ({
   useGetStarted: () => read,
 }));
+// The sample-content offer's state, as a case sets it.
+const seed = vi.hoisted(() => ({
+  status: { kind: "hidden" } as
+    | { kind: "hidden" }
+    | { kind: "idle"; template: { slug: string; label: string } }
+    | { kind: "error"; message: string },
+  startSeed: vi.fn(),
+  skip: vi.fn(),
+}));
 vi.mock("@admin/hooks/queries/useSeedStatus", () => ({
-  useSeedStatus: () => ({
-    status: { kind: "hidden" },
-    startSeed: vi.fn(),
-    skip: vi.fn(),
-  }),
+  useSeedStatus: () => seed,
 }));
 vi.mock("@admin/hooks/queries/useSingles", () => ({
   useSingles: () => ({
@@ -89,6 +94,9 @@ const STEPS = answerOf([
 
 beforeEach(() => {
   write.mockClear();
+  seed.status = { kind: "hidden" };
+  seed.startSeed.mockClear();
+  seed.skip.mockClear();
 });
 
 describe("the Get started card", () => {
@@ -148,6 +156,36 @@ describe("the Get started card", () => {
       { acted: true, skipped: ["invite"] },
       {}
     );
+  });
+
+  it("records that the reader acted before it loads sample content", () => {
+    // 🔴 Loading sample content can finish the last step; unrecorded, the
+    // card then goes instead of saying "You're all set".
+    seed.status = { kind: "idle", template: { slug: "blog", label: "Blog" } };
+    read = readOf({ answer: STEPS });
+    draw();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Load sample content" })
+    );
+    expect(write).toHaveBeenCalledWith(
+      "started",
+      "Get started",
+      expect.objectContaining({ acted: true }),
+      expect.anything()
+    );
+    expect(seed.startSeed).toHaveBeenCalledTimes(1);
+  });
+
+  it("says a sample-content load failed, with its message, and offers Retry", () => {
+    // 🔴 A failed load drew nothing: the controls vanished with no word why.
+    seed.status = { kind: "error", message: "The database refused it." };
+    read = readOf({ answer: STEPS });
+    draw();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "The database refused it."
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(seed.startSeed).toHaveBeenCalledTimes(1);
   });
 
   it("restores a skipped step, keeping the other skips", () => {
