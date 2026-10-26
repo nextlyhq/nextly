@@ -259,6 +259,40 @@ describe.each(getConfiguredTestDialects())(
       expect(calls).toHaveLength(attempts);
     });
 
+    it("is kept for a person whose id differs from the deleted one's only by case", async () => {
+      const t = await boot(dialect);
+      const gone = await person("acc_Case");
+      const kept = await person("acc_case");
+      behaviour.failures = Number.MAX_SAFE_INTEGER;
+      const theirs = await plugin().services.email.queue({
+        ...message,
+        to: "gone@example.com",
+        person: gone,
+      });
+      const other = await plugin().services.email.queue({
+        ...message,
+        to: SHARED,
+        person: kept,
+      });
+      const keptDeliveries = () =>
+        t.adapter.select("email_deliveries", {
+          where: {
+            and: [{ column: "principalId", op: "=", value: "acc_case" }],
+          },
+        });
+      const before = await queued(t, other.id);
+      const deliveries = await keptDeliveries();
+
+      await plugin().principals!.reportDeleted(gone);
+
+      expect((await queued(t, theirs.id)).state).toBe("cancelled");
+      expect(await queued(t, other.id)).toEqual(before);
+      expect(await recipientsOf(t, other.id)).toEqual([
+        recipientDigest(SHARED),
+      ]);
+      expect(await keptDeliveries()).toEqual(deliveries);
+    });
+
     it("is cancelled and cleared when its staff user is deleted", async () => {
       const t = await boot(dialect);
       const created = await t.nextly.users.create({
@@ -739,46 +773,58 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    it("re-seals the rest when one held message opens but does not parse", async () => {
-      const t = await boot(dialect);
-      const [old, current] = [
-        "old-secret-at-least-32-characters-long!!!!!",
-        "current-secret-at-least-32-characters-long!",
-      ];
-      const dialectName = t.adapter.getCapabilities().dialect;
-      const store = () =>
-        t.adapter.transaction(ctx =>
-          storeQueuedEmail(ctx, {
-            scope: "site",
-            message: { kind: "message", send: { ...message, to: SHARED } },
-            person: null,
-            secrets: [old],
-            lockServer: rowLockServer(t.adapter, dialectName),
-            dialect: dialectName,
-            now: new Date(),
-          })
+    it.each([
+      ["does not parse", "not a message"],
+      ["is not a whole message", JSON.stringify({ kind: "message" })],
+      [
+        "is a template without its recipient",
+        JSON.stringify({ kind: "template", slug: "welcome", options: {} }),
+      ],
+    ])(
+      "re-seals the rest when one held message opens but %s",
+      async (_, text) => {
+        const t = await boot(dialect);
+        const [old, current] = [
+          "old-secret-at-least-32-characters-long!!!!!",
+          "current-secret-at-least-32-characters-long!",
+        ];
+        const dialectName = t.adapter.getCapabilities().dialect;
+        const store = () =>
+          t.adapter.transaction(ctx =>
+            storeQueuedEmail(ctx, {
+              scope: "site",
+              message: { kind: "message", send: { ...message, to: SHARED } },
+              person: null,
+              secrets: [old],
+              lockServer: rowLockServer(t.adapter, dialectName),
+              dialect: dialectName,
+              now: new Date(),
+            })
+          );
+        const damaged = await store();
+        const sound = await store();
+        // Sealed under the old secret, authenticated, and not a message.
+        await t.adapter.update(
+          "email_queue",
+          {
+            message: `sealed:${sealSetting(text, old, "nextly core", ["email_queue", damaged.id])}`,
+          },
+          { and: [{ column: "id", op: "=", value: damaged.id }] }
         );
-      const damaged = await store();
-      const sound = await store();
-      // Sealed under the old secret, authenticated, and not a message.
-      await t.adapter.update(
-        "email_queue",
-        {
-          message: `sealed:${sealSetting("not a message", old, "nextly core", ["email_queue", damaged.id])}`,
-        },
-        { and: [{ column: "id", op: "=", value: damaged.id }] }
-      );
 
-      expect(await resealQueuedMessages(t.adapter, [current, old])).toEqual({
-        resealed: 1,
-        unreadable: 1,
-      });
-      expect(
-        openQueuedMessage((await queued(t, sound.id)).message ?? "", sound.id, [
-          current,
-        ])
-      ).toBeDefined();
-    });
+        expect(await resealQueuedMessages(t.adapter, [current, old])).toEqual({
+          resealed: 1,
+          unreadable: 1,
+        });
+        expect(
+          openQueuedMessage(
+            (await queued(t, sound.id)).message ?? "",
+            sound.id,
+            [current]
+          )
+        ).toBeDefined();
+      }
+    );
 
     it("never writes its address, subject or body to a log", async () => {
       const t = await boot(dialect);

@@ -23,6 +23,9 @@
  * @module schemas/_dialect-bundles/postgres
  * @since v0.0.3-alpha (Plan A Task 17 — replaces database/schema/postgres.ts)
  */
+// Every dialect's bundle exports its own tables under the same names, by
+// design: one is chosen by dialect at runtime.
+// fallow-ignore-file duplicate-export
 
 // Users + Auth.js identity.
 export { users } from "../users/postgres";
@@ -87,8 +90,6 @@ export { emailProvidersPg as emailProviders } from "../email-providers/postgres"
 export { emailDeliveriesPg as emailDeliveries } from "../email-deliveries/postgres";
 export { emailSendClaimsPg as emailSendClaims } from "../email-send-claims/postgres";
 export { emailQueuePg as emailQueue } from "../email-queue/postgres";
-// Each dialect's bundle exports its own table under the same name.
-// fallow-ignore-next-line duplicate-export
 export { emailQueueRecipientsPg as emailQueueRecipients } from "../email-queue-recipients/postgres";
 export { emailTemplatesPg as emailTemplates } from "../email-templates/postgres";
 

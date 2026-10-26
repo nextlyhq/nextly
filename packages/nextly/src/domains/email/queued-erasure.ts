@@ -21,7 +21,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Column, SQL, Table } from "drizzle-orm";
-import { and, eq, inArray, isNull, ne, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 
 import { NextlyError } from "../../errors";
 import { emailDeliveriesMysql } from "../../schemas/email-deliveries/mysql";
@@ -105,6 +105,28 @@ function locked<R>(
   return query.for(strength);
 }
 
+/**
+ * The rows naming `person`, by the exact bytes of their kind and id. MySQL
+ * compares a `varchar` under its default collation without regard to case,
+ * so `Alice` would match `alice`, another person to the plugin that named
+ * them and to their deleted-person digest. The plain comparison stays, so
+ * the principal index still narrows the rows the exact one is checked on.
+ */
+export function namingPerson(
+  columns: { principalKind: Column; principalId: Column },
+  dialect: SupportedDialect | undefined,
+  person: { kind: string; id: string }
+): SQL | undefined {
+  const { principalKind, principalId } = columns;
+  return and(
+    eq(principalKind, person.kind),
+    eq(principalId, person.id),
+    dialect === "mysql"
+      ? sql`CAST(${principalKind} AS BINARY) = CAST(${person.kind} AS BINARY) AND CAST(${principalId} AS BINARY) = CAST(${person.id} AS BINARY)`
+      : undefined
+  );
+}
+
 /** A read that can take a row lock where the dialect has one (not SQLite's). */
 type MaybeLockableRead<R> = PromiseLike<R> & {
   for?(strength: RowLockStrength): Promise<R>;
@@ -179,10 +201,7 @@ export async function cancelQueuedEmailsOf(
   digest: string
 ): Promise<void> {
   const { queue } = tables;
-  const naming: SQL | undefined = and(
-    eq(queue.principalKind, person.kind),
-    eq(queue.principalId, person.id)
-  );
+  const naming = namingPerson(queue, tables.dialect, person);
   // Each batch renames what it read, so the next reads the rest.
   for (;;) {
     const rows = (await locked(

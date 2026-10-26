@@ -24,7 +24,6 @@
 
 import {
   and,
-  eq,
   inArray,
   type Column,
   type SQL,
@@ -37,6 +36,7 @@ import { ERASED_RECIPIENT_HASH, recipientDigests } from "./delivery-record";
 import {
   cancelQueuedEmailsOf,
   cancelQueuedEmailsTo,
+  namingPerson,
   queueTablesBeside,
 } from "./queued-erasure";
 import { sendClaimsTableBeside } from "./send-claims";
@@ -247,10 +247,8 @@ export async function erasePrincipalDeliveries(
   person: { kind: string; id: string },
   digest: string
 ): Promise<void> {
-  const erased = and(
-    eq(deliveries.principalKind, person.kind),
-    eq(deliveries.principalId, person.id)
-  );
+  const tables = queueTablesBeside(deliveries);
+  const erased = namingPerson(deliveries, tables?.dialect, person);
   await clearSendKeyDigests(db, deliveries, erased);
   await db
     .update(deliveries)
@@ -258,6 +256,5 @@ export async function erasePrincipalDeliveries(
     .where(erased);
   // Their queued email too, in the same transaction, so a deletion leaves
   // nothing queued to them either way or both.
-  const tables = queueTablesBeside(deliveries);
   if (tables) await cancelQueuedEmailsOf(db, tables, person, digest);
 }

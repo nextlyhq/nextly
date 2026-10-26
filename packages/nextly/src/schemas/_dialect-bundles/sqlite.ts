@@ -9,6 +9,9 @@
  * @module schemas/_dialect-bundles/sqlite
  * @since v0.0.3-alpha (Plan A Task 17 — replaces database/schema/sqlite.ts)
  */
+// Every dialect's bundle exports its own tables under the same names, by
+// design: one is chosen by dialect at runtime.
+// fallow-ignore-file duplicate-export
 
 export { users } from "../users/sqlite";
 
@@ -62,8 +65,6 @@ export { emailProvidersSqlite as emailProviders } from "../email-providers/sqlit
 export { emailDeliveriesSqlite as emailDeliveries } from "../email-deliveries/sqlite";
 export { emailSendClaimsSqlite as emailSendClaims } from "../email-send-claims/sqlite";
 export { emailQueueSqlite as emailQueue } from "../email-queue/sqlite";
-// Each dialect's bundle exports its own table under the same name.
-// fallow-ignore-next-line duplicate-export
 export { emailQueueRecipientsSqlite as emailQueueRecipients } from "../email-queue-recipients/sqlite";
 export { emailTemplatesSqlite as emailTemplates } from "../email-templates/sqlite";
 

@@ -301,11 +301,40 @@ function parsedMessage(text: string): QueuedMessage | undefined {
   }
 }
 
+/**
+ * Whether `value` has every field a queued email's recipients are read
+ * from. A message whose authentication holds can still be of a shape that
+ * lacks them, and is unreadable rather than a throw part way through a scan.
+ */
+function whole(value: unknown): value is QueuedMessage {
+  const record = (item: unknown): item is Record<string, unknown> =>
+    typeof item === "object" && item !== null;
+  const list = (item: unknown) => item === undefined || Array.isArray(item);
+  const addressed = (fields: unknown, copies: unknown) =>
+    record(fields) &&
+    (typeof fields.to === "string" || Array.isArray(fields.to)) &&
+    list(fields.cc) &&
+    list(fields.bcc) &&
+    record(copies) &&
+    list(copies.cc) &&
+    list(copies.bcc);
+  if (!record(value)) return false;
+  if (value.kind === "message") return addressed(value.send, {});
+  return (
+    value.kind === "template" &&
+    typeof value.slug === "string" &&
+    addressed(
+      { ...(record(value.options) ? value.options : {}), to: value.to },
+      value.templateCopies ?? {}
+    )
+  );
+}
+
 /** The text that was sealed, as the message it was made from. */
 function messageFromText(text: string): QueuedMessage | undefined {
-  const parsed = JSON.parse(text) as QueuedMessage | undefined;
-  if (parsed?.kind === "message") return parsed;
-  if (parsed?.kind !== "template") return undefined;
+  const parsed = JSON.parse(text) as unknown;
+  if (!whole(parsed)) return undefined;
+  if (parsed.kind === "message") return parsed;
   const variables = readValue(parsed.variables as unknown as StoredValue);
   return {
     ...parsed,
