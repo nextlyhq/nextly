@@ -380,7 +380,11 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         const roleWithPermissions: RoleWithPermissions = {
           id: roleData.id,
           name: roleData.roleName,
-          slug: roleData.roleName.toLowerCase().replace(/\s+/g, "-"),
+          // The slug as stored: one rebuilt from the name differs wherever the
+          // two were set apart, and a save would send it as a slug change.
+          slug:
+            roleData.slug ??
+            roleData.roleName.toLowerCase().replace(/\s+/g, "-"),
           description: roleData.description,
           isSystemRole: roleData.type === "System",
           permissions: normalizedRolePermissionIds.map(id => ({ id })),

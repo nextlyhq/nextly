@@ -126,8 +126,9 @@ export class RoleMutationService extends BaseService {
 
   /**
    * `base`, or where a role already has that name (names are unique), the
-   * first of `<base> (built-in)`, `<base> (built-in 2)`, … no role has. A
-   * site's own role keeps its name; the built-in role takes another.
+   * first of `<base> built-in`, `<base> built-in 2`, … no role has: names the
+   * admin's role form accepts, so the role can still be saved there. A site's
+   * own role keeps its name; the built-in role takes another.
    */
   private async firstFreeRoleName(base: string): Promise<string> {
     const { roles } = this.tables;
@@ -136,8 +137,8 @@ export class RoleMutationService extends BaseService {
         n === 1
           ? base
           : n === 2
-            ? `${base} (built-in)`
-            : `${base} (built-in ${n - 1})`;
+            ? `${base} built-in`
+            : `${base} built-in ${n - 1}`;
       const taken = await this.db
         .select({ id: roles.id })
         .from(roles)

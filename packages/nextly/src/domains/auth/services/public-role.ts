@@ -81,10 +81,14 @@ interface PublicRoleSeeding {
 /** The value of {@link PUBLIC_ROLE_META_KEY} once the Public role is made. */
 const MADE = "created";
 
-/** A boot's claim on making the Public role: who, and since when. */
+/**
+ * A boot's claim on making the Public role: who, since when, and whether the
+ * site's own role has been moved off the slug yet.
+ */
 interface Claim {
   claim: string;
   at: string;
+  moved?: true;
 }
 
 /** How long a claim stands before another boot may take it over. */
@@ -103,8 +107,8 @@ const isClaim = (value: unknown): value is Claim =>
  * `public-<n>` first, and the move is logged with what a code rule naming the
  * slug must now check. The first run is claimed in `nextly_meta`, so of two
  * boots starting together only one moves anything; a claim left by a boot
- * that stopped part-way lapses and is taken over. Every later run only makes
- * sure the Public role exists.
+ * that stopped part-way lapses and is taken over, keeping whether the move
+ * was made. Every later run only makes sure the Public role exists.
  */
 export async function seedPublicRole({
   ensurePublicRole,
@@ -124,7 +128,11 @@ export async function seedPublicRole({
     isClaim(state) &&
     Date.now() - Date.parse(state.at) > CLAIM_LAPSES_AFTER_MS
   ) {
-    await meta.compareAndSet(PUBLIC_ROLE_META_KEY, state, mine);
+    await meta.compareAndSet(
+      PUBLIC_ROLE_META_KEY,
+      state,
+      state.moved ? { ...mine, moved: true } : mine
+    );
   }
   const holder = await meta.get<unknown>(PUBLIC_ROLE_META_KEY);
   if (holder === MADE) {
@@ -134,11 +142,19 @@ export async function seedPublicRole({
   // Another boot is making it; the next boot makes sure it exists.
   if (!isClaim(holder) || holder.claim !== mine.claim) return;
 
-  const moved = await moveRoleOffPublicSlug();
-  if (moved) {
-    logger.warn(
-      `A role of this site's own had the slug "${PUBLIC_ROLE_SLUG}", which the built-in Public role now holds, so it was moved to "${moved}". Its name, holders, permissions and inheritance are unchanged. Code access rules that check the role slug \`${PUBLIC_ROLE_SLUG}\` must now check \`${moved}\`.`
-    );
+  if (!holder.moved) {
+    const moved = await moveRoleOffPublicSlug();
+    if (moved) {
+      logger.warn(
+        `A role of this site's own had the slug "${PUBLIC_ROLE_SLUG}", which the built-in Public role now holds, so it was moved to "${moved}". Its name, holders, permissions and inheritance are unchanged. Code access rules that check the role slug \`${PUBLIC_ROLE_SLUG}\` must now check \`${moved}\`.`
+      );
+    }
+    // Recorded before the Public role is made, so a boot taking over after a
+    // stop past this point does not move the role made here as a site's own.
+    const recorded = { ...holder, moved: true as const };
+    if (!(await meta.compareAndSet(PUBLIC_ROLE_META_KEY, holder, recorded))) {
+      return;
+    }
   }
   await ensurePublicRole();
   await meta.set(PUBLIC_ROLE_META_KEY, MADE);

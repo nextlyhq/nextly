@@ -391,9 +391,32 @@ describe.each(getConfiguredTestDialects())("the Public role (%s)", dialect => {
       slug: "everyone",
     });
     expect(await roleBySlug(nextly, PUBLIC_ROLE_SLUG)).toMatchObject({
-      name: "Public (built-in)",
+      name: "Public built-in",
       isSystem: true,
     });
+  });
+
+  it("keeps the role it made where a boot stopped before recording it", async () => {
+    const nextly = await boot(dialect);
+    await seedPermissionsAndRolePresets();
+    const id = await publicRoleId(nextly);
+    const readMedia = await permissionId(nextly, "read-media");
+    await services(nextly).roles.updateRole(id, { permissionIds: [readMedia] });
+    // What a boot that moved the site's role, made Public and then stopped
+    // leaves behind: its claim, long lapsed.
+    const meta = nextly.getService("metaService");
+    await meta.set(PUBLIC_ROLE_META_KEY, {
+      claim: "stopped",
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      moved: true,
+    });
+
+    await seedPermissionsAndRolePresets();
+
+    expect(await publicRoleId(nextly)).toBe(id);
+    expect(await permissionsOf(nextly, id)).toEqual([readMedia]);
+    expect(await roleBySlug(nextly, "public-1")).toBeNull();
+    expect(await meta.get(PUBLIC_ROLE_META_KEY)).toBe("created");
   });
 
   it("moves a site's own `public` role to the next free slug", async () => {
