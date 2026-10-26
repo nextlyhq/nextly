@@ -121,12 +121,19 @@ test("opens a Single read-only, with the same banner", async () => {
   await expect(page.locator('[data-primary="true"]')).toHaveCount(0);
 });
 
-test("opens a post read-only at a phone's width", async () => {
+test("opens a post read-only at a phone's width, its id still to copy", async () => {
+  await limited.context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.setViewportSize({ width: 390, height: 844 });
   try {
     await openAsReader(`/collections/posts/${postId}`);
     await expect(excerpt()).not.toBeEditable();
     await expect(page.locator('[data-primary="true"]')).toHaveCount(0);
+    // The rail holding the id is hidden at this width; the menu offers it.
+    await page.getByRole("button", { name: "More actions" }).click();
+    await page.getByRole("menuitem", { name: "Copy ID" }).click();
+    await expect
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toBe(postId);
   } finally {
     await page.setViewportSize({ width: 1280, height: 720 });
   }
