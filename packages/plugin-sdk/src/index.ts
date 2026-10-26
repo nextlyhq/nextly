@@ -17,6 +17,14 @@
 export { definePlugin } from "nextly";
 
 /**
+ * @experimental `defineWidget` — declares a dashboard widget once: its
+ * settings, its data and how it draws. A widget drawn by its own component is
+ * handed `WidgetProps<typeof widget>`; the types are here and in `./widgets`.
+ */
+export { defineWidget } from "nextly";
+export type { WidgetData, WidgetProps, WidgetRenderSize } from "nextly";
+
+/**
  * @experimental `collectionDraftSplit` — whether a collection stores a working
  *   draft beside its published row.
  *

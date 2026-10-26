@@ -17,6 +17,7 @@
 import type { UserContext } from "../../collections/services/collection-types";
 import type { WidgetQuerySpec } from "../query";
 import type { WidgetScope } from "../resolved-sources";
+import type { DeclaredComponentProps } from "../result";
 import type { WidgetOp } from "../sources";
 import type { WidgetWidth } from "../widths";
 
@@ -472,17 +473,9 @@ export type WidgetData<W> = W extends { readonly [widgetData]?: infer D }
   ? D
   : never;
 
-/**
- * A card's current size, which changes as its width does.
- *
- * Not `WidgetSize`: that name is the published `"sm" | … | "full"` step of
- * the column grid, and a plugin reading both must not find one name meaning
- * two things.
- */
-export interface WidgetRenderSize {
-  width: WidgetWidth;
-  class: "small" | "medium" | "large";
-}
+// A card's size, declared beside the props the admin builds so both read one
+// shape, and published from here as it always was.
+export type { WidgetRenderSize } from "../result";
 
 /**
  * What a widget's own component is handed: its settings, its size and its
@@ -499,21 +492,14 @@ export interface WidgetRenderSize {
  * `W extends AnyWidget`, so a declaration refused by its own checks (see
  * `CheckedDeclaration`) cannot be given a component.
  */
-export interface WidgetProps<W extends AnyWidget> {
-  widgetId: string;
-  /** The card's id: one widget may sit on a dashboard more than once. */
-  placementId: string;
+export interface WidgetProps<W extends AnyWidget>
+  extends Omit<DeclaredComponentProps, "settings" | "data"> {
   settings: WidgetSettingValues<W>;
-  size: WidgetRenderSize;
   /**
    * The card's data, always present: the host draws loading, no permission
    * and error itself, and calls the component only once there is data.
    */
   data: WidgetData<W>;
-  /** True while a newer answer is on its way; `data` is the last one. */
-  refreshing: boolean;
-  /** Asks for the card's data again. */
-  retry: () => void;
 }
 
 /**

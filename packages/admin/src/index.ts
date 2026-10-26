@@ -734,6 +734,38 @@ export type {
 } from "./types/dashboard/recent-entries";
 export type { ProjectStatItem } from "./types/dashboard/project-stats";
 
+// The widget kit: the parts core's own dashboard cards are drawn from, for a
+// widget's own component. Plugins reach them only through
+// `@nextlyhq/plugin-sdk/admin`, so the admin stays the host's single copy and
+// a card part reads the tier of the card it is drawn in.
+// @experimental while the dashboard widget SDK settles.
+export {
+  CardEmpty,
+  CardError,
+  CardSkeleton,
+  CardUnavailable,
+  type CardEmptyContent,
+  type SkeletonShape,
+} from "./components/features/widgets/frame/states";
+export { CardFigure } from "./components/features/widgets/frame/figure";
+export {
+  cardChange,
+  cardNumber,
+} from "./components/features/widgets/frame/format";
+export {
+  GroupsChart,
+  type GroupsChartGroup,
+  type GroupsChartProps,
+} from "./components/features/widgets/charts/groups-chart";
+export {
+  OverTimeChart,
+  type OverTimeChartProps,
+  type OverTimeInterval,
+  type OverTimePoint,
+  type OverTimeSeries,
+} from "./components/features/widgets/charts/over-time-chart";
+export type { WidgetRenderSize } from "nextly/widget-result";
+
 // Constants
 export {
   MOBILE_DRAWER_WIDTH,
