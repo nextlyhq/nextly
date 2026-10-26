@@ -529,8 +529,17 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
     () => ({
       id: row.placementId,
       settings: settingsAsAsked(row.widget, row.config, sources),
+      // The width the card is drawn at, which a declared component is handed.
+      width: drawnWidth(row.width, row.allowedWidths),
     }),
-    [row.placementId, row.widget, row.config, sources]
+    [
+      row.placementId,
+      row.widget,
+      row.config,
+      row.width,
+      row.allowedWidths,
+      sources,
+    ]
   );
   const {
     quick,
