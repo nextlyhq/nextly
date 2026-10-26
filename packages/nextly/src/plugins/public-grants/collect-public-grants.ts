@@ -3,10 +3,11 @@
  * collections (`contributes.publicGrants`), resolved to the slugs the host
  * installed those collections under.
  *
- * Pure: no database access. A plugin may only open its own collections to
- * visitors, so a grant naming a collection it does not contribute, or an
- * action other than `read` and `create`, is refused here and returned for the
- * caller to log rather than granted.
+ * Pure: no database access. A disabled plugin's grants are not collected. A
+ * plugin may only open its own collections to visitors, so a grant naming a
+ * collection it does not contribute, or an action other than `read` and
+ * `create`, is refused here and returned for the caller to log rather than
+ * granted.
  *
  * @module plugins/public-grants/collect-public-grants
  */
@@ -41,6 +42,9 @@ export function collectPublicGrants(plugins: readonly PluginDefinition[]): {
   const grants: CollectedPublicGrant[] = [];
   const refused: RefusedPublicGrant[] = [];
   for (const plugin of plugins) {
+    // A plugin the host disabled keeps its collections but opens nothing:
+    // its routes and behaviour are off, so visitors get no grant from it.
+    if (plugin.enabled === false) continue;
     const own = new Set(
       (plugin.contributes?.collections ?? []).map(({ slug }) => slug)
     );

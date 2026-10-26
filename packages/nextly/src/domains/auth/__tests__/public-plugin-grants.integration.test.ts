@@ -86,14 +86,15 @@ function ticketsPlugin(rename?: Record<string, string>) {
 
 async function boot(
   dialect: TestDialect,
-  rename?: Record<string, string>
+  rename?: Record<string, string>,
+  enabled = true
 ): Promise<TestNextly> {
   logged = { warn: [], error: [] };
   t = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
     logger,
     collections: [defineCollection({ slug: "posts", fields })],
-    plugins: [ticketsPlugin(rename)],
+    plugins: [{ ...ticketsPlugin(rename), enabled }],
   });
   return t;
 }
@@ -179,6 +180,13 @@ describe.each(getConfiguredTestDialects())(
 
       await takeAway(nextly, "create-tickets");
       await seedPermissionsAndRolePresets();
+      expect(await publicHolds(nextly)).not.toContain("create-tickets");
+    });
+
+    it("grants nothing for a plugin the host disabled", async () => {
+      const nextly = await boot(dialect, undefined, false);
+      await seedPermissionsAndRolePresets();
+
       expect(await publicHolds(nextly)).not.toContain("create-tickets");
     });
 
