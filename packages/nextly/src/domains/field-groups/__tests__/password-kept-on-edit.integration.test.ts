@@ -83,7 +83,9 @@ describe.each(getConfiguredTestDialects())(
                 name: "box",
                 fields: [
                   text({ name: "a" }),
-                  password({ name: "secret" }),
+                  // Shorter than a stored hash: an edit that leaves it out is
+                  // validated as the writer sent it, not as the hash kept.
+                  password({ name: "secret", maxLength: 32 }),
                   fieldGroup({ name: "held", component: "kpin" }),
                 ],
               }),
@@ -126,6 +128,20 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
         singles: [
+          // A translated Single whose translated group is named in camel case:
+          // its translations table keys the column by its snake-case name.
+          defineSingle({
+            slug: "ksitel",
+            localized: true,
+            fields: [
+              text({ name: "title" }),
+              group({
+                name: "accountSettings",
+                localized: true,
+                fields: [text({ name: "a" }), password({ name: "pw" })],
+              }),
+            ],
+          }),
           defineSingle({
             slug: "ksite",
             fields: [
@@ -299,6 +315,23 @@ describe.each(getConfiguredTestDialects())(
 
       expect(open(row?.own).a).toBe("2");
       expect(await hashes(open(row?.own).pw, "site-1")).toBe(true);
+    });
+
+    it("keeps a translated Single's group password, named in camel case", async () => {
+      await trusted.updateSingle({
+        slug: "ksitel",
+        data: { title: "s", accountSettings: { a: "1", pw: "camel-1" } },
+      } as never);
+
+      await trusted.updateSingle({
+        slug: "ksitel",
+        data: { accountSettings: { a: "2" } },
+      } as never);
+      const [row] = await t.adapter.select<Doc>("single_ksitel_locales", {});
+      const stored = open(row?.accountSettings ?? row?.account_settings);
+
+      expect(stored.a).toBe("2");
+      expect(await hashes(stored.pw, "camel-1")).toBe(true);
     });
 
     it("keeps only the written language's password in a translated group", async () => {
