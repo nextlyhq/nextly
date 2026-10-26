@@ -27,6 +27,7 @@ import {
   useBulkUpdateEntries,
 } from "@admin/hooks/queries";
 import { useCollection } from "@admin/hooks/queries/useCollections";
+import { useCan } from "@admin/hooks/useCan";
 import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
@@ -60,6 +61,7 @@ import {
   type CollectionForColumns,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
+import { useEntryBulkActions } from "./useEntryBulkActions";
 
 // ============================================================================
 // Types
@@ -568,14 +570,19 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     setPage(1);
   }, []);
 
-  // disableCreate gates every creation affordance from one place — the
-  // header button, the empty-state CTA, and the keyboard shortcut all call
-  // this, so a machine-created collection cannot reach the create screen
-  // through any of them. While the collection metadata is still loading the
-  // answer is unknown, and unknown counts as disabled: the shortcut must
-  // not slip through the loading window.
+  // One gate for every creation affordance — the header button, the
+  // empty-state CTA, and the keyboard shortcut — so neither a
+  // machine-created collection (disableCreate) nor a caller who may not
+  // create here reaches the create screen through any of them. While the
+  // collection metadata or the caller's access is still loading the answer
+  // is unknown, and unknown counts as disabled: the shortcut must not slip
+  // through the loading window.
+  const canCreate = useCan(`create-${collectionSlug}`);
   const createDisabled = Boolean(collection?.admin?.disableCreate);
-  const createAllowed = Boolean(collection) && !createDisabled;
+  const createAllowed = Boolean(collection) && !createDisabled && canCreate;
+  // The bulk actions offered here, which the table's checkboxes and bar
+  // follow too, so the Delete shortcut opens nothing they would not.
+  const offeredBulk = useEntryBulkActions(collectionForColumns);
   const handleCreateClick = useCallback(() => {
     if (!createAllowed) return;
     navigateTo(
@@ -602,12 +609,13 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   }, []);
 
   const handleDeleteSelected = useCallback(() => {
+    if (!offeredBulk.delete) return;
     const selectedIds = tableRef.current?.getSelectedIds() ?? [];
     if (selectedIds.length > 0) {
       setSelectedForDelete(selectedIds);
       setDeleteDialogOpen(true);
     }
-  }, []);
+  }, [offeredBulk.delete]);
 
   const handleSelectionChange = useCallback((selectedIds: string[]) => {
     setHasSelection(selectedIds.length > 0);
@@ -702,8 +710,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
             API
           </Button>
           {/* Machine-created collections (disableCreate) never offer "New" —
-              a hand-typed entry there would be fiction, not data. */}
-          {!createDisabled && (
+              a hand-typed entry there would be fiction, not data — and nor
+              does a collection the caller may not create in. */}
+          {createAllowed && (
             <Button
               onClick={handleCreateClick}
               className="flex-1 sm:flex-initial hover-unified"
@@ -727,7 +736,7 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
         <EntryEmptyState
           collectionName={labels.plural}
           singularName={labels.singular}
-          onCreateClick={handleCreateClick}
+          onCreateClick={createAllowed ? handleCreateClick : undefined}
         />
       ) : (
         <EntryTable
