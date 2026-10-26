@@ -19,7 +19,7 @@ import type {
 } from "../../schemas/email-templates/types";
 
 /** The kinds of value a declaration may name. */
-export const TEMPLATE_VARIABLE_TYPES = [
+const TEMPLATE_VARIABLE_TYPES = [
   "text",
   "number",
   "date",
@@ -65,7 +65,7 @@ const fieldSchema: z.ZodType<EmailTemplateVariableField> = z.lazy(() =>
 );
 
 /** One declared variable, as a save gives it. Unknown keys are dropped. */
-export const templateVariableSchema = z
+const templateVariableSchema = z
   .object({
     ...fieldShape,
     required: z.boolean().optional(),
