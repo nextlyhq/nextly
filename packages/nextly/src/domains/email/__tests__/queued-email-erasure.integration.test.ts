@@ -274,12 +274,15 @@ describe.each(getConfiguredTestDialects())(
         to: SHARED,
         person: kept,
       });
-      const keptDeliveries = () =>
-        t.adapter.select("email_deliveries", {
-          where: {
-            and: [{ column: "principalId", op: "=", value: "acc_case" }],
-          },
-        });
+      // Matched exactly here too: MySQL's own comparison ignores case.
+      const keptDeliveries = async () =>
+        (
+          await t.adapter.select<{ principalId: string }>("email_deliveries", {
+            where: {
+              and: [{ column: "principalId", op: "=", value: "acc_case" }],
+            },
+          })
+        ).filter(row => row.principalId === "acc_case");
       const before = await queued(t, other.id);
       const deliveries = await keptDeliveries();
 
