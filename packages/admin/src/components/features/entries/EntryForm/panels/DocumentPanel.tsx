@@ -7,7 +7,7 @@ import { Check, Circle, Clock, Copy, Hash } from "@admin/components/icons";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
 import { cn } from "@admin/lib/utils";
 
-import { LanguagePanel } from "../../LanguagePanel";
+import { DocumentLanguagePanel } from "../../LanguagePanel";
 import type { EntryData, EntryFormMode } from "../useEntryForm";
 
 // "heavy" polish pass on top of that — neutral monochrome lucide icons
@@ -183,10 +183,10 @@ function TranslationsRow({
           The panel carries both, and the same component renders inline where
           this rail is hidden — so neither the state nor the actions can be the
           surface that disappears. */}
-      <LanguagePanel
-        {...(translations === undefined ? {} : { translations })}
-        {...(locale === undefined ? {} : { activeLocale: locale })}
-        {...(onLocaleChange === undefined ? {} : { onSelect: onLocaleChange })}
+      <DocumentLanguagePanel
+        translations={translations}
+        locale={locale}
+        onLocaleChange={onLocaleChange}
         hasStatus={hasStatus}
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}

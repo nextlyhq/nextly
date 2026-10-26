@@ -74,7 +74,7 @@ import {
   type EntryFormIntent,
 } from "@admin/components/features/entries/EntryForm/useEntryForm";
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
-import { LanguagePanel } from "@admin/components/features/entries/LanguagePanel";
+import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
 import { TranslationPanes } from "@admin/components/features/entries/TranslationMode/TranslationPanes";
 import { useTranslationSource } from "@admin/components/features/entries/TranslationMode/useTranslationSource";
@@ -307,10 +307,10 @@ function SingleFormLanguagePanel({
   if (!enabled) return null;
   return (
     <div className={cn("px-6 pt-4", !railCollapsed && "@4xl/content:hidden")}>
-      <LanguagePanel
-        {...(translations === undefined ? {} : { translations })}
-        {...(locale === undefined ? {} : { activeLocale: locale })}
-        {...(onLocaleChange === undefined ? {} : { onSelect: onLocaleChange })}
+      <DocumentLanguagePanel
+        translations={translations}
+        locale={locale}
+        onLocaleChange={onLocaleChange}
         hasStatus={hasStatus}
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}

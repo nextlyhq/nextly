@@ -635,6 +635,47 @@ function LanguageRow({
   );
 }
 
+/**
+ * Whether a document has languages to show. Two switches, and both have to be
+ * on. `enabled` is the APP's — several languages are configured — while
+ * `collectionLocalized` is this DOCUMENT's. Reading only the first puts a
+ * language panel on a document that has no language dimension, where every
+ * row after the default reads "not translated": a claim about content that
+ * cannot exist rather than work left to do.
+ */
+function hasLanguages(
+  enabled: boolean,
+  collectionLocalized: boolean,
+  languageCount: number
+): boolean {
+  return enabled && collectionLocalized && languageCount >= 2;
+}
+
+/**
+ * The panel as an editor mounts it, given the document's translations, the
+ * language on screen and the switch to another. The rail and the inline mount
+ * of the entry and Single editors share it, so each reads them the same way.
+ */
+export function DocumentLanguagePanel({
+  translations,
+  locale,
+  onLocaleChange,
+  ...panel
+}: Omit<LanguagePanelProps, "translations" | "activeLocale" | "onSelect"> & {
+  translations?: Record<string, LocaleTranslationMeta> | undefined;
+  locale?: string | undefined;
+  onLocaleChange?: LanguagePanelProps["onSelect"] | undefined;
+}): JSX.Element | null {
+  return (
+    <LanguagePanel
+      {...panel}
+      {...(translations === undefined ? {} : { translations })}
+      {...(locale === undefined ? {} : { activeLocale: locale })}
+      {...(onLocaleChange === undefined ? {} : { onSelect: onLocaleChange })}
+    />
+  );
+}
+
 export function LanguagePanel({
   translations,
   activeLocale,
@@ -655,13 +696,7 @@ export function LanguagePanel({
     hasStatus === undefined ? {} : { hasStatus }
   );
 
-  // Two switches, and both have to be on. `enabled` is the APP's — several
-  // languages are configured — while `collectionLocalized` is this DOCUMENT's.
-  // Reading only the first puts a language panel on a document that has no
-  // language dimension, where every row after the default reads "not
-  // translated": a claim about content that cannot exist rather than work left
-  // to do.
-  if (!enabled || !collectionLocalized || locales.length < 2) return null;
+  if (!hasLanguages(enabled, collectionLocalized, locales.length)) return null;
 
   const active = activeLocale ?? defaultLocale;
   const pendingCount = pendingLanguageCount(locales, translations);

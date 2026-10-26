@@ -53,7 +53,7 @@ import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
 import { CopyFromLanguageScope } from "../CopyFromLanguageScope";
 import { collectionSourceFetcher } from "../entry-locale-source";
 import { EntryLocaleProvider } from "../EntryLocaleContext";
-import { LanguagePanel } from "../LanguagePanel";
+import { DocumentLanguagePanel } from "../LanguagePanel";
 import { PreviewPanes } from "../PreviewMode/PreviewPanes";
 import { previewRevisionOf } from "../PreviewMode/previewRevision";
 import { TranslationPanes } from "../TranslationMode/TranslationPanes";
@@ -1158,25 +1158,20 @@ export function EntryForm({
                                         "@4xl/content:hidden"
                                     )}
                                   >
-                                    <LanguagePanel
-                                      {...(entry?._translations === undefined
-                                        ? {}
-                                        : {
-                                            translations:
-                                              entry._translations as Record<
-                                                string,
-                                                {
-                                                  translated: boolean;
-                                                  status?: string;
-                                                }
-                                              >,
-                                          })}
-                                      {...(locale === undefined
-                                        ? {}
-                                        : { activeLocale: locale })}
-                                      {...(onLocaleChange === undefined
-                                        ? {}
-                                        : { onSelect: onLocaleChange })}
+                                    <DocumentLanguagePanel
+                                      translations={
+                                        entry?._translations as
+                                          | Record<
+                                              string,
+                                              {
+                                                translated: boolean;
+                                                status?: string;
+                                              }
+                                            >
+                                          | undefined
+                                      }
+                                      locale={locale}
+                                      onLocaleChange={onLocaleChange}
                                       hasStatus={hasStatus}
                                       actionsDisabled={editsHeld}
                                       // A reader may still open the other languages.
