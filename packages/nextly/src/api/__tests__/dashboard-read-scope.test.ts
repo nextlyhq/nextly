@@ -8,13 +8,12 @@
  * by a resolver that only ever looks at permission slugs, which is what this
  * file exists to disprove.
  *
- * A collection may be authorized ENTIRELY in code:
+ * A collection may narrow its grant in code:
  *
  *     defineCollection({ slug: "posts", access: { read: ctx => ... } })
  *
- * `checkAccess` consults that rule BEFORE it falls back to the stored grants,
- * so a slug-only resolver answers a different question from the one the row
- * read answers. Both directions are wrong and only one is visible: a rule that
+ * `checkAccess` asks that rule after the stored grant, so a slug-only resolver
+ * answers a different question from the one the row read answers: a rule that
  * REFUSES a collection the caller holds `posts:read` for made `/stats` disclose
  * that collection's count and `/activity` disclose its entry titles, user names
  * and emails, while `GET /api/collections/posts` correctly returned 403.
