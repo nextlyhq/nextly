@@ -35,6 +35,7 @@ import {
   cellsProblem,
   customAsksTwiceProblem,
   QUERYLESS_ARCHETYPES,
+  rangedLimitSettingProblem,
   textContentProblem,
   widgetValueProblem,
   WIDGET_ARCHETYPES,
@@ -342,6 +343,10 @@ const FIELD_RULES: ReadonlyArray<
   // both a query and cells would have its query ignored by the admin, which
   // takes the cells, while the identical registered definition is refused.
   customAsksTwiceProblem,
+
+  // Through the SAME rule the registry applies: a "limit" setting beside a
+  // ranged query would fail every request it changed.
+  rangedLimitSettingProblem,
 
   // Through the SAME rule the registry applies, and it is the rule ITSELF
   // rather than a second spelling of it. This channel had no settings check at

@@ -247,6 +247,26 @@ const MUST_AGREE: Array<{
     expect: /asks through its query or its cells, not both/,
   },
   {
+    // 🔴 Accepted, the setting would add a limit the ranged query refuses, and
+    // every request it changed would fail.
+    case: "a limit setting beside a ranged query",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "p#X",
+      query: {
+        source: "collection:posts",
+        op: "timeseries",
+        dateField: "createdAt",
+        range: "30d",
+      },
+      settings: [{ name: "limit", type: "number", label: "Limit" }],
+    },
+    expect: /declares a "limit" setting, and a query with a range/,
+  },
+  {
     case: "minSize above defaultSize",
     widget: {
       id: "acme/thing",
