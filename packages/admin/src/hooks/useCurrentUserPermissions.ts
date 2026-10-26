@@ -264,9 +264,10 @@ type AnswerState = {
    */
   hasAnswer: boolean;
   /**
-   * Whether the answer on screen belongs to the language the screen moved
-   * from, kept while the new language's is asked so the page stays mounted.
-   * It is not an answer for the language on screen: `hasAnswer` is false, so
+   * Whether the answer on screen is kept only while a current one is asked,
+   * so the page stays mounted: the language the screen moved from, or this
+   * language's own once it no longer holds and is being asked again. It is
+   * not an answer for the language on screen: `hasAnswer` is false, so
    * nothing is allowed on its word.
    */
   isPlaceholder: boolean;
@@ -471,7 +472,12 @@ function answerState(
     error: query.error,
     hasAnswer:
       query.data !== undefined && !unusable && !query.isPlaceholderData,
-    isPlaceholder: query.isPlaceholderData,
+    // Kept on screen while a current answer is asked: another language's,
+    // or this language's own once it no longer holds and is being asked
+    // again, as on returning to a language another has answered since.
+    isPlaceholder:
+      query.isPlaceholderData ||
+      (unusable && query.data !== undefined && query.isFetching),
   };
 }
 

@@ -77,15 +77,19 @@ export function PermissionGuard({
 
   // While the content language changes, the answer for the one moved from
   // stays on screen until the new one's arrives (`content.isPlaceholder`).
-  // The page this guard last opened for the same entity stays mounted through
+  // The page this guard has open for the same entity stays mounted through
   // it, so the editor keeps its place; that answer grants nothing on the page,
   // and the route is decided again on the new one. Any other route waits for
   // the new answer as on a first visit, never opened on the old one's word.
+  // Each settled answer decides what is open: the entity it opens, or nothing
+  // once it refuses, so a page refused in one language is not reopened on the
+  // way to the next.
   const entityKey = entity ? `${entity.slug}:${entity.action}` : null;
   const [openedFor, setOpenedFor] = useState<string | null>(null);
   const switching = entity !== undefined && content.isPlaceholder;
-  if (!switching && hasAnswer && hasAccess && openedFor !== entityKey) {
-    setOpenedFor(entityKey);
+  const settledOpen = hasAccess ? entityKey : null;
+  if (!switching && hasAnswer && settledOpen !== openedFor) {
+    setOpenedFor(settledOpen);
   }
 
   if (switching && openedFor === entityKey && !isForceLoading) {

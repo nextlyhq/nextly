@@ -1042,6 +1042,59 @@ describe("useCurrentUserPermissions", () => {
   });
 });
 
+describe("returning to a language another has answered since", () => {
+  it("keeps the language's own answer on screen while it is asked again, granting nothing on it", async () => {
+    onScreen.locale = "en";
+    server.capabilities = answering({ read: true, update: true });
+    const { result, rerender } = renderHook(
+      () => ({
+        access: useCurrentUserPermissions(),
+        edits: editsOffered(useUpdateAnswer("posts")),
+      }),
+      { wrapper: wrapperFor(newClient()) }
+    );
+    await waitFor(() =>
+      expect(result.current.access.content.hasAnswer).toBe(true)
+    );
+
+    // German answers, which leaves the English answer in the cache no longer
+    // current.
+    onScreen.locale = "de";
+    rerender();
+    await waitFor(() =>
+      expect(server.asked).toContain("/me/capabilities?locale=de")
+    );
+    await waitFor(() =>
+      expect(result.current.access.content).toMatchObject({
+        hasAnswer: true,
+        isPlaceholder: false,
+      })
+    );
+
+    // Back to English: its own answer is asked again, and held back here.
+    let release!: () => void;
+    server.capabilitiesGate = new Promise(done => {
+      release = done;
+    });
+    onScreen.locale = "en";
+    rerender();
+    await waitFor(() =>
+      expect(result.current.access.content.isPlaceholder).toBe(true)
+    );
+    expect(result.current.access.content.hasAnswer).toBe(false);
+    expect(result.current.edits).toBe(false);
+
+    release();
+    await waitFor(() =>
+      expect(result.current.access.content).toMatchObject({
+        hasAnswer: true,
+        isPlaceholder: false,
+      })
+    );
+    expect(result.current.edits).toBe(true);
+  });
+});
+
 describe("invalidateCurrentUserAccess", () => {
   it("asks for both the permissions and the capabilities again", async () => {
     const client = newClient();

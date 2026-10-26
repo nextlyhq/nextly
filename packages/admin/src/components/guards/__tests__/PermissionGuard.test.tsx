@@ -422,6 +422,40 @@ describe("PermissionGuard", () => {
       ).toBeNull();
     });
 
+    it("does not reopen a page a later language refused while the next is asked", () => {
+      // Opened in English, refused in German, then switched on to French:
+      // the page was not open in German, so French's wait shows no page.
+      holding([], false, { allows: ["read-posts"] });
+      const guarded = (
+        <PermissionGuard
+          requiredPermission="read-posts"
+          subject="collection"
+          entity={POSTS}
+        >
+          <Page />
+        </PermissionGuard>
+      );
+      const { rerender } = render(guarded);
+      expect(screen.getByText("the page")).toBeTruthy();
+
+      holding([], false, { allows: [] });
+      rerender(guarded);
+      expect(
+        screen.getByRole("heading", {
+          name: "You don't have access to this collection",
+        })
+      ).toBeTruthy();
+
+      pageRendered.mockClear();
+      holding([], false, {
+        allows: [],
+        content: { hasAnswer: false, isPlaceholder: true },
+      });
+      rerender(guarded);
+      expect(screen.getByText("Setting up your workspace")).toBeTruthy();
+      expect(pageRendered).not.toHaveBeenCalled();
+    });
+
     it("opens no page on the answer for the language moved from", () => {
       // A route this guard never opened waits for its own language's answer,
       // as on a first visit.
