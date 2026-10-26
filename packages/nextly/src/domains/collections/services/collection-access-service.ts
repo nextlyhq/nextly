@@ -171,27 +171,13 @@ export class CollectionAccessService extends BaseService {
     if (answer.answer === "missing") {
       return answeredAsMissing<T>(collectionName, operation);
     }
-    // The caller is told what was refused in the site's words. Which check
-    // refused rides along for the server's log, written where the refusal
-    // reaches its caller: a caller asking only whether it may is not refused.
-    return {
-      success: false,
-      statusCode: NEXTLY_ERROR_STATUS.FORBIDDEN,
-      code: "FORBIDDEN",
-      refusalReason:
-        verdict.refusal === "unauthenticated"
-          ? `${operation} on ${collectionName} requires an authenticated user`
-          : `the caller may not ${operation} ${collectionName}`,
-      // Named by the service's caller, so its slug is the site's own. Read
-      // on the gate's own transaction, where it runs in one.
-      message: await refusalMessageFor(
-        operation,
-        collectionName,
-        params.entryId === undefined ? "all" : "one",
-        { named: true, executor }
-      ),
-      data: null as unknown as T,
-    };
+    return refusedInWords<T>({
+      collectionName,
+      operation,
+      unauthenticated: verdict.refusal === "unauthenticated",
+      namesOne: params.entryId !== undefined,
+      executor,
+    });
   }
 
   /**
@@ -233,5 +219,37 @@ function answeredAsMissing<T>(
     message: genericPublicMessage("NOT_FOUND"),
     refusalReason: `the caller may not read ${collectionName}, so the entry its ${operation} names is answered as missing`,
     data: null,
+  };
+}
+
+/**
+ * The refusal of a caller who may not do what it asked, told in the site's
+ * words. Which check refused rides along for the server's log, written where
+ * the refusal reaches its caller: a caller asking only whether it may is not
+ * refused. Named by the service's caller, so its slug is the site's own, and
+ * read on the gate's own transaction where it runs in one.
+ */
+async function refusedInWords<T>(refusal: {
+  collectionName: string;
+  operation: string;
+  unauthenticated: boolean;
+  namesOne: boolean;
+  executor: unknown;
+}): Promise<CollectionServiceResult<T>> {
+  const { collectionName, operation } = refusal;
+  return {
+    success: false,
+    statusCode: NEXTLY_ERROR_STATUS.FORBIDDEN,
+    code: "FORBIDDEN",
+    refusalReason: refusal.unauthenticated
+      ? `${operation} on ${collectionName} requires an authenticated user`
+      : `the caller may not ${operation} ${collectionName}`,
+    message: await refusalMessageFor(
+      operation,
+      collectionName,
+      refusal.namesOne ? "one" : "all",
+      { named: true, executor: refusal.executor }
+    ),
+    data: null as unknown as T,
   };
 }
