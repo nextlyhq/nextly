@@ -113,9 +113,11 @@ export class RoleMutationService extends BaseService {
    *
    * @returns Role ID and whether it was newly created
    */
-  ensurePublicRole(): Promise<{ id: string; created: boolean }> {
+  async ensurePublicRole(): Promise<{ id: string; created: boolean }> {
+    const existing = await this.findRoleIdBySlug(PUBLIC_ROLE_SLUG);
+    if (existing) return { id: existing.id, created: false };
     return this.ensureBuiltInRole({
-      name: "Public",
+      name: await this.firstFreeRoleName("Public"),
       slug: PUBLIC_ROLE_SLUG,
       description: "What anyone may do without signing in",
       level: 0,
@@ -123,29 +125,49 @@ export class RoleMutationService extends BaseService {
   }
 
   /**
-   * Moves a role of the site's own off the Public role's slug, to the first
-   * of `public-1`, `public-2`, … no role holds, changing the slug alone: its
-   * name, holders, permissions and inheritance stay as they are. A built-in
-   * role holding the slug is the Public role itself and is left alone.
+   * `base`, or where a role already has that name (names are unique), the
+   * first of `<base> (built-in)`, `<base> (built-in 2)`, … no role has. A
+   * site's own role keeps its name; the built-in role takes another.
+   */
+  private async firstFreeRoleName(base: string): Promise<string> {
+    const { roles } = this.tables;
+    for (let n = 1; ; n++) {
+      const name =
+        n === 1
+          ? base
+          : n === 2
+            ? `${base} (built-in)`
+            : `${base} (built-in ${n - 1})`;
+      const taken = await this.db
+        .select({ id: roles.id })
+        .from(roles)
+        .where(eq(roles.name, name))
+        .limit(1);
+      if (taken.length === 0) return name;
+    }
+  }
+
+  /**
+   * Moves the role holding the Public role's slug off it, to the first of
+   * `public-1`, `public-2`, … no role holds, changing the slug alone: its
+   * name, holders, permissions and inheritance stay as they are. Run before
+   * the Public role first exists, when whatever holds the slug is a role of
+   * the site's own, whether or not it is marked built-in. What is cached from
+   * the role's grants is then cleared, as any change to a role's slug clears
+   * it, since a code rule reading role slugs now answers its holders
+   * differently.
    *
    * @returns The slug the role now has, or `null` where none was moved
    */
   async moveRoleOffPublicSlug(): Promise<string | null> {
+    const holder = await this.findRoleIdBySlug(PUBLIC_ROLE_SLUG);
+    if (!holder) return null;
     const { roles } = this.tables;
-    const holders = (await this.db
-      .select({ id: roles.id, isSystem: roles.isSystem })
-      .from(roles)
-      .where(eq(roles.slug, PUBLIC_ROLE_SLUG))
-      .limit(1)) as Array<{ id: unknown; isSystem: unknown }>;
-    const holder = holders[0];
-    if (!holder || Boolean(holder.isSystem)) return null;
     for (let n = 1; ; n++) {
       const slug = `${PUBLIC_ROLE_SLUG}-${n}`;
       if (await this.findRoleIdBySlug(slug)) continue;
-      await this.db
-        .update(roles)
-        .set({ slug })
-        .where(eq(roles.id, String(holder.id)));
+      await this.db.update(roles).set({ slug }).where(eq(roles.id, holder.id));
+      await afterRoleGrantsChanged(holder.id);
       return slug;
     }
   }
@@ -575,7 +597,10 @@ export class RoleMutationService extends BaseService {
       const roleResult = await this.db
         .select({
           id: roles.id,
+          name: roles.name,
           slug: roles.slug,
+          description: roles.description,
+          level: roles.level,
           isSystem: roles.isSystem,
         })
         .from(roles)
@@ -597,18 +622,24 @@ export class RoleMutationService extends BaseService {
       // inherits another role, which would hand visitors that role's grants.
       const isPublicRole =
         isSystemRole && String(currentRole.slug) === PUBLIC_ROLE_SLUG;
-      if (isPublicRole && changes.childRoleIds !== undefined) {
+      if (isPublicRole && (changes.childRoleIds?.length ?? 0) > 0) {
         throw NextlyError.builtIn({
           thing: "role",
           change: "inherit",
           logContext: { reason: "public-role-inherit-refused", roleId },
         });
       }
+      // A role editor sends the whole form, the role's own name, slug,
+      // description, level and (none) child roles included: a field sent as
+      // it stands is no change to it.
+      const unchanged = (sent: unknown, stored: unknown) =>
+        sent === undefined || (sent || null) === (stored || null);
       const permissionsOnly =
-        changes.name === undefined &&
-        changes.slug === undefined &&
-        changes.description === undefined &&
-        changes.level === undefined;
+        unchanged(changes.name, currentRole.name) &&
+        unchanged(changes.slug, currentRole.slug) &&
+        unchanged(changes.description, currentRole.description) &&
+        (changes.level === undefined ||
+          Number(changes.level) === Number(currentRole.level));
 
       // Prevent modifying system roles. The caller is told the role is built
       // in, a fact about the role and not about their permissions (which

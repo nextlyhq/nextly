@@ -18,7 +18,26 @@ process.env.NEXTLY_SECRET =
   "test-secret-must-be-at-least-32-characters-long!!";
 
 import { eq } from "drizzle-orm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+/** The roles each grants-changed notice named, in order. */
+const grantsChanged = vi.hoisted(() => ({ roleIds: [] as string[] }));
+
+// Recorded, then passed on: the notice is what clears what is cached from a
+// role's grants, so a role whose slug moves must be named in one.
+vi.mock("../services/role-grants-changed", async importOriginal => {
+  const real =
+    await importOriginal<typeof import("../services/role-grants-changed")>();
+  return {
+    ...real,
+    afterRoleGrantsChanged: async (
+      ...args: Parameters<typeof real.afterRoleGrantsChanged>
+    ) => {
+      grantsChanged.roleIds.push(String(args[0]));
+      return real.afterRoleGrantsChanged(...args);
+    },
+  };
+});
 
 import { getDialectTables } from "../../../database/index";
 import { seedPermissionsAndRolePresets } from "../../../init/seed-permissions";
@@ -36,6 +55,7 @@ import {
 
 let t: TestNextly | undefined;
 afterEach(async () => {
+  grantsChanged.roleIds = [];
   await t?.destroy();
   t = undefined;
 });
@@ -98,10 +118,11 @@ const builtIn = (change: string) =>
 
 /**
  * Leaves the install as one from before the Public role: the role this boot
- * seeding created and the record that it ran are both gone, and `roleId` takes
- * the slug `public`, so the next seeding meets it as an upgrade would.
+ * seeding created and the record that it ran are both gone, and `roleId`,
+ * where one is named, takes the slug `public`, so the next seeding meets it as
+ * an upgrade would.
  */
-async function asBeforePublic(nextly: TestNextly, roleId: string) {
+async function asBeforePublic(nextly: TestNextly, roleId?: string) {
   const { roles } = getDialectTables();
   const db = nextly.adapter.getDrizzle() as unknown as {
     delete: (table: unknown) => { where: (c: unknown) => Promise<unknown> };
@@ -111,6 +132,7 @@ async function asBeforePublic(nextly: TestNextly, roleId: string) {
   };
   await db.delete(roles).where(eq(roles.id, await publicRoleId(nextly)));
   await nextly.getService("metaService").delete(PUBLIC_ROLE_META_KEY);
+  if (roleId === undefined) return;
   await db
     .update(roles)
     .set({ slug: PUBLIC_ROLE_SLUG })
@@ -163,6 +185,34 @@ describe.each(getConfiguredTestDialects())("the Public role (%s)", dialect => {
     // own on the next boot: what the owner chose stays.
     await seedPermissionsAndRolePresets();
     expect(await permissionsOf(nextly, id)).toEqual([readMedia]);
+  });
+
+  it("saves the permissions a role editor sends with the role's own fields", async () => {
+    const nextly = await boot(dialect);
+    await seedPermissionsAndRolePresets();
+    const id = await publicRoleId(nextly);
+    const role = await services(nextly).roles.getRoleById(id);
+    const readMedia = await permissionId(nextly, "read-media");
+
+    // The whole form, as a role editor sends it: the role's own name, slug,
+    // description and level, and no child roles, beside the permissions.
+    await services(nextly).roles.updateRole(id, {
+      name: role.name,
+      slug: role.slug,
+      description: role.description ?? "",
+      level: role.level,
+      childRoleIds: [],
+      permissionIds: [readMedia],
+    });
+    expect(await permissionsOf(nextly, id)).toEqual([readMedia]);
+
+    await expect(
+      services(nextly).roles.updateRole(id, {
+        name: "Visitors",
+        slug: role.slug,
+        permissionIds: [readMedia],
+      })
+    ).rejects.toEqual(builtIn("changed"));
   });
 
   it("is never given to a person", async () => {
@@ -291,9 +341,59 @@ describe.each(getConfiguredTestDialects())("the Public role (%s)", dialect => {
     expect(created).toMatchObject({ isSystem: true });
     expect(created?.id).not.toBe(own.id);
 
+    // What is cached from the role's grants is cleared with the move.
+    expect(grantsChanged.roleIds).toContain(own.id);
+
     // A second run renames nothing more.
     await seedPermissionsAndRolePresets();
     expect((await roles.getRoleById(own.id)).slug).toBe("public-1");
+  });
+
+  it("moves a role of the site's own off the slug even where it is marked built-in", async () => {
+    const nextly = await boot(dialect);
+    await seedPermissionsAndRolePresets();
+    const readMedia = await permissionId(nextly, "read-media");
+    const own = await services(nextly).roles.createRole({
+      name: "Marked",
+      slug: "marked",
+      isSystem: true,
+      permissionIds: [readMedia],
+    });
+    await asBeforePublic(nextly, own.id);
+
+    await seedPermissionsAndRolePresets();
+
+    expect(await services(nextly).roles.getRoleById(own.id)).toMatchObject({
+      slug: "public-1",
+      isSystem: true,
+    });
+    expect(await permissionsOf(nextly, own.id)).toEqual([readMedia]);
+    const created = await publicRoleId(nextly);
+    expect(created).not.toBe(own.id);
+    expect(await permissionsOf(nextly, created)).toEqual([]);
+  });
+
+  it("takes a name of its own where a role of the site's is called Public", async () => {
+    const nextly = await boot(dialect);
+    await seedPermissionsAndRolePresets();
+    await asBeforePublic(nextly);
+    const readMedia = await permissionId(nextly, "read-media");
+    const own = await services(nextly).roles.createRole({
+      name: "Public",
+      slug: "everyone",
+      permissionIds: [readMedia],
+    });
+
+    await seedPermissionsAndRolePresets();
+
+    expect(await services(nextly).roles.getRoleById(own.id)).toMatchObject({
+      name: "Public",
+      slug: "everyone",
+    });
+    expect(await roleBySlug(nextly, PUBLIC_ROLE_SLUG)).toMatchObject({
+      name: "Public (built-in)",
+      isSystem: true,
+    });
   });
 
   it("moves a site's own `public` role to the next free slug", async () => {
