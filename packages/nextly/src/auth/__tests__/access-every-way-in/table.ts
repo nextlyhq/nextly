@@ -449,6 +449,12 @@ const NO_SERVICE_RULES: readonly Rule[] = [
   "returns-true",
   "returns-false",
   "returns-null",
+  // A rule's filter reaches the fallbacks a missing service leaves too, which
+  // judge a rule's answer apart from the service's doors.
+  "returns-filter",
+  "async-filter",
+  "returns-empty-in",
+  "malformed-filter",
 ];
 
 /** Every combination of the lists, target first and caller last. */
