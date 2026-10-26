@@ -597,11 +597,27 @@ export class EmailService extends BaseService {
     to: string,
     variables: Record<string, unknown>,
     draft?: TemplateTestDraft
-  ): Promise<EmailSendOutcome> {
-    return this.sendTemplate(templateSlug, to, variables, undefined, {
-      templateCopies: false,
-      draft,
-    });
+  ): Promise<EmailSendOutcome & { delivery?: TestDelivery }> {
+    // The provider the send itself resolved, not one looked up beside it: a
+    // default changed in between would otherwise be named for a message
+    // another provider delivered.
+    let delivery: TestDelivery | undefined;
+    const outcome = await this.sendTemplate(
+      templateSlug,
+      to,
+      variables,
+      undefined,
+      {
+        templateCopies: false,
+        draft,
+        observe: {
+          provider: resolved => {
+            delivery = resolved;
+          },
+        },
+      }
+    );
+    return delivery ? { ...outcome, delivery } : outcome;
   }
 
   /**
@@ -631,8 +647,18 @@ export class EmailService extends BaseService {
     {
       templateCopies,
       draft,
-    }: { templateCopies: boolean; draft?: TemplateTestDraft }
+      observe,
+    }: {
+      templateCopies: boolean;
+      draft?: TemplateTestDraft;
+      observe?: { provider?: (delivery: TestDelivery) => void };
+    }
   ): Promise<EmailSendOutcome> {
+    // A test send is told which provider took it; any other calls `send` as
+    // every send does.
+    const deliver = (message: Parameters<EmailService["send"]>[0]) =>
+      observe ? this.send(message, observe) : this.send(message);
+
     // Whitespace-only overrides must not shadow the template/provider
     // defaults or reach a provider as malformed headers.
     const fromOverride = options?.from?.trim() || undefined;
@@ -699,7 +725,7 @@ export class EmailService extends BaseService {
         options?.attachments
       );
 
-      return this.send({
+      return deliver({
         to,
         subject,
         html,
@@ -754,7 +780,7 @@ export class EmailService extends BaseService {
         options?.attachments
       );
 
-      return this.send({
+      return deliver({
         to,
         subject: result.subject,
         html: result.html,
@@ -800,51 +826,58 @@ export class EmailService extends BaseService {
    * @param options - Email sending options
    * @returns Send result with success status and optional message ID
    */
-  async send(options: {
+  async send(
+    options: {
+      /**
+       * The recipient, or several. Every `to` address receives the email: in one
+       * message through a provider that takes several, else one message each,
+       * with `cc` and `bcc` on the first. Refused before any provider is
+       * contacted when empty, malformed, longer than the provider takes, or more
+       * than one alongside `person`.
+       */
+      to: string | string[];
+      subject: string;
+      html: string;
+      plainText?: string;
+      /** Override the resolved provider From (e.g. a per-template From). */
+      from?: string;
+      /** Reply-To header. Omitted when not set. */
+      replyTo?: string;
+      providerId?: string;
+      cc?: string[];
+      bcc?: string[];
+      attachments?: EmailAttachmentInput[];
+      /**
+       * Which template produced this message, for the delivery log.
+       *
+       * The SLUG, never the rendered subject: a slug says which kind of message
+       * this was and cannot carry a name, while a rendered subject is the field
+       * most likely to interpolate one.
+       */
+      templateSlug?: string;
+      /**
+       * @experimental The plugin-defined person `to` is, by kind and id, so the
+       * delivery record names them and their deletion report erases it. Names
+       * the `to` rows only: a copied address is someone else.
+       */
+      person?: PrincipalRef;
+      /**
+       * @experimental Send this message once for the key, on every provider.
+       *
+       * Claimed before any provider is contacted. A repeat of a send that
+       * succeeded returns its result, marked `repeat`, without sending; a repeat
+       * while it is still sending reports it in progress; a repeat after it
+       * failed sends again. The same key with a different message is refused.
+       * Keys are scoped to their caller, so two plugins never share one.
+       */
+      idempotencyKey?: string;
+    },
     /**
-     * The recipient, or several. Every `to` address receives the email: in one
-     * message through a provider that takes several, else one message each,
-     * with `cc` and `bcc` on the first. Refused before any provider is
-     * contacted when empty, malformed, longer than the provider takes, or more
-     * than one alongside `person`.
+     * Told which provider the send resolved, once it has: the one that
+     * delivers this message, for a caller that reports it.
      */
-    to: string | string[];
-    subject: string;
-    html: string;
-    plainText?: string;
-    /** Override the resolved provider From (e.g. a per-template From). */
-    from?: string;
-    /** Reply-To header. Omitted when not set. */
-    replyTo?: string;
-    providerId?: string;
-    cc?: string[];
-    bcc?: string[];
-    attachments?: EmailAttachmentInput[];
-    /**
-     * Which template produced this message, for the delivery log.
-     *
-     * The SLUG, never the rendered subject: a slug says which kind of message
-     * this was and cannot carry a name, while a rendered subject is the field
-     * most likely to interpolate one.
-     */
-    templateSlug?: string;
-    /**
-     * @experimental The plugin-defined person `to` is, by kind and id, so the
-     * delivery record names them and their deletion report erases it. Names
-     * the `to` rows only: a copied address is someone else.
-     */
-    person?: PrincipalRef;
-    /**
-     * @experimental Send this message once for the key, on every provider.
-     *
-     * Claimed before any provider is contacted. A repeat of a send that
-     * succeeded returns its result, marked `repeat`, without sending; a repeat
-     * while it is still sending reports it in progress; a repeat after it
-     * failed sends again. The same key with a different message is refused.
-     * Keys are scoped to their caller, so two plugins never share one.
-     */
-    idempotencyKey?: string;
-  }): Promise<EmailSendOutcome> {
+    observe?: { provider?: (delivery: TestDelivery) => void }
+  ): Promise<EmailSendOutcome> {
     if (options.idempotencyKey !== undefined) {
       assertIdempotencyKey(options.idempotencyKey);
     }
@@ -870,8 +903,14 @@ export class EmailService extends BaseService {
       adapter,
       from: resolvedFrom,
       providerType,
+      providerName,
       resolvedProviderId,
     } = await this.resolveProviderForSend(options.providerId);
+    observe?.provider?.({
+      provider: providerName,
+      type: providerType,
+      delivers: providerType !== LOG_PROVIDER_TYPE,
+    });
 
     // A per-template From override wins over the provider's default From.
     const from = options.from?.trim() ? options.from : resolvedFrom;

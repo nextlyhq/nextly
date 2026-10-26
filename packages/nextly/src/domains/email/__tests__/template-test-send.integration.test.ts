@@ -226,6 +226,45 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(sent).toHaveLength(0);
     });
 
+    it("previews the inbox line as the sent email renders it", async () => {
+      await boot(dialect);
+      const templates = current!.getService(
+        "emailTemplateService"
+      ) as unknown as EmailTemplateService;
+      const draft = {
+        subject: "Hello",
+        htmlContent: "<p>Hi</p>",
+        plainTextContent: null,
+        useLayout: false,
+        kind: "template" as const,
+        layoutId: null,
+      };
+
+      // The preview text renders into the email's HTML, so its markup is
+      // markup and its values are escaped there; an inbox shows that as text.
+      const preview = await templates.previewDraft(
+        { ...draft, preheader: "Hi <b>{{ name }}</b> & welcome" },
+        { name: "Priya" }
+      );
+      expect(preview.preheader).not.toContain("<b>");
+      expect(preview.preheader).toContain("Priya");
+
+      // A From that can't render fails the preview, as it fails the send.
+      await expect(
+        templates.previewDraft(
+          { ...draft, fromOverride: "{{ name | nope }} <shop@example.com>" },
+          { name: "Priya" }
+        )
+      ).rejects.toBeDefined();
+
+      // A variable in the From address, which a save refuses, shows as written.
+      const asWritten = await templates.previewDraft(
+        { ...draft, fromOverride: "Shop <{{ address }}>" },
+        {}
+      );
+      expect(asWritten.from).toBe("Shop <{{ address }}>");
+    });
+
     it("still copies the template's Cc and Bcc on a real send", async () => {
       // The control: the copies are stored and honoured, so leaving them out
       // of the test is the test send's doing, not a template without them.

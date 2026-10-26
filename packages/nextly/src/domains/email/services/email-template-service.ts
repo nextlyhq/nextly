@@ -63,6 +63,7 @@ import {
 import {
   checkTemplateEnvelope,
   renderTemplateFrom,
+  usesVariables,
   type SavedCopies,
 } from "../template-envelope";
 import {
@@ -104,12 +105,14 @@ import {
   templateReadsVariable,
 } from "./liquid-compat";
 import { parseLiquid, writesOutput } from "./liquid-engine";
+import { displayNameAndMailbox } from "./recipients";
 import {
   DEFAULT_APP_NAME,
   renderTemplate,
   type RenderedTemplate,
   type TemplateFields,
 } from "./render-template";
+import { htmlToText } from "./template-engine";
 import {
   BUILT_IN_TEMPLATES,
   DEFAULT_LAYOUT_SLUG,
@@ -443,21 +446,21 @@ type EmailTemplatesTable =
   | typeof emailTemplatesSqlite;
 
 /**
- * A field rendered as one line of plain text, as a subject is: with the same
- * data, engine and brand the email renders with. The preview text shows this
- * way in an inbox.
+ * The preview text as an inbox shows it: rendered exactly as the sent email
+ * renders it, in the HTML it is spliced into, with the same data, engine and
+ * brand, then read as text the way an inbox reads that hidden line.
  */
-function renderAsLine(
+function renderPreheaderText(
   source: string,
   template: TemplateFields,
   data: Record<string, unknown>,
   options: Parameters<typeof renderTemplate>[3]
 ): string {
-  return renderTemplate(
+  const { html } = renderTemplate(
     {
       ...template,
-      subject: source,
-      htmlContent: "",
+      subject: "",
+      htmlContent: source,
       plainTextContent: null,
       preheader: null,
       useLayout: false,
@@ -466,23 +469,24 @@ function renderAsLine(
     null,
     data,
     options
-  ).subject;
+  );
+  return htmlToText(html).trim();
 }
 
 /**
- * The From line a reader would see, for a preview. One a save would refuse
- * (a variable in the address) comes back as written: the preview shows the
- * draft, and the save says what is wrong with it.
+ * The From line a reader would see, for a preview. One whose address uses a
+ * variable, which a save refuses, comes back as written: the preview shows
+ * the draft, and the save says what is wrong with it. Any other failure is
+ * the preview's, as it would be the send's.
  */
 function previewFrom(
   fromOverride: string,
   data: Record<string, unknown>
 ): string {
-  try {
-    return renderTemplateFrom(fromOverride, data, "preview");
-  } catch {
+  if (usesVariables(displayNameAndMailbox(fromOverride).email)) {
     return fromOverride;
   }
+  return renderTemplateFrom(fromOverride, data, "preview");
 }
 
 export class EmailTemplateService extends BaseService {
@@ -2149,7 +2153,7 @@ export class EmailTemplateService extends BaseService {
     return {
       ...rendered,
       preheader: draft.preheader?.trim()
-        ? renderAsLine(
+        ? renderPreheaderText(
             draft.preheader,
             { ...draft, legacy },
             sampleData,

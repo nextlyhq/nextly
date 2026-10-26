@@ -48,7 +48,7 @@ beforeEach(() => {
   services.clear();
   sendTemplateTest = vi
     .fn()
-    .mockResolvedValue({ success: true, messageId: "m-1" });
+    .mockResolvedValue({ success: true, messageId: "m-1", delivery: DELIVERY });
   findById = vi.fn(async (id: string) => ({
     id,
     email: `${id}@example.com`,
@@ -88,11 +88,32 @@ describe("a template's test send", () => {
       messageId: "m-1",
       delivery: DELIVERY,
     });
-    // The template's own provider, as its sends use.
-    expect(testDelivery).toHaveBeenCalledWith("p-template");
   });
 
-  it("sends the editor's draft, through the draft's provider when it sets one", async () => {
+  it("names the provider the send itself went through", async () => {
+    // A lookup beside the send can disagree with it: the default may change
+    // in between. The send's own answer is the one reported.
+    testDelivery.mockResolvedValue({
+      provider: "Old default",
+      type: "smtp",
+      delivers: true,
+    });
+    const sent = {
+      provider: "Log (no delivery)",
+      type: "log",
+      delivers: false,
+    };
+    sendTemplateTest.mockResolvedValue({ success: true, delivery: sent });
+
+    const response = (await asCaller(sessionCaller({ userId: "ana" }), () =>
+      dispatchEmailTemplates("sendTestTemplate", PARAMS, { variables: {} })
+    )) as Response;
+
+    expect(await response.json()).toMatchObject({ delivery: sent });
+    expect(testDelivery).not.toHaveBeenCalled();
+  });
+
+  it("sends the editor's draft, its provider included", async () => {
     const draft = { subject: "Draft subject", providerId: "p-draft" };
     await asCaller(sessionCaller({ userId: "ana" }), () =>
       dispatchEmailTemplates("sendTestTemplate", PARAMS, {
@@ -107,7 +128,6 @@ describe("a template's test send", () => {
       {},
       draft
     );
-    expect(testDelivery).toHaveBeenCalledWith("p-draft");
   });
 
   it("ignores a `to` in the body", async () => {
