@@ -955,12 +955,23 @@ export async function requireCollectionWriteAccess(
       }
       refusals.set(action, answer);
     }
-    // Every action refused. A write that changes only the status asked to
-    // publish or unpublish, so it is told that, with the refusal that action's
-    // own check gave; any other write is told it may not edit.
-    const asked = actionAsked ? await actionAsked() : "update";
-    return asked === "update" ? asUpdate : (refusals.get(asked) ?? asUpdate);
+    return refusalForActionAsked(asUpdate, refusals, actionAsked);
   });
+}
+
+/**
+ * The refusal a write every action refused is answered with. A write that
+ * changes only the status asked to publish or unpublish, so it is told that,
+ * with the refusal that action's own check gave; any other write is told it
+ * may not edit.
+ */
+async function refusalForActionAsked(
+  asUpdate: ErrorResponse,
+  refusals: ReadonlyMap<"publish" | "unpublish", ErrorResponse>,
+  actionAsked?: () => Promise<"update" | "publish" | "unpublish">
+): Promise<ErrorResponse> {
+  const asked = actionAsked ? await actionAsked() : "update";
+  return asked === "update" ? asUpdate : (refusals.get(asked) ?? asUpdate);
 }
 
 /**

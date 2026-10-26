@@ -162,7 +162,7 @@ import {
   SKIP_TIMEZONE_FORMAT_HEADER,
   withTimezoneFormatting,
 } from "./lib/date-formatting";
-import { isStatusOnlyWrite, statusGate } from "./lib/immutable-system-fields";
+import { writeGateFor } from "./lib/immutable-system-fields";
 import { createCorsMiddleware } from "./middleware/cors";
 import { defaultRestCallerReaders } from "./middleware/rest-callers";
 import {
@@ -886,12 +886,11 @@ const STATUS_WRITE_METHODS: ReadonlySet<string> = new Set([
 
 /**
  * The action a status write route's request asks, read only once every
- * action has refused it, so the refusal names that action: the one a write
- * changing only the status of an entry with a lifecycle is judged by
- * ({@link statusGate}), as the services judge it, and update for any other.
- * A bulk route carries the write as its body's `data`. The body is read from
- * a copy, and a body or lookup that cannot be read is answered as update,
- * since only the refusal's words depend on it.
+ * action has refused it, so the refusal names that action: the gate the
+ * services judge the write by ({@link writeGateFor}). A bulk route carries
+ * the write as its body's `data`. The body is read from a copy, and a body or
+ * lookup that cannot be read is answered as update, since only the refusal's
+ * words depend on it.
  */
 function actionAskedBy(
   req: Request,
@@ -906,29 +905,29 @@ function actionAskedBy(
         method === "bulkUpdateEntries" || method === "bulkUpdateByQuery"
           ? (body as { data?: unknown } | null)?.data
           : body;
-      if (
-        typeof write !== "object" ||
-        write === null ||
-        Array.isArray(write) ||
-        !isStatusOnlyWrite(write as Record<string, unknown>, entity)
-      ) {
+      if (typeof write !== "object" || write === null || Array.isArray(write)) {
         return "update";
       }
-      const record =
-        entity === "single"
-          ? await container
-              .get<{
-                getSingleBySlug(slug: string): Promise<unknown>;
-              }>("singleRegistryService")
-              .getSingleBySlug(slug)
-          : await container
-              .get<{
-                getCollectionBySlug(slug: string): Promise<unknown>;
-              }>("collectionRegistryService")
-              .getCollectionBySlug(slug);
-      return hasLifecycle(record)
-        ? statusGate((write as Record<string, unknown>).status)
-        : "update";
+      // The entity's lifecycle, from the record the services read it from.
+      const lifecycle = async () =>
+        hasLifecycle(
+          entity === "single"
+            ? await container
+                .get<{
+                  getSingleBySlug(slug: string): Promise<unknown>;
+                }>("singleRegistryService")
+                .getSingleBySlug(slug)
+            : await container
+                .get<{
+                  getCollectionBySlug(slug: string): Promise<unknown>;
+                }>("collectionRegistryService")
+                .getCollectionBySlug(slug)
+        );
+      return await writeGateFor(
+        write as Record<string, unknown>,
+        entity,
+        lifecycle
+      );
     } catch {
       return "update";
     }
