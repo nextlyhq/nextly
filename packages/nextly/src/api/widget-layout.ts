@@ -48,6 +48,7 @@ import {
   collectionWidgets,
   unreadableCollectionCard,
 } from "../domains/widgets/collection-cards";
+import { generatedWidgets } from "../domains/widgets/collection-widgets";
 import { conditionProbe } from "../domains/widgets/condition-probe";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
 import { generatedCardConversion } from "../domains/widgets/generated-card-conversion";
@@ -311,6 +312,9 @@ async function visibleWidgets(auth: AuthContext) {
   // are all taken from.
   const readable = readableCollectionsOf(audience.visible);
   const registered = audience.registeredCollections;
+  const generatedById = new Map(
+    generatedWidgets().map(widget => [widget.id, widget])
+  );
   return {
     caller,
     audience,
@@ -327,7 +331,10 @@ async function visibleWidgets(auth: AuthContext) {
         return widget === undefined
           ? undefined
           : widthFacts(widget).allowedWidths;
-      }
+      },
+      // The cards core generates today, by id: only one of them is a retired
+      // core card, and a timeline converts only while it counts as Over time.
+      widgetId => generatedById.get(widgetId)
     ),
     // A card set to a collection this reader may not read, withheld as a card
     // of a widget they may not see is, judged by the Collection setting the

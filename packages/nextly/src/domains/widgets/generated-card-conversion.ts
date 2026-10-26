@@ -13,13 +13,24 @@
  * | timeline              | Over time      |
  * | breakdown             | Breakdown      |
  *
- * A converted card stores its collection and nothing else, so it is the same
- * card a reader adds from the add panel today. Everything else the old card
- * showed is the successor's own behaviour at the card's width: a health card's
- * split and a table card's columns from medium size, a table when drawn large,
- * thirty days of entries per interval, and a breakdown by status where the
- * collection has a lifecycle. The successors' defaults that promise this are
+ * A converted card stores its collection, so it is the card a reader adds
+ * from the add panel today. What else the old card showed is the successor's
+ * own behaviour at the card's width: a health card's split and a table card's
+ * columns from medium size, a table when drawn large, and thirty days of
+ * entries per interval. The one exception is a breakdown, which also stores
+ * `groupBy: "status"`: left to its default, Breakdown divides by whatever the
+ * collection divides by, which can change. The defaults this relies on are
  * pinned by the module's tests, so a change to one is a decision, not drift.
+ *
+ * 🔴 A card converts only when the conversion is exact. Otherwise it stays as
+ * stored, and the reader's next save cannot make a lossy conversion permanent:
+ *
+ * - Only an id core GENERATES TODAY is a retired core card. A plugin may
+ *   register a generated-looking id, and while that plugin is disabled its
+ *   card's id is declared by nobody; a deleted collection's card, or one whose
+ *   id two collections spell, has no generated card either. None is converted.
+ * - A timeline converts only while core's card counts by the date field Over
+ *   time draws: on a collection without timestamps it counted by another.
  *
  * ## Why per reader, and not in the stored-row decode
  *
@@ -34,11 +45,10 @@
  * ## What a card becomes
  *
  * - One collection the reader may read matches: its successor, set to it.
- * - Several match: its successor set to none, which draws "not available".
- *   Naming either would draw one collection's data under a card that may have
- *   been the other's.
- * - None in the install matches (the collection was deleted): its successor
- *   set to none, so the card is kept, drawn as not available.
+ * - Several match, read while the install's collections are not yet known:
+ *   its successor set to none, which draws "not available". Naming either
+ *   would draw one collection's data under a card that may have been the
+ *   other's.
  * - A widget is DECLARED under the id (a plugin may take a generated-looking
  *   id, and its card is then the plugin's): not converted.
  * - Only collections this reader may NOT read match: not converted. The card
@@ -81,6 +91,45 @@ const SUCCESSORS = {
 } as const;
 
 type GeneratedKind = keyof typeof SUCCESSORS;
+
+/** The date field a widget's query reads, or `undefined` when it names none. */
+function dateFieldOf(widget: { query?: unknown } | undefined): unknown {
+  const query = widget?.query;
+  return typeof query === "object" && query !== null
+    ? (query as { dateField?: unknown }).dateField
+    : undefined;
+}
+
+/** The date field Over time draws, by its declaration in core. */
+const OVER_TIME_DATE_FIELD = dateFieldOf(
+  CORE_WIDGETS.find(widget => widget.id === SUCCESSORS.timeline)
+);
+
+/** The card core generates under an id today: only its query is read. */
+export interface GeneratedCard {
+  query?: unknown;
+}
+
+/**
+ * Kinds whose conversion is exact only when today's generated card says so; a
+ * kind absent here converts whenever core generates the id. A timeline whose
+ * card counts by another date field than Over time's stays as stored.
+ */
+const EXACT_WHEN: Partial<
+  Record<GeneratedKind, (today: GeneratedCard) => boolean>
+> = {
+  timeline: today => dateFieldOf(today) === OVER_TIME_DATE_FIELD,
+};
+
+/**
+ * Settings a kind's successor is set to beside its collection, where the
+ * successor's default would not mean what the card did. A breakdown divided by
+ * status, which core generated only for a collection with a lifecycle;
+ * Breakdown's own default follows whatever the collection divides by.
+ */
+const KEPT_SETTINGS: Partial<Record<GeneratedKind, Record<string, unknown>>> = {
+  breakdown: { groupBy: "status" },
+};
 
 /**
  * A generated card's id, capturing the slug as the id spells it and the kind.
@@ -178,14 +227,18 @@ function settingsIdentity(placement: WidgetPlacement): string | undefined {
  * (`registeredCollectionSlugs`, which counts one without a source as held),
  * `declared` the ids a declared widget answers to, whose cards stay its, and
  * `widthsOf` the widths each successor allows AS REGISTERED (a plugin may
- * extend or override one), falling back to its declaration in core.
+ * extend or override one), falling back to its declaration in core, and
+ * `generated` the card core generates under an id today, which decides
+ * whether a card is a retired core card at all, and whether a timeline's
+ * conversion is exact (`EXACT_WHEN`).
  */
 export function generatedCardConversion(
   readable: ReadonlySet<string>,
   existing: ReadonlySet<string> | undefined,
   declared: ReadonlySet<string> = new Set(),
   widthsOf: (successor: string) => readonly WidgetWidth[] | undefined = () =>
-    undefined
+    undefined,
+  generated: (widgetId: string) => GeneratedCard | undefined = () => undefined
 ): WidgetRetirements {
   // One retirement per successor, carrying the identity a card of it ALREADY
   // in the layout merges by, so a converted card joins it.
@@ -205,9 +258,17 @@ export function generatedCardConversion(
       if (declared.has(widgetId)) return undefined;
       const parsed = GENERATED_CARD.exec(widgetId);
       if (parsed === null) return undefined;
-      const [, idSlug, kind] = parsed;
-      const retirement = into.get(SUCCESSORS[kind as GeneratedKind]);
+      const [, idSlug, matched] = parsed;
+      const kind = matched as GeneratedKind;
+      const retirement = into.get(SUCCESSORS[kind]);
       if (retirement === undefined) return undefined;
+      // Only a card core generates under this id today is a retired core
+      // card, and only an exact conversion is made; anything else stays as
+      // stored (the module note).
+      const today = generated(widgetId);
+      if (today === undefined) return undefined;
+      const exact = EXACT_WHEN[kind];
+      if (exact !== undefined && !exact(today)) return undefined;
       const resolved = resolveGeneratedCardCollection(
         idSlug,
         readable,
@@ -217,7 +278,10 @@ export function generatedCardConversion(
       if (resolved.kind === "one") {
         return {
           ...retirement,
-          settings: () => ({ collection: resolved.collection }),
+          settings: () => ({
+            collection: resolved.collection,
+            ...KEPT_SETTINGS[kind],
+          }),
         };
       }
       // Set to none, and merged only with the cards of the same id slug and
