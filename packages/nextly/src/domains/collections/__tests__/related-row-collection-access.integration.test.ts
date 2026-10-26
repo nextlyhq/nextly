@@ -33,7 +33,7 @@ import {
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { CollectionRelationshipService } from "../services/collection-relationship-service";
 
-import { userWhoMay } from "./user-who-may";
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 
 /**
  * The Builder's many-to-many shape: the target lives on `options.target`, not

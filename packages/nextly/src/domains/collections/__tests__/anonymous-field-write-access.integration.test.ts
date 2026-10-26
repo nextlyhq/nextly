@@ -28,7 +28,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 
-import { userWhoMay } from "./user-who-may";
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 
 let current: TestNextly | undefined;
 

@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { defineCollection, defineSingle, text } from "../../config";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
-import { userWhoMay } from "../../domains/collections/__tests__/user-who-may";
+import { userWhoMay } from "../../__tests__/fixtures/permission-holders";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
