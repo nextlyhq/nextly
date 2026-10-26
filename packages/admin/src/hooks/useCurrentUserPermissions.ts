@@ -88,6 +88,11 @@ const EVERY_ENTITY: Record<string, CollectionCapabilities> = new Proxy(
       canDelete: true,
       canPublish: true,
       canUnpublish: true,
+      canReadTranslations: true,
+      canReadHistory: true,
+      canPublishEveryLanguage: true,
+      canUpdateInDefaultLanguage: true,
+      canDuplicate: true,
     }),
   }
 );
@@ -130,13 +135,25 @@ function collectionsFrom(
 ): Record<string, CollectionCapabilities> {
   const collections: Record<string, CollectionCapabilities> = {};
   for (const [slug, entity] of Object.entries(answer?.entities ?? {})) {
+    const canCreate = entity.create ?? false;
     collections[slug] = {
       canRead: entity.read,
-      canCreate: entity.create ?? false,
+      // Every create the admin sends names no language, so the server writes
+      // it in the default one: that is the create answered here, for the
+      // list's New, the create page and the quick-create modal alike.
+      canCreate: entity.createInDefaultLanguage ?? canCreate,
       canUpdate: entity.update,
       canDelete: entity.delete ?? false,
       canPublish: entity.publish,
       canUnpublish: entity.unpublish,
+      // Each request judged in other languages, as the server judges it; an
+      // answer without it leaves the action's own cell.
+      canReadTranslations: entity.readTranslations ?? entity.read,
+      canReadHistory: entity.readHistory ?? entity.read,
+      canPublishEveryLanguage: entity.publishEveryLanguage ?? entity.publish,
+      canUpdateInDefaultLanguage:
+        entity.updateInDefaultLanguage ?? entity.update,
+      canDuplicate: entity.duplicate ?? canCreate,
     };
   }
   return collections;
@@ -224,8 +241,36 @@ const CAPABILITY_OF_ACTION = {
   unpublish: "canUnpublish",
 } as const satisfies Record<string, keyof CollectionCapabilities>;
 
+/**
+ * The capability flag each request judged in other languages is answered by.
+ * Not permission slugs: these are asked by name, never parsed from a slug.
+ */
+const CAPABILITY_OF_REQUEST = {
+  readTranslations: "canReadTranslations",
+  readHistory: "canReadHistory",
+  publishEveryLanguage: "canPublishEveryLanguage",
+  updateInDefaultLanguage: "canUpdateInDefaultLanguage",
+  duplicate: "canDuplicate",
+} as const satisfies Record<string, keyof CollectionCapabilities>;
+
+/** What `canAccessCollection` answers: an action, or a request judged in other languages. */
+export type CollectionAccess =
+  | keyof typeof CAPABILITY_OF_ACTION
+  | keyof typeof CAPABILITY_OF_REQUEST;
+
 /** An action the server's answer about collections and Singles covers. */
 type EntityAction = keyof typeof CAPABILITY_OF_ACTION;
+
+function isEntityAction(access: CollectionAccess): access is EntityAction {
+  return Object.hasOwn(CAPABILITY_OF_ACTION, access);
+}
+
+/** The capability flag that answers `access`. */
+function flagOf(access: CollectionAccess): keyof CollectionCapabilities {
+  return isEntityAction(access)
+    ? CAPABILITY_OF_ACTION[access]
+    : CAPABILITY_OF_REQUEST[access];
+}
 
 /**
  * The action and resource a permission slug (`<action>-<resource>`) names,
@@ -283,7 +328,7 @@ type CurrentUserPermissions = AnswerState & {
   hasPermission: (slug: string) => boolean;
   canAccessCollection: (
     collectionSlug: string,
-    action: "read" | "create" | "update" | "delete" | "publish" | "unpublish"
+    action: CollectionAccess
   ) => boolean;
   /**
    * Whether the user may do what a permission slug names: an action on a
@@ -723,11 +768,11 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
    */
   const canAccessCollection = (
     collectionSlug: string,
-    action: "read" | "create" | "update" | "delete" | "publish" | "unpublish"
+    action: CollectionAccess
   ): boolean => {
     const entity = capabilities.collections[collectionSlug];
     if (!entity) return false;
-    return entity[CAPABILITY_OF_ACTION[action]];
+    return entity[flagOf(action)];
   };
 
   /**

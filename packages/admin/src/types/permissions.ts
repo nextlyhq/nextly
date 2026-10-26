@@ -11,11 +11,25 @@
  */
 export interface CollectionCapabilities {
   canRead: boolean;
+  /**
+   * Whether the user may create an entry as the admin sends a create: with no
+   * language, so in the default one.
+   */
   canCreate: boolean;
   canUpdate: boolean;
   canDelete: boolean;
   canPublish: boolean;
   canUnpublish: boolean;
+  /** A read with every language's translation state: a localized list or a document's overview. */
+  canReadTranslations: boolean;
+  /** The version history of every language, unfiltered. */
+  canReadHistory: boolean;
+  /** Publishing every language at once. */
+  canPublishEveryLanguage: boolean;
+  /** An update sent with no language, as the quick-edit modal sends one. */
+  canUpdateInDefaultLanguage: boolean;
+  /** Copying an entry. Never true of a Single. */
+  canDuplicate: boolean;
 }
 
 /**
