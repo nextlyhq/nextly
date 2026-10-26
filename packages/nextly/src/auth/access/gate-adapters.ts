@@ -355,15 +355,30 @@ function asksReadRuleAgain(
   );
 }
 
-/** Who an actor is, as a question kept for the request names it. */
-function actorKeyOf(actor: Exclude<Actor, { kind: "system" }>): string {
+/**
+ * What a rule is told about an actor (`ruleContext`), as a question kept for
+ * the request names it, and nothing it is not told: a signed-in user and a
+ * key are each the user id, the roles and the grants' slugs; a plugin person
+ * is the person; a visitor is told nothing. So a narrower scope never reuses
+ * a wider one's answer, and two asks that hand the rule the same context,
+ * whichever way they built the actor, share one.
+ */
+function ruleContextKeyOf(actor: Exclude<Actor, { kind: "system" }>): string {
   switch (actor.kind) {
     case "user":
-      return `user:${actor.userId}`;
     case "key":
-      return `key:${actor.keyId}:${actor.userId}`;
+      return JSON.stringify([
+        "staff",
+        actor.userId,
+        [...actor.roles].sort(),
+        actor.permissions.map(grant => grant.slug).sort(),
+      ]);
     case "principal":
-      return `principal:${actor.principal.kind}:${actor.principal.id}`;
+      return JSON.stringify([
+        "principal",
+        actor.principal.kind,
+        actor.principal.id,
+      ]);
     case "visitor":
       return "visitor";
   }
@@ -372,9 +387,9 @@ function actorKeyOf(actor: Exclude<Actor, { kind: "system" }>): string {
 /**
  * A read rule's outcome, asked once in a request where the asker applies its
  * filter, so the route's question and the service's re-ask of the same read
- * run the rule once. Kept by the target, who asks and the language the rule
- * is told, which is all a rule's context is made of in one request. Any other
- * ask asks the rule as before.
+ * run the rule once. Kept by the target, the actor as its rule is told it
+ * (identity, roles and grants) and the language, which is all a rule's
+ * context is made of in one request. Any other ask asks the rule as before.
  */
 function askedOnce<T>(
   q: GateQuestion,
@@ -388,7 +403,7 @@ function askedOnce<T>(
   const question = [
     asked,
     `${target.kind}:${target.slug}`,
-    actorKeyOf(actor),
+    ruleContextKeyOf(actor),
     language.locale ?? "",
     language.locales.join(","),
   ].join("|");
