@@ -9,40 +9,22 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { NextlyError } from "../../errors";
+import { loadedDialect } from "../../database/dialect-tables";
 
-import * as my from "./mysql";
-import * as pg from "./postgres";
-import * as sl from "./sqlite";
-
-export { pg, my, sl };
 export * from "./types";
+
+// The dialect files' namespaces, for types only: the repository names each
+// dialect's table type through them, and a value export would import every
+// dialect's tables.
+export type * as my from "./mysql";
+export type * as pg from "./postgres";
+export type * as sl from "./sqlite";
 
 /** Returns the Drizzle table objects for the content event record. */
 export function contentEventsTables(dialect: SupportedDialect) {
-  switch (dialect) {
-    case "postgresql":
-      return {
-        nextlyContentEvents: pg.nextlyContentEventsPg,
-        nextlyContentEventParts: pg.nextlyContentEventPartsPg,
-      };
-    case "mysql":
-      return {
-        nextlyContentEvents: my.nextlyContentEventsMysql,
-        nextlyContentEventParts: my.nextlyContentEventPartsMysql,
-      };
-    case "sqlite":
-      return {
-        nextlyContentEvents: sl.nextlyContentEventsSqlite,
-        nextlyContentEventParts: sl.nextlyContentEventPartsSqlite,
-      };
-    default: {
-      const _exhaustive: never = dialect;
-      // Unreachable given the SupportedDialect union; the `never` assignment is
-      // the compile-time exhaustiveness guard.
-      throw NextlyError.internal({
-        logContext: { dialect: String(_exhaustive) },
-      });
-    }
-  }
+  // The loaded dialect's own tables, so only that dialect's files are
+  // imported; `createAdapter` loads them.
+  const { nextlyContentEventParts, nextlyContentEvents } =
+    loadedDialect(dialect).tables;
+  return { nextlyContentEventParts, nextlyContentEvents };
 }

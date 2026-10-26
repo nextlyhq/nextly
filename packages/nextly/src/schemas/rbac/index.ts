@@ -14,49 +14,29 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import * as my from "./mysql";
-import * as pg from "./postgres";
-import * as sl from "./sqlite";
-
-export { pg, my, sl };
+import { loadedDialect } from "../../database/dialect-tables";
 
 /**
  * Returns Drizzle table objects for the RBAC feature group, for the requested
  * dialect.
  */
 export function rbacTables(dialect: SupportedDialect) {
-  switch (dialect) {
-    case "postgresql":
-      return {
-        roles: pg.roles,
-        permissions: pg.permissions,
-        rolePermissions: pg.rolePermissions,
-        userRoles: pg.userRoles,
-        roleInherits: pg.roleInherits,
-        userPermissionCache: pg.userPermissionCache,
-      };
-    case "mysql":
-      return {
-        roles: my.roles,
-        permissions: my.permissions,
-        rolePermissions: my.rolePermissions,
-        userRoles: my.userRoles,
-        roleInherits: my.roleInherits,
-        userPermissionCache: my.userPermissionCache,
-      };
-    case "sqlite":
-      return {
-        roles: sl.roles,
-        permissions: sl.permissions,
-        rolePermissions: sl.rolePermissions,
-        userRoles: sl.userRoles,
-        roleInherits: sl.roleInherits,
-        userPermissionCache: sl.userPermissionCache,
-      };
-    default: {
-      // Exhaustiveness check — TypeScript flags any missing dialect at compile time.
-      const _exhaustive: never = dialect;
-      throw new Error(`Unsupported dialect: ${String(_exhaustive)}`);
-    }
-  }
+  // The loaded dialect's own tables, so only that dialect's files are
+  // imported; `createAdapter` loads them.
+  const {
+    permissions,
+    roleInherits,
+    rolePermissions,
+    roles,
+    userPermissionCache,
+    userRoles,
+  } = loadedDialect(dialect).tables;
+  return {
+    permissions,
+    roleInherits,
+    rolePermissions,
+    roles,
+    userPermissionCache,
+    userRoles,
+  };
 }

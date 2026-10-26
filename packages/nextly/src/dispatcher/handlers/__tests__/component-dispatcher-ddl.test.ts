@@ -15,7 +15,7 @@
  * on purpose: it reports no adapter from DI and a container that has none, because it is testing
  * response envelopes rather than DDL.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
 vi.mock("../../helpers/di", () => ({
   getComponentRegistryFromDI: vi.fn(),
@@ -88,6 +88,13 @@ import {
   getFieldGroupMetadataServiceFromDI,
 } from "../../helpers/di";
 import { dispatchComponents } from "../component-dispatcher";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 function wireRegistry() {
   const registry = {

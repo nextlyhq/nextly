@@ -30,12 +30,14 @@ const { clearWidgets, listWidgets, registerWidget } = await import(
   "../../domains/widgets/registry"
 );
 
-/** Reaches past adapter resolution and schema-registry init (both tolerant
- * of a minimal fake), through the widget wiring, then fails at
- * `publishStoredWebhookRecordingPolicies`'s first real adapter call. */
+/** Reaches past adapter resolution (which loads the dialect it reports) and
+ * schema-registry init (tolerant of a minimal fake), through the widget
+ * wiring, then fails at `publishStoredWebhookRecordingPolicies`'s first real
+ * adapter call. */
 const thinAdapter = {
   connect: () => undefined,
   getDrizzle: () => ({}),
+  getCapabilities: () => ({ dialect: "sqlite" }),
 };
 
 function boot(config: Record<string, unknown>): Promise<unknown> {

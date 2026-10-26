@@ -16,43 +16,25 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import * as my from "./mysql";
-import * as pg from "./postgres";
-import * as sl from "./sqlite";
-
-export { pg, my, sl };
+import { loadedDialect } from "../../database/dialect-tables";
 
 /**
  * Returns Drizzle table objects for the auth-token feature group, for the
  * requested dialect.
  */
 export function authTokenTables(dialect: SupportedDialect) {
-  switch (dialect) {
-    case "postgresql":
-      return {
-        emailVerificationTokens: pg.emailVerificationTokens,
-        passwordResetTokens: pg.passwordResetTokens,
-        userInviteTokens: pg.userInviteTokens,
-        refreshTokens: pg.refreshTokens,
-      };
-    case "mysql":
-      return {
-        emailVerificationTokens: my.emailVerificationTokens,
-        passwordResetTokens: my.passwordResetTokens,
-        userInviteTokens: my.userInviteTokens,
-        refreshTokens: my.refreshTokens,
-      };
-    case "sqlite":
-      return {
-        emailVerificationTokens: sl.emailVerificationTokens,
-        passwordResetTokens: sl.passwordResetTokens,
-        userInviteTokens: sl.userInviteTokens,
-        refreshTokens: sl.refreshTokens,
-      };
-    default: {
-      // Exhaustiveness check — TypeScript flags any missing dialect at compile time.
-      const _exhaustive: never = dialect;
-      throw new Error(`Unsupported dialect: ${String(_exhaustive)}`);
-    }
-  }
+  // The loaded dialect's own tables, so only that dialect's files are
+  // imported; `createAdapter` loads them.
+  const {
+    emailVerificationTokens,
+    passwordResetTokens,
+    refreshTokens,
+    userInviteTokens,
+  } = loadedDialect(dialect).tables;
+  return {
+    emailVerificationTokens,
+    passwordResetTokens,
+    refreshTokens,
+    userInviteTokens,
+  };
 }
