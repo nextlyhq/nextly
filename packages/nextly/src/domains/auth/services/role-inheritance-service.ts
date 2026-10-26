@@ -60,9 +60,15 @@ export class RoleInheritanceService extends BaseService {
    * @throws Error if self-inheritance or cycle would be created
    */
   async addRoleInheritance(
-    childRoleId: string,
-    parentRoleId: string
+    requestedChildRoleId: string,
+    requestedParentRoleId: string
   ): Promise<void> {
+    // Judged and written as the roles' rows spell their ids. MySQL matches
+    // ids case-insensitively, so a request can name a role in another case:
+    // compared as given, a role named twice in two spellings would pass as
+    // two roles, and the row written would carry an id other than the role's.
+    const childRoleId = await this.storedRoleId(requestedChildRoleId);
+    const parentRoleId = await this.storedRoleId(requestedParentRoleId);
     if (childRoleId === parentRoleId) throw new Error("INHERIT_SELF_FORBIDDEN");
     await this.refuseEditingSystemRole(parentRoleId);
     if (await this.willCreateCycle(childRoleId, parentRoleId))
@@ -162,6 +168,17 @@ export class RoleInheritanceService extends BaseService {
    *
    * @throws {NextlyError} `forbidden` when `roleId` is a system role.
    */
+  /** `id` as its role's row spells it, or as given when no role has it. */
+  private async storedRoleId(id: string): Promise<string> {
+    const { roles } = this.tables;
+    const [role] = (await (this.db as LastSuperAdminTx)
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.id, id))
+      .limit(1)) as Array<{ id: unknown }>;
+    return role ? String(role.id) : id;
+  }
+
   private async refuseEditingSystemRole(roleId: string): Promise<void> {
     const { roles } = this.tables;
     const [role] = (await (this.db as LastSuperAdminTx)
