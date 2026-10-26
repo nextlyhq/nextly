@@ -28,7 +28,11 @@ const FIELDS: ReadonlyArray<VersionField> = [
 export interface OwnerChange {
   /** Stable within one review: the field and the change's position in it. */
   id: string;
-  field: VersionField;
+  /**
+   * The field the change is in, or `"template"` (`@experimental`) for an
+   * update offered as a whole, whose lines show every field it replaces.
+   */
+  field: VersionField | "template";
   /** True when the site edited the same lines; then `mine` differs from `base`. */
   conflict: boolean;
   /** The base's lines the change replaced (empty for an insertion). */
@@ -347,12 +351,27 @@ export function wholeTemplateChange(
 ): OwnerChange {
   return {
     id: WHOLE_TEMPLATE,
-    field: "htmlContent",
+    field: "template",
     conflict: false,
-    base: lines(base.htmlContent),
-    theirs: lines(theirs.htmlContent),
-    mine: lines(mine.htmlContent),
+    base: wholeLines(base),
+    theirs: wholeLines(theirs),
+    mine: wholeLines(mine),
   };
+}
+
+/**
+ * Every field of a version, each named, so taking it whole is taken seeing
+ * all it replaces: a subject or a preview line can change with no HTML moving.
+ */
+function wholeLines(version: EmailTemplateVersion): string[] {
+  const plain = lines(version.plainTextContent);
+  return [
+    `Subject: ${version.subject}`,
+    ...(version.preheader ? [`Preview text: ${version.preheader}`] : []),
+    "HTML:",
+    ...lines(version.htmlContent),
+    ...(plain.length > 0 ? ["Plain text:", ...plain] : []),
+  ];
 }
 
 /**

@@ -107,6 +107,16 @@ describe("a plugin's written template in the registry", () => {
       paid({ engine: "legacy" }),
       'leave out engine "legacy"',
     ],
+    [
+      "plain text beside blocks",
+      paid({ plainTextContent: "Paid" }),
+      "gives plain text with blocks",
+    ],
+    [
+      "a subject Liquid can't read",
+      paid({ subject: "Paid {% if %}" }),
+      "subject",
+    ],
   ])("is refused, and not registered, with %s", (_case, template, why) => {
     const { registry, refused } = register(template);
     expect(registry.owned.has("orders-paid")).toBe(false);
@@ -138,20 +148,33 @@ describe("an owner's update to a written override", () => {
     preheader: null,
   });
 
-  it("is offered as one change for the whole template", () => {
+  it("is offered as one change for the whole template, showing every field it replaces", () => {
     expect(
       wholeTemplateChange(
         version("<p>Old</p>"),
-        version("<p>New</p>\n<p>Thanks</p>"),
+        {
+          ...version("<p>New</p>\n<p>Thanks</p>"),
+          subject: "Paid, thanks",
+          preheader: "Your receipt",
+          plainTextContent: "New",
+        },
         version("<p>Mine</p>")
       )
     ).toEqual({
       id: WHOLE_TEMPLATE,
-      field: "htmlContent",
+      field: "template",
       conflict: false,
-      base: ["<p>Old</p>"],
-      theirs: ["<p>New</p>", "<p>Thanks</p>"],
-      mine: ["<p>Mine</p>"],
+      base: ["Subject: Paid", "HTML:", "<p>Old</p>"],
+      theirs: [
+        "Subject: Paid, thanks",
+        "Preview text: Your receipt",
+        "HTML:",
+        "<p>New</p>",
+        "<p>Thanks</p>",
+        "Plain text:",
+        "New",
+      ],
+      mine: ["Subject: Paid", "HTML:", "<p>Mine</p>"],
     });
   });
 

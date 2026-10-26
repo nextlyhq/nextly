@@ -82,6 +82,7 @@ import {
   storedOwner,
   versionDigest,
   versionOf,
+  writtenVersionDigest,
   type KeptBase,
   type OwnedTemplate,
   type RegistryInput,
@@ -94,6 +95,7 @@ import {
 import type { EmailConfig } from "../types";
 import type { WrittenDocument } from "../written/document";
 import {
+  compiledVersion,
   sitesVersionFormat,
   storedFormat,
   writtenForCreate,
@@ -312,11 +314,36 @@ function changedSince(
 function reviewToken(
   base: EmailTemplateVersion,
   theirs: EmailTemplateVersion,
-  mine: EmailTemplateVersion
+  mine: EmailTemplateVersion,
+  blocks: {
+    theirs?: WrittenDocument | null;
+    mine?: WrittenDocument | null;
+  } = {}
 ): string {
+  // The blocks as well as the text: two documents can write the same HTML,
+  // and a choice made on one must not apply the other.
   return createHash("sha256")
-    .update(JSON.stringify([base, theirs, mine].map(v => versionOf(v))))
+    .update(
+      JSON.stringify([
+        ...[base, theirs, mine].map(v => versionOf(v)),
+        storedDigest(theirs, blocks.theirs),
+        storedDigest(mine, blocks.mine),
+      ])
+    )
     .digest("hex");
+}
+
+/**
+ * A stored version's digest: its text, or for a written one its subject,
+ * preheader and blocks, so blocks that write the same HTML are told apart.
+ */
+function storedDigest(
+  version: EmailTemplateVersion,
+  blocks: WrittenDocument | null | undefined
+): string {
+  return blocks
+    ? writtenVersionDigest(version, blocks)
+    : versionDigest(version);
 }
 
 /** What an applied review replaced, so it can be undone. */
@@ -1740,7 +1767,10 @@ export class EmailTemplateService extends BaseService {
           ? [wholeTemplateChange(base, entry.version, mine)]
           : []
         : ownerChanges(base, entry.version, mine),
-      review: reviewToken(base, entry.version, mine),
+      review: reviewToken(base, entry.version, mine, {
+        theirs: entry.blocks,
+        mine: record.blocks,
+      }),
     };
   }
 
@@ -1760,7 +1790,12 @@ export class EmailTemplateService extends BaseService {
     actor?: RequestActor | null
   ): Promise<{ template: EmailTemplateRecord; undo: OwnerUpdateUndo }> {
     const { row, record, entry, base, mine } = await this.reviewOf(id);
-    if (reviewToken(base, entry.version, mine) !== review) {
+    if (
+      reviewToken(base, entry.version, mine, {
+        theirs: entry.blocks,
+        mine: record.blocks,
+      }) !== review
+    ) {
       throw changedSince("reviewed", id, record.slug);
     }
     // A template written on either side is reviewed whole: the site's
@@ -1769,8 +1804,14 @@ export class EmailTemplateService extends BaseService {
     let blocks = record.blocks;
     if (reviewedWhole(record, entry)) {
       const use = wholeTemplateChoice(choices, record.ownerChanged);
-      merged = use === "theirs" ? versionOf(entry.version) : mine;
-      if (use === "theirs") blocks = entry.blocks ?? null;
+      if (use === "theirs") {
+        merged = versionOf(entry.version);
+        blocks = entry.blocks ?? null;
+      } else {
+        // As the blocks write now: HTML stored by a release that wrote them
+        // as other markup would read as code, and drop the blocks.
+        merged = blocks ? compiledVersion(mine, blocks) : mine;
+      }
     } else {
       merged = applyOwnerChoices(base, entry.version, mine, choices);
     }
@@ -1812,7 +1853,7 @@ export class EmailTemplateService extends BaseService {
         version: mine,
         blocks: record.blocks,
         base,
-        applied: versionDigest(merged),
+        applied: storedDigest(merged, blocks),
         appliedBase: entry.digest,
       },
     };
@@ -1832,12 +1873,14 @@ export class EmailTemplateService extends BaseService {
     this.ownedEntry(record);
     this.assertOverridden(record);
     if (
-      versionDigest(versionOf(row)) !== undo.applied ||
+      storedDigest(versionOf(row), storedFormat(row).blocks) !== undo.applied ||
       row.baseDigest !== undo.appliedBase
     ) {
       throw changedSince("applied", id, record.slug);
     }
-    const version = versionOf(undo.version);
+    const version = undo.blocks
+      ? compiledVersion(versionOf(undo.version), undo.blocks)
+      : versionOf(undo.version);
     const base = versionOf(undo.base);
     this.assertLayoutMarker(row.kind, version.htmlContent);
 
@@ -2489,6 +2532,8 @@ export class EmailTemplateService extends BaseService {
    * a plugin's contribution published before Liquid may not.
    */
   private keepsOwnersVersion(entry: OwnedTemplate): boolean {
+    // Blocks always render as Liquid; the boot refuses a legacy declaration.
+    if (entry.blocks) return false;
     if (entry.engine) return entry.engine === "legacy";
     return !this.readsAsLiquid(entry.version);
   }

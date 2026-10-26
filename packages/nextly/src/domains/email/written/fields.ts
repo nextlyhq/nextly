@@ -81,6 +81,21 @@ export function sitesVersionFormat(
     : { format: "code", blocks: null };
 }
 
+/**
+ * A version as its blocks compile now: the site's blocks kept through a
+ * review or an undo send what they say, though their HTML was stored by a
+ * release that wrote blocks as other markup.
+ */
+export function compiledVersion<
+  T extends { htmlContent: string; plainTextContent: string | null },
+>(version: T, blocks: WrittenDocument): T {
+  return {
+    ...version,
+    htmlContent: compileWrittenHtml(blocks),
+    plainTextContent: compileWrittenText(blocks),
+  };
+}
+
 /** A stored format as the record reads it: anything but `written` is coded. */
 function formatOf(stored: unknown): TemplateFormat {
   return stored === "written" ? "written" : "code";

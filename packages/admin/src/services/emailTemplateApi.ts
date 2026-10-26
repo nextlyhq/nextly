@@ -125,7 +125,13 @@ export interface EmailTemplateVersion {
 export interface OwnerChange {
   /** Stable within one review. */
   id: string;
-  field: "subject" | "preheader" | "htmlContent" | "plainTextContent";
+  /** The field, or "template" for an update offered as a whole. */
+  field:
+    | "subject"
+    | "preheader"
+    | "htmlContent"
+    | "plainTextContent"
+    | "template";
   /** The site edited the same lines. */
   conflict: boolean;
   /** The lines the change replaced in the version the copy started from. */

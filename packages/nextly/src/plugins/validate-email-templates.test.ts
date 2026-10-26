@@ -73,6 +73,16 @@ describe("a plugin's email template at boot", () => {
       "blocks.blocks.0.link.url",
     ],
     [
+      "plain text beside blocks",
+      { blocks: BLOCKS, plainTextContent: "Paid" },
+      "gives plain text with blocks",
+    ],
+    [
+      "a subject Liquid can't read, on blocks",
+      { blocks: BLOCKS, subject: "Paid {% if %}" },
+      "subject",
+    ],
+    [
       'blocks declared for the "legacy" engine',
       { blocks: BLOCKS, engine: "legacy" },
       'leave out engine "legacy"',

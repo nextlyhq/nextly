@@ -47,6 +47,28 @@ const MINE: WrittenDocument = {
   blocks: [heading("Paid, with thanks"), paragraph("Your payment of ")],
 };
 
+/**
+ * The same blocks with the paragraph's text in two runs: other blocks that
+ * compile to exactly the same HTML and plain text.
+ */
+const splitRuns = (document: WrittenDocument): WrittenDocument => ({
+  version: 1,
+  blocks: document.blocks.map(block => {
+    if (block.type !== "text") return block;
+    const [first, ...rest] = block.text;
+    if (first?.type !== "text") return block;
+    const cut = first.text.indexOf(" ");
+    return {
+      ...block,
+      text: [
+        { type: "text", text: first.text.slice(0, cut) },
+        { type: "text", text: first.text.slice(cut) },
+        ...rest,
+      ],
+    };
+  }),
+});
+
 const paid = (blocks: WrittenDocument): PluginEmailTemplate => ({
   slug: "orders-paid",
   name: "Order paid",
@@ -202,6 +224,88 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         )
       ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
       expect(await service.getTemplate(id)).toMatchObject({ blocks: MINE });
+    });
+
+    it("refuses a choice made before the site rewrote its blocks, even to the same HTML", async () => {
+      const id = await overridden();
+      const service = await boot(V2);
+      const comparison = await service.compareTemplate(id);
+      await service.updateTemplate(id, { blocks: splitRuns(MINE) });
+      // The control: the rewrite changed the blocks, not the HTML.
+      expect((await service.getTemplate(id)).htmlContent).toBe(
+        compileWrittenHtml(MINE)
+      );
+
+      await expect(
+        service.applyOwnerUpdate(
+          id,
+          { [WHOLE_TEMPLATE]: { use: "theirs" } },
+          comparison.review
+        )
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(await service.getTemplate(id)).toMatchObject({
+        blocks: splitRuns(MINE),
+      });
+    });
+
+    it("refuses to undo once the site rewrote its blocks, even to the same HTML", async () => {
+      const id = await overridden();
+      const service = await boot(V2);
+      const { undo } = await service.applyOwnerUpdate(
+        id,
+        { [WHOLE_TEMPLATE]: { use: "theirs" } },
+        (await service.compareTemplate(id)).review
+      );
+      await service.updateTemplate(id, { blocks: splitRuns(V2) });
+
+      await expect(service.undoOwnerUpdate(id, undo)).rejects.toMatchObject({
+        code: "CONFLICT",
+      });
+      expect(await service.getTemplate(id)).toMatchObject({
+        blocks: splitRuns(V2),
+      });
+    });
+
+    it("keeps its own blocks, written, when HTML from an earlier Nextly is stored", async () => {
+      const id = await overridden();
+      // As a row written by a release whose blocks compiled to other markup.
+      await store.exec(
+        `UPDATE ${store.q("email_templates")} SET ${store.q("html_content")} = '<p>Older markup</p>' WHERE ${store.q("slug")} = 'orders-paid'`
+      );
+      const service = await boot(V2);
+
+      const { template } = await service.applyOwnerUpdate(
+        id,
+        { [WHOLE_TEMPLATE]: { use: "mine" } },
+        (await service.compareTemplate(id)).review
+      );
+      expect(template).toMatchObject({
+        format: "written",
+        blocks: MINE,
+        htmlContent: compileWrittenHtml(MINE),
+      });
+    });
+
+    it("is written again on undo when HTML from an earlier Nextly was stored", async () => {
+      const id = await overridden();
+      // As a row written by a release whose blocks compiled to other markup.
+      await store.exec(
+        `UPDATE ${store.q("email_templates")} SET ${store.q("html_content")} = '<p>Older markup</p>' WHERE ${store.q("slug")} = 'orders-paid'`
+      );
+      const service = await boot(V2);
+      const { undo } = await service.applyOwnerUpdate(
+        id,
+        { [WHOLE_TEMPLATE]: { use: "theirs" } },
+        (await service.compareTemplate(id)).review
+      );
+
+      await service.undoOwnerUpdate(id, undo);
+
+      expect(await service.getTemplate(id)).toMatchObject({
+        format: "written",
+        blocks: MINE,
+        htmlContent: compileWrittenHtml(MINE),
+      });
     });
 
     it("is the plugin's blocks again on Reset", async () => {
