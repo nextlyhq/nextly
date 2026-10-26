@@ -100,17 +100,27 @@ describe("canReadSystemResource — the decision", () => {
     );
   });
 
-  it("does not count a manage permission as the read, as before", async () => {
-    // The decision counts `manage-media` as read on media; this reader never
-    // has, and keeps its answer through a named deviation.
+  it("counts a manage permission on the resource as its read, as the decision does", async () => {
+    // `manage-media` still counts as read on media, so the reader answers as
+    // the decision does, and nothing deviates.
     grantsSpy.mockResolvedValue([grant("manage", "media")]);
 
     const { result, deviations } = await recordingDeviations(() =>
       canReadSystemResource("media", "u1", undefined)
     );
 
-    expect(result).toBe(false);
-    expect(deviations).toEqual(["manage-not-counted"]);
+    expect(result).toBe(true);
+    expect(deviations).toEqual([]);
+  });
+
+  it("does not count a manage permission on another resource", async () => {
+    // The control: `manage-settings` counts on settings alone, so a read of
+    // media is still refused.
+    grantsSpy.mockResolvedValue([grant("manage", "settings")]);
+
+    await expect(
+      canReadSystemResource("media", "u1", undefined)
+    ).resolves.toBe(false);
   });
 });
 
