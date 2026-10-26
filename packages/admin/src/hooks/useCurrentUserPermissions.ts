@@ -264,11 +264,10 @@ type AnswerState = {
    */
   hasAnswer: boolean;
   /**
-   * Whether the answer on screen is kept only while a current one is asked,
-   * so the page stays mounted: the language the screen moved from, or this
-   * language's own once it no longer holds and is being asked again. It is
-   * not an answer for the language on screen: `hasAnswer` is false, so
-   * nothing is allowed on its word.
+   * Whether the answer on screen belongs to another language, the one the
+   * screen moved from, kept while this language's is asked so the page stays
+   * mounted. It is not an answer for the language on screen: `hasAnswer` is
+   * false, so nothing is allowed on its word.
    */
   isPlaceholder: boolean;
 };
@@ -447,25 +446,6 @@ function latestPassed(ends: readonly number[], now: number): number | null {
 }
 
 /**
- * Whether the answer on screen is kept only while a current one is asked:
- * another language's, or this language's own once it no longer holds and is
- * being asked again, as on returning to a language another has answered
- * since.
- */
-function keptWhileAsked(
-  query: Pick<
-    UseQueryResult<{ askedAt?: number }>,
-    "data" | "isFetching" | "isPlaceholderData"
-  >,
-  unusable: boolean
-): boolean {
-  return (
-    query.isPlaceholderData ||
-    (unusable && query.data !== undefined && query.isFetching)
-  );
-}
-
-/**
  * Where one query's answer stands, once it may no longer hold: an answer that
  * arrived before `endedAt`, the end of the role assignment it was given for,
  * no longer counts, and nor does one a change to roles, permissions,
@@ -491,7 +471,10 @@ function answerState(
     error: query.error,
     hasAnswer:
       query.data !== undefined && !unusable && !query.isPlaceholderData,
-    isPlaceholder: keptWhileAsked(query, unusable),
+    // Only another language's answer is kept on screen: one for this
+    // language that no longer holds may have stopped holding because access
+    // changed, and is waited on rather than kept.
+    isPlaceholder: query.isPlaceholderData,
   };
 }
 

@@ -1043,7 +1043,10 @@ describe("useCurrentUserPermissions", () => {
 });
 
 describe("returning to a language another has answered since", () => {
-  it("keeps the language's own answer on screen while it is asked again, granting nothing on it", async () => {
+  it("waits on the language's own answer while it is asked again, rather than keeping it", async () => {
+    // An answer for the language on screen that no longer holds may have
+    // stopped holding because access changed, so it is not kept as another
+    // language's would be: the page waits for the current one.
     onScreen.locale = "en";
     server.capabilities = answering({ read: true, update: true });
     // A cache that keeps a language's answer once nothing reads it, as the
@@ -1084,10 +1087,15 @@ describe("returning to a language another has answered since", () => {
     onScreen.locale = "en";
     rerender();
     await waitFor(() =>
-      expect(result.current.access.content.isPlaceholder).toBe(true)
+      expect(
+        server.asked.filter(p => p === "/me/capabilities?locale=en")
+      ).toHaveLength(2)
     );
-    expect(result.current.access.content.hasAnswer).toBe(false);
-    expect(result.current.edits).toBe(false);
+    expect(result.current.access.content).toMatchObject({
+      isPlaceholder: false,
+      hasAnswer: false,
+      isLoading: true,
+    });
 
     release();
     await waitFor(() =>

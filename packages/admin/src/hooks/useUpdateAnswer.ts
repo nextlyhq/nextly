@@ -3,9 +3,8 @@ import { useCurrentUserPermissions } from "./useCurrentUserPermissions";
 /**
  * What the server's capabilities answer says about the signed-in user
  * changing the collection or Single `slug`: allowed or refused; `switching`
- * while the answer on screen is kept only until a current one arrives (the
- * language moved from, or this one's own once it no longer holds), which
- * grants nothing; `unknown` while no answer is in hand. A page opens
+ * while the answer on screen is the language moved from, kept until this
+ * one's arrives, which grants nothing; `unknown` while no answer is in hand. A page opens
  * read-only for a reader on `refused` alone, never on a guess while the
  * answer is on its way.
  */

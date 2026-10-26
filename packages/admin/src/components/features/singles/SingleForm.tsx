@@ -590,6 +590,10 @@ export function SingleForm({
   // While a language switch's answer is on its way, nothing that saves is
   // offered and a submit is held, though the page is not read-only.
   const mayEdit = editsOffered(updateAnswer);
+  // What changing the Single needs is held with it: previewing and sharing a
+  // preview (minting a link needs it on the server) and a version's restore,
+  // for a reader and while a language switch's answer is on its way.
+  const updatesHeld = !mayEdit;
   const lock = useDocumentLockSurface({
     scopeKind: "single",
     slug: schema.slug,
@@ -635,7 +639,7 @@ export function SingleForm({
   const editsHeld = writesHeld || !mayEdit;
   // A colleague's claim or a reader's page, without the version on screen:
   // what holds the actions a version's own surfaces offer, Restore among them.
-  const versionWritesHeld = lock.actionsDisabled || readOnlyForReader;
+  const versionWritesHeld = lock.actionsDisabled || updatesHeld;
 
   //
   // The synchronous half of the same gate. `isSubmitting` is render state: it
@@ -1047,7 +1051,7 @@ export function SingleForm({
                  * it there.
                  */
                 // Nor beside a document view, which takes the window alone.
-                open={previewPane.open && !documentView && !readOnlyForReader}
+                open={previewPane.open && !documentView && !updatesHeld}
                 onClose={previewPane.onClose}
                 scope={previewPane.scope}
                 label={previewPane.label}
@@ -1136,13 +1140,12 @@ export function SingleForm({
                                   // Sharing a preview needs the permission to change
                                   // the Single on the server, so a reader is not offered it.
                                   isLinkAvailable={
-                                    previewLink.isAvailable &&
-                                    !readOnlyForReader
+                                    previewLink.isAvailable && !updatesHeld
                                   }
                                   // Withheld from a reader, so the share
                                   // popover cannot stay mounted for them.
                                   {...(previewLink.shareDocument ===
-                                    undefined || readOnlyForReader
+                                    undefined || updatesHeld
                                     ? {}
                                     : {
                                         shareDocument:
@@ -1158,9 +1161,7 @@ export function SingleForm({
                                   // share link beside it: opening one mints a
                                   // credential the server grants only to a
                                   // user who may change the Single.
-                                  {...(readOnlyForReader
-                                    ? {}
-                                    : previewPane.toggle)}
+                                  {...(updatesHeld ? {} : previewPane.toggle)}
                                   toolbarSlot={versionAwareToolbarSlots(
                                     viewedVersionHost,
                                     // A reader's page holds the slot's writes too.

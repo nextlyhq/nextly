@@ -598,6 +598,10 @@ export function EntryForm({
   // While a language switch's answer is on its way, nothing that saves is
   // offered and a submit is held, though the page is not read-only.
   const mayEdit = mode === "create" || editsOffered(updateAnswer);
+  // What changing the entry needs is held with it: previewing and sharing a
+  // preview (minting a link needs it on the server) and a version's restore,
+  // for a reader and while a language switch's answer is on its way.
+  const updatesHeld = !mayEdit;
   const lock = useDocumentLockSurface({
     scopeKind: "collection",
     slug: collectionSlug,
@@ -616,7 +620,7 @@ export function EntryForm({
   const editsHeld = writesHeld || !mayEdit;
   // A colleague's claim or a reader's page, without the version on screen:
   // what holds the actions a version's own surfaces offer, Restore among them.
-  const versionWritesHeld = lock.actionsDisabled || readOnlyForReader;
+  const versionWritesHeld = lock.actionsDisabled || updatesHeld;
   // Delete is offered only to a caller who may delete in this collection.
   // The quick-edit and quick-create modals save only with the update or
   // create permission their mode needs: those modals open from a related
@@ -709,7 +713,7 @@ export function EntryForm({
   // Withheld from a reader too, so the share popover cannot stay mounted
   // once the user may no longer change the entry.
   const shareDocument: PreviewLinkDocument | undefined =
-    readOnlyForReader || savedEntryId === "" || linkLocale.kind === "unresolved"
+    updatesHeld || savedEntryId === "" || linkLocale.kind === "unresolved"
       ? undefined
       : {
           collection: collection.name,
@@ -766,7 +770,7 @@ export function EntryForm({
   // Previewing, and sharing a preview, are offered only to a user who may
   // change the entry: minting a link needs that on the server.
   const canPreview =
-    !readOnlyForReader &&
+    !updatesHeld &&
     entryPreview.isPreviewAvailable &&
     savedEntryId !== "" &&
     linkLocale.kind !== "unresolved";
@@ -930,7 +934,7 @@ export function EntryForm({
                 previewOpen &&
                 translationMode.source === undefined &&
                 !documentView &&
-                !readOnlyForReader
+                !updatesHeld
               }
               onClose={() => setPreviewOpen(false)}
               scope={{
@@ -1090,7 +1094,7 @@ export function EntryForm({
                                   // locale is either refused by the mint route or, if the claim
                                   // were dropped to avoid that, a grant over every translation.
                                   isLinkAvailable={
-                                    !readOnlyForReader &&
+                                    !updatesHeld &&
                                     savedEntryId !== "" &&
                                     linkLocale.kind !== "unresolved"
                                   }

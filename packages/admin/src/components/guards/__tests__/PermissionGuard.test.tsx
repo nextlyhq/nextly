@@ -461,6 +461,32 @@ describe("PermissionGuard", () => {
       expect(pageRendered).not.toHaveBeenCalled();
     });
 
+    it("does not keep a page open while an access change's answer is asked", () => {
+      // A change to roles or a role's end leaves the answer no longer holding
+      // while it is asked again; that is not a language switch, so the page
+      // it had open waits rather than stays.
+      holding([], false, { allows: ["read-posts"] });
+      const guarded = () => (
+        <PermissionGuard
+          requiredPermission="read-posts"
+          subject="collection"
+          entity={POSTS}
+        >
+          <Page />
+        </PermissionGuard>
+      );
+      const { rerender } = render(guarded());
+      expect(screen.getByText("the page")).toBeTruthy();
+
+      holding([], false, {
+        allows: [],
+        content: { isLoading: true, hasAnswer: false },
+      });
+      rerender(guarded());
+      expect(screen.getByText("Setting up your workspace")).toBeTruthy();
+      expect(screen.queryByText("the page")).toBeNull();
+    });
+
     it("opens no page on the answer for the language moved from", () => {
       // A route this guard never opened waits for its own language's answer,
       // as on a first visit.
