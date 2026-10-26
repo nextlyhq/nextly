@@ -402,8 +402,10 @@ export async function hashPasswordFieldValues(
   // Hashing is asynchronous and the walk is not: it writes a JSON-text
   // container back as it leaves it. So the values are read first, from a
   // copy, hashed, and only then put in place by a second walk, while each
-  // container it rewrites is still open.
-  const plain = new Set<string>();
+  // container it rewrites is still open. Each occurrence gets a hash of its
+  // own, with its own salt, so two fields holding one password store
+  // different hashes and don't show that they match.
+  const plain: string[] = [];
   walkPasswordLevels(detachForReading(data), fields, {
     reach,
     onUnknown: refuseUnknown,
@@ -411,12 +413,17 @@ export async function hashPasswordFieldValues(
     level: (level, levelFields) => {
       for (const name of passwordNames(levelFields)) {
         const value = level[name];
-        if (toHash(value)) plain.add(value);
+        if (toHash(value)) plain.push(value);
       }
     },
   });
-  const hashed = new Map<string, string>();
-  for (const value of plain) hashed.set(value, await hashPassword(value));
+  const hashed = new Map<string, string[]>();
+  for (const value of plain) {
+    const hash = await hashPassword(value);
+    const queue = hashed.get(value);
+    if (queue) queue.push(hash);
+    else hashed.set(value, [hash]);
+  }
   walkPasswordLevels(data, fields, {
     reach,
     onUnknown: refuseUnknown,
@@ -429,7 +436,7 @@ export async function hashPasswordFieldValues(
         if (typeof value !== "string" || value.trim() === "") {
           delete level[name];
         } else if (toHash(value)) {
-          level[name] = hashed.get(value);
+          level[name] = hashed.get(value)?.shift();
         }
       }
     },
