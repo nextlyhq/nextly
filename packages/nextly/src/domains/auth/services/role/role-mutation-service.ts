@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 import { invalidatePermissionCache } from "@nextly/services/lib/permissions";
 import type {
@@ -182,11 +182,24 @@ export class RoleMutationService extends BaseService {
       .limit(1);
     if (!role) return null;
     let slug = String(role.slug);
-    for (let n = 1; slug === PUBLIC_ROLE_SLUG; n++) {
+    // The slug in any case: MySQL's collation finds a role whose slug is
+    // `Public` when asked for `public`, so that one holds it there too.
+    for (let n = 1; slug.toLowerCase() === PUBLIC_ROLE_SLUG; n++) {
       const free = `${PUBLIC_ROLE_SLUG}-${n}`;
       if (await this.findRoleIdBySlug(free)) continue;
-      await this.db.update(roles).set({ slug: free }).where(eq(roles.id, id));
-      slug = free;
+      // Only while the role still has the slug it was read with: a rename
+      // another instance made meanwhile stands, and is read back below.
+      await this.db
+        .update(roles)
+        .set({ slug: free })
+        .where(and(eq(roles.id, id), eq(roles.slug, slug)));
+      const [now] = await this.db
+        .select({ slug: roles.slug })
+        .from(roles)
+        .where(eq(roles.id, id))
+        .limit(1);
+      if (!now) return null;
+      slug = String(now.slug);
     }
     await afterRoleGrantsChanged(id);
     return slug;

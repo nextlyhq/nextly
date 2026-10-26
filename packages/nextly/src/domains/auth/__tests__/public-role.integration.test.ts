@@ -461,6 +461,39 @@ describe.each(getConfiguredTestDialects())("the Public role (%s)", dialect => {
     expect(await meta.get(PUBLIC_ROLE_META_KEY)).toBe("created");
   });
 
+  it("moves a role whose slug the database reads as `public` in any case", async () => {
+    const nextly = await boot(dialect);
+    await seedPermissionsAndRolePresets();
+    const readMedia = await permissionId(nextly, "read-media");
+    const own = await services(nextly).roles.createRole({
+      name: "Capitalised",
+      slug: "capitalised",
+      permissionIds: [readMedia],
+    });
+    await asBeforePublic(nextly);
+    const { roles } = getDialectTables();
+    const db = nextly.adapter.getDrizzle() as unknown as {
+      update: (table: unknown) => {
+        set: (v: unknown) => { where: (c: unknown) => Promise<unknown> };
+      };
+    };
+    await db.update(roles).set({ slug: "Public" }).where(eq(roles.id, own.id));
+
+    await seedPermissionsAndRolePresets();
+
+    // MySQL's collation reads `Public` as `public`, so there the site's role
+    // holds the slug and moves; elsewhere the two are different slugs.
+    expect((await services(nextly).roles.getRoleById(own.id)).slug).toBe(
+      dialect === "mysql" ? "public-1" : "Public"
+    );
+    expect(await roleBySlug(nextly, PUBLIC_ROLE_SLUG)).toMatchObject({
+      isSystem: true,
+    });
+    expect(
+      await nextly.getService("metaService").get(PUBLIC_ROLE_META_KEY)
+    ).toBe("created");
+  });
+
   it("moves a site's own `public` role to the next free slug", async () => {
     const nextly = await boot(dialect);
     await seedPermissionsAndRolePresets();
