@@ -680,7 +680,11 @@ function carryInstances(
   };
   if (Array.isArray(value)) {
     forEachPairedRow(value, previous, carryInstance);
-  } else if (isPlainRecord(value) && isPlainRecord(previous)) {
+  } else if (
+    isPlainRecord(value) &&
+    isPlainRecord(previous) &&
+    sameInstance(value, previous)
+  ) {
     carryInstance(value, previous);
   }
 }
@@ -706,6 +710,18 @@ function forEachPairedRow(
     if (identified && !hasRowId(storedRow)) return;
     if (isPlainRecord(row) && isPlainRecord(storedRow)) visit(row, storedRow);
   });
+}
+
+/**
+ * Whether a single instance is the stored one: the same id, or none on
+ * either side. One with another id replaces it and takes none of its values.
+ */
+function sameInstance(
+  instance: Record<string, unknown>,
+  stored: Record<string, unknown>
+): boolean {
+  if (!hasRowId(instance) && !hasRowId(stored)) return true;
+  return hasRowId(instance) && instance.id === stored.id;
 }
 
 /** Whether a row carries an id of its own. */
