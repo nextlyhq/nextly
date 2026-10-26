@@ -15,6 +15,7 @@
 
 import { seedRolePresets } from "../database/seeders/role-presets";
 import { getService } from "../di/service-access";
+import { PermissionService } from "../domains/auth/services/permission-service";
 import { seedPublicReadGrants } from "../domains/auth/services/public-read-grant";
 import {
   PUBLIC_ROLE_SLUG,
@@ -276,6 +277,20 @@ function seedPublicRoleReads(): Promise<void> {
         ...target,
         access: rbac.getRegisteredTarget(target.slug)?.access,
       }));
+    },
+    permissionIds: async () => {
+      // One read of every permission, orphaned ones included, so a grant on
+      // one is still recognised as made.
+      const { data } = await new PermissionService(
+        adapter,
+        logger
+      ).listPermissions({ page: 1, limit: 10000, includeOrphaned: true });
+      return new Map(
+        data.map(({ id, action, resource }) => [
+          `${action}-${resource}`,
+          String(id),
+        ])
+      );
     },
     publicHolds: async roleId =>
       new Set(

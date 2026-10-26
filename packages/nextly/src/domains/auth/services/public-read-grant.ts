@@ -4,9 +4,11 @@
  * Each collection's and Single's read rule is asked about a visitor. Where it
  * answers exactly `true`, a plain `true` or a function returning `true`,
  * Public is granted that read, as it is `read-media`; `read-users` never.
- * Each grant is made once and recorded in `nextly_meta`, so a read an owner
- * takes away again stays away, and an entity added later, or a rule changed
- * to `true`, is granted at the first boot that sees it.
+ * Each grant is made once: claimed in `nextly_meta` by permission id before
+ * it is made, so a read an owner takes away again stays away, while an entity
+ * added later, or a rule changed to `true`, is granted at the first boot that
+ * sees it. Rules are asked as a visitor's request is, through the same
+ * evaluator and in each configured language.
  *
  * Then what Public does not hold yet and visitors may be relying on is
  * listed, at every boot while Public lacks it: a read with no rule, which a
@@ -16,14 +18,25 @@
  *
  * @module domains/auth/services/public-read-grant
  */
-import { ruleContext, visitorActor } from "../../../auth/access/actor";
+import { visitorActor } from "../../../auth/access/actor";
+import { askRule, type AccessTarget } from "../../../auth/access/decide";
+import {
+  everyLanguage,
+  registeredReadLanguagesFor,
+  registeredWriteLanguagesFor,
+  withRuleLanguage,
+  type RuleLanguage,
+} from "../../../auth/access/rule-language";
 import { NextlyError } from "../../../errors/nextly-error";
 import { permissionSlug } from "../../../schemas/_zod/rbac";
 import type { Logger } from "../../../services/shared";
-import type { AccessControlFunction } from "../../../shared/types/access";
 
-/** The `nextly_meta` key listing the reads boot seeding has granted Public. */
-const PUBLIC_READ_GRANTED_META_KEY = "public-read-granted";
+/**
+ * The `nextly_meta` key listing the permissions boot seeding has granted
+ * Public, by permission id. A permission deleted with its collection and made
+ * again for a new one has a new id, so the new collection is granted afresh.
+ */
+const PUBLIC_GRANTED_META_KEY = "public-role-granted";
 
 /**
  * How long a rule may take to answer at boot before it is taken as giving
@@ -32,17 +45,6 @@ const PUBLIC_READ_GRANTED_META_KEY = "public-read-granted";
 const RULE_ANSWER_TIMEOUT_MS = 2000;
 
 type Action = "read" | "create" | "update" | "delete";
-
-/** A collection or Single, with its code-defined access where it has one. */
-interface PublicReadTarget {
-  kind: "collection" | "single";
-  slug: string;
-  /**
-   * Its rules by action. A Single's access has no `create` or `delete`, which
-   * read as absent here, so both kinds are asked one way.
-   */
-  access?: Partial<Record<Action, AccessControlFunction | boolean>>;
-}
 
 /** The writes a visitor could make by rule, per kind. */
 const WRITES = {
@@ -61,7 +63,9 @@ interface PublicReadGrantSeeding {
   /** The Public role's id, or `null` where it has not been made. */
   publicRoleId: () => Promise<string | null>;
   /** Every collection and Single, with its code-defined access. */
-  targets: () => Promise<PublicReadTarget[]>;
+  targets: () => Promise<AccessTarget[]>;
+  /** Every permission's id, by its slug (`read-posts`). */
+  permissionIds: () => Promise<Map<string, string>>;
   /** The permission slugs the role holds now. */
   publicHolds: (roleId: string) => Promise<Set<string>>;
   /** Grants the role the read of `resource`. */
@@ -80,53 +84,92 @@ interface PublicReadGrantSeeding {
 
 const NO_ANSWER = Symbol("no-answer");
 
-/** Asks a target's rule for `action` about a visitor, bounded in time. */
-async function ask(target: PublicReadTarget, action: Action): Promise<Answer> {
-  const rule = target.access?.[action];
-  if (rule === undefined) return { kind: "no-rule" };
-  if (typeof rule === "boolean") return { kind: "answered", value: rule };
-  if (typeof rule !== "function") return { kind: "no-rule" };
-
+/**
+ * Asks a target's rule for `action` about a visitor, through the evaluator
+ * every door uses, in `language`, bounded in time.
+ */
+async function askIn(
+  target: AccessTarget,
+  action: Action,
+  language: RuleLanguage | undefined
+): Promise<Answer> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<typeof NO_ANSWER>(resolve => {
+    timer = setTimeout(() => resolve(NO_ANSWER), RULE_ANSWER_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  const asking = () => askRule(visitorActor(), action, target);
   try {
-    const deadline = new Promise<typeof NO_ANSWER>(resolve => {
-      timer = setTimeout(() => resolve(NO_ANSWER), RULE_ANSWER_TIMEOUT_MS);
-      timer.unref?.();
-    });
-    const value = await Promise.race([
-      // Called inside the chain, so a rule that throws as it is called
-      // rejects here rather than escaping the race.
-      Promise.resolve().then(() =>
-        rule(ruleContext(visitorActor(), action, target))
-      ),
+    const outcome = await Promise.race([
+      language ? withRuleLanguage(language, asking) : asking(),
       deadline,
     ]);
-    return value === NO_ANSWER
+    if (outcome === NO_ANSWER) return { kind: "failed" };
+    if (!outcome.declared) return { kind: "no-rule" };
+    return "threw" in outcome
       ? { kind: "failed" }
-      : { kind: "answered", value };
-  } catch {
-    return { kind: "failed" };
+      : { kind: "answered", value: outcome.value };
   } finally {
     if (timer) clearTimeout(timer);
   }
 }
 
-/** Adds `slugs` to the recorded grants, against any other boot doing the same. */
-async function recordGranted(
+/**
+ * Asks a target's rule for `action` about a visitor in each configured
+ * language, as a visitor's request in that language is asked, and keeps the
+ * answer that lets the most through: `true` in any language, as Public needs
+ * the permission for that language's visitors; else a failure, as the rule
+ * could not be told apart from one that lets them through.
+ */
+async function ask(target: AccessTarget, action: Action): Promise<Answer> {
+  const codes = everyLanguage().locales;
+  const languageFor =
+    action === "read"
+      ? registeredReadLanguagesFor
+      : registeredWriteLanguagesFor;
+  const answers = await Promise.all(
+    codes.length === 0
+      ? [askIn(target, action, undefined)]
+      : codes.map(code => askIn(target, action, languageFor(code)))
+  );
+  const allows = (answer: Answer) =>
+    answer.kind === "answered" && answer.value === true;
+  return (
+    answers.find(allows) ??
+    answers.find(answer => answer.kind === "failed") ??
+    answers.find(
+      answer =>
+        answer.kind === "answered" &&
+        answer.value !== true &&
+        answer.value !== false
+    ) ??
+    answers[0]
+  );
+}
+
+/**
+ * Claims `ids` in the recorded grants before they are made, against any other
+ * boot doing the same, keeping only ids of permissions that still exist.
+ * Returns the ids this boot claimed: those no other boot recorded first.
+ */
+async function claimGrants(
   meta: PublicReadGrantSeeding["meta"],
-  slugs: readonly string[]
-): Promise<void> {
+  ids: readonly string[],
+  existing: ReadonlySet<string>
+): Promise<string[]> {
   for (let attempt = 0; attempt < 5; attempt++) {
-    const recorded = await meta.get<string[]>(PUBLIC_READ_GRANTED_META_KEY);
+    const recorded = await meta.get<string[]>(PUBLIC_GRANTED_META_KEY);
     if (recorded === null) {
-      await meta.insertIfAbsent(PUBLIC_READ_GRANTED_META_KEY, []);
+      await meta.insertIfAbsent(PUBLIC_GRANTED_META_KEY, []);
       continue;
     }
-    const next = Array.from(new Set([...recorded, ...slugs])).sort();
-    if (
-      await meta.compareAndSet(PUBLIC_READ_GRANTED_META_KEY, recorded, next)
-    ) {
-      return;
+    const claimed = ids.filter(id => !recorded.includes(id));
+    if (claimed.length === 0) return [];
+    const next = Array.from(
+      new Set([...recorded.filter(id => existing.has(id)), ...claimed])
+    ).sort();
+    if (await meta.compareAndSet(PUBLIC_GRANTED_META_KEY, recorded, next)) {
+      return claimed;
     }
   }
   throw NextlyError.internal({
@@ -134,9 +177,28 @@ async function recordGranted(
   });
 }
 
+/**
+ * Takes `ids` back out of the recorded grants, for grants claimed and then
+ * not made, so the next boot makes them. Best effort: the failure that made
+ * them unmade is the one reported.
+ */
+async function releaseClaims(
+  meta: PublicReadGrantSeeding["meta"],
+  ids: readonly string[]
+): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const recorded = await meta.get<string[]>(PUBLIC_GRANTED_META_KEY);
+    if (recorded === null) return;
+    const next = recorded.filter(id => !ids.includes(id));
+    if (await meta.compareAndSet(PUBLIC_GRANTED_META_KEY, recorded, next)) {
+      return;
+    }
+  }
+}
+
 /** A target, with what its rules said about a visitor. */
 interface Asked {
-  target: PublicReadTarget;
+  target: AccessTarget;
   read: Answer;
   writes: Array<{ action: Action; answer: Answer }>;
 }
@@ -197,6 +259,7 @@ function listing(asked: readonly Asked[], held: Set<string>): string | null {
 export async function seedPublicReadGrants({
   publicRoleId,
   targets,
+  permissionIds,
   publicHolds,
   grantRead,
   meta,
@@ -204,30 +267,51 @@ export async function seedPublicReadGrants({
 }: PublicReadGrantSeeding): Promise<void> {
   const roleId = await publicRoleId();
   if (roleId === null) return;
+  // Every rule of every target is asked at once, so one deadline bounds them.
   const asked: Asked[] = await Promise.all(
-    (await targets()).map(async target => ({
-      target,
-      read: await ask(target, "read"),
-      writes: await Promise.all(
-        WRITES[target.kind].map(async action => ({
+    (await targets()).map(async target => {
+      const [read, ...writes] = await Promise.all([
+        ask(target, "read"),
+        ...WRITES[target.kind].map(action => ask(target, action)),
+      ]);
+      return {
+        target,
+        read,
+        writes: WRITES[target.kind].map((action, i) => ({
           action,
-          answer: await ask(target, action),
-        }))
-      ),
-    }))
+          answer: writes[i],
+        })),
+      };
+    })
   );
 
-  const recorded = new Set(
-    (await meta.get<string[]>(PUBLIC_READ_GRANTED_META_KEY)) ?? []
-  );
-  const toGrant = [
+  const ids = await permissionIds();
+  const wanted = new Map<string, string>();
+  for (const resource of [
     "media",
     ...asked
       .filter(({ read }) => read.kind === "answered" && read.value === true)
       .map(({ target }) => target.slug),
-  ].filter(slug => !recorded.has(slug));
-  for (const slug of toGrant) await grantRead(roleId, slug);
-  if (toGrant.length > 0) await recordGranted(meta, toGrant);
+  ]) {
+    const id = ids.get(permissionSlug("read", resource));
+    if (id !== undefined) wanted.set(id, resource);
+  }
+  // Claimed before it is made, so a grant is never made twice: not by two
+  // boots at once, and not again after an owner has taken it away. A boot
+  // that stops between the two leaves the grant unmade rather than repeated.
+  const claimed = await claimGrants(
+    meta,
+    [...wanted.keys()],
+    new Set(ids.values())
+  );
+  for (const [i, id] of claimed.entries()) {
+    try {
+      await grantRead(roleId, wanted.get(id)!);
+    } catch (error) {
+      await releaseClaims(meta, claimed.slice(i)).catch(() => undefined);
+      throw error;
+    }
+  }
 
   const said = listing(asked, await publicHolds(roleId));
   if (said !== null) logger.warn(said);
