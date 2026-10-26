@@ -1581,11 +1581,14 @@ export class UserMutationService extends BaseService {
             logContext: { email },
           });
         }
+        // Written as the role rows spell them. MySQL matches ids
+        // case-insensitively, so a requested id can differ in case from its
+        // row's own, and a stored assignment is read back by comparing ids.
         await txDb.insert(this.tables.userRoles).values(
-          requestedRoleIds.map(roleId => ({
+          existing.map(role => ({
             id: randomUUID(),
             userId: newUserId,
-            roleId,
+            roleId: String(role.id),
             expiresAt: null,
           }))
         );

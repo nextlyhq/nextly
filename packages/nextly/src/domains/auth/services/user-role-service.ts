@@ -96,11 +96,16 @@ export class UserRoleService extends BaseService {
         return { success: false, statusCode: 404, message: "Role not found" };
       }
 
+      // Written as the rows spell them. MySQL matches ids case-insensitively,
+      // so the request's spelling can differ from the row's own, and a stored
+      // assignment is read back by comparing ids.
+      const storedUserId = String(user.id);
+      const storedRoleId = String(roleRow[0].id);
       const { userRoles } = this.tables;
       const userRoleData: UserRoleInsertData = {
         id: randomUUID(),
-        userId,
-        roleId,
+        userId: storedUserId,
+        roleId: storedRoleId,
         expiresAt: opts?.expiresAt ?? null,
       };
 
@@ -115,8 +120,8 @@ export class UserRoleService extends BaseService {
         await refuseGrantingSuperAdmin(
           tx as LastSuperAdminTx,
           this.dialect,
-          [roleId],
-          { userId, roleId }
+          [storedRoleId],
+          { userId: storedUserId, roleId: storedRoleId }
         );
         // One moment for the check and the replacement below, so the row this
         // request found lapsed is the row it replaces. Taken once the lock is
@@ -132,8 +137,8 @@ export class UserRoleService extends BaseService {
           .from(userRoles)
           .where(
             and(
-              userRoleAssignmentsInForce(userRoles, userId, now),
-              eq(userRoles.roleId, roleId)
+              userRoleAssignmentsInForce(userRoles, storedUserId, now),
+              eq(userRoles.roleId, storedRoleId)
             )
           )
           .limit(1);
@@ -150,8 +155,8 @@ export class UserRoleService extends BaseService {
           .delete(userRoles)
           .where(
             and(
-              eq(userRoles.userId, userId),
-              eq(userRoles.roleId, roleId),
+              eq(userRoles.userId, storedUserId),
+              eq(userRoles.roleId, storedRoleId),
               not(roleAssignmentInForce(userRoles, now))
             )
           );
@@ -185,7 +190,7 @@ export class UserRoleService extends BaseService {
         };
       }
 
-      await this.invalidateRoleCaches(userId);
+      await this.invalidateRoleCaches(storedUserId);
 
       return {
         success: true,
