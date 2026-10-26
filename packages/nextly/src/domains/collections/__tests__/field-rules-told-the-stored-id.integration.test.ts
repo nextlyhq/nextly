@@ -2,11 +2,9 @@
  * A field write rule is told the entry as it is stored: its id, and none of
  * the values only the service decides.
  *
- * MySQL matches an id without regard to case, so a request naming an entry in
- * another case still finds it. A rule told the request's id then judged a
- * different string than the one stored, and `({ id }) => id !== protectedId`
- * let the write through. Nor may a body put an `id`, or a timestamp, into the
- * `data` a rule reads: those are not what is stored either.
+ * A rule reading `id` is told the stored row's id, however the request named
+ * the entry, and the `data` it reads holds no `id` or timestamp a body sent:
+ * those are not what is stored.
  *
  * @module domains/collections/__tests__/field-rules-told-the-stored-id.integration.test
  */

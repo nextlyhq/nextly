@@ -29,6 +29,6 @@
 "nextly": patch
 ---
 
-A field's write rule is now told the entry's id as stored. MySQL matches an id without regard to case, so an update naming an entry in another case still reached it, while its field rules were told the id as the request spelled it: a rule refusing one entry by its id, such as `({ id }) => id !== protectedId`, could be passed that way. This held for an update, a transactional or batch update, a publish that puts a pending draft live, and taking a live value into a draft.
+A field's write rule is now told the entry's id as stored, on an update, a transactional or batch update, a publish that puts a pending draft live, and taking a live value into a draft.
 
 The `data` a field write rule reads no longer carries values only the server decides, as the request body sent them: the `id`, `createdAt`, `updatedAt`, `createdBy` and `firstPublishedAt`. On an update, `id` is the stored entry's. On a create, it is there only where the collection keeps the id a create sends (`db.allowIdOnCreate`), since that is the id the entry is stored under.
