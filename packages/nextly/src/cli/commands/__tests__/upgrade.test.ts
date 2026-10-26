@@ -74,7 +74,9 @@ describe("nextly upgrade (sqlite)", () => {
 
   it("aborts on a foreign nextly_schema_events table (collision)", async () => {
     testDb.sqlite.exec("DROP TABLE IF EXISTS nextly_migrations");
-    testDb.sqlite.exec("CREATE TABLE nextly_schema_events (totally_wrong INTEGER)");
+    testDb.sqlite.exec(
+      "CREATE TABLE nextly_schema_events (totally_wrong INTEGER)"
+    );
     await expect(
       runUpgrade({ confirmBackedUp: true }, { adapter })
     ).rejects.toMatchObject({ code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION" });
@@ -84,5 +86,77 @@ describe("nextly upgrade (sqlite)", () => {
     await expect(
       runUpgrade({ confirmBackedUp: false }, { adapter, isTTY: false })
     ).rejects.toBeTruthy();
+  });
+});
+
+describe("nextly upgrade runs a list of steps", () => {
+  let testDb: TestDb;
+  let adapter: UpgradeAdapter;
+
+  beforeEach(async () => {
+    // Already moved to nextly_schema_events: the first step has no work.
+    testDb = await createTestDb();
+    adapter = makeAdapter(testDb);
+  });
+
+  /** A step that says it has `pending` to do and records whether it ran. */
+  function step(title: string, pending: number) {
+    const ran: number[] = [];
+    return {
+      ran,
+      step: {
+        title,
+        pending: () => Promise.resolve(pending),
+        run: () => {
+          ran.push(pending);
+          return Promise.resolve(pending);
+        },
+      },
+    };
+  }
+
+  it("runs only the steps with work, and reports each one's count", async () => {
+    const idle = step("tidy one thing", 0);
+    const busy = step("tidy another thing", 2);
+    const lines: string[] = [];
+
+    await runUpgrade({ confirmBackedUp: true }, {
+      adapter,
+      logger: { info: msg => lines.push(msg) },
+      steps: [idle.step, busy.step],
+    } as Parameters<typeof runUpgrade>[1]);
+
+    expect(idle.ran).toEqual([]);
+    expect(busy.ran).toEqual([2]);
+    expect(lines.join("\n")).toContain("tidy another thing: 2");
+    expect(lines.join("\n")).not.toContain("Nothing to do");
+  });
+
+  it("asks for a backup only when a step has work", async () => {
+    const busy = step("tidy a thing", 1);
+
+    await expect(
+      runUpgrade({ confirmBackedUp: false }, {
+        adapter,
+        isTTY: false,
+        steps: [busy.step],
+      } as Parameters<typeof runUpgrade>[1])
+    ).rejects.toMatchObject({ code: "NEXTLY_UPGRADE_IN_PROGRESS" });
+    expect(busy.ran).toEqual([]);
+  });
+
+  it("says there is nothing to do only when no step has work, without asking for a backup", async () => {
+    const idle = step("tidy a thing", 0);
+    const lines: string[] = [];
+
+    await runUpgrade({ confirmBackedUp: false }, {
+      adapter,
+      isTTY: false,
+      logger: { info: msg => lines.push(msg) },
+      steps: [idle.step],
+    } as Parameters<typeof runUpgrade>[1]);
+
+    expect(idle.ran).toEqual([]);
+    expect(lines).toContain("Already upgraded. Nothing to do.");
   });
 });
