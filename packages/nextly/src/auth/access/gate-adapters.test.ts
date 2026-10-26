@@ -398,6 +398,40 @@ describe("a read whose route already authorized it", () => {
     expect(rule).toHaveBeenCalledTimes(2);
   });
 
+  it("asks a rule again for the same key owner under a narrower scope", async () => {
+    // The rule reads the key's grants: a scope that drops one is a different
+    // question, even for the same key owner.
+    const rule = vi.fn(({ permissions }: { permissions: readonly string[] }) =>
+      permissions.includes("read-secrets")
+        ? (OWN as unknown as boolean)
+        : ({ author: { equals: "nobody" } } as unknown as boolean)
+    );
+    const grant = (resource: string) => ({
+      slug: `read-${resource}`,
+      action: "read",
+      resource,
+    });
+    const wide = apiKeyScope([grant("posts"), grant("secrets")], ["editor"]);
+    const narrow = apiKeyScope([grant("posts")], ["editor"]);
+    const [first, second] = await runWithAccessMemo(async () => [
+      await collectionGateVerdict(
+        asked(
+          { read: rule },
+          { user: { id: "u1" }, scope: wide, appliesFilter: true }
+        )
+      ),
+      await collectionGateVerdict(
+        asked(
+          { read: rule },
+          { user: { id: "u1" }, scope: narrow, appliesFilter: true }
+        )
+      ),
+    ]);
+    expect(first).toMatchObject({ filter: OWN });
+    expect(second).toMatchObject({ filter: { author: { equals: "nobody" } } });
+    expect(rule).toHaveBeenCalledTimes(2);
+  });
+
   it("is allowed as before, asking no rule, where the asker applies no filter", async () => {
     // The control: only an asker that applies a filter has it asked again.
     const rule = filtering();
