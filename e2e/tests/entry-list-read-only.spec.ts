@@ -20,6 +20,11 @@ import { createEntry } from "./support/runtime-collection";
 // One signed-in user for the whole file: signing in spends the auth budget.
 test.describe.configure({ mode: "serial" });
 
+// Unique to this attempt: a retry runs `beforeAll` again, and a second post
+// with the same title would match the row this file looks for twice.
+const RUN = Date.now().toString(36);
+const TITLE = `A post to read ${RUN}`;
+
 let limited: LimitedUser;
 let page: Page;
 
@@ -34,8 +39,8 @@ test.beforeAll(async ({ browser, playwright }, testInfo) => {
     // A row to select, so a missing checkbox is the permission and not an
     // empty list.
     await createEntry(admin, "posts", {
-      title: "A post to read",
-      slug: `read-only-${Date.now().toString(36)}`,
+      title: TITLE,
+      slug: `read-only-${RUN}`,
     });
     limited = await signInAsLimitedUser(browser, admin, baseURL, [
       "read-posts",
@@ -56,7 +61,7 @@ test.afterAll(async () => {
  */
 const row = () =>
   page
-    .getByRole("button", { name: /A post to read/ })
+    .getByRole("button", { name: new RegExp(TITLE) })
     .filter({ visible: true });
 
 /**
