@@ -262,3 +262,67 @@ describe("the owner registry", () => {
     expect(absentPluginFor("accounts-newsletter")).toBeNull();
   });
 });
+
+describe("what an owner says sends its template", () => {
+  it("records a plugin's sentBy, and keeps it off the row it inserts", () => {
+    const { registry } = buildTemplateOwnerRegistry({
+      builtIns: BUILT_IN_TEMPLATES,
+      plugins: [
+        {
+          name: "@acme/plugin-orders",
+          templates: [
+            {
+              slug: "orders-paid",
+              name: "Paid",
+              subject: "Paid",
+              htmlContent: "<p>Paid</p>",
+              sentBy: ["A shop order is paid", "", 42 as never],
+            },
+          ],
+        },
+      ],
+      complete: true,
+    });
+
+    const paid = registry.owned.get("orders-paid");
+    // Only sentences: an empty line, or a plugin's non-string, is dropped.
+    expect(paid?.sentBy).toEqual(["A shop order is paid"]);
+    expect(paid?.defaults).not.toHaveProperty("sentBy");
+  });
+
+  it("says nothing for a template whose owner declares nothing", () => {
+    const { registry } = buildTemplateOwnerRegistry({
+      builtIns: [],
+      plugins: [
+        {
+          name: "@acme/plugin-orders",
+          templates: [
+            {
+              slug: "orders-paid",
+              name: "Paid",
+              subject: "P",
+              htmlContent: "<p>P</p>",
+            },
+          ],
+        },
+      ],
+      complete: true,
+    });
+    expect(registry.owned.get("orders-paid")?.sentBy).toEqual([]);
+  });
+
+  it("gives each of core's emails what sends it, without changing its version", () => {
+    const { registry } = buildTemplateOwnerRegistry({
+      builtIns: BUILT_IN_TEMPLATES,
+      plugins: [],
+      complete: true,
+    });
+    for (const slug of ["welcome", "password-reset", "email-verification"]) {
+      const entry = registry.owned.get(slug);
+      expect(entry?.sentBy.length, slug).toBeGreaterThan(0);
+      // A sender is no part of what the email says: overridden sites get no
+      // owner update to review for it.
+      expect(entry?.defaults).not.toHaveProperty("sentBy");
+    }
+  });
+});
