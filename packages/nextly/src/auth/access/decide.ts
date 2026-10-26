@@ -320,37 +320,53 @@ export function judge(
       },
     });
   }
+  if (actor.kind === "principal" && !outcomes.action.declared) {
+    return refuse("principal-without-rule");
+  }
+  const refusal = ruleRefusal(outcomes.action);
+  if (refusal) return refuse(refusal);
+  // A plugin's person is judged by the action's own rule alone.
   if (actor.kind === "principal") {
-    if (!outcomes.action.declared) return refuse("principal-without-rule");
-    const refusal = ruleRefusal(outcomes.action);
-    if (refusal) return refuse(refusal);
     return withFilters(action, target, [
       { action, filter: filterOf(outcomes.action) },
     ]);
   }
-  const refusal = ruleRefusal(outcomes.action);
-  if (refusal) return refuse(refusal);
-  if (isLifecycle(action)) {
-    // A change judged without its update rule could be one that rule refuses.
-    if (!outcomes.update) {
-      throw NextlyError.internal({
-        logContext: {
-          reason: "access-update-rule-not-asked",
-          action,
-          target: target.slug,
-        },
-      });
-    }
-    const update = ruleRefusal(outcomes.update);
-    // Kept apart, so the log tells a failing update rule from a refusing one.
-    if (update === "rule-threw") return refuse("update-rule-threw");
-    if (update === "rule-filter-malformed") return refuse(update);
-    if (update) return refuse("update-rule-refused");
-  }
+  const update = isLifecycle(action)
+    ? updateRuleRefusal(action, target, outcomes.update)
+    : null;
+  if (update) return update;
   return withFilters(action, target, [
     { action, filter: filterOf(outcomes.action) },
     { action: "update", filter: filterOf(outcomes.update) },
   ]);
+}
+
+/**
+ * The refusal from the update rule a publish or an unpublish is judged on top
+ * of, or `null` when it lets the change through. Asked only once the action's
+ * own rule has let it through, so it must have been asked by then.
+ */
+function updateRuleRefusal(
+  action: AccessAction,
+  target: AccessTarget,
+  outcome: RuleOutcome | undefined
+): Decision | null {
+  // A change judged without its update rule could be one that rule refuses.
+  if (!outcome) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "access-update-rule-not-asked",
+        action,
+        target: target.slug,
+      },
+    });
+  }
+  const update = ruleRefusal(outcome);
+  // Kept apart, so the log tells a failing update rule from a refusing one.
+  if (update === "rule-threw") return refuse("update-rule-threw");
+  if (update === "rule-filter-malformed") return refuse(update);
+  if (update) return refuse("update-rule-refused");
+  return null;
 }
 
 export async function decide(
