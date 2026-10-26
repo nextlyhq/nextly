@@ -80,7 +80,10 @@ describe("pointing a test file at its worker's databases", () => {
   };
 
   it("moves each server's URL to the worker's database on it", () => {
-    const env: NodeJS.ProcessEnv = { ...run, VITEST_POOL_ID: "2" };
+    const env: Record<string, string | undefined> = {
+      ...run,
+      VITEST_POOL_ID: "2",
+    };
     pointAtWorkerDatabases(env);
     expect(env.TEST_POSTGRES_URL).toBe(
       "postgres://u:p@localhost:5432/nextly_test_pool2"
@@ -91,7 +94,10 @@ describe("pointing a test file at its worker's databases", () => {
   });
 
   it("derives from the run's URL, so a second file in the process lands on the same database", () => {
-    const env: NodeJS.ProcessEnv = { ...run, VITEST_POOL_ID: "1" };
+    const env: Record<string, string | undefined> = {
+      ...run,
+      VITEST_POOL_ID: "1",
+    };
     pointAtWorkerDatabases(env);
     pointAtWorkerDatabases(env);
     expect(env.TEST_MYSQL_URL).toBe(
@@ -100,7 +106,7 @@ describe("pointing a test file at its worker's databases", () => {
   });
 
   it("leaves a run whose setup made no databases as it is", () => {
-    const env: NodeJS.ProcessEnv = {
+    const env: Record<string, string | undefined> = {
       TEST_MYSQL_URL: "mysql://u:p@localhost:3306/nextly_test",
       VITEST_POOL_ID: "3",
     };

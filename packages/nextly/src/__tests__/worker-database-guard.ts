@@ -127,7 +127,9 @@ export function workerDatabaseUrl(url: string, poolId: number): string {
  * TEST_POSTGRES_URL and TEST_MYSQL_URL, so this moves them all; a run with one
  * worker, or a unit run, has no kept URL and is left as it is.
  */
-export function pointAtWorkerDatabases(env: NodeJS.ProcessEnv): void {
+export function pointAtWorkerDatabases(
+  env: Record<string, string | undefined>
+): void {
   const made = SERVER_DIALECTS.filter(server => env[server.baseEnv]);
   if (made.length === 0) return;
   const poolId = workerPoolId(env.VITEST_POOL_ID, integrationWorkers(env));
