@@ -1719,6 +1719,11 @@ export class CollectionQueryService extends BaseService {
     overrideAccess?: boolean;
     routeAuthorized?: boolean;
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * The one entry a read by id names, so a refusal is about that entry and
+     * a caller who may not read it is answered as if it were missing.
+     */
+    entryId?: string;
   }): Promise<
     | { readonly denied: CollectionServiceResult<T> }
     | { readonly denied: null; readonly filter?: RuleFilter }
@@ -1731,6 +1736,7 @@ export class CollectionQueryService extends BaseService {
       routeAuthorized: params.routeAuthorized,
       // A scoped API key is judged on its own read grant, as for every read.
       authenticatedScope: params.authenticatedScope,
+      entryId: params.entryId,
     });
   }
 
@@ -4391,19 +4397,15 @@ export class CollectionQueryService extends BaseService {
     includeWorkingDraft?: boolean;
   }): Promise<CollectionServiceResult> {
     try {
-      const accessUser = params.overrideAccess ? undefined : params.user;
-
-      // 1. Check collection-level access FIRST
-      const accessDenied = await this.denyCollectionRead({
-        collectionName: params.collectionName,
-        accessUser,
+      // 1. Check collection-level access FIRST. A read rule that answered a
+      // filter limits the read to an entry it matches; one outside it is
+      // answered below exactly as a missing entry is.
+      const access = await this.filteredCollectionRead<unknown>({
+        ...params,
         entryId: params.entryId,
-        overrideAccess: params.overrideAccess,
-        routeAuthorized: params.routeAuthorized,
-        authenticatedScope: params.authenticatedScope,
       });
-      if (accessDenied) {
-        return accessDenied;
+      if (access.denied) {
+        return access.denied;
       }
 
       const schema = await this.fileManager.loadDynamicSchema(
@@ -4502,7 +4504,30 @@ export class CollectionQueryService extends BaseService {
               readNow
             ),
           });
-      const whereParts = [idCondition, lifecycleCondition].filter(
+      // The read rule's filter, in the language this read resolves through,
+      // so an entry it does not match is not found: the same `404` a missing
+      // entry gets, and nothing that tells the two apart.
+      const ruleCondition = access.filter
+        ? (
+            await prepareFilterCondition(
+              { collectionName: params.collectionName, filter: access.filter },
+              this.filterSources()
+            )
+          ).condition(
+            schema,
+            this.buildLocalizedQueryContext(
+              companion,
+              localeChain,
+              schema,
+              statusFilter?.values
+            )
+          )
+        : undefined;
+      const whereParts = [
+        idCondition,
+        lifecycleCondition,
+        ruleCondition,
+      ].filter(
         (c): c is NonNullable<typeof c> => c !== null && c !== undefined
       );
       const whereCondition =
