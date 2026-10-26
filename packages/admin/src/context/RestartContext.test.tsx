@@ -5,7 +5,7 @@
 // RestartOverlay never actually paints. These tests lock in the 800 ms
 // minimum so users always get visual feedback.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CURRENT_USER_CAPABILITIES_KEY } from "@admin/hooks/current-user-access";
@@ -86,7 +86,7 @@ describe("RestartContext minimum display time", () => {
 });
 
 describe("RestartContext after an apply", () => {
-  it("asks again what the user may do with each collection and Single", () => {
+  it("asks again what the user may do with each collection and Single", async () => {
     // A collection just created is missing from that answer, and filtered out
     // of the navigation, until it is asked again.
     const queryClient = new QueryClient({
@@ -106,8 +106,11 @@ describe("RestartContext after an apply", () => {
       result.current.stopRestart(true, "done");
     });
 
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: CURRENT_USER_CAPABILITIES_KEY,
-    });
+    // Once any request under way has been cancelled.
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: CURRENT_USER_CAPABILITIES_KEY,
+      })
+    );
   });
 });

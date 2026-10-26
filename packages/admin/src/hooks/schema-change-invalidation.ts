@@ -11,7 +11,10 @@
  */
 import type { QueryClient } from "@tanstack/react-query";
 
-import { CURRENT_USER_CAPABILITIES_KEY } from "./current-user-access";
+import {
+  CURRENT_USER_CAPABILITIES_KEY,
+  askAccessAgain,
+} from "./current-user-access";
 import { fieldGroupKeys } from "./queries";
 
 /** Ask again every content cache a schema change makes stale. */
@@ -26,7 +29,5 @@ export function invalidateContentCaches(queryClient: QueryClient): void {
   // What the user may do with each collection and Single is answered per
   // entity, so one just added or removed is missing from that answer, or
   // still in it, until it is asked again.
-  void queryClient.invalidateQueries({
-    queryKey: CURRENT_USER_CAPABILITIES_KEY,
-  });
+  askAccessAgain(queryClient, CURRENT_USER_CAPABILITIES_KEY);
 }

@@ -9,7 +9,7 @@
  * the layout's own wiring.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CURRENT_USER_CAPABILITIES_KEY } from "@admin/hooks/current-user-access";
@@ -98,15 +98,18 @@ beforeEach(() => {
 });
 
 describe("RootLayout and what the user may do with content", () => {
-  it("asks the server's answer again when the schema changes elsewhere", () => {
+  it("asks the server's answer again when the schema changes elsewhere", async () => {
     const client = renderAt({ routeType: "public" });
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
     window.dispatchEvent(new Event("nextly:schema-updated"));
 
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: CURRENT_USER_CAPABILITIES_KEY,
-    });
+    // Once any request under way has been cancelled.
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: CURRENT_USER_CAPABILITIES_KEY,
+      })
+    );
   });
 
   it("hands a content route's entity to the guard", () => {

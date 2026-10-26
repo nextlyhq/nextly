@@ -41,12 +41,23 @@ export function currentUserCapabilitiesKey(
  * permissions or someone's role assignments, any of which can change it.
  */
 export function invalidateCurrentUserAccess(queryClient: QueryClient): void {
-  void queryClient.invalidateQueries({
-    queryKey: CURRENT_USER_PERMISSIONS_KEY,
-  });
-  void queryClient.invalidateQueries({
-    queryKey: CURRENT_USER_CAPABILITIES_KEY,
-  });
+  askAccessAgain(queryClient, CURRENT_USER_PERMISSIONS_KEY);
+  askAccessAgain(queryClient, CURRENT_USER_CAPABILITIES_KEY);
+}
+
+/**
+ * Ask an access answer again after a change. A request already under way was
+ * asked before the change, so it is cancelled first: invalidating alone
+ * would let it stand in for the refresh when no answer is cached yet, and its
+ * answer from before the change would then land looking current.
+ */
+export function askAccessAgain(
+  queryClient: QueryClient,
+  queryKey: readonly unknown[]
+): void {
+  void queryClient
+    .cancelQueries({ queryKey })
+    .then(() => queryClient.invalidateQueries({ queryKey }));
 }
 
 /**

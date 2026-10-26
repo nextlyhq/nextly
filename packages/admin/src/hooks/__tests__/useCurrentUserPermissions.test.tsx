@@ -734,6 +734,34 @@ describe("useCurrentUserPermissions", () => {
     await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
   });
 
+  it("does not let a first request asked before a change stand in for the refresh", async () => {
+    // The first content request is under way, answering as roles stood.
+    let release = (): void => {};
+    server.capabilitiesGate = new Promise(done => {
+      release = done;
+    });
+    server.capabilities = answering({ read: true });
+    const client = newClient();
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(capabilityAsks()).toBe(1));
+
+    // A role change lands meanwhile, and the server now refuses the read.
+    server.capabilities = answering({ read: false });
+    await act(async () => {
+      invalidateCurrentUserAccess(client);
+    });
+    await act(async () => {
+      release();
+    });
+
+    // A request asked after the change decides, not the one before it.
+    await waitFor(() => expect(capabilityAsks()).toBe(2));
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+    expect(result.current.canAccessCollection("posts", "read")).toBe(false);
+  });
+
   it("asks once at an end, however many callers are mounted", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     server.capabilities = answering({ read: true }, Date.now() + 60_000);
@@ -917,15 +945,18 @@ describe("useCurrentUserPermissions", () => {
 });
 
 describe("invalidateCurrentUserAccess", () => {
-  it("asks for both the permissions and the capabilities again", () => {
+  it("asks for both the permissions and the capabilities again", async () => {
     const client = newClient();
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
     invalidateCurrentUserAccess(client);
 
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: CURRENT_USER_PERMISSIONS_KEY,
-    });
+    // Each is invalidated once any request under way has been cancelled.
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: CURRENT_USER_PERMISSIONS_KEY,
+      })
+    );
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: CURRENT_USER_CAPABILITIES_KEY,
     });
