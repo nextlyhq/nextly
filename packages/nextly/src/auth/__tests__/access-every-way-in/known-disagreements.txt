@@ -288,13 +288,14 @@ service principal-other read media none at population  # visitor-keeps-media
 no-service visitor read collection none at direct  # visitor-public-default
 no-service user-with read collection none at can  # can-no-service-refuses-people
 no-service user-with read collection none at entity  # no-service
+no-service user-with read collection none at capabilities  # no-service
 no-service visitor read collection returns-true at direct  # visitor-public-default
 no-service user-with read collection returns-true at can  # can-no-service-refuses-people
 no-service user-with read collection returns-true at entity  # no-service
+no-service user-with read collection returns-true at capabilities  # no-service
 no-service visitor read collection returns-false at direct  # visitor-public-default
 no-service user-with read collection returns-false at rest
 no-service user-with read collection returns-false at direct  # no-service
-no-service user-with read collection returns-false at capabilities  # no-service
 no-service key-role-based read collection returns-false at rest
 no-service key-role-based read collection returns-false at direct  # no-service
 no-service key-role-based read collection returns-false at can  # no-service
@@ -302,7 +303,6 @@ no-service key-role-based read collection returns-false at entity  # no-service
 no-service visitor read collection returns-null at direct  # visitor-public-default
 no-service user-with read collection returns-null at rest
 no-service user-with read collection returns-null at direct  # no-service
-no-service user-with read collection returns-null at capabilities  # no-service
 no-service key-role-based read collection returns-null at rest
 no-service key-role-based read collection returns-null at direct  # no-service
 no-service key-role-based read collection returns-null at can  # no-service
@@ -310,15 +310,16 @@ no-service key-role-based read collection returns-null at entity  # no-service
 no-service visitor read single none at direct  # visitor-public-default
 no-service user-with read single none at can  # can-no-service-refuses-people
 no-service user-with read single none at entity  # no-service
+no-service user-with read single none at capabilities  # no-service
 no-service user-without read single none at direct  # no-service
 no-service visitor read single returns-true at direct  # visitor-public-default
 no-service user-with read single returns-true at can  # can-no-service-refuses-people
 no-service user-with read single returns-true at entity  # no-service
+no-service user-with read single returns-true at capabilities  # no-service
 no-service user-without read single returns-true at direct  # no-service
 no-service visitor read single returns-false at direct  # visitor-public-default
 no-service user-with read single returns-false at rest
 no-service user-with read single returns-false at direct  # no-service
-no-service user-with read single returns-false at capabilities  # no-service
 no-service user-without read single returns-false at direct  # no-service
 no-service key-role-based read single returns-false at rest
 no-service key-role-based read single returns-false at direct  # no-service
@@ -327,7 +328,6 @@ no-service key-role-based read single returns-false at entity  # no-service
 no-service visitor read single returns-null at direct  # visitor-public-default
 no-service user-with read single returns-null at rest
 no-service user-with read single returns-null at direct  # no-service
-no-service user-with read single returns-null at capabilities  # no-service
 no-service user-without read single returns-null at direct  # no-service
 no-service key-role-based read single returns-null at rest
 no-service key-role-based read single returns-null at direct  # no-service

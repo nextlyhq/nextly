@@ -63,6 +63,8 @@ interface Capabilities {
 interface Measured {
   reads: number;
   cells: number;
+  /** The entities the answer named. */
+  named: string[];
 }
 
 const slugsFor = (count: number) =>
@@ -72,9 +74,12 @@ describe.each(getConfiguredTestDialects())(
   "what one capabilities answer costs (%s)",
   (dialect: TestDialect) => {
     /**
-     * Boots an install of `collections` collections, asks one caller holding
-     * one read permission for its capabilities, and reports the access tables
-     * that request read and the cells it answered.
+     * Boots an install of `collections` collections, asks one caller who may
+     * read every one of them for its capabilities, and reports the access
+     * tables that request read, the cells it answered and the entities it
+     * named. The caller reads them all because the answer names only what
+     * the caller may read, deciding that for each entity: a caller reading
+     * one collection would leave every other entity's cells out of the count.
      */
     async function measure(collections: number): Promise<Measured> {
       const t: TestNextly = await createTestNextly({
@@ -116,7 +121,9 @@ describe.each(getConfiguredTestDialects())(
             data: {
               name: "readers",
               slug: "readers",
-              permissionIds: [seeded.items.find(p => p.slug === "read-c0")!.id],
+              permissionIds: slugsFor(collections).map(
+                slug => seeded.items.find(p => p.slug === `read-${slug}`)!.id
+              ),
             },
           })
         ).item.id;
@@ -179,7 +186,11 @@ describe.each(getConfiguredTestDialects())(
               .length,
           0
         );
-        return { reads: read.length, cells };
+        return {
+          reads: read.length,
+          cells,
+          named: Object.keys(body.entities).sort(),
+        };
       } finally {
         resetSessionStandingForTests();
         await t.destroy();
@@ -196,6 +207,10 @@ describe.each(getConfiguredTestDialects())(
       expect(one.cells).toBeGreaterThan(0);
       expect(many.cells).toBeGreaterThan(one.cells);
       expect(one.reads).toBeGreaterThan(0);
+      // Every entity was decided readable and named, so each one's
+      // readability was asked, and the slope covers that question too.
+      expect(one.named).toEqual(slugsFor(1).sort());
+      expect(many.named).toEqual(slugsFor(12).sort());
 
       // No read per added cell: every cell is answered from the caller as it
       // was read once. Asking each cell's permission on its own would add a

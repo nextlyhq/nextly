@@ -699,7 +699,10 @@ export function oneAnswer(row: Row): Verdict {
  * one, and `.` where the door does not ask the row. `S` is a media row a read
  * was refused and still populated with its file, its internal columns taken
  * off: the way a trusted read bounded away from media presents a refusal, so
- * it counts as one.
+ * it counts as one. `=absent` is a capabilities answer that does not name the
+ * target, which the admin offers nothing for, so it counts as a refusal too:
+ * an entity left out where the caller may act on it still disagrees with the
+ * allow expected there.
  */
 export type Answer = string;
 
@@ -708,6 +711,7 @@ export function verdictOf(answer: Answer): Verdict | "error" {
   if (answer === "R" || answer === "401" || answer === "403") return "refuse";
   if (answer === "S") return "refuse";
   if (answer === "404") return "refuse";
+  if (answer === "=absent") return "refuse";
   return "error";
 }
 
