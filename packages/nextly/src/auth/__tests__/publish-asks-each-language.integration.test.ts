@@ -755,6 +755,27 @@ describe.each(getConfiguredTestDialects())(
       expect(entry.statusCode).toBe(403);
     });
 
+    it("asks a language with no translation stored when publishing every language promotes a shared change", async () => {
+      const t = await boot(dialect);
+      // Live in English alone, with no French row, then an English edit to a
+      // shared value held as a draft: promoting it changes what French shows.
+      await singlesOf(t).update(
+        SHARED_PENDING_BANNER,
+        { headline: "en", code: "live", status: "published" },
+        { overrideAccess: true, locale: "en" }
+      );
+      await singlesOf(t).update(
+        SHARED_PENDING_BANNER,
+        { code: "pending" },
+        { overrideAccess: true, locale: "en" }
+      );
+      const refused = await singlesOf(t).publishAllLocales(
+        SHARED_PENDING_BANNER,
+        { overrideAccess: false, user: USER }
+      );
+      expect(refused.statusCode).toBe(403);
+    });
+
     it("tells content that is not localized each language when it holds a localized group inside another", async () => {
       const t = await boot(dialect);
       const created = await t.nextly.create({

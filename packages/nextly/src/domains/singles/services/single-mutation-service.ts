@@ -115,6 +115,7 @@ import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
   languagesChangedConflict,
   languagesGoingLiveFrom,
+  languagesPromotedChangeReaches,
   languagesToAsk,
   unaskedLanguages,
 } from "../../i18n/languages-going-live";
@@ -838,13 +839,10 @@ export class SingleMutationService extends BaseService {
       { scopeKind: "single", scopeSlug: slug, entryId },
       locale
     );
-    if (draft === undefined) return [];
-    return [
-      ...new Set([
-        locale,
-        ...(this.localization?.locales.map(language => language.code) ?? []),
-      ]),
-    ];
+    return languagesPromotedChangeReaches(
+      draft === undefined ? undefined : locale,
+      this.localization?.locales.map(language => language.code) ?? []
+    );
   }
 
   /**

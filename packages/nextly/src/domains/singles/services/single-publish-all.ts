@@ -52,6 +52,7 @@ import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
   languagesChangedConflict,
   languagesGoingLiveFrom,
+  languagesPromotedChangeReaches,
   languagesToAsk,
   unaskedLanguages,
 } from "../../i18n/languages-going-live";
@@ -577,7 +578,14 @@ export class SinglePublishAllService extends BaseService {
         new Set(this.localization?.locales.map(locale => locale.code) ?? [])
       ),
     ];
-    return this.publishLanguages(db, plan, judged, statuses, mainStatus);
+    return this.publishLanguages(
+      db,
+      plan,
+      judged,
+      pending,
+      statuses,
+      mainStatus
+    );
   }
 
   /**
@@ -585,13 +593,17 @@ export class SinglePublishAllService extends BaseService {
    * judges, a change with no language of its own (the shared values) being
    * the default language's; those the one answer to "what goes live" names,
    * the default language among them whenever the main row goes live, which
-   * the judged list leaves to the translations it carries; and every
-   * configured language where the Single reaches a localized field group.
+   * the judged list leaves to the translations it carries; every configured
+   * language where a pending change is promoted, since it can carry shared
+   * values every language shows, a language with no translation stored
+   * included; and every configured language where the Single reaches a
+   * localized field group.
    */
   private async publishLanguages(
     db: TransactionContext | DrizzleAdapter,
     plan: PublishPlan,
     judged: ReadonlyArray<{ locale: string | null }>,
+    pending: ReadonlyArray<{ locale: string | null }>,
     statuses: ReadonlyMap<string, string | null>,
     mainStatus: unknown
   ): Promise<string[]> {
@@ -617,6 +629,12 @@ export class SinglePublishAllService extends BaseService {
       ...new Set(
         [
           ...judged.map(change => change.locale ?? defaultLocale),
+          ...pending.flatMap(change =>
+            languagesPromotedChangeReaches(
+              change.locale ?? defaultLocale,
+              configured
+            )
+          ),
           ...languagesToAsk(goingLive, {
             configured,
             reachesLocalizedFieldGroup: reaches,
@@ -702,6 +720,7 @@ export class SinglePublishAllService extends BaseService {
         tx,
         plan,
         [...stored, ...alsoGoingLive],
+        stored,
         priorCompanionStatuses,
         lockedRow.status
       ),

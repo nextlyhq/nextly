@@ -51,6 +51,19 @@ export function languagesGoingLiveFrom(args: {
 }
 
 /**
+ * The languages a pending change goes live in when a write to every language
+ * promotes it: its own (`promoted`, the language holding the working draft),
+ * and every configured language, since the change can carry shared values
+ * every language's document shows. None where the write promotes nothing.
+ */
+export function languagesPromotedChangeReaches(
+  promoted: string | undefined,
+  configured: readonly string[]
+): string[] {
+  return promoted === undefined ? [] : [...new Set([promoted, ...configured])];
+}
+
+/**
  * The languages a publish of every language asks its rule about: those going
  * live, and every configured language where the content reaches a localized
  * field group. Such a group stores its values per language in a table of its
