@@ -622,6 +622,12 @@ interface GroupedRows {
 }
 
 /**
+ * A read's access, settled once: allowed, with the filter a read rule
+ * answered where it answered one.
+ */
+type SettledRead = { readonly denied: null; readonly filter?: RuleFilter };
+
+/**
  * Everything a filtered read needs to settle the row set a caller is allowed
  * to see.
  *
@@ -3293,75 +3299,80 @@ export class CollectionQueryService extends BaseService {
         // We call countEntries separately to get total (it handles same filters)
         const [fetchedEntries, countResult] = await Promise.all([
           query,
-          this.countEntries({
-            collectionName: params.collectionName,
-            user: params.user,
-            // Its search is narrowed by the same identity the page's was.
-            fieldAccessUser: params.fieldAccessUser,
-            search: params.search,
-            // This count is part of THIS read, so it resolves releases against
-            // the same instant the rows did.
-            releaseNow: readNow,
-            // Resolved once for this request; see the parameter's own note.
-            resolvedComponentTables: componentTables,
-            resolvedComponentTypeColumns: componentTypeColumns,
-            // Geo operators removed (the count cannot apply them), but component
-            // predicates kept: `cleanedWhere` has BOTH stripped, and the count
-            // builds its own EXISTS conditions from the ones it is given. Sending
-            // the component-stripped filter counts rows the page excluded, so a
-            // read filtered on `seo.metaTitle` reported a total describing rows
-            // it had correctly withheld.
-            where: whereAfterGeo,
-            // The read hooks already ran for this request and `cleanedWhere`
-            // is what they settled on. Running them again here would fire every
-            // side effect twice -- an audit entry, a rate-limit tick -- for one
-            // list call.
-            readHooksAlreadyRan: true,
-            // The `_translated` language filter was stripped from `cleanedWhere` for
-            // the list query; pass it explicitly so the count applies the same filter.
-            // Without it the count ignores the filter and over-counts
-            // totalDocs/totalPages when a language filter is active.
-            translationFilter: translationFilter ?? undefined,
-            // The workflow keys were stripped with it, and for the same reason
-            // are passed explicitly: without them the total would count every
-            // entry beside a page of the few the filter keeps.
-            workflowFilter: workflowFilter ?? undefined,
-            // Forward locale so count mirrors any locale-scoped filter (M4b parity).
-            locale: params.locale,
-            fallbackLocale: params.fallbackLocale,
-            // The count has to answer the same question as the rows beside it.
-            // Both resolve the Draft/Published filter from these two, so
-            // leaving them out counts published-only for every caller: a
-            // trusted reader gets its drafts listed but not counted, and
-            // totalPages then hides the tail of its own result set.
-            status: params.status,
-            overrideAccess: params.overrideAccess,
-            // Forwarded for the same reason `overrideAccess` is: the total has
-            // to answer under the field trust the page answered under, or the
-            // count matches on searchable fields the rows were narrowed by.
-            enforceFieldAccess: params.enforceFieldAccess,
-            frameworkFilter: true,
-            // Not a caller, and not a second boundary. This count is THIS
-            // read's own continuation: the caller's filter was judged at the
-            // top of `listEntries`, and what arrives here is the settled
-            // predicate, which legitimately carries whatever a trusted
-            // `beforeRead` hook narrowed it by. Re-judging it would reject a
-            // list that was already allowed -- and the rejection is swallowed
-            // into `totalDocs = 0`, so the page would come back correct with a
-            // total that quietly said there was nothing.
+          this.countEntriesAs(
+            {
+              collectionName: params.collectionName,
+              user: params.user,
+              // Its search is narrowed by the same identity the page's was.
+              fieldAccessUser: params.fieldAccessUser,
+              search: params.search,
+              // This count is part of THIS read, so it resolves releases against
+              // the same instant the rows did.
+              releaseNow: readNow,
+              // Resolved once for this request; see the parameter's own note.
+              resolvedComponentTables: componentTables,
+              resolvedComponentTypeColumns: componentTypeColumns,
+              // Geo operators removed (the count cannot apply them), but component
+              // predicates kept: `cleanedWhere` has BOTH stripped, and the count
+              // builds its own EXISTS conditions from the ones it is given. Sending
+              // the component-stripped filter counts rows the page excluded, so a
+              // read filtered on `seo.metaTitle` reported a total describing rows
+              // it had correctly withheld.
+              where: whereAfterGeo,
+              // The read hooks already ran for this request and `cleanedWhere`
+              // is what they settled on. Running them again here would fire every
+              // side effect twice -- an audit entry, a rate-limit tick -- for one
+              // list call.
+              readHooksAlreadyRan: true,
+              // The `_translated` language filter was stripped from `cleanedWhere` for
+              // the list query; pass it explicitly so the count applies the same filter.
+              // Without it the count ignores the filter and over-counts
+              // totalDocs/totalPages when a language filter is active.
+              translationFilter: translationFilter ?? undefined,
+              // The workflow keys were stripped with it, and for the same reason
+              // are passed explicitly: without them the total would count every
+              // entry beside a page of the few the filter keeps.
+              workflowFilter: workflowFilter ?? undefined,
+              // Forward locale so count mirrors any locale-scoped filter (M4b parity).
+              locale: params.locale,
+              fallbackLocale: params.fallbackLocale,
+              // The count has to answer the same question as the rows beside it.
+              // Both resolve the Draft/Published filter from these two, so
+              // leaving them out counts published-only for every caller: a
+              // trusted reader gets its drafts listed but not counted, and
+              // totalPages then hides the tail of its own result set.
+              status: params.status,
+              overrideAccess: params.overrideAccess,
+              // Forwarded for the same reason `overrideAccess` is: the total has
+              // to answer under the field trust the page answered under, or the
+              // count matches on searchable fields the rows were narrowed by.
+              enforceFieldAccess: params.enforceFieldAccess,
+              frameworkFilter: true,
+              // Not a caller, and not a second boundary. This count is THIS
+              // read's own continuation: the caller's filter was judged at the
+              // top of `listEntries`, and what arrives here is the settled
+              // predicate, which legitimately carries whatever a trusted
+              // `beforeRead` hook narrowed it by. Re-judging it would reject a
+              // list that was already allowed -- and the rejection is swallowed
+              // into `totalDocs = 0`, so the page would come back correct with a
+              // total that quietly said there was nothing.
 
-            // The count must answer the same access question as the rows, or a
-            // route-authorized update/delete-only caller gets its read gate
-            // denied here and totalDocs silently falls back to 0 — breaking the
-            // bulk-by-query limit guard and pagination.
-            routeAuthorized: params.routeAuthorized,
-            // The scope has to travel with it for the same reason. The rows
-            // above are filtered by the key's own grant, so a count taken
-            // without the scope takes the owner's super-admin bypass instead
-            // and reports the unscoped total beside correctly filtered rows —
-            // disclosing how many rows exist outside the grant.
-            authenticatedScope: params.authenticatedScope,
-          }),
+              // The count must answer the same access question as the rows, or a
+              // route-authorized update/delete-only caller gets its read gate
+              // denied here and totalDocs silently falls back to 0 — breaking the
+              // bulk-by-query limit guard and pagination.
+              routeAuthorized: params.routeAuthorized,
+              // The scope has to travel with it for the same reason. The rows
+              // above are filtered by the key's own grant, so a count taken
+              // without the scope takes the owner's super-admin bypass instead
+              // and reports the unscoped total beside correctly filtered rows —
+              // disclosing how many rows exist outside the grant.
+              authenticatedScope: params.authenticatedScope,
+              // The page's own access: the total counts the entries the page's
+              // filter matched, not those of a second answer of the rule.
+            },
+            { denied: null, filter: access.filter }
+          ),
         ]);
 
         entries = fetchedEntries;
@@ -3870,7 +3881,16 @@ export class CollectionQueryService extends BaseService {
     return { localeChain, companion };
   }
 
-  private async resolveReadPlan<TData>(params: FilteredReadParams) {
+  private async resolveReadPlan<TData>(
+    params: FilteredReadParams,
+    /**
+     * The access the enclosing read already settled, when this plan is that
+     * read's own continuation: a list's total, counted under the filter its
+     * page was read with rather than under a second answer of the rule.
+     * Never taken from a caller's params.
+     */
+    settled?: SettledRead
+  ) {
     const accessUser = params.overrideAccess ? undefined : params.user;
 
     // 1. Check collection-level access FIRST, through the same member the
@@ -3882,7 +3902,8 @@ export class CollectionQueryService extends BaseService {
     // impossible. No entry id, because an aggregate names no single row.
     // Same caller, scope and route judgement as listEntries, so a read cannot
     // describe rows the caller itself is not allowed to list.
-    const access = await this.filteredCollectionRead<TData>(params);
+    const access =
+      settled ?? (await this.filteredCollectionRead<TData>(params));
     if (access.denied) {
       return { allowed: false as const, denied: access.denied };
     }
@@ -3981,8 +4002,22 @@ export class CollectionQueryService extends BaseService {
   async countEntries(
     params: FilteredReadParams
   ): Promise<CollectionServiceResult<{ totalDocs: number }>> {
+    return this.countEntriesAs(params);
+  }
+
+  /**
+   * A count, under `settled` access when it continues a read that already
+   * settled it (see {@link resolveReadPlan}), and otherwise judged here.
+   */
+  private async countEntriesAs(
+    params: FilteredReadParams,
+    settled?: SettledRead
+  ): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     try {
-      const plan = await this.resolveReadPlan<{ totalDocs: number }>(params);
+      const plan = await this.resolveReadPlan<{ totalDocs: number }>(
+        params,
+        settled
+      );
       if (!plan.allowed) return plan.denied;
       const { schema, whereConditions } = plan;
 

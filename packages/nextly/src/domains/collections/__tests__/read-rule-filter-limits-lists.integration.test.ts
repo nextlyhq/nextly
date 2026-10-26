@@ -36,9 +36,15 @@ const NOTES = "rulefilter_notes";
 // reason but the one a test is watching.
 const OPEN_NOTES = "rulefilter_open_notes";
 const PLACES = "rulefilter_places";
+// A rule whose filter changes with every call, as one built from state that
+// moves between calls would.
+const SHIFTING = "rulefilter_shifting";
+let shiftingCalls = 0;
 
 /** A read rule answering `value`, which the rule type does not allow yet. */
 const answering = (value: unknown) => () => value as boolean;
+/** A read rule answering what `next` returns on each call. */
+const answeringEach = (next: () => unknown) => () => next() as boolean;
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -64,6 +70,18 @@ async function boot(): Promise<TestNextly> {
       defineCollection({
         slug: OPEN_NOTES,
         access: { read: answering({ team: { equals: "public" } }) },
+        fields: [text({ name: "title" }), text({ name: "team" })],
+      }),
+      defineCollection({
+        slug: SHIFTING,
+        access: {
+          read: answeringEach(() => {
+            shiftingCalls += 1;
+            return {
+              team: { equals: shiftingCalls === 1 ? "public" : "staff" },
+            };
+          }),
+        },
         fields: [text({ name: "title" }), text({ name: "team" })],
       }),
       defineCollection({
@@ -127,6 +145,18 @@ describe("a read rule that answers a filter", () => {
       "public-2",
       "public-3",
     ]);
+  });
+
+  it("counts a list's total under the filter its page was read with, asking the rule once", async () => {
+    const t = await boot();
+    await seed(t, SHIFTING);
+    shiftingCalls = 0;
+    const listed = await t.nextly.find({ collection: SHIFTING, ...asVisitor });
+    expect(shiftingCalls).toBe(1);
+    // Three public entries on the page, and the total says three: not the two
+    // a second answer of the rule would match.
+    expect(titles(listed.items)).toEqual(["public-1", "public-2", "public-3"]);
+    expect(listed.meta.total).toBe(3);
   });
 
   it("limits a count to the matching entries", async () => {
