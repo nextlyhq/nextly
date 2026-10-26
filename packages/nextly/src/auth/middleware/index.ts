@@ -853,13 +853,15 @@ export function admittedActionOf(caller: AuthContext): string | undefined {
  * service asks update of any other write, so admitting a caller here on
  * publish lets them edit nothing. Each action is asked in turn, its rule
  * included; the first that admits the caller is recorded for the dispatch
- * ({@link admittedActionOf}), and a caller none admits is refused as update
- * refuses them.
+ * ({@link admittedActionOf}). A caller none admits is refused in the words
+ * of the action the write asks, which `actionAsked` reads from the request
+ * only then; without it, or where it names update, as update refuses them.
  */
 export async function requireCollectionWriteAccess(
   req: Request,
   collectionSlug: string,
-  operation?: RouteOperation
+  operation?: RouteOperation,
+  actionAsked?: () => Promise<"update" | "publish" | "unpublish">
 ): Promise<AuthContext | ErrorResponse> {
   const authResult = await requireAuthentication(req);
   if ("statusCode" in authResult) return authResult;
@@ -876,6 +878,7 @@ export async function requireCollectionWriteAccess(
       admittedActions.set(asUpdate, "update");
       return asUpdate;
     }
+    const refusals = new Map<"publish" | "unpublish", ErrorResponse>();
     for (const action of ["publish", "unpublish"] as const) {
       const answer = await authorizeCaller(
         authResult,
@@ -887,8 +890,13 @@ export async function requireCollectionWriteAccess(
         admittedActions.set(answer, action);
         return answer;
       }
+      refusals.set(action, answer);
     }
-    return asUpdate;
+    // Every action refused. A write that changes only the status asked to
+    // publish or unpublish, so it is told that, with the refusal that action's
+    // own check gave; any other write is told it may not edit.
+    const asked = actionAsked ? await actionAsked() : "update";
+    return asked === "update" ? asUpdate : (refusals.get(asked) ?? asUpdate);
   });
 }
 
