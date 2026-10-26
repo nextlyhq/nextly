@@ -34,7 +34,11 @@ import { cn } from "@admin/lib/utils";
 
 import { CardSkeleton } from "../widgets/frame/states";
 
-import { isSkippable, stepPresentation } from "./get-started/step-presentation";
+import {
+  isSkippable,
+  stepPresentation,
+  stepRuns,
+} from "./get-started/step-presentation";
 import {
   useGetStartedWrite,
   type GetStartedWrite,
@@ -87,8 +91,22 @@ function SetupNotChecked({ onRetry }: { onRetry: () => void }) {
 }
 
 /** The sample-content offer, inline in the first-entry step while it is open. */
-function SampleContentOffer() {
+/**
+ * The sample-content offer inside the first-entry step.
+ *
+ * Every action records that the reader acted on the card first (`markActed`),
+ * as the step links do: loading sample content can finish the last step, and a
+ * reader who finished it from here is told "You're all set" rather than seeing
+ * the card go. A failed load says so, with its message and a Retry, rather than
+ * taking the controls away.
+ */
+function SampleContentOffer({
+  markActed,
+}: {
+  markActed: (then?: () => void) => void;
+}) {
   const { status, startSeed, skip } = useSeedStatus();
+  const acting = (action: () => void) => () => markActed(action);
   if (status.kind === "seeding") {
     return (
       <span className="text-xs text-muted-foreground">
@@ -96,13 +114,25 @@ function SampleContentOffer() {
       </span>
     );
   }
+  if (status.kind === "error") {
+    return (
+      <span className="flex flex-wrap items-center gap-2">
+        <span role="alert" className="text-xs text-destructive">
+          Sample content couldn&apos;t be loaded: {status.message}
+        </span>
+        <Button variant="outline" size="sm" onClick={acting(startSeed)}>
+          Retry
+        </Button>
+      </span>
+    );
+  }
   if (status.kind !== "idle") return null;
   return (
     <span className="flex flex-wrap items-center gap-2">
-      <Button variant="outline" size="sm" onClick={startSeed}>
+      <Button variant="outline" size="sm" onClick={acting(startSeed)}>
         Load sample content
       </Button>
-      <Button variant="ghost" size="sm" onClick={skip}>
+      <Button variant="ghost" size="sm" onClick={acting(skip)}>
         No thanks
       </Button>
     </span>
@@ -169,14 +199,16 @@ function StepActions({
       {open && (
         <Link
           href={href}
-          onClick={write.markActed}
+          onClick={() => write.markActed()}
           className="text-xs font-medium text-foreground underline decoration-primary/40 underline-offset-4 hover:decoration-primary focus-visible:decoration-primary"
         >
           {step.kind === "single" ? "Open" : "Start"}
           <span className="sr-only">: {label}</span>
         </Link>
       )}
-      {open && step.kind === "entry" && <SampleContentOffer />}
+      {open && step.kind === "entry" && (
+        <SampleContentOffer markActed={write.markActed} />
+      )}
       {open && isSkippable(step) && (
         <Button
           variant="ghost"
@@ -221,6 +253,42 @@ function StepRow({
   );
 }
 
+/**
+ * A run of consecutive Single steps: the first five, then a control for the
+ * rest (with `aria-expanded`), so a site with many Singles does not bury the
+ * steps after them.
+ */
+function SinglesRun({
+  steps,
+  row,
+}: {
+  steps: GetStartedStep[];
+  row: (step: GetStartedStep) => React.ReactNode;
+}) {
+  const [all, setAll] = useState(false);
+  const restId = useId();
+  const folded = steps.length - SINGLES_SHOWN;
+  return (
+    <>
+      <ul id={restId} className="grid divide-y divide-border">
+        {(all ? steps : steps.slice(0, SINGLES_SHOWN)).map(row)}
+      </ul>
+      {folded > 0 && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="justify-self-start"
+          aria-expanded={all}
+          aria-controls={restId}
+          onClick={() => setAll(open => !open)}
+        >
+          {all ? "Show fewer Singles" : `Show ${folded} more`}
+        </Button>
+      )}
+    </>
+  );
+}
+
 function StepList({
   answer,
   write,
@@ -229,11 +297,6 @@ function StepList({
   write: GetStartedWrite;
 }) {
   const singleLabels = useSingleLabels();
-  const [allSingles, setAllSingles] = useState(false);
-  const restId = useId();
-  const singles = answer.steps.filter(step => step.kind === "single");
-  const shownSingles = allSingles ? singles : singles.slice(0, SINGLES_SHOWN);
-  const folded = singles.length - SINGLES_SHOWN;
   const row = (step: GetStartedStep) => (
     <StepRow
       key={step.key}
@@ -264,31 +327,17 @@ function StepList({
           {answer.done} of {answer.total} done
         </p>
       </div>
-      <ul className="grid divide-y divide-border">
-        {answer.steps
-          .filter(step => step.kind === "collection" || step.kind === "entry")
-          .map(row)}
-      </ul>
-      {singles.length > 0 && (
-        <ul id={restId} className="grid divide-y divide-border">
-          {shownSingles.map(row)}
-        </ul>
+      {/* The server's list in its own order, every step drawn: only runs of
+          Singles fold. */}
+      {stepRuns(answer.steps).map(run =>
+        run.kind === "singles" ? (
+          <SinglesRun key={run.steps[0].key} steps={run.steps} row={row} />
+        ) : (
+          <ul key={run.steps[0].key} className="grid divide-y divide-border">
+            {run.steps.map(row)}
+          </ul>
+        )
       )}
-      {folded > 0 && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="justify-self-start"
-          aria-expanded={allSingles}
-          aria-controls={restId}
-          onClick={() => setAllSingles(open => !open)}
-        >
-          {allSingles ? "Show fewer Singles" : `Show ${folded} more`}
-        </Button>
-      )}
-      <ul className="grid divide-y divide-border">
-        {answer.steps.filter(step => step.kind === "invite").map(row)}
-      </ul>
     </div>
   );
 }
