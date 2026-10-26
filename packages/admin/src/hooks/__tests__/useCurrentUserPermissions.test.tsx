@@ -577,6 +577,33 @@ describe("useCurrentUserPermissions", () => {
     expect(result.current.canAccessCollection("posts", "read")).toBe(false);
   });
 
+  it("does not ask a failed answer again for each caller that mounts", async () => {
+    server.capabilities = new Error("capabilities unavailable");
+    const client = newClient();
+    const first = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() =>
+      expect(first.result.current.content.error).not.toBeNull()
+    );
+    const before = capabilityAsks();
+
+    // Two more callers mount, as a system page's children would.
+    const second = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    // POPULATION CONTROL: the new callers see the failure, not a fresh ask.
+    expect(second.result.current.content.error).not.toBeNull();
+    // A mount's retry would be asked as the callers mount; let it settle.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(capabilityAsks()).toBe(before);
+  });
+
   it("asks once at an end, however many callers are mounted", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     server.capabilities = answering({ read: true }, Date.now() + 60_000);

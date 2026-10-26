@@ -480,6 +480,10 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     enabled: isPrivateRoute,
     staleTime: Infinity,
     refetchOnWindowFocus: "always",
+    // A failed answer is asked again on the schedule below and on focus, not
+    // by each caller that mounts: while the content registry is degraded,
+    // every mount would otherwise ask the whole matrix again.
+    retryOnMount: false,
     refetchInterval: query =>
       query.state.data === undefined && query.state.error !== null
         ? UNANSWERED_RECHECK_MS
