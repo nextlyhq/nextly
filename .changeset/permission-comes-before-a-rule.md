@@ -29,13 +29,4 @@
 "nextly": patch
 ---
 
-A code access rule can no longer let in a signed-in user who lacks the permission on their role. The permission is asked first, and a rule only narrows it: a rule that returns `true` lets through only a user who holds the permission for that action. Before, a rule declared for an action decided alone for signed-in users, so a rule of `true` let in a user the role screen kept out. This holds for every action and wherever the rule is asked:
-
-- **A collection or a Single.** A Single's own rule narrows the permission as a collection's does: with `read: () => true`, a user without the Single's read permission is refused.
-- **Related rows.** A related row is shown only to a user who could read it directly, with the permission on their role and the target's rule. Before, the target's rule alone decided.
-- **Writes.** A create or update by a signed-in user needs the permission before the collection's rule is asked. The fields such a write may set are then judged by their own rules, as before.
-- `nextly.access.check` answers the same way, as does the deprecated `checkCollectionAccess` from `nextly/auth`: it asks the permission before the rule its `evaluateCodeAccess` runs, and that rule then allows only by returning `true`. An API key no longer passes it on its creator's super-admin role: as everywhere else, a key is judged on its own permissions.
-
-To keep such a user's access, tick the permission on their role.
-
-For this release, each request refused this way is logged once, naming the collection or Single, the action and the permission to grant.
+A code access rule no longer lets in a signed-in user or an API key that lacks the permission: the permission is asked first, and the rule only narrows it, for collections, Singles, related rows and writes alike, as well as `nextly.access.check` and the deprecated `checkCollectionAccess`, where a key no longer passes on its creator's super-admin role. Where a rule was letting such users in, grant the permission on the role screen; for this release, each request newly refused this way is logged once, naming the permission to grant.

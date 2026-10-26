@@ -78,9 +78,9 @@ export function noticePermissionNowComesFirst(
   const permission = permissionSlug(action, slug);
   consoleLogger.warn(
     `[rbac] "${slug}" declares a ${action} rule, and a ${caller} without ` +
-      `the ${permission} permission is now refused even where the rule ` +
-      `would allow. A code access rule only narrows the permission; grant ` +
-      `${permission} to the roles that should ${action}.`
+      `the ${permission} permission is now refused before the rule is ` +
+      `asked. A code access rule only narrows the permission; if the rule ` +
+      `should let such callers ${action}, grant ${permission} to their roles.`
   );
 }
 
