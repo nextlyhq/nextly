@@ -996,6 +996,50 @@ describe("useCurrentUserPermissions", () => {
       true
     );
   });
+
+  it("offers no edit to an editor mounted while the next language is asked", async () => {
+    // The entry page shows its skeleton while the document loads in the new
+    // language, so the editor mounts again during the switch, with no answer
+    // of its own to keep. It reads the English answer as a placeholder too.
+    onScreen.locale = "en";
+    server.capabilities = answering({ read: true, update: true });
+    const client = newClient();
+    // The route guard, which stays mounted through the switch.
+    const guard = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() =>
+      expect(guard.result.current.content.hasAnswer).toBe(true)
+    );
+
+    let release!: () => void;
+    server.capabilitiesGate = new Promise(done => {
+      release = done;
+    });
+    server.capabilities = answering({ read: true, update: false });
+    onScreen.locale = "de";
+    const editor = renderHook(
+      () => ({
+        access: useCurrentUserPermissions(),
+        edits: editsOffered(useUpdateAnswer("posts")),
+      }),
+      { wrapper: wrapperFor(client) }
+    );
+    await waitFor(() =>
+      expect(server.asked).toContain("/me/capabilities?locale=de")
+    );
+    expect(editor.result.current.access.content).toMatchObject({
+      isPlaceholder: true,
+      hasAnswer: false,
+    });
+    expect(editor.result.current.edits).toBe(false);
+
+    release();
+    await waitFor(() =>
+      expect(editor.result.current.access.content.hasAnswer).toBe(true)
+    );
+    expect(editor.result.current.edits).toBe(false);
+  });
 });
 
 describe("invalidateCurrentUserAccess", () => {

@@ -1,5 +1,4 @@
 import {
-  keepPreviousData,
   useQuery,
   useQueryClient,
   type QueryClient,
@@ -301,6 +300,29 @@ type CurrentUserPermissions = AnswerState & {
   can: (permission: string) => boolean;
 };
 
+/**
+ * The capabilities answer last received in any language, held on screen while
+ * another language's is asked. A component mounted during the switch (an
+ * editor mounted again for the document in the new language) has no previous
+ * answer of its own; this one puts it on the same footing as one that stayed
+ * mounted: a placeholder, which grants nothing (see `isPlaceholder`).
+ */
+function latestAnswerHeld<T>(client: QueryClient): T | undefined {
+  let latest: { data: T; at: number } | undefined;
+  for (const query of client
+    .getQueryCache()
+    .findAll({ queryKey: CURRENT_USER_CAPABILITIES_KEY })) {
+    const { data, dataUpdatedAt } = query.state;
+    if (
+      data !== undefined &&
+      (latest === undefined || dataUpdatedAt > latest.at)
+    ) {
+      latest = { data: data as T, at: dataUpdatedAt };
+    }
+  }
+  return latest?.data;
+}
+
 /** Whether the content answer has failed and has never answered. */
 function contentUnanswered(
   queryClient: ReturnType<typeof useQueryClient>,
@@ -542,7 +564,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     enabled: isPrivateRoute,
     // The language moved from keeps the page mounted while the new one is
     // asked; it counts as no answer (see `isPlaceholder`).
-    placeholderData: keepPreviousData,
+    placeholderData: previous => previous ?? latestAnswerHeld(queryClient),
     staleTime: Infinity,
     refetchOnWindowFocus: "always",
     // A failed answer is asked again on the schedule below and on focus, not

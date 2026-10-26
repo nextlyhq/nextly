@@ -1,8 +1,8 @@
 /**
  * A user who may change a note in English and only read it in Spanish, by the
  * fixture's rule, edits the English and opens the Spanish read-only. While the
- * Spanish answer is on its way the editor stays on screen with nothing that
- * saves offered: the English answer it keeps meanwhile grants nothing in
+ * Spanish answer is on its way the Spanish editor is on screen with nothing
+ * that saves offered: the English answer kept meanwhile grants nothing in
  * Spanish.
  */
 import { expect, type Page } from "@playwright/test";
@@ -67,12 +67,6 @@ test("edits the English and opens the Spanish read-only, offering no save while 
   await expect(banner()).toHaveCount(0);
   await expect(note()).toBeEditable();
 
-  // The editor on screen, marked so a remount would show.
-  await page
-    .locator("main form")
-    .first()
-    .evaluate(form => form.setAttribute("data-kept", "english"));
-
   // The Spanish answer is held until the page has been read without it.
   let release!: () => void;
   const held = new Promise<void>(resolve => {
@@ -88,9 +82,12 @@ test("edits the English and opens the Spanish read-only, offering no save while 
   await page.getByRole("button", { name: "Open Spanish" }).click();
   await expect.poll(() => asked).toBe(true);
 
-  // The editor stays on screen, and nothing that saves is offered for Spanish
-  // on the English answer's word.
-  await expect(page.locator('main form[data-kept="english"]')).toHaveCount(1);
+  // The Spanish editor is on screen, and nothing that saves is offered for
+  // Spanish on the English answer's word.
+  await expect(
+    page.getByRole("listitem").filter({ hasText: "Spanish" })
+  ).toContainText("editing now");
+  await expect(note()).toBeVisible();
   await expect(save()).toHaveCount(0);
 
   release();
