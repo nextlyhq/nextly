@@ -492,6 +492,22 @@ export function namedEndsAfter(
 }
 
 /**
+ * Whether two lists name the same ends from the same answers, in order.
+ * Compared by value: an end one answer drops and another still names is kept
+ * as a new entry of the same end, and comparing entries by identity would set
+ * the list again on every render.
+ */
+function sameEnds(a: readonly NamedEnd[], b: readonly NamedEnd[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (named, index) =>
+        named.end === b[index]?.end && named.namedAt === b[index]?.namedAt
+    )
+  );
+}
+
+/**
  * A request's answer, stamped with when it was asked. That moment, not when
  * the answer arrived, says whether the answer could have seen an end: one
  * asked before an end and delivered after it still describes the role before.
@@ -706,10 +722,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
       ),
     [ends, validUntil, answeredAt, permissionsValidUntil, permissionsAnsweredAt]
   );
-  if (
-    namedEnds.length !== ends.length ||
-    namedEnds.some((named, index) => named !== ends[index])
-  ) {
+  if (!sameEnds(namedEnds, ends)) {
     setEnds(namedEnds);
   }
   const knownEnds = useMemo(() => namedEnds.map(({ end }) => end), [namedEnds]);

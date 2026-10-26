@@ -309,9 +309,14 @@ function useHistoryView(
   input: Omit<Parameters<typeof buildStory>[0], "view">,
   opening: HistoryView,
   selected: number | null,
-  onClearSelection: (() => void) | undefined
+  onClearSelection: (() => void) | undefined,
+  allLanguages: boolean
 ): [HistoryView, (next: HistoryView) => void] {
-  const [view, setView] = useState<HistoryView>(opening);
+  const [chosen, setView] = useState<HistoryView>(opening);
+  // Where only the language being edited was read, the list shows that
+  // language, whatever was chosen while every language was: a view of all of
+  // them would show the others' events without their versions.
+  const view = allLanguages ? chosen : opening;
   const changeView = (next: HistoryView) => {
     setView(next);
     if (onClearSelection && hidesSelection(input, next, selected)) {
@@ -353,7 +358,8 @@ export function HistoryStoryList({
     { versions, events, lifecycle, localized, filter },
     openingView(localized, languages.editing),
     selected,
-    onClearSelection
+    onClearSelection,
+    languages.all
   );
   const story = useMemo(
     () => buildStory({ versions, events, lifecycle, localized, view, filter }),

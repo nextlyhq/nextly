@@ -269,6 +269,7 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       updatedFrom,
       updatedTo,
       translated: translationFilter,
+      readsTranslationState: asksTranslationStatus,
     });
   }, [
     whereParam,
@@ -278,6 +279,7 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     updatedFrom,
     updatedTo,
     translationFilter,
+    asksTranslationStatus,
   ]);
 
   // Fetch entries with pagination and filters

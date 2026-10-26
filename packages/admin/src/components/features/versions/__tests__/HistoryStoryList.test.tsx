@@ -391,6 +391,41 @@ describe("the language being edited", () => {
     ).toBeInTheDocument();
   });
 
+  it("returns to the language being edited once every language is no longer read", async () => {
+    // All languages chosen, then the right to read every language's history
+    // ends while the list is open: only Spanish's versions are read now, so
+    // the list shows Spanish rather than other languages' events alone.
+    const list = (all: boolean) => (
+      <HistoryStoryList
+        scope={scope}
+        versions={newest(versions)}
+        events={[]}
+        lifecycle={false}
+        localized
+        languages={{ editing: "es", all }}
+        hasMore={false}
+        selected={null}
+        onSelect={vi.fn()}
+      />
+    );
+    const { rerender } = render(list(true));
+    await userEvent.click(
+      screen.getByRole("combobox", { name: "Languages shown" })
+    );
+    await userEvent.click(
+      screen.getByRole("option", { name: "All languages" })
+    );
+    expect(
+      screen.getByRole("button", { name: /Version 1/ })
+    ).toBeInTheDocument();
+
+    rerender(list(false));
+    expect(screen.queryByRole("button", { name: /Version 1/ })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /Version 2/ })
+    ).toBeInTheDocument();
+  });
+
   it("ends the preview of a version the language view stops showing", async () => {
     const onClearSelection = vi.fn();
     renderList(versions, [], {

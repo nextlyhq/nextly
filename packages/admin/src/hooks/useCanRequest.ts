@@ -1,7 +1,10 @@
+import { LOCALE_PARAM } from "@admin/constants/search-params";
+
 import {
   useCurrentUserPermissions,
   type CollectionAccess,
 } from "./useCurrentUserPermissions";
+import { useLocaleParam } from "./useLocaleParam";
 import { useLocalization } from "./useLocalization";
 
 /**
@@ -58,4 +61,21 @@ export function useCompareLanguage(
   const { defaultLocale } = useLocalization();
   const narrowed = useHistoryLanguage(slug, defaultLocale);
   return asked ?? narrowed;
+}
+
+/**
+ * {@link useAsksTranslationStatus} for a read sent in the default language,
+ * as quick edit sends one. The answer in hand is for the content language on
+ * screen, and a rule may answer by language, so it speaks for a default
+ * language read only while that is the language on screen; elsewhere the read
+ * asks no state rather than risk the server refusing it.
+ */
+export function useDefaultLanguageAsksTranslationStatus(slug: string): boolean {
+  const asksTranslationStatus = useAsksTranslationStatus(slug);
+  const onScreen = useLocaleParam(LOCALE_PARAM);
+  const { defaultLocale } = useLocalization();
+  return (
+    asksTranslationStatus &&
+    (onScreen === undefined || onScreen === defaultLocale)
+  );
 }

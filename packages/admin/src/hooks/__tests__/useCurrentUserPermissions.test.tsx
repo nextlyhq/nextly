@@ -1073,6 +1073,38 @@ describe("the end the permission list names", () => {
     ).toBeGreaterThan(before);
   });
 
+  it("settles when a newer permission list drops an end the content answer still names", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Both answers name the end of an assignment a minute away.
+    const end = Date.now() + 60_000;
+    server.capabilities = answering({ read: true }, end);
+    server.permissions = { ...EDITOR, validUntil: end };
+    const client = newClient();
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+    await waitFor(() => expect(result.current.hasAnswer).toBe(true));
+
+    // Only the permission list is asked again, and its newer answer names no
+    // end, while the content answer, not asked again, still names it.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    server.permissions = { ...EDITOR, validUntil: null };
+    await act(async () => {
+      await client.invalidateQueries({
+        queryKey: CURRENT_USER_PERMISSIONS_KEY,
+      });
+    });
+
+    // The hook settles on the answers in hand rather than setting its ends
+    // again on every render.
+    await waitFor(() => expect(result.current.hasAnswer).toBe(true));
+    expect(result.current.content.hasAnswer).toBe(true);
+    expect(result.current.hasPermission("read-posts")).toBe(true);
+  });
+
   it("keeps an end until an answer newer than the one that named it leaves it out", () => {
     const end = 5_000;
     const named = [{ end, namedAt: 100 }];
