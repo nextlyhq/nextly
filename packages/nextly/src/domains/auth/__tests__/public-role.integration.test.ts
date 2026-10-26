@@ -1,9 +1,9 @@
 /**
  * The Public role: the role every visitor is judged by.
  *
- * Boot seeding creates it once, as a built-in role holding nothing. It is the
- * one built-in role whose permissions an owner may set; everything else about
- * it is locked. It is never deleted or renamed, never given to a person or an
+ * Boot seeding creates it once, as a built-in role holding only the reads
+ * code opens to anyone (none here) and `read-media`. It is the one built-in
+ * role whose permissions an owner may set; everything else about it is locked. It is never deleted or renamed, never given to a person or an
  * API key, and never joined to another role's inheritance in either direction,
  * since a visitor holds exactly what Public holds and nothing it could reach
  * through another role.
@@ -140,7 +140,7 @@ async function asBeforePublic(nextly: TestNextly, roleId?: string) {
 }
 
 describe.each(getConfiguredTestDialects())("the Public role (%s)", dialect => {
-  it("is created by boot seeding as a built-in role holding nothing", async () => {
+  it("is created by boot seeding as a built-in role holding only read-media", async () => {
     const nextly = await boot(dialect);
     await seedPermissionsAndRolePresets();
 
@@ -149,7 +149,8 @@ describe.each(getConfiguredTestDialects())("the Public role (%s)", dialect => {
       id,
       isSystem: true,
     });
-    expect(await permissionsOf(nextly, id)).toEqual([]);
+    const held = await services(nextly).rolePermissions.listRolePermissions(id);
+    expect(held.map(p => `${p.action}-${p.resource}`)).toEqual(["read-media"]);
 
     // Seeding again leaves the one role as it was.
     await seedPermissionsAndRolePresets();

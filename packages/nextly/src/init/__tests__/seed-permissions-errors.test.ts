@@ -15,6 +15,7 @@ const error = vi.fn();
 const seedSystemPermissions = vi.fn();
 const seedRolePresets = vi.fn();
 const seedPublicRole = vi.fn();
+const seedPublicReadGrants = vi.fn();
 const seedPluginRoles = vi.fn();
 
 vi.mock("../../di/service-access", () => ({
@@ -43,7 +44,13 @@ vi.mock("../../di/service-access", () => ({
   },
 }));
 vi.mock("../../database/seeders/role-presets", () => ({ seedRolePresets }));
-vi.mock("../../domains/auth/services/public-role", () => ({ seedPublicRole }));
+vi.mock("../../domains/auth/services/public-role", () => ({
+  PUBLIC_ROLE_SLUG: "public",
+  seedPublicRole,
+}));
+vi.mock("../../domains/auth/services/public-read-grant", () => ({
+  seedPublicReadGrants,
+}));
 vi.mock("../../plugins/roles/seed-roles", () => ({ seedPluginRoles }));
 
 const { awaitBootSeeding, holdBootSeeding, seedPermissionsAndRolePresets } =
@@ -67,6 +74,7 @@ beforeEach(() => {
   seedSystemPermissions.mockResolvedValue(seeded());
   seedRolePresets.mockResolvedValue(undefined);
   seedPublicRole.mockResolvedValue(undefined);
+  seedPublicReadGrants.mockResolvedValue(undefined);
   seedPluginRoles.mockResolvedValue(undefined);
 });
 
@@ -184,6 +192,19 @@ describe("seedPermissionsAndRolePresets", () => {
     ]);
     // The role visitors are judged by is made whatever the steps before it did.
     expect(seedPublicRole).toHaveBeenCalled();
+    // Its reads wait for it.
+    expect(seedPublicReadGrants).not.toHaveBeenCalled();
+  });
+
+  it("logs a failure of the Public role's reads the same way, and goes on", async () => {
+    seedPublicReadGrants.mockRejectedValue(new Error("connection reset"));
+
+    await seedPermissionsAndRolePresets();
+
+    expect(error.mock.calls.map(call => String(call[0]))).toEqual([
+      expect.stringContaining("Seeding public role's reads failed"),
+    ]);
+    expect(seedPluginRoles).toHaveBeenCalled();
   });
 
   it("writes nothing during a production build", async () => {
@@ -196,6 +217,7 @@ describe("seedPermissionsAndRolePresets", () => {
     expect(seedSystemPermissions).not.toHaveBeenCalled();
     expect(seedRolePresets).not.toHaveBeenCalled();
     expect(seedPublicRole).not.toHaveBeenCalled();
+    expect(seedPublicReadGrants).not.toHaveBeenCalled();
     expect(seedPluginRoles).not.toHaveBeenCalled();
   });
 
