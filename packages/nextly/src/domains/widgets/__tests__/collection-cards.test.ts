@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  collectionDefaultForReader,
   collectionSettingsToken,
   collectionWidgets,
   unreadableCollectionCard,
@@ -125,5 +126,48 @@ describe("the Collection settings as scope-token inputs", () => {
 
   it("is the same for the same declaration", () => {
     expect(token({ ...pinnedSetting })).toEqual(token(pinnedSetting));
+  });
+});
+
+describe("a declaration as a reader is told it", () => {
+  const limit: AnyWidgetSetting = {
+    name: "limit",
+    type: "number",
+    defaultValue: 5,
+  };
+  const declaration = (setting: AnyWidgetSetting) => ({
+    id: "acme/pinned",
+    settings: [setting, limit],
+  });
+
+  it("withholds a Collection setting's default naming a collection the reader may not read", () => {
+    // 🔴 Shipped as declared, the slug tells the reader of a collection they
+    // may not read, whether or not they hold a card.
+    const told = collectionDefaultForReader(
+      declaration(pinnedSetting),
+      new Set(["posts"])
+    );
+    expect(told.settings).toEqual([
+      { name: "source", type: "collection", label: "Collection" },
+      limit,
+    ]);
+    expect(JSON.stringify(told)).not.toContain("secret");
+  });
+
+  it("ships the same declaration when its default names a collection the reader may read", () => {
+    // The must-differ half: the same declaration, for a reader who may read it.
+    const whole = declaration(pinnedSetting);
+    expect(collectionDefaultForReader(whole, new Set(["secret"]))).toBe(whole);
+  });
+
+  it("keeps a default that names no collection, and a declaration with no Collection setting", () => {
+    const everything = declaration({ ...pinnedSetting, defaultValue: "*" });
+    expect(collectionDefaultForReader(everything, new Set())).toBe(everything);
+    const plain = { id: "core/team", settings: [limit] };
+    expect(collectionDefaultForReader(plain, new Set())).toBe(plain);
+    const bare: { id: string; settings?: readonly AnyWidgetSetting[] } = {
+      id: "core/note",
+    };
+    expect(collectionDefaultForReader(bare, new Set())).toBe(bare);
   });
 });
