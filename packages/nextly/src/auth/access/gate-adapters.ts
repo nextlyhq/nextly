@@ -356,19 +356,19 @@ function asksReadRuleAgain(
 }
 
 /**
- * Everything about an actor a rule is told (`ruleContext`), as a question
- * kept for the request names it: who it is, and for staff and keys their
- * roles and their grants. Two scopes of one key owner that hold different
- * grants are two questions, so a narrower one never reuses a wider one's
- * answer.
+ * What a rule is told about an actor (`ruleContext`), as a question kept for
+ * the request names it, and nothing it is not told: a signed-in user and a
+ * key are each the user id, the roles and the grants' slugs; a plugin person
+ * is the person; a visitor is told nothing. So a narrower scope never reuses
+ * a wider one's answer, and two asks that hand the rule the same context,
+ * whichever way they built the actor, share one.
  */
 function ruleContextKeyOf(actor: Exclude<Actor, { kind: "system" }>): string {
   switch (actor.kind) {
     case "user":
     case "key":
       return JSON.stringify([
-        actor.kind,
-        actor.kind === "key" ? actor.keyId : "",
+        "staff",
         actor.userId,
         [...actor.roles].sort(),
         actor.permissions.map(grant => grant.slug).sort(),
