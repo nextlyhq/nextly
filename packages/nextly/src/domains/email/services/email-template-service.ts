@@ -62,6 +62,8 @@ import { checkTemplateEnvelope, type SavedCopies } from "../template-envelope";
 import {
   applyOwnerChoices,
   ownerChanges,
+  wholeTemplateChange,
+  wholeTemplateChoice,
   type OwnerChange,
   type OwnerChangeChoice,
 } from "../template-merge";
@@ -146,9 +148,6 @@ export interface OldEngineStatus {
   kept: boolean;
   reasons: Array<{ field: string; label: string; reason: string }>;
 }
-
-/** The format of every owner's version: plugins and core contribute coded templates. */
-const OWNERS_FORMAT = { format: "code", blocks: null } as const;
 
 /** Legacy reserved slugs migrated into the unified layout row on boot. */
 const LEGACY_HEADER_SLUG = "_email-header";
@@ -339,6 +338,18 @@ export interface OwnerUpdateUndo {
    */
   applied: string;
   appliedBase: string;
+}
+
+/**
+ * Whether an owner's update to this override is reviewed as a whole, the
+ * site's version or the owner's: when it is written in blocks on either
+ * side, until blocks are reviewed one by one.
+ */
+function reviewedWhole(
+  record: Pick<EmailTemplateRecord, "format" | "blocks">,
+  entry: OwnedTemplate
+): boolean {
+  return storedFormat(record).format === "written" || !!entry.blocks;
 }
 
 /** A stored row: the record's columns, with ownership as stored. */
@@ -1487,10 +1498,19 @@ export class EmailTemplateService extends BaseService {
     updateData: Record<string, unknown>
   ): boolean {
     if (record.owner.kind === "site" || record.overridden) return false;
-    return [...VERSION_FIELDS, ...DETAIL_FIELDS].some(
-      field =>
-        updateData[field] !== undefined &&
-        !sameStoredValue(updateData[field] ?? null, existing[field] ?? null)
+    // A written owner's template converted to code keeps its HTML, so only
+    // its format says it is no longer the owner's: following the owner would
+    // turn it back into blocks at the next boot.
+    const converted =
+      updateData.format !== undefined &&
+      updateData.format !== storedFormat(existing).format;
+    return (
+      converted ||
+      [...VERSION_FIELDS, ...DETAIL_FIELDS].some(
+        field =>
+          updateData[field] !== undefined &&
+          !sameStoredValue(updateData[field] ?? null, existing[field] ?? null)
+      )
     );
   }
 
@@ -1709,13 +1729,17 @@ export class EmailTemplateService extends BaseService {
    * change the owner made since the override started.
    */
   async compareTemplate(id: string): Promise<EmailTemplateComparison> {
-    const { entry, base, mine } = await this.reviewOf(id);
+    const { record, entry, base, mine } = await this.reviewOf(id);
     return {
       base,
       // A copy: the registry's own version must not change with a caller's.
       theirs: versionOf(entry.version),
       mine,
-      changes: ownerChanges(base, entry.version, mine),
+      changes: reviewedWhole(record, entry)
+        ? record.ownerChanged
+          ? [wholeTemplateChange(base, entry.version, mine)]
+          : []
+        : ownerChanges(base, entry.version, mine),
       review: reviewToken(base, entry.version, mine),
     };
   }
@@ -1739,7 +1763,17 @@ export class EmailTemplateService extends BaseService {
     if (reviewToken(base, entry.version, mine) !== review) {
       throw changedSince("reviewed", id, record.slug);
     }
-    const merged = applyOwnerChoices(base, entry.version, mine, choices);
+    // A template written on either side is reviewed whole: the site's
+    // version and blocks, or the owner's.
+    let merged: EmailTemplateVersion;
+    let blocks = record.blocks;
+    if (reviewedWhole(record, entry)) {
+      const use = wholeTemplateChoice(choices, record.ownerChanged);
+      merged = use === "theirs" ? versionOf(entry.version) : mine;
+      if (use === "theirs") blocks = entry.blocks ?? null;
+    } else {
+      merged = applyOwnerChoices(base, entry.version, mine, choices);
+    }
     this.assertLayoutMarker(row.kind, merged.htmlContent);
 
     await this.writeSitesVersion(
@@ -1755,7 +1789,7 @@ export class EmailTemplateService extends BaseService {
           details: row.baseVersion?.details ?? detailsOf(entry.defaults),
         },
       },
-      record.blocks
+      blocks
     );
 
     await this.recordActivity({
@@ -2227,8 +2261,10 @@ export class EmailTemplateService extends BaseService {
     return {
       ...entry.version,
       kind: entry.defaults.kind ?? "template",
-      // An owner's version is coded, so writing it replaces a site's blocks.
-      ...OWNERS_FORMAT,
+      // The owner's format with its version, so writing it replaces a site's
+      // blocks with the owner's, or with none for a coded owner.
+      format: entry.blocks ? ("written" as const) : ("code" as const),
+      blocks: entry.blocks ?? null,
       ...detailsOf(entry.defaults),
     };
   }
@@ -2336,7 +2372,7 @@ export class EmailTemplateService extends BaseService {
     // A row holding one of the owner's earlier versions was never edited,
     // only not brought up to date, so it follows the owner too.
     const keepSitesVersion =
-      !isOwnersVersion(entry, versionOf(row)) ||
+      !isOwnersVersion(entry, versionOf(row), storedFormat(row).blocks) ||
       (firstTime && this.registry.setInCode.has(row.slug)) ||
       row.overridden === true;
     const owner = storedOwner(entry.owner);

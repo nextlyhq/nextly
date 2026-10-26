@@ -9,6 +9,7 @@ import type {
 import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-field";
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { RegisteredEmailProvider } from "../domains/email/provider-definition";
+import type { WrittenDocument } from "../domains/email/written/document";
 import type { AnyJobDefinition } from "../domains/jobs/job-registry";
 import type { LimitRule } from "../domains/limits/limit-rules";
 import type { SchemaHook } from "../domains/schema/extension/draft";
@@ -146,8 +147,20 @@ export interface PluginEmailTemplate {
   name: string;
   /** Subject line; supports `{{variable}}` interpolation. */
   subject: string;
-  /** HTML body; supports `{{variable}}` interpolation. */
-  htmlContent: string;
+  /**
+   * HTML body; supports `{{variable}}` interpolation. Give this or `blocks`,
+   * never both.
+   */
+  htmlContent?: string;
+  /**
+   * @experimental The template written in blocks instead of HTML, as the
+   * admin's written editor stores it (`{ version: 1, blocks }`). Its HTML and
+   * plain text are written from the blocks, so give neither with it. Both or
+   * neither of `htmlContent` and `blocks`, blocks that don't pass the
+   * written rules, or `engine: "legacy"` with blocks (a written template is
+   * always Liquid) are refused at startup.
+   */
+  blocks?: WrittenDocument;
   plainTextContent?: string;
   variables?: Array<{ name: string; description?: string; required?: boolean }>;
   /** Wrap with the shared layout; default true. */
