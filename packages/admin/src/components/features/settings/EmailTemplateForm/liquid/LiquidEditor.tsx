@@ -23,9 +23,11 @@ import CodeMirror, {
   EditorState,
   EditorView,
   ExternalChange,
+  StateEffect,
   type Transaction,
 } from "@uiw/react-codemirror";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -40,11 +42,14 @@ import {
   nextlyHighlighting,
 } from "@admin/lib/code-highlight";
 
+import { SUPPLIED_VARIABLE_NAMES } from "../sample-data";
+
 import {
   emailCompletionSource,
   type CompletionData,
 } from "./liquid-completion";
 import { liquidProblems, type LiquidProblem } from "./liquid-problems";
+import { missingValues } from "./liquid-variables";
 
 export interface LiquidEditorProps {
   value: string;
@@ -137,6 +142,10 @@ const inputLike = EditorView.theme({
  * Completion and live problems, for text that is Liquid. In the HTML body the
  * marks also include the admin's HTML tag check, which the body had before it
  * read Liquid; the problem list stays Liquid's, the ones a save refuses.
+ *
+ * A template that parses also has its blank spots marked, as warnings: a
+ * variable written out with no value in the test data and no `| default:`
+ * fallback. They don't stop a save, so they stay out of the problem list.
  */
 function liquidTooling(
   completionRef: MutableRefObject<CompletionData>,
@@ -151,7 +160,8 @@ function liquidTooling(
     }),
     linter(
       view => {
-        const problems = liquidProblems(view.state.doc.toString());
+        const doc = view.state.doc.toString();
+        const problems = liquidProblems(doc);
         problemsRef.current?.(problems);
         const liquidMarks = problems.map(
           (problem): Diagnostic => ({
@@ -161,14 +171,39 @@ function liquidTooling(
             message: problem.message,
           })
         );
+        const blankMarks =
+          problems.length > 0
+            ? []
+            : missingValues(
+                doc,
+                completionRef.current.sample,
+                SUPPLIED_VARIABLE_NAMES
+              ).map(
+                (use): Diagnostic => ({
+                  from: use.from,
+                  to: use.to,
+                  severity: "warning",
+                  message: `{{${use.path}}} has no test value and no fallback, so it shows blank.`,
+                })
+              );
         return mode === "html"
-          ? [...liquidMarks, ...xmlLinter(view)]
-          : liquidMarks;
+          ? [...liquidMarks, ...blankMarks, ...xmlLinter(view)]
+          : [...liquidMarks, ...blankMarks];
       },
-      { delay: 300 }
+      {
+        delay: 300,
+        // The blank marks read the test data, which isn't the document.
+        needsRefresh: update =>
+          update.transactions.some(tr =>
+            tr.effects.some(effect => effect.is(testDataChanged))
+          ),
+      }
     ),
   ];
 }
+
+/** Told to the editor when its test data changes, so its marks are checked again. */
+const testDataChanged = StateEffect.define<null>();
 
 /** The grammar: Liquid (inside HTML for the body), or plain HTML or text. */
 function language(isLiquid: boolean, mode: LiquidEditorProps["mode"]) {
@@ -286,6 +321,21 @@ export function LiquidEditor(props: LiquidEditorProps): JSX.Element {
     singleLine,
     disabled
   );
+  // The blank marks read the test data, which isn't the document: when it
+  // changes, they are checked again.
+  const viewRef = useRef<EditorView | null>(null);
+  const { onCreateEditor } = props;
+  const keepView = useCallback(
+    (view: EditorView) => {
+      viewRef.current = view;
+      onCreateEditor?.(view);
+    },
+    [onCreateEditor]
+  );
+  const sample = props.completion.sample;
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: testDataChanged.of(null) });
+  }, [sample]);
 
   return (
     <CodeMirror
@@ -305,7 +355,7 @@ export function LiquidEditor(props: LiquidEditorProps): JSX.Element {
       readOnly={disabled || props.readOnly}
       basicSetup={setupFor(singleLine, props.readOnly)}
       placeholder={props.placeholder}
-      onCreateEditor={props.onCreateEditor}
+      onCreateEditor={keepView}
       className="overflow-hidden rounded-md border border-input"
     />
   );

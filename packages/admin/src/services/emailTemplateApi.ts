@@ -33,7 +33,42 @@ export interface EmailTemplateVariable {
   name: string;
   description: string;
   required?: boolean;
+  /** What kind of value it holds; text when absent. */
+  type?: EmailTemplateVariableType;
+  /** A friendly name for the editor. */
+  label?: string;
+  /** A value of its type, the editor's starting test data. */
+  example?: unknown;
+  /** The fields of each item of a list, or of an object. */
+  fields?: EmailTemplateVariableField[];
 }
+
+/** The kinds of value a declared variable may hold. */
+export type EmailTemplateVariableType =
+  | "text"
+  | "number"
+  | "date"
+  | "money"
+  | "link"
+  | "boolean"
+  | "list"
+  | "object";
+
+/** A field of a list's items or of an object variable. */
+export interface EmailTemplateVariableField {
+  name: string;
+  description?: string;
+  type?: EmailTemplateVariableType;
+  label?: string;
+  example?: unknown;
+  fields?: EmailTemplateVariableField[];
+}
+
+/** The part of a declaration that only shapes the editor's test data. */
+export type EmailTemplateVariablePresentation = Pick<
+  EmailTemplateVariable,
+  "type" | "label" | "example" | "fields"
+>;
 
 export interface EmailTemplateAttachment {
   mediaId: string;

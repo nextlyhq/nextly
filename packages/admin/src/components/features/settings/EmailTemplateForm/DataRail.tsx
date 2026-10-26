@@ -3,6 +3,8 @@
 import { Badge, Button } from "@nextlyhq/ui";
 import { Suspense, lazy, useId, type JSX } from "react";
 
+import type { TemplateVariableCheck } from "./useTemplateVariables";
+
 // The admin's code editor, which reads and checks JSON; loaded with the panel.
 const CodeMirrorEditor = lazy(() =>
   import(
@@ -19,13 +21,16 @@ export function DataRail({
   onSampleChange,
   onReset,
   sampleError,
-  unknownVariables,
+  check,
+  onDeclare,
 }: {
   sampleText: string;
   onSampleChange: (v: string) => void;
   onReset: () => void;
   sampleError: string | null;
-  unknownVariables: string[];
+  check: TemplateVariableCheck;
+  /** Declare a variable the template uses; absent where declarations are locked. */
+  onDeclare?: (name: string) => void;
 }): JSX.Element {
   const errorId = useId();
   return (
@@ -83,29 +88,74 @@ export function DataRail({
         ) : null}
       </div>
 
-      <div>
-        <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="space-y-2" data-testid="variable-check">
+        <h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Variable check
         </h4>
-        {unknownVariables.length > 0 ? (
+        {check.undeclared.length > 0 ? (
           // Full-strength status border so the boundary is perceivable.
-          <div className="rounded-md border border-warning bg-warning/10 p-3">
+          <div
+            className="rounded-md border border-warning bg-warning/10 p-3"
+            data-testid="undeclared-variables"
+          >
+            <p className="text-xs text-foreground">Used but not declared:</p>
+            <ul className="mt-2 space-y-1.5">
+              {check.undeclared.map(variable => (
+                <li
+                  key={variable.name}
+                  className="flex flex-wrap items-center gap-1.5"
+                >
+                  {variable.paths.map(path => (
+                    <Badge
+                      key={path}
+                      variant="outline"
+                      className="font-mono text-xs"
+                    >
+                      {`{{${path}}}`}
+                    </Badge>
+                  ))}
+                  {onDeclare ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => onDeclare(variable.name)}
+                    >
+                      Declare {variable.name}
+                    </Button>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {check.missing.length > 0 ? (
+          <div
+            className="rounded-md border border-warning bg-warning/10 p-3"
+            data-testid="missing-values"
+          >
             <p className="text-xs text-foreground">
-              Used but not declared or sampled (renders blank):
+              No test value and no fallback, so these show blank:
             </p>
             <div className="mt-2 flex flex-wrap gap-1.5">
-              {unknownVariables.map(n => (
-                <Badge key={n} variant="outline" className="font-mono text-xs">
-                  {`{{${n}}}`}
+              {check.missing.map(path => (
+                <Badge
+                  key={path}
+                  variant="outline"
+                  className="font-mono text-xs"
+                >
+                  {`{{${path}}}`}
                 </Badge>
               ))}
             </div>
           </div>
-        ) : (
+        ) : null}
+        {check.undeclared.length === 0 && check.missing.length === 0 ? (
           <p className="rounded-md border border-border bg-muted p-3 text-xs text-muted-foreground">
-            All referenced variables are declared or sampled.
+            Every variable used is declared and has a value.
           </p>
-        )}
+        ) : null}
       </div>
     </div>
   );

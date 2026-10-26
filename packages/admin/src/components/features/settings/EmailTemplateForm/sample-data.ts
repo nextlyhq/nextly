@@ -14,6 +14,16 @@ export const BUILT_IN_VARIABLES: {
   { name: "year", description: "Current year" },
 ];
 
+/**
+ * Names the send supplies itself, never the template's sender: the built-ins
+ * above and the brand settings (`nextly_brand`). The workbench neither asks
+ * for them to be declared nor marks them blank.
+ */
+export const SUPPLIED_VARIABLE_NAMES: ReadonlySet<string> = new Set([
+  ...BUILT_IN_VARIABLES.map(variable => variable.name),
+  "nextly_brand",
+]);
+
 const SAMPLE_VALUE_BY_NAME: Record<string, string> = {
   appName: "Northwind",
   year: String(new Date().getFullYear()),
