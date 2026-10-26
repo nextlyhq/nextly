@@ -477,7 +477,14 @@ export function authorizeCaller(
   // The route gate's answer, asked of the one decision: a key on its own
   // grants and the entity's rule, a session through the access-control
   // service's rules and its permissions, as this gate has always judged them.
-  return authorizeBy(routeGateVerdict, authResult, action, resource, scope);
+  return authorizeBy(
+    routeGateVerdict,
+    authResult,
+    action,
+    resource,
+    scope,
+    appliesFilter
+  );
 }
 
 /**
@@ -501,12 +508,16 @@ async function authorizeBy(
     auth: AuthContext,
     action: string,
     resource: string,
-    rules: RouteRules
+    rules: RouteRules,
+    // Whether the route's handler applies a read rule's filter; a verdict on
+    // the grant alone reads no rule, and has no filter to hand back.
+    appliesFilter?: boolean
   ) => Promise<GateVerdict>,
   authResult: AuthContext,
   action: string,
   resource: string,
-  scope: RefusalScope
+  scope: RefusalScope,
+  appliesFilter = false
 ): Promise<AuthContext | ErrorResponse> {
   const verdict = await verdictOf(
     authResult,
