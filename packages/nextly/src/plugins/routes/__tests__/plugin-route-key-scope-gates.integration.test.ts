@@ -469,7 +469,7 @@ function post(
  *
  * Route params are strings, so the scope written into them recovered the stored
  * permission slugs and neither the caller's roles nor the rows a rule's
- * `resource:action` spelling comes from. Every gate reading it therefore judged
+ * permission list is built from. Every gate reading it therefore judged
  * an API key on a scope missing most of itself — in the direction that DENIES.
  */
 function restGet(
@@ -842,8 +842,8 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
     expect(
       body.may,
       "`can()` said the caller may not do what the same caller then did. It " +
-        "builds its own scope by hand, so the rows a rule's `resource:action` " +
-        "spelling derives from never reach it and every documented permission " +
+        "builds its own scope by hand, so the rows a rule's permission list " +
+        "is built from never reach it and every documented permission " +
         "predicate answers false."
     ).toBe(true);
   });
