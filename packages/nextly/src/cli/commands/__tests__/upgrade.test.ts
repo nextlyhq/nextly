@@ -7,6 +7,10 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { runUpgrade, type UpgradeAdapter } from "../upgrade";
+import { schemaEventsStep } from "../upgrade-steps/schema-events";
+
+/** The step these fixtures exercise: a fake adapter serves no content table. */
+const steps = [schemaEventsStep];
 
 /** Fake adapter over the in-memory SQLite fixture. */
 function makeAdapter(testDb: TestDb): UpgradeAdapter {
@@ -56,7 +60,7 @@ describe("nextly upgrade (sqlite)", () => {
   });
 
   it("creates the events table, backfills file_apply rows, and drops the legacy table", async () => {
-    await runUpgrade({ confirmBackedUp: true }, { adapter });
+    await runUpgrade({ confirmBackedUp: true }, { adapter, steps });
 
     expect(tableExistsSync(testDb, "nextly_schema_events")).toBe(true);
     expect(tableExistsSync(testDb, "nextly_migrations")).toBe(false);
@@ -66,9 +70,9 @@ describe("nextly upgrade (sqlite)", () => {
   });
 
   it("is idempotent — a second run reports already-upgraded and does not throw", async () => {
-    await runUpgrade({ confirmBackedUp: true }, { adapter });
+    await runUpgrade({ confirmBackedUp: true }, { adapter, steps });
     await expect(
-      runUpgrade({ confirmBackedUp: true }, { adapter })
+      runUpgrade({ confirmBackedUp: true }, { adapter, steps })
     ).resolves.toBeUndefined();
   });
 
@@ -78,13 +82,13 @@ describe("nextly upgrade (sqlite)", () => {
       "CREATE TABLE nextly_schema_events (totally_wrong INTEGER)"
     );
     await expect(
-      runUpgrade({ confirmBackedUp: true }, { adapter })
+      runUpgrade({ confirmBackedUp: true }, { adapter, steps })
     ).rejects.toMatchObject({ code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION" });
   });
 
   it("requires --confirm-backed-up in non-TTY", async () => {
     await expect(
-      runUpgrade({ confirmBackedUp: false }, { adapter, isTTY: false })
+      runUpgrade({ confirmBackedUp: false }, { adapter, isTTY: false, steps })
     ).rejects.toBeTruthy();
   });
 });

@@ -516,6 +516,82 @@ export function storedPasswordValues(
   return found;
 }
 
+/**
+ * Read a stored value's passwords for {@link storedPlainPasswords} and
+ * {@link hashStoredPlainPasswords}: each one `isHashed` doesn't recognise, in
+ * the order the walk meets them. A blank value is not a password, as a write
+ * reads one. An instance of a field group `reach` has no fields for, or an
+ * untyped zone row, is left as it is, since its passwords cannot be told
+ * from its other values.
+ */
+function visitStoredPlainPasswords(
+  data: Record<string, unknown>,
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
+  isHashed: (value: string) => boolean,
+  visit: (level: Record<string, unknown>, name: string, value: string) => void
+): void {
+  walkPasswordLevels(data, fields, {
+    reach,
+    onUnknown: () => false,
+    untypedZoneRows: "unknown",
+    level: (level, levelFields) => {
+      for (const name of passwordNames(levelFields)) {
+        const value = level[name];
+        if (typeof value !== "string" || value.trim() === "") continue;
+        if (!isHashed(value)) visit(level, name, value);
+      }
+    },
+  });
+}
+
+/**
+ * The passwords `data` holds as given, at every depth: one entry for each
+ * value `isHashed` does not recognise as a hash. What
+ * {@link hashStoredPlainPasswords} would hash, without changing anything.
+ */
+export function storedPlainPasswords(
+  data: Record<string, unknown>,
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
+  isHashed: (value: string) => boolean
+): string[] {
+  const found: string[] = [];
+  visitStoredPlainPasswords(
+    detachForReading(data),
+    fields,
+    reach,
+    isHashed,
+    (_level, _name, value) => found.push(value)
+  );
+  return found;
+}
+
+/**
+ * Hash in place each password {@link storedPlainPasswords} finds in `data`, so
+ * it still verifies, and return how many. Each occurrence gets a hash, and a
+ * salt, of its own. A container held as JSON text is written back as text.
+ */
+export async function hashStoredPlainPasswords(
+  data: Record<string, unknown>,
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
+  isHashed: (value: string) => boolean
+): Promise<number> {
+  // Hashing is asynchronous and the walk is not, so the values are read
+  // first and hashed, then put in place by a second walk, as
+  // `hashPasswordFieldValues` does.
+  const plain = storedPlainPasswords(data, fields, reach, isHashed);
+  if (plain.length === 0) return 0;
+  const hashes: string[] = [];
+  for (const value of plain) hashes.push(await hashPassword(value));
+  let next = 0;
+  visitStoredPlainPasswords(data, fields, reach, isHashed, (level, name) => {
+    level[name] = hashes[next++];
+  });
+  return plain.length;
+}
+
 /** A copy to walk, so reading what a value holds never rewrites it. */
 function detachForReading(
   data: Record<string, unknown>
