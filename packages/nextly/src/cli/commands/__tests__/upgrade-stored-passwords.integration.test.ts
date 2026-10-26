@@ -512,3 +512,101 @@ describe.each(getConfiguredTestDialects())(
     });
   }
 );
+
+describe.each(getConfiguredTestDialects())(
+  "nextly upgrade removes passwords kept in version history (%s)",
+  (dialect: TestDialect) => {
+    let t: TestNextly;
+    let trusted: Nextly;
+    const lines: string[] = [];
+
+    beforeAll(async () => {
+      t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "vpin",
+            fields: [text({ name: "heading" }), password({ name: "pin" })],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "upversioned",
+            versions: true,
+            fields: [
+              text({ name: "title" }),
+              group({
+                name: "own",
+                fields: [fieldGroup({ name: "held", component: "vpin" })],
+              }),
+            ],
+          }),
+        ],
+      } as never);
+      trusted = new Nextly();
+    }, 180_000);
+
+    afterAll(async () => {
+      await t?.destroy();
+    });
+
+    const versionsOf = (entryId: string) =>
+      t.adapter.select<Doc>("nextly_versions", {
+        where: { and: [{ column: "entryId", op: "=", value: entryId }] },
+      });
+
+    it("strips each password a version's snapshot holds, and reports only the count", async () => {
+      const { item } = await trusted.create({
+        collection: "upversioned",
+        data: { title: "v1", own: { held: { heading: "h" } } },
+      } as never);
+      const id = String(item.id);
+      await trusted.update({
+        collection: "upversioned",
+        id,
+        data: { title: "v2" },
+      } as never);
+      // Each snapshot as an earlier release could leave one: with the
+      // password a field group held inline in a group carried.
+      const versions = await versionsOf(id);
+      expect(versions.length).toBeGreaterThanOrEqual(2);
+      for (const version of versions) {
+        const snapshot = parsed(version.snapshot) as Doc;
+        snapshot.own = { held: { heading: "h", pin: "version-plain" } };
+        await t.adapter.update(
+          "nextly_versions",
+          { snapshot },
+          { and: [{ column: "id", op: "=", value: version.id as string }] }
+        );
+      }
+      // The control: every snapshot now holds it.
+      for (const version of await versionsOf(id)) {
+        expect(valuesAt(version.snapshot, "pin")).toEqual(["version-plain"]);
+      }
+
+      lines.length = 0;
+      await runUpgrade(
+        { confirmBackedUp: true },
+        {
+          adapter: t.adapter as unknown as UpgradeAdapter,
+          logger: {
+            info: msg => lines.push(msg),
+            warn: msg => lines.push(msg),
+          },
+        }
+      );
+
+      for (const version of await versionsOf(id)) {
+        expect(valuesAt(version.snapshot, "pin")).toEqual([]);
+        expect(valuesAt(version.snapshot, "heading")).toEqual(["h"]);
+      }
+      const output = lines.join("\n");
+      expect(output).toMatch(
+        new RegExp(
+          `remove passwords kept in version history: ${String(versions.length)}\\b`
+        )
+      );
+      expect(output).not.toContain("version-plain");
+    });
+  }
+);
