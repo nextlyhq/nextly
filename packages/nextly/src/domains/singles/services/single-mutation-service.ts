@@ -33,9 +33,8 @@ import type { HookRegistry } from "../../../hooks/hook-registry";
 import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { keysToSnakeCase, toSnakeCase } from "../../../lib/case-conversion";
 import {
-  isStatusOnlyWrite,
-  statusGate,
   stripImmutableSystemFields,
+  writeGateFor,
 } from "../../../lib/immutable-system-fields";
 import {
   LIFECYCLE_STATUSES,
@@ -1260,11 +1259,15 @@ export class SingleMutationService extends BaseService {
       // a publish or an unpublish alone, judged by the gate its status names
       // in place of update, whether or not the status moves. Any other field
       // it names is an edit, which needs update whatever its value.
-      const gate =
-        isStatusOnlyWrite(data, "single") &&
-        (singleMeta as { status?: boolean }).status === true
-          ? statusGate(data.status)
-          : "update";
+      const gate = await writeGateFor(
+        data,
+        "single",
+        () => (singleMeta as { status?: boolean }).status === true
+      );
+      // Handed on as the status alone: the system columns a status-only body
+      // may also name are never stored, and no hook is handed a value sent by
+      // a caller judged without update.
+      if (gate !== "update") data = { status: data.status };
       // A write to every language that publishes is judged as publishing
       // every language is, once in each language it puts live (asked below,
       // once its document is resolved and before any hook runs), not once in

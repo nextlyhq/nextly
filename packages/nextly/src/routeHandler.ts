@@ -24,6 +24,7 @@ import {
   requireAnyPermission,
   requireCollectionAccess,
   requireCollectionWriteAccess,
+  requireLifecycleAccess,
   admittedActionOf,
   createJsonErrorResponse,
   isErrorResponse,
@@ -935,8 +936,9 @@ function actionAskedBy(
 }
 
 /**
- * The routes that change only the status of every language, each judged by
- * its own action rather than update.
+ * The routes that change only the status of every language, each admitted on
+ * its own action's grant rather than update; the service asks that action's
+ * rule in each language the change puts live.
  */
 const LIFECYCLE_ROUTE_ACTIONS: Readonly<
   Record<string, "publish" | "unpublish">
@@ -974,9 +976,16 @@ async function resolveAuthorization(
           actionAskedBy(req, method, "collection", slug)
         );
       }
-      const action =
-        LIFECYCLE_ROUTE_ACTIONS[method] ?? getActionFromOperation(operation);
-      return requireCollectionAccess(req, action, slug, route);
+      const lifecycle = LIFECYCLE_ROUTE_ACTIONS[method];
+      if (lifecycle) {
+        return requireLifecycleAccess(req, lifecycle, slug, route);
+      }
+      return requireCollectionAccess(
+        req,
+        getActionFromOperation(operation),
+        slug,
+        route
+      );
     }
     if (method === "getCollection") {
       const slug = routeParams?.collectionName || "";
@@ -1027,12 +1036,11 @@ async function resolveAuthorization(
           actionAskedBy(req, method, "single", slug)
         );
       }
-      return requireCollectionAccess(
-        req,
-        LIFECYCLE_ROUTE_ACTIONS[method] ?? action,
-        slug,
-        route
-      );
+      const lifecycle = LIFECYCLE_ROUTE_ACTIONS[method];
+      if (lifecycle) {
+        return requireLifecycleAccess(req, lifecycle, slug, route);
+      }
+      return requireCollectionAccess(req, action, slug, route);
     }
     if (method === "getSingleSchema") {
       const slug = routeParams?.slug || "";

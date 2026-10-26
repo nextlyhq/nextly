@@ -79,6 +79,23 @@ export function statusGate(status: unknown): "publish" | "unpublish" {
 }
 
 /**
+ * The gate a write is judged by: where its body changes only the status of an
+ * entry with a lifecycle ({@link isStatusOnlyWrite}), the `publish` or
+ * `unpublish` its status names ({@link statusGate}), whether or not the status
+ * moves; otherwise `update`. `hasLifecycle` is asked only for a status-only
+ * body, so an ordinary edit never reads it.
+ */
+export async function writeGateFor(
+  body: Record<string, unknown>,
+  entity: WritableEntityKind,
+  hasLifecycle: () => boolean | Promise<boolean>
+): Promise<"update" | "publish" | "unpublish"> {
+  return isStatusOnlyWrite(body, entity) && (await hasLifecycle())
+    ? statusGate(body.status)
+    : "update";
+}
+
+/**
  * Whether a write's body changes nothing but the entry's status: it names
  * `status`, and every other key it names is a system column the write never
  * stores from a body ({@link immutableSystemFieldsFor}). Such a write is a

@@ -26,9 +26,13 @@ import {
   refusalMessageFor,
   type RefusalScope,
 } from "../access/refusal-message";
+import { EVERY_LOCALE } from "../../domains/i18n/locale-selector";
+import type { GateVerdict } from "../access/gate-adapters";
 import {
   anyPermissionVerdict,
   routeGateVerdict,
+  routeGrantVerdict,
+  type RouteRules,
 } from "../access/route-gate-adapters";
 import {
   everyLanguage,
@@ -461,7 +465,7 @@ export async function requirePermission(
  * before it can know which permission to ask for judges the caller it already
  * holds here, so the request is counted once.
  */
-export async function authorizeCaller(
+export function authorizeCaller(
   authResult: AuthContext,
   action: string,
   resource: string,
@@ -471,7 +475,38 @@ export async function authorizeCaller(
   // The route gate's answer, asked of the one decision: a key on its own
   // grants and the entity's rule, a session through the access-control
   // service's rules and its permissions, as this gate has always judged them.
-  const verdict = await routeGateVerdict(
+  return authorizeBy(routeGateVerdict, authResult, action, resource, scope);
+}
+
+/**
+ * {@link authorizeCaller} by the grant alone, its rule not read
+ * ({@link routeGrantVerdict}): for a publish or an unpublish of every
+ * language, whose rule the service asks in each language the change puts
+ * live. Refused as `authorizeCaller` refuses, a caller who may not read the
+ * entry it names answered as if it were missing.
+ */
+function authorizeCallerOnGrant(
+  authResult: AuthContext,
+  action: string,
+  resource: string,
+  scope: RefusalScope
+): Promise<AuthContext | ErrorResponse> {
+  return authorizeBy(routeGrantVerdict, authResult, action, resource, scope);
+}
+
+async function authorizeBy(
+  verdictOf: (
+    auth: AuthContext,
+    action: string,
+    resource: string,
+    rules: RouteRules
+  ) => Promise<GateVerdict>,
+  authResult: AuthContext,
+  action: string,
+  resource: string,
+  scope: RefusalScope
+): Promise<AuthContext | ErrorResponse> {
+  const verdict = await verdictOf(
     authResult,
     action,
     resource,
@@ -832,6 +867,32 @@ export async function requireCollectionAccess(
   );
 }
 
+/**
+ * The access check for a route that publishes or unpublishes every language
+ * of an entry or a Single: by the grant alone, since the service asks the
+ * rule once in each language the change puts live, which the route cannot
+ * know. Told every language here, a rule refusing a language that does not go
+ * live would refuse what the service allows.
+ */
+export async function requireLifecycleAccess(
+  req: Request,
+  action: "publish" | "unpublish",
+  collectionSlug: string,
+  operation?: RouteOperation
+): Promise<AuthContext | ErrorResponse> {
+  const authResult = await requireAuthentication(req);
+  if ("statusCode" in authResult) return authResult;
+  // The languages still matter to the read a refusal is answered by.
+  return withRuleLanguage(requestLanguage(operation), () =>
+    authorizeCallerOnGrant(
+      authResult,
+      action,
+      collectionSlug,
+      operation?.namesOne ? "one" : "all"
+    )
+  );
+}
+
 /** The action a write route admitted each caller on, where it accepts several. */
 const admittedActions = new WeakMap<
   AuthContext,
@@ -878,14 +939,16 @@ export async function requireCollectionWriteAccess(
       admittedActions.set(asUpdate, "update");
       return asUpdate;
     }
+    // A write to every language (`?locale=*`) changes only the status, and
+    // its publish rule is asked by the service in each language it puts live;
+    // here, by the grant alone. Any other write's rule is asked here too.
+    const authorize =
+      operation?.params.locale === EVERY_LOCALE
+        ? authorizeCallerOnGrant
+        : authorizeCaller;
     const refusals = new Map<"publish" | "unpublish", ErrorResponse>();
     for (const action of ["publish", "unpublish"] as const) {
-      const answer = await authorizeCaller(
-        authResult,
-        action,
-        collectionSlug,
-        scope
-      );
+      const answer = await authorize(authResult, action, collectionSlug, scope);
       if (!isErrorResponse(answer)) {
         admittedActions.set(answer, action);
         return answer;

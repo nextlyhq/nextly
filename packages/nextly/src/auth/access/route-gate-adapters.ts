@@ -159,6 +159,22 @@ export function routeGateVerdict(
 }
 
 /**
+ * The verdict for one permission by the grant alone, no rule read: what a
+ * route asks of a publish or an unpublish of every language, whose rule the
+ * service asks once in each language the change puts live, which the route
+ * cannot know. Told every language here, a rule refusing a language that
+ * does not go live would refuse what the service allows.
+ */
+export function routeGrantVerdict(
+  auth: AuthContext,
+  action: string,
+  resource: string,
+  rules: RouteRules
+): Promise<GateVerdict> {
+  return permissionVerdict(callerOf(auth), action, resource, rules);
+}
+
+/**
  * The actions a collection's capabilities answer: every access operation, so
  * an operation the gates gain is answered here without an edit.
  */

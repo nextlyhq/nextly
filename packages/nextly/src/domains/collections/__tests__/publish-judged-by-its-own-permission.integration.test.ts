@@ -24,6 +24,7 @@ import { resetSessionStandingForTests } from "../../../auth/session/session-stan
 import { defineCollection, defineSingle, text } from "../../../config";
 import { Nextly } from "../../../direct-api/nextly";
 import { NextlyError } from "../../../errors/nextly-error";
+import { resetHookRegistry } from "../../../hooks/hook-registry";
 import {
   definePlugin,
   type PluginContext,
@@ -42,6 +43,8 @@ const POSTS = "posts";
 /** No draft/published lifecycle; its `status` is an ordinary field. */
 const NOTES = "notes";
 const HOME = "home";
+/** Its update rule answers a filter. */
+const FILTERED = "filtered";
 /** May read, publish and unpublish, and not update. */
 const PUBLISHER = "publisher-1";
 /** May read and update, and not publish. */
@@ -49,14 +52,22 @@ const EDITOR = "editor-1";
 /** May read, and not update, publish or unpublish. */
 const READER = "reader-1";
 
+/** A system column's value no hook should be handed from a status-only body. */
+const SENT_SYSTEM_VALUE = "1999-01-01T00:00:00.000Z";
+
 let current: TestNextly | undefined;
 let services: PluginServices | undefined;
+/** The data each update's hooks were handed, in order. */
+let handedToHooks: unknown[] = [];
 
 afterEach(async () => {
   resetSessionStandingForTests();
   await current?.destroy();
   current = undefined;
   services = undefined;
+  handedToHooks = [];
+  // Single hooks register into the global registry.
+  resetHookRegistry();
 });
 
 async function boot(dialect: TestDialect): Promise<TestNextly> {
@@ -74,17 +85,45 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       defineCollection({
         slug: POSTS,
         status: true,
+        hooks: {
+          beforeOperation: [
+            ({ operation, args }) => {
+              if (operation === "update") {
+                handedToHooks.push((args as { data?: unknown }).data);
+              }
+              return args;
+            },
+          ],
+        },
         fields: [text({ name: "title" })],
       }),
       defineCollection({
         slug: NOTES,
         fields: [text({ name: "title" }), text({ name: "status" })],
       }),
+      defineCollection({
+        slug: FILTERED,
+        status: true,
+        // An update rule answering a filter, which no write applies: an edit
+        // is refused, whoever asks.
+        access: {
+          update: (() => ({ title: { equals: "never" } })) as never,
+        },
+        fields: [text({ name: "title" })],
+      }),
     ],
     singles: [
       defineSingle({
         slug: HOME,
         status: true,
+        hooks: {
+          beforeChange: [
+            context => {
+              handedToHooks.push(context.data);
+              return context.data;
+            },
+          ],
+        },
         fields: [text({ name: "headline" })],
       }),
     ],
@@ -97,6 +136,56 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   await grantTo(current, PUBLISHER, "unpublish", [POSTS, NOTES, HOME]);
   await userWhoMay(current, EDITOR, "read", [POSTS]);
   await grantTo(current, EDITOR, "update", [POSTS]);
+  await userWhoMay(current, MAINTAINER, "read", [FILTERED]);
+  for (const action of ["update", "publish"]) {
+    await grantTo(current, MAINTAINER, action, [FILTERED]);
+  }
+  return current;
+}
+
+/** Localized, with a publish rule refusing anything that involves French. */
+const FRENCH_INVOLVED = "frenchinvolved";
+const FRENCH_INVOLVED_HOME = "frenchinvolvedhome";
+/** May read, update, publish and unpublish. */
+const MAINTAINER = "maintainer-1";
+
+/**
+ * A site in three languages whose publish rule refuses any publish told it
+ * involves French, so a publish of every language with no French going live
+ * is allowed and one with French is refused.
+ */
+async function bootLocalized(dialect: TestDialect): Promise<TestNextly> {
+  const frenchRefused = ({ locales }: { locales: readonly string[] }) =>
+    !locales.includes("fr");
+  current = await createTestNextly({
+    ...(dialect === "sqlite" ? {} : { dialect }),
+    localization: { locales: ["en", "fr", "de"], defaultLocale: "en" },
+    collections: [
+      defineCollection({
+        slug: FRENCH_INVOLVED,
+        localized: true,
+        status: true,
+        access: { publish: frenchRefused },
+        fields: [text({ name: "title" })],
+      }),
+    ],
+    singles: [
+      defineSingle({
+        slug: FRENCH_INVOLVED_HOME,
+        localized: true,
+        status: true,
+        access: { publish: frenchRefused },
+        fields: [text({ name: "headline" })],
+      }),
+    ],
+  });
+  const both = [FRENCH_INVOLVED, FRENCH_INVOLVED_HOME];
+  await userWhoMay(current, PUBLISHER, "read", both);
+  await grantTo(current, PUBLISHER, "publish", both);
+  await userWhoMay(current, MAINTAINER, "read", both);
+  for (const action of ["update", "publish", "unpublish"]) {
+    await grantTo(current, MAINTAINER, action, both);
+  }
   return current;
 }
 
@@ -136,9 +225,10 @@ async function stored(
 /** A REST write as `userId`, answered with its response. */
 async function restResponse(
   userId: string,
-  method: "PATCH",
+  method: "PATCH" | "POST",
   path: string[],
-  body: unknown
+  body: unknown,
+  query = ""
 ): Promise<Response> {
   const token = await signAccessToken(
     buildClaims({
@@ -156,7 +246,7 @@ async function restResponse(
     (request: Request, context: unknown) => Promise<Response>
   >;
   const res = await handlers[method]!(
-    new Request(`http://localhost/api/${path.join("/")}`, {
+    new Request(`http://localhost/api/${path.join("/")}${query}`, {
       method,
       headers: {
         cookie: `nextly_session=${token}`,
@@ -172,11 +262,12 @@ async function restResponse(
 /** A REST write as `userId`, answered with its status. */
 async function rest(
   userId: string,
-  method: "PATCH",
+  method: "PATCH" | "POST",
   path: string[],
-  body: unknown
+  body: unknown,
+  query = ""
 ): Promise<number> {
-  return (await restResponse(userId, method, path, body)).status;
+  return (await restResponse(userId, method, path, body, query)).status;
 }
 
 /** A REST write as `userId`, answered with its status and error message. */
@@ -446,6 +537,171 @@ describe.each(getConfiguredTestDialects())(
           )
         )
         .toEqual({ status: 403, message: "You can't edit this notes." });
+    });
+
+    it("asks publish of a status-only row in a batch, for a caller who may update", async () => {
+      await boot(dialect);
+      const live = await draft(POSTS, "live");
+      await trusted().update({
+        collection: POSTS,
+        id: live,
+        data: { status: "published" },
+      } as never);
+      const other = await draft(POSTS, "other");
+
+      // The editor may update and not publish. A row naming only the status
+      // the entry already has is a publish, refused though nothing would
+      // move; a row naming a field is an update, allowed.
+      const result = await pluginServices().collections.updateMany(
+        POSTS,
+        [
+          { id: live, data: { status: "published" } },
+          { id: other, data: { title: "edited" } },
+        ],
+        asPlugin(EDITOR)
+      );
+
+      expect(result.successful).toBe(1);
+      expect(result.failed).toBe(1);
+      expect((await stored(POSTS, other)).title).toBe("edited");
+    });
+
+    it("hands an entry's hooks a status-only write as the status alone", async () => {
+      await boot(dialect);
+      const id = await draft(POSTS, "t");
+      handedToHooks = [];
+
+      // System columns are never stored from a body, so naming them leaves
+      // the write a publish; nor is any hook handed what a caller judged
+      // without update sent for them.
+      await as(PUBLISHER).update({
+        collection: POSTS,
+        id,
+        data: { status: "published", id, createdAt: SENT_SYSTEM_VALUE },
+      } as never);
+
+      expect((await stored(POSTS, id)).status).toBe("published");
+      expect(handedToHooks).toEqual([{ status: "published" }]);
+    });
+
+    it("hands a Single's hooks a status-only write as the status alone", async () => {
+      await boot(dialect);
+      await trusted().updateSingle({
+        slug: HOME,
+        data: { headline: "h", status: "draft" },
+      } as never);
+      handedToHooks = [];
+
+      expect(
+        await rest(PUBLISHER, "PATCH", ["singles", HOME], {
+          status: "published",
+          updatedAt: SENT_SYSTEM_VALUE,
+        })
+      ).toBe(200);
+
+      expect(handedToHooks.length).toBeGreaterThan(0);
+      for (const data of handedToHooks) {
+        expect(JSON.stringify(data)).not.toContain(SENT_SYSTEM_VALUE);
+      }
+    });
+
+    it("judges a publish that also names a field by update's rule too, its filter included", async () => {
+      await boot(dialect);
+      const id = await draft(FILTERED, "t");
+
+      // The caller may update and publish. The write names a field, so it is
+      // an edit, judged by the update rule, whose filter no write applies.
+      await expect(
+        as(MAINTAINER).update({
+          collection: FILTERED,
+          id,
+          data: { status: "published", title: "edited" },
+        } as never)
+      ).rejects.toThrow();
+      expect(await stored(FILTERED, id)).toMatchObject({
+        title: "t",
+        status: "draft",
+      });
+
+      // The control: the status alone is a publish, judged by its own rule.
+      await as(MAINTAINER).update({
+        collection: FILTERED,
+        id,
+        data: { status: "published" },
+      } as never);
+      expect((await stored(FILTERED, id)).status).toBe("published");
+    });
+
+    it("admits a publish of every language over REST on the grant, asking the rule in each language", async () => {
+      await bootLocalized(dialect);
+      // English and German drafts, and no French: French does not go live.
+      const entryIn = async (title: string) => {
+        const id = await draft(FRENCH_INVOLVED, title);
+        await trusted().update({
+          collection: FRENCH_INVOLVED,
+          id,
+          locale: "de",
+          data: { title: "de" },
+        } as never);
+        return id;
+      };
+      const viaRoute = await entryIn("route");
+      const viaPatch = await entryIn("patch");
+      for (const locale of ["en", "de"]) {
+        await trusted().updateSingle({
+          slug: FRENCH_INVOLVED_HOME,
+          locale,
+          data: { headline: locale },
+        } as never);
+      }
+      const entry = (id: string) => [
+        "collections",
+        FRENCH_INVOLVED,
+        "entries",
+        id,
+      ];
+
+      // Publishing every language, as a caller who may also update.
+      expect(
+        await rest(MAINTAINER, "POST", [...entry(viaRoute), "publish-all"], {})
+      ).toBe(200);
+      expect((await stored(FRENCH_INVOLVED, viaRoute)).status).toBe(
+        "published"
+      );
+      expect(
+        await rest(
+          MAINTAINER,
+          "POST",
+          ["singles", FRENCH_INVOLVED_HOME, "publish-all"],
+          {}
+        )
+      ).toBe(200);
+      // A status-only write to every language, as a caller who may only
+      // publish.
+      expect(
+        await rest(
+          PUBLISHER,
+          "PATCH",
+          entry(viaPatch),
+          { status: "published" },
+          "?locale=*"
+        )
+      ).toBe(200);
+      expect((await stored(FRENCH_INVOLVED, viaPatch)).status).toBe(
+        "published"
+      );
+
+      // The control: with a French draft, French goes live and the service
+      // refuses it.
+      await trusted().update({
+        collection: FRENCH_INVOLVED,
+        id: viaRoute,
+        locale: "fr",
+        data: { title: "fr" },
+      } as never);
+      expect(
+        await rest(MAINTAINER, "POST", [...entry(viaRoute), "publish-all"], {})
+      ).toBe(403);
     });
   }
 );
