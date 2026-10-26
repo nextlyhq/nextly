@@ -371,7 +371,8 @@ describe.each(getConfiguredTestDialects())("the Public role (%s)", dialect => {
     expect(await permissionsOf(nextly, own.id)).toEqual([readMedia]);
     const created = await publicRoleId(nextly);
     expect(created).not.toBe(own.id);
-    expect(await permissionsOf(nextly, created)).toEqual([]);
+    // A new role, so boot seeding grants it `read-media` afresh.
+    expect(await permissionsOf(nextly, created)).toEqual([readMedia]);
   });
 
   it("takes a name of its own where a role of the site's is called Public", async () => {

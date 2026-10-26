@@ -29,14 +29,19 @@ import {
   withRuleLanguage,
   type RuleLanguage,
 } from "../../../auth/access/rule-language";
+import {
+  EVERY_LOCALE,
+  EVERY_TRANSLATION,
+} from "../../../domains/i18n/locale-selector";
 import { NextlyError } from "../../../errors/nextly-error";
 import { permissionSlug } from "../../../schemas/_zod/rbac";
 import type { Logger } from "../../../services/shared";
 
 /**
  * The `nextly_meta` key listing the permissions boot seeding has granted
- * Public, by permission id. A permission deleted with its collection and made
- * again for a new one has a new id, so the new collection is granted afresh.
+ * Public, by permission id, with the Public role's id. A permission deleted
+ * with its collection and made again for a new one has a new id, and a Public
+ * role made again has a new id, so either is granted afresh.
  */
 const PUBLIC_GRANTED_META_KEY = "public-role-granted";
 
@@ -171,39 +176,49 @@ async function askIn(
 }
 
 /**
- * Asks a target's rule for `action` about a visitor in each configured
- * language, as a visitor's request in that language is asked, and in every
- * language at once, as a request naming none is asked, and keeps the
- * answer that lets the most through: `true` in any language, as Public needs
- * the permission for that language's visitors; else a failure, as the rule
- * could not be told apart from one that lets them through.
+ * Every set of languages a visitor's request for `action` can tell a rule, as
+ * the request paths work them out: for a read, each language or every
+ * translation asked for, with the configured fallback, none, or any language
+ * named as the fallback, as a plain read or one that also reads each
+ * language's translation state; for a write, each language or every one; and
+ * every language at once, as a delete is told. Each distinct set once. A site
+ * without languages has one: none.
+ */
+function languageContexts(action: Action): Array<RuleLanguage | undefined> {
+  const codes = everyLanguage().locales;
+  if (codes.length === 0) return [undefined];
+  const contexts =
+    action === "read"
+      ? [...codes, EVERY_TRANSLATION].flatMap(requested =>
+          [undefined, false as const, ...codes].flatMap(fallback =>
+            [{}, { translationStatus: true }].map(asked =>
+              registeredReadLanguagesFor(requested, fallback, asked)
+            )
+          )
+        )
+      : [...codes, EVERY_LOCALE].map(requested =>
+          registeredWriteLanguagesFor(requested)
+        );
+  const distinct = new Map<string, RuleLanguage>();
+  for (const language of [...contexts, everyLanguage()]) {
+    distinct.set(
+      JSON.stringify([language.locale ?? null, language.locales]),
+      language
+    );
+  }
+  return [...distinct.values()];
+}
+
+/**
+ * Asks a target's rule for `action` about a visitor in every set of languages
+ * a request can tell it, and keeps the answer that lets the most through:
+ * `true` in any, as Public needs the permission for those visitors; else a
+ * failure, as the rule could not be told apart from one that lets them
+ * through.
  */
 async function ask(target: AccessTarget, action: Action): Promise<Answer> {
-  const codes = everyLanguage().locales;
-  const languageFor =
-    action === "read"
-      ? registeredReadLanguagesFor
-      : registeredWriteLanguagesFor;
-  // Each language a visitor may ask in; for a read, each one again as a
-  // translation overview or a language filter asks it, told every language
-  // as well; and every language at once, as a read of every translation, a
-  // write to every language or a delete is asked.
-  const contexts =
-    codes.length === 0
-      ? [undefined]
-      : [
-          ...codes.map(code => languageFor(code)),
-          ...(action === "read"
-            ? codes.map(code =>
-                registeredReadLanguagesFor(code, undefined, {
-                  translationStatus: true,
-                })
-              )
-            : []),
-          everyLanguage(),
-        ];
   const answers = await Promise.all(
-    contexts.map(language => askIn(target, action, language))
+    languageContexts(action).map(language => askIn(target, action, language))
   );
   const allows = (answer: Answer) =>
     answer.kind === "answered" && answer.value === true;
@@ -220,31 +235,45 @@ async function ask(target: AccessTarget, action: Action): Promise<Answer> {
   );
 }
 
+/** The recorded grants: the Public role they were made to, and their ids. */
+interface Recorded {
+  role: string;
+  granted: string[];
+}
+
 /**
  * Claims `ids` in the recorded grants, on `executor`, the transaction they are
- * made in, keeping only ids of permissions that still exist. Returns the ids
- * this boot claimed: those no other boot recorded first.
+ * made in, keeping only ids of permissions that still exist. Grants recorded
+ * for another role, a Public role since removed and made again, count for
+ * nothing: the new role is granted afresh. Returns the ids this boot claimed:
+ * those no other boot recorded first.
  */
 async function claimGrants(
   meta: PublicReadGrantSeeding["meta"],
+  roleId: string,
   ids: readonly string[],
   existing: ReadonlySet<string>,
   executor: unknown
 ): Promise<string[]> {
   for (let attempt = 0; attempt < 5; attempt++) {
-    const recorded = await meta.get<string[]>(
+    const recorded = await meta.get<Recorded>(
       PUBLIC_GRANTED_META_KEY,
       executor
     );
     if (recorded === null) {
-      await meta.insertIfAbsent(PUBLIC_GRANTED_META_KEY, [], executor);
+      const empty: Recorded = { role: roleId, granted: [] };
+      await meta.insertIfAbsent(PUBLIC_GRANTED_META_KEY, empty, executor);
       continue;
     }
-    const claimed = ids.filter(id => !recorded.includes(id));
+    const granted = recorded.role === roleId ? recorded.granted : [];
+    const claimed = ids.filter(id => !granted.includes(id));
     if (claimed.length === 0) return [];
-    const next = Array.from(
-      new Set([...recorded.filter(id => existing.has(id)), ...claimed])
-    ).sort();
+    const next: Recorded = {
+      role: roleId,
+      granted: Array.from(
+        new Set([...granted.filter(id => existing.has(id)), ...claimed])
+      ).sort(),
+    };
     if (
       await meta.compareAndSet(
         PUBLIC_GRANTED_META_KEY,
@@ -374,7 +403,7 @@ export async function seedPublicReadGrants({
   // edit made meanwhile. The claim and the grant commit or roll back
   // together. One the role holds already is claimed and left as it is.
   await addOnce(roleId, (_held, executor) =>
-    claimGrants(meta, wanted, new Set(ids.values()), executor)
+    claimGrants(meta, roleId, wanted, new Set(ids.values()), executor)
   );
 
   const said = listing(asked, await publicHolds(roleId));

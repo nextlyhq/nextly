@@ -116,6 +116,17 @@ async function boot(
               access: { read: ({ locale }) => locale === undefined },
               fields,
             }),
+            // Read by a visitor only in German with no fallback, as
+            // `?locale=de&fallback-locale=none` asks.
+            defineCollection({
+              slug: "germanonly",
+              localized: true,
+              access: {
+                read: ({ locale, locales }) =>
+                  locale === "de" && locales.length === 1,
+              },
+              fields,
+            }),
             // Read by a visitor only in a translation overview of English,
             // which is told English and every other language too.
             defineCollection({
@@ -266,6 +277,68 @@ describe.each(getConfiguredTestDialects())(
       expect(await publicHolds(nextly)).toContain("read-english");
       expect(await publicHolds(nextly)).toContain("read-everylang");
       expect(await publicHolds(nextly)).toContain("read-overview");
+      expect(await publicHolds(nextly)).toContain("read-germanonly");
+    });
+
+    it("has an owner's removal of a Public permission wait for a grant in progress", async () => {
+      const nextly = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+      const id = (await services(nextly).roles.findRoleIdBySlug(
+        PUBLIC_ROLE_SLUG
+      ))!.id;
+      let entered!: () => void;
+      const inside = new Promise<void>(resolve => (entered = resolve));
+      let release!: () => void;
+      const released = new Promise<void>(resolve => (release = resolve));
+      const grant = services(nextly).rolePermissions.addRolePermissionsOnce(
+        id,
+        async () => {
+          entered();
+          await released;
+          return [];
+        }
+      );
+      await inside;
+
+      let removed = false;
+      const removal = services(nextly)
+        .rolePermissions.removePermissionFromRole(id, {
+          action: "read",
+          resource: "open",
+        })
+        .then(() => {
+          removed = true;
+        });
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const removedWhileGranting = removed;
+      release();
+      await Promise.all([grant, removal]);
+
+      expect(removedWhileGranting).toBe(false);
+      expect(await publicHolds(nextly)).not.toContain("read-open");
+    });
+
+    it("grants afresh to a Public role made again", async () => {
+      const nextly = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+      const old = (await services(nextly).roles.findRoleIdBySlug(
+        PUBLIC_ROLE_SLUG
+      ))!.id;
+      const { roles: rolesTable, rolePermissions } = getDialectTables();
+      const db = nextly.adapter.getDrizzle() as unknown as {
+        delete: (t: unknown) => { where: (c: unknown) => Promise<unknown> };
+      };
+      await db.delete(rolePermissions).where(eq(rolePermissions.roleId, old));
+      await db.delete(rolesTable).where(eq(rolesTable.id, old));
+
+      await seedPermissionsAndRolePresets();
+
+      const made = (await services(nextly).roles.findRoleIdBySlug(
+        PUBLIC_ROLE_SLUG
+      ))!.id;
+      expect(made).not.toBe(old);
+      expect(await publicHolds(nextly)).toContain("read-media");
+      expect(await publicHolds(nextly)).toContain("read-open");
     });
 
     it("has an owner's save of Public's permissions wait for a grant in progress", async () => {

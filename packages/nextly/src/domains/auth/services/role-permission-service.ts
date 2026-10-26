@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, getColumns } from "drizzle-orm";
+import { eq, getColumns } from "drizzle-orm";
 
 import type {
   RBACDatabaseInstance,
@@ -236,14 +236,18 @@ export class RolePermissionService extends BaseService {
     });
     if (!permission) return;
 
-    await (this.db as RBACDatabaseInstance)
-      .delete(this.tables.rolePermissions)
-      .where(
-        and(
-          eq(this.tables.rolePermissions.roleId, roleId),
-          eq(this.tables.rolePermissions.permissionId, permission.id)
-        )
-      );
+    // Under the lock on the role's row that every other writer of its
+    // permissions takes, so a removal never lands between another writer's
+    // read of what the role holds and its write.
+    await this.adapter.transaction(async tx => {
+      await tx.lockRow("roles", roleId);
+      await tx.delete("role_permissions", {
+        and: [
+          { column: "roleId", op: "=", value: roleId },
+          { column: "permissionId", op: "=", value: String(permission.id) },
+        ],
+      });
+    });
 
     await afterRoleGrantsChanged(roleId);
   }

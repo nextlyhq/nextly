@@ -139,9 +139,11 @@ describe("seedPublicReadGrants", () => {
     const meta = memoryMeta();
     const claimedWhenMade: boolean[] = [];
     const { seeding } = site(meta, storedRole(), async () => {
-      const recorded = JSON.parse(meta.rows.get("public-role-granted") ?? "[]");
+      const { granted = [] } = JSON.parse(
+        meta.rows.get("public-role-granted") ?? "{}"
+      );
       claimedWhenMade.push(
-        recorded.includes("p-media") && recorded.includes("p-posts")
+        granted.includes("p-media") && granted.includes("p-posts")
       );
     });
 
@@ -174,10 +176,10 @@ describe("seedPublicReadGrants", () => {
     await seedPublicReadGrants(next.seeding);
 
     expect(next.granted).toEqual(["posts"]);
-    expect(JSON.parse(meta.rows.get("public-role-granted") ?? "[]")).toEqual([
-      "p-media",
-      "p-posts",
-    ]);
+    expect(JSON.parse(meta.rows.get("public-role-granted") ?? "{}")).toEqual({
+      role: "public",
+      granted: ["p-media", "p-posts"],
+    });
   });
 
   it("makes each grant once when two boots seed at once", async () => {
