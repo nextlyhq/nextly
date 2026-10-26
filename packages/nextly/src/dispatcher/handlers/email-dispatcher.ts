@@ -374,9 +374,10 @@ const EMAIL_TEMPLATE_METHODS: Record<
   },
   sendTestTemplate: {
     // Sends the SAVED template, with the editor's sample data, to the
-    // signed-in user's own address, never to one the caller names: a route
-    // that let any signed-in caller choose the recipient would let anyone
-    // with an account send as the site.
+    // signed-in user's own address and to nobody else: never to one the
+    // caller names (a route that let any signed-in caller choose the
+    // recipient would let anyone with an account send as the site), and never
+    // to the template's own Cc and Bcc, who would get a sample-data email.
     //
     // PATCH, not POST, on purpose: the email-templates gate takes its
     // permission from the method, and PATCH is what makes this require
@@ -397,7 +398,7 @@ const EMAIL_TEMPLATE_METHODS: Record<
         });
       }
       const template = await svc.templateService.getTemplate(p.templateId);
-      const result = await emailService.sendWithTemplate(
+      const result = await emailService.sendTemplateTest(
         template.slug,
         to,
         variables ?? {}
