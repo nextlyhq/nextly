@@ -189,10 +189,16 @@ export class RoleMutationService extends BaseService {
       if (await this.findRoleIdBySlug(free)) continue;
       // Only while the role still has the slug it was read with: a rename
       // another instance made meanwhile stands, and is read back below.
-      await this.db
-        .update(roles)
-        .set({ slug: free })
-        .where(and(eq(roles.id, id), eq(roles.slug, slug)));
+      try {
+        await this.db
+          .update(roles)
+          .set({ slug: free })
+          .where(and(eq(roles.id, id), eq(roles.slug, slug)));
+      } catch (error) {
+        // Another role took the free slug in the meantime: try the next.
+        if (await this.findRoleIdBySlug(free)) continue;
+        throw error;
+      }
       const [now] = await this.db
         .select({ slug: roles.slug })
         .from(roles)
