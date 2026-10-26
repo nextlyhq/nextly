@@ -18,11 +18,15 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 import {
+  confineVariantClasses,
+  findUnconfinedVariants,
   findUnscopedRules,
   namespaceInternalProperties,
   prefixKeyframes,
   scopeCss,
 } from "@nextlyhq/admin-css";
+
+import { cssPaths } from "./css-paths.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -34,10 +38,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  */
 const NAME_PREFIX = "nx-";
 const rootDir = path.resolve(__dirname, "..");
-
-const inputFile = path.join(rootDir, "src/styles/globals.css");
-const outputDir = path.join(rootDir, "dist/styles");
-const outputFile = path.join(outputDir, "globals.css");
+const { inputFile, outputDir, outputFile } = cssPaths(rootDir);
 const tempFile = path.join(outputDir, "globals.temp.css");
 
 // Ensure output directory exists
@@ -61,6 +62,14 @@ try {
 
   // Apply scoping
   css = scopeCss(css);
+
+  // Scoping each rule's own selector is not the whole of isolation: `dark:`,
+  // `group-*:` and `peer-*:` compile to a reference to an ancestor class the
+  // rule does not own (`:where(.dark, .dark *)`, `:is(:where(.group):hover *)`),
+  // which the host's own `<html class="dark">` or `.group` satisfies inside the
+  // wrapper. Rewriting the reference to sit under .nextly-admin ties the
+  // variants to the wrapper the admin's own theme sync controls.
+  css = confineVariantClasses(css);
 
   // Scoping selectors is not the whole job. Two kinds of name in this sheet are
   // resolved for the whole DOCUMENT no matter which selector accompanies them,
@@ -100,7 +109,8 @@ try {
   // Step 4: Guard the isolation invariant. The admin mounts inside the host
   // app's document, so any style rule that escapes .nextly-admin restyles the
   // host page. Fail the build rather than ship a leak.
-  const unscoped = findUnscopedRules(fs.readFileSync(outputFile, "utf-8"));
+  const built = fs.readFileSync(outputFile, "utf-8");
+  const unscoped = findUnscopedRules(built);
   if (unscoped.length) {
     console.error(
       `\n❌ ${unscoped.length} style rule(s) escaped the .nextly-admin scope:\n`
@@ -114,12 +124,32 @@ try {
     process.exit(1);
   }
 
-  // Step 5: Guard the naming invariant, for the same reason and on the same
+  // Step 5: Guard the variant confinement invariant. The check above reads the
+  // rule's own subject; a variant's ancestor reference (the `.dark` inside
+  // `:where(.dark, .dark *)`, the `.group` inside `:is(:where(.group):hover *)`)
+  // can reach outside the wrapper from within an otherwise-scoped rule, so it
+  // needs its own gate. A host doing class-based dark mode would activate
+  // every dark utility inside the admin while its tokens stay light.
+  const unconfined = findUnconfinedVariants(built);
+  if (unconfined.length) {
+    console.error(
+      `\n❌ ${unconfined.length} selector(s) reference a dark/group/peer variant ` +
+        `outside the .nextly-admin scope:\n`
+    );
+    for (const sel of unconfined) console.error("  " + sel);
+    console.error(
+      "\nconfineVariantClasses() runs after scoping and rewrites these\n" +
+        "references to sit under .nextly-admin; one surviving means a variant\n" +
+        "shape it does not cover.\n"
+    );
+    process.exit(1);
+  }
+
+  // Step 6: Guard the naming invariant, for the same reason and on the same
   // terms. A selector that escapes restyles the host page; a NAME that escapes
   // is resolved for the whole document and changes what the host's own rules
   // mean. Reading the built file rather than the in-memory string, because the
   // minifier runs between them and the file is what ships.
-  const built = fs.readFileSync(outputFile, "utf-8");
   const escapedNames = [
     ...[
       ...built.matchAll(/@(?:-webkit-)?keyframes\s+("[^"]*"|'[^']*'|[\w-]+)/gi),
@@ -144,7 +174,7 @@ try {
     process.exit(1);
   }
 
-  // Step 6: Guard the same invariant from the other side. Steps 4 and 5 read
+  // Step 7: Guard the same invariant from the other side. Steps 4-6 read
   // the stylesheet, and a keyframe name can also be written in JSX — an inline
   // `animation` style never passes through the rename above, so it silently
   // names a definition that no longer exists and the element just does not
