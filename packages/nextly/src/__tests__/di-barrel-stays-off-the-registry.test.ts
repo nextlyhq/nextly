@@ -29,7 +29,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, sep } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -38,14 +38,18 @@ const di = new URL("../di/", import.meta.url);
 
 /**
  * The registration modules under `dir`, at any depth, so one placed in a
- * subfolder later is watched too. Tests, and anything in a `__tests__` folder,
- * are not registrations.
+ * subfolder later is watched too. Tests, and anything in a `__tests__` folder
+ * under `dir`, are not registrations. The folder is matched below `dir` only,
+ * so a checkout that sits under a `__tests__` folder of its own still watches
+ * every module.
  */
 function registrationModules(dir: string): string[] {
   return readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter(entry => entry.isFile() && /\.ts$/.test(entry.name))
     .filter(entry => !/\.test\.ts$/.test(entry.name))
-    .filter(entry => !entry.parentPath.split(sep).includes("__tests__"))
+    .filter(
+      entry => !relative(dir, entry.parentPath).split(sep).includes("__tests__")
+    )
     .map(entry => join(entry.parentPath, entry.name));
 }
 
@@ -92,8 +96,11 @@ describe("the DI barrel stays off the service registry", () => {
   it("discovers a registration in a subfolder, and no test", () => {
     // On a directory laid out for it, since `di/registrations/` has no
     // subfolder today: a registration placed in one later must be watched,
-    // and a test or a `__tests__` folder beside the modules must not be.
-    const root = mkdtempSync(join(tmpdir(), "di-registrations-"));
+    // and a test or a `__tests__` folder beside the modules must not be. The
+    // directory itself sits under a `__tests__` folder, as a checkout can,
+    // which must not hide the modules inside it.
+    const base = mkdtempSync(join(tmpdir(), "di-registrations-"));
+    const root = join(base, "__tests__", "registrations");
     try {
       const files = [
         "register-a.ts",
@@ -111,7 +118,7 @@ describe("the DI barrel stays off the service registry", () => {
         join(root, "register-a.ts"),
       ]);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      rmSync(base, { recursive: true, force: true });
     }
   });
 
