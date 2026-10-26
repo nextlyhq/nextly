@@ -48,6 +48,7 @@ import {
   BRAND_BINDING,
   EMAIL_SAFE_FONTS,
   resolveBrand,
+  STARTING_BRAND,
   type BrandOverview,
   type BrandReach,
   type BrandSettings,
@@ -358,6 +359,26 @@ async function chooseLayout(
 ): Promise<EmailTemplateRecord | null> {
   const own = template.layoutId ? await find(template.layoutId) : null;
   return own?.kind === "layout" ? own : defaultLayout();
+}
+
+/**
+ * Brand settings with an unsaved change over them, for one preview: each
+ * setting the change names takes its value, or its starting value where the
+ * change says null. A render that reads no settings stays without them.
+ */
+function withBrandChange(
+  brand: BrandSettings | undefined,
+  change: BrandSettingsUpdate | undefined
+): BrandSettings | undefined {
+  if (!brand || !change) return brand;
+  const changed: BrandSettings = { ...brand };
+  for (const key of Object.keys(change) as Array<keyof BrandSettings>) {
+    const value = change[key];
+    if (value === undefined) continue;
+    (changed as Record<keyof BrandSettings, unknown>)[key] =
+      value === null ? structuredClone(STARTING_BRAND[key]) : value;
+  }
+  return changed;
 }
 
 /** Whether any of a template's own fields reads `brand`. */
@@ -2047,7 +2068,8 @@ export class EmailTemplateService extends BaseService {
   async previewDraft(
     draft: TemplateFields &
       Pick<EmailTemplateRecord, "layoutId"> & { id?: string },
-    sampleData: Record<string, unknown>
+    sampleData: Record<string, unknown>,
+    brandChange?: BrandSettingsUpdate
   ): Promise<RenderedTemplate> {
     const layout = draft.useLayout ? await this.getLayoutFor(draft) : null;
     // A draft of a saved template previews with that template's engine unless
@@ -2066,7 +2088,10 @@ export class EmailTemplateService extends BaseService {
       sampleData,
       {
         appName: this.appName,
-        brand: await this.brandFor({ ...draft, legacy }, layout),
+        brand: withBrandChange(
+          await this.brandFor({ ...draft, legacy }, layout),
+          brandChange
+        ),
       }
     );
   }

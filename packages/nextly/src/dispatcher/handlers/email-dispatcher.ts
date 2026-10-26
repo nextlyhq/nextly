@@ -296,7 +296,8 @@ const EMAIL_TEMPLATE_METHODS: Record<
       }
       const preview = await svc.templateService.previewDraft(
         validated.template,
-        validated.data
+        validated.data,
+        validated.brand
       );
       return respondData(preview);
     },
