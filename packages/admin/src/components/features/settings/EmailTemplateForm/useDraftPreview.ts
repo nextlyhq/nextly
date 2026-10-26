@@ -53,6 +53,8 @@ export interface DraftPreviewState {
   previewPreheader: string;
   /** The From line with its name rendered, or null when the draft sets none. */
   previewFrom: string | null;
+  /** Whether any render has arrived yet, so an empty field is a render, not a gap. */
+  hasPreview: boolean;
   /** A render is in flight and there is no earlier one to show in its place. */
   isPreviewPending: boolean;
   /** The render was refused or unreachable; the pane says so rather than lying. */
@@ -112,6 +114,7 @@ export function useDraftPreview(
       previewSubject: shown?.subject ?? "",
       previewPreheader: shown?.preheader ?? "",
       previewFrom: shown?.from ?? null,
+      hasPreview: shown !== null,
       isPreviewPending: isPending && shown === null,
       previewError: error ? error.message : null,
     }),

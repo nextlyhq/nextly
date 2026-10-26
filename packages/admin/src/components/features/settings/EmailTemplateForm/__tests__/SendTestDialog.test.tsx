@@ -20,6 +20,7 @@ const userRead = vi.hoisted(() => ({
   } as unknown,
 }));
 
+const targetAsked = vi.hoisted(() => vi.fn());
 const target = vi.hoisted(() => ({
   current: {
     data: {
@@ -31,7 +32,10 @@ const target = vi.hoisted(() => ({
 
 vi.mock("@admin/hooks/queries/useEmailTemplates", () => ({
   useSendTestEmailTemplate: () => ({ mutate, isPending: false }),
-  useSendTestTarget: () => target.current,
+  useSendTestTarget: (...args: unknown[]) => {
+    targetAsked(...args);
+    return target.current;
+  },
 }));
 vi.mock("@admin/hooks/useDashboardUser", () => ({
   useDashboardUser: () => userRead.current,
@@ -40,7 +44,11 @@ vi.mock("@admin/hooks/useDashboardUser", () => ({
 import { SendTestDialog } from "../SendTestDialog";
 
 const SAMPLE = { name: "Ana" };
-const DRAFT = { subject: "Unsaved subject", htmlContent: "<p>Unsaved</p>" };
+const DRAFT = {
+  subject: "Unsaved subject",
+  htmlContent: "<p>Unsaved</p>",
+  providerId: "p-draft",
+};
 const draftOf = vi.fn(() => DRAFT);
 
 function renderDialog(templateId = "t1") {
@@ -58,7 +66,8 @@ function renderDialog(templateId = "t1") {
 
 beforeEach(() => {
   mutate.mockReset();
-  draftOf.mockClear();
+  draftOf.mockReset();
+  draftOf.mockReturnValue(DRAFT);
   target.current = {
     data: {
       to: "ana@example.com",
@@ -90,9 +99,10 @@ describe("the send-test dialog", () => {
 
   it("sends the template's id, sample data and what is on screen, and no address", () => {
     renderDialog();
-    // Read when the test is sent, not when the dialog opens: an edit made
-    // with the dialog open is on screen too.
-    expect(draftOf).not.toHaveBeenCalled();
+    // Read again when the test is sent, not only when the dialog opens: what
+    // is on screen at that moment is what goes.
+    const edited = { ...DRAFT, subject: "Edited after opening" };
+    draftOf.mockReturnValue(edited);
 
     fireEvent.click(screen.getByRole("button", { name: /send test/i }));
 
@@ -100,7 +110,15 @@ describe("the send-test dialog", () => {
     expect(mutate.mock.calls[0]?.[0]).toEqual({
       templateId: "t1",
       variables: SAMPLE,
-      draft: DRAFT,
+      draft: edited,
+    });
+  });
+
+  it("asks who delivers it through the provider the draft chose", () => {
+    renderDialog();
+
+    expect(targetAsked).toHaveBeenLastCalledWith("t1", "p-draft", {
+      enabled: true,
     });
   });
 
