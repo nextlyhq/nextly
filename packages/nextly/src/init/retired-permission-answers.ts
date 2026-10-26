@@ -21,8 +21,8 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { retiredOwnedTable } from "./retired-accounts-erasure";
 import { hasRetiredShape, liveColumnsOf } from "./retired-auth-tables";
 
-/** The retired table this module empties. */
-export const RETIRED_PERMISSION_ANSWERS_TABLE = "user_permission_cache";
+/** The retired table this module empties; named here alone. */
+const RETIRED_PERMISSION_ANSWERS_TABLE = "user_permission_cache";
 
 /** The part of an adapter this module uses. */
 export interface PermissionAnswersStore {
