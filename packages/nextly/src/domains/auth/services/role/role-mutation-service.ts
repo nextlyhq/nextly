@@ -710,13 +710,14 @@ export class RoleMutationService extends BaseService {
 
         // Invalidate cache after successful transaction. A new slug changes
         // the roles a code-defined rule reads, as new grants change the
-        // permissions it reads.
+        // permissions it reads. Named by the role's own id, as the caches
+        // holding its grants keep it.
         if (
           changes.permissionIds !== undefined ||
           changes.childRoleIds !== undefined ||
           changes.slug !== undefined
         ) {
-          await afterRoleGrantsChanged(roleId);
+          await afterRoleGrantsChanged(storedRoleId);
         }
 
         return;
