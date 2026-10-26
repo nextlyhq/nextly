@@ -8,6 +8,7 @@
     "src/__tests__/routeHandler-direct-branches.test.ts",
     "src/__tests__/routeHandler-history-refusals-private.test.ts",
     "src/__tests__/routeHandler-languages-method.test.ts",
+    "src/__tests__/routeHandler-masked-refusal.test.ts",
     "src/__tests__/routeHandler-plugin-settings-permission.test.ts",
     "src/__tests__/routeHandler-plugin-settings-rate-limit.test.ts",
     "src/__tests__/routeHandler-rest-limit.test.ts",
@@ -59,6 +60,7 @@
     "src/route-handler/__tests__/dispatcher-singleton.test.ts",
     "src/route-handler/__tests__/request-boot-awaits-seeding.test.ts",
     "src/route-handler/__tests__/route-parser.email-send.test.ts",
-    "src/services/dashboard/__tests__/admin-counts.test.ts"
+    "src/services/dashboard/__tests__/admin-counts.test.ts",
+    "src/services/dashboard/__tests__/list-read-gates-readers.test.ts"
   ]
 }
