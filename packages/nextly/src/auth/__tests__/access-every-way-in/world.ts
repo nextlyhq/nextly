@@ -54,11 +54,29 @@ export const singleOf = (rule: Rule) => `s_${rule.replace(/-/g, "_")}`;
 export const pubSingleOf = (rule: Rule) => `s_pub_${rule.replace(/-/g, "_")}`;
 
 /**
- * The filter a `list` and a `count` ask with: it matches the one published
- * row of a rule collection every read asks for, so the answer says whether
- * that row was returned.
+ * The filter a `list` and a `count` ask with: it matches the two published
+ * rows of a rule collection, the probe every read asks for and one other, so
+ * the answer says which of them were returned.
  */
-export const PROBE_WHERE = { slug: { equals: "probe" } };
+export const PROBES_WHERE = { slug: { in: ["probe", "probe-other"] } };
+
+/**
+ * A list's or a count's answer from what it read: `A` for both probes, `M`
+ * for the probe alone, which is what a rule's filter allows, and `R` for
+ * neither. Anything else is recorded as it came back.
+ */
+export function probesRead(read: readonly unknown[] | number): string {
+  if (typeof read === "number") {
+    if (read === 2) return "A";
+    if (read === 1) return "M";
+    return read === 0 ? "R" : `=${read}`;
+  }
+  const probe = read.includes("probe");
+  const other = read.includes("probe-other");
+  if (probe && other) return "A";
+  if (probe) return "M";
+  return other ? "=probe-other" : "R";
+}
 /**
  * The filter the filter rule kinds answer with: it matches the probe entry
  * and no other, so a door that applies it returns the probe and withholds the
@@ -252,9 +270,9 @@ function refsCollection() {
 async function outcome(work: () => Promise<unknown>): Promise<Response> {
   try {
     const result = await work();
-    // A list or a count answers whether the probe row was among what it read.
+    // A list or a count answers which probe rows were among what it read.
     return Response.json(
-      typeof result === "boolean" ? { ok: true, found: result } : { ok: true }
+      typeof result === "string" ? { ok: true, read: result } : { ok: true }
     );
   } catch (error) {
     // What the call threw, read the one way every door reads a thrown
@@ -267,6 +285,11 @@ async function outcome(work: () => Promise<unknown>): Promise<Response> {
 export interface Seeded {
   /** A published row every read asks for, with slug `probe`. */
   readId: string;
+  /**
+   * A published row with slug `probe-other`, which the filter rule kinds do
+   * not match, so a list shows whether a door applied the filter.
+   */
+  otherId: string;
   /** A draft row every update rewrites. */
   updateId: string;
   /**
@@ -303,11 +326,13 @@ const SERVICE_CALLS: Record<
   unpublish: (c, slug, id, opts) =>
     c.updateEntry(slug, id, { status: "draft" }, opts),
   list: async (c, slug, _id, opts) =>
-    (await c.listEntries(slug, { where: PROBE_WHERE }, opts)).data.some(
-      entry => entry.slug === "probe"
+    probesRead(
+      (await c.listEntries(slug, { where: PROBES_WHERE }, opts)).data.map(
+        entry => entry.slug
+      )
     ),
   count: async (c, slug, _id, opts) =>
-    (await c.count(slug, { where: PROBE_WHERE }, opts)) > 0,
+    probesRead(await c.count(slug, { where: PROBES_WHERE }, opts)),
 };
 
 /**
@@ -622,6 +647,7 @@ async function seedCollections(
     const own = new Map(keys.map((key, i) => [key, ids[i]]));
     seeded.set(slug, {
       readId: await create(slug, "published", "probe"),
+      otherId: await create(slug, "published", "probe-other"),
       updateId: await create(slug, "draft", "edited"),
       own,
     });
