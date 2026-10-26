@@ -35,6 +35,13 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 
 import type { CollectionServiceResult, UserContext } from "./collection-types";
+import type { ReadReach } from "./write-filter-match";
+
+/**
+ * The writes that limit themselves to the entries a write rule's filter
+ * matches, by matching the entry they change against it under its lock.
+ */
+export type FilteredWrite = "delete";
 
 /** What the collection gate is asked about a caller and an operation. */
 interface CollectionAccessParams {
@@ -140,6 +147,76 @@ export class CollectionAccessService extends BaseService {
       return { denied: null, filter: verdict.filter };
     }
     return { denied: await this.refusalOf<T>(verdict, asked, ask) };
+  }
+
+  /**
+   * Check collection-level access for a write that limits itself to the
+   * entries a write rule's filter matches, by matching the entry it changes
+   * against the filter before changing it. Allowed with no filter; allowed only
+   * for the entries `filter` matches, with what the caller may read of the
+   * collection (`read`) for answering an entry outside it; or refused with the
+   * envelope to hand back.
+   *
+   * A write that cannot match its entry against a filter asks
+   * {@link checkCollectionAccess}, which refuses one.
+   */
+  async checkCollectionWrite<T>(
+    params: CollectionAccessParams & { operation: FilteredWrite }
+  ): Promise<
+    | { readonly denied: CollectionServiceResult<T> }
+    | {
+        readonly denied: null;
+        readonly filter?: RuleFilter;
+        readonly read?: ReadReach;
+      }
+  > {
+    if (params.overrideAccess) return { denied: null };
+    const ask = this.gateFor(params, true);
+    const verdict = await ask(params.operation);
+    if (verdict.allowed) return { denied: null };
+    if (verdict.refusal !== "only-matching-entries") {
+      return { denied: await this.refusalOf<T>(verdict, params, ask) };
+    }
+    // What the caller may read decides how an entry outside the filter is
+    // refused, so it is asked as the reads that apply a filter ask it.
+    const read = await ask("read");
+    if (!read.allowed && read.refusal === "failed") {
+      return {
+        denied: this.accessUnreadable<T>(read.error, {
+          collectionName: params.collectionName,
+          operation: params.operation,
+          userId: params.user?.id,
+        }),
+      };
+    }
+    return { denied: null, filter: verdict.filter, read: readReachOf(read) };
+  }
+
+  /**
+   * The refusal of a write to one entry outside the caller's filter: in words
+   * where the caller may read the entry, and exactly as a missing entry is
+   * answered where it may not.
+   */
+  async refusalOutsideFilter<T>(
+    params: CollectionAccessParams,
+    readsEntry: boolean
+  ): Promise<CollectionServiceResult<T>> {
+    const { collectionName, operation, executor } = params;
+    if (!readsEntry) {
+      return answeredAsMissing<T>(
+        collectionName,
+        operation,
+        `the entry is outside the caller's ${operation} filter and the caller may not read it, so its ${operation} is answered as missing`
+      );
+    }
+    return refusedInWords<T>({
+      collectionName,
+      operation,
+      unauthenticated: false,
+      namesOne: true,
+      executor,
+      reason: `the entry is outside the caller's ${operation} filter`,
+    });
   }
 
   /**
@@ -257,16 +334,26 @@ export class CollectionAccessService extends BaseService {
  */
 function answeredAsMissing<T>(
   collectionName: string,
-  operation: string
+  operation: string,
+  reason = `the caller may not read ${collectionName}, so the entry its ${operation} names is answered as missing`
 ): CollectionServiceResult<T> {
   return {
     success: false,
     statusCode: NEXTLY_ERROR_STATUS.NOT_FOUND,
     code: "NOT_FOUND",
     message: genericPublicMessage("NOT_FOUND"),
-    refusalReason: `the caller may not read ${collectionName}, so the entry its ${operation} names is answered as missing`,
+    refusalReason: reason,
     data: null,
   };
+}
+
+/** What the caller may read of a collection, from the gate's read verdict. */
+function readReachOf(verdict: GateVerdict): ReadReach {
+  if (verdict.allowed) return { kind: "every" };
+  if (verdict.refusal === "only-matching-entries") {
+    return { kind: "matching", filter: verdict.filter };
+  }
+  return { kind: "none" };
 }
 
 /**
@@ -282,15 +369,19 @@ async function refusedInWords<T>(refusal: {
   unauthenticated: boolean;
   namesOne: boolean;
   executor: unknown;
+  /** Which check refused, where it is not the gate's own refusal. */
+  reason?: string;
 }): Promise<CollectionServiceResult<T>> {
   const { collectionName, operation } = refusal;
   return {
     success: false,
     statusCode: NEXTLY_ERROR_STATUS.FORBIDDEN,
     code: "FORBIDDEN",
-    refusalReason: refusal.unauthenticated
-      ? `${operation} on ${collectionName} requires an authenticated user`
-      : `the caller may not ${operation} ${collectionName}`,
+    refusalReason:
+      refusal.reason ??
+      (refusal.unauthenticated
+        ? `${operation} on ${collectionName} requires an authenticated user`
+        : `the caller may not ${operation} ${collectionName}`),
     message: await refusalMessageFor(
       operation,
       collectionName,

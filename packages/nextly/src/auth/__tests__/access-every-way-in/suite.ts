@@ -183,6 +183,7 @@ export function describeEveryWayIn(dialect: TestDialect): void {
       answer: Answer;
       landed: boolean;
       done: boolean;
+      outsideKept?: boolean;
     }[] = [];
 
     beforeAll(async () => {
@@ -192,11 +193,8 @@ export function describeEveryWayIn(dialect: TestDialect): void {
       for (const row of rows()) {
         const byDoor = new Map<Door, Answer>();
         for (const door of doorsAsking(row)) {
-          const { answer, deviations, refusal, landed, done } = await ask(
-            world,
-            row,
-            door
-          );
+          const { answer, deviations, refusal, landed, done, outsideKept } =
+            await ask(world, row, door);
           byDoor.set(door, answer);
           deviated.set(cellKey(row, door), deviations);
           // Every answer that is a status is a refusal some door answered with,
@@ -215,7 +213,13 @@ export function describeEveryWayIn(dialect: TestDialect): void {
             });
           }
           if (landed !== undefined && done !== undefined) {
-            writes.push({ cell: cellKey(row, door), answer, landed, done });
+            writes.push({
+              cell: cellKey(row, door),
+              answer,
+              landed,
+              done,
+              outsideKept,
+            });
           }
         }
         answers.set(rowKey(row), byDoor);
@@ -247,12 +251,20 @@ export function describeEveryWayIn(dialect: TestDialect): void {
       // read whole before and after: a door that refuses after the write has
       // happened would otherwise pass on its answer alone.
       const allowed = () => writes.filter(w => w.answer === "A");
-      const notAllowed = () => writes.filter(w => w.answer !== "A");
+      // A filtered write let through for the entry inside the rule's filter
+      // alone, and refused for its twin outside it.
+      const matching = () => writes.filter(w => w.answer === "M");
+      const notAllowed = () =>
+        writes.filter(w => w.answer !== "A" && w.answer !== "M");
 
       it("is nothing, wherever the write was not allowed", () => {
         // POPULATION CONTROL: refusals were watched, so `[]` is not vacuous.
         expect(notAllowed().length).toBeGreaterThan(0);
-        expect(notAllowed().filter(w => w.landed)).toEqual([]);
+        // A filtered write's twin is held to the same: refused both ways,
+        // its ask of the twin left the table as it was too.
+        expect(
+          notAllowed().filter(w => w.landed || w.outsideKept === false)
+        ).toEqual([]);
       });
 
       it("is the write, wherever it was allowed", () => {
@@ -260,6 +272,17 @@ export function describeEveryWayIn(dialect: TestDialect): void {
         // the comparison can tell a written table from an untouched one.
         expect(allowed().length).toBeGreaterThan(0);
         expect(allowed().filter(w => !w.done)).toEqual([]);
+      });
+
+      it("is the matching entry's write alone, wherever a filter limited it", () => {
+        // POPULATION CONTROL: filtered writes were let through, so `[]` is
+        // not vacuous. Each changed the entry inside the filter, and its
+        // refused twin outside it was left as it was: the answer alone would
+        // pass a door that refused the twin after writing it.
+        expect(matching().length).toBeGreaterThan(0);
+        expect(
+          matching().filter(w => !w.done || w.outsideKept !== true)
+        ).toEqual([]);
       });
     });
 

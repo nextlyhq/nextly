@@ -138,10 +138,8 @@ service custom-role delete collection async-false at direct  404 NOT_FOUND throw
 service custom-role delete collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service custom-role delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
-service custom-role delete collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection async-throws at route  403 FORBIDDEN error  | You can't delete c async throws.
@@ -170,10 +168,8 @@ service custom-role delete collection returns-false at direct  404 NOT_FOUND thr
 service custom-role delete collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service custom-role delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
-service custom-role delete collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection returns-null at route  403 FORBIDDEN error  | You can't delete c returns nulls.
@@ -904,10 +900,8 @@ service key-full-access delete collection async-false at direct  404 NOT_FOUND t
 service key-full-access delete collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service key-full-access delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access delete collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
-service key-full-access delete collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection async-throws at route  403 FORBIDDEN error  | You can't delete c async throws.
@@ -936,10 +930,8 @@ service key-full-access delete collection returns-false at direct  404 NOT_FOUND
 service key-full-access delete collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service key-full-access delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access delete collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
-service key-full-access delete collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection returns-null at route  403 FORBIDDEN error  | You can't delete c returns nulls.
@@ -3433,10 +3425,8 @@ service key-role-based delete collection async-false at direct  404 NOT_FOUND th
 service key-role-based delete collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service key-role-based delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
-service key-role-based delete collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection async-throws at route  403 FORBIDDEN error  | You can't delete c async throws.
@@ -3465,10 +3455,8 @@ service key-role-based delete collection returns-false at direct  404 NOT_FOUND 
 service key-role-based delete collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service key-role-based delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
-service key-role-based delete collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection returns-null at route  403 FORBIDDEN error  | You can't delete c returns nulls.
@@ -4171,10 +4159,8 @@ service key-super-admin delete collection async-false at direct  404 NOT_FOUND t
 service key-super-admin delete collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-super-admin delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service key-super-admin delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-super-admin delete collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-super-admin delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-super-admin delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
-service key-super-admin delete collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-super-admin delete collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-super-admin delete collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-super-admin delete collection async-throws at route  403 FORBIDDEN error  | You can't delete c async throws.
@@ -4203,10 +4189,8 @@ service key-super-admin delete collection returns-false at direct  404 NOT_FOUND
 service key-super-admin delete collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-super-admin delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service key-super-admin delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-super-admin delete collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-super-admin delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-super-admin delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
-service key-super-admin delete collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-super-admin delete collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-super-admin delete collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-super-admin delete collection returns-null at route  403 FORBIDDEN error  | You can't delete c returns nulls.
@@ -4906,8 +4890,6 @@ service principal create collection user-is-key-maker at direct  403 FORBIDDEN t
 service principal create collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service principal delete collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service principal delete collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service principal delete collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal delete collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal delete collection async-throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal delete collection false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -4926,8 +4908,6 @@ service principal delete collection returns-empty-in at direct  404 NOT_FOUND th
 service principal delete collection returns-empty-in at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal delete collection returns-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service principal delete collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service principal delete collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal delete collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal delete collection returns-null at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal delete collection returns-string at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5348,8 +5328,6 @@ service principal-other create collection user-is-key-maker at direct  403 FORBI
 service principal-other create collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service principal-other delete collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service principal-other delete collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service principal-other delete collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other delete collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other delete collection async-throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other delete collection false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5370,8 +5348,6 @@ service principal-other delete collection returns-empty-in at direct  404 NOT_FO
 service principal-other delete collection returns-empty-in at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other delete collection returns-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service principal-other delete collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service principal-other delete collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other delete collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other delete collection returns-null at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other delete collection returns-string at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -6719,10 +6695,8 @@ service user-with delete collection async-false at direct  404 NOT_FOUND thrown 
 service user-with delete collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service user-with delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with delete collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
-service user-with delete collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection async-throws at route  403 FORBIDDEN error  | You can't delete c async throws.
@@ -6751,10 +6725,8 @@ service user-with delete collection returns-false at direct  404 NOT_FOUND throw
 service user-with delete collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service user-with delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with delete collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
-service user-with delete collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection returns-null at route  403 FORBIDDEN error  | You can't delete c returns nulls.

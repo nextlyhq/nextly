@@ -442,3 +442,52 @@ describe("a read whose route already authorized it", () => {
     expect(rule).not.toHaveBeenCalled();
   });
 });
+
+describe("a write rule's filter", () => {
+  const OWN = { author: { equals: "u1" } };
+  const filtering = () => vi.fn(() => OWN as unknown as boolean);
+
+  it("is handed back for a delete to an asker that matches its entry against it", async () => {
+    callerMay("delete");
+    const verdict = await collectionGateVerdict(
+      asked(
+        { delete: filtering() },
+        { action: "delete", user: { id: "u1" }, appliesFilter: true }
+      )
+    );
+    expect(verdict).toEqual({
+      allowed: false,
+      refusal: "only-matching-entries",
+      filter: OWN,
+    });
+  });
+
+  it("refuses a delete to an asker that cannot match its entry against it", async () => {
+    // The control: the filter is handed back only where it is applied.
+    callerMay("delete");
+    const verdict = await collectionGateVerdict(
+      asked({ delete: filtering() }, { action: "delete", user: { id: "u1" } })
+    );
+    expect(verdict).toEqual({ allowed: false, refusal: "insufficient" });
+  });
+
+  it("still refuses an update's filter, which no write applies yet", async () => {
+    callerMay("update");
+    const verdict = await collectionGateVerdict(
+      asked(
+        { update: filtering() },
+        { action: "update", user: { id: "u1" }, appliesFilter: true }
+      )
+    );
+    expect(verdict.allowed).toBe(false);
+    expect(verdict).not.toHaveProperty("filter");
+  });
+
+  it("refuses a visitor's delete, whose writes no filter limits yet", async () => {
+    const verdict = await collectionGateVerdict(
+      asked({ delete: filtering() }, { action: "delete", appliesFilter: true })
+    );
+    expect(verdict.allowed).toBe(false);
+    expect(verdict).not.toHaveProperty("filter");
+  });
+});

@@ -7,6 +7,7 @@
  * the real catch-all, a Direct API call, a plugin route — and never calls the
  * decision behind it, so a door that stops asking the decision shows up here.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
 
 import { vi } from "vitest";
@@ -26,7 +27,11 @@ import { widgetAudience } from "../../../domains/widgets/visibility";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { resolveContent } from "../../../runtime/routing/resolve-content";
 import { consoleLogger } from "../../../services/shared";
-import { recordingDeviations, type Deviation } from "../../access/deviations";
+import {
+  DEVIATIONS,
+  recordingDeviations,
+  type Deviation,
+} from "../../access/deviations";
 import { canReadEntity, readAccessCaller } from "../../entity-read-access";
 import { canReadSystemResource } from "../../resource-readable";
 
@@ -43,13 +48,21 @@ import {
   takeRefusal,
   type Refusal,
 } from "./refusals";
-import { rowKey, type Answer, type Door, type Row } from "./table";
+import {
+  hasOutsideTwin,
+  rowKey,
+  verdictOf,
+  type Answer,
+  type Door,
+  type Row,
+} from "./table";
 import {
   MEDIA_MARKER,
   ORIGIN,
   PROBES_WHERE,
   USER_MARKER,
   collectionOf,
+  outsideKey,
   ownKey,
   personRoute,
   probesRead,
@@ -90,6 +103,12 @@ async function settle(
   }
 }
 
+/**
+ * Set while a door is asked a filtered write of the entry's twin outside the
+ * rule's filter, so the door names that twin rather than the entry inside it.
+ */
+const askingOutside = new AsyncLocalStorage<true>();
+
 /** The target's slug, and the row id a collection action names. */
 function addressOf(world: World, row: Row, door: string) {
   if (row.target === "single") return { slug: singleOf(row.rule), id: "" };
@@ -104,7 +123,11 @@ function addressOf(world: World, row: Row, door: string) {
       ? seeded.readId
       : row.action === "update"
         ? seeded.updateId
-        : (seeded.own.get(ownKey(door, row.caller, row.action)) ?? "");
+        : (seeded.own.get(
+            askingOutside.getStore()
+              ? outsideKey(door, row.caller, row.action)
+              : ownKey(door, row.caller, row.action)
+          ) ?? "");
   return { slug, id };
 }
 
@@ -836,7 +859,15 @@ async function capabilities(
   const cell = answer.entities[slug];
   const deviations = bySubject.get(`${row.action}-${slug}`) ?? [];
   if (cell === undefined || !(row.action in cell)) {
-    return { answer: "=absent", deviations };
+    // An entity is left out where the caller may not read it, so its read's
+    // deviations are the ones that decided every action's absence.
+    const read = bySubject.get(`read-${slug}`) ?? [];
+    return {
+      answer: "=absent",
+      deviations: DEVIATIONS.filter(
+        deviation => deviations.includes(deviation) || read.includes(deviation)
+      ),
+    };
   }
   return { answer: fromBoolean(cell[row.action]), deviations };
 }
@@ -1096,7 +1127,10 @@ const statusAfter = (row: Row) =>
 /**
  * A door's answer to one row, and, for a write, what it did to the database:
  * `landed` says it changed the target's table at all, and `done` that it made
- * the change asked for. Both are set only where the door writes.
+ * the change asked for. Both are set only where the door writes. A filtered
+ * write is asked of the entry inside the rule's filter and then of its twin
+ * outside it; `outsideKept` says the twin's ask left the table as it found
+ * it.
  */
 export async function ask(
   world: World,
@@ -1108,11 +1142,12 @@ export async function ask(
   refusal?: Refusal;
   landed?: boolean;
   done?: boolean;
+  outsideKept?: boolean;
 }> {
   if (!writes(row, door)) return answer(world, row, door);
   await markUpdated(world, row);
   const before = await storedTable(world, row);
-  const { answer: given, deviations, refusal } = await answer(world, row, door);
+  const inside = await answer(world, row, door);
   const after = await storedTable(world, row);
   const landed = !isDeepStrictEqual(before, after);
   // A Single's publish or unpublish is done only when its status moved, and
@@ -1125,5 +1160,32 @@ export async function ask(
       : row.action === "new-pub"
         ? addedPublished(before, after)
         : landed;
-  return { answer: given, deviations, refusal, landed, done };
+  if (!hasOutsideTwin(row)) return { ...inside, landed, done };
+  // The twin, compared with the table as the first ask left it: an ask
+  // answered as refused that wrote all the same is caught here.
+  const outside = await askingOutside.run(true, () => answer(world, row, door));
+  const outsideKept = isDeepStrictEqual(after, await storedTable(world, row));
+  return { ...filteredAnswer(inside, outside), landed, done, outsideKept };
+}
+
+/**
+ * One answer to a filtered write from its two asks: `M` where the entry inside
+ * the filter was let through and its twin refused, `A` where both were, which
+ * is a filter not applied, and the inside entry's own answer where it was
+ * refused. The deviations either ask recorded are the cell's.
+ */
+function filteredAnswer(
+  inside: { answer: Answer; deviations: Deviation[]; refusal?: Refusal },
+  outside: { answer: Answer; deviations: Deviation[] }
+): { answer: Answer; deviations: Deviation[]; refusal?: Refusal } {
+  const deviations = DEVIATIONS.filter(
+    deviation =>
+      inside.deviations.includes(deviation) ||
+      outside.deviations.includes(deviation)
+  );
+  if (inside.answer !== "A") return { ...inside, deviations };
+  return {
+    answer: verdictOf(outside.answer) === "refuse" ? "M" : "A",
+    deviations,
+  };
 }
