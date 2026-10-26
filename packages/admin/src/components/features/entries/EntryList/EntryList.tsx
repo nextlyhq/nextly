@@ -28,9 +28,8 @@ import {
 } from "@admin/hooks/queries";
 import { useCollection } from "@admin/hooks/queries/useCollections";
 import { useCan } from "@admin/hooks/useCan";
-import { useCanRequest } from "@admin/hooks/useCanRequest";
+import { useAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
-import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
 import type { ListResponse } from "@admin/lib/api/response-types";
@@ -42,6 +41,10 @@ import type { ApiCollection } from "@admin/types/entities";
 
 import { BulkDeleteDialog } from "../BulkActions/BulkDeleteDialog";
 
+import {
+  getCollectionLabels,
+  toCollectionForColumns,
+} from "./collection-for-columns";
 import { EntryEmptyState } from "./EntryEmptyState";
 import {
   buildEntryWhereFilter,
@@ -59,7 +62,6 @@ import {
   linkedSortFor,
   linkedStatusFor,
   type ChosenForCollection,
-  type CollectionForColumns,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
 import { useEntryBulkActions } from "./useEntryBulkActions";
@@ -104,105 +106,6 @@ function toTablePaginationState(
     limit: response.meta.limit,
     total: response.meta.total,
     totalPages: response.meta.totalPages,
-  };
-}
-
-/**
- * Creates a CollectionForColumns object from collection data.
- * Uses slug as fallback for labels.
- */
-function toCollectionForColumns(
-  collection:
-    | {
-        name: string;
-        label?: string;
-        schemaDefinition?: { fields: Array<{ name?: string; type?: string }> };
-        fields?: Array<{ name?: string; type?: string }>;
-        admin?: { defaultColumns?: string[]; useAsTitle?: string };
-        /**
-         * Built-in Draft / Published lifecycle flag (collection-level).
-         * Read from the dynamic-collections row or the code-first config.
-         * Forwarded to `CollectionForColumns.status` so the table's
-         * bulk-action bar can decide whether to render Publish /
-         * Unpublish buttons.
-         */
-        status?: boolean;
-        /** i18n: collection has multilingual content — drives the translation-status column. */
-        localized?: boolean;
-      }
-    | undefined,
-  slug: string
-): CollectionForColumns {
-  // Default collection structure when data is loading
-  if (!collection) {
-    return {
-      slug,
-      fields: [],
-      admin: {},
-    };
-  }
-
-  // Get fields from either new or old API format
-  // schemaDefinition.fields is the legacy format from the API
-  const rawFields =
-    collection.schemaDefinition?.fields || collection.fields || [];
-  const fields = rawFields as CollectionForColumns["fields"];
-
-  // Determine default columns: use admin config or auto-generate from first few fields
-  // Filter to only data fields (those with name property, excluding layout fields)
-  const layoutTypes = ["group", "relationship", "repeater", "component"];
-  const dataFields = rawFields.filter(
-    (f): f is { name: string; type: string } =>
-      typeof f.name === "string" &&
-      f.name.length > 0 &&
-      typeof f.type === "string" &&
-      !layoutTypes.includes(f.type)
-  );
-
-  const defaultColumns =
-    collection.admin?.defaultColumns || dataFields.slice(0, 4).map(f => f.name);
-
-  const labels = getCollectionLabels(collection, slug);
-
-  return {
-    slug,
-    label: labels.plural,
-    fields,
-    // Forward the Draft / Published flag so the bulk-action bar can
-    // surface Publish / Unpublish only for collections that opted in.
-    status: collection.status === true,
-    // Forward the localization flag so the table can render a
-    // per-row translation-completeness column.
-    localized: collection.localized === true,
-    admin: {
-      useAsTitle: collection.admin?.useAsTitle,
-      defaultColumns: [
-        "title",
-        ...defaultColumns.filter(
-          c => c !== "title" && c !== "slug" && c !== "updatedAt"
-        ),
-        "slug",
-        "updatedAt",
-      ],
-    },
-  };
-}
-
-/**
- * Gets display labels for the collection.
- */
-function getCollectionLabels(
-  collection: { label?: string; name?: string } | undefined,
-  slug: string
-): { singular: string; plural: string } {
-  const displayName = collection?.label || collection?.name || slug;
-
-  // Simple pluralization: add 's' if doesn't already end with 's'
-  const plural = displayName.endsWith("s") ? displayName : `${displayName}s`;
-
-  return {
-    singular: displayName,
-    plural,
   };
 }
 
@@ -301,11 +204,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // Asked only of a user the server lets read every language's state: the
   // overview reads them all, so without that the whole list would be refused
   // rather than shown without its translation column.
-  const { enabled: localizationEnabled } = useLocalization();
-  const mayReadTranslations = useCanRequest(collectionSlug, "readTranslations");
+  const asksTranslationStatus = useAsksTranslationStatus(collectionSlug);
   const wantsTranslationStatus =
-    localizationEnabled &&
-    mayReadTranslations &&
+    asksTranslationStatus &&
     (collection as { localized?: boolean } | undefined)?.localized === true;
 
   // A sort the link that opened this list carried (`?sort=-updatedAt`, from a dashboard card's
@@ -318,10 +219,14 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       linkedSortFor(
         sortParam,
         collection
-          ? toCollectionForColumns(collection, collectionSlug)
+          ? toCollectionForColumns(
+              collection,
+              collectionSlug,
+              asksTranslationStatus
+            )
           : undefined
       ),
-    [sortParam, collection, collectionSlug]
+    [sortParam, collection, collectionSlug, asksTranslationStatus]
   );
   const sort = choiceInForce(
     chosenSort,
@@ -339,10 +244,14 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       linkedStatusFor(
         statusParam,
         collection
-          ? toCollectionForColumns(collection, collectionSlug)
+          ? toCollectionForColumns(
+              collection,
+              collectionSlug,
+              asksTranslationStatus
+            )
           : undefined
       ),
-    [statusParam, collection, collectionSlug]
+    [statusParam, collection, collectionSlug, asksTranslationStatus]
   );
   const status = choiceInForce(
     chosenStatus,
@@ -418,8 +327,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // ---------------------------------------------------------------------------
 
   const collectionForColumns = useMemo(
-    () => toCollectionForColumns(collection, collectionSlug),
-    [collection, collectionSlug]
+    () =>
+      toCollectionForColumns(collection, collectionSlug, asksTranslationStatus),
+    [collection, collectionSlug, asksTranslationStatus]
   );
 
   // ---------------------------------------------------------------------------

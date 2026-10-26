@@ -71,6 +71,12 @@ export interface HistoryStoryListProps {
   localized: boolean;
   /** The language being edited, which the list opens on. */
   editingLocale: string | null;
+  /**
+   * Whether every language's versions were read. When only the language being
+   * edited was, the list offers no "All languages": the other languages'
+   * versions are not there, and the events alone would tell half their story.
+   */
+  allLanguages?: boolean;
   /** The retention limit, when the editor knows it. */
   retention?: number | false;
   /** Whether older versions remain to load: a predecessor may be among them. */
@@ -88,6 +94,7 @@ export interface HistoryStoryListProps {
 function StoryTools({
   localized,
   editingLocale,
+  allLanguages,
   languageName,
   view,
   onView,
@@ -96,6 +103,7 @@ function StoryTools({
 }: {
   localized: boolean;
   editingLocale: string | null;
+  allLanguages: boolean;
   languageName: (code: string) => string;
   view: HistoryView;
   onView: (view: HistoryView) => void;
@@ -104,7 +112,7 @@ function StoryTools({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2 px-4 pb-1 pt-2">
-      {localized && editingLocale ? (
+      {localized && editingLocale && allLanguages ? (
         <Select
           value={view.kind === "all" ? ALL_LANGUAGES : view.locale}
           onValueChange={value =>
@@ -331,6 +339,7 @@ export function HistoryStoryList({
   lifecycle,
   localized,
   editingLocale,
+  allLanguages = true,
   retention,
   hasMore,
   selected,
@@ -370,6 +379,7 @@ export function HistoryStoryList({
       <StoryTools
         localized={localized}
         editingLocale={editingLocale}
+        allLanguages={allLanguages}
         languageName={languageName}
         view={view}
         onView={changeView}

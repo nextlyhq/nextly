@@ -2,6 +2,7 @@ import {
   useCurrentUserPermissions,
   type CollectionAccess,
 } from "./useCurrentUserPermissions";
+import { useLocalization } from "./useLocalization";
 
 /**
  * Whether the user may send `request` about the collection or Single `slug`,
@@ -16,4 +17,17 @@ export function useCanRequest(
 ): boolean {
   const { canAccessCollection } = useCurrentUserPermissions();
   return canAccessCollection(slug, request);
+}
+
+/**
+ * Whether a read of the collection `slug`'s documents asks every language's
+ * translation state: on an app with several languages, and only of a user the
+ * server lets read that state, since a read asking it is refused otherwise.
+ * The editor's read and its save's cache key both take it from here, so a save
+ * writes to the document on screen.
+ */
+export function useAsksTranslationStatus(slug: string): boolean {
+  const { enabled } = useLocalization();
+  const mayReadTranslations = useCanRequest(slug, "readTranslations");
+  return enabled && mayReadTranslations;
 }

@@ -46,7 +46,7 @@ import {
   useStoredEntry,
   useWithStoredReferences,
 } from "@admin/hooks/queries/useStoredReferences";
-import { useCanRequest } from "@admin/hooks/useCanRequest";
+import { useAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
@@ -274,7 +274,7 @@ export default function EditEntryPage({
   const { defaultLocale, enabled: localizationEnabled } = useLocalization();
   // The overview reads every language's state, so it is asked only of a user
   // the server lets read them all; otherwise the editor would be refused.
-  const mayReadTranslations = useCanRequest(slug ?? "", "readTranslations");
+  const asksTranslationStatus = useAsksTranslationStatus(slug ?? "");
 
   const populatedEntry = useEntry({
     collectionSlug: slug || "",
@@ -291,7 +291,7 @@ export default function EditEntryPage({
     // as this locale's translation). sourceEntry (below) supplies the default-language
     // hint. Gated on localizationEnabled so a non-localized app sends no fallback param.
     fallbackLocale: localizationEnabled ? "none" : undefined,
-    translationStatus: localizationEnabled && mayReadTranslations,
+    translationStatus: asksTranslationStatus,
   });
   // The same document as stored, read in the same language and view. The
   // populated read above leaves out a related item the editor may not read,

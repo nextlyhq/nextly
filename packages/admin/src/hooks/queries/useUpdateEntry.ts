@@ -55,6 +55,7 @@ import { useCallback } from "react";
 import type { UseFormSetError, FieldValues } from "react-hook-form";
 
 import { toast } from "@admin/components/ui";
+import { useAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { useSharedFieldsRecovery } from "@admin/hooks/useSharedFieldsRecovery";
 import {
@@ -266,17 +267,19 @@ export function useUpdateEntry<
     }, [queryClient, collectionSlug, entryId]),
   });
   const { enabled: localizationEnabled } = useLocalization();
+  const asksTranslationStatus = useAsksTranslationStatus(collectionSlug);
 
   // The optimistic cache is keyed by the same per-view dimensions useEntry reads
   // with, built through the shared `detailScoped` helper so the two can never
   // drift (React Query hashes the object; any mismatch silently no-ops the
   // optimistic write, rollback, and cancellation). A localized editor reads with
-  // `translationStatus` on and `fallbackLocale: "none"`, and draft mode follows
-  // the collection's working-draft split.
+  // `fallbackLocale: "none"` and, where the user may read every language's
+  // state, `translationStatus` on; draft mode follows the collection's
+  // working-draft split.
   const localeKey = entryKeys.detailScoped(collectionSlug, entryId, {
     locale,
     fallbackLocale: localizationEnabled ? "none" : fallbackLocale,
-    translationStatus: localizationEnabled,
+    translationStatus: asksTranslationStatus,
     draft,
   });
 

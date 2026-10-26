@@ -375,6 +375,23 @@ describe("the language being edited", () => {
     ).toHaveTextContent("Spanish and shared fields");
   });
 
+  it("offers no All languages where only the language being edited was read", () => {
+    // The other languages' versions were not fetched, so a view of every
+    // language would show their events without their versions.
+    renderList(versions, [], {
+      lifecycle: false,
+      localized: true,
+      editingLocale: "es",
+      allLanguages: false,
+    });
+    expect(
+      screen.queryByRole("combobox", { name: "Languages shown" })
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /Version 2/ })
+    ).toBeInTheDocument();
+  });
+
   it("ends the preview of a version the language view stops showing", async () => {
     const onClearSelection = vi.fn();
     renderList(versions, [], {
