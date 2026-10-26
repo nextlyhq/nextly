@@ -25,6 +25,7 @@ import { eq, ne, and, like, ilike, inArray } from "drizzle-orm";
 import type { BeforeOperationArgs } from "@nextly/hooks/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { holdsGrant } from "../../../auth/access/gate-adapters";
 import { askEachLanguage } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { runWithCallerScope } from "../../../auth/caller-scope";
@@ -6260,6 +6261,30 @@ export class CollectionMutationService extends BaseService {
       );
       const hasMainStatus =
         (publishCollection as { status?: boolean }).status === true;
+      // A collection with a lifecycle is asked the lifecycle grant here, before
+      // any work only that change needs; its rule below, once the languages
+      // going live are known. A caller without it is refused as the gate words.
+      if (
+        hasMainStatus &&
+        !(await holdsGrant({
+          action: direction.accessAction,
+          slug: params.collectionName,
+          user: accessUser,
+          overrideAccess: params.overrideAccess,
+          authenticatedScope: params.authenticatedScope,
+        }))
+      ) {
+        const refused = await this.accessService.checkCollectionAccess({
+          collectionName: params.collectionName,
+          operation: direction.accessAction,
+          entryId: params.entryId,
+          user: accessUser,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: false,
+          authenticatedScope: params.authenticatedScope,
+        });
+        if (refused) return refused;
+      }
       const companion = await this.fileManager.loadCompanionSchema(
         params.collectionName
       );
@@ -8494,6 +8519,29 @@ export class CollectionMutationService extends BaseService {
       });
       if (toUpdate.answer) return toUpdate.answer;
       const { accessUser, schema, existingEntry } = toUpdate;
+      // Its grant is asked here, before any work only a publish needs; its
+      // rule below, in each language, once the languages going live are known.
+      if (
+        publishesEveryLanguage &&
+        !(await holdsGrant({
+          action: "publish",
+          slug: params.collectionName,
+          user: accessUser,
+          overrideAccess: params.overrideAccess,
+          authenticatedScope: params.authenticatedScope,
+        }))
+      ) {
+        const refused = await this.accessService.checkCollectionAccess({
+          collectionName: params.collectionName,
+          operation: "publish",
+          entryId: params.entryId,
+          user: accessUser,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: false,
+          authenticatedScope: params.authenticatedScope,
+        });
+        if (refused) return refused;
+      }
 
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(

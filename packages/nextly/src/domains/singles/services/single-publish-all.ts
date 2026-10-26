@@ -20,6 +20,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import { holdsGrant } from "../../../auth/access/gate-adapters";
 import { askEachLanguage } from "../../../auth/access/rule-language";
 import { actorForWrite } from "../../../auth/request-actor";
 import type { FieldConfig } from "../../../collections/fields/types";
@@ -377,6 +378,33 @@ export class SinglePublishAllService extends BaseService {
           message: `Single "${slug}" has no document to publish`,
         },
       };
+    }
+
+    // A Single with a lifecycle is asked the publish grant here, before any
+    // work only a publish needs; its rule is asked below, once the languages
+    // going live are known. A caller without the grant is refused as the full
+    // gate words it.
+    if ((singleMeta as { status?: boolean }).status === true) {
+      const grantHeld = await holdsGrant({
+        action: "publish",
+        slug,
+        user: options.user,
+        overrideAccess: options.overrideAccess,
+        authenticatedScope: options.authenticatedScope,
+      });
+      if (!grantHeld) {
+        const refused = await checkSingleAccess({
+          slug,
+          operation: "publish",
+          user: options.user,
+          overrideAccess: options.overrideAccess,
+          routeAuthorized: false,
+          rbacAccessControlService: this.rbacAccessControlService,
+          authenticatedScope: options.authenticatedScope,
+          logger: this.logger,
+        });
+        if (refused) return { result: refused };
+      }
     }
 
     const { hasMainStatus, companion, companionPublishable } =
