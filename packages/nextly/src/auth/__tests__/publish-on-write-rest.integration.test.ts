@@ -180,6 +180,17 @@ async function stored(
   return found.items as { status?: unknown }[];
 }
 
+/**
+ * The id of every entry `collection` stores, whatever its title, status or
+ * languages: a write that lands only part of an entry adds one all the same.
+ */
+async function entryIds(t: TestNextly, collection: string): Promise<string[]> {
+  const found = await t.nextly.find({ collection, status: "all", limit: 1000 });
+  return found.items
+    .map(item => String((item as { id: string | number }).id))
+    .sort();
+}
+
 /** A draft entry made by trusted code, for an update to publish. */
 async function draftOf(t: TestNextly, title: string): Promise<string> {
   const made = await t.nextly.create({
@@ -251,6 +262,7 @@ for (const dialect of getConfiguredTestDialects()) {
     ] as const)("%s", (_who, without, granted) => {
       it("is refused a create as published, and nothing is stored", async () => {
         const title = `${without} create published`;
+        const before = await entryIds(t, POSTS);
         const res = await rest(
           "POST",
           `collections/${POSTS}/entries`,
@@ -259,6 +271,7 @@ for (const dialect of getConfiguredTestDialects()) {
         );
         expect(res.status).toBe(403);
         expect(await stored(t, POSTS, title)).toEqual([]);
+        expect(await entryIds(t, POSTS)).toEqual(before);
       });
 
       it("is allowed the same create as a draft, so the refusal is the publish", async () => {
@@ -294,6 +307,7 @@ for (const dialect of getConfiguredTestDialects()) {
 
       it("is refused a create as published in another language", async () => {
         const title = `${without} create fr`;
+        const before = await entryIds(t, PAGES);
         const res = await rest(
           "POST",
           `collections/${PAGES}/entries?locale=fr`,
@@ -304,6 +318,8 @@ for (const dialect of getConfiguredTestDialects()) {
         // Read in French, where the write would have landed, and in English.
         expect(await stored(t, PAGES, title, "fr")).toEqual([]);
         expect(await stored(t, PAGES, title)).toEqual([]);
+        // No entry at all, so not one stored without its French translation.
+        expect(await entryIds(t, PAGES)).toEqual(before);
       });
 
       it("is refused a Single's update to published, and it is left as it was", async () => {
