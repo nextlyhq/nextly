@@ -1265,6 +1265,10 @@ export class SingleMutationService extends BaseService {
         (singleMeta as { status?: boolean }).status === true
           ? statusGate(data.status)
           : "update";
+      // Handed on as the status alone: the system columns a status-only body
+      // may also name are never stored, and no hook is handed a value sent by
+      // a caller judged without update.
+      if (gate !== "update") data = { status: data.status };
       // A write to every language that publishes is judged as publishing
       // every language is, once in each language it puts live (asked below,
       // once its document is resolved and before any hook runs), not once in

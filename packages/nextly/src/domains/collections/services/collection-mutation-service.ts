@@ -8462,6 +8462,10 @@ export class CollectionMutationService extends BaseService {
           )) as { status?: boolean }
         ).status === true;
       const gate = statusOnly ? statusGate(body.status) : "update";
+      // Handed on as the status alone: the system columns a status-only body
+      // may also name are never stored, and no hook is handed a value sent by
+      // a caller judged without update.
+      if (statusOnly) body = { status: body.status };
       // A write to every language that publishes is judged as publishing
       // every language is, once in each language it puts live (asked below,
       // before any hook runs), not once in all of them together: a rule
@@ -12129,6 +12133,10 @@ export class CollectionMutationService extends BaseService {
           (collection as { status?: boolean }).status === true
             ? statusGate(body.status)
             : "update";
+        // Handed on as the status alone: the system columns a status-only body
+        // may also name are never stored, and no hook is handed a value sent by
+        // a caller judged without update.
+        if (gate !== "update") body = { status: body.status };
         // The transaction API asks the access service for the whole verdict,
         // with the caller's overrideAccess / routeAuthorized forwarded.
         const accessDenied = await this.accessService.checkCollectionAccess({
