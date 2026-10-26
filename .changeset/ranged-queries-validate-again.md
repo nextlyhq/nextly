@@ -32,6 +32,6 @@
 A ranged widget query validates again unchanged, and settings say what they may hand back.
 
 - **Widget queries:** a timeseries over a `range` carries no `limit` once validated, so what `validateWidgetQuery` returns validates again unchanged. A widget declaring a `limit` number setting beside a ranged query is refused at registration and as a contribution, since its range sets how many points are drawn.
-- **`applyWidgetSettings`** returns `AskedQuery<T>`: the query as declared with each setting applied, or, for a titled list set to a collection it cannot title, the same with no `source` and no `select`. The type is exported from `nextly/config`.
+- **`applyWidgetSettings`** returns `AppliedQuery<T>`: the query as declared with each setting applied, or, for a titled list set to a collection it cannot title, the same with no `source` and no `select`. The type is exported from `nextly/config`.
 
 All of it is `@experimental` while the content widgets are built.

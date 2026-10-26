@@ -347,7 +347,7 @@ export {
   effectiveWidgetSettings,
   naturalGroupBy,
   resolveWidgetSettings,
-  type AskedQuery,
+  type AppliedQuery,
 } from "./domains/widgets/settings";
 // Whether a link a plugin wrote stays inside the admin: asked at startup and
 // again by the admin before it draws the link, so both read this one rule.

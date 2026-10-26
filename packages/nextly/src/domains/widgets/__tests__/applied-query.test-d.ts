@@ -14,9 +14,7 @@ const declared = {
 };
 const asked = applyWidgetSettings(declared, undefined, undefined);
 
-// 🔴 Typed as the query it was given, this compiled and threw at runtime.
-// @ts-expect-error the source may have been dropped
-asked.source.toUpperCase();
-
+// 🔴 Typed as the query it was given, `asked.source.toUpperCase()` compiled
+// and threw at runtime: the source is optional, so a caller checks it first.
 expectTypeOf(asked.source).toEqualTypeOf<string | undefined>();
 expectTypeOf(asked.select).toEqualTypeOf<string[] | undefined>();

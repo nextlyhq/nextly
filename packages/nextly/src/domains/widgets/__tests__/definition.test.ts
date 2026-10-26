@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  rangedLimitSettingProblem,
   validateWidgetDefinition,
   widgetValueProblem,
   MAX_TEXT_CONTENT,
 } from "../definition";
+import { applyWidgetSettings } from "../settings";
 
 const valid = {
   id: "core/recent-entries",
@@ -994,5 +996,49 @@ describe("a custom card's cells", () => {
     expect(() => validateWidgetDefinition({ ...card, cells: [split] })).toThrow(
       /its cell "split" names no source, and no Collection setting supplies one/
     );
+  });
+});
+
+describe("a limit setting beside a ranged query", () => {
+  // The rule refuses exactly the setting the limit knob would apply: one test
+  // of what a limit setting is, read by both, so the two cannot part.
+  it.each([
+    [{ name: "limit", type: "number" as const, label: "Limit" }, 3],
+    [{ name: "limit", type: "text" as const, label: "Limit" }, "3"],
+    [{ name: "items", type: "number" as const, label: "Items" }, 3],
+  ])("refuses %o exactly when the limit knob applies it", (setting, value) => {
+    const applied = applyWidgetSettings(
+      { source: "collection:posts", op: "list" as const },
+      [setting],
+      { [setting.name]: value }
+    );
+    const refused = rangedLimitSettingProblem({
+      query: {
+        source: "collection:posts",
+        op: "timeseries",
+        dateField: "createdAt",
+        range: "30d",
+      },
+      settings: [setting],
+    });
+    expect(refused !== undefined).toBe("limit" in applied);
+  });
+
+  it("is refused at registration, naming the widget", () => {
+    expect(() =>
+      validateWidgetDefinition({
+        id: "acme/over-time",
+        title: "Over time",
+        archetype: "timeseries",
+        defaultSize: "md",
+        query: {
+          source: "collection:posts",
+          op: "timeseries",
+          dateField: "createdAt",
+          range: "30d",
+        },
+        settings: [{ name: "limit", type: "number", label: "Limit" }],
+      })
+    ).toThrow(/acme\/over-time: declares a "limit" setting/);
   });
 });

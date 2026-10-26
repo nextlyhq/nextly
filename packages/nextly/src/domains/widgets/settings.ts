@@ -1117,13 +1117,29 @@ interface KnobQuery {
 }
 
 /**
+ * Whether `setting` sets how many rows a card asks for: a number setting named
+ * `limit`. The limit knob drives it, and a widget whose query has a range may
+ * not declare it (`rangedLimitSettingProblem`), both by this one test.
+ *
+ * @experimental While the content widgets are being built.
+ */
+export function isLimitSetting(setting: unknown): boolean {
+  return (
+    typeof setting === "object" &&
+    setting !== null &&
+    (setting as { type?: unknown }).type === "number" &&
+    (setting as { name?: unknown }).name === "limit"
+  );
+}
+
+/**
  * A query as settings may leave it: as declared with each knob applied, or,
  * for a titled list set to a collection it cannot title, the same with no
  * source and no fields, which asks nothing.
  *
  * @experimental While the content widgets are being built.
  */
-export type AskedQuery<T> =
+export type AppliedQuery<T> =
   | T
   | (T extends unknown
       ? Omit<T, "source" | "select"> & {
@@ -1268,7 +1284,7 @@ function allOffered(
  */
 const QUERY_KNOBS: readonly QueryKnob[] = [
   {
-    drives: setting => setting.type === "number" && setting.name === "limit",
+    drives: isLimitSetting,
     apply: (query, value) => ({ ...query, limit: value as number }),
   },
   {
@@ -1494,7 +1510,7 @@ export function applyWidgetSettings<T extends KnobQuery>(
   settings: readonly AnyWidgetSetting[] | undefined,
   stored: Record<string, unknown> | undefined,
   ctx: KnobContext = {}
-): AskedQuery<T> {
+): AppliedQuery<T> {
   if (!settings || settings.length === 0) return query;
   // Judged on the DECLARED source, read once before any knob may replace it.
   const source = ctx.source ?? knobSourceOf(query);

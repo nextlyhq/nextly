@@ -23,6 +23,7 @@ import type {
   WidgetQuerySpec,
 } from "./query";
 import {
+  isLimitSetting,
   settingsSourceOf,
   validateWidgetSettings,
   type AnyWidgetSetting,
@@ -1575,15 +1576,9 @@ export function rangedLimitSettingProblem(widget: {
   cells?: unknown;
   settings?: unknown;
 }): string | undefined {
+  // The setting the limit knob drives, by the knob's own test.
   const limited =
-    Array.isArray(widget.settings) &&
-    widget.settings.some(
-      setting =>
-        typeof setting === "object" &&
-        setting !== null &&
-        (setting as { type?: unknown }).type === "number" &&
-        (setting as { name?: unknown }).name === "limit"
-    );
+    Array.isArray(widget.settings) && widget.settings.some(isLimitSetting);
   if (!limited) return undefined;
   const queries = [
     widget.query,
