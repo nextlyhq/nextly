@@ -22,6 +22,7 @@ import { readComponentSubtrees } from "../../field-groups/read-component-subtree
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { isFieldLocalized } from "../../i18n/classify-fields";
+import { perLanguageFieldNames } from "../../i18n/per-language-fields";
 import {
   sharedFieldNames,
   type SharedViews,
@@ -228,27 +229,7 @@ function asIdSet(value: unknown): unknown {
   return value.map(id => String(id)).sort();
 }
 
-/**
- * The fields judged per language when every language is published: the
- * translated fields, and each field whose component is translated. A dynamic
- * zone counts when any type it permits is translated. References are read
- * through `fieldGroupSlugList`, so a definition stored under the migrated
- * `fieldGroup` / `fieldGroups` keys counts as the field-group saver sees it.
- */
-export async function perLanguageFieldNames(
-  fieldConfigs: readonly FieldConfig[],
-  localizedFieldNames: ReadonlySet<string>,
-  isComponentLocalized: (slug: string) => Promise<boolean>
-): Promise<Set<string>> {
-  const names = new Set(localizedFieldNames);
-  for (const field of fieldConfigs) {
-    if (!isFieldGroupField(field)) continue;
-    for (const slug of fieldGroupSlugList(field)) {
-      if (await isComponentLocalized(slug)) {
-        names.add(field.name);
-        break;
-      }
-    }
-  }
-  return names;
-}
+// Which fields hold values per language is one question with one answer, and
+// the collection paths ask it as well, so it is kept beside the rest of the
+// language code. Re-exported here, where this reader first held it.
+export { perLanguageFieldNames };
