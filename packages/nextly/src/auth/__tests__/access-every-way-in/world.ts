@@ -59,6 +59,13 @@ export const pubSingleOf = (rule: Rule) => `s_pub_${rule.replace(/-/g, "_")}`;
  * that row was returned.
  */
 export const PROBE_WHERE = { slug: { equals: "probe" } };
+/**
+ * The filter the filter rule kinds answer with: it matches the probe entry
+ * and no other, so a door that applies it returns the probe and withholds the
+ * rest of the collection.
+ */
+const PROBE_FILTER = { slug: { equals: "probe" } };
+
 /** The relationship on `refs` that points at `rule`'s collection. */
 export const relationOf = (rule: Rule) => `to_${rule.replace(/-/g, "_")}`;
 
@@ -120,6 +127,10 @@ const RULE_BODIES: Record<Rule, boolean | RuleFn | undefined> = {
   "user-is-key-maker": ({ user }) =>
     keyMaker.id !== undefined && user?.id === keyMaker.id,
   "publish-false": () => false,
+  "returns-filter": () => PROBE_FILTER,
+  "async-filter": async () => PROBE_FILTER,
+  "returns-empty-in": () => ({ slug: { in: [] } }),
+  "malformed-filter": () => ({ slug: { resembles: "probe" } }),
 };
 
 /**
