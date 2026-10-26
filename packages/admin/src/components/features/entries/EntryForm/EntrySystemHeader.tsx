@@ -17,7 +17,6 @@ import {
   PanelRight,
   PanelRightClose,
 } from "@admin/components/icons";
-import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { useCan } from "@admin/hooks/useCan";
 import { useLocalization } from "@admin/hooks/useLocalization";
@@ -358,10 +357,6 @@ export function EntrySystemHeader({
     disabled: isSubmitting,
   };
 
-  // The document's id, copied from the rail on a wide screen. The rail is
-  // hidden on a narrow one, so the menu below offers it there.
-  const documentId = entry?.id ? String(entry.id) : null;
-
   // The header's own controls as menu rows, for a screen too narrow to keep
   // them beside the document's verbs.
   const narrowItems: NarrowMenuItem[] = [
@@ -380,21 +375,6 @@ export function EntrySystemHeader({
       onSelect: choice.run,
       disabled: choice.disabled,
     })),
-    // Copying the id writes nothing, so it is offered to anyone who sees the
-    // document, a user who may only read it included.
-    ...(documentId === null
-      ? []
-      : [
-          {
-            id: "copy-id",
-            label: "Copy ID",
-            onSelect: () => {
-              void navigator.clipboard
-                .writeText(documentId)
-                .then(() => toast.success("ID copied"));
-            },
-          },
-        ]),
   ];
 
   return (

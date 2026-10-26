@@ -128,9 +128,8 @@ test("opens a post read-only at a phone's width, its id still to copy", async ()
     await openAsReader(`/collections/posts/${postId}`);
     await expect(excerpt()).not.toBeEditable();
     await expect(page.locator('[data-primary="true"]')).toHaveCount(0);
-    // The rail holding the id is hidden at this width; the menu offers it.
-    await page.getByRole("button", { name: "More actions" }).click();
-    await page.getByRole("menuitem", { name: "Copy ID" }).click();
+    // The rail holding the id is hidden at this width; the strip offers it.
+    await page.getByRole("button", { name: "Copy ID to clipboard" }).click();
     await expect
       .poll(() => page.evaluate(() => navigator.clipboard.readText()))
       .toBe(postId);

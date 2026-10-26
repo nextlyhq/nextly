@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-On a narrow screen, where the document panel holding an entry's or a Single's ID is hidden, the editor's "More actions" menu offers "Copy ID", for a user who may only read the document as for one who may change it.
+Wherever the document panel holding an entry's or a Single's ID is not on screen (a phone, a tablet, or a collapsed panel), the strip under the editor's header shows the ID with a control to copy it, for a user who may only read the document as for one who may change it. A copy the browser refuses, or a page served without clipboard access, says so and shows the ID to copy by hand.

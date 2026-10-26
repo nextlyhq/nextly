@@ -1140,6 +1140,7 @@ export function EntryForm({
                                   )}
                                   isRailCollapsed={railCollapsed}
                                   hasPublicAddress={hasPublicAddress}
+                                  documentId={entry?.id}
                                 />
 
                                 {/* The language panel, inline. Its rail mount is

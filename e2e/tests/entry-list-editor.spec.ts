@@ -90,20 +90,29 @@ test("opens a post editable, with no reader's banner", async () => {
   await expect(page.getByTestId("document-lock-banner")).toHaveCount(0);
 });
 
-test("copies a post's id at a phone's width", async () => {
-  await limited.context.grantPermissions(["clipboard-read", "clipboard-write"]);
-  await page.setViewportSize({ width: 390, height: 844 });
-  try {
-    await gotoAdmin(page, `/collections/posts/${postId}`);
-    await page.getByRole("button", { name: "More actions" }).click();
-    await page.getByRole("menuitem", { name: "Copy ID" }).click();
-    await expect
-      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-      .toBe(postId);
-  } finally {
-    await page.setViewportSize({ width: 1280, height: 720 });
-  }
-});
+// Below the width the document panel is drawn from, a tablet's as a phone's,
+// the strip under the header offers the id the panel holds.
+for (const [width, height, screenName] of [
+  [390, 844, "a phone"],
+  [820, 1180, "a tablet"],
+] as const) {
+  test(`copies a post's id at ${screenName}'s width`, async () => {
+    await limited.context.grantPermissions([
+      "clipboard-read",
+      "clipboard-write",
+    ]);
+    await page.setViewportSize({ width, height });
+    try {
+      await gotoAdmin(page, `/collections/posts/${postId}`);
+      await page.getByRole("button", { name: "Copy ID to clipboard" }).click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe(postId);
+    } finally {
+      await page.setViewportSize({ width: 1280, height: 720 });
+    }
+  });
+}
 
 test("offers the preview of a page it may change", async () => {
   await gotoAdmin(page, `/collections/block-pages/${blockPageId}`);

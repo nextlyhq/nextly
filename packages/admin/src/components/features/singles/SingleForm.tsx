@@ -1186,6 +1186,7 @@ export function SingleForm({
                                   )}
                                   isRailCollapsed={railCollapsed}
                                   lockSlug
+                                  documentId={entryLike.id}
                                 />
 
                                 {/* Inside the main column, below the header, matching the entry
