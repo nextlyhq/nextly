@@ -90,3 +90,37 @@ export function collectionSettingsToken(
     ([id, setting]) => `${id}=${JSON.stringify(setting)}`
   );
 }
+
+/**
+ * A widget declaration as this reader is told it: its Collection setting's
+ * declared default withheld when that default names a collection the reader
+ * may not read. The same declaration when there is nothing to withhold.
+ *
+ * 🔴 The workspace payload ships declarations to every reader who may see the
+ * widget, and a default is a collection slug: shipped as declared, it tells a
+ * reader of a collection they may not read, whether or not they hold a card.
+ * Withholding the cards that rely on it (`unreadableCollectionCard`) does not
+ * reach the declaration.
+ *
+ * Only the default goes, not the declaration: the widget stays offered for
+ * the collections the reader may read, and a card added without choosing one
+ * is set to none, drawn as not available. The verdict is the layout's: the
+ * same slug rule (`namedCollection`) and the same readable collections.
+ */
+export function collectionDefaultForReader<
+  W extends { settings?: readonly AnyWidgetSetting[] },
+>(widget: W, readable: ReadonlySet<string>): W {
+  const settings = widget.settings;
+  if (settings === undefined) return widget;
+  let withheld = false;
+  const told = settings.map(setting => {
+    if (setting.type !== "collection") return setting;
+    const named = namedCollection(setting.defaultValue);
+    if (named === undefined || readable.has(named)) return setting;
+    withheld = true;
+    return Object.fromEntries(
+      Object.entries(setting).filter(([key]) => key !== "defaultValue")
+    ) as AnyWidgetSetting;
+  });
+  return withheld ? { ...widget, settings: told } : widget;
+}
