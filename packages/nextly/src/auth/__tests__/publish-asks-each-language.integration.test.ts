@@ -58,28 +58,6 @@ const SHARED_NESTED = "sharednested";
 const SHARED_NESTED_BANNER = "sharednestedbanner";
 const PENDING_BANNER = "pendingbanner";
 const USER = { id: "user-1", isActive: true };
-/** Every collection and Single this file defines. */
-const TARGETS = [
-  ARTICLES,
-  NO_ENGLISH_ARTICLES,
-  GROUPED_ARTICLES,
-  HELD_PAGES,
-  BANNER,
-  NO_ENGLISH,
-  UNPUBLISHABLE,
-  GROWING_ARTICLES,
-  GROWING_BANNER,
-  SHARED_ARTICLES,
-  SHARED_BANNER,
-  PENDING_PAGES,
-  NESTED_ARTICLES,
-  NESTED_BANNER,
-  SHARED_PENDING_PAGES,
-  SHARED_PENDING_BANNER,
-  SHARED_NESTED,
-  SHARED_NESTED_BANNER,
-  PENDING_BANNER,
-];
 
 /** Every question the publish rule was asked, in order. */
 let asked: { locale?: string; locales: string[] }[] = [];
@@ -131,7 +109,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   asked = [];
   order = [];
   onFirstAsk = undefined;
-  current = await createTestNextly({
+  const config: Parameters<typeof createTestNextly>[0] = {
     dialect,
     localization: { locales: ["en", "fr", "de"], defaultLocale: "en" },
     fieldGroups: [
@@ -401,12 +379,18 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [text({ name: "headline" })],
       }),
     ],
-  });
+  };
+  current = await createTestNextly(config);
   // A code rule only narrows the permission, so the user holds every action
-  // this file asks on each collection and Single, and the rules alone decide.
-  await userWhoMay(current, USER.id, "read", TARGETS);
+  // this file asks on each collection and Single it defines, read from the
+  // config itself, and the rules alone decide.
+  const targets = [
+    ...(config.collections ?? []),
+    ...(config.singles ?? []),
+  ].map(entity => entity.slug);
+  await userWhoMay(current, USER.id, "read", targets);
   for (const action of ["create", "update", "publish", "unpublish"]) {
-    await grantTo(current, USER.id, action, TARGETS);
+    await grantTo(current, USER.id, action, targets);
   }
   return current;
 }
