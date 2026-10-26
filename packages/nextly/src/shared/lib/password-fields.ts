@@ -341,9 +341,17 @@ function instanceFields(
   { single, many }: { single?: string; many?: string[] },
   walk: PasswordWalk
 ): readonly NamedField[] | undefined {
+  const typed = readFieldGroupType(instance);
+  // A snapshot (`direct`) is the server's own record of an instance, and
+  // tags it with the field group it held when captured, which the field
+  // may have been pointed away from since: it is read by that one. A live
+  // value's tag is the writer's to set, so there it names only one of the
+  // field's own field groups.
+  if (walk.reach.direct === true && typed !== undefined) {
+    return walk.reach.fieldsOf(typed);
+  }
   if (single !== undefined) return walk.reach.fieldsOf(single);
   const candidates = many ?? [];
-  const typed = readFieldGroupType(instance);
   if (typed !== undefined) {
     return candidates.includes(typed) ? walk.reach.fieldsOf(typed) : undefined;
   }

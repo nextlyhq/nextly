@@ -50,6 +50,7 @@ import { isMissingTable } from "./migration/session";
 import { passwordReachOf } from "./password-reach";
 import { FieldGroupRegistryService } from "./services/field-group-registry-service";
 import { registerComponentSchemas } from "./services/register-field-group-schemas";
+import { extractFieldGroupReferences } from "./storage/field-group-field-type";
 
 /** Rows read per page, so a large table is never read whole. */
 const PAGE_SIZE = 500;
@@ -510,11 +511,26 @@ async function versionedEntities(
       fields: record.fields,
     })),
   ];
+  // A version may tag a field group the field held when it was captured,
+  // so one whose fields hold any field group is read, as well as one whose
+  // fields reach a password now.
   return records
     .map(record => ({ ...record, fieldsOf }))
-    .filter(entity =>
-      reachesPasswordField(entity.fields, { fieldsOf, direct: true })
+    .filter(
+      entity =>
+        reachesPasswordField(entity.fields, { fieldsOf, direct: true }) ||
+        holdsFieldGroup(entity.fields)
     );
+}
+
+/** Whether `fields` hold a field-group field, at any depth. */
+function holdsFieldGroup(fields: readonly FieldConfig[]): boolean {
+  return fields.some(field => {
+    const { single, many } = extractFieldGroupReferences(field);
+    if (single !== undefined || many !== undefined) return true;
+    const nested = (field as { fields?: FieldConfig[] }).fields;
+    return nested !== undefined && holdsFieldGroup(nested);
+  });
 }
 
 /** Whether a version's snapshot holds a password, at any depth. */
