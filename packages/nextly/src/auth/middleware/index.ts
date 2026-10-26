@@ -779,9 +779,11 @@ export interface RouteOperation {
   method: string;
   params: Readonly<Record<string, string>>;
   /**
-   * The request names one document that has no entry id in its parameters:
-   * a Single's own. A request naming one entry, by id or so, is refused about
-   * it, and a caller who may not read it is answered as if it were missing.
+   * The request names one entry or document: an entry its path names by id,
+   * or a Single's own document. It is refused about that one, and a caller
+   * who may not read it is answered as if it were missing. Set by the route,
+   * which knows what its path names; the parameters cannot say, since a
+   * query may carry an `entryId` that names nothing.
    */
   namesOne?: boolean;
 }
@@ -823,8 +825,9 @@ export async function requireCollectionAccess(
       authResult,
       action,
       collectionSlug,
-      // A route naming one entry is refused about that entry.
-      operation?.params.entryId || operation?.namesOne ? "one" : "all"
+      // A route naming one entry is refused about that entry. Named by the
+      // route, never by a parameter: a query can carry an `entryId` too.
+      operation?.namesOne ? "one" : "all"
     )
   );
 }

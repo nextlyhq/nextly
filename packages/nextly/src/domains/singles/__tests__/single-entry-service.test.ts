@@ -937,6 +937,12 @@ describe("SingleEntryService", () => {
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
+      // The missing Single's own answer, data and all, so nothing tells the two
+      // apart.
+      expect(result).toMatchObject({
+        statusCode: 404,
+        publicData: { single: "site-settings" },
+      });
       expect(ctx.adapter.update).not.toHaveBeenCalled();
     });
 

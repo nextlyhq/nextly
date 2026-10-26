@@ -687,6 +687,31 @@ describe("publish-transition access control", () => {
     expect(result.statusCode).toBe(403);
   });
 
+  it("answers a publish in a transaction as missing to a caller who may not read the entry", async () => {
+    // May update, so the write's own gate passes; may neither publish nor
+    // read, so the transition's refusal is the missing entry's answer, as the
+    // ordinary update's is.
+    callerMay("update");
+    const rbac = createMockRbacAccessControlService();
+    const { service, adapter } = buildService({
+      rbacAccessControlService: rbac,
+      collectionService: lifecycle(),
+    });
+
+    const result = (await adapter.transaction((tx: object) =>
+      service.updateEntryInTransaction(
+        {
+          ...tx,
+          selectOne: async () => createSampleEntry({ status: "draft" }),
+        } as never,
+        { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
+        { status: "published" }
+      )
+    )) as { statusCode: number; code?: string };
+
+    expect(result).toMatchObject({ statusCode: 404, code: "NOT_FOUND" });
+  });
+
   it("denies unpublishing without the unpublish permission", async () => {
     const rbac = allowUpdateDeny("unpublish");
     const { service, selectData } = buildService({

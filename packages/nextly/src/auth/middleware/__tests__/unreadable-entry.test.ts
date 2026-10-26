@@ -52,6 +52,7 @@ vi.mock("../api-key-budget", () => ({
 }));
 
 const { requireCollectionAccess } = await import("../index");
+const { parseRestRoute } = await import("../../../route-handler/route-parser");
 
 /** The grants `read-posts` and the like, for the key. */
 function holds(...actions: string[]): GrantedPermission[] {
@@ -70,7 +71,12 @@ function ask(action: string, entryId?: string) {
     }),
     action,
     "posts",
-    { method: "updateEntry", params: entryId ? { entryId } : {} }
+    // As the route sets it: only a path naming one entry says so.
+    {
+      method: "updateEntry",
+      params: entryId ? { entryId } : {},
+      namesOne: entryId !== undefined,
+    }
   );
 }
 
@@ -113,5 +119,34 @@ describe("a request naming one entry", () => {
 describe("a request naming no one entry", () => {
   it("is refused in words, not answered as missing", async () => {
     await expect(ask("update")).resolves.toMatchObject({ statusCode: 403 });
+  });
+
+  it("is refused in words even when a parameter carries an entry id", async () => {
+    // A list's query can carry `?entryId=`, which names nothing: only the
+    // route says whether one entry is named.
+    const answer = await requireCollectionAccess(
+      new Request(
+        "https://example.com/api/collections/posts/entries?entryId=7",
+        {
+          headers: { authorization: "Bearer nx_test_key" },
+        }
+      ),
+      "read",
+      "posts",
+      { method: "listEntries", params: { entryId: "7" } }
+    );
+    expect(answer).toMatchObject({ statusCode: 403 });
+  });
+});
+
+describe("what a route's path names", () => {
+  it("names one entry only where the path does, whatever the query carries", () => {
+    // The route sets `namesOne` from the path parsed without its query.
+    const list = ["collections", "posts", "entries"];
+    const one = ["collections", "posts", "entries", "7"];
+    const query = new URLSearchParams({ entryId: "7" });
+    expect(parseRestRoute(list, "GET", query).routeParams?.entryId).toBe("7");
+    expect(parseRestRoute(list, "GET").routeParams?.entryId).toBeUndefined();
+    expect(parseRestRoute(one, "GET").routeParams?.entryId).toBe("7");
   });
 });

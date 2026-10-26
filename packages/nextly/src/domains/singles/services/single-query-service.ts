@@ -34,10 +34,7 @@ import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
 import type { Nextly as NextlyDirectAPI } from "../../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
-import {
-  genericPublicMessage,
-  NEXTLY_ERROR_STATUS,
-} from "../../../errors/error-codes";
+import { NEXTLY_ERROR_STATUS } from "../../../errors/error-codes";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
@@ -356,11 +353,10 @@ export async function checkSingleAccess(params: {
     };
   }
   if (answer.answer === "missing") {
+    // The missing Single's own answer, data and all, so nothing in it tells
+    // the two apart; only the server's reason is added.
     return {
-      success: false,
-      statusCode: NEXTLY_ERROR_STATUS.NOT_FOUND,
-      code: "NOT_FOUND",
-      message: genericPublicMessage("NOT_FOUND"),
+      ...singleAbsentResult(slug),
       refusalReason: `the caller may not read single "${slug}", so its ${operation} is answered as missing`,
     };
   }
