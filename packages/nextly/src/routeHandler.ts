@@ -774,13 +774,11 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
  * Read methods that still need resolved role slugs, even though reads normally
  * skip the lookup.
  *
- * Every method here runs the caller through `checkCollectionAccess`, which
- * reads roles twice over: the super-admin bypass is keyed on the role set
- * (`isSuperAdminContext`), and the RBAC gate matches the caller's permissions
- * against the roles forwarded in the request context. A caller arriving
- * without roles is therefore treated as a non-super-admin holding no roles, so
- * a role-based rule denies a legitimately permitted reader and a super-admin
- * loses the bypass and gets owner-filtered instead.
+ * Every method here runs the caller through `checkCollectionAccess`, whose
+ * RBAC gate matches the caller's permissions against the roles forwarded in
+ * the request context. A caller arriving without roles is therefore treated
+ * as holding no roles, so a role-based rule denies a legitimately permitted
+ * reader. Super-admin authority is not among them: the gate looks it up.
  *
  * The version methods surface that denial as a 404, since their gate does not
  * disclose existence, and the two version `get*` methods additionally return a
@@ -795,8 +793,7 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
 const ROLE_AWARE_READ_METHODS = new Set([
   // The autosave reads run through the same gate the version reads use, so
   // they need resolved roles for the same reason: without them a caller arrives
-  // as a non-super-admin holding no roles, and the gate answers not-found for
-  // the author whose own
+  // holding no roles, and the gate answers not-found for the author whose own
   // recovery point it is.
   "getEntryAutosave",
   "getSingleAutosave",
