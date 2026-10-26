@@ -85,6 +85,7 @@ import {
   invalidateCurrentUserAccess,
 } from "../current-user-access";
 import { useCurrentUserPermissions } from "../useCurrentUserPermissions";
+import { editsOffered, useUpdateAnswer } from "../useReadOnlyForReader";
 
 function wrapperFor(client: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -940,6 +941,59 @@ describe("useCurrentUserPermissions", () => {
     rerender();
     await waitFor(() =>
       expect(server.asked).toContain("/me/capabilities?locale=fr")
+    );
+  });
+
+  it("keeps the language moved from on screen while the next is asked, and grants nothing on its word", async () => {
+    // A role that may edit English and only read German.
+    onScreen.locale = "en";
+    server.capabilities = answering({ read: true, update: true });
+    const { result, rerender } = renderHook(
+      () => ({
+        access: useCurrentUserPermissions(),
+        edits: editsOffered(useUpdateAnswer("posts")),
+      }),
+      { wrapper: wrapperFor(newClient()) }
+    );
+    await waitFor(() =>
+      expect(result.current.access.content.hasAnswer).toBe(true)
+    );
+    expect(result.current.edits).toBe(true);
+
+    // Switching to German: its answer is held back, so the English one stays
+    // on screen meanwhile.
+    let release!: () => void;
+    server.capabilitiesGate = new Promise(done => {
+      release = done;
+    });
+    server.capabilities = answering({ read: true, update: false });
+    onScreen.locale = "de";
+    rerender();
+    await waitFor(() =>
+      expect(server.asked).toContain("/me/capabilities?locale=de")
+    );
+    // The page stays (a placeholder), and nothing is granted on its word:
+    // no update, and no edit offered, though English allowed both.
+    expect(result.current.access.content).toMatchObject({
+      isPlaceholder: true,
+      hasAnswer: false,
+    });
+    expect(result.current.access.canAccessCollection("posts", "update")).toBe(
+      false
+    );
+    expect(result.current.edits).toBe(false);
+
+    // German's own answer arrives, and it refuses.
+    release();
+    await waitFor(() =>
+      expect(result.current.access.content).toMatchObject({
+        isPlaceholder: false,
+        hasAnswer: true,
+      })
+    );
+    expect(result.current.edits).toBe(false);
+    expect(result.current.access.canAccessCollection("posts", "read")).toBe(
+      true
     );
   });
 });

@@ -33,6 +33,9 @@ const { headerProps, localization, reader } = vi.hoisted(() => ({
 
 vi.mock("@admin/hooks/useReadOnlyForReader", () => ({
   useReadOnlyForReader: () => reader.current,
+  useUpdateAnswer: () => (reader.current ? "refused" : "allowed"),
+  editsOffered: (answer: string) =>
+    answer !== "refused" && answer !== "switching",
 }));
 
 vi.mock(

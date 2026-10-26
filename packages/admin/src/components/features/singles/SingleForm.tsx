@@ -101,7 +101,10 @@ import {
   useDocumentAutosave,
 } from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import { useReadOnlyForReader } from "@admin/hooks/useReadOnlyForReader";
+import {
+  editsOffered,
+  useUpdateAnswer,
+} from "@admin/hooks/useReadOnlyForReader";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
@@ -585,7 +588,11 @@ export function SingleForm({
    */
   // A user who may read this Single but not change it gets the same page,
   // read-only, with no claim made on the document.
-  const readOnlyForReader = useReadOnlyForReader(schema.slug);
+  const updateAnswer = useUpdateAnswer(schema.slug);
+  const readOnlyForReader = updateAnswer === "refused";
+  // While a language switch's answer is on its way, nothing that saves is
+  // offered and a submit is held, though the page is not read-only.
+  const mayEdit = editsOffered(updateAnswer);
   const lock = useDocumentLockSurface({
     scopeKind: "single",
     slug: schema.slug,
@@ -628,7 +635,7 @@ export function SingleForm({
   // screen even while one is.
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
   // Changing the content is held for a reader as well.
-  const editsHeld = writesHeld || readOnlyForReader;
+  const editsHeld = writesHeld || !mayEdit;
   // A colleague's claim or a reader's page, without the version on screen:
   // what holds the actions a version's own surfaces offer, Restore among them.
   const versionWritesHeld = lock.actionsDisabled || readOnlyForReader;
@@ -983,7 +990,7 @@ export function SingleForm({
     // A colleague's claim, which withholds every write: a reader's read-only
     // page withholds only the edits, through `canEdit`.
     documentLocked: lock.actionsDisabled,
-    canEdit: !readOnlyForReader,
+    canEdit: mayEdit,
     contributedActions: documentActions,
     ...storingHandlers(handleSubmit),
     onDiscardWorkingDraft: discardWorkingDraft,

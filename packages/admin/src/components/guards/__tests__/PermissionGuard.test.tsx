@@ -35,7 +35,12 @@ function holding(
   isLoading = false,
   server: {
     allows?: string[];
-    content?: { isLoading?: boolean; hasAnswer?: boolean; error?: Error };
+    content?: {
+      isLoading?: boolean;
+      hasAnswer?: boolean;
+      isPlaceholder?: boolean;
+      error?: Error;
+    };
   } = {}
 ) {
   const allows = server.allows ?? slugs;
@@ -50,6 +55,7 @@ function holding(
       isLoading: server.content?.isLoading ?? isLoading,
       hasAnswer: server.content?.hasAnswer ?? !isLoading,
       error: server.content?.error ?? null,
+      isPlaceholder: server.content?.isPlaceholder ?? false,
     },
     retry: vi.fn(),
   } as unknown as ReturnType<typeof useCurrentUserPermissions>);
@@ -384,6 +390,61 @@ describe("PermissionGuard", () => {
         </PermissionGuard>
       );
       expect(screen.getByText("the page")).toBeTruthy();
+    });
+
+    it("keeps the page it opened on screen while the next language's answer is on its way", () => {
+      // The language moved from allowed the page; the new one's answer is not
+      // in yet. The page stays mounted, its writes held by the editor, rather
+      // than swapped for a spinner or a refusal nothing supports.
+      holding([], false, { allows: ["read-posts"] });
+      const guarded = (
+        <PermissionGuard
+          requiredPermission="read-posts"
+          subject="collection"
+          entity={POSTS}
+        >
+          <Page />
+        </PermissionGuard>
+      );
+      const { rerender } = render(guarded);
+      expect(screen.getByText("the page")).toBeTruthy();
+
+      holding([], false, {
+        allows: [],
+        content: { hasAnswer: false, isPlaceholder: true },
+      });
+      rerender(guarded);
+      expect(screen.getByText("the page")).toBeTruthy();
+      expect(
+        screen.queryByRole("heading", {
+          name: "You don't have access to this collection",
+        })
+      ).toBeNull();
+    });
+
+    it("opens no page on the answer for the language moved from", () => {
+      // A route this guard never opened waits for its own language's answer,
+      // as on a first visit.
+      holding([], false, {
+        allows: [],
+        content: { hasAnswer: false, isPlaceholder: true },
+      });
+      render(
+        <PermissionGuard
+          requiredPermission="read-posts"
+          subject="collection"
+          entity={POSTS}
+        >
+          <Page />
+        </PermissionGuard>
+      );
+      expect(screen.getByText("Setting up your workspace")).toBeTruthy();
+      expect(pageRendered).not.toHaveBeenCalled();
+      expect(
+        screen.queryByRole("heading", {
+          name: "You don't have access to this collection",
+        })
+      ).toBeNull();
     });
 
     it("claims no refusal while the server's answer is missing", () => {

@@ -1,4 +1,5 @@
 import {
+  keepPreviousData,
   useQuery,
   useQueryClient,
   type QueryClient,
@@ -263,6 +264,13 @@ type AnswerState = {
    * assignment it was given for ends.
    */
   hasAnswer: boolean;
+  /**
+   * Whether the answer on screen belongs to the language the screen moved
+   * from, kept while the new language's is asked so the page stays mounted.
+   * It is not an answer for the language on screen: `hasAnswer` is false, so
+   * nothing is allowed on its word.
+   */
+  isPlaceholder: boolean;
 };
 
 /** What {@link useCurrentUserPermissions} returns. */
@@ -424,7 +432,7 @@ function latestPassed(ends: readonly number[], now: number): number | null {
 function answerState(
   query: Pick<
     UseQueryResult<{ askedAt?: number }>,
-    "data" | "error" | "isFetching" | "isPending"
+    "data" | "error" | "isFetching" | "isPending" | "isPlaceholderData"
   >,
   endedAt: number | null,
   invalidated: boolean
@@ -439,7 +447,9 @@ function answerState(
       query.isPending ||
       (unusable && (query.isFetching || query.error === null)),
     error: query.error,
-    hasAnswer: query.data !== undefined && !unusable,
+    hasAnswer:
+      query.data !== undefined && !unusable && !query.isPlaceholderData,
+    isPlaceholder: query.isPlaceholderData,
   };
 }
 
@@ -530,6 +540,9 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
         )
       ),
     enabled: isPrivateRoute,
+    // The language moved from keeps the page mounted while the new one is
+    // asked; it counts as no answer (see `isPlaceholder`).
+    placeholderData: keepPreviousData,
     staleTime: Infinity,
     refetchOnWindowFocus: "always",
     // A failed answer is asked again on the schedule below and on focus, not

@@ -36,6 +36,7 @@ import { LinkedEntries } from "./src/collections/linked-entries";
 import { Posts } from "./src/collections/posts";
 import { Tags } from "./src/collections/tags";
 import { TranslatedPages } from "./src/collections/translated-pages";
+import { TranslatorNotes } from "./src/collections/translator-notes";
 import { LinkCard, LinkQuote } from "./src/field-groups/related-link-groups";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
@@ -113,6 +114,10 @@ export default defineConfig({
     // field group, so a past version can be read in that layout; registered
     // for the e2e run only, by the same switch.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [HistoryNotes] : []),
+    // The browser test of a document editable in one language and read-only
+    // in another needs a rule that answers by language; registered for the
+    // e2e run only, by the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [TranslatorNotes] : []),
   ],
   // Announcement is the localized single WITH the draft/published lifecycle,
   // registered for the same reason Authors is: so the per-language publish

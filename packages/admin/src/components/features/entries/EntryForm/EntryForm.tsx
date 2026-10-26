@@ -44,7 +44,10 @@ import {
 } from "@admin/hooks/useDocumentAutosave";
 import { previewMessage, useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import { useReadOnlyForReader } from "@admin/hooks/useReadOnlyForReader";
+import {
+  editsOffered,
+  useUpdateAnswer,
+} from "@admin/hooks/useReadOnlyForReader";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
@@ -593,8 +596,11 @@ export function EntryForm({
    */
   // A user who may read this entry but not change it gets the same page,
   // read-only, with no claim made on the document.
-  const readOnlyForReader =
-    useReadOnlyForReader(collectionSlug) && mode === "edit";
+  const updateAnswer = useUpdateAnswer(collectionSlug);
+  const readOnlyForReader = updateAnswer === "refused" && mode === "edit";
+  // While a language switch's answer is on its way, nothing that saves is
+  // offered and a submit is held, though the page is not read-only.
+  const mayEdit = mode === "create" || editsOffered(updateAnswer);
   const lock = useDocumentLockSurface({
     scopeKind: "collection",
     slug: collectionSlug,
@@ -610,7 +616,7 @@ export function EntryForm({
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
   // Changing the content is held for a reader as well. Deleting is not: it
   // follows its own permission, and is offered only with it.
-  const editsHeld = writesHeld || readOnlyForReader;
+  const editsHeld = writesHeld || !mayEdit;
   // A colleague's claim or a reader's page, without the version on screen:
   // what holds the actions a version's own surfaces offer, Restore among them.
   const versionWritesHeld = lock.actionsDisabled || readOnlyForReader;
@@ -804,7 +810,7 @@ export function EntryForm({
     // A colleague's claim, which withholds every write: a reader's read-only
     // page withholds only the edits, through `canEdit`.
     documentLocked: lock.actionsDisabled,
-    canEdit: !readOnlyForReader,
+    canEdit: mayEdit,
     contributedActions: documentActions,
     ...(onViewApi === undefined ? {} : { onViewApi }),
     ...storingHandlers(handleSubmit),
