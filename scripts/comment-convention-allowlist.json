@@ -346,7 +346,7 @@
     ]
   },
   "packages/nextly/src/dispatcher/handlers/collection-dispatcher.ts": {
-    "count": 8,
+    "count": 7,
     "digests": [
       "1e8a73b1b250c068",
       "34be3f05d319e7dd",
@@ -354,8 +354,7 @@
       "56303ebc13cade9c",
       "75f892f575725597",
       "9c894904db58afcf",
-      "d8196efde331f07e",
-      "ec5df2b847c937f8"
+      "d8196efde331f07e"
     ]
   },
   "packages/nextly/src/domains/auth/__tests__/role-service.test.ts": {
