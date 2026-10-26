@@ -56,7 +56,8 @@ export default defineSingle({
     }),
   ],
   access: {
-    // Anyone can read; the role's update-site-settings decides an update.
+    // Visitors can read, and signed-in callers holding read-site-settings;
+    // the role's update-site-settings decides an update.
     read: true,
   },
   hooks: {
@@ -304,7 +305,8 @@ export default defineSingle({
     }),
   ],
   access: {
-    // Anyone can read; the role's update-header decides an update.
+    // Visitors can read, and signed-in callers holding read-header; the
+    // role's update-header decides an update.
     read: true,
   },
 });

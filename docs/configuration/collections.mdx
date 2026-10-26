@@ -51,8 +51,8 @@ export default defineCollection({
     description: "Blog posts and articles",
   },
   access: {
-    // Anyone can read. Create, update and delete declare no rule, so the
-    // role's create-posts, update-posts and delete-posts decide.
+    // Visitors can read, and signed-in callers holding read-posts. Create,
+    // update and delete declare no rule, so the role's permission decides.
     read: true,
   },
   hooks: {
