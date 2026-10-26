@@ -109,6 +109,14 @@ const PRINCIPALS: readonly Caller[] = ["principal", "principal-other"];
  * one, answers it differently. `publish-false` declares only a refusing
  * publish and unpublish rule, so a door that judges a publish by the update
  * rule allows what it refuses.
+ *
+ * The filter kinds answer with a filter over the target's entries instead of
+ * a boolean: `returns-filter` one matching the probe entry and `async-filter`
+ * the same from a promise. `returns-empty-in` gives an empty `in` and
+ * `malformed-filter` an operator no filter has, neither of them a well-formed
+ * filter, so they stay refused once filters apply. A door that applies filters
+ * returns only the entries a well-formed one matches; until one does, a filter
+ * is not `true`, and every door refuses it.
  */
 export const RULES = [
   "none",
@@ -130,6 +138,10 @@ export const RULES = [
   "principal-kind",
   "user-is-key-maker",
   "publish-false",
+  "returns-filter",
+  "async-filter",
+  "returns-empty-in",
+  "malformed-filter",
 ] as const;
 export type Rule = (typeof RULES)[number];
 
@@ -542,6 +554,11 @@ const RULE_SAYS: Record<Rule, RuleAnswer> = {
   "user-is-key-maker": (_action, caller) => MADE_BY_USER_WITH.includes(caller),
   "publish-false": action =>
     action === "publish" || action === "unpublish" ? false : null,
+  // A filter is not `true`, and no door applies one yet, so each refuses.
+  "returns-filter": SAYS_NOT_TRUE,
+  "async-filter": SAYS_NOT_TRUE,
+  "returns-empty-in": SAYS_NOT_TRUE,
+  "malformed-filter": SAYS_NOT_TRUE,
 };
 
 /**
