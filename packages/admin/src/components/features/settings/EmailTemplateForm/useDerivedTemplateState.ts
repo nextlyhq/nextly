@@ -22,12 +22,12 @@ import type {
   EmailTemplateKind,
 } from "@admin/services/emailTemplateApi";
 
-import { buildSampleData } from "./sample-data";
+import { buildSampleData, sampleFrom, type SampleEdits } from "./sample-data";
 import type { TemplateFormVariable } from "./schema";
 import { useDraftPreview } from "./useDraftPreview";
 
 export interface DerivedTemplateState {
-  /** Sample JSON as edited, or as derived from the declared variables. */
+  /** The test data as JSON: as typed, or the data written out. */
   sampleText: string;
   sampleData: Record<string, unknown>;
   sampleError: string | null;
@@ -42,7 +42,7 @@ export interface DerivedTemplateState {
 
 export function useDerivedTemplateState({
   variables,
-  sampleOverride,
+  sampleEdits,
   subject,
   htmlContent,
   plainTextContent,
@@ -52,7 +52,8 @@ export function useDerivedTemplateState({
   kind,
 }: {
   variables: TemplateFormVariable[] | undefined;
-  sampleOverride: string | null;
+  /** What the author changed in the test data, if anything. */
+  sampleEdits: SampleEdits | null;
   subject: string | undefined;
   htmlContent: string | undefined;
   plainTextContent: string | undefined;
@@ -67,30 +68,14 @@ export function useDerivedTemplateState({
     () => buildSampleData(variables ?? [], { isLayoutRow }),
     [variables, isLayoutRow]
   );
-  const sampleText = sampleOverride ?? JSON.stringify(suggestedSample, null, 2);
-  const { sampleData, sampleError } = useMemo<{
-    sampleData: Record<string, unknown>;
-    sampleError: string | null;
-  }>(() => {
-    try {
-      const parsed: unknown = JSON.parse(sampleText);
-      // `JSON.parse("null")` / arrays / primitives succeed but then crash the
-      // downstream `Object.keys(sampleData)`; require a plain object.
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("Sample data must be a JSON object.");
-      }
-      return {
-        sampleData: parsed as Record<string, unknown>,
-        sampleError: null,
-      };
-    } catch (e) {
-      return {
-        sampleData: {},
-        sampleError:
-          e instanceof Error ? e.message : "Invalid JSON in sample data.",
-      };
-    }
-  }, [sampleText]);
+  const {
+    data: sampleData,
+    text: sampleText,
+    error: sampleError,
+  } = useMemo(
+    () => sampleFrom(suggestedSample, sampleEdits),
+    [suggestedSample, sampleEdits]
+  );
 
   /*
    * Exactly the route's schema, and nothing beyond it. Assembled as one object

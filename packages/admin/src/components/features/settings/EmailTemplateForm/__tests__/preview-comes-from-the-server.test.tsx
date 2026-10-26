@@ -43,7 +43,7 @@ function wrapper({ children }: { children: React.ReactNode }) {
 /** The authored fields, with one variable the sample data binds. */
 const INPUT = {
   variables: [{ name: "userName", description: "", required: false }],
-  sampleOverride: JSON.stringify({ userName: "Priya" }),
+  sampleEdits: { json: JSON.stringify({ userName: "Priya" }) },
   subject: "Hi {{userName}}",
   htmlContent: "<p>Hello {{userName}}</p>",
   plainTextContent: "",
@@ -150,7 +150,10 @@ describe("the editor previews what the server renders", () => {
 
     const { rerender } = renderHook(
       ({ sampleOverride }: { sampleOverride: string }) =>
-        useDerivedTemplateState({ ...INPUT, sampleOverride }),
+        useDerivedTemplateState({
+          ...INPUT,
+          sampleEdits: { json: sampleOverride },
+        }),
       { wrapper, initialProps: { sampleOverride: "{ not json" } }
     );
 
@@ -174,7 +177,11 @@ describe("the editor previews what the server renders", () => {
     previewDraft.mockResolvedValue({ subject: "", html: "", text: "" });
 
     renderHook(
-      () => useDerivedTemplateState({ ...INPUT, sampleOverride: "{ not json" }),
+      () =>
+        useDerivedTemplateState({
+          ...INPUT,
+          sampleEdits: { json: "{ not json" },
+        }),
       { wrapper }
     );
 

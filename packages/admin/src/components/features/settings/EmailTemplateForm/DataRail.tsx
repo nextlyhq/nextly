@@ -1,8 +1,11 @@
 "use client";
 
 import { Badge, Button } from "@nextlyhq/ui";
-import { Suspense, lazy, useId, type JSX } from "react";
+import { Suspense, lazy, useId, useState, type JSX } from "react";
 
+import { DataFields } from "./DataFields";
+import type { SampleDeclaration } from "./sample-data";
+import { Segmented } from "./Segmented";
 import type { TemplateVariableCheck } from "./useTemplateVariables";
 
 // The admin's code editor, which reads and checks JSON; loaded with the panel.
@@ -16,16 +19,27 @@ const CodeMirrorEditor = lazy(() =>
 // Rail: Data tab (sample data + variable check)
 // ============================================================
 
+/** How the test data is edited: as fields, or as the JSON it is. */
+type DataView = "fields" | "json";
+
 export function DataRail({
   sampleText,
-  onSampleChange,
+  sampleData,
+  variables,
+  onFieldChange,
+  onJsonChange,
   onReset,
   sampleError,
   check,
   onDeclare,
 }: {
+  /** The test data as JSON: as typed, or the data written out. */
   sampleText: string;
-  onSampleChange: (v: string) => void;
+  sampleData: Record<string, unknown>;
+  /** The declared variables, which the fields are drawn from. */
+  variables: ReadonlyArray<SampleDeclaration & { description?: string }>;
+  onFieldChange: (name: string, value: unknown) => void;
+  onJsonChange: (json: string) => void;
   onReset: () => void;
   sampleError: string | null;
   check: TemplateVariableCheck;
@@ -33,59 +47,87 @@ export function DataRail({
   onDeclare?: (name: string) => void;
 }): JSX.Element {
   const errorId = useId();
+  const [view, setView] = useState<DataView>("fields");
   return (
     <div className="space-y-5">
       <div>
-        <div className="mb-1 flex items-center justify-between">
+        <div className="mb-1 flex items-center justify-between gap-2">
           <h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Sample data
+            Test data
           </h4>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-7 text-xs"
-            onClick={onReset}
-          >
-            Reset
-          </Button>
+          <div className="flex items-center gap-1.5">
+            <Segmented<DataView>
+              options={[
+                { value: "fields", label: "Fields" },
+                { value: "json", label: "JSON" },
+              ]}
+              value={view}
+              onChange={setView}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={onReset}
+            >
+              Reset
+            </Button>
+          </div>
         </div>
         <p className="mb-2 text-xs text-muted-foreground">
-          JSON that fills the live preview. Not saved with the template.
+          Fills the live preview and a test send. Not saved with the template.
         </p>
-        <div className="rounded-md border border-input">
-          <Suspense
-            fallback={
-              <div
-                aria-hidden
-                className="h-55 animate-pulse rounded-md bg-muted/30"
-              />
-            }
-          >
-            <CodeMirrorEditor
-              label="Sample data"
-              invalid={Boolean(sampleError)}
-              describedBy={sampleError ? errorId : undefined}
-              language="json"
-              value={sampleText}
-              onChange={onSampleChange}
-              disabled={false}
-              readOnly={false}
-              minHeight={220}
-              maxHeight={480}
-              editorOptions={{
-                fontSize: 12,
-                lineNumbers: false,
-                folding: true,
-              }}
+        {view === "fields" ? (
+          sampleError ? (
+            <p className="rounded-md border border-destructive p-3 text-xs text-destructive">
+              The JSON doesn&apos;t parse, so the fields can&apos;t show it. Fix
+              it in JSON, or Reset.
+            </p>
+          ) : (
+            <DataFields
+              variables={variables}
+              data={sampleData}
+              onChange={onFieldChange}
             />
-          </Suspense>
-        </div>
-        {sampleError ? (
-          <p id={errorId} className="mt-1.5 text-xs text-destructive">
-            Invalid JSON: {sampleError}
-          </p>
-        ) : null}
+          )
+        ) : (
+          <>
+            <div className="rounded-md border border-input">
+              <Suspense
+                fallback={
+                  <div
+                    aria-hidden
+                    className="h-55 animate-pulse rounded-md bg-muted/30"
+                  />
+                }
+              >
+                <CodeMirrorEditor
+                  label="Test data"
+                  invalid={Boolean(sampleError)}
+                  describedBy={sampleError ? errorId : undefined}
+                  language="json"
+                  value={sampleText}
+                  onChange={onJsonChange}
+                  disabled={false}
+                  readOnly={false}
+                  minHeight={220}
+                  maxHeight={480}
+                  editorOptions={{
+                    fontSize: 12,
+                    lineNumbers: false,
+                    folding: true,
+                  }}
+                />
+              </Suspense>
+            </div>
+            {sampleError ? (
+              <p id={errorId} className="mt-1.5 text-xs text-destructive">
+                Invalid JSON: {sampleError}
+              </p>
+            ) : null}
+          </>
+        )}
       </div>
 
       <div className="space-y-2" data-testid="variable-check">

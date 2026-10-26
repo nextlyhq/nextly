@@ -1,4 +1,8 @@
-import type { TemplateFormVariable } from "./schema";
+import type {
+  EmailTemplateVariableField,
+  EmailTemplateVariablePresentation,
+  EmailTemplateVariableType,
+} from "@admin/services/emailTemplateApi";
 
 // ============================================================
 // Variables & sample data
@@ -54,18 +58,139 @@ function sampleValueForVariable(name: string): string {
  */
 const LAYOUT_CONTENT_SAMPLE = "Your email content appears here.";
 
+/** A declaration, as the Data panel reads one: its name and how it's shown. */
+export interface SampleDeclaration {
+  name: string;
+  presentation?: EmailTemplateVariablePresentation;
+}
+
+/** A starting value for a field of `type`, when its declaration gives none. */
+function valueOfType(
+  name: string,
+  type: EmailTemplateVariableType | undefined,
+  fields: EmailTemplateVariableField[] | undefined
+): unknown {
+  switch (type) {
+    case "number":
+      return 1;
+    case "money":
+      return 19.99;
+    case "date":
+      return new Date().toISOString().slice(0, 10);
+    case "link":
+      return SAMPLE_VALUE_BY_NAME[name] ?? "https://example.com";
+    case "boolean":
+      return true;
+    case "list":
+      // One row of the list's items, so the loop shows something.
+      return fields?.length ? [objectOf(fields)] : [`Sample ${name}`];
+    case "object":
+      return objectOf(fields ?? []);
+    default:
+      return sampleValueForVariable(name);
+  }
+}
+
+/** An object with a starting value for each of `fields`. */
+export function objectOf(
+  fields: readonly EmailTemplateVariableField[]
+): Record<string, unknown> {
+  return Object.fromEntries(
+    fields.map(field => [
+      field.name,
+      field.example ?? valueOfType(field.name, field.type, field.fields),
+    ])
+  );
+}
+
+/**
+ * A variable's starting test value: its declared example, else a value of its
+ * type, else today's sample for its name.
+ */
+export function startingValue(declaration: SampleDeclaration): unknown {
+  const presentation = declaration.presentation ?? {};
+  return (
+    presentation.example ??
+    valueOfType(declaration.name, presentation.type, presentation.fields)
+  );
+}
+
 export function buildSampleData(
-  variables: TemplateFormVariable[],
+  variables: SampleDeclaration[],
   options?: { isLayoutRow?: boolean }
-): Record<string, string> {
-  const data: Record<string, string> = {
+): Record<string, unknown> {
+  const data: Record<string, unknown> = {
     appName: SAMPLE_VALUE_BY_NAME.appName,
     year: SAMPLE_VALUE_BY_NAME.year,
   };
   if (options?.isLayoutRow) data.content = LAYOUT_CONTENT_SAMPLE;
   for (const v of variables) {
     if (!v.name || v.name.includes(".")) continue;
-    data[v.name] = sampleValueForVariable(v.name);
+    data[v.name] = startingValue(v);
   }
   return data;
+}
+
+/**
+ * What the author changed in the test data: values set in the fields, kept
+ * apart from the starting data so a variable declared later still starts with
+ * its own value; or the JSON as typed, which is the whole data.
+ */
+export type SampleEdits =
+  | { values: Record<string, unknown> }
+  | { json: string };
+
+/** The test data: the starting values with the author's edits on top. */
+export function sampleFrom(
+  starting: Record<string, unknown>,
+  edits: SampleEdits | null
+): {
+  data: Record<string, unknown>;
+  /** The JSON view: as typed, or the data written out. */
+  text: string;
+  error: string | null;
+} {
+  if (edits && "json" in edits) {
+    try {
+      const parsed: unknown = JSON.parse(edits.json);
+      // `JSON.parse("null")`, arrays and primitives parse, but aren't data.
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("Sample data must be a JSON object.");
+      }
+      // The JSON as typed is the data, all of it: the preview never renders
+      // a value the author can't see in it.
+      return {
+        data: parsed as Record<string, unknown>,
+        text: edits.json,
+        error: null,
+      };
+    } catch (e) {
+      return {
+        data: {},
+        text: edits.json,
+        error: e instanceof Error ? e.message : "Invalid JSON in sample data.",
+      };
+    }
+  }
+  const data = { ...starting, ...(edits?.values ?? {}) };
+  return { data, text: JSON.stringify(data, null, 2), error: null };
+}
+
+/**
+ * The values the author has set, however they set them: from the fields, or
+ * the JSON as it parses. A field edit after a JSON edit builds on the JSON.
+ */
+export function editedValues(
+  edits: SampleEdits | null
+): Record<string, unknown> {
+  if (!edits) return {};
+  if ("values" in edits) return edits.values;
+  try {
+    const parsed: unknown = JSON.parse(edits.json);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
 }

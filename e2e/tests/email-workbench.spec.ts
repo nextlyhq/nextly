@@ -207,9 +207,13 @@ test("keeps every part of an email in reach", async ({ page }, testInfo) => {
   await page.getByRole("button", { name: "HTML", exact: true }).click();
   await expect(page.getByTestId("workbench-preview")).toBeVisible();
 
-  // Sample data.
+  // Test data, as fields and as JSON.
   await page.getByRole("button", { name: "Data", exact: true }).click();
-  await expect(liquidField(page, "Sample data")).toBeVisible({
+  await expect(page.getByTestId("data-fields")).toBeVisible({
+    timeout: 30_000,
+  });
+  await page.getByRole("button", { name: "JSON", exact: true }).click();
+  await expect(liquidField(page, "Test data")).toBeVisible({
     timeout: 30_000,
   });
   await keep("workbench-data", await page.screenshot());
