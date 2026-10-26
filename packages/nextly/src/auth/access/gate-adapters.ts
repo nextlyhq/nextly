@@ -44,7 +44,7 @@ import {
 } from "./decide";
 import { targetAsDeclared } from "./declared-rules";
 import { deviate } from "./deviations";
-import { rememberRuleOutcome } from "./request-memo";
+import { rememberRuleOutcome, routeVerdictFor } from "./request-memo";
 import {
   actorForKey,
   actorForPrincipal,
@@ -59,7 +59,7 @@ import {
   noticePermissionNowComesFirst,
   noticeRuleNoLongerAllows,
 } from "./rule-answer-log";
-import { askReadAsPlainRead, currentRuleLanguage } from "./rule-language";
+import { askReadAsPlainRead, ruleLanguageKey } from "./rule-language";
 
 /**
  * Allowed, refused with the kind of refusal the gate words, or allowed only
@@ -314,15 +314,27 @@ async function routeAuthorizedVerdict(
   q: GateQuestion,
   target: AccessTarget
 ): Promise<GateVerdict> {
-  if (q.user && asksReadRuleAgain(kind, q, target)) {
-    // The route's allow said only that the caller may read; which entries a
-    // read rule lets through is the rule's own answer, asked again here as
-    // the route asked it, and run once in the request.
-    return staffOrVisitorVerdict(
-      kind,
-      { ...q, routeAuthorized: false },
-      target
-    );
+  if (q.user && readsRouteFilter(kind, q, target)) {
+    // The route's allow said only that the caller may read; the route kept
+    // its verdict for the request, every entry or a read rule's filter, and
+    // the read applies it. The rule is not asked again: the route asked it,
+    // and a rule may call out to a service, whose second answer could differ
+    // from the first.
+    const kept = routeVerdictFor({
+      userId: q.user.id,
+      slug: q.slug,
+      action: q.action,
+      language: ruleLanguageKey(),
+    });
+    // A route that judged this read only in another language said nothing
+    // of this one.
+    if (kept === "other-language") return INSUFFICIENT;
+    if (kept && "filter" in kept) return onlyMatching(q, kept.filter, true);
+    // `routeAuthorized` is set by server code that has already judged the
+    // caller, never from a request's input. Where no route in this request
+    // kept a verdict, the server code that set it judged the caller as it
+    // always has, and its allow is for every entry.
+    return ALLOWED;
   }
   if (q.user) return ALLOWED;
   if (kind === "collection") return UNAUTHENTICATED;
@@ -332,17 +344,12 @@ async function routeAuthorizedVerdict(
 }
 
 /**
- * The decision's answer as the gate gives it. A filter it names for a read is
- * handed to an asker that applies it; a write rule's filter is not applied
- * yet, so it refuses.
+ * Whether a read the route already authorized reads the filter the route let
+ * its caller through on: where the asker applies the rule's filter and the
+ * collection's read rule is a function, which may answer one. A plain `true`
+ * or `false` was judged by the route, as before.
  */
-/**
- * Whether a read the route already authorized asks its read rule again: where
- * the asker applies the rule's filter and the collection's read rule is a
- * function, which may answer one. A plain `true` or `false` was judged by the
- * route, as before.
- */
-function asksReadRuleAgain(
+function readsRouteFilter(
   kind: "collection" | "single",
   q: GateQuestion,
   target: AccessTarget
@@ -399,17 +406,20 @@ function askedOnce<T>(
   asked: "rule" | "rules"
 ): Promise<T> {
   if (!q.appliesFilter || q.action !== "read") return ask();
-  const language = currentRuleLanguage();
   const question = [
     asked,
     `${target.kind}:${target.slug}`,
     ruleContextKeyOf(actor),
-    language.locale ?? "",
-    language.locales.join(","),
+    ruleLanguageKey(),
   ].join("|");
   return rememberRuleOutcome(question, ask);
 }
 
+/**
+ * The decision's answer as the gate gives it. A filter it names for a read is
+ * handed to an asker that applies it; a write rule's filter is not applied
+ * yet, so it refuses.
+ */
 function answerOf(q: GateQuestion, decision: Decision): Promise<GateVerdict> {
   if (
     !decision.allowed &&
