@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A code access rule no longer lets in a signed-in user or an API key that lacks the permission: the permission is asked first, and the rule only narrows it, for collections, Singles, related rows and writes alike, as well as `nextly.access.check` and the deprecated `checkCollectionAccess`, where a key no longer passes on its creator's super-admin role. Where a rule was letting such users in, grant the permission on the role screen; for this release, each request newly refused this way is logged once, naming the permission to grant.
+A code access rule no longer lets in a signed-in user or an API key that lacks the permission: the permission is asked first, and the rule only narrows it, for collections, Singles, related rows and writes alike, as well as `nextly.access.check`. Where a rule was letting such users in, grant the permission on the role screen; for this release, each request newly refused this way is logged once, naming the permission to grant.
