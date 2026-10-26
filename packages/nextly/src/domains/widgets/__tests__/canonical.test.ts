@@ -197,6 +197,35 @@ describe("the canonical widget set", () => {
     expect(merged[0]).not.toHaveProperty("visibleWhen");
   });
 
+  it("takes a Collection setting only from the declaration whose settings win", () => {
+    // 🔴 The admin draws the registration's whole settings list wherever it
+    // states one, so a registration stating settings without a Collection
+    // setting draws a widget with none -- and its cards must not be judged by
+    // the contribution's.
+    const contributed: CanonicalWidget = {
+      id: "dup/one",
+      textBounds: [],
+      collectionSetting: { name: "source", type: "collection" },
+    };
+    registerWidget(
+      registered({
+        id: "dup/one",
+        settings: [{ name: "limit", type: "number", defaultValue: 5 }],
+      })
+    );
+    const merged = canonicalWidgets([contributed])[0];
+    expect(merged.collectionSetting).toBeUndefined();
+    expect(merged.textBounds).toEqual([]);
+
+    // The must-differ half: a registration stating no settings keeps the
+    // contribution's, as the admin draws them.
+    clearWidgets();
+    registerWidget(registered({ id: "dup/one" }));
+    expect(canonicalWidgets([contributed])[0].collectionSetting?.name).toBe(
+      "source"
+    );
+  });
+
   it("does NOT inherit a contributed permission, matching the admin", () => {
     // The asymmetry is deliberate. The registry is the override channel, so a
     // registration that states no permission has stated that, and

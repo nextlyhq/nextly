@@ -718,10 +718,36 @@ describe("partitioning by what a reader may see", () => {
         .visible
     ).toHaveLength(1);
   });
+
+  it("puts a withheld card of a visible widget in the invisible half", () => {
+    const set = (to: string) =>
+      card(to, "core/a", { config: { collection: to } });
+    const { visible: shown, invisible } = partitionPlacements(
+      [set("posts"), set("secret")],
+      visible,
+      placement => placement.config?.collection === "secret"
+    );
+    expect(shown.map(p => p.id)).toEqual(["posts"]);
+    expect(invisible.map(p => p.id)).toEqual(["secret"]);
+  });
 });
 
 describe("merging a write with the cards the writer could not see", () => {
   const visible = new Set(["core/a", "core/b", "core/c"]);
+
+  it("carries a withheld card of a visible widget back in place", () => {
+    // A Count card set to a collection the writer may not read is not in what
+    // they were handed, so their save cannot hold it: dropping it would
+    // delete it.
+    const secret = card("S", "core/a", { config: { collection: "secret" } });
+    const merged = mergePreservingHidden(
+      [card("b"), card("a")],
+      [card("a"), secret, card("b")],
+      visible,
+      placement => placement.config?.collection === "secret"
+    );
+    expect(merged.map(p => p.id)).toEqual(["b", "a", "S"]);
+  });
 
   it("puts each carried card back after the card it followed", () => {
     // Stored: a, H1, b, H2, c. The writer moves c to the front. H1 still
@@ -844,6 +870,23 @@ describe("the visibility token", () => {
 
   it("moves when a shortcut's gate is gained or lost, with the widgets unchanged", () => {
     expect(visibilityToken(["a"], [])).not.toBe(visibilityToken(["a"], ["g"]));
+  });
+
+  it("moves when the collections a reader may read change by name alone", () => {
+    // Renaming `a_b` to `a-b` keeps every widget id and changes this.
+    expect(visibilityToken(["a"], [], ["a_b"])).not.toBe(
+      visibilityToken(["a"], [], ["a-b"])
+    );
+    expect(visibilityToken(["a"], [])).toBe(visibilityToken(["a"], [], []));
+  });
+
+  it("moves when a Collection setting changes, with nothing else changing", () => {
+    // A stored card is judged by the setting -- its default when it stores no
+    // value -- so a plugin changing it moves that card between withheld and
+    // shown.
+    expect(visibilityToken(["a"], [], [], ['a="posts"'])).not.toBe(
+      visibilityToken(["a"], [], [], ['a="secret"'])
+    );
   });
 
   it("cannot mistake a held gate for a widget id", () => {

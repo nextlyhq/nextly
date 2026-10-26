@@ -47,6 +47,17 @@ describe("which collection a saved card's id resolves to", () => {
     ).toEqual({ kind: "none" });
   });
 
+  it("names the one readable match even when an unreadable collection spells the same id", () => {
+    // 🔴 Counting the unreadable one would set the card to none here and to
+    // `a-b` without it, telling the reader that collection exists.
+    expect(
+      resolveCountCardCollection("a-b", set("a-b"), set("a_b", "a-b"))
+    ).toEqual(resolveCountCardCollection("a-b", set("a-b"), set("a-b")));
+    expect(
+      resolveCountCardCollection("a-b", set("a-b"), set("a_b", "a-b"))
+    ).toEqual({ kind: "one", collection: "a-b" });
+  });
+
   it("names none when no collection in the install matches: it was deleted", () => {
     expect(
       resolveCountCardCollection("gone", set("posts"), set("posts"))
@@ -109,6 +120,22 @@ describe("saved count and health cards, converted for one reader", () => {
       })
     );
     expect(rest).toEqual([card("other", "core/team")]);
+  });
+
+  it("takes the merged width from the registered Count's widths", () => {
+    // A plugin may widen Count; its full width is then kept.
+    const [merged] = applyRetirements(
+      [
+        card("health", "collection/posts-stats", { width: "full" }),
+        card("count", "collection/posts-count", { width: "half" }),
+      ],
+      countCardConversion(set("posts"), set("posts"), set(), [
+        "quarter",
+        "half",
+        "full",
+      ])
+    );
+    expect(merged.width).toBe("full");
   });
 
   it("removes the merged card only if every card in it was removed", () => {
