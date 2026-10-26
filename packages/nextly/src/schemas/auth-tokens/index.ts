@@ -28,13 +28,13 @@ export function authTokenTables(dialect: SupportedDialect) {
   const {
     emailVerificationTokens,
     passwordResetTokens,
-    refreshTokens,
     userInviteTokens,
+    refreshTokens,
   } = loadedDialect(dialect).tables;
   return {
     emailVerificationTokens,
     passwordResetTokens,
-    refreshTokens,
     userInviteTokens,
+    refreshTokens,
   };
 }

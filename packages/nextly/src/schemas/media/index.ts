@@ -20,6 +20,6 @@ import { loadedDialect } from "../../database/dialect-tables";
 export function mediaTables(dialect: SupportedDialect) {
   // The loaded dialect's own tables, so only that dialect's files are
   // imported; `createAdapter` loads them.
-  const { imageSizes, media, mediaFolders } = loadedDialect(dialect).tables;
-  return { imageSizes, media, mediaFolders };
+  const { media, mediaFolders, imageSizes } = loadedDialect(dialect).tables;
+  return { media, mediaFolders, imageSizes };
 }

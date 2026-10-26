@@ -23,13 +23,7 @@ import { loadedDialect } from "../../database/dialect-tables";
 export function rbacTables(dialect: SupportedDialect) {
   // The loaded dialect's own tables, so only that dialect's files are
   // imported; `createAdapter` loads them.
-  const { permissions, roleInherits, rolePermissions, roles, userRoles } =
+  const { roles, permissions, rolePermissions, userRoles, roleInherits } =
     loadedDialect(dialect).tables;
-  return {
-    permissions,
-    roleInherits,
-    rolePermissions,
-    roles,
-    userRoles,
-  };
+  return { roles, permissions, rolePermissions, userRoles, roleInherits };
 }

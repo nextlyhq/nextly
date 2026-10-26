@@ -24,7 +24,7 @@ export type * as sl from "./sqlite";
 export function contentEventsTables(dialect: SupportedDialect) {
   // The loaded dialect's own tables, so only that dialect's files are
   // imported; `createAdapter` loads them.
-  const { nextlyContentEventParts, nextlyContentEvents } =
+  const { nextlyContentEvents, nextlyContentEventParts } =
     loadedDialect(dialect).tables;
-  return { nextlyContentEventParts, nextlyContentEvents };
+  return { nextlyContentEvents, nextlyContentEventParts };
 }

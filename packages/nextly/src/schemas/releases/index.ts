@@ -15,7 +15,7 @@ import { loadedDialect } from "../../database/dialect-tables";
 export function releasesTables(dialect: SupportedDialect) {
   // The loaded dialect's own tables, so only that dialect's files are
   // imported; `createAdapter` loads them.
-  const { nextlyReleaseMembers, nextlyReleases } =
+  const { nextlyReleases, nextlyReleaseMembers } =
     loadedDialect(dialect).tables;
-  return { nextlyReleaseMembers, nextlyReleases };
+  return { nextlyReleases, nextlyReleaseMembers };
 }

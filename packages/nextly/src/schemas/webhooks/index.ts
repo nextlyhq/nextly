@@ -18,7 +18,7 @@ import { loadedDialect } from "../../database/dialect-tables";
 export function webhookTables(dialect: SupportedDialect) {
   // The loaded dialect's own tables, so only that dialect's files are
   // imported; `createAdapter` loads them.
-  const { nextlyEvents, nextlyWebhookDeliveries, nextlyWebhooks } =
+  const { nextlyEvents, nextlyWebhooks, nextlyWebhookDeliveries } =
     loadedDialect(dialect).tables;
-  return { nextlyEvents, nextlyWebhookDeliveries, nextlyWebhooks };
+  return { nextlyEvents, nextlyWebhooks, nextlyWebhookDeliveries };
 }

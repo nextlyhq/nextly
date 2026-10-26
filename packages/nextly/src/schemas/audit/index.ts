@@ -19,6 +19,6 @@ import { loadedDialect } from "../../database/dialect-tables";
 export function auditTables(dialect: SupportedDialect) {
   // The loaded dialect's own tables, so only that dialect's files are
   // imported; `createAdapter` loads them.
-  const { activityLog, auditLog } = loadedDialect(dialect).tables;
-  return { activityLog, auditLog };
+  const { auditLog, activityLog } = loadedDialect(dialect).tables;
+  return { auditLog, activityLog };
 }
