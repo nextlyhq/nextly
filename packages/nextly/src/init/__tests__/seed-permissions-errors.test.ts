@@ -46,6 +46,7 @@ vi.mock("../../di/service-access", () => ({
 vi.mock("../../database/seeders/role-presets", () => ({ seedRolePresets }));
 vi.mock("../../domains/auth/services/public-role", () => ({
   PUBLIC_ROLE_SLUG: "public",
+  publicRoleMade: async () => true,
   seedPublicRole,
 }));
 vi.mock("../../domains/auth/services/public-read-grant", () => ({
@@ -201,6 +202,8 @@ describe("seedPermissionsAndRolePresets", () => {
 
     await seedPermissionsAndRolePresets();
 
+    // The failure logged is the grant step's own.
+    expect(seedPublicReadGrants).toHaveBeenCalledTimes(1);
     expect(error.mock.calls.map(call => String(call[0]))).toEqual([
       expect.stringContaining("Seeding public role's reads failed"),
     ]);

@@ -116,6 +116,17 @@ async function boot(
               access: { read: ({ locale }) => locale === undefined },
               fields,
             }),
+            // Read by a visitor only in a translation overview of English,
+            // which is told English and every other language too.
+            defineCollection({
+              slug: "overview",
+              localized: true,
+              access: {
+                read: ({ locale, locales }) =>
+                  locale === "en" && locales.length > 1,
+              },
+              fields,
+            }),
           ]
         : []),
       defineCollection({
@@ -254,6 +265,46 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await publicHolds(nextly)).toContain("read-english");
       expect(await publicHolds(nextly)).toContain("read-everylang");
+      expect(await publicHolds(nextly)).toContain("read-overview");
+    });
+
+    it("has an owner's save of Public's permissions wait for a grant in progress", async () => {
+      const nextly = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+      const id = (await services(nextly).roles.findRoleIdBySlug(
+        PUBLIC_ROLE_SLUG
+      ))!.id;
+      const held =
+        await services(nextly).rolePermissions.listRolePermissions(id);
+      let entered!: () => void;
+      const inside = new Promise<void>(resolve => (entered = resolve));
+      let release!: () => void;
+      const released = new Promise<void>(resolve => (release = resolve));
+      const grant = services(nextly).rolePermissions.addRolePermissionsOnce(
+        id,
+        async () => {
+          entered();
+          await released;
+          return [];
+        }
+      );
+      await inside;
+
+      let saved = false;
+      const save = services(nextly)
+        .roles.updateRole(id, {
+          permissionIds: held.slice(1).map(p => p.id),
+        })
+        .then(() => {
+          saved = true;
+        });
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const savedWhileGranting = saved;
+      release();
+      await Promise.all([grant, save]);
+
+      expect(savedWhileGranting).toBe(false);
+      expect(saved).toBe(true);
     });
 
     it("claims a read Public holds already without adding it twice", async () => {
