@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const error = vi.fn();
 const seedSystemPermissions = vi.fn();
 const seedRolePresets = vi.fn();
+const seedPublicRole = vi.fn();
 const seedPluginRoles = vi.fn();
 
 vi.mock("../../di/service-access", () => ({
@@ -25,6 +26,8 @@ vi.mock("../../di/service-access", () => ({
         return { debug() {}, info() {}, warn() {}, error };
       case "config":
         return { plugins: [] };
+      case "metaService":
+        return {};
       case "permissionSeedService":
         return {
           seedSystemPermissions,
@@ -40,6 +43,7 @@ vi.mock("../../di/service-access", () => ({
   },
 }));
 vi.mock("../../database/seeders/role-presets", () => ({ seedRolePresets }));
+vi.mock("../../domains/auth/services/public-role", () => ({ seedPublicRole }));
 vi.mock("../../plugins/roles/seed-roles", () => ({ seedPluginRoles }));
 
 const { awaitBootSeeding, holdBootSeeding, seedPermissionsAndRolePresets } =
@@ -62,6 +66,7 @@ beforeEach(() => {
   vi.unstubAllEnvs();
   seedSystemPermissions.mockResolvedValue(seeded());
   seedRolePresets.mockResolvedValue(undefined);
+  seedPublicRole.mockResolvedValue(undefined);
   seedPluginRoles.mockResolvedValue(undefined);
 });
 
@@ -69,6 +74,7 @@ describe("seedPermissionsAndRolePresets", () => {
   it("keeps quiet about a table that does not exist yet, in every step", async () => {
     seedSystemPermissions.mockRejectedValue(missingTable());
     seedRolePresets.mockRejectedValue(missingTable());
+    seedPublicRole.mockRejectedValue(missingTable());
     seedPluginRoles.mockRejectedValue(missingTable());
 
     await expect(seedPermissionsAndRolePresets()).resolves.toBeUndefined();
@@ -163,8 +169,9 @@ describe("seedPermissionsAndRolePresets", () => {
     await expect(awaitBootSeeding()).resolves.toBeUndefined();
   });
 
-  it("logs a failure of the role presets or the plugin roles the same way", async () => {
+  it("logs a failure of the role presets, the Public role or the plugin roles the same way", async () => {
     seedRolePresets.mockRejectedValue(new Error("deadlock detected"));
+    seedPublicRole.mockRejectedValue(new Error("connection reset"));
     seedPluginRoles.mockRejectedValue(new Error("lock wait timeout"));
 
     await seedPermissionsAndRolePresets();
@@ -172,8 +179,11 @@ describe("seedPermissionsAndRolePresets", () => {
     const messages = error.mock.calls.map(call => String(call[0]));
     expect(messages).toEqual([
       expect.stringContaining("Seeding role presets failed"),
+      expect.stringContaining("Seeding public role failed"),
       expect.stringContaining("Seeding plugin roles failed"),
     ]);
+    // The role visitors are judged by is made whatever the steps before it did.
+    expect(seedPublicRole).toHaveBeenCalled();
   });
 
   it("writes nothing during a production build", async () => {
@@ -185,6 +195,7 @@ describe("seedPermissionsAndRolePresets", () => {
 
     expect(seedSystemPermissions).not.toHaveBeenCalled();
     expect(seedRolePresets).not.toHaveBeenCalled();
+    expect(seedPublicRole).not.toHaveBeenCalled();
     expect(seedPluginRoles).not.toHaveBeenCalled();
   });
 

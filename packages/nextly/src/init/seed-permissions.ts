@@ -15,6 +15,8 @@
 
 import { seedRolePresets } from "../database/seeders/role-presets";
 import { getService } from "../di/service-access";
+import { seedPublicRole } from "../domains/auth/services/public-role";
+import { RoleMutationService } from "../domains/auth/services/role/role-mutation-service";
 import { isMissingTable } from "../domains/field-groups/migration/session";
 import { describeError } from "../errors/describe-error";
 import { NextlyError } from "../errors/nextly-error";
@@ -202,6 +204,20 @@ async function seedEverything(): Promise<void> {
   await seedingStep("role presets", () =>
     seedRolePresets(getService("adapter"), getService("logger"))
   );
+  // The role visitors are judged by. Made once and then left to the owner,
+  // unlike a preset: only its permissions change after it exists.
+  await seedingStep("public role", () => {
+    const roles = new RoleMutationService(
+      getService("adapter"),
+      getService("logger")
+    );
+    return seedPublicRole({
+      ensurePublicRole: () => roles.ensurePublicRole(),
+      moveRoleOffPublicSlug: () => roles.moveRoleOffPublicSlug(),
+      meta: getService("metaService"),
+      logger: getService("logger"),
+    });
+  });
   // A plugin role is created once and never revisited: a later boot skips a
   // role whose slug exists, so as not to undo an administrator's edits. Created
   // after a permission step that failed part-way, it would lack the grants that

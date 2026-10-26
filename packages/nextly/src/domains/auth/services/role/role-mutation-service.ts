@@ -22,6 +22,7 @@ import {
   refuseRemovingLastSuperAdmin,
   type LastSuperAdminTx,
 } from "../../../users/services/last-super-admin";
+import { PUBLIC_ROLE_SLUG, refuseLinkingPublicRole } from "../public-role";
 import { afterRoleGrantsChanged } from "../role-grants-changed";
 import { refuseGrantingSuperAdmin } from "../super-admin-grant";
 
@@ -95,18 +96,79 @@ export class RoleMutationService extends BaseService {
    *
    * @returns Role ID and whether it was newly created
    */
-  async ensureSuperAdminRole(): Promise<{ id: string; created: boolean }> {
-    // Ensure a system role with slug 'super-admin' exists; it may have zero permissions
-    const existing = await this.findRoleIdBySlug("super-admin");
+  ensureSuperAdminRole(): Promise<{ id: string; created: boolean }> {
+    // A system role with slug 'super-admin'; it may have zero permissions.
+    return this.ensureBuiltInRole({
+      name: "Super Admin",
+      slug: "super-admin",
+      description: "Grants implicit access to all permissions",
+      level: 1000,
+    });
+  }
+
+  /**
+   * Ensure the Public role exists (idempotent): the built-in role every
+   * visitor is judged by, created holding nothing. Only its permissions may
+   * change after that, so it is never brought back to a set of its own.
+   *
+   * @returns Role ID and whether it was newly created
+   */
+  ensurePublicRole(): Promise<{ id: string; created: boolean }> {
+    return this.ensureBuiltInRole({
+      name: "Public",
+      slug: PUBLIC_ROLE_SLUG,
+      description: "What anyone may do without signing in",
+      level: 0,
+    });
+  }
+
+  /**
+   * Moves a role of the site's own off the Public role's slug, to the first
+   * of `public-1`, `public-2`, … no role holds, changing the slug alone: its
+   * name, holders, permissions and inheritance stay as they are. A built-in
+   * role holding the slug is the Public role itself and is left alone.
+   *
+   * @returns The slug the role now has, or `null` where none was moved
+   */
+  async moveRoleOffPublicSlug(): Promise<string | null> {
+    const { roles } = this.tables;
+    const holders = (await this.db
+      .select({ id: roles.id, isSystem: roles.isSystem })
+      .from(roles)
+      .where(eq(roles.slug, PUBLIC_ROLE_SLUG))
+      .limit(1)) as Array<{ id: unknown; isSystem: unknown }>;
+    const holder = holders[0];
+    if (!holder || Boolean(holder.isSystem)) return null;
+    for (let n = 1; ; n++) {
+      const slug = `${PUBLIC_ROLE_SLUG}-${n}`;
+      if (await this.findRoleIdBySlug(slug)) continue;
+      await this.db
+        .update(roles)
+        .set({ slug })
+        .where(eq(roles.id, String(holder.id)));
+      return slug;
+    }
+  }
+
+  /**
+   * Ensure a built-in role exists with this slug (idempotent), created with
+   * no permissions.
+   *
+   * @returns Role ID and whether it was newly created
+   */
+  private async ensureBuiltInRole(role: {
+    name: string;
+    slug: string;
+    description: string;
+    level: number;
+  }): Promise<{ id: string; created: boolean }> {
+    const existing = await this.findRoleIdBySlug(role.slug);
     if (existing) return { id: existing.id, created: false };
 
     const id = randomUUID();
     const roleData: RoleInsertData = {
       id,
-      name: "Super Admin",
-      slug: "super-admin",
-      description: "Grants implicit access to all permissions",
-      level: 1000,
+      ...role,
       isSystem: toDialectBool(true),
     };
     const insert = (this.db as RBACDatabaseInstance)
@@ -119,8 +181,8 @@ export class RoleMutationService extends BaseService {
     // duplicate. MySQL's update fires on ANY unique key, the role name's
     // included, so it writes the row's own id back and changes nothing: a
     // role that merely holds the name keeps its slug, rather than becoming
-    // the administrator role for everyone who holds it, and the lookup below
-    // then finds no administrator role, as on the other dialects.
+    // the built-in role for everyone who holds it, and the lookup below then
+    // finds no built-in role, as on the other dialects.
     if (typeof insert.onConflictDoNothing === "function") {
       await insert.onConflictDoNothing();
     } else if (typeof insert.onDuplicateKeyUpdate === "function") {
@@ -132,10 +194,13 @@ export class RoleMutationService extends BaseService {
     }
     // The stored row's id, not this call's: when another caller won the
     // insert, the id generated here was never written.
-    const settled = await this.findRoleIdBySlug("super-admin");
+    const settled = await this.findRoleIdBySlug(role.slug);
     if (!settled) {
       throw NextlyError.internal({
-        logContext: { reason: "super-admin-role-missing-after-insert" },
+        logContext: {
+          reason: "built-in-role-missing-after-insert",
+          slug: role.slug,
+        },
       });
     }
     return { id: settled.id, created: settled.id === id };
@@ -194,6 +259,15 @@ export class RoleMutationService extends BaseService {
       const uniqueChildRoleIds = input.childRoleIds
         ? Array.from(new Set(input.childRoleIds.map(String)))
         : [];
+      // The Public role is never inherited: a role reaching it would hand
+      // its holders visitors' grants as their own.
+      await refuseLinkingPublicRole(
+        this.db as LastSuperAdminTx,
+        this.dialect,
+        uniqueChildRoleIds,
+        "inherit",
+        { slug: input.slug }
+      );
 
       // Validate permissions and child roles according to the rules:
       // - If 0 child roles: At least 1 permission required
@@ -501,6 +575,7 @@ export class RoleMutationService extends BaseService {
       const roleResult = await this.db
         .select({
           id: roles.id,
+          slug: roles.slug,
           isSystem: roles.isSystem,
         })
         .from(roles)
@@ -517,11 +592,28 @@ export class RoleMutationService extends BaseService {
       // row's own, and the rows written below are read back by comparing ids.
       const storedRoleId = String(currentRole.id);
       const isSystemRole = Boolean(currentRole.isSystem);
+      // The Public role is the one built-in role whose permissions an owner
+      // sets, so a change to its permissions alone goes through. It never
+      // inherits another role, which would hand visitors that role's grants.
+      const isPublicRole =
+        isSystemRole && String(currentRole.slug) === PUBLIC_ROLE_SLUG;
+      if (isPublicRole && changes.childRoleIds !== undefined) {
+        throw NextlyError.builtIn({
+          thing: "role",
+          change: "inherit",
+          logContext: { reason: "public-role-inherit-refused", roleId },
+        });
+      }
+      const permissionsOnly =
+        changes.name === undefined &&
+        changes.slug === undefined &&
+        changes.description === undefined &&
+        changes.level === undefined;
 
       // Prevent modifying system roles. The caller is told the role is built
       // in, a fact about the role and not about their permissions (which
       // §13.8 keeps generic); the reason goes to logContext.
-      if (isSystemRole) {
+      if (isSystemRole && !(isPublicRole && permissionsOnly)) {
         throw NextlyError.builtIn({
           thing: "role",
           change: "change",
@@ -585,6 +677,14 @@ export class RoleMutationService extends BaseService {
       if (changes.childRoleIds !== undefined) {
         uniqueChildRoleIds = Array.from(
           new Set(changes.childRoleIds.map(String))
+        );
+        // The Public role is never inherited (see createRole).
+        await refuseLinkingPublicRole(
+          this.db as LastSuperAdminTx,
+          this.dialect,
+          uniqueChildRoleIds,
+          "inherit",
+          { roleId: storedRoleId }
         );
 
         // Verify all child roles exist
