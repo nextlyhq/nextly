@@ -124,6 +124,7 @@ import {
 } from "./auth/collection-definition-policy";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import { hasAuthRateLimit } from "./auth/handlers/router";
+import { LIST_READ_GATES, requireListRead } from "./auth/list-read-gates";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
@@ -854,10 +855,7 @@ export const _applyGlobalDateFormattingForTest = applyGlobalDateFormatting;
  * What a refused read of permissions names, whichever of the grants it
  * accepts the caller lacked.
  */
-const READING_PERMISSIONS: RefusalTarget = {
-  action: "read",
-  resource: "permissions",
-};
+const READING_PERMISSIONS: RefusalTarget = LIST_READ_GATES.permissions.target;
 
 /**
  * Centralized permission resolver for all API service endpoints.
@@ -1081,13 +1079,13 @@ async function resolveAuthorization(
       );
     }
 
-    // listPermissions: allow users with read-roles (for role form's permission matrix)
+    // The permissions and roles lists: the gates the dashboard's counts of
+    // them read too.
     if (method === "listPermissions") {
-      return requireAnyPermission(
-        req,
-        [{ action: "read", resource: "roles" }],
-        READING_PERMISSIONS
-      );
+      return requireListRead(req, LIST_READ_GATES.permissions);
+    }
+    if (method === "listRoles") {
+      return requireListRead(req, LIST_READ_GATES.roles);
     }
 
     // addPermissionToRole, removePermissionFromRole → update-roles
@@ -1142,6 +1140,11 @@ async function resolveAuthorization(
     // (listRoles, getRoleById, createRole, updateRole, deleteRole, etc.)
     const action = getActionFromMethod(httpMethod);
     return requirePermission(req, action, "roles");
+  }
+
+  // The users list: the gate the dashboard's user count reads too.
+  if (service === "users" && method === "listUsers") {
+    return requireListRead(req, LIST_READ_GATES.users);
   }
 
   // --- Default: {action}-{service} (e.g., read-users, create-users) ---
