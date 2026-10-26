@@ -558,7 +558,8 @@ async function authenticateLayoutWrite(
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
   if (!mayWriteLayout(auth)) {
-    throw NextlyError.forbidden({
+    throw NextlyError.personOnly({
+      doing: "change a dashboard layout",
       logContext: { reason: `an api key may not ${intent} a dashboard layout` },
     });
   }

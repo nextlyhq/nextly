@@ -785,9 +785,10 @@ export class SingleRegistryService extends BaseRegistryService<
     const existing = await this.getSingle(slug);
 
     if (!options?.force) {
-      // Generic FORBIDDEN per §13.8 — the policy explanation is operator-only.
-      // Public clients see "You don't have permission to perform this action."
-      throw NextlyError.forbidden({
+      // Refused in words that say a Single is not deleted from here, a fact
+      // about Singles and not about the caller's permissions (which §13.8
+      // keeps generic). The `force` hint stays operator-only, in logContext.
+      throw NextlyError.singleNotDeletable({
         logContext: {
           reason: "single-requires-force-delete",
           slug,
