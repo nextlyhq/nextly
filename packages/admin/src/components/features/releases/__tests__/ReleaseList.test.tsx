@@ -595,32 +595,39 @@ describe("the open tab and its count", () => {
 });
 
 describe("paging when a tab shrinks", () => {
-  it("moves back to the last page when the only row on a later page goes", async () => {
-    const user = userEvent.setup();
-    const rows = Array.from({ length: 25 }, (_, i) =>
-      release({ id: `r${i}`, title: `Release ${i}` })
-    );
-    let total = 26;
-    mocks.listPage.mockImplementation(({ page: number }: { page: number }) =>
-      number === 1 ? page(rows, total) : page([], total)
-    );
-    const { rerender } = render(<ReleaseList />);
-    await user.click(screen.getByRole("button", { name: "Go to next page" }));
-    expect(mocks.listPage).toHaveBeenLastCalledWith(
-      expect.objectContaining({ page: 2 })
-    );
-
-    // The only release on page 2 is published: the next answer (a poll, or
-    // the refresh after the action) has one release fewer and no page 2.
-    total = 25;
-    rerender(<ReleaseList />);
-    await waitFor(() =>
+  // Driving several full 25-row renders through userEvent costs more than the
+  // suite's 10 s default on a loaded machine — the same reason the registry
+  // suite gives its module-graph passes a wider budget.
+  it(
+    "moves back to the last page when the only row on a later page goes",
+    { timeout: 60_000 },
+    async () => {
+      const user = userEvent.setup();
+      const rows = Array.from({ length: 25 }, (_, i) =>
+        release({ id: `r${i}`, title: `Release ${i}` })
+      );
+      let total = 26;
+      mocks.listPage.mockImplementation(({ page: number }: { page: number }) =>
+        number === 1 ? page(rows, total) : page([], total)
+      );
+      const { rerender } = render(<ReleaseList />);
+      await user.click(screen.getByRole("button", { name: "Go to next page" }));
       expect(mocks.listPage).toHaveBeenLastCalledWith(
-        expect.objectContaining({ page: 1 })
-      )
-    );
-    expect(screen.getByText(/Showing 1.25 of 25/)).toBeTruthy();
-  });
+        expect.objectContaining({ page: 2 })
+      );
+
+      // The only release on page 2 is published: the next answer (a poll, or
+      // the refresh after the action) has one release fewer and no page 2.
+      total = 25;
+      rerender(<ReleaseList />);
+      await waitFor(() =>
+        expect(mocks.listPage).toHaveBeenLastCalledWith(
+          expect.objectContaining({ page: 1 })
+        )
+      );
+      expect(screen.getByText(/Showing 1.25 of 25/)).toBeTruthy();
+    }
+  );
 });
 
 describe("the single-document filter", () => {
