@@ -16,6 +16,7 @@
  * @module services/collections/related-row-read-context
  */
 
+import type { FilteredRead } from "../../auth/access/rule-answer";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { CompanionSchema } from "../collection-file-manager";
 
@@ -167,14 +168,14 @@ export interface RelatedRowReadContext {
   targetCompanions?: Map<string, Promise<CompanionSchema | null>>;
 
   /**
-   * Whether this caller may read each target collection, decided once per
-   * expansion. The verdict depends on nothing but the caller and the target,
+   * Which rows of each target collection this caller may read, decided once
+   * per expansion. The verdict depends on nothing but the caller and the target,
    * and both are fixed for the whole expansion — a nested hop inherits the
    * same caller — so a `hasMany` field fetching its references concurrently
    * asks its target's rule once rather than once per reference. Holds the
    * PENDING verdict, as the policy map does, and for the same reason.
    */
-  targetVerdicts?: Map<string, Promise<boolean>>;
+  targetVerdicts?: Map<string, Promise<FilteredRead>>;
 }
 
 /** The per-read caches a {@link RelatedRowReadContext} carries. */

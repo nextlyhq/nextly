@@ -49,8 +49,11 @@ import {
 } from "../../../auth/access/declared-rules";
 import {
   noteFilterNotApplied,
+  readFilterIn,
+  readOf,
   reportRuleFilterMisuse,
   ruleAnswer,
+  type FilteredRead,
   type RuleAnswer,
 } from "../../../auth/access/rule-answer";
 import {
@@ -79,13 +82,16 @@ import type {
  * Asks a rule function once, through `ask`, and reads its answer through `ruleAnswer`, for
  * the caller to judge. A rule that throws refuses, and is logged so it can be
  * found and fixed: `null`. A filter it may not answer, or one that is not
- * well formed, is reported as misused.
+ * well formed, is reported as misused. A read rule's filter is refused, and
+ * the difference from the decision recorded, unless the caller applies it
+ * (`appliesFilter`).
  */
 async function askRuleFunction(
   ask: () => unknown,
   operation: AccessOperation,
   target: AccessTarget,
-  decisionAllows: boolean
+  decisionAllows: boolean,
+  appliesFilter: boolean
 ): Promise<{ answer: unknown; meaning: RuleAnswer } | null> {
   let answer: unknown;
   try {
@@ -99,9 +105,29 @@ async function askRuleFunction(
   }
   const meaning = ruleAnswer(answer);
   reportRuleFilterMisuse(target.slug, operation, target.kind, meaning);
-  // Neither caller applies a read rule's filter, so each refuses it.
-  await noteFilterNotApplied(target.kind, operation, meaning, decisionAllows);
+  // A caller that does not apply a read rule's filter refuses it.
+  if (!appliesFilter) {
+    await noteFilterNotApplied(target.kind, operation, meaning, decisionAllows);
+  }
   return { answer, meaning };
+}
+
+/**
+ * A rule's answer as a caller judges it: allowed only by `true`, or, to a
+ * caller that applies it (`appliesFilter`), for the entries a collection read
+ * rule's filter matches.
+ */
+function readFromAnswer(
+  meaning: RuleAnswer,
+  operation: AccessOperation,
+  target: AccessTarget,
+  appliesFilter: boolean
+): FilteredRead {
+  const filter = appliesFilter
+    ? readFilterIn(target.kind, operation, meaning)
+    : undefined;
+  if (filter !== undefined) return { allowed: false, filter };
+  return readOf(meaning.kind === "allow");
 }
 
 /**
@@ -228,14 +254,33 @@ export class RBACAccessControlService {
    * ```
    */
   async checkAccess(params: CheckAccessParams): Promise<boolean> {
+    return (await this.userAccess(params, false)).allowed;
+  }
+
+  /**
+   * {@link checkAccess}, asked by a reader that applies a collection read
+   * rule's filter to the entries it reads: a rule answering one allows the
+   * entries it matches, and the filter is handed back to apply.
+   */
+  async checkAccessApplyingFilter(
+    params: CheckAccessParams
+  ): Promise<FilteredRead> {
+    return this.userAccess(params, true);
+  }
+
+  /** A signed-in user's access, the filter handed back where it is applied. */
+  private async userAccess(
+    params: CheckAccessParams,
+    appliesFilter: boolean
+  ): Promise<FilteredRead> {
     const { userId, operation, resource, executor } = params;
 
     if (!userId) {
-      return false;
+      return readOf(false);
     }
 
     if (await isSuperAdmin(userId, executor)) {
-      return true;
+      return readOf(true);
     }
 
     const target = this.targetFor(resource, params.codeAccess);
@@ -254,10 +299,10 @@ export class RBACAccessControlService {
         if (operationAccess !== false) {
           noticePermissionNowComesFirst(resource, operation, "signed-in user");
         }
-        return false;
+        return readOf(false);
       }
       if (typeof operationAccess === "boolean") {
-        return operationAccess;
+        return readOf(operationAccess);
       }
 
       if (typeof operationAccess === "function") {
@@ -267,35 +312,49 @@ export class RBACAccessControlService {
           target,
           executor
         );
-        return this.userRuleAllows(operationAccess, ctx, operation, target);
+        return this.userRuleRead(
+          operationAccess,
+          ctx,
+          operation,
+          target,
+          appliesFilter
+        );
       }
     }
 
-    return hasPermission(userId, operation, resource, executor);
+    return readOf(await hasPermission(userId, operation, resource, executor));
   }
 
   /**
-   * Whether a signed-in user's rule function allows: only by answering
-   * `true`. A rule that throws refuses. A truthy answer that is not `true`
-   * let the user in before, so that refusal is named once.
+   * What a signed-in user's rule function allows: every entry only by
+   * answering `true`, or, to a caller that applies it, the entries a read
+   * rule's filter matches. A rule that throws refuses. A truthy answer that
+   * refuses let the user in before, so that refusal is named once.
    */
-  private async userRuleAllows(
+  private async userRuleRead(
     rule: (ctx: AccessControlContext) => unknown,
     ctx: AccessControlContext,
     operation: AccessOperation,
-    target: AccessTarget
-  ): Promise<boolean> {
+    target: AccessTarget,
+    appliesFilter: boolean
+  ): Promise<FilteredRead> {
     // Asked only of a user who holds the permission, whom the decision would
     // let read the entries a filter matches.
     const asked = await askRuleFunction(
       () => rule(ctx),
       operation,
       target,
-      true
+      true,
+      appliesFilter
     );
-    if (asked === null) return false;
-    // Only `true` allows every entry.
-    if (asked.meaning.kind !== "allow" && Boolean(asked.answer)) {
+    if (asked === null) return readOf(false);
+    const read = readFromAnswer(
+      asked.meaning,
+      operation,
+      target,
+      appliesFilter
+    );
+    if (!read.allowed && !read.filter && Boolean(asked.answer)) {
       noticeRuleNoLongerAllows(
         target.slug,
         operation,
@@ -304,7 +363,7 @@ export class RBACAccessControlService {
         asked.meaning
       );
     }
-    return asked.meaning.kind === "allow";
+    return read;
   }
 
   /**
@@ -329,7 +388,20 @@ export class RBACAccessControlService {
     resource: string;
     codeAccess?: CollectionAccessControl | SingleAccessControl;
   }): Promise<boolean | undefined> {
-    return this.codeRuleVerdict(params, null);
+    return (await this.codeRuleRead(params, null, false))?.allowed;
+  }
+
+  /**
+   * {@link checkAnonymousCodeAccess}, asked by a reader that applies a
+   * collection read rule's filter: a rule answering one admits the visitor to
+   * the entries it matches, and the filter is handed back to apply.
+   */
+  async checkAnonymousCodeAccessApplyingFilter(params: {
+    operation: AccessOperation;
+    resource: string;
+    codeAccess?: CollectionAccessControl | SingleAccessControl;
+  }): Promise<FilteredRead | undefined> {
+    return this.codeRuleRead(params, null, true);
   }
 
   /**
@@ -359,23 +431,26 @@ export class RBACAccessControlService {
     if (params.operation === "publish" || params.operation === "unpublish") {
       return false;
     }
-    return (await this.codeRuleVerdict(params, params.principal)) === true;
+    const read = await this.codeRuleRead(params, params.principal, false);
+    return read?.allowed === true;
   }
 
   /**
    * The rule's own verdict for a caller with no staff user: `undefined` when
-   * no rule governs the operation, else the boolean it gives. One evaluation
+   * no rule governs the operation, else what it allows, a read rule's filter
+   * handed back to a caller that applies it (`appliesFilter`). One evaluation
    * for the anonymous caller and the person, so the two differ only in who
    * the rule is told is asking and in what each does with no rule at all.
    */
-  private async codeRuleVerdict(
+  private async codeRuleRead(
     params: {
       operation: AccessOperation;
       resource: string;
       codeAccess?: CollectionAccessControl | SingleAccessControl;
     },
-    principal: Principal | null
-  ): Promise<boolean | undefined> {
+    principal: Principal | null,
+    appliesFilter: boolean
+  ): Promise<FilteredRead | undefined> {
     const { operation, resource } = params;
     const target = this.targetFor(resource, params.codeAccess);
     const rule =
@@ -384,7 +459,7 @@ export class RBACAccessControlService {
       ];
 
     if (rule === undefined) return undefined;
-    if (typeof rule === "boolean") return rule;
+    if (typeof rule === "boolean") return readOf(rule);
     if (typeof rule !== "function") return undefined;
 
     // Fail-secure, exactly as the authenticated path does: a rule that threw
@@ -401,17 +476,25 @@ export class RBACAccessControlService {
       target,
       // A plugin's person is judged by the rule alone; a visitor holds no
       // permission, so the decision refuses it whatever the rule says.
-      principal !== null
+      principal !== null,
+      appliesFilter
     );
-    if (asked === null) return false;
-    // A rule allows only by answering `true`. A visitor was refused before
-    // only by `false`, so any other answer that now refuses one is named
-    // once; a plugin's person was already held to `true`.
+    if (asked === null) return readOf(false);
+    // A rule allows only by answering `true`, or a filter to a caller that
+    // applies it. A visitor was refused before only by `false`, so any other
+    // answer that now refuses one is named once; a plugin's person was
+    // already held to `true`.
     const { answer, meaning } = asked;
-    if (principal === null && meaning.kind !== "allow" && answer !== false) {
+    const read = readFromAnswer(meaning, operation, target, appliesFilter);
+    if (
+      principal === null &&
+      !read.allowed &&
+      !read.filter &&
+      answer !== false
+    ) {
       noticeRuleNoLongerAllows(resource, operation, "visitor", answer, meaning);
     }
-    return meaning.kind === "allow";
+    return read;
   }
 
   /**

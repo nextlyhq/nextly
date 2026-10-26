@@ -1,9 +1,14 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { inArray, sql } from "drizzle-orm";
+import { getTableColumns, inArray, sql, type SQL } from "drizzle-orm";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { relatedRowReads } from "../../../auth/access/population-read";
+import {
+  readOf,
+  type FilteredRead,
+  type RuleFilter,
+} from "../../../auth/access/rule-answer";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { canReadSystemResource } from "../../../auth/resource-readable";
@@ -76,6 +81,11 @@ import {
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
 import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
+import {
+  localizedFilterContext,
+  ruleFilterCondition,
+  type DynamicSchema,
+} from "../query/filter-condition";
 
 import { CollectionAccessService } from "./collection-access-service";
 import type { UserContext } from "./collection-types";
@@ -498,7 +508,7 @@ export interface RelationshipExpansionOptions {
    *
    * @internal
    */
-  targetVerdicts?: Map<string, Promise<boolean>>;
+  targetVerdicts?: Map<string, Promise<FilteredRead>>;
 
   /**
    * The caller's authenticated scope, when one applies.
@@ -1411,6 +1421,13 @@ type TargetTableColumns = {
 };
 
 /**
+ * The key a related row's fetch selects the match of the target's read rule
+ * filter under, beside the row's own columns. A field name cannot begin with
+ * `$`, so it names no column.
+ */
+const RULE_MATCH = "$ruleMatch";
+
+/**
  * Strip a related row to its identity (`id` and `label`), in place: the answer
  * for a row whose schema cannot be resolved, which leaves no field to judge.
  */
@@ -1596,7 +1613,8 @@ export class CollectionRelationshipService extends BaseService {
     // refused the whole target is not owed the difference between a row that
     // exists and one that does not, and a completeness check reads the
     // absence as deliberate either way.
-    if (!(await this.callerMayReadTarget(targetCollection, access))) {
+    const read = await this.callerMayReadTarget(targetCollection, access);
+    if (!read.allowed && read.filter === undefined) {
       this.recordWithheldIds(targetCollection, ids, access);
       return [];
     }
@@ -1616,14 +1634,38 @@ export class CollectionRelationshipService extends BaseService {
       access
     );
 
-    const entries = (await this.db
-      .select()
-      .from(schema)
-      .where(inArray(schema.id, ids))) as Record<string, unknown>[];
+    // A read rule that answered a filter shows the caller the rows it
+    // matches. Whether each row matches is selected as a column of this same
+    // fetch rather than added to its WHERE, so a row the filter does not
+    // match is still fetched and recorded below as withheld on purpose, and
+    // an id no row has stays unrecorded, as a dangling reference.
+    const match =
+      read.filter === undefined
+        ? undefined
+        : await this.ruleMatch(
+            targetCollection,
+            read.filter,
+            schema,
+            statusFilter,
+            access
+          );
+    const entries = (await (
+      match === undefined
+        ? this.db.select().from(schema)
+        : this.db
+            .select({ ...getTableColumns(schema), [RULE_MATCH]: match })
+            .from(schema)
+    ).where(inArray(schema.id, ids))) as Record<string, unknown>[];
 
-    const fetched = entries.map(entry =>
-      convertTimestampsToCamelCase({ ...entry })
-    );
+    const matching = new Set<Record<string, unknown>>();
+    const fetched = entries.map(entry => {
+      // The match is taken off before the row goes further, so it is never
+      // redacted, labelled or returned as one of the row's fields.
+      const { [RULE_MATCH]: matches, ...columns } = entry;
+      const row = convertTimestampsToCamelCase(columns);
+      if (match === undefined || matches === 1) matching.add(row);
+      return row;
+    });
     // Filtered here rather than in the query above so the rows this removes are
     // recorded as deliberately withheld. Narrowing the fetch would drop them
     // before anything could distinguish "exists, wrong lifecycle" from "does
@@ -1646,7 +1688,7 @@ export class CollectionRelationshipService extends BaseService {
     );
     const revealed = new Set(decisions.reveal);
     const hidden = new Set(decisions.hide);
-    const rows = statusFilter
+    const lifecycleRows = statusFilter
       ? fetched.filter(row => {
           const id = typeof row.id === "string" ? row.id : null;
           // Withdrawn wins over the stored status: the row still says
@@ -1660,6 +1702,7 @@ export class CollectionRelationshipService extends BaseService {
           );
         })
       : fetched;
+    const rows = lifecycleRows.filter(row => matching.has(row));
     this.recordWithheld(targetCollection, fetched, rows, access);
 
     // Redaction runs before any caller derives a label from a row: a label
@@ -1670,13 +1713,60 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
-   * Whether this caller may read the target collection at all — decided
-   * before its rows are queried, and once per expansion for a dynamic target.
+   * Whether each row of the target matches its read rule's `filter`, as a
+   * column to select: `1` for a row it matches, `0` for one it does not.
+   * Built in the language the read resolved to and under its Draft/Published
+   * filter, as a direct read of the target builds it. `undefined` for a
+   * filter that constrains nothing, which every row matches. A filter that
+   * cannot be built matches no row.
+   */
+  private async ruleMatch(
+    targetCollection: string,
+    filter: RuleFilter,
+    schema: DynamicSchema,
+    statusFilter: StatusFilter | null,
+    access: RelatedRowAccess
+  ): Promise<SQL<number> | undefined> {
+    const localeChain = access.locale ? [access.locale] : null;
+    const companion = localeChain
+      ? await this.resolveTargetCompanion(targetCollection, access)
+      : null;
+    const condition = await ruleFilterCondition(
+      {
+        collectionName: targetCollection,
+        filter,
+        schema,
+        localizedCtx: localizedFilterContext(
+          companion,
+          localeChain,
+          schema,
+          statusFilter?.values
+        ),
+      },
+      // A rule's filter may not name a field inside a component, which the
+      // builder refuses before it looks for a component table, so it is not
+      // told where they are.
+      {
+        getCollection: name => this.collectionService.getCollection(name),
+        adapter: this.adapter,
+      },
+      this.logger
+    );
+    if (condition === undefined) return undefined;
+    return sql<number>`case when ${condition} then 1 else 0 end`.mapWith(
+      Number
+    );
+  }
+
+  /**
+   * Which rows of the target collection this caller may read: all, none, or
+   * those its read rule's filter matches — decided before its rows are
+   * queried, and once per expansion for a dynamic target.
    */
   private async callerMayReadTarget(
     targetCollection: string,
     access: RelatedRowAccess
-  ): Promise<boolean> {
+  ): Promise<FilteredRead> {
     // Deliberately NOT keyed on `enforceFieldAccess`. That flag asks whether a
     // related row's FIELDS should be redacted; this asks whether the caller may
     // see the row at all, and the two have different callers. A Single's
@@ -1685,9 +1775,9 @@ export class CollectionRelationshipService extends BaseService {
     // preliminary view has to withhold it too, or the rule approves a document
     // on evidence the response then removes and side effects run in between.
     if (!access.enforceCollectionAccess && !access.enforceFieldAccess) {
-      return true;
+      return readOf(true);
     }
-    if (trustsTarget(access, targetCollection)) return true;
+    if (trustsTarget(access, targetCollection)) return readOf(true);
     if (isSystemEntity(targetCollection)) {
       // A system entity carries no stored collection rules, so the dynamic
       // path below has nothing to evaluate. A direct read of `users` requires
@@ -1705,17 +1795,21 @@ export class CollectionRelationshipService extends BaseService {
       // field otherwise, each a permission lookup.
       return this.memoizedVerdict(access, targetCollection, async () => {
         if (boundRefuses(access, targetCollection)) {
-          return canReadSystemResource(
-            targetCollection.toLowerCase(),
-            callerId(access),
-            access.authenticatedScope
+          return readOf(
+            await canReadSystemResource(
+              targetCollection.toLowerCase(),
+              callerId(access),
+              access.authenticatedScope
+            )
           );
         }
         // A read holding no bypass is asked what its direct read asks.
         // Answered "yes" for everyone before, which let a key or a person
         // refused `users` by name read a post's author through the
         // relationship.
-        return identifiedCallerMayRead(access, targetCollection.toLowerCase());
+        return readOf(
+          await identifiedCallerMayRead(access, targetCollection.toLowerCase())
+        );
       });
     }
 
@@ -1824,7 +1918,7 @@ export class CollectionRelationshipService extends BaseService {
     user: UserContext | undefined,
     targetCollection: string,
     access: RelatedRowAccess
-  ): Promise<boolean> {
+  ): Promise<FilteredRead> {
     return this.memoizedVerdict(access, targetCollection, () =>
       relatedRowReads(
         targetCollection,
@@ -1852,8 +1946,8 @@ export class CollectionRelationshipService extends BaseService {
   private memoizedVerdict(
     access: RelatedRowAccess,
     targetCollection: string,
-    decide: () => Promise<boolean>
-  ): Promise<boolean> {
+    decide: () => Promise<FilteredRead>
+  ): Promise<FilteredRead> {
     const cached = access.targetVerdicts?.get(targetCollection);
     if (cached) return cached;
     const pending = decide();
