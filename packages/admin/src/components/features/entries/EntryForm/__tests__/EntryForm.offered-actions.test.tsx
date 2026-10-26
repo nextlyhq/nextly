@@ -64,8 +64,11 @@ vi.mock("@admin/hooks/useLocalization", () => ({
 vi.mock("@admin/hooks/useCan", () => ({
   useCan: (slug: string) => canFor(slug),
 }));
-// A request judged in other languages, held as `<request>:<slug>`.
-vi.mock("@admin/hooks/useCanRequest", () => ({
+// A request judged in other languages, held as `<request>:<slug>`. The
+// module's other hooks stay real: the history panel they serve is not what
+// these cases are about.
+vi.mock("@admin/hooks/useCanRequest", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/useCanRequest")>()),
   useCanRequest: (slug: string, request: string) =>
     canFor(`${request}:${slug}`),
 }));

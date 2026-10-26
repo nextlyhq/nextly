@@ -139,7 +139,11 @@ describe("VersionComparePage — the languages its history is read in", () => {
   it("reads every language's history where the server allows it", () => {
     renderPage();
     expect(canRequestMock).toHaveBeenCalledWith("posts", "readHistory");
-    expect(useVersionsMock.mock.calls.at(-1)?.[0]).not.toHaveProperty("locale");
+    // No language narrows the read: `useVersions` lists every language's
+    // versions for an absent locale.
+    expect(
+      (useVersionsMock.mock.calls.at(-1)?.[0] as { locale?: string }).locale
+    ).toBeUndefined();
   });
 
   it("reads the default language's where it does not, rather than a refused list", () => {
