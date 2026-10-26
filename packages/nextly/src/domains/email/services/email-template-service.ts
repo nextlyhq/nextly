@@ -53,12 +53,18 @@ import {
   type BrandSettings,
   type BrandSettingsUpdate,
 } from "../brand-settings";
+import type { DraftPreview } from "../draft-preview-request";
 import {
   changedTemplateFields,
   recordTemplateActivity,
   type EmailTemplateActivityInput,
 } from "../template-activity";
-import { checkTemplateEnvelope, type SavedCopies } from "../template-envelope";
+import {
+  checkTemplateEnvelope,
+  renderTemplateFrom,
+  usesVariables,
+  type SavedCopies,
+} from "../template-envelope";
 import {
   applyOwnerChoices,
   ownerChanges,
@@ -95,12 +101,14 @@ import {
   templateReadsVariable,
 } from "./liquid-compat";
 import { parseLiquid, writesOutput } from "./liquid-engine";
+import { displayNameAndMailbox } from "./recipients";
 import {
   DEFAULT_APP_NAME,
   renderTemplate,
   type RenderedTemplate,
   type TemplateFields,
 } from "./render-template";
+import { htmlToText } from "./template-engine";
 import {
   BUILT_IN_TEMPLATES,
   DEFAULT_LAYOUT_SLUG,
@@ -398,6 +406,50 @@ type EmailTemplatesTable =
   | typeof emailTemplatesPg
   | typeof emailTemplatesMysql
   | typeof emailTemplatesSqlite;
+
+/**
+ * The preview text as an inbox shows it: rendered exactly as the sent email
+ * renders it, in the HTML it is spliced into, with the same data, engine and
+ * brand, then read as text the way an inbox reads that hidden line.
+ */
+function renderPreheaderText(
+  source: string,
+  template: TemplateFields,
+  data: Record<string, unknown>,
+  options: Parameters<typeof renderTemplate>[3]
+): string {
+  const { html } = renderTemplate(
+    {
+      ...template,
+      subject: "",
+      htmlContent: source,
+      plainTextContent: null,
+      preheader: null,
+      useLayout: false,
+      kind: "template",
+    },
+    null,
+    data,
+    options
+  );
+  return htmlToText(html, { linkTargets: false }).trim();
+}
+
+/**
+ * The From line a reader would see, for a preview. One whose address uses a
+ * variable, which a save refuses, comes back as written: the preview shows
+ * the draft, and the save says what is wrong with it. Any other failure is
+ * the preview's, as it would be the send's.
+ */
+function previewFrom(
+  fromOverride: string,
+  data: Record<string, unknown>
+): string {
+  if (usesVariables(displayNameAndMailbox(fromOverride).email)) {
+    return fromOverride;
+  }
+  return renderTemplateFrom(fromOverride, data, "preview");
+}
 
 export class EmailTemplateService extends BaseService {
   private emailTemplates: EmailTemplatesTable;
@@ -1917,9 +1969,12 @@ export class EmailTemplateService extends BaseService {
    */
   async previewDraft(
     draft: TemplateFields &
-      Pick<EmailTemplateRecord, "layoutId"> & { id?: string },
+      Pick<EmailTemplateRecord, "layoutId"> & {
+        id?: string;
+        fromOverride?: string | null;
+      },
     sampleData: Record<string, unknown>
-  ): Promise<RenderedTemplate> {
+  ): Promise<DraftPreview> {
     const layout = draft.useLayout ? await this.getLayoutFor(draft) : null;
     // A draft of a saved template previews with that template's engine unless
     // the caller chose one, so a kept template's draft looks as it would send.
@@ -1928,18 +1983,33 @@ export class EmailTemplateService extends BaseService {
       (draft.id
         ? await this.keptOnOldEngine({ ...draft, id: draft.id })
         : false);
-    return renderTemplate(
+    const options = {
+      appName: this.appName,
+      brand: await this.brandFor({ ...draft, legacy }, layout),
+    };
+    const rendered = renderTemplate(
       { ...draft, legacy },
       layout && {
         ...layout,
         legacy: await this.keptOnOldEngine(layout),
       },
       sampleData,
-      {
-        appName: this.appName,
-        brand: await this.brandFor({ ...draft, legacy }, layout),
-      }
+      options
     );
+    return {
+      ...rendered,
+      preheader: draft.preheader?.trim()
+        ? renderPreheaderText(
+            draft.preheader,
+            { ...draft, legacy },
+            sampleData,
+            options
+          )
+        : "",
+      from: draft.fromOverride
+        ? previewFrom(draft.fromOverride, sampleData)
+        : null,
+    };
   }
 
   // ============================================================

@@ -56,11 +56,33 @@ interface EmailTemplateServices {
 }
 
 /**
- * A test send's body: only the sample data. Anything else, a `to` included,
- * is ignored.
+ * The editor's fields, saved or not, for a test of what is on screen. Each is
+ * optional: an absent field is the stored one.
+ */
+const testDraftSchema = z.object({
+  subject: z.string().optional(),
+  preheader: z.string().nullable().optional(),
+  htmlContent: z.string().optional(),
+  plainTextContent: z.string().nullable().optional(),
+  useLayout: z.boolean().optional(),
+  layoutId: z.string().nullable().optional(),
+  fromOverride: z.string().nullable().optional(),
+  replyTo: z.string().nullable().optional(),
+  providerId: z.string().nullable().optional(),
+  // The attachments on screen, added or removed: null sends none.
+  attachments: z
+    .array(z.object({ mediaId: z.string(), filename: z.string().optional() }))
+    .nullable()
+    .optional(),
+});
+
+/**
+ * A test send's body: the sample data and, for a test of unsaved edits, the
+ * editor's draft. Anything else, a `to` included, is ignored.
  */
 const sendTestSchema = z.object({
   variables: z.record(z.string(), z.unknown()).optional(),
+  draft: testDraftSchema.optional(),
 });
 
 /** A service from the container, or undefined before it is set up. */
@@ -71,6 +93,22 @@ function fromContainer<T>(name: string): T | undefined {
     // DI not initialized
     return undefined;
   }
+}
+
+/** The email service, or the generic internal error when it isn't wired. */
+function emailServiceOrFail(): EmailService {
+  const emailService = fromContainer<EmailService>("emailService");
+  // Unwired services are a server fault: the caller gets the generic
+  // internal error and the log gets what to call first.
+  if (!emailService) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "email-service-unavailable",
+        hint: "Ensure registerServices() or getNextly() has been called before API requests.",
+      },
+    });
+  }
+  return emailService;
 }
 
 /**
@@ -383,27 +421,59 @@ const EMAIL_TEMPLATE_METHODS: Record<
     // permission from the method, and PATCH is what makes this require
     // `update-email-templates`, as the ownership steps do. A POST would
     // need only `create-email-templates`.
+    //
+    // With a draft, the test is of what is on screen: the editor's unsaved
+    // fields over the stored template, through the same render path as a real
+    // send. The response says which provider the send went through, and
+    // whether that provider delivers anything (the log provider doesn't).
     execute: async (svc, p, body) => {
-      const { variables } = parseBody(sendTestSchema, body ?? {});
+      const { variables, draft } = parseBody(sendTestSchema, body ?? {});
       const to = await ownAddressOfCaller();
-      const emailService = fromContainer<EmailService>("emailService");
-      // Unwired services are a server fault: the caller gets the generic
-      // internal error and the log gets what to call first.
-      if (!emailService) {
-        throw NextlyError.internal({
-          logContext: {
-            reason: "email-service-unavailable",
-            hint: "Ensure registerServices() or getNextly() has been called before API requests.",
-          },
-        });
-      }
       const template = await svc.templateService.getTemplate(p.templateId);
-      const result = await emailService.sendTemplateTest(
+      const result = await emailServiceOrFail().sendTemplateTest(
         template.slug,
         to,
-        variables ?? {}
+        variables ?? {},
+        draft
       );
       return respondAction(sendOutcomeMessage(result.success), { ...result });
+    },
+  },
+  testSendTarget: {
+    // Where a test of this template would go, and which provider would
+    // deliver it, before anything is sent: the caller's own address, refused
+    // to anyone without one, as the send is.
+    //
+    // `?providerId=` names the provider the editor's draft chose, as the send
+    // will use it: an id, or empty for the default. Without it, the
+    // template's own.
+    execute: async (svc, p) => {
+      const to = await ownAddressOfCaller();
+      const template = await svc.templateService.getTemplate(p.templateId);
+      const asked = p.providerId;
+      const delivery = await emailServiceOrFail().testDelivery(
+        asked === undefined ? template.providerId : asked || null
+      );
+      return respondData({ to, delivery });
+    },
+  },
+  templateEngine: {
+    // Whether the template is kept on the engine it was written for, and the
+    // fields and reasons that keep it there.
+    execute: async (svc, p) =>
+      respondData({
+        ...(await svc.templateService.oldEngineStatus(p.templateId)),
+      }),
+  },
+  readAsLiquid: {
+    // Reads a kept template as Liquid from now on. The service refuses while
+    // the text that kept it is unchanged, or when it doesn't parse.
+    execute: async (svc, p) => {
+      const template = await svc.templateService.confirmLiquid(
+        p.templateId,
+        readAuthenticatedActor()
+      );
+      return respondMutation("This email is now read as Liquid.", template);
     },
   },
   previewTemplate: {

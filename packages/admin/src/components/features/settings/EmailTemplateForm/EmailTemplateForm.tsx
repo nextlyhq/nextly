@@ -18,7 +18,7 @@ import { BodyEditor } from "./BodyEditor";
 import { DataRail } from "./DataRail";
 import { DetailsPanel } from "./DetailsPanel";
 import { EnvelopeBar } from "./EnvelopeBar";
-import { InboxStrip } from "./InboxStrip";
+import { InboxStrip, shownInboxLine } from "./InboxStrip";
 import { OwnershipNotices } from "./OwnershipNotices";
 import { regionsForRefusal } from "./refusal-routing";
 import {
@@ -26,6 +26,7 @@ import {
   EMAIL_TEMPLATE_FORM_ID,
   templateSchemaFor,
   templateToFormValues,
+  testDraftOf,
   type TemplateFormValues,
 } from "./schema";
 import { SendTestDialog } from "./SendTestDialog";
@@ -66,7 +67,7 @@ function ContentColumn({
   acts,
   isPending,
   isLayoutRow,
-  previewSubject,
+  inbox,
   editor,
 }: {
   form: FormOf;
@@ -76,7 +77,8 @@ function ContentColumn({
   acts: OwnershipActs;
   isPending: boolean;
   isLayoutRow: boolean;
-  previewSubject: string;
+  /** The inbox line as rendered from the draft, or null before the first render. */
+  inbox: { subject: string; preheader: string; from: string | null } | null;
   editor: Omit<
     React.ComponentProps<typeof BodyEditor>,
     "control" | "isPending" | "readOnly" | "liquid"
@@ -95,6 +97,7 @@ function ContentColumn({
         record={template}
         ownsContent={owns}
         keptOnOldEngine={keptOnOldEngine}
+        isDirty={form.formState.isDirty}
         undo={acts.undoNote}
         onOverride={() => acts.startAct("override")}
         onReview={() => acts.startAct("review")}
@@ -102,9 +105,7 @@ function ContentColumn({
       />
       {isLayoutRow ? null : (
         <InboxStrip
-          from={fromOverride}
-          subject={previewSubject || subject}
-          preheader={preheader}
+          {...shownInboxLine({ subject, preheader, from: fromOverride }, inbox)}
         />
       )}
       <div
@@ -201,10 +202,10 @@ export function EmailTemplateForm({
     preheader,
     useLayout,
     isActive,
-    slug,
     name,
     variables,
     layoutId,
+    fromOverride,
   ] = form.watch([
     "htmlContent",
     "plainTextContent",
@@ -212,10 +213,10 @@ export function EmailTemplateForm({
     "preheader",
     "useLayout",
     "isActive",
-    "slug",
     "name",
     "variables",
     "layoutId",
+    "fromOverride",
   ]);
 
   useEffect(() => {
@@ -254,6 +255,8 @@ export function EmailTemplateForm({
     useLayout,
     layoutId,
     kind: currentKind,
+    fromOverride,
+    templateId: template?.id,
   });
 
   // What the editors complete: the declared variables, and the test data's
@@ -331,7 +334,15 @@ export function EmailTemplateForm({
               acts={acts}
               isPending={isPending}
               isLayoutRow={isLayoutRow}
-              previewSubject={derived.previewSubject}
+              inbox={
+                derived.hasPreview
+                  ? {
+                      subject: derived.previewSubject,
+                      preheader: derived.previewPreheader,
+                      from: derived.previewFrom,
+                    }
+                  : null
+              }
               editor={{
                 editorTab,
                 onEditorTabChange: setEditorTab,
@@ -398,8 +409,8 @@ export function EmailTemplateForm({
             onOpenChange={setSendTestOpen}
             templateId={template?.id ?? ""}
             templateName={name}
-            slug={slug}
             sampleData={derived.sampleData}
+            draftOf={() => testDraftOf(form.getValues())}
           />
         )}
       </form>

@@ -15,8 +15,8 @@
  */
 
 import type {
+  DraftPreview,
   DraftPreviewRequest,
-  RenderedTemplate,
 } from "nextly/api/email-template-preview-types";
 
 import { fetcher } from "../lib/api/fetcher";
@@ -327,14 +327,15 @@ export type DraftPreviewTemplate = DraftPreviewRequest["template"];
 export type DraftPreviewData = DraftPreviewRequest["data"];
 
 /**
- * A rendered draft: the complete artifact, including the text part.
+ * A rendered draft: the complete artifact, including the text part, and the
+ * preview text and From line rendered as an inbox shows them.
  *
- * The server's own `RenderedTemplate`, so the field the browser-side preview
+ * The server's own `DraftPreview`, so the field the browser-side preview
  * used to guess at cannot be dropped here without the compiler noticing.
  * Distinct from `EmailTemplatePreviewResult`, which carries no `text` because
  * the saved-row preview predates the unified renderer.
  */
-export type DraftPreviewResult = RenderedTemplate;
+export type DraftPreviewResult = DraftPreview;
 
 /**
  * Render UNSAVED template fields through the server's composition.
@@ -362,29 +363,123 @@ export async function previewDraft(
   );
 }
 
-export interface SendTestEmailResult {
-  success: boolean;
-  messageId?: string;
+/**
+ * Who delivers a send: the provider by its name, and whether it delivers at
+ * all. The log provider, which a site with no provider falls back to, writes
+ * the email to the server log and reaches nobody.
+ *
+ * Restated from the server's `TestDelivery`, which no public entry exports.
+ */
+export interface TestDelivery {
+  provider: string;
+  type: string;
+  delivers: boolean;
+}
+
+/** Where a test would go, before anything is sent. */
+export interface SendTestTarget {
+  /** The signed-in user's own address: the only one a test reaches. */
+  to: string;
+  delivery: TestDelivery;
 }
 
 /**
- * Send a real test email from a saved template to the signed-in user's own
- * address: the server picks the recipient, never the caller. Tests the SAVED
- * template (not unsaved edits).
+ * The editor's fields, saved or not, for a test of what is on screen. An
+ * absent field is the stored one.
+ */
+export interface TemplateTestDraft {
+  subject?: string;
+  preheader?: string | null;
+  htmlContent?: string;
+  plainTextContent?: string | null;
+  useLayout?: boolean;
+  layoutId?: string | null;
+  fromOverride?: string | null;
+  replyTo?: string | null;
+  providerId?: string | null;
+  /** The attachments on screen; null sends none. */
+  attachments?: Array<{ mediaId: string; filename?: string }> | null;
+}
+
+export interface SendTestEmailResult {
+  success: boolean;
+  messageId?: string;
+  delivery?: TestDelivery;
+}
+
+/**
+ * Send a real test email to the signed-in user's own address: the server
+ * picks the recipient, never the caller, and copies nobody the template
+ * copies. With a draft it sends what is on screen, unsaved edits included.
  */
 export async function sendTestEmail(
   templateId: string,
-  variables: Record<string, unknown>
+  variables: Record<string, unknown>,
+  draft?: TemplateTestDraft
 ): Promise<SendTestEmailResult> {
   return fetcher<SendTestEmailResult>(
     `/email-templates/${encodeURIComponent(templateId)}/send-test`,
     {
       // PATCH: the server gates it by the update permission on templates.
       method: "PATCH",
-      body: JSON.stringify({ variables }),
+      body: JSON.stringify({ variables, draft }),
     },
     true
   );
+}
+
+/**
+ * Where a test of this template would go, and who would deliver it: through
+ * `providerId` when the draft chose one (null for the default), else the
+ * template's own provider.
+ */
+export async function getSendTestTarget(
+  templateId: string,
+  providerId?: string | null
+): Promise<SendTestTarget> {
+  const query =
+    providerId === undefined
+      ? ""
+      : `?providerId=${encodeURIComponent(providerId ?? "")}`;
+  return fetcher<SendTestTarget>(
+    `/email-templates/${encodeURIComponent(templateId)}/send-test${query}`,
+    {},
+    true
+  );
+}
+
+/**
+ * Whether a template is kept on the engine it was written for, and the
+ * fields and reasons that keep it there.
+ */
+export interface TemplateEngine {
+  kept: boolean;
+  reasons: Array<{ field: string; label: string; reason: string }>;
+}
+
+export async function getTemplateEngine(
+  templateId: string
+): Promise<TemplateEngine> {
+  return fetcher<TemplateEngine>(
+    `/email-templates/${encodeURIComponent(templateId)}/engine`,
+    {},
+    true
+  );
+}
+
+/**
+ * Read a kept template as Liquid from now on. Refused while the text that
+ * kept it is unchanged, or when it doesn't parse as Liquid.
+ */
+export async function readAsLiquid(
+  templateId: string
+): Promise<EmailTemplateRecord> {
+  const result = await fetcher<MutationResponse<RawEmailTemplateRecord>>(
+    `/email-templates/${encodeURIComponent(templateId)}/read-as-liquid`,
+    { method: "PATCH", body: JSON.stringify({}) },
+    true
+  );
+  return normalizeTemplate(result.item);
 }
 
 // ============================================================

@@ -14,8 +14,6 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { randomUUID } from "node:crypto";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchEmailTemplates } from "../../../dispatcher/handlers/email-dispatcher";
@@ -32,6 +30,8 @@ import { parseRestRoute } from "../../../route-handler/route-parser";
 import { defineEmailProvider } from "../provider-definition";
 import type { EmailTemplateService } from "../services/email-template-service";
 import { interpolateTemplate } from "../services/template-engine";
+
+import { storeAsBefore } from "./stored-before-liquid";
 
 const sent: Array<{ to: string; subject: string; html: string }> = [];
 let current: TestNextly | undefined;
@@ -101,51 +101,6 @@ async function seedPluginTemplates(
     plugins: [{ name: "promo-plugin", templates: contributed }],
   });
   await templates(t).ensureBuiltInTemplates();
-}
-
-/**
- * Store a template as an install before Liquid did, straight into the
- * table: some of what these hold no longer passes the save-time check.
- */
-async function storeAsBefore(
-  t: TestNextly,
-  dialect: TestDialect,
-  slug: string,
-  htmlContent: string,
-  kind: "template" | "layout" = "template"
-): Promise<string> {
-  const id = randomUUID();
-  const q = (n: string) => (dialect === "mysql" ? `\`${n}\`` : `"${n}"`);
-  const p = (i: number) => (dialect === "postgresql" ? `$${i}` : "?");
-  const columns = [
-    "id",
-    "name",
-    "slug",
-    "subject",
-    "html_content",
-    "kind",
-    "use_layout",
-    "is_active",
-    "created_at",
-    "updated_at",
-  ];
-  const now = new Date();
-  await t.adapter.executeQuery(
-    `INSERT INTO ${q("email_templates")} (${columns.map(q).join(", ")}) VALUES (${columns.map((_, i) => p(i + 1)).join(", ")})`,
-    [
-      id,
-      slug,
-      slug,
-      "Hello {{name}}",
-      htmlContent,
-      kind,
-      dialect === "postgresql" ? false : 0,
-      dialect === "postgresql" ? true : 1,
-      now,
-      now,
-    ]
-  );
-  return id;
 }
 
 const LITERAL_IF = "<p>Members: {% if vip %}VIP{% endif %} {{name}}</p>";
