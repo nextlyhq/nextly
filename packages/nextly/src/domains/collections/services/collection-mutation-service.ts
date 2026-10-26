@@ -257,11 +257,7 @@ import type {
   CollectionHookService,
   QueryDatabaseParams,
 } from "./collection-hook-service";
-import {
-  collectionDbOptions,
-  resolveEntryId,
-  suppliedEntryId,
-} from "./collection-id";
+import { collectionDbOptions, resolveEntryId } from "./collection-id";
 import type { CollectionServiceResult, UserContext } from "./collection-types";
 import {
   toCamelCase,
@@ -2157,7 +2153,7 @@ export class CollectionMutationService extends BaseService {
       slug: params.collectionName,
       data,
       operation: "create",
-      id: suppliedEntryId(collectionDbOptions(params.collectionName), data.id),
+      id: suppliedCreateId("create", params.collectionName, data),
       user: params.user,
       authenticatedScope: params.authenticatedScope,
       overrideAccess: params.overrideAccess,
