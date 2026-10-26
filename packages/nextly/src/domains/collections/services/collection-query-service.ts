@@ -32,11 +32,7 @@ import { transformRichTextFields } from "@nextly/lib/field-transform";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
-import {
-  FILTER_NAMES_A_COMPONENT_FIELD,
-  reportRuleFilterMisuse,
-  type RuleFilter,
-} from "../../../auth/access/rule-answer";
+import type { RuleFilter } from "../../../auth/access/rule-answer";
 import { currentRuleLanguage } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { isFieldGroupField } from "../../../collections/fields/guards";
@@ -194,9 +190,10 @@ import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
 import {
   componentTableNamesFor,
+  localizedFilterContext,
   prepareFilterCondition,
+  ruleFilterCondition,
   type FilterConditionSources,
-  type PreparedFilterCondition,
 } from "../query/filter-condition";
 import {
   isPlainObject,
@@ -1655,30 +1652,6 @@ export class CollectionQueryService extends BaseService {
     );
   }
 
-  private buildLocalizedQueryContext(
-    companion: CompanionSchema | null,
-    localeChain: string[] | null,
-    schema: DynamicSchema,
-    statusFilterValues?: readonly string[] | null
-  ): LocalizedQueryContext | null {
-    if (!companion || !localeChain || localeChain.length === 0) return null;
-    // The caller resolves the Draft/Published filter before building the context and
-    // passes it as `statusFilterValues`, so per-locale where/search/order subqueries
-    // constrain by the resolved status too (a public read never matches a draft).
-    return {
-      companionTableName: companion.companionTableName,
-      localizedFields: companion.localizedFields,
-      mainIdColumn: schema.id,
-      locale: localeChain[0],
-      // Only constrain by status when the collection has per-locale status and the
-      // read resolved to a single status; otherwise leave it unfiltered.
-      statusValues:
-        companion.hasStatus && statusFilterValues
-          ? statusFilterValues
-          : undefined,
-    };
-  }
-
   /**
    * The coarse collection-level read gate, asked once for every read verb.
    *
@@ -1875,56 +1848,6 @@ export class CollectionQueryService extends BaseService {
     };
   }
 
-  /**
-   * The condition a read rule's filter adds to a read. A filter that cannot be
-   * built against the collection as it stands, one naming a field it no
-   * longer has, matches no entry: a read by id then answers as a missing
-   * entry does, and a list finds nothing. The rule's own error is logged for
-   * whoever maintains the rule, by its code alone, and never handed to the
-   * caller, to whom it would describe the rule.
-   */
-  private async ruleFilterCondition(
-    collectionName: string,
-    filter: RuleFilter,
-    schema: DynamicSchema,
-    localizedCtx: LocalizedQueryContext | null
-  ): Promise<SQLWrapper | undefined> {
-    const unbuildable = (error: unknown): SQLWrapper => {
-      this.logger.error("A read rule's filter could not be built", {
-        collectionName,
-        code: error instanceof NextlyError ? error.code : "UNBUILDABLE",
-      });
-      return sql`1 = 0`;
-    };
-    let prepared: PreparedFilterCondition;
-    try {
-      prepared = await prepareFilterCondition(
-        { collectionName, filter },
-        this.filterSources()
-      );
-    } catch (error) {
-      return unbuildable(error);
-    }
-    // A field inside a component cannot be used in a rule's filter yet: it is
-    // refused as a filter that is not well formed, reported once and raised
-    // in development, and matches no entry. Asked before any condition is
-    // built, so no query runs on a component path the component may not have.
-    if (prepared.namesComponentFields) {
-      reportRuleFilterMisuse(
-        collectionName,
-        "read",
-        "collection",
-        FILTER_NAMES_A_COMPONENT_FIELD
-      );
-      return sql`1 = 0`;
-    }
-    try {
-      return prepared.condition(schema, localizedCtx);
-    } catch (error) {
-      return unbuildable(error);
-    }
-  }
-
   /** Where the filter builder reads its facts about a collection. */
   private filterSources(): FilterConditionSources {
     const fieldGroups = this.fieldGroupDataService;
@@ -2076,7 +1999,7 @@ export class CollectionQueryService extends BaseService {
     // AFTER the status filter, so localized where/search EXISTS checks
     // constrain by the per-locale status too — a published read must not match
     // a draft translation.
-    const localizedCtx = this.buildLocalizedQueryContext(
+    const localizedCtx = localizedFilterContext(
       companion,
       localeChain,
       schema,
@@ -2158,11 +2081,15 @@ export class CollectionQueryService extends BaseService {
     conditions.push(...filter.conditions);
     const { componentTables, componentTypeColumns } = filter;
     if (params.ruleFilter) {
-      const limited = await this.ruleFilterCondition(
-        params.collectionName,
-        params.ruleFilter,
-        schema,
-        localizedCtx
+      const limited = await ruleFilterCondition(
+        {
+          collectionName: params.collectionName,
+          filter: params.ruleFilter,
+          schema,
+          localizedCtx,
+        },
+        this.filterSources(),
+        this.logger
       );
       if (limited) conditions.push(limited);
     }
@@ -4568,16 +4495,20 @@ export class CollectionQueryService extends BaseService {
       // so an entry it does not match is not found: the same `404` a missing
       // entry gets, and nothing that tells the two apart.
       const ruleCondition = access.filter
-        ? await this.ruleFilterCondition(
-            params.collectionName,
-            access.filter,
-            schema,
-            this.buildLocalizedQueryContext(
-              companion,
-              localeChain,
+        ? await ruleFilterCondition(
+            {
+              collectionName: params.collectionName,
+              filter: access.filter,
               schema,
-              statusFilter?.values
-            )
+              localizedCtx: localizedFilterContext(
+                companion,
+                localeChain,
+                schema,
+                statusFilter?.values
+              ),
+            },
+            this.filterSources(),
+            this.logger
           )
         : undefined;
       const whereParts = [

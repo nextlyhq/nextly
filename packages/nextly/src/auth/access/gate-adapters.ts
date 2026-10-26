@@ -54,7 +54,11 @@ import {
   userHoldsPermission,
   userIsSuperAdmin,
 } from "./resolve-actor";
-import { allowsSome, mayAnswerFilter, type RuleFilter } from "./rule-answer";
+import {
+  allowsSome,
+  mayAnswerFilter,
+  type RuleFilter,
+} from "./rule-answer";
 import {
   noticePermissionNowComesFirst,
   noticeRuleNoLongerAllows,
