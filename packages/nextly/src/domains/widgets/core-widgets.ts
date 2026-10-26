@@ -515,6 +515,37 @@ const CORE_WIDGET_LITERALS = [
     ],
   },
   {
+    id: "core/breakdown",
+    title: "Breakdown",
+    description:
+      "How a collection's entries divide: by status, or by a field with choices.",
+    archetype: "bars",
+    // Added from a collection's group of the add panel, once per collection
+    // and again with other settings, never placed on the default dashboard.
+    // Offered only on a collection with something to divide its entries by.
+    offered: "per-collection",
+    defaultSize: "md",
+    minSize: "sm",
+    maxSize: "lg",
+    settings: [
+      { name: "collection", type: "collection", label: "Collection" },
+      { name: "filter", type: "filter", of: "collection", label: "Filter" },
+      // No static default: collections need not share a field. Unset, or set
+      // to a field this reader may not use, it groups by what the collection
+      // divides by (status, else its first groupable choice field).
+      {
+        name: "groupBy",
+        type: "groupBy",
+        of: "collection",
+        label: "Group by",
+        defaultFrom: "collection",
+      },
+    ],
+    // Its source and its group key are the card's settings: a Breakdown set
+    // to no collection, or to one with nothing to divide by, asks nothing.
+    query: { op: "groupBy", status: "all" },
+  },
+  {
     id: "core/note",
     title: "Note",
     description: "A note of your own, in Markdown, that only you see.",

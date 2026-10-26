@@ -38,6 +38,9 @@ import { FormProvider, useForm, type UseFormReturn } from "react-hook-form";
 
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import type { DashboardWidget } from "@admin/types/dashboard/widgets";
+
+import { askableWith } from "../widget-as-asked";
 
 import {
   dependentsOf,
@@ -60,6 +63,12 @@ export interface WidgetSettingsSheetProps {
   /** The card being configured, for the heading a reader reads. */
   title: string;
   settings: AnyWidgetSetting[];
+  /**
+   * The widget whose card this configures: its Collection setting offers only the collections
+   * that card can be asked of (`askableWith`), as the add panel does. Absent, it offers every
+   * collection the server sent.
+   */
+  widget?: DashboardWidget;
   /** What this placement has stored, if anything. */
   config: Record<string, unknown> | undefined;
   /**
@@ -405,10 +414,12 @@ function SheetFields({
   settings,
   sources,
   saving,
+  widget,
 }: {
   settings: readonly AnyWidgetSetting[];
   sources: WidgetSources;
   saving: boolean;
+  widget: DashboardWidget | undefined;
 }) {
   // Frozen while Done saves: the save carries the values Done was pressed on, so a field changed
   // after it would be dropped without a word when the sheet closes, and one changed before a
@@ -425,6 +436,16 @@ function SheetFields({
             key={setting.name}
             setting={setting}
             sources={sources ?? []}
+            {...(widget === undefined || setting.type !== "collection"
+              ? {}
+              : {
+                  offers: (collection: string) =>
+                    askableWith(
+                      widget,
+                      { [setting.name]: collection },
+                      sources ?? undefined
+                    ),
+                })}
           />
         ) : (
           // No cast: `WidgetSetting` is assignable to `FieldConfig`,
@@ -546,6 +567,7 @@ export function WidgetSettingsSheet(
                 settings={settings}
                 sources={sources}
                 saving={saving}
+                widget={props.widget}
               />
               <SheetActions
                 saving={saving}
