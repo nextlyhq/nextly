@@ -309,7 +309,7 @@ export async function GET(req: Request) {
 }
 ```
 
-`hasRole`, `hasAnyRole`, `hasAllRoles` and the `requireRole*` guards are deprecated and are removed in the next release. They compare the user's role ids with role names, so they never match a role by its name.
+`nextly/auth` has no role checks. A session carries role ids, not role names, so ask the question you mean: a permission through `nextly.access.check`, or super-admin authority through `isSuperAdmin`.
 
 ## Permissions
 
