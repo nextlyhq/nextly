@@ -14,6 +14,30 @@ function senderName(from: string): string {
   return (named ? named[1] : from).trim();
 }
 
+/** The three fields of the inbox line. */
+export interface InboxLine {
+  subject: string;
+  preheader: string;
+  from: string;
+}
+
+/**
+ * What the inbox line shows: the server's render once there is one, a field
+ * that renders empty included, since that is what a reader sees; the text as
+ * written only until the first render arrives.
+ */
+export function shownInboxLine(
+  written: InboxLine,
+  rendered: { subject: string; preheader: string; from: string | null } | null
+): InboxLine {
+  if (!rendered) return written;
+  return {
+    subject: rendered.subject,
+    preheader: rendered.preheader,
+    from: rendered.from ?? "",
+  };
+}
+
 export function InboxStrip({
   from,
   subject,

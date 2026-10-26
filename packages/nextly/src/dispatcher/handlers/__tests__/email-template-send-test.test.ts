@@ -135,6 +135,23 @@ describe("a template's test send", () => {
     expect(sendTemplateTest).not.toHaveBeenCalled();
   });
 
+  it("sends the draft's attachments, added or removed", async () => {
+    const draft = {
+      attachments: [{ mediaId: "m-new", filename: "terms.pdf" }],
+    };
+    await asCaller(sessionCaller({ userId: "ana" }), () =>
+      dispatchEmailTemplates("sendTestTemplate", PARAMS, { draft })
+    );
+    expect(sendTemplateTest.mock.calls[0]?.[3]).toEqual(draft);
+
+    await asCaller(sessionCaller({ userId: "ana" }), () =>
+      dispatchEmailTemplates("sendTestTemplate", PARAMS, {
+        draft: { attachments: null },
+      })
+    );
+    expect(sendTemplateTest.mock.calls[1]?.[3]).toEqual({ attachments: null });
+  });
+
   it("refuses a draft field of the wrong kind", async () => {
     await expect(
       asCaller(sessionCaller({ userId: "ana" }), () =>
@@ -170,6 +187,27 @@ describe("where a test would go", () => {
     });
     expect(testDelivery).toHaveBeenCalledWith("p-template");
     expect(sendTemplateTest).not.toHaveBeenCalled();
+  });
+
+  it("names the provider the draft chose, which the send would use", async () => {
+    await asCaller(sessionCaller({ userId: "ana" }), () =>
+      dispatchEmailTemplates(
+        "testSendTarget",
+        { ...PARAMS, providerId: "p-draft" },
+        undefined
+      )
+    );
+    expect(testDelivery).toHaveBeenCalledWith("p-draft");
+
+    // Empty: the draft chose the default provider, not the template's.
+    await asCaller(sessionCaller({ userId: "ana" }), () =>
+      dispatchEmailTemplates(
+        "testSendTarget",
+        { ...PARAMS, providerId: "" },
+        undefined
+      )
+    );
+    expect(testDelivery).toHaveBeenLastCalledWith(null);
   });
 
   it.each([

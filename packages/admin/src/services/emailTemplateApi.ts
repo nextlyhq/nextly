@@ -401,6 +401,8 @@ export interface TemplateTestDraft {
   fromOverride?: string | null;
   replyTo?: string | null;
   providerId?: string | null;
+  /** The attachments on screen; null sends none. */
+  attachments?: Array<{ mediaId: string; filename?: string }> | null;
 }
 
 export interface SendTestEmailResult {
@@ -430,12 +432,21 @@ export async function sendTestEmail(
   );
 }
 
-/** Where a test of this template would go, and who would deliver it. */
+/**
+ * Where a test of this template would go, and who would deliver it: through
+ * `providerId` when the draft chose one (null for the default), else the
+ * template's own provider.
+ */
 export async function getSendTestTarget(
-  templateId: string
+  templateId: string,
+  providerId?: string | null
 ): Promise<SendTestTarget> {
+  const query =
+    providerId === undefined
+      ? ""
+      : `?providerId=${encodeURIComponent(providerId ?? "")}`;
   return fetcher<SendTestTarget>(
-    `/email-templates/${encodeURIComponent(templateId)}/send-test`,
+    `/email-templates/${encodeURIComponent(templateId)}/send-test${query}`,
     {},
     true
   );

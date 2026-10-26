@@ -69,6 +69,11 @@ const testDraftSchema = z.object({
   fromOverride: z.string().nullable().optional(),
   replyTo: z.string().nullable().optional(),
   providerId: z.string().nullable().optional(),
+  // The attachments on screen, added or removed: null sends none.
+  attachments: z
+    .array(z.object({ mediaId: z.string(), filename: z.string().optional() }))
+    .nullable()
+    .optional(),
 });
 
 /**
@@ -446,11 +451,16 @@ const EMAIL_TEMPLATE_METHODS: Record<
     // Where a test of this template would go, and which provider would
     // deliver it, before anything is sent: the caller's own address, refused
     // to anyone without one, as the send is.
+    //
+    // `?providerId=` names the provider the editor's draft chose, as the send
+    // will use it: an id, or empty for the default. Without it, the
+    // template's own.
     execute: async (svc, p) => {
       const to = await ownAddressOfCaller();
       const template = await svc.templateService.getTemplate(p.templateId);
+      const asked = p.providerId;
       const delivery = await emailServiceOrFail().testDelivery(
-        template.providerId
+        asked === undefined ? template.providerId : asked || null
       );
       return respondData({ to, delivery });
     },

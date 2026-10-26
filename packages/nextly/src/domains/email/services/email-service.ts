@@ -217,6 +217,7 @@ export type TemplateTestDraft = Partial<
     | "fromOverride"
     | "replyTo"
     | "providerId"
+    | "attachments"
   >
 >;
 
