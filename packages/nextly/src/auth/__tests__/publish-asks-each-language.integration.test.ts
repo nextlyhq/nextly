@@ -27,6 +27,10 @@ import {
 } from "../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import type { AccessRuleContext } from "../../shared/types/access";
+import {
+  grantTo,
+  userWhoMay,
+} from "../../__tests__/fixtures/permission-holders";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -105,7 +109,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   asked = [];
   order = [];
   onFirstAsk = undefined;
-  current = await createTestNextly({
+  const config: Parameters<typeof createTestNextly>[0] = {
     dialect,
     localization: { locales: ["en", "fr", "de"], defaultLocale: "en" },
     fieldGroups: [
@@ -375,7 +379,19 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [text({ name: "headline" })],
       }),
     ],
-  });
+  };
+  current = await createTestNextly(config);
+  // A code rule only narrows the permission, so the user holds every action
+  // this file asks on each collection and Single it defines, read from the
+  // config itself, and the rules alone decide.
+  const targets = [
+    ...(config.collections ?? []),
+    ...(config.singles ?? []),
+  ].map(entity => entity.slug);
+  await userWhoMay(current, USER.id, "read", targets);
+  for (const action of ["create", "update", "publish", "unpublish"]) {
+    await grantTo(current, USER.id, action, targets);
+  }
   return current;
 }
 
