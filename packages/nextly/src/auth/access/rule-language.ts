@@ -23,15 +23,12 @@ import {
   isPlainObject,
   TRANSLATED_KEY,
 } from "../../domains/collections/query/filter-shape";
-import {
-  extractFieldGroupReferences,
-  isFieldGroupFieldType,
-} from "../../domains/field-groups/storage/field-group-field-type";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
 import {
   EVERY_LOCALE,
   EVERY_TRANSLATION,
 } from "../../domains/i18n/locale-selector";
+import { reachesLocalizedFieldGroupIn } from "../../domains/i18n/per-language-fields";
 import {
   resolveLocaleChain,
   resolveRequestedLocale,
@@ -194,32 +191,21 @@ function storedByLanguage(target: AccessRuleTarget): boolean | undefined {
 }
 
 /**
- * Whether `declared` reaches a field group that is localized: one it
- * references, or one inside a group it references, at any depth. A localized
- * one missed here is judged as content the same in every language, which is
- * told every language. Each group is looked at once, so a group that holds
- * itself ends the walk.
+ * Whether `declared` reaches a field group that is localized, at any depth,
+ * through the declared field groups. A localized one missed here is judged as
+ * content the same in every language, which is told every language.
  */
 function hasLocalizedFieldGroup(
   declared: DeclaredContent,
   fieldGroups: readonly DeclaredContent[]
 ): boolean {
   const bySlug = new Map(fieldGroups.map(group => [group.slug, group]));
-  const looked = new Set<string>();
-  const reaches = (content: DeclaredContent): boolean =>
-    (content.fields ?? []).some(field => {
-      if (!isFieldGroupFieldType(field.type)) return false;
-      const { single, many } = extractFieldGroupReferences(field);
-      return [single, ...(many ?? [])].some(slug => {
-        if (slug === undefined || looked.has(slug)) return false;
-        looked.add(slug);
-        const group = bySlug.get(slug);
-        return (
-          group !== undefined && (group.localized === true || reaches(group))
-        );
-      });
-    });
-  return reaches(declared);
+  return (
+    reachesLocalizedFieldGroupIn(
+      declared.fields ?? [],
+      slug => bySlug.get(slug) ?? null
+    ) === true
+  );
 }
 
 /**

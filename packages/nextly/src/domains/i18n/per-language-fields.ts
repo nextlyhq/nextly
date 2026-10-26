@@ -38,38 +38,62 @@ export async function perLanguageFieldNames(
   return names;
 }
 
-/** What {@link reachesLocalizedFieldGroup} reads of a field group by slug. */
-export interface FieldGroupReader {
-  /** Whether the group's own definition is localized. */
-  isComponentLocalized: (slug: string) => Promise<boolean>;
-  /** The group's own fields, or `null` for a group that is not defined. */
-  getComponentFields: (slug: string) => Promise<readonly FieldShape[] | null>;
+/** A field group's definition, as {@link reachesLocalizedFieldGroupIn} reads it. */
+export interface FieldGroupDefinition {
+  readonly localized?: boolean;
+  readonly fields?: readonly FieldShape[] | null;
 }
 
 /**
  * Whether `fieldConfigs` reach a field group whose definition is localized:
  * one they reference, or one inside a group they reference, at any depth. A
  * localized group stores its values per language, in its own table, whatever
- * languages the collection, Single or group around it stores. Each group is
- * read once, so a group that holds itself ends the walk.
+ * languages the collection, Single or group around it stores.
+ *
+ * Each group's definition comes from `groupOf`: `null` for a group that is
+ * not defined, and `undefined` for one not read yet, which is answered as
+ * `{ unread: slug }` so a caller reading definitions as it goes reads that
+ * one and asks again. Each group is looked at once, so a group that holds
+ * itself ends the walk. The one walk for this question, on the registered
+ * configuration and on the stored definitions alike.
+ */
+export function reachesLocalizedFieldGroupIn(
+  fieldConfigs: readonly FieldShape[],
+  groupOf: (slug: string) => FieldGroupDefinition | null | undefined
+): boolean | { unread: string } {
+  const groupsIn = (fields: readonly FieldShape[]): string[] =>
+    fields.flatMap(field =>
+      isFieldGroupField(field) ? fieldGroupSlugList(field) : []
+    );
+  // Every group reached so far, in the order it was reached; the ones a group
+  // holds join the end as it is looked at.
+  const reached = groupsIn(fieldConfigs);
+  const looked = new Set<string>();
+  for (const slug of reached) {
+    if (looked.has(slug)) continue;
+    const group = groupOf(slug);
+    if (group === undefined) return { unread: slug };
+    looked.add(slug);
+    if (group?.localized === true) return true;
+    reached.push(...groupsIn(group?.fields ?? []));
+  }
+  return false;
+}
+
+/**
+ * {@link reachesLocalizedFieldGroupIn}, reading each group it reaches through
+ * `readGroup` once, as the walk first needs it.
  */
 export async function reachesLocalizedFieldGroup(
   fieldConfigs: readonly FieldShape[],
-  groups: FieldGroupReader
+  readGroup: (slug: string) => Promise<FieldGroupDefinition | null>
 ): Promise<boolean> {
-  const read = new Set<string>();
-  const reaches = async (fields: readonly FieldShape[]): Promise<boolean> => {
-    for (const field of fields) {
-      if (!isFieldGroupField(field)) continue;
-      for (const slug of fieldGroupSlugList(field)) {
-        if (read.has(slug)) continue;
-        read.add(slug);
-        if (await groups.isComponentLocalized(slug)) return true;
-        const inner = await groups.getComponentFields(slug);
-        if (inner !== null && (await reaches(inner))) return true;
-      }
-    }
-    return false;
-  };
-  return reaches(fieldConfigs);
+  const read = new Map<string, FieldGroupDefinition | null>();
+  for (;;) {
+    const answer = reachesLocalizedFieldGroupIn(fieldConfigs, slug =>
+      read.get(slug)
+    );
+    if (typeof answer === "boolean") return answer;
+    read.set(answer.unread, await readGroup(answer.unread));
+  }
 }

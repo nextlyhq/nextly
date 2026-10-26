@@ -3365,12 +3365,9 @@ export class CollectionMutationService extends BaseService {
   ): Promise<boolean> {
     const service = this.fieldGroupDataService;
     if (!service) return Promise.resolve(false);
-    return reachesLocalizedFieldGroup(fields, {
-      isComponentLocalized: slug =>
-        service.isComponentLocalized(slug, tx?.getDrizzle()),
-      getComponentFields: slug =>
-        service.getComponentFields(slug, tx?.getDrizzle()),
-    });
+    return reachesLocalizedFieldGroup(fields, slug =>
+      service.getComponentDefinition(slug, tx?.getDrizzle())
+    );
   }
 
   /**

@@ -619,12 +619,9 @@ export class SinglePublishAllService extends BaseService {
     const service = this.fieldGroupDataService;
     const reaches =
       service !== undefined &&
-      (await reachesLocalizedFieldGroup(plan.fieldConfigs, {
-        isComponentLocalized: slug =>
-          service.isComponentLocalized(slug, db.getDrizzle()),
-        getComponentFields: slug =>
-          service.getComponentFields(slug, db.getDrizzle()),
-      }));
+      (await reachesLocalizedFieldGroup(plan.fieldConfigs, slug =>
+        service.getComponentDefinition(slug, db.getDrizzle())
+      ));
     return [
       ...new Set(
         [
