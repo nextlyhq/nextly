@@ -79,10 +79,10 @@ async function boot(): Promise<void> {
       }),
       defineSingle({
         slug: "spelled-out",
-        // Decides on the documented `resource:action` spelling. A key handed
-        // its stored slugs (`read-spelled-out`) is refused here.
+        // Decides on the permission a rule is handed, `read-spelled-out`. A
+        // key whose own grants never reach the rule is refused here.
         access: {
-          read: ({ permissions }) => permissions.includes("spelled-out:read"),
+          read: ({ permissions }) => permissions.includes("read-spelled-out"),
           update: () => false,
         },
         fields: [text({ name: "body" })],
@@ -196,9 +196,9 @@ describe("an API key, asked the same two ways", () => {
   });
 
   it("is admitted by a rule written to the documented permission spelling", async () => {
-    // 🔴 The key holds `read-spelled-out`; the rule checks
-    // `spelled-out:read`, which is what the context promises. Handed the
-    // stored spelling, the rule refused a correctly scoped key.
+    // 🔴 The key holds `read-spelled-out`, and the rule checks for it, as
+    // the context promises. A rule never handed the key's grants refuses a
+    // correctly scoped key.
     await boot();
     expect(await listedForKey()).toContain("spelled-out");
     // The condition's own builder, given a key holding ONLY this grant and

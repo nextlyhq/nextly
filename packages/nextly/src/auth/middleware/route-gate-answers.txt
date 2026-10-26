@@ -1727,12 +1727,12 @@ service role-name key-manage
   any(read-posts|update-posts):403 You can't see posts.
   any(delete-posts):403 You can't delete posts.
 service permission-spelling user-with
-  create-posts:A
-  read-posts:A
-  update-posts:A
-  delete-posts:A
-  publish-posts:A
-  unpublish-posts:A
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
@@ -1760,11 +1760,11 @@ service permission-spelling user-without
   any(delete-posts):403 You can't delete posts.
 service permission-spelling user-partial
   create-posts:403 You can't create posts.
-  read-posts:A
+  read-posts:403 You can't see posts.
   update-posts:403 You can't edit posts.
   delete-posts:403 You can't delete posts.
-  publish-posts:A
-  unpublish-posts:A
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:403 You can't manage settings.
@@ -1807,12 +1807,12 @@ service permission-spelling super-admin-inherited
   any(read-posts|update-posts):A
   any(delete-posts):A
 service permission-spelling key-with
-  create-posts:A
-  read-posts:A
-  update-posts:A
-  delete-posts:A
-  publish-posts:A
-  unpublish-posts:A
+  create-posts:403 You can't create posts.
+  read-posts:403 You can't see posts.
+  update-posts:403 You can't edit posts.
+  delete-posts:403 You can't delete posts.
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
   manage-settings:A
@@ -1840,11 +1840,11 @@ service permission-spelling key-without
   any(delete-posts):403 You can't delete posts.
 service permission-spelling key-partial
   create-posts:403 You can't create posts.
-  read-posts:A
+  read-posts:403 You can't see posts.
   update-posts:403 You can't edit posts.
   delete-posts:403 You can't delete posts.
-  publish-posts:A
-  unpublish-posts:A
+  publish-posts:403 You can't publish posts.
+  unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
@@ -1872,7 +1872,7 @@ service permission-spelling key-slugs-only
   any(delete-posts):A
 service permission-spelling key-made-by-super-admin
   create-posts:403 You can't create posts.
-  read-posts:A
+  read-posts:403 You can't see posts.
   update-posts:403 You can't edit posts.
   delete-posts:403 You can't delete posts.
   publish-posts:403 You can't publish posts.
@@ -1888,7 +1888,7 @@ service permission-spelling key-made-by-super-admin
   any(delete-posts):403 You can't delete posts.
 service permission-spelling key-custom-slugs
   create-posts:403 You can't create posts.
-  read-posts:A
+  read-posts:403 You can't see posts.
   update-posts:403 You can't edit posts.
   delete-posts:403 You can't delete posts.
   publish-posts:403 You can't publish posts.

@@ -261,7 +261,6 @@ export class RBACAccessControlService {
           userId,
           operation,
           target,
-          operationAccess,
           executor
         );
         return this.userRuleAllows(operationAccess, ctx, operation, target);
@@ -382,7 +381,6 @@ export class RBACAccessControlService {
       () =>
         rule(
           buildRuleContext(
-            rule,
             { user: null, roles: [], permissions: [], principal },
             { operation, target: { kind: target.kind, slug: target.slug } }
           )
@@ -411,7 +409,6 @@ export class RBACAccessControlService {
     userId: string,
     operation: AccessOperation,
     target: AccessTarget,
-    rule: object,
     // Optional transaction-bound executor so the role/permission reads run on the
     // caller's transaction connection instead of the pool; see `checkAccess`.
     executor?: unknown
@@ -422,7 +419,6 @@ export class RBACAccessControlService {
     ]);
 
     return buildRuleContext(
-      rule,
       {
         user: { id: userId },
         roles: roleSlugs,

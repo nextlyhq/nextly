@@ -95,11 +95,12 @@ const PRINCIPALS: readonly Caller[] = ["principal", "principal-other"];
  * read, a create or a delete meets an access object with no rule for it.
  * `role-name` admits a caller whose roles include one named `editor`, the
  * shape a template rule takes when it checks names instead of permissions.
- * `permission-spelling` admits a caller whose rule-facing permissions hold
- * `<collection>:<operation>`, the earlier spelling a rule is still handed for
- * one release, so a door that drops it refuses. `role-screen-spelling` admits
- * one whose permissions hold `<operation>-<collection>`, as the role screen
- * spells it, so a door that hands a rule only the earlier spelling refuses.
+ * `permission-spelling` checks for `<collection>:<operation>`, the spelling
+ * rules were once handed and are handed no more, so it must refuse at every
+ * door: a door that still hands a rule that spelling allows where it should
+ * not. `role-screen-spelling` admits a caller whose permissions hold
+ * `<operation>-<collection>`, as the role screen spells it, so a door that
+ * hands a rule any other spelling refuses.
  * `principal-kind` admits only a person of the `principal` caller's kind,
  * so a door that drops the person from the rule's context refuses it too.
  * `user-is-key-maker` admits only the caller whose `user` is `user-with`:
@@ -550,9 +551,7 @@ const RULE_SAYS: Record<Rule, RuleAnswer> = {
   "async-throws": SAYS_NOT_TRUE,
   "other-operation": action => (action === "update" ? false : null),
   "role-name": (_action, caller) => holdsRoleNamedEditor(caller),
-  "permission-spelling": (action, caller) =>
-    HOLDS_ROLES.includes(caller) &&
-    holdsPermission(caller, action, "collection"),
+  "permission-spelling": SAYS_NOT_TRUE,
   "role-screen-spelling": (action, caller) =>
     HOLDS_ROLES.includes(caller) &&
     holdsPermission(caller, action, "collection"),

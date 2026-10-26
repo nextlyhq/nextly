@@ -52,7 +52,9 @@ overrides:
   "vite": "^7.3.5"
   "fast-xml-parser": "^5.5.7"
   "flatted": "^3.4.2"
-  "happy-dom": "^20.8.9"
+  # Vitest's optional DOM environment. 21.0.4 is the first release past
+  # GHSA-834v-8h66-3h79, an ESM-compiler injection that reaches the host.
+  "happy-dom": "^21.0.4"
   "js-yaml": "^4.3.2"
   "minimatch": "^10.2.6"
   "picomatch@<3": "^2.3.2"

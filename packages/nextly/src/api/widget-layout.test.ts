@@ -63,6 +63,7 @@ import {
   registerWidget,
 } from "../domains/widgets/registry";
 import { setContributedWidgets } from "../domains/widgets/canonical";
+import { collectionSettingsToken } from "../domains/widgets/collection-cards";
 import type { PluginDefinition } from "../plugins/plugin-context";
 import { contributedWidgetSummaries } from "../plugins/validate-admin-widgets";
 
@@ -2290,6 +2291,62 @@ describe("a card's note", () => {
       })
     );
     expect(res.status).toBe(200);
+  });
+
+  it("refuses a card a plugin's widget sets to a collection the reader may not read", async () => {
+    const summaries = contributedWidgetSummaries([
+      {
+        name: "@acme/pinned",
+        contributes: {
+          admin: {
+            widgets: [
+              {
+                id: "acme/pinned",
+                title: "Pinned",
+                archetype: "metric",
+                defaultSize: "full",
+                query: { source: "collection:posts", op: "count" },
+                settings: [
+                  { name: "source", label: "Collection", type: "collection" },
+                ],
+              },
+            ],
+          },
+        },
+      } as unknown as PluginDefinition,
+    ]);
+    // The control: the contribution's Collection setting reached the summary,
+    // so the refusal below is the collection's, not an unknown widget's.
+    expect(summaries.map(summary => summary.collectionSetting?.name)).toEqual([
+      "source",
+    ]);
+    setContributedWidgets(summaries);
+    // 🔴 Judged by the registry alone, a contributed widget's card was never
+    // judged at all: no registry holds it.
+    const res = await putWidgetLayout(
+      putReq({
+        placements: [
+          {
+            id: "p",
+            widgetId: "acme/pinned",
+            width: "full",
+            removed: false,
+            config: { source: "secret" },
+          },
+        ],
+        version: 0,
+        scope: visibilityToken(
+          [...listWidgets().map(w => w.id), "acme/pinned"],
+          [],
+          [],
+          collectionSettingsToken(summaries)
+        ),
+      })
+    );
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain(
+      "collection that is not available"
+    );
   });
 
   it("still saves a note it already held, written before the bound was lowered", async () => {

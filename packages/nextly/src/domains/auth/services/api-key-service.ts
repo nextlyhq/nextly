@@ -380,10 +380,9 @@ function keyGrantsServable(entry: KeyGrantsEntry, now: number): boolean {
  * Distinct rows, keyed on the slug — the identity a grant is stored under.
  *
  * A key's grants are kept as rows, not slugs: the slug (`read-posts`) is what
- * every check compares and what a rule is handed, and for one release a rule
- * is also handed the earlier `posts:read` spelling, made from the row's
- * `action` and `resource`. A stored slug cannot be decomposed back into those
- * parts — a deliberately custom one (`manage-api-keys`, on action `update`) is
+ * every check compares and what a rule is handed, and the row also names
+ * the `action` and `resource` it grants. A stored slug cannot be decomposed
+ * back into those parts — a deliberately custom one (`manage-api-keys`, on action `update`) is
  * explicitly supported by `RolePermissionService`, so splitting on the hyphen
  * would invent a resource that no row names.
  */
@@ -863,10 +862,10 @@ export class ApiKeyService extends BaseService {
   /**
    * The key's grants, as the rows they were resolved from.
    *
-   * Rows rather than slugs, because a rule judging the key on its own scope is
-   * handed, for one release, each grant's earlier `resource:action` spelling
-   * beside the stored slug its coarse permission check tests, and only the
-   * row has the parts to make it.
+   * Rows rather than slugs, because a slug cannot be split back into the
+   * action and resource it grants, and the scope keeps both for whatever
+   * asks of the key. A rule judging the key is handed each grant's stored
+   * slug, the one its coarse permission check tests.
    *
    * Returns a COPY. The cached arrays are shared by every request this key
    * makes for the TTL, and the scope built from them is handed to plugin route

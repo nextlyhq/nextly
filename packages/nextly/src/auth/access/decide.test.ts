@@ -460,11 +460,10 @@ describe("what a rule is handed", () => {
     expect(ctx.collection).toBe("pages");
   });
 
-  it("is the role screen's permission spelling, with the earlier one after it for one release", async () => {
+  it("is the role screen's permission spelling, and no other", async () => {
     const ctx = await contextFor(callers["user-with"]);
     const stored = ACTIONS.map(action => `${action}-posts`);
-    const earlier = ACTIONS.map(action => `posts:${action}`);
-    expect([...ctx.permissions]).toEqual([...stored, ...earlier]);
+    expect([...ctx.permissions]).toEqual(stored);
   });
 
   it("names a key's maker as the user, with the key's own roles", async () => {

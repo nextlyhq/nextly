@@ -153,7 +153,7 @@ export async function askRule(
   if (typeof rule === "boolean") return { declared: true, value: rule };
   let value: unknown;
   try {
-    value = await rule(ruleContext(actor, action, target, rule));
+    value = await rule(ruleContext(actor, action, target));
   } catch (error) {
     // A broken rule refuses, and is logged so it can be found and fixed.
     consoleLogger.error(
