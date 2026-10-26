@@ -750,6 +750,14 @@ async function callerHeaders(t: TestNextly) {
   );
   headers.set("key-super-admin", await mint(users.root.id, "full-access"));
   headers.set(
+    "key-read-only-super-admin",
+    await mint(users.root.id, "read-only")
+  );
+  headers.set(
+    "key-role-based-super-admin",
+    await mint(users.root.id, "role-based", reviewerRole)
+  );
+  headers.set(
     "key-partial",
     await mint(users.with.id, "role-based", partialRole)
   );
