@@ -87,6 +87,8 @@ export { emailProvidersPg as emailProviders } from "../email-providers/postgres"
 export { emailDeliveriesPg as emailDeliveries } from "../email-deliveries/postgres";
 export { emailSendClaimsPg as emailSendClaims } from "../email-send-claims/postgres";
 export { emailQueuePg as emailQueue } from "../email-queue/postgres";
+// Each dialect's bundle exports its own table under the same name.
+// fallow-ignore-next-line duplicate-export
 export { emailQueueRecipientsPg as emailQueueRecipients } from "../email-queue-recipients/postgres";
 export { emailTemplatesPg as emailTemplates } from "../email-templates/postgres";
 

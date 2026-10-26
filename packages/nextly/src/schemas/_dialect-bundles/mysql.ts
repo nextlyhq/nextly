@@ -62,6 +62,8 @@ export { emailProvidersMysql as emailProviders } from "../email-providers/mysql"
 export { emailDeliveriesMysql as emailDeliveries } from "../email-deliveries/mysql";
 export { emailSendClaimsMysql as emailSendClaims } from "../email-send-claims/mysql";
 export { emailQueueMysql as emailQueue } from "../email-queue/mysql";
+// Each dialect's bundle exports its own table under the same name.
+// fallow-ignore-next-line duplicate-export
 export { emailQueueRecipientsMysql as emailQueueRecipients } from "../email-queue-recipients/mysql";
 export { emailTemplatesMysql as emailTemplates } from "../email-templates/mysql";
 

@@ -318,6 +318,27 @@ describe.each(getConfiguredTestDialects())(
       expect((await queued(t, elsewhere.id)).state).toBe("waiting");
     });
 
+    it("is left as it was when erasing its address fails part way", async () => {
+      const t = await boot(dialect);
+      behaviour.failures = Number.MAX_SAFE_INTEGER;
+      const result = await t.nextly.email.queue({ ...message, to: SHARED });
+      const before = await queued(t, result.id);
+
+      // The cancel's last step fails, after the email was cancelled and
+      // cleared: nothing of the erasure may stay.
+      await expect(
+        new EmailDeliveryService(
+          refusingRecipientDeletes(t) as never,
+          logger as never
+        ).eraseRecipient(SHARED)
+      ).rejects.toThrow();
+
+      expect(await queued(t, result.id)).toEqual(before);
+      expect(await recipientsOf(t, result.id)).toEqual([
+        recipientDigest(SHARED),
+      ]);
+    });
+
     it("is cancelled when a copied address is erased, though it names a person", async () => {
       // The person named is the email's `to`; a copy is someone else, and
       // erasing them must stop the email reaching them.
@@ -843,4 +864,55 @@ function deletingAfterFirstRead(
     getDrizzle: (relations?: unknown) =>
       wrap(real.getDrizzle(relations), false),
   };
+}
+
+/**
+ * The booted adapter, whose Drizzle handles, in a transaction or out of one,
+ * refuse to delete from `email_queue_recipients`.
+ */
+function refusingRecipientDeletes(t: TestNextly): unknown {
+  const refusing = (db: object): object =>
+    new Proxy(db, {
+      get(target, prop) {
+        const value = Reflect.get(target, prop, target) as unknown;
+        if (prop === "delete") {
+          return (table: unknown) => {
+            const name = (table as Record<symbol, unknown>)[
+              Symbol.for("drizzle:Name")
+            ];
+            if (name === "email_queue_recipients") {
+              throw new Error("delete refused");
+            }
+            return (value as (table: unknown) => unknown).call(target, table);
+          };
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  const handles = (source: object): object =>
+    new Proxy(source, {
+      get(target, prop) {
+        const value = Reflect.get(target, prop, target) as unknown;
+        if (typeof value !== "function") return value;
+        if (prop === "getDrizzle" || prop === "drizzleWithRelations") {
+          return (...args: unknown[]) =>
+            refusing(
+              (value as (...a: unknown[]) => object).apply(target, args)
+            );
+        }
+        if (prop === "transaction") {
+          return (
+            work: (ctx: object) => Promise<unknown>,
+            ...rest: unknown[]
+          ) =>
+            (value as (...a: unknown[]) => Promise<unknown>).call(
+              target,
+              (ctx: object) => work(handles(ctx)),
+              ...rest
+            );
+        }
+        return (value as (...a: unknown[]) => unknown).bind(target);
+      },
+    });
+  return handles(t.adapter as unknown as object);
 }

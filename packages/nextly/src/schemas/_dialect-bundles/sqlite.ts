@@ -62,6 +62,8 @@ export { emailProvidersSqlite as emailProviders } from "../email-providers/sqlit
 export { emailDeliveriesSqlite as emailDeliveries } from "../email-deliveries/sqlite";
 export { emailSendClaimsSqlite as emailSendClaims } from "../email-send-claims/sqlite";
 export { emailQueueSqlite as emailQueue } from "../email-queue/sqlite";
+// Each dialect's bundle exports its own table under the same name.
+// fallow-ignore-next-line duplicate-export
 export { emailQueueRecipientsSqlite as emailQueueRecipients } from "../email-queue-recipients/sqlite";
 export { emailTemplatesSqlite as emailTemplates } from "../email-templates/sqlite";
 
