@@ -419,7 +419,7 @@ export interface DirectAPIConfig {
    * Bypass access control checks.
    *
    * When `true` (default for Direct API), all access control is skipped.
-   * Set to `false` to enforce collection, field, and row-level permissions.
+   * Set to `false` to enforce collection and field access rules.
    *
    * @default true
    */

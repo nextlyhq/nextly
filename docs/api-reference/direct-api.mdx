@@ -55,7 +55,7 @@ The generator writes a `nextly-types.ts` (or whatever path you set in `typescrip
 
 ## Access control
 
-By default, Direct API calls run with `overrideAccess: true` — access control is bypassed because the Direct API runs in trusted server code. If you want collection access control, field-level rules, and row-level filters to apply (for example when forwarding a user request through a server action), pass `overrideAccess: false` and supply a `user`:
+By default, Direct API calls run with `overrideAccess: true` — access control is bypassed because the Direct API runs in trusted server code. If you want collection access rules and field-level rules to apply (for example when forwarding a user request through a server action), pass `overrideAccess: false` and supply a `user`:
 
 ```typescript
 const visiblePosts = await nextly.find({
