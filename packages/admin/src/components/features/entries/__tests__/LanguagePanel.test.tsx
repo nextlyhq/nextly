@@ -635,6 +635,26 @@ describe("LanguagePanel", () => {
     expect(screen.getByRole("button", { name: "Open English" })).toBeEnabled();
   });
 
+  it("closes an open publish-all confirmation once the actions are held", async () => {
+    // The confirmation was open when a language switch began: its Confirm is
+    // not left to publish on the answer for the language moved from.
+    useBranding.mockReturnValue({ locales: LOCALES });
+    const props = { translations: TRANSLATIONS, hasStatus: true };
+    const { rerender } = renderPanel(props);
+    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+
+    rerender(
+      <EntryLocaleProvider value={LOCALIZED_CTX}>
+        <CopyFromLanguageScope>
+          <LanguagePanel {...props} actionsDisabled />
+        </CopyFromLanguageScope>
+      </EntryLocaleProvider>
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(publishAll).not.toHaveBeenCalled();
+  });
+
   it("hides publish-all when the action does not apply", () => {
     useBranding.mockReturnValue({ locales: LOCALES });
     publishState.mockReturnValue({ ...PUBLISH_IDLE, available: false });

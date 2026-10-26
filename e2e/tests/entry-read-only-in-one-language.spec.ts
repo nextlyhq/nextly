@@ -88,6 +88,9 @@ test("edits the English and opens the Spanish read-only, offering no save while 
     page.getByRole("listitem").filter({ hasText: "Spanish" })
   ).toContainText("editing now");
   await expect(note()).toBeVisible();
+  // The Spanish document, which has no note of its own, not the English one
+  // left on screen.
+  await expect(note()).toHaveValue("");
   await expect(save()).toHaveCount(0);
 
   release();

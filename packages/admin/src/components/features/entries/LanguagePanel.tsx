@@ -729,8 +729,11 @@ export function LanguagePanel({
         onTranslate={() => onEnterTranslationMode?.(defaultLocale)}
       />
 
+      {/* Open only while publishing is offered: a confirmation already open
+          when the actions are held (a language switch's answer on its way, a
+          past version on screen) closes rather than publish on their word. */}
       <PublishAllConfirmDialog
-        open={confirmPublishAll}
+        open={confirmPublishAll && !actionsDisabled}
         onOpenChange={setConfirmPublishAll}
         languageCount={locales.length}
         pendingCount={pendingCount}
