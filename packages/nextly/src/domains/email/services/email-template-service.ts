@@ -78,6 +78,7 @@ import {
   ownerOf,
   ownershipFromConfig,
   sameStoredValue,
+  sameDetails,
   sameVersion,
   storedOwner,
   versionDigest,
@@ -87,6 +88,10 @@ import {
   type RegistryInput,
   type TemplateOwnerRegistry,
 } from "../template-ownership";
+import {
+  declarationSubstance,
+  withOwnerPresentation,
+} from "../template-variables";
 import {
   SNAPSHOT_MAX_AGE_MS,
   transactionOpenInFlow,
@@ -575,6 +580,15 @@ export class EmailTemplateService extends BaseService {
     const entry = this.registry.owned.get(row.slug);
     return {
       ...columns,
+      // An owned template's declarations carry its owner's current
+      // presentation, overridden or not (see `withOwnerPresentation`).
+      variables:
+        owner.kind === "site"
+          ? columns.variables
+          : withOwnerPresentation(
+              columns.variables ?? null,
+              entry?.defaults.variables
+            ),
       kind: columns.kind ?? "template",
       description: columns.description ?? null,
       cc: columns.cc ?? null,
@@ -1541,11 +1555,17 @@ export class EmailTemplateService extends BaseService {
     updateData: Record<string, unknown>
   ): boolean {
     if (record.owner.kind === "site" || record.overridden) return false;
-    return [...VERSION_FIELDS, ...DETAIL_FIELDS].some(
-      field =>
-        updateData[field] !== undefined &&
-        !sameStoredValue(updateData[field] ?? null, existing[field] ?? null)
-    );
+    return [...VERSION_FIELDS, ...DETAIL_FIELDS].some(field => {
+      if (updateData[field] === undefined) return false;
+      // A variable's type, label and example are presentation: changing only
+      // those is not the site saying something different from the owner.
+      return field === "variables"
+        ? !sameStoredValue(
+            declarationSubstance(updateData.variables),
+            declarationSubstance(existing.variables)
+          )
+        : !sameStoredValue(updateData[field] ?? null, existing[field] ?? null);
+    });
   }
 
   /**
@@ -2423,10 +2443,13 @@ export class EmailTemplateService extends BaseService {
   ): Promise<void> {
     const owners = detailsOf(entry.defaults);
     const kept = row.baseVersion?.details;
+    // Compared presentation aside: the owner's presentation reaches the
+    // site's copy when it is read (see `withOwnerPresentation`), so it alone
+    // neither counts as the site's change nor needs writing.
     // The site changed them: they stay.
-    if (kept && !sameStoredValue(detailsOf(row), kept)) return;
+    if (kept && !sameDetails(detailsOf(row), kept)) return;
     // Already the owner's, and recorded as such.
-    if (kept && sameStoredValue(kept, owners)) return;
+    if (kept && sameDetails(kept, owners)) return;
     await this.writeTemplateRow(row.id, db =>
       db
         .update(this.emailTemplates)

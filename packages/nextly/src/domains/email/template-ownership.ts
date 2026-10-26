@@ -23,6 +23,7 @@ import type {
 } from "../../schemas/email-templates/types";
 
 import { parseLiquid } from "./services/liquid-engine";
+import { declarationSubstance } from "./template-variables";
 import type { EmailConfig } from "./types";
 
 /** An owner as the registry records it: a plugin there is always running. */
@@ -317,6 +318,18 @@ export function detailsOf(template: {
     description: template.description ?? null,
     variables: (template.variables ?? null) as EmailTemplateVariable[] | null,
   };
+}
+
+/**
+ * Whether two sets of details say the same thing, presentation aside: a
+ * variable's type, label, example and fields are never a change (see
+ * `declarationSubstance`).
+ */
+export function sameDetails(a: OwnerDetails, b: OwnerDetails): boolean {
+  return sameStoredValue(
+    { ...a, variables: declarationSubstance(a.variables) },
+    { ...b, variables: declarationSubstance(b.variables) }
+  );
 }
 
 /**

@@ -44,6 +44,48 @@ export interface EmailTemplateVariable {
    * @default false
    */
   required?: boolean;
+
+  /**
+   * @experimental What kind of value it holds, for the editor's Data panel.
+   * A declaration without one holds text, as declarations always have.
+   */
+  type?: EmailTemplateVariableType;
+
+  /** @experimental A friendly name for the editor, in place of `name`. */
+  label?: string;
+
+  /** @experimental A value of its type, the editor's starting test data. */
+  example?: unknown;
+
+  /** @experimental The fields of each item of a list, or of an object. */
+  fields?: EmailTemplateVariableField[];
+}
+
+/**
+ * @experimental The kinds of value a template variable may declare. They
+ * shape the editor's test data only: a send renders whatever it is given.
+ */
+export type EmailTemplateVariableType =
+  | "text"
+  | "number"
+  | "date"
+  | "money"
+  | "link"
+  | "boolean"
+  | "list"
+  | "object";
+
+/**
+ * @experimental A field of a list's items or of an object variable, declared
+ * as a variable is, without `required`.
+ */
+export interface EmailTemplateVariableField {
+  name: string;
+  description?: string;
+  type?: EmailTemplateVariableType;
+  label?: string;
+  example?: unknown;
+  fields?: EmailTemplateVariableField[];
 }
 
 // ============================================================
